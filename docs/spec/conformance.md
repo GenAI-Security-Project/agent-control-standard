@@ -29,6 +29,8 @@ ACS-Core does NOT require: field-level Provenance objects, Trace event emission,
 
 What "ACS-Core conformant" guarantees: the channel is authenticated and the Observed Agent honors the Guardian's decisions. It does NOT assert that a deployment's policies are strict, nor that the audit chain is tamper-evident against a compromised Guardian (that is the ACS-Crypto and ACS-Audit profiles, since the HMAC baseline is symmetric). A permissive Guardian is a conformant but permissive deployment, not a violation.
 
+Who verifies a conformance claim: nobody, in v0.1.0. `profiles_supported` and `profiles_accepted` are self-declaration on the wire. This release ships no conformance test suite, no registry of conformant implementations, and no steward body to arbitrate a disputed claim. A deployment that advertises "ACS-Core conformant" is asserting that about itself, and a buyer who procures on that basis is trusting the implementer rather than a third party. Test the deployment against the requirements above the way you would check any other vendor claim. A conformance suite and the governance to operate it are tracked in [issue #19](https://github.com/GenAI-Security-Project/agent-control-standard/issues/19) and scoped to a later release.
+
 ## ACS-Trace
 
 Adds deterministic Trace event emission per [Trace Events](./trace/events.md). A deployment claiming ACS-Trace MUST:
