@@ -8,3 +8,12 @@ dependencies = [ "mike>=1.2.0", "mkdocs-material>=9.6.14", "pymdown-extensions>=
 
 [dependency-groups]
 dev = [ "pytest>=8.0", "jsonschema>=4.25.0",]
+
+[tool.pytest.ini_options]
+# The deploy workflow runs a bare `uv run pytest -v` as the gate the site build
+# depends on, in the environment `uv sync --locked` produces. Without this,
+# pytest collects the whole repository, so any suite whose dependencies are not
+# in uv.lock fails at collection and takes the deploy down with it. Scoping
+# collection to tests/ keeps that gate about the guards it was written for.
+# Suites that carry their own dependencies run from their own workflow.
+testpaths = ["tests"]
