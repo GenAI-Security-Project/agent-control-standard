@@ -28,7 +28,12 @@ This project follows our [Code of Conduct](./CODE_OF_CONDUCT.md). By participati
 uv pip install -e .          # install dependencies
 uv run mkdocs serve          # preview docs at http://localhost:8000
 uv run mkdocs build          # build static docs
+uv run pytest -v             # run the guards (same command CI runs)
 ```
+
+The guards in `tests/` check things the build itself will not catch, including spec heading structure, published schema URIs, and the third-party asset rules for the site. They run in the `test` job of `deploy-pages.yml`, and the build job depends on them, so a failing guard blocks the deploy rather than shipping a broken page.
+
+Put new guards in `tests/`. Collection is scoped there by `testpaths` in `pyproject.toml`, so a test written anywhere else never runs in CI and will pass review looking like coverage it does not provide. A suite that needs dependencies outside `uv.lock` belongs in its own workflow with its own environment, because the deploy gate installs only what the lockfile carries.
 
 For prose contributions, follow the [editorial style guide](./STYLE.md). For schema contributions, validate `specification/v0.1.0/acs_schema.json` against the JSON Schema spec before submitting.
 
