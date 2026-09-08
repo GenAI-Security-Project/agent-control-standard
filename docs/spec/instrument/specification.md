@@ -96,8 +96,11 @@ Hook details, payloads, and per-hook examples are catalogued on the [Hooks](./ho
 | 12 | `postCompact` | After compaction; carries the new summary's payload and provenance |
 | 13 | `subagentStart` | A subagent is spawned (in-process delegation) |
 | 14 | `subagentStop` | A subagent has terminated |
-| 15 | `turnEnd` | End of an agent turn |
-| 16 | `sessionEnd` | Session termination, audit finalization |
+| 15 | `skillRegister` | Skill enters the available set, before it can load; decision-eligible |
+| 16 | `skillLoad` | Registered skill activates into a session, before its actions run; decision-eligible |
+| 17 | `skillUnload` | Skill leaves the active set |
+| 18 | `turnEnd` | End of an agent turn |
+| 19 | `sessionEnd` | Session termination, audit finalization |
 
 Wrapped: `protocols/MCP/*` (specified in v0.1; see [Extending MCP](./extend_mcp.md)). The `protocols/A2A/*` namespace is reserved; wrapping specification deferred to v0.2.
 
