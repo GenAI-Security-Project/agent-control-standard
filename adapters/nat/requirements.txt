@@ -1,0 +1,14 @@
+# Runtime dependency for the NAT adapter.
+# Pinned to the public release that ships ACSMiddlewareConfig's required
+# base classes. The adapter feature-detects InvocationAction.SKIP and falls
+# back to raising ACSGuardianDenied on releases that don't expose it.
+nvidia-nat-core==1.7.0
+
+# wire.py YAML round-trips must preserve user comments, key order, and
+# formatting (pyyaml strips all three); pinned to the tested version.
+ruamel.yaml==0.19.1
+
+# Runtime dependency: §10 permits no canonicalization other than RFC 8785
+# (JCS), so acs_common refuses to import without it. Pinned to match
+# claude-code/ and cursor/.
+rfc8785==0.1.4
