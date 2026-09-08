@@ -1,0 +1,111 @@
+"""Hook taxonomy guards for the Instrument pillar documents.
+
+The hook set is stated in three places: the schemas under
+`specification/v0.1.0/hooks/`, the overview table on the Hooks page, and the
+taxonomy table in Specification section 5. The schemas are the normative
+source; the two tables are readable views of the same set.
+
+Nothing binds the views to the source. When the skill lifecycle hooks landed,
+they reached the schemas and the Hooks page but not the taxonomy table, so the
+specification page listed sixteen hooks while the Hooks page listed nineteen.
+A reader treating the specification page as canonical never learned that skills
+are governable, and the omission propagated into implementations. The build
+stayed green throughout, so only a check that reads the schemas catches it.
+"""
+
+import json
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+HOOK_SCHEMAS = ROOT / "specification" / "v0.1.0" / "hooks"
+SPECIFICATION = ROOT / "docs" / "spec" / "instrument" / "specification.md"
+HOOKS_PAGE = ROOT / "docs" / "spec" / "instrument" / "hooks.md"
+
+# `steps/skillRegister payload` -> "skillRegister". The profile variants title
+# themselves `... payload (ACS-Provenance profile)` and are the same hook, so
+# anchoring the end of the string collapses them to one entry.
+SCHEMA_TITLE = re.compile(r"^steps/([A-Za-z][A-Za-z0-9]*) payload$")
+# `| 15 | `skillRegister` | Skill enters ...` -> ("15", "skillRegister")
+TAXONOMY_ROW = re.compile(r"^\|\s*(\d+)\s*\|\s*`([A-Za-z][A-Za-z0-9]*)`\s*\|")
+# `| [`skillRegister`](#skillregister) | Skill enters ...` -> "skillRegister".
+# Namespaced entries (`agbom/snapshot`, `system/ping`, `protocols/MCP/*`) carry
+# a slash, so they do not match and stay out of the native set.
+OVERVIEW_ROW = re.compile(r"^\|\s*\[?`([A-Za-z][A-Za-z0-9]*)`")
+# `ACS v0.1.0 defines 19 native `steps/*` hooks` -> "19"
+STATED_COUNT = re.compile(r"defines (\d+) native `steps/\*` hooks")
+
+
+def native_hook_methods():
+    """The normative hook set, read from the schemas' own declared titles."""
+    methods = set()
+    for path in sorted(HOOK_SCHEMAS.glob("*.json")):
+        title = json.loads(path.read_text(encoding="utf-8")).get("title", "")
+        match = SCHEMA_TITLE.match(title)
+        if match:
+            methods.add(match.group(1))
+    return methods
+
+
+def section(path, heading):
+    """Lines under a `## ` heading, stopping at the next one."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(heading))
+    for offset, line in enumerate(lines[start + 1 :], start=start + 1):
+        if line.startswith("## "):
+            return lines[start + 1 : offset]
+    return lines[start + 1 :]
+
+
+def test_specification_taxonomy_lists_every_native_hook():
+    rows = [
+        TAXONOMY_ROW.match(line)
+        for line in section(SPECIFICATION, "## 5. Hook Taxonomy")
+    ]
+    listed = {match.group(2) for match in rows if match}
+    expected = native_hook_methods()
+
+    missing = sorted(expected - listed)
+    unknown = sorted(listed - expected)
+    assert not missing, (
+        "Specification section 5 omits hooks the schemas define: "
+        + ", ".join(missing)
+    )
+    assert not unknown, (
+        "Specification section 5 lists hooks with no schema: " + ", ".join(unknown)
+    )
+
+
+def test_specification_taxonomy_numbering_runs_without_gaps():
+    numbers = [
+        int(match.group(1))
+        for line in section(SPECIFICATION, "## 5. Hook Taxonomy")
+        if (match := TAXONOMY_ROW.match(line))
+    ]
+    assert numbers == list(range(1, len(numbers) + 1)), (
+        f"Specification section 5 numbering is not 1..{len(numbers)}: {numbers}"
+    )
+
+
+def test_hooks_page_overview_lists_every_native_hook():
+    rows = [OVERVIEW_ROW.match(line) for line in section(HOOKS_PAGE, "## Overview")]
+    listed = {match.group(1) for match in rows if match}
+    expected = native_hook_methods()
+
+    missing = sorted(expected - listed)
+    unknown = sorted(listed - expected)
+    assert not missing, (
+        "Hooks page overview omits hooks the schemas define: " + ", ".join(missing)
+    )
+    assert not unknown, (
+        "Hooks page overview lists hooks with no schema: " + ", ".join(unknown)
+    )
+
+
+def test_hooks_page_states_the_real_hook_count():
+    match = STATED_COUNT.search(HOOKS_PAGE.read_text(encoding="utf-8"))
+    assert match, "Hooks page no longer states a native `steps/*` hook count"
+    expected = len(native_hook_methods())
+    assert int(match.group(1)) == expected, (
+        f"Hooks page claims {match.group(1)} native hooks; the schemas define {expected}"
+    )
