@@ -1487,6 +1487,41 @@ the whole evening. Phase 2 Step 7 opens it correctly.
 
 **Not for subagent execution.** Every step below mutates the public OWASP repository in a way that is outward-facing, hard to reverse, or both: deleting a label removes it from every issue carrying it, filing issues notifies watchers, retargeting a pull request touches someone else's work, and moving the default branch changes what every visitor and every clone gets. The project lead runs these, or explicitly authorizes each one.
 
+### Run it with the executor, not by hand
+
+`tools/apply_governance.py` performs every automatable step below. It is idempotent, so a
+half-finished migration is fixed by running it again rather than by working out what
+already landed. `--dry-run` is the default and prints every command it would run.
+`--apply` is required to change anything. `--only <step>` runs one step.
+
+It is structurally incapable of merging a pull request, closing one, retargeting one, or
+deleting a label. Those are human decisions or destructive operations, and a test asserts
+no code path can emit them. Three steps therefore stay manual: merging the ready pull
+requests, retargeting the open ones, and merging the Phase 1 pull request itself.
+
+**Order for a single-maintainer migration.** The numbered steps below remain the reference.
+This is the sequence that minimizes friction when one admin runs the whole thing alone:
+
+1. `--only labels` and `--only milestones`, before anything merges, so no issue arrives
+   through a form whose labels do not exist yet
+2. Push `feature/contribution-governance`
+3. `--only branch` to create `integration` from `main`
+4. Open the Phase 1 pull request against `integration` and merge it. Do this **before**
+   creating `protect-integration`, so no approval is needed on a branch with no second
+   reviewer awake
+5. Promote `integration` to `main` with a merge commit, which publishes the site and puts
+   the guard workflow on `main`
+6. `--only rulesets` to create `protect-integration` and `protect-release`
+7. `--only default-branch`
+8. `--only required-check` to add `base-branch-guard` to `protect-main`
+9. `--only issues` to file the seeded onramp and tracked follow-up issues
+10. Retarget the open pull requests, and merge #21, #20, and #22 whenever the core team
+    decides
+
+Both new rulesets carry `protect-main`'s admin bypass. Without it a sole maintainer cannot
+merge into a branch that requires a review they are not allowed to give themselves, which
+would strand the migration with `integration` created, protected, and unmergeable.
+
 **Order is not a preference, and two orderings deadlock the repository.**
 
 Pinning `protect-main` to a literal ref precedes moving the default branch, or the
