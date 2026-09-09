@@ -20,6 +20,22 @@ Each workstream owns a slice of the standard and runs its own review. Two leads 
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
 
+## Triage authority
+
+Workstream leads and the project lead apply the decision labels: `scope:`, `priority:`,
+`workstream:`, and `status:accepted`. Nobody else does, and no issue form can.
+
+Minimum triage on a new issue is two labels, `scope:` and `status:`. `priority:` and
+`workstream:` are enrichment applied to accepted work. Requiring four decisions per issue
+is how a taxonomy stops getting used in month two.
+
+`priority:P0` is reserved for work on the serial chain the Strategic Adoption Plan names:
+the mandatory floor decision, the adapters, the installable Guardian, and the
+interoperability benchmark. It does not mean important.
+
+Triage runs on the weekly call. Promotion from `integration` to `main` is a standing item
+on the same call, and the project lead owns merging it.
+
 ## Origins
 
 Michael Bargury ([@mbrg](https://github.com/mbrg)) and Ory Segal ([@oorryy](https://github.com/oorryy)) created ACS. Both remain project leaders.
