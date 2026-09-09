@@ -1,0 +1,46 @@
+# Keeps integration current with main, so a promotion pull request stays conflict-free.
+#
+# This opens a pull request rather than pushing. The protect-integration ruleset requires
+# pull requests and blocks non-fast-forward updates, and GITHUB_TOKEN is not a bypass
+# actor, so a push here would fail on every run.
+name: Sync integration from main
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-integration
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Open or update the sync pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor origin/main origin/integration; then
+            echo "integration already contains main. Nothing to sync."
+            exit 0
+          fi
+          if [ "$(gh pr list --base integration --head main --state open --json number --jq 'length')" -gt 0 ]; then
+            echo "A sync pull request is already open."
+            exit 0
+          fi
+          gh pr create --base integration --head main \
+            --title "Sync integration from main" \
+            --body "Documentation landed on main. This carries it to integration so the next promotion does not conflict. The content already passed review on main."

@@ -1,12 +1,12 @@
 # Synchronizes the version in version.txt across the project files.
-# Triggers on a push to version.txt on main, or manually.
+# Triggers on a push to version.txt on integration, or manually.
 name: Sync Version
 
 on:
   push:
     paths:
       - 'version.txt'
-    branches: ["main"]
+    branches: ["integration"]
   workflow_dispatch:
 
 # Deny by default. The one job below grants itself only what it needs.
