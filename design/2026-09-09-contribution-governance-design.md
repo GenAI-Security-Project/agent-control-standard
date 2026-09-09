@@ -128,7 +128,7 @@ Three things then argue for `integration`. Dependabot targets the default branch
 key at all, which removes a dependency on undocumented security-update targeting behavior
 rather than betting on it. Mistargeting fails in the safe direction, because a documentation
 pull request that lands on `integration` is merely slower while a specification pull request
-that lands on `main` shows a first-time contributor a red failed check. And a contributor who
+that lands on `main` shows a first-time contributor a red failed check. A contributor who
 does nothing but accept GitHub's default is doing the right thing, which is the only version
 of a rule that survives a hundred new people.
 
@@ -490,7 +490,7 @@ contributions Track 1 needs. Ariel's invitation in the sync was open: if somebod
 open a reference implementation against Codex, have at it. A gate requiring an accepted
 issue turns that invitation into a queue wait unless the accepted issue already exists.
 
-So maintainers file them before the kick-off. Each carries `scope:in-focus`,
+Maintainers therefore file them before the kick-off. Each carries `scope:in-focus`,
 `status:accepted`, `help wanted`, a workstream, and a priority:
 
 1. Port the AGT reference implementation to Python
