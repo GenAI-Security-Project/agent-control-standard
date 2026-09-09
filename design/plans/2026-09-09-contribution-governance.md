@@ -1330,9 +1330,9 @@ jobs:
           gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label 'status:needs-triage'
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Thanks for this. It is queued rather than ignored.
 
-This pull request does not reference an issue carrying \`status:accepted\`, so a maintainer has not looked at it yet and will not until the underlying issue is triaged. Nothing here is rejected. See [Current Priority Scope](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md#current-priority-scope) for what the project is working on, and [\`help wanted\`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) for work that is already accepted.
+          This pull request does not reference an issue carrying \`status:accepted\`, so a maintainer has not looked at it yet and will not until the underlying issue is triaged. Nothing here is rejected. See [Current Priority Scope](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md#current-priority-scope) for what the project is working on, and [\`help wanted\`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) for work that is already accepted.
 
-If this is an editorial correction, tick that box in the description and this comment stops applying."
+          If this is an editorial correction, tick that box in the description and this comment stops applying."
 ```
 
 - [ ] **Step 4: Remove the Dependabot problem rather than solving it**
