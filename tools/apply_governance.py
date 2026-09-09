@@ -29,7 +29,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = "GenAI-Security-Project/agent-control-standard"
@@ -117,6 +117,11 @@ class Issue:
     milestone: str | None = None
 
 
+def _default_bypass_actors() -> tuple[dict, ...]:
+    """Admin RepositoryRole always bypass, matching protect-main's existing bypass."""
+    return ({"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"},)
+
+
 @dataclass(frozen=True)
 class Ruleset:
     """A branch ruleset, flattened out of GitHub's nested rule-array shape.
@@ -128,6 +133,10 @@ class Ruleset:
 
     Deletion and non-fast-forward protection are not fields because every ruleset this
     tool renders carries both, unconditionally, so there is nothing to diff.
+
+    bypass_actors defaults to admin always-bypass, matching protect-main. Every ruleset
+    needs this so a sole maintainer can merge into a branch requiring review, since
+    GitHub does not let anyone approve their own pull request.
     """
 
     name: str
@@ -140,6 +149,7 @@ class Ruleset:
     require_last_push_approval: bool = True
     required_review_thread_resolution: bool = True
     enforcement: str = "active"
+    bypass_actors: tuple[dict, ...] = field(default_factory=_default_bypass_actors)
 
 
 @dataclass(frozen=True)
@@ -483,7 +493,10 @@ def desired_rulesets() -> list[Ruleset]:
 
     Both mirror the pre-change protect-main: one approval, code owner review, stale
     reviews dismissed on push, last-push approval, required thread resolution, the
-    `test` and `build` checks, and squash or rebase merges only. Every field left at
+    `test` and `build` checks, and squash or rebase merges only. Both also inherit
+    the admin always-bypass from the Ruleset default, matching protect-main. Without
+    this bypass, a sole maintainer cannot merge into a branch requiring review, since
+    GitHub does not let anyone approve their own pull request. Every field left at
     its default on Ruleset already carries that shape, so the two instances below
     differ only in the two fields Step 5 says differ: the name and the target ref.
     """
@@ -610,12 +623,14 @@ def _ruleset_payload(desired: Ruleset) -> dict:
 
     Deletion and non-fast-forward protection are unconditional, per the plan's Step 5,
     so they are written here rather than carried as fields with only one valid value.
+    bypass_actors is rendered at the top level so GitHub recognizes the admin bypass.
     """
     return {
         "name": desired.name,
         "target": "branch",
         "enforcement": desired.enforcement,
         "conditions": {"ref_name": {"include": [desired.target_ref], "exclude": []}},
+        "bypass_actors": list(desired.bypass_actors),
         "rules": [
             {"type": "deletion"},
             {"type": "non_fast_forward"},

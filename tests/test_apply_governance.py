@@ -172,6 +172,61 @@ def test_desired_rulesets_are_protect_integration_and_protect_release():
         assert ruleset.allowed_merge_methods == ("squash", "rebase")
 
 
+def test_every_ruleset_carries_admin_bypass():
+    """Every ruleset must carry a bypass entry for RepositoryRole 5 (admin).
+
+    Without it, a sole maintainer cannot merge into a branch requiring review,
+    because GitHub does not let anyone approve their own pull request. When that
+    maintainer is the only one awake the night before a public relaunch, a missing
+    bypass means the workflow that installs this very tool becomes unmergeable the
+    instant the protected branch is created, halting the migration halfway through.
+    """
+    for ruleset in desired_rulesets():
+        assert ruleset.bypass_actors is not None, (
+            f"ruleset {ruleset.name!r} has no bypass_actors"
+        )
+        # Check it has at least one entry for admin role
+        admin_bypasses = [
+            entry for entry in ruleset.bypass_actors
+            if entry.get("actor_id") == 5
+            and entry.get("actor_type") == "RepositoryRole"
+            and entry.get("bypass_mode") == "always"
+        ]
+        assert admin_bypasses, (
+            f"ruleset {ruleset.name!r} has bypass_actors but no entry for "
+            f"RepositoryRole 5 with always mode"
+        )
+
+
+def test_ruleset_payload_includes_bypass_actors_at_top_level():
+    """The rendered payload must include bypass_actors at the top level.
+
+    A bypass buried inside rules goes unrecognized and does not grant the expected
+    override, leaving the maintainer in the lockout scenario described above.
+    """
+    from apply_governance import _ruleset_payload
+
+    for ruleset in desired_rulesets():
+        payload = _ruleset_payload(ruleset)
+        assert "bypass_actors" in payload, (
+            f"payload for {ruleset.name!r} has no top-level bypass_actors field"
+        )
+        assert isinstance(payload["bypass_actors"], list), (
+            f"bypass_actors in {ruleset.name!r} payload is not a list"
+        )
+        # Check that at least one entry is for admin role
+        admin_entries = [
+            entry for entry in payload["bypass_actors"]
+            if entry.get("actor_id") == 5
+            and entry.get("actor_type") == "RepositoryRole"
+            and entry.get("bypass_mode") == "always"
+        ]
+        assert admin_entries, (
+            f"payload for {ruleset.name!r} has bypass_actors but no admin "
+            f"RepositoryRole 5 entry"
+        )
+
+
 # --- plan_actions: idempotence and completeness ---------------------------------
 
 def _live_matching(desired) -> dict:
