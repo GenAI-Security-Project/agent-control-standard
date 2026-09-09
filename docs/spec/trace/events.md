@@ -26,6 +26,9 @@ The full mapping lives in [`trace/otel-mapping.json`](https://github.com/afogel/
 | `steps/preCompact` | `acs.compact` | `acs.compact.entry_count`, `acs.compact.triggered_by` |
 | `steps/postCompact` | `acs.compact.complete` | `acs.compact.entry_count`; `acs.compact.lineage_depth_after` (optional) |
 | `steps/subagentStart`, `steps/subagentStop` | `acs.subagent`, `acs.subagent.end` | `acs.subagent.session_id`, `acs.subagent.parent_session_id`, `acs.subagent.intent_derivation` / `acs.subagent.outcome`, `acs.subagent.final_chain_hash` |
+| `steps/skillRegister` | `acs.skill.register` | `acs.skill.id`, `acs.skill.digest`, `acs.skill.declared_capabilities` |
+| `steps/skillLoad` | `acs.skill.load` | `acs.skill.id`, `acs.skill.digest`, `acs.skill.load_trigger`, `acs.skill.load_path` (skill ids, root first); `acs.skill.digest_verified`, `acs.skill.registration_ref` (optional) |
+| `steps/skillUnload` | `acs.skill.unload` | `acs.skill.id`, `acs.skill.reason`; `acs.skill.replaced_by` (optional) |
 | Decision (allow/deny/modify/ask/defer) | `acs.decision` (span event) | `acs.decision`, `acs.evaluator`, `acs.reasoning` (when present), `acs.confidence` (when present) |
 | `agbom/snapshot` | `acs.agbom` | `acs.agbom.format` (`canonical`/`cyclonedx`/`spdx`/`swid`), `acs.agbom.component_count` |
 | `agbom/changed` | `acs.agbom` | `acs.agbom.format` (`canonical`/`cyclonedx`/`spdx`/`swid`), `acs.agbom.change_reason` |
@@ -43,12 +46,14 @@ The full mapping lives in [`trace/ocsf-mapping.json`](https://github.com/afogel/
 | `steps/sessionStart` | Authentication | 3002 |
 | `steps/agentTrigger`, `steps/userMessage`, `steps/agentResponse` | Application Activity | 6002 |
 | `steps/toolCallRequest`, `steps/toolCallResult` | Process Activity | 1007 |
+| `steps/skillLoad` | Process Activity | 1007 (digest-verified load into execution) |
 | `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval` | Datastore Activity | 6005 |
 | `steps/preCompact`, `steps/postCompact` | Datastore Activity | 6005 (compaction subtype) |
 | `steps/subagentStart`, `steps/subagentStop` | Authentication | 3002 (logon/logoff for the subagent's session) |
 | `steps/turnStart`, `steps/turnEnd` | Application Activity | 6002 |
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
 | `agbom/snapshot`, `agbom/changed` | Inventory Info | 5001 |
+| `steps/skillRegister`, `steps/skillUnload` | Inventory Info | 5001 (skill enters or leaves the component set) |
 | `steps/sessionEnd` | Authentication | 3002 (logoff) |
 
 OCSF `severity_id` for decision events is set from the disposition:
