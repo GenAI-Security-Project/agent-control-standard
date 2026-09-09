@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/agbom/component.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/component.json",
   "title": "ACS AgBOM Component",
   "description": "Single component in an Agent Bill of Materials. Discriminated by 'type'. Every component carries provenance of its registration so AgBOM mutations are traceable in the same lineage system as data flow.",
   "type": "object",

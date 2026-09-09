@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/tool-call-result.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-result.json",
   "title": "steps/toolCallResult payload",
   "description": "Payload for the toolCallResult hook. Fires after tool execution, before the result reaches the agent. Output redaction gate.",
   "type": "object",

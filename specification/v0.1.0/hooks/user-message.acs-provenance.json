@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/user-message.acs-provenance.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/user-message.acs-provenance.json",
   "title": "steps/userMessage payload (ACS-Provenance profile)",
   "description": "Strict variant of user-message.json for deployments running provenance_producer: deterministic / claiming ACS-Provenance. Every content item MUST carry provenance. ACS-Core deployments validate against the base schema instead.",
   "allOf": [{ "$ref": "./user-message.json" }],

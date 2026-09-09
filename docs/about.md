@@ -28,4 +28,4 @@ ACS succeeds when the entire AI agent ecosystem adopts these standards. We're bu
 - **Implement**: Build ACS support in your agent platform
 - **Advocate**: Spread the word about trustworthy agents
 
-Contact us at [acs@zenity.io](mailto:acs@zenity.io).
+Reach us in [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions).

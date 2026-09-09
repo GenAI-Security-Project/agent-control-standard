@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/request-envelope.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/request-envelope.json",
   "title": "ACS Request Envelope",
   "description": "JSON-RPC 2.0 envelope with ACS extensions. Sent by the Observed Agent to the Guardian Agent.",
   "type": "object",

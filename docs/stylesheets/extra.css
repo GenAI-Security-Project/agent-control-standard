@@ -1,10 +1,84 @@
+/* ACS theme for the documentation site.
+   Maps the landing page's design tokens onto Material's variables so both surfaces
+   read as one site. Material keeps its own layout, header, and navigation. */
+
+@font-face {
+  font-family: "Inter";
+  /* Resolves against the published site root, where the landing page vendors this file.
+     Under a bare `mkdocs serve` there is no sibling assets directory, so the stack in
+     --md-text-font takes over and the page renders in the system font. */
+  src: url("../../assets/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --md-text-font: "Inter";
+  --md-code-font: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* Light. Values match landing/assets/acs.css, including the contrast-corrected ones. */
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: #ffffff;
+  --md-default-fg-color: #121212;
+  --md-default-fg-color--light: #5f636d;
+  --md-default-fg-color--lighter: #6b7079;
+  --md-default-fg-color--lightest: #d0d5dd;
+  --md-primary-fg-color: #111111;
+  --md-primary-bg-color: #f7f7f7;
+  --md-accent-fg-color: #1b4f72;
+  --md-typeset-color: #121212;
+  --md-typeset-a-color: #1b4f72;
+  --md-code-bg-color: #eef0f4;
+  --md-code-fg-color: #121212;
+  --md-footer-bg-color: #111111;
+  --md-footer-bg-color--dark: #0a0a0a;
+}
+
+/* Dark. */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #0a0a0a;
+  --md-default-fg-color: #ffffff;
+  --md-default-fg-color--light: #9ca3af;
+  --md-default-fg-color--lighter: #868e9c;
+  --md-default-fg-color--lightest: #373737;
+  --md-primary-fg-color: #0a0a0a;
+  --md-primary-bg-color: #f7f7f7;
+  --md-accent-fg-color: #63b3ed;
+  --md-typeset-color: #ffffff;
+  --md-typeset-a-color: #63b3ed;
+  --md-code-bg-color: #161616;
+  --md-code-fg-color: #ffffff;
+  --md-footer-bg-color: #0a0a0a;
+  --md-footer-bg-color--dark: #000000;
+}
+
+/* The theme's own palette sets --md-typeset-a-color from the primary colour, and the
+   built pages always carry a data-md-color-primary attribute. Matching on both wins
+   deterministically rather than relying on file order at equal specificity. */
+[data-md-color-scheme="default"][data-md-color-primary] {
+  --md-typeset-a-color: #1b4f72;
+  --md-accent-fg-color: #1b4f72;
+}
+[data-md-color-scheme="slate"][data-md-color-primary] {
+  --md-typeset-a-color: #63b3ed;
+  --md-accent-fg-color: #63b3ed;
+}
+
+/* Square off Material's rounded chrome to match the landing page's flatter shapes. */
+.md-typeset code { border-radius: 4px; }
+.md-typeset pre > code { border-radius: 8px; }
+.md-typeset table:not([class]) { border-radius: 8px; overflow: hidden; }
+
+/* Size the header mark. Material emits it as an img, and the default box is too tall
+   for the wordmark this site uses. */
 .md-header__button.md-logo {
   padding: 0.2rem;
   margin: 0;
 }
-
-.md-header__button.md-logo img {
-  height: 2rem;
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
   width: auto;
   max-width: none;
 }

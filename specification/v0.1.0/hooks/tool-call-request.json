@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/tool-call-request.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json",
   "title": "steps/toolCallRequest payload",
   "description": "Payload for the toolCallRequest hook. Fires before tool execution. Primary enforcement gate.",
   "type": "object",

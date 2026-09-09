@@ -1,0 +1,140 @@
+# Builds and publishes the landing page, the documentation site, and the JSON schemas.
+# Pull requests test and build without deploying. Merge to main publishes with no human
+# in the loop, so every guard runs here rather than on a contributor's laptop.
+name: Deploy Pages
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+# Deny by default. Each job grants itself only what it needs.
+permissions: {}
+
+# One group for every deploy so they serialize on the single Pages site they share.
+# Pull request builds group per ref and cancel stale runs. Keying everything on ref
+# would let a dispatch on a branch deploy alongside a push to main.
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked
+
+      - name: Run the guards
+        run: uv run pytest -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # configure-pages calls GET /repos/{owner}/{repo}/pages, which needs this.
+      pages: read
+    steps:
+      - name: Decide whether this run deploys
+        id: gate
+        # Through env, never interpolated into the shell. sync_version.yml documents why:
+        # github context data is untrusted input and a run: string is not the place for it.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ] && [ "$REF_NAME" = "refs/heads/main" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked --no-dev
+
+      - name: Configure Pages
+        id: pages
+        # Gated on the same branch check the deploy job enforces. Without it, a
+        # workflow_dispatch from a feature branch configured Pages and uploaded an
+        # artifact that the deploy job then declined to publish.
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Build the documentation site
+        env:
+          # mkdocs.yml reads site_url from this, and MkDocs builds into _site/docs/, so
+          # the value must name the docs subpath. Passing the site root makes every
+          # canonical URL and every sitemap entry omit /docs/ and resolve to a 404.
+          GITHUB_PAGES_URL: ${{ steps.pages.outputs.base_url && format('{0}/docs/', steps.pages.outputs.base_url) || 'https://genai-security-project.github.io/agent-control-standard/docs/' }}
+        run: uv run --no-dev mkdocs build --strict -d _site/docs
+
+      - name: Render the landing page
+        run: uv run --no-dev python tools/render_landing.py landing _site
+
+      - name: Publish the schemas
+        # Fails when any $id is unsafe or duplicated, or any $ref does not resolve.
+        run: uv run --no-dev python tools/publish_schemas.py specification _site/schema
+
+      - name: Upload the artifact
+        # Gated on the same branch check the deploy job enforces, rather than on
+        # the event alone. If the gate step is ever skipped, its output is empty and this step
+        # fails closed rather than uploading an artifact the deploy job would decline.
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+          # The default is one day, which would expire the fastest rollback path:
+          # re-running the deploy job of the last good run.
+          retention-days: 30
+
+  deploy:
+    # event_name alone is not enough. workflow_dispatch can target any ref, so without
+    # the branch check a feature branch could publish to the production site.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: Verify the published schemas
+        # 44 checks at six attempts of ten seconds apiece can run well over half an
+        # hour during a real outage. The cap sits on this step rather than the job so
+        # it cannot cancel the deploy action above it, which has already published.
+        timeout-minutes: 20
+        # Through env, never interpolated into the shell. sync_version.yml documents why.
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          python3 tools/verify_published.py "${PAGE_URL%/}/schema" --from specification

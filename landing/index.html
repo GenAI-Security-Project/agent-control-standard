@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACS Agent Control Standard</title>
+<meta name="description" content="The open standard for runtime agent control. Declarative hooks, policy enforcement, and observability across AI agent frameworks.">
+<link rel="icon" href="assets/icon.svg">
+<link rel="stylesheet" href="assets/acs.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="wordmark" href=".">
+      <img src="assets/icon.svg" alt="" width="28" height="28">
+      <span>ACS</span>
+    </a>
+    <nav aria-label="Sections">
+      <a class="nav-primary" href="docs/">Specification</a>
+      <a href="#problem">The problem</a>
+      <a href="#solution">The solution</a>
+      <a href="#architecture">How it works</a>
+      <a href="#why-now">Why now</a>
+      <a href="#status">Spec status</a>
+      <a href="#workstreams">Workstreams</a>
+      <a href="#contribute">Contribute</a>
+    </nav>
+    <div>
+      <h2>External resources</h2>
+      <nav aria-label="External resources">
+        <a href="https://github.com/GenAI-Security-Project/agent-control-standard">GitHub</a>
+        <a href="https://owasp.slack.com">Slack</a>
+      </nav>
+    </div>
+    <button id="theme-toggle" type="button" aria-label="Switch to dark theme">
+      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/>
+      </svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="12" r="4.2"/>
+        <path d="M12 1.8v3M12 19.2v3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M1.8 12h3M19.2 12h3M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/>
+      </svg>
+      <span class="visually-hidden">Switch theme</span>
+    </button>
+  </aside>
+
+  <main>
+    <section class="hero">
+      <div>
+        <h1>The runtime control plane for AI agents.</h1>
+        <p>Agent Control Standard (ACS) is the open standard that defines how agent
+        platforms expose middleware hooks and how open-source tooling enforces safety
+        policy through those hooks. Declarative controls. Portable across frameworks.
+        Enforced at runtime.</p>
+        <div class="cta-row">
+          <a class="cta cta-primary" href="docs/">Read the specification</a>
+          <a class="cta" href="https://github.com/GenAI-Security-Project/agent-control-standard">View on GitHub</a>
+          <a class="cta" href="https://owasp.slack.com">Join the conversation</a>
+        </div>
+      </div>
+      <div><!--ACS:STARBURST--></div>
+    </section>
+
+    <section id="problem">
+      <h2>Agents are shipping fast. Controls are not</h2>
+      <p>AI agents act across organizational boundaries. The industry standardized how
+      agents communicate through MCP and A2A, and documented the risks through the OWASP
+      Agentic Top 10. Runtime control never got the same treatment.</p>
+      <ul>
+        <li>System prompts are not controls.</li>
+        <li>Model improvements do not cover edge cases or adversarial inputs.</li>
+        <li>Proprietary guardrails create vendor lock-in.</li>
+      </ul>
+    </section>
+
+    <section id="solution">
+      <h2>Three layers, one standard</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>Instrument</h3>
+          <p>ACS defines standardized middleware hooks at every agent decision point. A
+          Guardian Agent intercepts the action and returns a verdict: allow, deny, or
+          modify.</p>
+        </div>
+        <div class="card">
+          <h3>Trace</h3>
+          <p>Agents emit structured trace data through OpenTelemetry, the pipeline your
+          teams already run. ACS maps those traces to OCSF so security events land in the
+          SIEM without a custom parser.</p>
+        </div>
+        <div class="card">
+          <h3>Inspect</h3>
+          <p>Enterprises cannot secure what they cannot inventory. AgBOM captures tools,
+          models, and dependencies as the agent acquires them, which a static SBOM cannot
+          do.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2>How it works</h2>
+      <div class="tier tier-1">
+        <h3>Tier 1: Platform layer</h3>
+        <p>Agent frameworks expose standardized middleware hooks.</p>
+      </div>
+      <div class="tier tier-2">
+        <h3>Tier 2: Enforcement layer</h3>
+        <p>An open-source SDK reads declarative policy and returns verdicts through those hooks.</p>
+      </div>
+      <div class="tier tier-3">
+        <h3>Tier 3: Enterprise layer</h3>
+        <p>Custom classifiers and domain-specific logic plug in behind the same interface.</p>
+      </div>
+    </section>
+
+    <section id="why-now">
+      <h2>Why now</h2>
+      <p>The EU AI Act requires high-risk AI systems to be designed for effective human
+      oversight, including the ability for a person to intervene in or interrupt the
+      system (<a href="https://eur-lex.europa.eu/eli/reg/2024/1689/oj">Regulation (EU)
+      2024/1689</a>, Article 14). The NIST AI Risk Management Framework, which is
+      voluntary guidance rather than regulation, describes continuous monitoring and the
+      ability to deactivate systems operating outside intended limits
+      (<a href="https://doi.org/10.6028/NIST.AI.100-1">NIST AI 100-1</a>, MANAGE 2.4).</p>
+      <p>Both describe controls that exist at runtime. Neither is satisfied by a system
+      prompt.</p>
+    </section>
+
+    <section id="built-with">
+      <h2>Built with the community</h2>
+      <p>ACS maps onto standards your teams already run. It adds a control layer rather
+      than replacing any of them.</p>
+      <ul class="standards">
+        <li>
+          <a href="https://genai.owasp.org/">OWASP ASI</a>
+          <span>The agentic risk taxonomy ACS controls are written against.</span>
+        </li>
+        <li>
+          <a href="https://aivss.owasp.org/">AIVSS</a>
+          <span>Severity scoring for the findings ACS surfaces.</span>
+        </li>
+        <li>
+          <a href="https://opentelemetry.io/">OpenTelemetry</a>
+          <span>The transport ACS emits its trace data over.</span>
+        </li>
+        <li>
+          <a href="https://ocsf.io/">OCSF</a>
+          <span>The event schema ACS maps traces onto for the SIEM.</span>
+        </li>
+        <li>
+          <a href="https://cyclonedx.org/">CycloneDX</a>
+          <span>One serialization for the Agent Bill of Materials.</span>
+        </li>
+        <li>
+          <a href="https://spdx.dev/">SPDX</a>
+          <span>A second AgBOM serialization, for teams already standardized on it.</span>
+        </li>
+        <li>
+          <a href="https://modelcontextprotocol.io">MCP</a>
+          <span>A tool protocol ACS hooks wrap without modifying.</span>
+        </li>
+        <li>
+          <a href="https://a2a-protocol.org/">A2A</a>
+          <span>An agent-to-agent protocol ACS hooks wrap without modifying.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section id="status">
+      <h2>Spec status</h2>
+      <table>
+        <tbody>
+          <tr><th>Specification version</th><td><code><!--ACS:SPEC_VERSION--></code></td></tr>
+          <tr><th>Published schemas</th><td><!--ACS:SCHEMA_COUNT--></td></tr>
+        </tbody>
+      </table>
+      <p>Every schema resolves at the URI its <code>$id</code> declares. Start at
+      <a href="<!--ACS:SCHEMA_HREF-->">the root schema</a>.</p>
+    </section>
+
+    <section id="workstreams">
+      <h2>Workstreams</h2>
+      <p>Each workstream owns a slice of the standard and runs its own review.</p>
+      <table>
+        <thead><tr><th>Workstream</th><th>Leads</th></tr></thead>
+        <tbody><!--ACS:WORKSTREAMS--></tbody>
+      </table>
+    </section>
+
+    <section id="contribute">
+      <h2>Contribute</h2>
+      <p>ACS is an open specification. The fastest way to shape it is to use it and tell
+      us what breaks.</p>
+      <ul>
+        <li>Join <a href="https://owasp.slack.com">owasp.slack.com</a> and the
+        <code>#team-genai-asi-acs-general</code> channel.</li>
+        <li>Open an issue or a discussion on
+        <a href="https://github.com/GenAI-Security-Project/agent-control-standard">GitHub</a>.</li>
+        <li>General questions about the project:
+        <a href="mailto:rock.lambros@owasp.org">rock.lambros@owasp.org</a></li>
+      </ul>
+      <h3>Reporting a problem</h3>
+      <p>Report a security vulnerability through
+      <a href="https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new">GitHub
+      private vulnerability reporting</a>, which is the channel our
+      <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/SECURITY.md">security
+      policy</a> covers. Report a Code of Conduct concern through the
+      <a href="https://owasp.org/www-policy/operational/code-of-conduct">OWASP Code of
+      Conduct process</a>, which handles reports independently of this project's
+      maintainers.</p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <p>Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors.
+  Specification and code licensed under
+  <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.
+  Documentation licensed under
+  <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.</p>
+  <p>ACS is vendor neutral and community governed. A project of the OWASP GenAI Security
+  Project.</p>
+  <nav aria-label="Project documents">
+    <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md">Governance</a>
+    <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/SECURITY.md">Security</a>
+    <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CODE_OF_CONDUCT.md">Code of Conduct</a>
+    <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/LICENSING.md">Licensing</a>
+  </nav>
+</footer>
+
+<script>
+  // Theme toggle. The page renders correctly without this. It only overrides the
+  // system preference and remembers the override.
+  (function () {
+    var root = document.documentElement;
+    var toggle = document.getElementById("theme-toggle");
+
+    function resolved() {
+      return root.getAttribute("data-theme")
+        || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    }
+
+    function label() {
+      toggle.setAttribute(
+        "aria-label",
+        resolved() === "dark" ? "Switch to light theme" : "Switch to dark theme"
+      );
+    }
+
+    try {
+      var saved = localStorage.getItem("acs-theme");
+      if (saved) root.setAttribute("data-theme", saved);
+    } catch (e) { /* private mode blocks storage, so the system preference still applies */ }
+
+    label();
+    toggle.addEventListener("click", function () {
+      var next = resolved() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("acs-theme", next); } catch (e) { /* ignore */ }
+      label();
+    });
+  })();
+</script>
+</body>
+</html>

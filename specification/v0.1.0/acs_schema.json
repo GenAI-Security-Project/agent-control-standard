@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentcontrolstandard.org/schema/v0.1.0/acs_schema.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/acs_schema.json",
   "title": "ACS Schema (v0.1.0 aggregator)",
-  "description": "Aggregator manifest for the modular ACS v0.1.0 JSON Schema package. Each subschema lives as its own file under specification/v0.1.0/ and carries an $id under https://acs.org/schema/v0.1.0/...; this file lists the package contents and cross-references them via relative $ref so a single document can be loaded as the entry point. Validators that need a self-contained bundle should resolve $ref by loading the referenced files; validators that follow $id can ignore this aggregator and load the modular files directly.",
+  "description": "Aggregator manifest for the modular ACS v0.1.0 JSON Schema package. Each subschema lives as its own file under specification/v0.1.0/ and carries an $id under https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/...; this file lists the package contents and cross-references them via relative $ref so a single document can be loaded as the entry point. Validators that need a self-contained bundle should resolve $ref by loading the referenced files; validators that follow $id can ignore this aggregator and load the modular files directly.",
   "version": "0.1.0",
 
   "$defs": {

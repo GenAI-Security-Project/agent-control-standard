@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/modifications.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/modifications.json",
   "title": "ACS Modifications",
   "description": "Modifications applied when decision is 'modify'. Two mutually exclusive shapes: wholesale replacement via 'modified_content', or structured edits via 'redactions' and/or 'parameter_overrides'. The two shapes never combine, and structured edits MUST target disjoint paths so the effective payload is order-independent (Specification 6.3). The provenance of values introduced by 'parameter_overrides' is not defined in v0.1.",
   "type": "object",

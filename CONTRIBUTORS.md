@@ -7,8 +7,9 @@ If you've contributed and aren't listed here, open a PR. We'd rather over-credit
 ## People
 
 - **Almog Langleben** ([@almogbhl](https://github.com/almogbhl))
-- **Ariel** ([@afogel](https://github.com/afogel))
-- **[@bar-capsule](https://github.com/bar-capsule)**
+- **Ariel Fogel** ([@afogel](https://github.com/afogel))
+- **Bar Kaduri** ([@bar-capsule](https://github.com/bar-capsule))
+- **Eva Benn** ([@evabenn](https://github.com/evabenn))
 - **Fred Wilmot** ([@fewdisc](https://github.com/fewdisc))
 - **Stefano Amorelli** ([@stefanoamorelli](https://github.com/stefanoamorelli))
 

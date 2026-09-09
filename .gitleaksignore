@@ -1,0 +1,27 @@
+# Gitleaks allowlist.
+#
+# Every entry below is a signed agent-card example in the A2A hook
+# documentation. The specification requires a JWS structure, so the examples
+# have to show a real-shaped JWT. These authenticate nothing. Payloads decode
+# to sample metadata such as:
+#   {"name": "Content generator", "provider": {"name": "OpenAI", ...}}
+#
+# Verified 2026-08-11 across all 250 commits: 12 findings, all from commit
+# d24eab0, all rule "jwt", all documentation. No real credentials in history.
+#
+# Add an entry only after decoding the token and confirming it is an example.
+# A fingerprint is commit:path:rule:line, so an entry stops matching if the
+# content moves. That is intentional. Moved content gets re-reviewed.
+
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/cancel_task_request.md:jwt:64
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/cancel_task_request.md:jwt:151
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/get_task_push_notification_config_request.md:jwt:63
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/get_task_push_notification_config_request.md:jwt:149
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/get_task_request.md:jwt:68
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/get_task_request.md:jwt:159
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/resubscribe_to_task_request.md:jwt:64
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/resubscribe_to_task_request.md:jwt:151
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/set_task_push_notification_config_request.md:jwt:71
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/set_task_push_notification_config_request.md:jwt:165
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/stream_message_request.md:jwt:110
+d24eab0343460c27d9622910250b027b80fca9bd:docs/spec/instrument/a2a/hooks/stream_message_request.md:jwt:243

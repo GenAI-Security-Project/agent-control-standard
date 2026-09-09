@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/agent-trigger.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agent-trigger.json",
   "title": "steps/agentTrigger payload",
   "description": "Payload for the agentTrigger hook. Fires when an agent is activated.",
   "type": "object",

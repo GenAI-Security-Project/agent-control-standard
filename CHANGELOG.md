@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0.0. Pre-1.0 releases MAY change the ACS-Core baseline in patch versions; the wire format version (`acs_version` in the handshake) evolves separately in the `specification/` directory.
 
-## [0.1.1] — 2026-07-09
+## [0.1.3] — 2026-09-09
 
 ### Changed — ACS-Core baseline (relaxations)
 
@@ -31,6 +31,19 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Related issues
 
 - Guardian-side hook-coverage unfalsifiability tracked at [#31](https://github.com/GenAI-Security-Project/agent-control-standard/issues/31); out of scope for this release, needed for the enforcement side of `subagentStart`'s security rationale to be checkable.
+
+## [0.1.2] — 2026-09-09
+
+### Fixed
+
+- `specification/v0.1.0/response-envelope.json`: `result` is now a `oneOf` over `AcsResult` and `handshake.json#/$defs/ServerHello`. It referenced `AcsResult` unconditionally, which requires `decision`, so a conformant `handshake/hello` response could not satisfy the envelope that carries it. Implementers who skipped response validation for that one method can stop. The change only widens what validates, so every response that validated before still does (see [#59](https://github.com/GenAI-Security-Project/agent-control-standard/pull/59)).
+
+## [0.1.1] — 2026-08-11
+
+### Changed
+
+- Relicensed to [Apache License 2.0](LICENSE) for code and schemas and [CC BY-SA 4.0](LICENSE-DOCS) for documentation. No specification content changed. The release marker exists so implementers can pin to the relicensed distribution.
+- The release version and the specification version now move independently. `sync_version.py` owns the release version alone and no longer rewrites the `version` field in `acs_schema.json` or the Version line in `specification.md`, both of which had drifted out of agreement with the schema `$id` and every `$ref` around them (see [`1af1f92`](https://github.com/GenAI-Security-Project/agent-control-standard/commit/1af1f92)).
 
 ## [0.1.0] — 2026-06-05
 

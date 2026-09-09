@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/trace/otel-mapping.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json",
   "title": "ACS Trace → OpenTelemetry semconv mapping",
   "description": "Normative mapping from ACS hooks and decisions to OpenTelemetry spans and span events. v0.1.0 conformance requires that a deployment emitting OTel for the Trace pillar uses these span names and required attributes verbatim. Decisions are recorded as span events on the parent step span, not as separate spans, so that the enforcement verdict and the action it gates share a parent and an OTel context.",
   "type": "object",

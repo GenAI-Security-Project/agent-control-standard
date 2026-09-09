@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/agbom-snapshot.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-snapshot.json",
   "title": "agbom/snapshot payload",
   "description": "Full Agent Bill of Materials snapshot. Emitted by the Observed Agent once per session, after sessionStart and before any content-bearing hook fires; also re-emitted after any handshake renegotiation. Disposition is normally 'allow'; Guardians MAY return 'deny' to refuse a session whose component graph contains a banned model, tool, peer, or knowledge source. agbom/snapshot MUST be written into the SessionContext audit chain (the AgBOM is part of the session's security-relevant history).",
   "type": "object",

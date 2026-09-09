@@ -68,7 +68,7 @@ This example shows a deployment that elects to populate the OPTIONAL `trust` fie
       "capability": "network.egress",
       "arguments": {
         "recipient": {
-          "value": "manager@company.com",
+          "value": "manager@example.com",
           "provenance": {
             "provenance_id": "p1",
             "origin": "user_input",
@@ -93,7 +93,7 @@ This example shows a deployment that elects to populate the OPTIONAL `trust` fie
 
 ### Decision
 
-The Guardian's deterministic layer evaluates against IBAC (does `email.send` to `manager@company.com` fall inside `Intent.parsed`?) and FIDES (does the trusted-recipient + possibly-tainted-body combination satisfy the P-F flow check?). Both pass.
+The Guardian's deterministic layer evaluates against IBAC (does `email.send` to `manager@example.com` fall inside `Intent.parsed`?) and FIDES (does the trusted-recipient + possibly-tainted-body combination satisfy the P-F flow check?). Both pass.
 
 ```json
 {
@@ -112,7 +112,7 @@ The Guardian's deterministic layer evaluates against IBAC (does `email.send` to 
     ],
     "policy_data": {
       "fides": { "recipient_trust": "trusted", "body_trust": "untrusted", "p_f_passed": true },
-      "ibac": { "matched_capability": { "tool": "email.send", "resource": "manager@company.com" } }
+      "ibac": { "matched_capability": { "tool": "email.send", "resource": "manager@example.com" } }
     },
     "cited_provenance_ids": ["p1", "p3"],
     "metadata": {
@@ -150,7 +150,7 @@ User's committed Intent: `["summarize Project X"]`. The agent attempts `email.se
   ],
   "policy_data": {
     "ibac": {
-      "requested_capability": { "tool": "email.send", "resource": "manager@company.com" },
+      "requested_capability": { "tool": "email.send", "resource": "manager@example.com" },
       "intent_parsed": ["summarize.read"],
       "closest_match_in_intent": null
     }

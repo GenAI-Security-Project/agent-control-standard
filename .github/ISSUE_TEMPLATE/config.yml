@@ -1,0 +1,16 @@
+# Routes people away from filing security reports as public issues, which is
+# the single most common way a coordinated disclosure gets blown.
+
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new
+    about: Do not open a public issue. Report privately here. See SECURITY.md for scope, response times, and safe harbor.
+
+  - name: Propose a specification change
+    url: https://github.com/GenAI-Security-Project/agent-control-standard/discussions
+    about: Schema, hook, and event changes affect every downstream implementer. Start a Discussion before opening a PR.
+
+  - name: Ask a question
+    url: https://github.com/GenAI-Security-Project/agent-control-standard/discussions
+    about: Questions about using or implementing ACS belong in Discussions.

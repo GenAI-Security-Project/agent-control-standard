@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/skill-register.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-register.json",
   "title": "steps/skillRegister payload",
   "description": "Fires when a skill enters the agent's available set, before it is eligible to load or run. This is the static vetting gate: the only point where a Guardian inspects the whole skill artifact and fixes its approved integrity digest before any of its actions execute. Per-action hooks like steps/toolCallRequest cannot catch a payload split across a skill's actions, because each action is benign in isolation. The malice exists only in the composition. The approval recorded here is what steps/skillLoad is later checked against, by the (skill_id, digest) pair. A Guardian MAY deny registration; a denied skill MUST NOT become eligible to load. The full definition body travels in this payload for inspection but is NOT persisted to the AgBOM. Only definition.ref and definition.digest persist (Spec Review Principle 3).",
   "type": "object",

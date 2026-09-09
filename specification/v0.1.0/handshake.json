@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/handshake.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/handshake.json",
   "title": "ACS Handshake",
   "description": "Capability negotiation messages exchanged at session start, before any hook traffic. The Observed Agent sends a ClientHello; the Guardian Agent responds with a ServerHello. Version mismatch terminates with an UNSUPPORTED_VERSION error in the JSON-RPC error envelope. Unknown fields MUST be ignored at every level. This file defines both message shapes via $defs; the wire encoding wraps them in the standard request/response envelope using method 'handshake/hello'.",
   "type": "object",

@@ -1,82 +1,93 @@
-# This workflow synchronizes the version from the version.txt file to all project files
-# It can be triggered manually or on changes to the version.txt file
+# Synchronizes the version in version.txt across the project files.
+# Triggers on a push to version.txt on main, or manually.
 name: Sync Version
 
 on:
-  # Trigger on changes to version.txt file
   push:
     paths:
       - 'version.txt'
     branches: ["main"]
-  
-  # Allow manual trigger
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
+# Deny by default. The one job below grants itself only what it needs.
+permissions: {}
+
+# A second push to version.txt while a run is in flight would race the first
+# on the same branch name.
+concurrency:
+  group: sync-version-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   sync-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create the version-sync branch
+      pull-requests: write   # open the PR
     steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "latest"
-      
-      - name: Configure Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Read version from version.txt file
+          version: "0.9.9"
+
+      - name: Read and validate version
         id: version
         run: |
-          VERSION=$(cat version.txt)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Current version: $VERSION"
-      
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < version.txt)"
+          # version.txt is attacker-controlled by anyone with write access.
+          # Anything not matching semver stops here rather than reaching a
+          # shell, a git ref, or PR body markdown downstream.
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error file=version.txt::Not a valid semantic version"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Validated version: ${VERSION}"
+
       - name: Sync versions across files
+        env:
+          # Passed through the environment, never interpolated into the shell
+          # command. A ${{ }} expansion inside run: would execute as code.
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          uv run .github/workflows/sync_version.py "${{ env.VERSION }}"
-      
+          set -euo pipefail
+          uv run .github/workflows/sync_version.py "$VERSION"
+
       - name: Check for changes
         id: changes
         run: |
+          set -euo pipefail
           if git diff --quiet; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "No changes detected"
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected"
           fi
-      
-      - name: Create Pull Request
+
+      - name: Create pull request
         if: steps.changes.outputs.has_changes == 'true'
-        uses: peter-evans/create-pull-request@v5
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Automated: sync version to ${{ env.VERSION }}"
-          title: "Sync version to ${{ env.VERSION }}"
+          commit-message: "Automated: sync version to ${{ steps.version.outputs.version }}"
+          title: "Sync version to ${{ steps.version.outputs.version }}"
           body: |
-            This PR synchronizes the version across all project files to `${{ env.VERSION }}`.
-            
-            Updated files:
-            - `pyproject.toml`
-            - `docs/spec/instrument/specification.md`
-            - `specification/ACS/acs_schema.json`
-            
-            The version was read from the `version.txt` file.
-          branch: version-sync-${{ env.VERSION }}
+            Synchronizes the release version in `pyproject.toml` to
+            `${{ steps.version.outputs.version }}`, read from `version.txt` and
+            validated as semver.
+
+            The specification version is deliberately not touched. It lives in
+            the schema `$id`, the `specification/v0.1.0/` directory name, and
+            the `$ref` links between those files. It moves only when the
+            specification changes, through a migration that renames the
+            directory and rewrites the references together.
+          branch: version-sync-${{ steps.version.outputs.version }}
           delete-branch: true
+          sign-commits: true
           add-paths: |
             pyproject.toml
-            docs/spec/instrument/specification.md
-            specification/ACS/acs_schema.json
-          

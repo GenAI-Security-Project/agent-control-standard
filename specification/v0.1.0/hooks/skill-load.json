@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/skill-load.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-load.json",
   "title": "steps/skillLoad payload",
   "description": "Fires when a registered skill activates into a session, before its actions run. Where steps/skillRegister vets the artifact statically and once, steps/skillLoad governs each activation in live context. It carries the load path so a Guardian can see and contain inter-skill cascades (skill A loads B loads C, each clean alone), and it carries the digest of the artifact being loaded so the Guardian can bind this activation to an approved prior registration. A skillLoad MUST be correlatable to a prior approved steps/skillRegister for the same skill_id and digest. A load the Guardian cannot tie to an approved registration, or whose digest differs from the approved one, is unverifiable and SHOULD be denied. Without this binding the lifecycle gate is bypassable: a framework could emit skillLoad for an artifact that was never registered or whose registration was denied. The Guardian also SHOULD deny when load_path shows a skill loading another skill outside its declared composed_skills.",
   "type": "object",

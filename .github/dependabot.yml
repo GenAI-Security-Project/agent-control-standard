@@ -1,0 +1,56 @@
+# Dependabot version updates.
+#
+# Security updates are enabled separately in repository settings and fire on
+# advisories regardless of this file. This config covers routine version
+# drift, so a dependency is current before it becomes a CVE.
+#
+# Every ecosystem sets a cooldown. A compromised release is most dangerous in
+# the hours after publication, and registry takeovers are usually caught and
+# yanked within days. Waiting before proposing a bump costs nothing here and
+# keeps a poisoned version from landing in a PR that looks routine.
+
+version: 2
+updates:
+  # GitHub Actions run with write access to the repository. Actions are pinned
+  # to commit SHAs in the workflows, and Dependabot understands SHA pins and
+  # updates them along with the version comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Python dependencies resolved through uv.lock. The only runtime surface is
+  # the documentation build and the version-sync script.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      # Patch and minor bumps for the docs toolchain land as one PR. Majors
+      # stay separate, since mkdocs-material majors have broken builds before.
+      docs-toolchain:
+        patterns:
+          - "mkdocs*"
+          - "mike"
+          - "pymdown-extensions"
+        update-types:
+          - "minor"
+          - "patch"

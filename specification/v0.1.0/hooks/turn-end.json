@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/turn-end.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-end.json",
   "title": "steps/turnEnd payload",
   "description": "Fires at the end of an agent turn. Audit-only — the turn has already happened, so the Guardian writes a ContextEntry but cannot return 'deny' or 'modify'. The matching turnStart's turn_id is referenced via metadata.turn_id on the envelope (and SHOULD also appear in this payload for self-containment). Closes the per-turn audit window so policies that key on per-turn state (cumulative-taint reset, tool-call counts, etc.) have a clean boundary to compute against.",
   "type": "object",

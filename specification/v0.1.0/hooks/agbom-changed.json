@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/agbom-changed.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-changed.json",
   "title": "agbom/changed payload",
   "description": "AgBOM mutation notification. Emitted by the Observed Agent whenever a component is added, removed, or version-changed mid-session. MAY be denied by the Guardian to block a hot-swap (e.g., refuse a model upgrade mid-session); otherwise audited. MUST be written into the SessionContext audit chain alongside the originating mutation.",
   "type": "object",

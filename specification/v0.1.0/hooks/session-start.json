@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/session-start.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json",
   "title": "steps/sessionStart payload",
   "description": "Fires once at session initiation, before any other steps/* hook for the session_id. Establishes the session boundary, opens the receipt chain (the first ContextEntry has previous_hash=null), and lets Guardians attach session-level state (policy bundle selection, tenant routing, identity binding) before content-bearing hooks fire. All payload fields are OPTIONAL — the simplest valid invocation is an empty payload that just marks the session boundary. Required by paradigms that need an explicit session boundary marker (AARM cumulative-context, IBAC intent lock at session start) and recommended for any deployment that wants to attach session-level identity or policy state out-of-band from agentTrigger.",
   "type": "object",

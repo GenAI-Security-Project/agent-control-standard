@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/trace/ocsf-mapping.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json",
   "title": "ACS Trace → OCSF event-class mapping",
   "description": "Normative mapping from ACS hooks and decisions to OCSF (Open Cybersecurity Schema Framework) event classes. v0.1.0 conformance requires that a deployment emitting OCSF for the Trace pillar uses these class UIDs and severity rules verbatim. OCSF classes are referenced by their stable class_uid as of OCSF 1.5+.",
   "type": "object",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/skill-unload.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-unload.json",
   "title": "steps/skillUnload payload",
   "description": "Fires when a skill leaves the active set. Its enforcement value is low: by unload time the skill's actions have already run, so a Guardian typically observes rather than denies. It earns a place for two reasons: it keeps the AgBOM's active inventory accurate, and repeated load/unload churn of the same skill is itself an evasion signal worth tracing. Deployments MAY fold this into agbom/changed instead of emitting a distinct hook; the field shape below is what agbom/changed would carry for a skill removal.",
   "type": "object",

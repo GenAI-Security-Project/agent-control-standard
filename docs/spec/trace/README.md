@@ -23,7 +23,7 @@ Modern agents orchestrate complex workflows: reasoning chains, tool execution, k
 
 **Performance**: Identify bottlenecks in reasoning chains. Optimize tool usage patterns. Monitor resource consumption across agent workflows.
 
-**Trust**: Verifiable audit trails for regulatory compliance. Explainable decisions for stakeholder confidence.
+**Trust**: Observable, reconstructable audit trails for regulatory compliance. Trace events are self-reported observations produced inside the environment being observed; they become evidence only when a party outside the emitting runtime attests to them (see the verifier-side discussion in issue #18). Explainable decisions for stakeholder confidence.
 
 ## How It Works
 

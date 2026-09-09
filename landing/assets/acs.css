@@ -1,0 +1,279 @@
+/* ACS landing page. Tokens mirror agentcontrolstandard.org, except where the source
+   value failed a WCAG contrast measurement. Those five carry their ratio inline. */
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --acs-page: #ffffff;
+  --acs-surface: #f4f5f7;
+  --acs-surface-2: #eef0f4;
+  --acs-text: #121212;
+  --acs-text-soft: #5f636d;
+  --acs-text-muted: #6b7079;
+  --acs-text-inverse: #f7f7f7;
+  --acs-brand: #111111;
+  --acs-accent-navy: #1b4f72;
+  --acs-accent-teal: #17a2b8;
+  --acs-border: #e5e7eb;
+  --acs-border-strong: #d0d5dd;
+  --acs-footer: #111111;
+  /* Was hsla(0,0%,7%,.18), which composited to #d4d4d4 for 1.48:1 against the page.
+     SC 1.4.11 needs 3:1. Solid navy measures 8.72:1. */
+  --acs-focus-ring: #1b4f72;
+  --acs-grid-line: hsla(0, 0%, 7%, 0.04);
+  --acs-node-fill: #ffffff;
+  --acs-node-stroke: #6b7079;   /* 4.98:1 on the page */
+  --acs-spoke: #6b7079;
+  --acs-hex-fill: #f4f5f7;
+  /* Was #c4cdd8 for 1.47:1 against the hexagon fill. The center of the diagram was
+     close to invisible. #7d8899 measures 3.29:1. */
+  --acs-hex-stroke: #7d8899;
+  --acs-tier-1: #0f7b3f;
+  --acs-tier-2: #1b4f72;
+  --acs-tier-3: #6b46c1;
+  --acs-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --acs-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* Dark tokens are redefined in two places so the toggle wins in both directions. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --acs-page: #0a0a0a;
+    --acs-surface: #161616;
+    --acs-surface-2: #202020;
+    --acs-text: #ffffff;
+    --acs-text-soft: #9ca3af;
+    /* Was #6b7280 for 3.74:1 on the surface. SC 1.4.3 needs 4.5:1. This is 5.48:1. */
+    --acs-text-muted: #868e9c;
+    --acs-brand: #1b4f72;
+    --acs-accent-navy: #2e86c1;
+    --acs-accent-teal: #1abc9c;
+    --acs-border: #2a2a2a;
+    --acs-border-strong: #373737;
+    --acs-footer: #0a0a0a;
+    /* Was hsla(0,0%,100%,.2) for 1.77:1. Solid measures 8.67:1. */
+    --acs-focus-ring: #63b3ed;
+    --acs-grid-line: hsla(0, 0%, 100%, 0.04);
+    --acs-node-fill: #111111;
+    --acs-node-stroke: #a0aec0;
+    /* Was #3d4f65 for 2.36:1 against the page. This is 8.78:1. */
+    --acs-spoke: #a0aec0;
+    --acs-hex-fill: #0d1117;
+    --acs-hex-stroke: #63b3ed;
+    --acs-tier-1: #48bb78;
+    --acs-tier-2: #63b3ed;
+    --acs-tier-3: #805ad5;
+  }
+}
+
+:root[data-theme="dark"] {
+  --acs-page: #0a0a0a;
+  --acs-surface: #161616;
+  --acs-surface-2: #202020;
+  --acs-text: #ffffff;
+  --acs-text-soft: #9ca3af;
+  --acs-text-muted: #868e9c;
+  --acs-brand: #1b4f72;
+  --acs-accent-navy: #2e86c1;
+  --acs-accent-teal: #1abc9c;
+  --acs-border: #2a2a2a;
+  --acs-border-strong: #373737;
+  --acs-footer: #0a0a0a;
+  --acs-focus-ring: #63b3ed;
+  --acs-grid-line: hsla(0, 0%, 100%, 0.04);
+  --acs-node-fill: #111111;
+  --acs-node-stroke: #a0aec0;
+  --acs-spoke: #a0aec0;
+  --acs-hex-fill: #0d1117;
+  --acs-hex-stroke: #63b3ed;
+  --acs-tier-1: #48bb78;
+  --acs-tier-2: #63b3ed;
+  --acs-tier-3: #805ad5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--acs-font);
+  color: var(--acs-text);
+  background-color: var(--acs-page);
+  background-image: linear-gradient(var(--acs-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--acs-grid-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  line-height: 1.6;
+}
+
+a { color: inherit; }
+a:focus-visible,
+button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
+
+.layout { display: grid; grid-template-columns: 260px 1fr; }
+
+.sidebar {
+  position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+  padding: 2rem 1.5rem; border-right: 1px solid var(--acs-border);
+  display: flex; flex-direction: column; gap: 1.5rem;
+}
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  font-size: 1.1rem;
+  text-decoration: none;
+}
+.wordmark img { width: 28px; height: 28px; border-radius: 6px; }
+.sidebar nav { display: flex; flex-direction: column; gap: 0.6rem; }
+.sidebar nav a { text-decoration: none; color: var(--acs-text-soft); }
+.sidebar nav a:hover { color: var(--acs-text); }
+/* This one navigates to the documentation while its neighbours are in-page anchors. */
+.sidebar nav a.nav-primary {
+  font-weight: 600;
+  color: var(--acs-text);
+  padding-bottom: 0.6rem;
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid var(--acs-border);
+}
+.sidebar h2 { font-size: 0.75rem; text-transform: uppercase; color: var(--acs-text-muted); }
+
+main { padding: 4rem 3rem; max-width: 1100px; }
+section { padding-block: 3.5rem; border-top: 1px solid var(--acs-border); }
+section:first-of-type { border-top: 0; }
+
+.hero { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: center; }
+.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); line-height: 1.02; letter-spacing: -0.03em; margin: 0; }
+.hero p { font-size: 1.15rem; color: var(--acs-text-soft); }
+
+.cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
+.cta {
+  display: inline-flex; align-items: center; min-height: 50px; padding: 0.85rem 1.25rem;
+  border: 1px solid var(--acs-border-strong); border-radius: 999px;
+  font-weight: 600; text-decoration: none;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.cta:hover { background-color: var(--acs-surface); transform: translateY(-1px); }
+.cta-primary { background-color: var(--acs-brand); color: var(--acs-text-inverse); border-color: var(--acs-brand); }
+
+#theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  color: var(--acs-text-soft);
+  background-color: transparent;
+  border: 1px solid var(--acs-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+#theme-toggle:hover {
+  background-color: var(--acs-surface);
+  color: var(--acs-text);
+}
+#theme-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+/* The moon is filled rather than stroked, so it reads as a shape at this size. */
+#theme-toggle .icon-moon { fill: currentColor; stroke: none; }
+
+/* Show the mark for the theme a click would give, not the one already showing. */
+#theme-toggle .icon-sun { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #theme-toggle .icon-moon { display: none; }
+  :root:not([data-theme="light"]) #theme-toggle .icon-sun { display: inline; }
+}
+:root[data-theme="dark"] #theme-toggle .icon-moon { display: none; }
+:root[data-theme="dark"] #theme-toggle .icon-sun { display: inline; }
+:root[data-theme="light"] #theme-toggle .icon-moon { display: inline; }
+:root[data-theme="light"] #theme-toggle .icon-sun { display: none; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; }
+.card { padding: 1.5rem; border: 1px solid var(--acs-border); border-radius: 14px; background-color: var(--acs-surface); }
+.card h3 { margin-top: 0; }
+
+.standards {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+.standards li {
+  padding: 1.1rem;
+  border: 1px solid var(--acs-border);
+  border-radius: 12px;
+  background-color: var(--acs-surface);
+}
+.standards a {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.standards a:hover { color: var(--acs-accent-navy); }
+.standards span {
+  display: block;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--acs-text-soft);
+}
+
+/* Cap the measure so body text stays scannable on a wide screen. The card and
+   standards grids set their own widths and are excluded. */
+main section > p,
+main section > ul:not(.standards),
+main section > table { max-width: 72ch; }
+
+.tier { border-left: 4px solid var(--acs-border-strong); padding-left: 1rem; margin-bottom: 1.25rem; }
+.tier-1 { border-left-color: var(--acs-tier-1); }
+.tier-2 { border-left-color: var(--acs-tier-2); }
+.tier-3 { border-left-color: var(--acs-tier-3); }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--acs-border); }
+code { font-family: var(--acs-mono); background-color: var(--acs-surface-2); padding: 0.15em 0.4em; border-radius: 4px; }
+
+footer { background-color: var(--acs-footer); color: var(--acs-text-inverse); padding: 3rem; }
+footer a { color: var(--acs-text-inverse); }
+footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+
+@media (max-width: 1024px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--acs-border); }
+  .hero { grid-template-columns: 1fr; }
+  main { padding: 2rem 1.25rem; }
+}
+
+/* Continuous motion is a vestibular trigger and a battery cost. CSS animation is
+   stopped here. The SVG's SMIL elements carry their own guard, because
+   `animation: none` does not reach them. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

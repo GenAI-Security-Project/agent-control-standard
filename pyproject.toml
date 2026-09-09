@@ -1,6 +1,19 @@
 [project]
 name = "acs"
-version = "0.1.1"
+version = "0.1.3"
 description = "ACS Documentation"
-requires-python = ">=3.8"
-dependencies = [ "mike>=1.2.0", "mkdocs-material>=9.6.14", "pymdown-extensions>=10.0.0",]
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [ "mike>=1.2.0", "mkdocs-material>=9.6.14", "pymdown-extensions>=11.0.1",]
+
+[dependency-groups]
+dev = [ "pytest>=8.0", "jsonschema>=4.25.0",]
+
+[tool.pytest.ini_options]
+# The deploy workflow runs a bare `uv run pytest -v` as the gate the site build
+# depends on, in the environment `uv sync --locked` produces. Without this,
+# pytest collects the whole repository, so any suite whose dependencies are not
+# in uv.lock fails at collection and takes the deploy down with it. Scoping
+# collection to tests/ keeps that gate about the guards it was written for.
+# Suites that carry their own dependencies run from their own workflow.
+testpaths = ["tests"]

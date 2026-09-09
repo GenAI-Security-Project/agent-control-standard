@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/subagent-start.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-start.json",
   "title": "steps/subagentStart payload",
   "description": "Fires when a parent agent spawns a subagent in-process — i.e., delegation that does NOT cross an A2A boundary. A2A-mediated delegation flows through steps/agentTrigger with trigger_type='a2a_inbound' on the subagent's side; subagentStart is for the same-runtime case. The audit chain must record whether the subagent inherits the parent's Intent.parsed, gets a derived intent, or starts fresh — and a Guardian MAY deny the spawn if intent_derivation would grant capabilities the parent's Intent.parsed does not authorize. Sessions are per-subagent: each subagent gets its own session_id and SessionContext; the parent–child relation is captured here.",
   "type": "object",

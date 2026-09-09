@@ -1,6 +1,7 @@
 # Agent Control Standard
 
-[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE.txt)
+[![Code: Apache 2.0](https://img.shields.io/badge/Code-Apache%202.0-blue.svg)](./LICENSE)
+[![Docs: CC BY-SA 4.0](https://img.shields.io/badge/Docs-CC%20BY--SA%204.0-lightgrey.svg)](./LICENSE-DOCS)
 
 ![ACS Banner](docs/assets/banner.png)
 
@@ -26,15 +27,15 @@ The standard covers the following aspects
 
 ## Getting Started
 
-- 📚 **Explore the Documentation:** Visit the [Documentation Site](https://agentcontrolstandard.org) for a complete overview, the full specification, tutorials, and guides.
-- 📝 **View the Specification:** [Specification](https://github.com/Agent-Control-Standard/ACS/tree/main/specification)
+- 📚 **Explore the Documentation:** Once GitHub Pages is enabled, visit the [documentation site](https://genai-security-project.github.io/agent-control-standard/docs/) for a complete overview, the full specification, tutorials, and guides. The [project landing page](https://genai-security-project.github.io/agent-control-standard/) covers what ACS is and why it exists.
+- 📝 **View the Specification:** [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification)
 
 ## Contributing
 
 We welcome community contributions to enhance and evolve ACS!
 
-- **Questions & Discussions:** Join our [GitHub Discussions](https://github.com/Agent-Control-Standard/ACS/discussions).
-- **Issues & Feedback:** Report issues or suggest improvements via [GitHub Issues](https://github.com/Agent-Control-Standard/ACS/issues).
+- **Questions & Discussions:** Join our [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions).
+- **Issues & Feedback:** Report issues or suggest improvements via [GitHub Issues](https://github.com/GenAI-Security-Project/agent-control-standard/issues).
 - **Contribution Guide:** See our [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute.
 
 ## What's next
@@ -64,4 +65,6 @@ We welcome community contributions to enhance and evolve ACS!
 
 ## About
 
-The ACS is an open-source project under the [MIT License](LICENSE.txt), and is open to contributions from the community.
+ACS is an open project of the [OWASP GenAI Security Project](https://genai.owasp.org/), open to contributions from the community.
+
+Code and schemas are licensed under the [Apache License 2.0](./LICENSE). Documentation is licensed under [CC BY-SA 4.0](./LICENSE-DOCS). See [LICENSING.md](./LICENSING.md) for the scope map.

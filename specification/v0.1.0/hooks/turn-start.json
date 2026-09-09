@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/turn-start.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-start.json",
   "title": "steps/turnStart payload",
   "description": "Fires at the beginning of an agent turn. Lightweight — most policies will return 'allow' and use the hook for state transitions in policy. Decision-eligible (a Guardian MAY deny to block the turn from starting, e.g., to enforce a per-turn rate limit or to refuse auto-continuation under certain conditions). The framework MUST set metadata.turn_id on the envelope and propagate that turn_id onto every subsequent per-step ContextEntry until the matching turnEnd. Without an explicit turn boundary, AARM-style 'no consequential action in N turns after taint' has to infer turn breaks from userMessage/agentResponse pairing — an inference that breaks under auto-continuation, planning loops, and multi-step ReAct cycles.",
   "type": "object",

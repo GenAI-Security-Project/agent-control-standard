@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/response-envelope.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json",
   "title": "ACS Response Envelope",
   "description": "JSON-RPC 2.0 response envelope with ACS extensions. Sent by the Guardian Agent to the Observed Agent.",
   "type": "object",
@@ -12,7 +12,13 @@
       "type": ["string", "number", "null"],
       "description": "Echoes the request id. Per JSON-RPC 2.0, MUST be null when the id cannot be determined (e.g. parse error or invalid request); otherwise matches the request id. A successful (result) response always carries the original non-null id."
     },
-    "result": { "$ref": "#/$defs/AcsResult" },
+    "result": {
+      "description": "Method-dependent. Hook, wrapped-protocol, agbom/* and system/* methods return an AcsResult. handshake/hello returns a ServerHello (handshake.json), which carries no decision. The two shapes share no required field, so a conformant response matches exactly one branch: a ServerHello has no 'decision' and an AcsResult has no 'negotiated_version'.",
+      "oneOf": [
+        { "$ref": "#/$defs/AcsResult" },
+        { "$ref": "handshake.json#/$defs/ServerHello" }
+      ]
+    },
     "error": { "$ref": "#/$defs/JsonRpcError" }
   },
   "oneOf": [

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/agbom/document.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/document.json",
   "title": "ACS AgBOM Document",
   "description": "Canonical AgBOM document. Wire-shape for the Inspect pillar. Serializations to CycloneDX 1.6, SPDX 3.0, and SWID are deterministic derivations from this canonical form (see inspect/format-mapping.json). The Observed Agent always emits this canonical form on the wire; the Guardian renders serializations on request from downstream consumers.",
   "type": "object",
