@@ -1,0 +1,48 @@
+# Test fixture only -- NOT read by production code. Identical to the real
+# mapping.yaml except `allow` is (wrongly) marked require_policy_references,
+# so a real AGT "allow" verdict for a benign command (which carries no
+# `reason`/`message`, per bridge.test.ts) makes mapVerdict throw for real.
+#
+# AND except that no `intervention_points` row here carries a per-point
+# `modifications` block -- so this file has no point that can express a
+# transform at all. The throw this fixture exists to provoke happens on an
+# `allow`, so nothing it is used for reaches a `modify`; the same caveat as
+# its sibling fixture applies to any later test that does, and the header
+# used to say the file was identical.
+#
+# Used by packages/guardian/test/server.test.ts to
+# prove the Guardian's evaluation-failure catch turns a genuine
+# assemblePreToolCallSnapshot/bridge.evaluate/mapVerdict throw into a well-formed
+# JSON-RPC error in the ACS-reserved range, not an unhandled exception that
+# Bun.serve would otherwise turn into a text/html 500.
+acs_version: "0.1.0"
+agt_version: "0.3.1-beta"
+
+intervention_points:
+  pre_tool_call: { acs_method: "steps/toolCallRequest" }
+  post_tool_call: { acs_method: "steps/toolCallResult" }
+  agent_startup: { acs_method: "steps/sessionStart" }
+  agent_shutdown: { acs_method: "steps/sessionEnd" }
+  input: { acs_method: "steps/userMessage" }
+  output: { acs_method: "steps/agentResponse" }
+  pre_model_call: { acs_method: null, note: "no ACS v0.1.0 method carries a model call, so this point is unexpressed at every verdict" }
+  post_model_call: { acs_method: null, note: "no ACS v0.1.0 method carries a model call, so this point is unexpressed at every verdict" }
+
+verdicts:
+  allow: { decision: allow, require_policy_references: true }
+  deny: { decision: deny }
+  warn: { decision: allow, require_policy_references: true }
+  escalate: { decision: ask }
+  transform: { decision: modify }
+
+field_synthesis:
+  reasoning:
+    source: verdict.message
+  reason_codes:
+    source: verdict.reason
+    wrap: array
+  policy_references:
+    rule_id:
+      source: verdict.reason
+    policy_id:
+      literal: agt_stock

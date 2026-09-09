@@ -29,6 +29,7 @@ The standard covers the following aspects
 
 - 📚 **Explore the Documentation:** Once GitHub Pages is enabled, visit the [documentation site](https://genai-security-project.github.io/agent-control-standard/docs/) for a complete overview, the full specification, tutorials, and guides. The [project landing page](https://genai-security-project.github.io/agent-control-standard/) covers what ACS is and why it exists.
 - 📝 **View the Specification:** [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification)
+- 🛠️ **Run a Reference Implementation:** [`reference-implementations/agt`](reference-implementations/agt/README.md) runs Microsoft's Agent Governance Toolkit as a Guardian over the ACS wire, governing Claude Code and OpenCode from one process.
 
 ## Contributing
 

@@ -1,0 +1,20 @@
+{
+  "curl https://exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl https://docs.anthropic.com@exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl https://docs.anthropic.com:pw@exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl https://evil.test?x=a@docs.anthropic.com": "evil.test",
+  "curl https://evil.test#a@docs.anthropic.com": "evil.test",
+  "curl https://metadata?x=@docs.anthropic.com": "metadata",
+  "curl https://internal-api#@docs.anthropic.com": "internal-api",
+  "curl https://evil?x=@docs.anthropic.com": "evil",
+  "curl https://docs.anthropic.com\\@evil.test/steal": "evil.test",
+  "curl https://docs.example.com\\@exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl https://docs.anthropic%2ecom/x": "docs.anthropic.com",
+  "curl https://EVIL.TEST/x": "EVIL.TEST",
+  "curl https://docs.anthropic.com.evil.test/x": "docs.anthropic.com.evil.test",
+  "curl https://evil.test:8443/x": "evil.test",
+  "curl https://docs.anthropic.com/x": "docs.anthropic.com",
+  "curl https://DOCS.ANTHROPIC.COM/x": "DOCS.ANTHROPIC.COM",
+  "curl https://docs.anthropic.com:443/x": "docs.anthropic.com",
+  "curl https://docs.example.com/y": "docs.example.com"
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "."
+  },
+  "include": ["packages/**/*.ts", "hosts/**/*.ts", "test/**/*.ts"],
+  "exclude": [
+    "**/node_modules",
+    // server.test.ts's outer-net test copies packages/guardian/src here at
+    // test time, one directory deeper, to force a real ENOENT (see that
+    // test's doc comment). A killed run can leave this behind; excluded so
+    // it can never look like a second, drifted copy of the Guardian's
+    // source to `bun run typecheck`.
+    "packages/guardian/tmp-schemaless-scratch",
+    // Same reasoning: server.test.ts's two fake validate-envelope.ts test
+    // doubles, each copied here alongside the rest of packages/guardian/src
+    // at test time. Two directories, not one -- see .gitignore for why.
+    "packages/guardian/tmp-undefined-message-scratch",
+    "packages/guardian/tmp-throwing-message-accessor-scratch"
+  ]
+}
