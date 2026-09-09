@@ -53,9 +53,10 @@ turns into a blocklist.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Matches the import style the other tools tests use, in test_publish_schemas.py:12.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from tools.base_branch_guard import (  # noqa: E402
+from base_branch_guard import (  # noqa: E402
     PUBLISHING_BRANCH,
     decide,
     in_docs_lane,
@@ -142,12 +143,19 @@ def test_specification_pull_request_to_main_fails_and_names_the_file():
 
 
 def test_mixed_diff_fails():
+    """Only the offenders appear in the listing.
+
+    The assertion reads the listing rather than the whole message on purpose. The
+    message ends with "See CONTRIBUTING.md.", so a naive `not in message` check can
+    never pass and would push somebody into changing the guard to satisfy the test.
+    """
     status, message = decide(
         ["CONTRIBUTING.md", "specification/a.json"], PUBLISHING_BRANCH, "mix", FORK, REPO
     )
+    listing = message.split("\n\n")[0]
     assert status == 1
-    assert "specification/a.json" in message
-    assert "CONTRIBUTING.md" not in message
+    assert "specification/a.json" in listing
+    assert "CONTRIBUTING.md" not in listing
 
 
 def test_promotion_passes_with_specification_paths():
@@ -316,7 +324,7 @@ if __name__ == "__main__":
 uv run pytest tests/test_base_branch_guard.py -v
 ```
 
-Expected: 15 passed.
+Expected: 16 passed.
 
 - [ ] **Step 5: Run the whole suite to confirm nothing else broke**
 
@@ -419,11 +427,11 @@ jobs:
 - [ ] **Step 2: Validate the YAML parses**
 
 ```bash
-python3 -c "import sys,yaml;yaml.safe_load(open('.github/workflows/pr-base-guard.yml'))" \
+uv run python -c "import yaml;yaml.safe_load(open('.github/workflows/pr-base-guard.yml'))" \
   && echo OK
 ```
 
-Expected: `OK`. If `yaml` is unavailable, use `uv run python -c ...`.
+Expected: `OK`. It must be `uv run python`: the system `python3` on this machine has no PyYAML, and `import yaml` there fails with `ModuleNotFoundError` that reads like broken YAML.
 
 - [ ] **Step 3: Confirm the job id matches the required check string**
 
@@ -809,7 +817,7 @@ Expected: `OK`.
 
 ```bash
 for f in .github/ISSUE_TEMPLATE/*.yml; do
-  python3 -c "import sys,yaml;yaml.safe_load(open('$f'))" || echo "FAIL $f"
+  uv run python -c "import yaml;yaml.safe_load(open('$f'))" || echo "FAIL $f"
 done; echo done
 ```
 
@@ -1072,13 +1080,26 @@ uv run mkdocs build --strict && uv run pytest -v
 
 Expected: both pass.
 
-- [ ] **Step 6: Check for style violations**
+- [ ] **Step 6: Check for style violations in the prose you wrote**
+
+**Do not edit the DCO.** `CONTRIBUTING.md` lines 79 and 85 carry the Developer's
+Certificate of Origin, which is verbatim legal text ending each clause with `; or`. Those
+two semicolons are correct and must not be "fixed". The check below excludes that block
+so nobody reaches for it.
 
 ```bash
-grep -nE '(^|\. )(And|But|So|Or|Yet) |—|; ' CONTRIBUTING.md || echo "clean"
+awk '/^## Developer.s Certificate of Origin/{skip=1;next} skip && /^## /{skip=0} !skip' \
+  CONTRIBUTING.md > /tmp/prose.txt
+grep -nE '(^|\. )(And|But|So|Or|Yet) |—|; ' /tmp/prose.txt || echo "clean"
 ```
 
-Expected: `clean`.
+Expected: `clean`. Verified against the file as it stands today: 89 of 114 lines kept,
+every section except the DCO block, no matches.
+
+The `skip && /^## /` condition is what keeps the sections *after* the DCO in the check. A
+plain range expression drops everything to the end of the file, and `awk '!/pattern/,0'`
+does not exclude anything at all, because the range opens on the first line that does not
+match, which is line one.
 
 - [ ] **Step 7: Commit**
 
@@ -1184,8 +1205,7 @@ jobs:
             echo "integration already contains main. Nothing to sync."
             exit 0
           fi
-          if gh pr list --base integration --head main --state open --json number \
-             --jq 'length' | grep -qv '^0$'; then
+          if [ "$(gh pr list --base integration --head main --state open --json number --jq 'length')" -gt 0 ]; then
             echo "A sync pull request is already open."
             exit 0
           fi
@@ -1236,8 +1256,7 @@ jobs:
             echo "integration is not ahead of main. Nothing to promote."
             exit 0
           fi
-          if gh pr list --base main --head integration --state open --json number \
-             --jq 'length' | grep -qv '^0$'; then
+          if [ "$(gh pr list --base main --head integration --state open --json number --jq 'length')" -gt 0 ]; then
             echo "A promotion pull request is already open."
             exit 0
           fi
@@ -1293,6 +1312,14 @@ jobs:
             echo "Declared editorial. No issue required."
             exit 0
           fi
+          # The `edited` trigger fires every time anyone touches the body, so without
+          # this the queue comment gets reposted on every edit.
+          if gh pr view "$PR_NUMBER" --repo "$REPO" --json comments \
+             --jq '[.comments[] | select(.author.login == "github-actions")] | length' \
+             | grep -qv '^0$'; then
+            echo "Already commented on this pull request."
+            exit 0
+          fi
           for n in $NUMBERS; do
             if gh issue view "$n" --repo "$REPO" --json labels \
                --jq '.labels[].name' 2>/dev/null | grep -qx 'status:accepted'; then
@@ -1327,7 +1354,7 @@ In `.github/workflows/sync_version.yml`, change `branches: ["main"]` to `branche
 
 ```bash
 for f in .github/workflows/*.yml .github/dependabot.yml; do
-  python3 -c "import sys,yaml;yaml.safe_load(open('$f'))" || echo "FAIL $f"
+  uv run python -c "import yaml;yaml.safe_load(open('$f'))" || echo "FAIL $f"
 done; echo done
 ```
 
@@ -1336,7 +1363,7 @@ Expected: no `FAIL` lines.
 - [ ] **Step 7: Confirm no workflow grants more than it needs**
 
 ```bash
-grep -n -A4 "^permissions:" .github/workflows/*.yml
+grep -n -A4 "^permissions:" .github/workflows/*.yml .github/workflows/*.yaml
 ```
 
 Expected: every file has a top-level `permissions: {}` and per-job grants no wider than those written above.
@@ -1404,8 +1431,7 @@ jobs:
             exit 0
           fi
           TITLE="Review the Current Priority Scope (was due $DUE)"
-          if gh issue list --state open --search "$TITLE in:title" --json number \
-             --jq 'length' | grep -qv '^0$'; then
+          if [ "$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')" -gt 0 ]; then
             echo "Reminder already open."
             exit 0
           fi
@@ -1441,15 +1467,19 @@ uv run pytest -v && uv run mkdocs build --strict
 
 Expected: both pass.
 
-- [ ] **Step 2: Push and open the pull request against `main`**
+- [ ] **Step 2: Push the branch, and stop**
 
-At this point `integration` does not exist yet, and the diff touches `.github/`, `tools/`, and `tests/`, all off the documentation lane. This pull request therefore predates the rule it installs, which is the one time that is acceptable. Phase 2 Step 3 creates `integration` from `main` after it merges.
+Push only. Do not open the pull request yet.
 
 ```bash
 git push -u origin feature/contribution-governance
-gh pr create --base main --title "Install the contribution governance for the OWASP re-launch" \
-  --body-file design/2026-09-09-contribution-governance-design.md
 ```
+
+This diff touches `.github/`, `tools/`, and `tests/`, every one of them off the
+documentation lane. A pull request from here to `main` would fail the guard it is
+installing, so it goes to `integration` instead, and `integration` does not exist until
+Phase 2 Step 3. Opening it against `main` now is the single mistake that would deadlock
+the whole evening. Phase 2 Step 6 opens it correctly.
 
 ---
 
@@ -1457,37 +1487,41 @@ gh pr create --base main --title "Install the contribution governance for the OW
 
 **Not for subagent execution.** Every step below mutates the public OWASP repository in a way that is outward-facing, hard to reverse, or both: deleting a label removes it from every issue carrying it, filing issues notifies watchers, retargeting a pull request touches someone else's work, and moving the default branch changes what every visitor and every clone gets. The project lead runs these, or explicitly authorizes each one.
 
-**Order is not a preference.** Step 1 is a security precondition for Step 5.
+**Order is not a preference, and two orderings deadlock the repository.**
 
-- [ ] **Step 1: Pin `protect-main` to the literal ref**
+Pinning `protect-main` to a literal ref precedes moving the default branch, or the
+protection follows the default and leaves `main` bare. Separately, `base-branch-guard`
+becomes a required status check **last**, after the guard workflow has reached `main`
+through a promotion. A required check that no workflow reports never turns green, so
+adding it early blocks the Phase 1 pull request that installs the guard, and then blocks
+every documentation pull request whose merge commit does not yet carry the workflow.
+Version 1.0 of this plan added it in Step 1 and deadlocked itself.
 
-This happens before anything else. While the condition reads `~DEFAULT_BRANCH`, moving the default carries the protection with it and leaves `main` unprotected.
+- [ ] **Step 1: Pin `protect-main` to the literal ref, without the new check**
 
 ```bash
 gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 > /tmp/protect-main.json
 # Edit /tmp/protect-main.json:
 #   conditions.ref_name.include: ["refs/heads/main"]
 #   rules[pull_request].parameters.allowed_merge_methods: ["squash","rebase","merge"]
-#   rules[required_status_checks].parameters.required_status_checks:
-#     add {"context":"base-branch-guard"} alongside test and build
+# Do NOT add base-branch-guard yet. That is Step 9.
 # Leave required_approving_review_count at 1. Raising it throttles promotion, which is
 # the operation this whole model exists to serve.
 gh api -X PUT repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
   --input /tmp/protect-main.json
 gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
-  --jq '.conditions.ref_name.include, [.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[].context]'
+  --jq '.conditions.ref_name.include, [.rules[]|select(.type=="pull_request").parameters.allowed_merge_methods]'
 ```
 
-Expected: `["refs/heads/main"]` and a list containing `test`, `build`, `base-branch-guard`.
+Expected: `["refs/heads/main"]` and `["squash","rebase","merge"]`.
 
 - [ ] **Step 2: Merge the ready pull requests to `main`**
 
 Core-team decision, not an automated step. The sync's plan was merge #21, align #20 with it, then review #22. Doing this before `integration` exists means those pull requests never move.
 
-- [ ] **Step 3: Merge the Phase 1 pull request, then create `integration`**
+- [ ] **Step 3: Create `integration` from `main`**
 
 ```bash
-gh pr merge <phase-1-pr> --squash
 git fetch origin main
 git push origin origin/main:refs/heads/integration
 gh api repos/GenAI-Security-Project/agent-control-standard/branches --jq '.[].name'
@@ -1495,9 +1529,20 @@ gh api repos/GenAI-Security-Project/agent-control-standard/branches --jq '.[].na
 
 Expected: `integration` present and identical to `main`.
 
-- [ ] **Step 4: Retarget the remaining open pull requests**
+- [ ] **Step 4: Create `protect-integration` and `protect-release`**
 
-Because the branches are identical, no diff changes and no contributor redoes work.
+```bash
+gh api -X POST repos/GenAI-Security-Project/agent-control-standard/rulesets \
+  --input /tmp/protect-integration.json
+```
+
+`protect-integration` mirrors the pre-change `protect-main`: target `refs/heads/integration`, one approval, `require_code_owner_review: true`, `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: true`, `required_review_thread_resolution: true`, required checks `test` and `build`, merge methods squash and rebase, plus deletion and non-fast-forward rules.
+
+`protect-release` targets `refs/heads/release/*` with deletion, non-fast-forward, one approval, and the same required checks.
+
+- [ ] **Step 5: Retarget the remaining open pull requests**
+
+Because `integration` and `main` are identical, no diff changes and no contributor redoes work.
 
 ```bash
 for n in 63 24 22 60; do
@@ -1510,20 +1555,36 @@ gh pr list --json number,baseRefName --jq '.[] | "#\(.number) -> \(.baseRefName)
 
 After each retarget, confirm the required checks reported on the new base. Whether a base change re-triggers them is undocumented, and this repository's workflows declare no `pull_request` types. If a check is missing, close and reopen the pull request to force a run. Do not ask the contributor to rebase, which would cost them their existing approvals.
 
-- [ ] **Step 5: Create `protect-integration` and `protect-release`**
+- [ ] **Step 6: Open the Phase 1 pull request against `integration` and merge it**
 
 ```bash
-gh api -X POST repos/GenAI-Security-Project/agent-control-standard/rulesets \
-  --input /tmp/protect-integration.json
+gh pr create --base integration --head feature/contribution-governance \
+  --title "Install the contribution governance for the OWASP re-launch" \
+  --body "Implements design/2026-09-09-contribution-governance-design.md v1.1."
 ```
 
-`protect-integration` mirrors the pre-change `protect-main`: target `refs/heads/integration`, one approval, `require_code_owner_review: true`, `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: true`, `required_review_thread_resolution: true`, required checks `test` and `build`, merge methods squash and rebase, plus deletion and non-fast-forward rules.
+It targets `integration` because the diff touches `.github/`, `tools/`, and `tests/`. Merge it once `test` and `build` pass.
 
-`protect-release` targets `refs/heads/release/*` with deletion, non-fast-forward, one approval, and the same required checks.
+- [ ] **Step 7: Promote to `main`**
 
-- [ ] **Step 6: Move the default branch to `integration`**
+This publishes the site with the new `CONTRIBUTING.md` and, just as importantly, puts the guard workflow on `main` so Step 9 has something that can report.
 
-Last. Step 1 must already be done.
+```bash
+gh pr create --base main --head integration --title "Promote integration to main" \
+  --body "Carries the contribution governance to the publishing branch."
+```
+
+Merge with a **merge commit**, not a squash.
+
+```bash
+git fetch origin main && git ls-tree --name-only origin/main .github/workflows/
+```
+
+Expected: `pr-base-guard.yml` present on `main`.
+
+- [ ] **Step 8: Move the default branch to `integration`**
+
+Step 1 must already be done.
 
 ```bash
 gh repo edit GenAI-Security-Project/agent-control-standard --default-branch integration
@@ -1534,30 +1595,46 @@ gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
 
 Expected: `integration`, and `protect-main` still naming `refs/heads/main`.
 
-- [ ] **Step 7: Create the label taxonomy**
+- [ ] **Step 9: Add `base-branch-guard` to the required checks on `main`**
+
+Only now. The workflow reached `main` in Step 7, so the check can report.
+
+```bash
+gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 > /tmp/protect-main.json
+# Add {"context":"base-branch-guard"} to
+# rules[required_status_checks].parameters.required_status_checks
+gh api -X PUT repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
+  --input /tmp/protect-main.json
+gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
+  --jq '[.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[].context]'
+```
+
+Expected: `["test","build","base-branch-guard"]`.
+
+- [ ] **Step 10: Create the label taxonomy**
 
 ```bash
 gh label edit bug           --name 'type:bug'        --color 'd73a4a'
 gh label edit documentation --name 'type:docs'       --color '0075ca'
 gh label edit enhancement   --name 'type:proposal'   --color 'a2eeef'
-gh label create 'type:refimpl'     --color '1d76db' --description 'Reference implementation or adapter work'
-gh label create 'type:conformance' --color '5319e7' --description 'Conformance or dogfooding report'
+gh label create --force 'type:refimpl'     --color '1d76db' --description 'Reference implementation or adapter work'
+gh label create --force 'type:conformance' --color '5319e7' --description 'Conformance or dogfooding report'
 
-gh label create 'scope:in-focus' --color '0e8a16' --description 'Feeds the ninety-day committed outcome. Maintainers only'
-gh label create 'scope:deferred' --color 'fbca04' --description 'Real work, tracked, lands after Day 90. Maintainers only'
-gh label create 'scope:out'      --color 'e4e669' --description 'Outside what ACS does by design. Maintainers only'
+gh label create --force 'scope:in-focus' --color '0e8a16' --description 'Feeds the ninety-day committed outcome. Maintainers only'
+gh label create --force 'scope:deferred' --color 'fbca04' --description 'Real work, tracked, lands after Day 90. Maintainers only'
+gh label create --force 'scope:out'      --color 'e4e669' --description 'Outside what ACS does by design. Maintainers only'
 
-gh label create 'status:needs-triage' --color 'ededed' --description 'Not yet triaged. Applied by the issue forms'
-gh label create 'status:accepted'     --color '0e8a16' --description 'In the backlog. Maintainers only'
-gh label create 'status:blocked'      --color 'b60205' --description 'Waiting on another decision or PR'
-gh label create 'status:needs-info'   --color 'd876e3' --description 'Waiting on the filer'
+gh label create --force 'status:needs-triage' --color 'ededed' --description 'Not yet triaged. Applied by the issue forms'
+gh label create --force 'status:accepted'     --color '0e8a16' --description 'In the backlog. Maintainers only'
+gh label create --force 'status:blocked'      --color 'b60205' --description 'Waiting on another decision or PR'
+gh label create --force 'status:needs-info'   --color 'd876e3' --description 'Waiting on the filer'
 
-gh label create 'priority:P0' --color 'b60205' --description 'On the serial chain to the benchmark. Maintainers only'
-gh label create 'priority:P1' --color 'd93f0b' --description 'Maintainers only'
-gh label create 'priority:P2' --color 'fef2c0' --description 'Maintainers only'
+gh label create --force 'priority:P0' --color 'b60205' --description 'On the serial chain to the benchmark. Maintainers only'
+gh label create --force 'priority:P1' --color 'd93f0b' --description 'Maintainers only'
+gh label create --force 'priority:P2' --color 'fef2c0' --description 'Maintainers only'
 
 for w in spec coding-agents sdk identity outreach; do
-  gh label create "workstream:$w" --color 'c5def5' --description 'Owning workstream. Maintainers only'
+  gh label create --force "workstream:$w" --color 'c5def5' --description 'Owning workstream. Maintainers only'
 done
 ```
 
@@ -1571,7 +1648,7 @@ done
 
 Delete only those reporting `0`.
 
-- [ ] **Step 8: Create the milestones**
+- [ ] **Step 11: Create the milestones**
 
 ```bash
 for m in "Day 14:2026-09-24:Reference Implementation lead named. PR #21 floor decision closed. Discussions seeded. Domain transfer counterpart identified." \
@@ -1584,7 +1661,7 @@ for m in "Day 14:2026-09-24:Reference Implementation lead named. PR #21 floor de
 done
 ```
 
-- [ ] **Step 9: File the seeded onramp issues**
+- [ ] **Step 12: File the seeded onramp issues**
 
 Each carries `scope:in-focus`, `status:accepted`, `help wanted`, a workstream, and a priority. These are what make the acceptance gate an invitation rather than a queue.
 
@@ -1600,7 +1677,7 @@ Each carries `scope:in-focus`, `status:accepted`, `help wanted`, a workstream, a
 
 Items 8 and 9 are open decisions in the plan with Day 30 dates, so give them the Day 30 milestone.
 
-- [ ] **Step 10: File the tracked follow-up issues**
+- [ ] **Step 13: File the tracked follow-up issues**
 
 1. Workstream vocabulary mismatch between `GOVERNANCE.md` and the plan's open lead seats
 2. Label-strip enforcement workflow, if the permission lookup proves workable
@@ -1610,17 +1687,29 @@ Items 8 and 9 are open decisions in the plan with Day 30 dates, so give them the
 6. A comment on #52 that the DCO check stays indifferent to non-sign-off trailers
 7. Confirm whether Dependabot security updates honor a non-default `target-branch`
 
-- [ ] **Step 11: Verify the whole thing end to end**
+- [ ] **Step 14: Verify the whole thing end to end**
 
 ```bash
-# The guard fires on a real pull request
-git checkout -b scratch/guard-proof integration
-echo "# proof" >> specification/README.md 2>/dev/null || true
-git commit -asm "Prove the guard fires" && git push -u origin scratch/guard-proof
-gh pr create --base main --title "Scratch: prove the guard" --body "Delete me"
+# The guard fires on a real pull request. specification/proposals/ exists; a README at
+# specification/README.md does not, so creating a new file is what actually produces a
+# diff here.
+git fetch origin integration
+git checkout -b scratch/guard-proof origin/integration
+mkdir -p specification/v0.1.0
+printf 'guard proof, delete me\n' > specification/v0.1.0/GUARD_PROOF.txt
+git add specification/v0.1.0/GUARD_PROOF.txt
+git commit -s -m "Prove the guard fires"
+git push -u origin scratch/guard-proof
+gh pr create --base main --head scratch/guard-proof \
+  --title "Scratch: prove the guard" --body "Delete me"
 ```
 
-Expected: the `base-branch-guard` check fails and names `specification/README.md`. Close the pull request and delete the branch afterward.
+Expected: the `base-branch-guard` check fails and names
+`specification/v0.1.0/GUARD_PROOF.txt`. Then clean up.
+
+```bash
+gh pr close scratch/guard-proof --delete-branch
+```
 
 ```bash
 gh label list --limit 100
@@ -1635,8 +1724,10 @@ Expected: the taxonomy from Step 7, default branch `integration`, three branch r
 
 ## Self-review
 
-**Spec coverage.** Current Priority Scope is Task 5. Branching and the allowlist are Tasks 1, 2, and 5 plus Phase 2 Steps 3, 5, and 6. Labels are Task 3 and Phase 2 Step 7. Issue intake is Task 3. The pull request gate is Tasks 4 and 7. Rulesets are Phase 2 Steps 1 and 5. CODEOWNERS for `reference-implementations/` and `adapters/` is deliberately deferred until #60 and #22 land, since a CODEOWNERS entry for a path that does not exist is inert. Authorship is Task 5. The seeded onramp is Phase 2 Step 9. The sign-up form is specified in the design and is not a repository change. Promotion cadence is Task 7 and Task 6.
+**Spec coverage.** Current Priority Scope is Task 5. Branching and the allowlist are Tasks 1, 2, and 5 plus Phase 2 Steps 3, 5, 6, and 7. Labels are Task 3 and Phase 2 Step 10. Issue intake is Task 3. The pull request gate is Tasks 4 and 7. Rulesets are Phase 2 Steps 1, 4, and 9. CODEOWNERS for `reference-implementations/` and `adapters/` is deliberately deferred until #60 and #22 land, since a CODEOWNERS entry for a path that does not exist is inert. Authorship is Task 5. The seeded onramp is Phase 2 Step 12. The sign-up form is specified in the design and is not a repository change. Promotion cadence is Task 7 and Task 6.
 
-**Placeholders.** None. Every code and configuration step carries its content. Phase 2 Steps 1 and 5 describe ruleset JSON edits rather than pasting the full payload, because the payload is fetched from the live API and edited in place, and a stale copy pasted here would overwrite fields the API added since.
+**Placeholders.** None. Every code and configuration step carries its content. Phase 2 Steps 1, 4, and 9 describe ruleset JSON edits rather than pasting the full payload, because the payload is fetched from the live API and edited in place, and a stale copy pasted here would overwrite fields the API added since.
 
-**Type consistency.** `decide`, `in_docs_lane`, `is_promotion`, and `paths_requiring_integration` carry the same signatures in the test file, the implementation, and the Interfaces block. `is_promotion` takes three arguments everywhere. The job id `base-branch-guard` is identical in Task 2 Step 1, Task 2 Step 3, Phase 2 Step 1, and Phase 2 Step 11. The label strings in Task 3 match those created in Phase 2 Step 7.
+**Type consistency.** `decide`, `in_docs_lane`, `is_promotion`, and `paths_requiring_integration` carry the same signatures in the test file, the implementation, and the Interfaces block. `is_promotion` takes three arguments everywhere. The job id `base-branch-guard` is identical in Task 2 Step 1, Task 2 Step 3, Phase 2 Step 9, and Phase 2 Step 14. The label strings in Task 3 match those created in Phase 2 Step 10.
+
+**Executed, not assumed.** The guard module, its sixteen tests, the `gh label` and `gh repo` flags, the pull-request-count idiom, the PyYAML availability, and the DCO-excluding style check were all run before this plan was finalized. The premortem found six defects that way, including a test that could never pass and a Phase 2 ordering that deadlocked its own pull request.
