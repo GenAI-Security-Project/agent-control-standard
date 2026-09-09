@@ -1718,7 +1718,7 @@ gh api repos/GenAI-Security-Project/agent-control-standard/rulesets --jq '.[]|"\
 gh issue list --label 'help wanted' --json number,title --jq 'length'
 ```
 
-Expected: the taxonomy from Step 7, default branch `integration`, three branch rulesets plus the repository ruleset, and nine `help wanted` issues.
+Expected: the taxonomy from Step 2, default branch `integration`, three branch rulesets plus the repository ruleset, and nine `help wanted` issues.
 
 ---
 
