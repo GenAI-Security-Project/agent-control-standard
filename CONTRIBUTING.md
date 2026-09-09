@@ -50,6 +50,8 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 
 For changes to the spec itself (`acs_schema.json`, hooks, events), open a [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions) before submitting a PR. These affect downstream implementers and warrant a longer conversation.
 
+Commits land under human authorship. Many of us write with AI assistance, and the project takes no position on which tools you use. The sign-off is what matters here. The DCO below is a certification a person makes about the origin of the code, and only a person can make it. Keep your `Signed-off-by` line, and leave AI tools out of the commit trailers. If a `Co-Authored-By` naming a model reaches a pull request, a maintainer drops it when the pull request is squashed, and your authorship and sign-off carry through unchanged.
+
 ## What We Need
 
 **High Priority:**
