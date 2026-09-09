@@ -6,6 +6,72 @@ We're building trustworthy AI agents together. Your contributions make the futur
 
 Search existing issues and pull requests to avoid duplicating efforts.
 
+## Current Priority Scope
+
+Reviewed at each milestone. Current window: Day 0 to Day 30. Next review October 9, 2026.
+
+The project has one committed outcome:
+
+> A runnable Guardian Agent reference implementation, benchmarked for interoperability
+> against Microsoft Agent Governance Toolkit, in the hands of external evaluators within
+> ninety days of the September 10, 2026 kick-off. Everything else either feeds that
+> outcome or gets deferred.
+
+Every issue and every pull request is accepted against that sentence. This section is the
+only place that scope is stated, so if something here disagrees with a form, a template,
+or a comment, this wins.
+
+**In focus.** Work that feeds the runnable Guardian, the interoperability benchmark, or
+the conformance evidence that makes either credible:
+
+- The mandatory floor decision in PR #21, which gates everything behind it
+- The Claude Code, Cursor, and NVIDIA NAT adapters in PR #22
+- The AGT reference implementation in PR #60
+- Ports of that reference implementation to other runtimes: Python, Go, Rust, Codex
+- Production-hardening it, including span batching and OpenTelemetry collection
+- Resolving the fail-open default, which issues #32 and #37 attack from opposite ends
+- The ACS-Core conformance claim template
+- The requirement ledger and behavioral tests in milestone #33
+- Closing the Cursor file-read gap
+- Conformance and dogfooding reports that document where ACS fails in practice
+
+**Deferred to v0.2.0.** Real work, tracked, landing after Day 90: async and composition,
+streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
+binding, and AgBOM federation across A2A peers. Negative conformance vectors sit here
+too, in #53.
+
+One distinction, because it will otherwise get argued in a pull request. *Batching
+semantics in the specification* is deferred. *Batching in the reference implementation*
+is in focus, because it is exactly the production-hardening the project asked for. The
+two share a word and nothing else.
+
+**Out of scope.** What ACS leaves to deployments by design: the policy engine, the
+signature algorithm, the transport, the authentication mechanism, and the policy content.
+The specification is opinionated on the contract and permissive on the implementation.
+That is a position, not a gap waiting to be filled.
+
+A proposal that is deferred or out of scope is still worth filing. It gets a label and a
+tracking issue rather than a close, because a finding the project cannot act on this
+quarter is not a finding without value.
+
+## How work gets accepted
+
+Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog,
+and only a maintainer applies that label.
+
+A pull request that changes behavior, alters normative text, or adds code references an
+accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
+fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
+issue.
+
+If you open a pull request against an issue that is not accepted yet, it will not be
+closed and it will not be reviewed. It waits, and a comment will say so. Start from an
+issue labeled `help wanted` if you want work that is already accepted.
+
+Maintainers apply `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue
+form can apply them, which is what makes the rule hold rather than depend on everyone
+remembering it.
+
 ## Code of Conduct
 
 This project follows our [Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you agree to uphold it.
@@ -42,26 +108,61 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 ## Development Process
 
 1. **Fork the repository** and clone your fork
-2. **Create a feature branch.** Use `feature/<short-description>` or `fix/<short-description>`
+2. **Branch from `integration`.** Use `spec/`, `refimpl/`, `fix/`, or `docs/` followed by
+   a short description
 3. **Make your changes** following the style guide
-4. **Sign your commits** with `git commit -s` (required by the DCO below)
-5. **Open a pull request** against `main`
-6. **Address review feedback** to land your change
+4. **Sync with `integration` and run the guards** before you open anything. `uv run
+   pytest -v` and `uv run mkdocs build --strict` both have to pass on your machine
+5. **Sign your commits** with `git commit -s` (required by the DCO below)
+6. **Open a pull request against `integration`**
+7. **Address review feedback** to land your change
 
-For changes to the spec itself (`acs_schema.json`, hooks, events), open a [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions) before submitting a PR. These affect downstream implementers and warrant a longer conversation.
+`integration` is the default branch, so a pull request opened from the GitHub interface
+already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
+it takes only two kinds of change: a promotion from `integration`, and an editorial
+change to a path on the allowlist below. A guard enforces this and will tell you to
+retarget if you get it wrong.
 
-Commits land under human authorship. Many of us write with AI assistance, and the project takes no position on which tools you use. The sign-off is what matters here. The DCO below is a certification a person makes about the origin of the code, and only a person can make it. Keep your `Signed-off-by` line, and leave AI tools out of the commit trailers. If a `Co-Authored-By` naming a model reaches a pull request, a maintainer drops it when the pull request is squashed, and your authorship and sign-off carry through unchanged.
+Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.md`,
+`README.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`,
+`SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`. Everything else goes to
+`integration`, including `docs/spec/`, `docs/concepts/`, `docs/identity/`, `mkdocs.yml`,
+`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`.
+
+For changes to the spec itself (`acs_schema.json`, hooks, events), open a
+[Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
+before submitting a PR. These affect downstream implementers and warrant a longer
+conversation.
+
+## Authorship and AI assistance
+
+Commits land under human authorship. The DCO below is a certification about the origin of
+code, and only a person can make one, so every commit carries a `Signed-off-by` line
+naming a human who takes responsibility for what the commit contains. That requirement
+does not move.
+
+The rest of the trailers are your call. Many contributors here write with AI assistance.
+If you want to record that with a `Co-Authored-By` trailer naming the tool, keep it. If
+you would rather not, leave it off. Maintainers will not add one and will not remove one,
+and its presence has no effect on how a change is reviewed.
+
+A trailer naming a model certifies nothing and moves no responsibility. The human on the
+`Signed-off-by` line answers for the change either way. Some employers require their
+people to disclose AI assistance, and a visible trailer is the simplest way to satisfy
+that. ACS is also a standard about agent provenance, and a project built on the premise
+that you should be able to see what an agent did has no business erasing the record of
+what an agent did to its own commits.
 
 ## What We Need
 
-**High Priority:**
-Look for unassigned [Open Issues](https://github.com/GenAI-Security-Project/agent-control-standard/issues).
+Start with [issues labeled `help wanted`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
+Every one of them is already accepted, which means you can open a pull request against it
+without waiting on triage.
 
-**Always Welcome:**
-- Documentation improvements
-- Real-world use case examples
-- Security analysis and feedback
-- Performance optimizations
+The highest-value contribution right now is running ACS against a real harness and
+documenting where it fails. Install the reference implementation, wire it to a coding
+agent, and file a conformance report when the behavior and the specification disagree.
+That is worth more to this project than a patch nobody asked for.
 
 ## Release Process
 
