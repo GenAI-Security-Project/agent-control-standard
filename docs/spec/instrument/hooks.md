@@ -209,7 +209,7 @@ Fires after compaction. Audit + provenance-binding hook.
 
 **Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`.
 
-**Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. The audit chain MUST record the post-compact state regardless.
+**Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
 
 ---
 
@@ -233,7 +233,7 @@ Each subagent has its own SessionContext and audit chain; the parent–child rel
 
 Schema: [`hooks/subagent-stop.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/subagent-stop.json).
 
-**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`), the subagent's `final_chain_hash`, optional `summary` of what was returned to the parent. The summary's `provenance` follows the standard monotonicity rule.
+**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`); optional `final_chain_hash` (a framework that maintains no session-chain omits it rather than fabricate a value — Guardian handling in [§8.6](specification.md#86-chain-head-publication-normative)); optional `summary` of what was returned to the parent; optional `subagent_step_count`. The summary's `provenance` follows the standard monotonicity rule.
 
 **Decision:** Audit only.
 
@@ -339,4 +339,4 @@ Liveness probe. Always returns `decision: "allow"` regardless of policy, signatu
 
 ## protocols/MCP/\*
 
-See [Extending MCP](./extend_mcp.md). Wrapped MCP messages flow through `protocols/MCP/*` (e.g. `protocols/MCP/initialize`, `protocols/MCP/tools/call`, `protocols/MCP/prompts/get`, `protocols/MCP/resources/read`). The wrapped methods carry the underlying MCP message intact and apply the standard ACS envelope, decision contract, and audit-chain rules on top. Deployments that only need transport-agnostic tool governance MAY collapse MCP tool calls into `steps/toolCallRequest`; deployments that need MCP-specific policy precision use this namespace to preserve distinctions such as capability negotiation, prompt fetches, resource reads/subscriptions, and notifications.
+See [Extending MCP](./extend_mcp.md). Wrapped MCP messages flow through `protocols/MCP/*` (e.g. `protocols/MCP/initialize`, `protocols/MCP/tools/call`, `protocols/MCP/prompts/get`, `protocols/MCP/resources/read`). The wrapped methods carry the underlying MCP message intact and apply the standard ACS envelope, decision contract, and audit-chain rules on top. Deployments MAY collapse MCP `tools/call` into `steps/toolCallRequest` when tool-level policy suffices; the rest of the namespace — capability negotiation, prompt fetches, resource reads/subscriptions, notifications — MUST be wrapped in any session that involves MCP, because those surfaces are invisible to the generic tool hooks ([Conformance › ACS-Core](../conformance.md#acs-core-mandatory-baseline)).

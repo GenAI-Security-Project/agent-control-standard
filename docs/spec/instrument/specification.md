@@ -154,7 +154,7 @@ The provenance of a value introduced by `parameter_overrides` (its `origin`, and
 
 ### 6.4 Honoring decisions (normative)
 
-A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3), `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant.
+A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3) — or, for a client that cannot apply it, falls back per [§6.5](#65-modify-incapable-clients-normative) — `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant; the one defined substitution is §6.5's MODIFY fallback, which blocks rather than proceeds unmodified.
 
 A step suffers a **decision failure** when no usable decision arrives within the negotiated timeout: the Guardian stays silent, the transport fails (connection refused, TLS failure, malformed response), or the Guardian returns an error instead of a decision. All three resolve the same way: the Observed Agent applies the deployment's failure posture, declared as `on_decision_failure` in the handshake (§4) and defaulting to `proceed` (fail-open) so that a slow, erroring, or unreachable Guardian does not halt production. A deployment MAY set `on_decision_failure: deny` (fail-closed). The negotiated timeout bounds every failure mode: an error from the §17.1 registry carries a recovery action the agent MAY attempt within the remaining budget, and an unambiguous failure (a refused connection) MAY resolve immediately rather than waiting out the clock.
 
@@ -169,6 +169,8 @@ When the Guardian determines that the client cannot apply `MODIFY`, the Guardian
 If a client receives a `MODIFY` it cannot apply — from a Guardian that misjudged capability, or a Guardian that did not consult the declaration — the client MUST treat the decision as `DENY` and MUST record an audit event with `reason_codes: ["modify_unsupported"]`. Proceeding with the original payload is non-conformant: a Guardian that intended to redact a secret out of a tool argument would otherwise get the unredacted secret shipped while the audit log recorded a modification that never happened.
 
 This rule preserves the security guarantee (actions that would have been rewritten by the Guardian are not silently allowed with the unmodified payload) while letting clients whose framework cannot mutate requests, or deployments that choose strict allow/deny for auditability, participate in ACS sessions as fully conformant ACS-Core deployments.
+
+**Exception — `postCompact`.** `postCompact` fires after compaction has occurred and `DENY` is not a legal disposition there ([Hooks › postCompact](hooks.md#postcompact)), so the substitution above has no legal answer at that hook. For a MODIFY-incapable client the Guardian MUST return `ALLOW` at `postCompact` and MUST record an audit event with `reason_codes: ["modify_unsupported"]` naming the rewrite it could not deliver, so the unmodified summary standing is visible rather than silent. A client that receives a `MODIFY` it cannot apply at `postCompact` keeps the original summary and MUST record the same audit event; substituting `DENY` there would record a denial that changed nothing.
 
 ## 7. Provenance
 
@@ -264,6 +266,8 @@ The audit chain is only tamper-evident to an outside party if its head is commit
 For every step where the Guardian writes a ContextEntry (the content-bearing steps), the Guardian MUST include the resulting `chain_hash` in its response, and that `chain_hash` MUST be covered by the response signature (§10). Publishing the head as each decision is made lets an observer that records traffic detect any later rewrite, because the true sequence was already witnessed.
 
 `CHAIN_MISMATCH` is the named integrity condition, exposed two ways for two detectors. A Guardian that receives an Observed Agent's `chain_hash` (cross-check) that disagrees with its own computed head MAY DENY with `reason_codes: ["chain_mismatch"]`, or return the `CHAIN_MISMATCH` error (`-32007`, §17.1) when it cannot proceed at all. An Observed Agent or external auditor that finds a published `chain_hash` inconsistent with the recomputed chain SHOULD treat it as an integrity event, not a transient error.
+
+A `subagentStop` payload MAY omit `final_chain_hash`: a framework that maintains no session-chain omits the field rather than fabricate a value, since fabrication corrupts the artifact the field exists to produce. A Guardian MUST treat the omission as "chain not maintained by this framework," not as an integrity failure; integrity claims about that subagent's chain are simply unavailable.
 
 Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline the published, signed head gives integrity against a network tamperer and lets a key-holder verify the chain, but it does not bind the Guardian itself: the Guardian holds the symmetric key and can re-sign a rewritten head. Non-repudiation, proving to a third party that a specific Guardian issued a specific head, requires the asymmetric ACS-Crypto profile. The baseline detects accidental divergence and cross-Guardian disagreement; defeating a determined, compromised Guardian is a profile-level guarantee, not a Core one.
 
@@ -370,7 +374,7 @@ OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 
 ## 13. Liveness / System Methods
 
-A liveness method is required for connection-health checks, transport-debugging, and timeout tuning. It carries no enforcement semantics and is not part of the audit chain.
+`system/ping` SHOULD be implemented for connection-health checks, transport debugging, and timeout tuning; a deployment MAY omit it only with a declared alternative liveness mechanism ([Conformance › ACS-Core](../conformance.md#acs-core-mandatory-baseline)). It carries no enforcement semantics and is not part of the audit chain.
 
 **Method:** `system/ping`. Schema: [`hooks/system-ping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/system-ping.json).
 

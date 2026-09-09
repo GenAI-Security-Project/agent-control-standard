@@ -18,6 +18,7 @@ Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors.
 | `overrides/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `design/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `landing/assets/fonts/**` | SIL Open Font License 1.1 | `OFL-1.1` |
+| `CHANGELOG.md` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | Everything else, including any new top-level directory | Apache License 2.0 | `Apache-2.0` |
 
 A more specific row wins over the catch-all. The catch-all exists so a directory added later is governed the day it lands rather than on the day someone notices it was never listed. Apache 2.0 is the default because a new directory is usually code, and an over-permissive grant on prose costs less than a ShareAlike obligation attaching by accident to reference code that adopters copy into their own systems. When a new directory holds prose, add an explicit `CC-BY-SA-4.0` row for it in the same pull request that creates it.

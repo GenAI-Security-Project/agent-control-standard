@@ -19,7 +19,7 @@
     "final_chain_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "OPTIONAL. The subagent's final SessionContext chain_hash at sessionEnd. When present, lets parent-side audit replay verify the subagent's chain integrity without the parent maintaining a copy of it. Frameworks that maintain no session-chain (e.g., shell-hook integrations without an internal audit chain) MAY omit this field rather than fabricate a value — fabrication would corrupt the exact artifact the field exists to produce. A conformant Guardian MUST treat omission as 'chain not maintained by this framework' rather than as an integrity failure."
+      "description": "OPTIONAL. The subagent's final SessionContext chain_hash at sessionEnd. When present, lets parent-side audit replay verify the subagent's chain integrity without the parent maintaining a copy of it. Frameworks that maintain no session-chain (e.g., shell-hook integrations without an internal audit chain) omit this field rather than fabricate a value; Guardian handling of the omission is specified in \u00a78.6 of the specification."
     },
     "summary": {
       "type": "object",
