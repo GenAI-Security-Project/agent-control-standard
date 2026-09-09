@@ -1,0 +1,18 @@
+name: Something else
+description: >-
+  A structural finding, a question the other forms do not fit, or an idea that does not
+  have a shape yet. Nothing here is required except the description.
+title: ""
+labels: ["type:proposal", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        The other forms exist to make triage fast. This one exists because the most
+        valuable contributions rarely fit a form. Tell us what you found.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want to tell us
+    validations:
+      required: true

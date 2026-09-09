@@ -1,7 +1,11 @@
 # Routes people away from filing security reports as public issues, which is
 # the single most common way a coordinated disclosure gets blown.
+#
+# Blank issues are off because a form is what applies the type: and
+# status:needs-triage labels that triage depends on. The "Something else" form is the
+# open door that keeps this from turning away a finding that fits no template.
 
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
     url: https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new
