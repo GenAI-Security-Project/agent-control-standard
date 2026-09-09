@@ -20,6 +20,7 @@ from publish_schemas import SchemaError, load_schemas, target_for
 
 # Tolerant of case and spacing so a formatter cannot break the build.
 WORKSTREAM_HEADING = re.compile(r"^##\s+workstream\s+leads\s*$", re.IGNORECASE)
+PRIORITY_SCOPE_HEADING = re.compile(r"^##\s+current\s+priority\s+scope\s*$", re.IGNORECASE)
 ANY_HEADING = re.compile(r"^#{2,6}\s")
 MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 PLACEHOLDER = re.compile(r"<!--ACS:[A-Z_]+-->")
@@ -31,6 +32,7 @@ REQUIRED_PLACEHOLDERS = (
     "<!--ACS:SCHEMA_COUNT-->",
     "<!--ACS:SCHEMA_HREF-->",
     "<!--ACS:WORKSTREAMS-->",
+    "<!--ACS:PRIORITY_SCOPE-->",
     "<!--ACS:STARBURST-->",
 )
 
@@ -115,6 +117,34 @@ def parse_workstreams(text: str) -> list[tuple[str, str]]:
     return rows
 
 
+def parse_priority_scope(text: str) -> str:
+    """Read the committed-outcome blockquote under the Current Priority Scope heading.
+
+    The heading is followed by review-cadence prose before the quote starts, so this
+    skips lines until the first '> ' line rather than requiring the quote immediately
+    below the heading.
+    """
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if PRIORITY_SCOPE_HEADING.match(line)), None)
+    if start is None:
+        raise RenderError("CONTRIBUTING.md: no '## Current Priority Scope' section")
+
+    quote_lines: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith(">"):
+            quote_lines.append(line[1:].strip())
+        elif quote_lines:
+            break  # the blockquote has ended
+        elif ANY_HEADING.match(line):
+            break  # the section ended before any blockquote appeared
+
+    if not quote_lines:
+        raise RenderError(
+            "CONTRIBUTING.md: no blockquote follows '## Current Priority Scope'"
+        )
+    return " ".join(quote_lines)
+
+
 def _to_html(markdown: str) -> str:
     """Escape everything, then rebuild links from an allowlisted scheme."""
 
@@ -134,7 +164,13 @@ def render_workstreams(rows: list[tuple[str, str]]) -> str:
     )
 
 
-def render(template: str, source: Path, governance: str, starburst: str) -> str:
+def render_priority_scope(scope: str) -> str:
+    # The blockquote sits in a text position in the template, not an attribute, but
+    # it is a build input like GOVERNANCE.md, so it is escaped for the same reason.
+    return html.escape(scope)
+
+
+def render(template: str, source: Path, governance: str, contributing: str, starburst: str) -> str:
     """Replace every placeholder. Fail if one is missing from the template or survives it.
 
     Both directions matter. A surviving token means the renderer did not know about it.
@@ -150,6 +186,9 @@ def render(template: str, source: Path, governance: str, starburst: str) -> str:
     out = out.replace("<!--ACS:SCHEMA_COUNT-->", str(count))
     out = out.replace("<!--ACS:SCHEMA_HREF-->", html.escape(f"schema/{version}/acs_schema.json"))
     out = out.replace("<!--ACS:WORKSTREAMS-->", render_workstreams(parse_workstreams(governance)))
+    out = out.replace(
+        "<!--ACS:PRIORITY_SCOPE-->", render_priority_scope(parse_priority_scope(contributing))
+    )
     # Inlining is required: an SVG loaded through <img> cannot read the page's CSS
     # custom properties, so the diagram would ignore the theme.
     out = out.replace("<!--ACS:STARBURST-->", starburst)
@@ -169,6 +208,7 @@ def main(argv: list[str]) -> int:
             (landing / "index.html").read_text(encoding="utf-8"),
             repo / "specification",
             (repo / "GOVERNANCE.md").read_text(encoding="utf-8"),
+            (repo / "CONTRIBUTING.md").read_text(encoding="utf-8"),
             (landing / "assets" / "starburst.svg").read_text(encoding="utf-8"),
         )
     except (RenderError, SchemaError) as error:
