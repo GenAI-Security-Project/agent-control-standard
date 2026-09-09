@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: >-
-        This is the work the project needs most. Check the open issues labelled
+        This is the work the project needs most. Check the open issues labeled
         `help wanted` before filing, since the one you want may already be accepted.
   - type: input
     id: target

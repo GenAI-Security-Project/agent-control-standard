@@ -368,7 +368,7 @@ git commit -s -m "Add the guard that keeps specification changes off the publish
 
 **Interfaces:**
 - Consumes: `tools/base_branch_guard.py` from Task 1, invoked as a script with one argument.
-- Produces: a check run named `base-branch-guard`. Phase 2 Task 10 requires that exact string in `protect-main`.
+- Produces: a check run named `base-branch-guard`. Phase 2 Step 10 requires that exact string in `protect-main`.
 
 - [ ] **Step 1: Write the workflow**
 
@@ -439,7 +439,7 @@ Expected: `OK`. It must be `uv run python`: the system `python3` on this machine
 grep -n "^  base-branch-guard:" .github/workflows/pr-base-guard.yml
 ```
 
-Expected: one match. This string is repeated in Phase 2 Task 10.
+Expected: one match. This string is repeated in Phase 2 Step 10.
 
 - [ ] **Step 4: Commit**
 
@@ -463,7 +463,7 @@ git commit -s -m "Run the base branch guard on every pull request to main"
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: labels `type:bug`, `type:proposal`, `type:refimpl`, `type:conformance`, `type:docs`, and `status:needs-triage`. Phase 2 Task 8 creates them. A form referencing a label that does not exist fails to apply it silently.
+- Produces: labels `type:bug`, `type:proposal`, `type:refimpl`, `type:conformance`, `type:docs`, and `status:needs-triage`. Phase 2 Step 2 creates them. A form referencing a label that does not exist fails to apply it silently.
 
 **Rule for every form:** no form may declare a `scope:`, `priority:`, `workstream:`, or `status:accepted` label. That prohibition is the whole enforcement mechanism for maintainer-only decision labels.
 
@@ -1116,7 +1116,7 @@ git commit -s -m "State the Current Priority Scope and the acceptance gate in CO
 - Modify: `GOVERNANCE.md`
 
 **Interfaces:**
-- Consumes: the label taxonomy from Task 3 and Phase 2 Task 8.
+- Consumes: the label taxonomy from Task 3 and Phase 2 Step 2.
 - Produces: nothing other tasks read.
 
 - [ ] **Step 1: Insert a section after "Workstream leads"**
@@ -1158,7 +1158,7 @@ git commit -s -m "Record who applies decision labels and what minimum triage is"
 - Modify: `.github/workflows/sync_version.yml:8` (the `branches` key)
 
 **Interfaces:**
-- Consumes: the labels `status:accepted` and `status:needs-triage` from Phase 2 Task 8.
+- Consumes: the labels `status:accepted` and `status:needs-triage` from Phase 2 Step 2.
 - Produces: nothing other tasks read.
 
 - [ ] **Step 1: Write `sync-integration.yml`**
@@ -1478,8 +1478,8 @@ git push -u origin feature/contribution-governance
 This diff touches `.github/`, `tools/`, and `tests/`, every one of them off the
 documentation lane. A pull request from here to `main` would fail the guard it is
 installing, so it goes to `integration` instead, and `integration` does not exist until
-Phase 2 Step 3. Opening it against `main` now is the single mistake that would deadlock
-the whole evening. Phase 2 Step 6 opens it correctly.
+Phase 2 Step 4. Opening it against `main` now is the single mistake that would deadlock
+the whole evening. Phase 2 Step 7 opens it correctly.
 
 ---
 
@@ -1504,7 +1504,7 @@ gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 > /
 # Edit /tmp/protect-main.json:
 #   conditions.ref_name.include: ["refs/heads/main"]
 #   rules[pull_request].parameters.allowed_merge_methods: ["squash","rebase","merge"]
-# Do NOT add base-branch-guard yet. That is Step 9.
+# Do NOT add base-branch-guard yet. That is Step 10.
 # Leave required_approving_review_count at 1. Raising it throttles promotion, which is
 # the operation this whole model exists to serve.
 gh api -X PUT repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
@@ -1515,103 +1515,7 @@ gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
 
 Expected: `["refs/heads/main"]` and `["squash","rebase","merge"]`.
 
-- [ ] **Step 2: Merge the ready pull requests to `main`**
-
-Core-team decision, not an automated step. The sync's plan was merge #21, align #20 with it, then review #22. Doing this before `integration` exists means those pull requests never move.
-
-- [ ] **Step 3: Create `integration` from `main`**
-
-```bash
-git fetch origin main
-git push origin origin/main:refs/heads/integration
-gh api repos/GenAI-Security-Project/agent-control-standard/branches --jq '.[].name'
-```
-
-Expected: `integration` present and identical to `main`.
-
-- [ ] **Step 4: Create `protect-integration` and `protect-release`**
-
-```bash
-gh api -X POST repos/GenAI-Security-Project/agent-control-standard/rulesets \
-  --input /tmp/protect-integration.json
-```
-
-`protect-integration` mirrors the pre-change `protect-main`: target `refs/heads/integration`, one approval, `require_code_owner_review: true`, `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: true`, `required_review_thread_resolution: true`, required checks `test` and `build`, merge methods squash and rebase, plus deletion and non-fast-forward rules.
-
-`protect-release` targets `refs/heads/release/*` with deletion, non-fast-forward, one approval, and the same required checks.
-
-- [ ] **Step 5: Retarget the remaining open pull requests**
-
-Because `integration` and `main` are identical, no diff changes and no contributor redoes work.
-
-```bash
-for n in 63 24 22 60; do
-  gh pr edit "$n" --base integration || echo "skip $n"
-done
-gh pr list --json number,baseRefName --jq '.[] | "#\(.number) -> \(.baseRefName)"'
-```
-
-`#20`, the FAQ, may stay on `main`.
-
-After each retarget, confirm the required checks reported on the new base. Whether a base change re-triggers them is undocumented, and this repository's workflows declare no `pull_request` types. If a check is missing, close and reopen the pull request to force a run. Do not ask the contributor to rebase, which would cost them their existing approvals.
-
-- [ ] **Step 6: Open the Phase 1 pull request against `integration` and merge it**
-
-```bash
-gh pr create --base integration --head feature/contribution-governance \
-  --title "Install the contribution governance for the OWASP re-launch" \
-  --body "Implements design/2026-09-09-contribution-governance-design.md v1.1."
-```
-
-It targets `integration` because the diff touches `.github/`, `tools/`, and `tests/`. Merge it once `test` and `build` pass.
-
-- [ ] **Step 7: Promote to `main`**
-
-This publishes the site with the new `CONTRIBUTING.md` and, just as importantly, puts the guard workflow on `main` so Step 9 has something that can report.
-
-```bash
-gh pr create --base main --head integration --title "Promote integration to main" \
-  --body "Carries the contribution governance to the publishing branch."
-```
-
-Merge with a **merge commit**, not a squash.
-
-```bash
-git fetch origin main && git ls-tree --name-only origin/main .github/workflows/
-```
-
-Expected: `pr-base-guard.yml` present on `main`.
-
-- [ ] **Step 8: Move the default branch to `integration`**
-
-Step 1 must already be done.
-
-```bash
-gh repo edit GenAI-Security-Project/agent-control-standard --default-branch integration
-gh api repos/GenAI-Security-Project/agent-control-standard --jq '.default_branch'
-gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
-  --jq '.conditions.ref_name.include'
-```
-
-Expected: `integration`, and `protect-main` still naming `refs/heads/main`.
-
-- [ ] **Step 9: Add `base-branch-guard` to the required checks on `main`**
-
-Only now. The workflow reached `main` in Step 7, so the check can report.
-
-```bash
-gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 > /tmp/protect-main.json
-# Add {"context":"base-branch-guard"} to
-# rules[required_status_checks].parameters.required_status_checks
-gh api -X PUT repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
-  --input /tmp/protect-main.json
-gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
-  --jq '[.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[].context]'
-```
-
-Expected: `["test","build","base-branch-guard"]`.
-
-- [ ] **Step 10: Create the label taxonomy**
+- [ ] **Step 2: Create the label taxonomy**
 
 ```bash
 gh label edit bug           --name 'type:bug'        --color 'd73a4a'
@@ -1647,6 +1551,102 @@ done
 ```
 
 Delete only those reporting `0`.
+
+- [ ] **Step 3: Merge the ready pull requests to `main`**
+
+Core-team decision, not an automated step. The sync's plan was merge #21, align #20 with it, then review #22. Doing this before `integration` exists means those pull requests never move.
+
+- [ ] **Step 4: Create `integration` from `main`**
+
+```bash
+git fetch origin main
+git push origin origin/main:refs/heads/integration
+gh api repos/GenAI-Security-Project/agent-control-standard/branches --jq '.[].name'
+```
+
+Expected: `integration` present and identical to `main`.
+
+- [ ] **Step 5: Create `protect-integration` and `protect-release`**
+
+```bash
+gh api -X POST repos/GenAI-Security-Project/agent-control-standard/rulesets \
+  --input /tmp/protect-integration.json
+```
+
+`protect-integration` mirrors the pre-change `protect-main`: target `refs/heads/integration`, one approval, `require_code_owner_review: true`, `dismiss_stale_reviews_on_push: true`, `require_last_push_approval: true`, `required_review_thread_resolution: true`, required checks `test` and `build`, merge methods squash and rebase, plus deletion and non-fast-forward rules.
+
+`protect-release` targets `refs/heads/release/*` with deletion, non-fast-forward, one approval, and the same required checks.
+
+- [ ] **Step 6: Retarget the remaining open pull requests**
+
+Because `integration` and `main` are identical, no diff changes and no contributor redoes work.
+
+```bash
+for n in 63 24 22 60; do
+  gh pr edit "$n" --base integration || echo "skip $n"
+done
+gh pr list --json number,baseRefName --jq '.[] | "#\(.number) -> \(.baseRefName)"'
+```
+
+`#20`, the FAQ, may stay on `main`.
+
+After each retarget, confirm the required checks reported on the new base. Whether a base change re-triggers them is undocumented, and this repository's workflows declare no `pull_request` types. If a check is missing, close and reopen the pull request to force a run. Do not ask the contributor to rebase, which would cost them their existing approvals.
+
+- [ ] **Step 7: Open the Phase 1 pull request against `integration` and merge it**
+
+```bash
+gh pr create --base integration --head feature/contribution-governance \
+  --title "Install the contribution governance for the OWASP re-launch" \
+  --body "Implements design/2026-09-09-contribution-governance-design.md v1.1."
+```
+
+It targets `integration` because the diff touches `.github/`, `tools/`, and `tests/`. Merge it once `test` and `build` pass.
+
+- [ ] **Step 8: Promote to `main`**
+
+This publishes the site with the new `CONTRIBUTING.md` and, just as importantly, puts the guard workflow on `main` so Step 10 has something that can report.
+
+```bash
+gh pr create --base main --head integration --title "Promote integration to main" \
+  --body "Carries the contribution governance to the publishing branch."
+```
+
+Merge with a **merge commit**, not a squash.
+
+```bash
+git fetch origin main && git ls-tree --name-only origin/main .github/workflows/
+```
+
+Expected: `pr-base-guard.yml` present on `main`.
+
+- [ ] **Step 9: Move the default branch to `integration`**
+
+Step 1 must already be done.
+
+```bash
+gh repo edit GenAI-Security-Project/agent-control-standard --default-branch integration
+gh api repos/GenAI-Security-Project/agent-control-standard --jq '.default_branch'
+gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
+  --jq '.conditions.ref_name.include'
+```
+
+Expected: `integration`, and `protect-main` still naming `refs/heads/main`.
+
+- [ ] **Step 10: Add `base-branch-guard` to the required checks on `main`**
+
+Only now. The workflow reached `main` in Step 8, so the check can report.
+
+```bash
+gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 > /tmp/protect-main.json
+# Add {"context":"base-branch-guard"} to
+# rules[required_status_checks].parameters.required_status_checks
+gh api -X PUT repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
+  --input /tmp/protect-main.json
+gh api repos/GenAI-Security-Project/agent-control-standard/rulesets/20720988 \
+  --jq '[.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[].context]'
+```
+
+Expected: `["test","build","base-branch-guard"]`.
 
 - [ ] **Step 11: Create the milestones**
 
@@ -1724,10 +1724,10 @@ Expected: the taxonomy from Step 7, default branch `integration`, three branch r
 
 ## Self-review
 
-**Spec coverage.** Current Priority Scope is Task 5. Branching and the allowlist are Tasks 1, 2, and 5 plus Phase 2 Steps 3, 5, 6, and 7. Labels are Task 3 and Phase 2 Step 10. Issue intake is Task 3. The pull request gate is Tasks 4 and 7. Rulesets are Phase 2 Steps 1, 4, and 9. CODEOWNERS for `reference-implementations/` and `adapters/` is deliberately deferred until #60 and #22 land, since a CODEOWNERS entry for a path that does not exist is inert. Authorship is Task 5. The seeded onramp is Phase 2 Step 12. The sign-up form is specified in the design and is not a repository change. Promotion cadence is Task 7 and Task 6.
+**Spec coverage.** Current Priority Scope is Task 5. Branching and the allowlist are Tasks 1, 2, and 5 plus Phase 2 Steps 4, 6, 7, and 8. Labels are Task 3 and Phase 2 Step 2. Issue intake is Task 3. The pull request gate is Tasks 4 and 7. Rulesets are Phase 2 Steps 1, 5, and 10. CODEOWNERS for `reference-implementations/` and `adapters/` is deliberately deferred until #60 and #22 land, since a CODEOWNERS entry for a path that does not exist is inert. Authorship is Task 5. The seeded onramp is Phase 2 Step 12. The sign-up form is specified in the design and is not a repository change. Promotion cadence is Task 7 and Task 6.
 
-**Placeholders.** None. Every code and configuration step carries its content. Phase 2 Steps 1, 4, and 9 describe ruleset JSON edits rather than pasting the full payload, because the payload is fetched from the live API and edited in place, and a stale copy pasted here would overwrite fields the API added since.
+**Placeholders.** None. Every code and configuration step carries its content. Phase 2 Steps 1, 5, and 10 describe ruleset JSON edits rather than pasting the full payload, because the payload is fetched from the live API and edited in place, and a stale copy pasted here would overwrite fields the API added since.
 
-**Type consistency.** `decide`, `in_docs_lane`, `is_promotion`, and `paths_requiring_integration` carry the same signatures in the test file, the implementation, and the Interfaces block. `is_promotion` takes three arguments everywhere. The job id `base-branch-guard` is identical in Task 2 Step 1, Task 2 Step 3, Phase 2 Step 9, and Phase 2 Step 14. The label strings in Task 3 match those created in Phase 2 Step 10.
+**Type consistency.** `decide`, `in_docs_lane`, `is_promotion`, and `paths_requiring_integration` carry the same signatures in the test file, the implementation, and the Interfaces block. `is_promotion` takes three arguments everywhere. The job id `base-branch-guard` is identical in Task 2 Step 1, Task 2 Step 3, Phase 2 Step 10, and Phase 2 Step 14. The label strings in Task 3 match those created in Phase 2 Step 2.
 
 **Executed, not assumed.** The guard module, its sixteen tests, the `gh label` and `gh repo` flags, the pull-request-count idiom, the PyYAML availability, and the DCO-excluding style check were all run before this plan was finalized. The premortem found six defects that way, including a test that could never pass and a Phase 2 ordering that deadlocked its own pull request.

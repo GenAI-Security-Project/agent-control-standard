@@ -33,8 +33,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if git merge-base --is-ancestor origin/main origin/integration; then
-            echo "integration already contains main. Nothing to sync."
+          # integration does not exist until the branch migration runs. Exit quietly rather
+          # than failing a scheduled job on a branch nobody has created yet.
+          git rev-parse --verify origin/integration >/dev/null 2>&1 || { echo "integration does not exist yet."; exit 0; }
+          # protect-integration allows squash and rebase merges only. A squash of the sync
+          # pull request never makes main an ancestor of integration, so an ancestry check
+          # is false forever even once the two trees hold identical content. Compare content
+          # instead.
+          if git diff --quiet origin/integration origin/main; then
+            echo "integration already matches main. Nothing to sync."
             exit 0
           fi
           if [ "$(gh pr list --base integration --head main --state open --json number --jq 'length')" -gt 0 ]; then

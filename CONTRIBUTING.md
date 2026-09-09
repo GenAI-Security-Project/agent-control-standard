@@ -65,8 +65,10 @@ fix, a broken link, or a formatting repair that leaves the meaning untouched nee
 issue.
 
 If you open a pull request against an issue that is not accepted yet, it will not be
-closed and it will not be reviewed. It waits, and a comment will say so. Start from an
-issue labeled `help wanted` if you want work that is already accepted.
+reviewed and nothing about it is rejected. It waits, and a comment will say so. A pull
+request that sits untriaged for a long time may be closed with an invitation to reopen
+once its issue is accepted. Start from an issue labeled `help wanted` if you want work
+that is already accepted.
 
 Maintainers apply `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue
 form can apply them, which is what makes the rule hold rather than depend on everyone
