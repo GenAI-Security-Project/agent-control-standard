@@ -1,9 +1,20 @@
 # Contribution governance for the OWASP re-launch
 
-Version: 1.0
+Version: 1.1
 Owner: ACS project lead
 Date: 2026-09-09
 Status: design, approved for planning
+
+An adversarial premortem ran against version 1.0 and refuted five of its decisions. The
+default branch moved to `integration` once Dependabot's targeting made the original
+recommendation a bet on undocumented behavior. Required approvals on `main` stayed at one
+rather than rising to two, because doubling the cost of promotion would have throttled the
+operation the whole model exists to serve. The acceptance gate moved off base-branch
+membership and onto change substance, after the security narrowing of the documentation lane
+turned out to have widened the gate as a side effect. A sixth open-ended issue form was added,
+because turning off blank issues would have closed the door the project's strongest outside
+contribution came through. Promotion and integration sync both gained machine triggers, since
+each was otherwise nobody's job and one of them could not have worked at all.
 
 The OWASP re-launch kick-off runs Thursday, September 10, 2026. The core team sync on
 September 8 named the problem plainly: many people want to contribute, and the project has
@@ -97,19 +108,32 @@ Four kinds of branch.
 
 | Branch | Receives | Publishes |
 |---|---|---|
-| `main` | docs-lane pull requests, promotion pull requests | site, all 44 schema `$id` URIs |
+| `main` | editorial pull requests on allowlisted paths, promotion pull requests | site, all 44 schema `$id` URIs |
 | `integration` | specification, schemas, reference implementations, adapters, tests, CI | nothing |
 | `release/vX.Y.Z` | stabilization for a tagged specification version | nothing until merged |
 | fork branches | contributor work | nothing |
 
-`main` stays the repository default. This is deliberate and runs against the sync's
-shorthand that all pull requests target `integration`, so the reasoning matters. The
-`protect-main` ruleset currently keys its condition on `~DEFAULT_BRANCH`. Moving the default
-to `integration` transfers that protection to `integration` and leaves `main` bare, which is
-a silent security regression rather than a visible one. Keeping `main` as default also gives
-the documentation lane, which will carry the most contributors and the least GitHub
-fluency, the path with no base-branch step, while a mistargeted specification pull request
-is caught by a guard at no maintainer cost.
+`integration` becomes the repository default, which matches the sync's instruction that all
+pull requests target it. Version 1.0 of this design recommended the opposite and the
+premortem reversed it, so the reasoning is recorded rather than assumed.
+
+The objection to moving the default was that `protect-main` keys its condition on
+`~DEFAULT_BRANCH`, so moving the default would transfer that protection to `integration` and
+leave `main` bare. That is a real hazard and it is closed independently, by pinning the
+condition to the literal `refs/heads/main` before the default moves. Order matters: pin
+first, then move.
+
+Three things then argue for `integration`. Dependabot targets the default branch, and with
+`integration` as default both routine and security updates land there with no `target-branch`
+key at all, which removes a dependency on undocumented security-update targeting behavior
+rather than betting on it. Mistargeting fails in the safe direction, because a documentation
+pull request that lands on `integration` is merely slower while a specification pull request
+that lands on `main` shows a first-time contributor a red failed check. And a contributor who
+does nothing but accept GitHub's default is doing the right thing, which is the only version
+of a rule that survives a hundred new people.
+
+The cost is real and accepted: `main` is the branch that publishes the site, and it is no
+longer what a visitor lands on or what `git clone` checks out.
 
 Treating the specification as code is the sync's other instruction, and it decides the
 allowlist below.
@@ -172,28 +196,49 @@ merge forever, so it runs and passes rather than skipping. A mixed diff carrying
 documentation and specification fails, which forces the split instead of letting the
 specification ride in on a documentation change.
 
-Two automated producers currently open pull requests against the default branch and touch
-paths outside the allowlist. Dependabot gets `target-branch: "integration"` in
-`.github/dependabot.yml`. `sync_version.yml` moves its trigger from a push to `version.txt`
-on `main` to the same push on `integration`. Neither gets an exemption in the guard, because
-an exemption keyed on an actor is a hole an actor can be impersonated through.
+**The required status check context is the job name, not the workflow name.** GitHub matches
+a required check against the check run, so a ruleset requiring `base-branch-guard` while the
+workflow declares `jobs: { guard: ... }` never matches, never reports, and leaves every pull
+request to `main` permanently unmergeable. The job id is therefore fixed at
+`base-branch-guard`, and the ruleset requires that exact string. The two are one value and
+are changed together or not at all.
+
+Automated producers need no special handling once `integration` is the default branch.
+Dependabot targets the default branch, so both routine and security updates land on
+`integration` with no `target-branch` key in `.github/dependabot.yml` and no guard
+interaction at all. `sync_version.yml` moves its trigger from a push to `version.txt` on
+`main` to the same push on `integration`, and it already opens a pull request rather than
+pushing. No actor-keyed exemption exists anywhere in the guard, because an exemption keyed
+on an actor is a hole an actor can be impersonated through.
 
 ### Promotion
 
-A promotion is a pull request from `integration` to `main`, opened by a maintainer, merged
-with a merge commit rather than a squash. Squashing a promotion flattens every specification
-commit into one and destroys the history that makes a schema change reviewable after the
-fact. `protect-main` currently allows only squash and rebase, so `merge` gets added.
+A promotion is a pull request from `integration` to `main`, merged with a merge commit
+rather than a squash. Squashing a promotion flattens every specification commit into one and
+destroys the history that makes a schema change reviewable after the fact. `protect-main`
+currently allows only squash and rebase, so `merge` gets added.
 
 Promotion is when the 44 schema URIs change. That is a property worth keeping: the URIs are
 a machine-consumed contract, and batching their changes into a deliberate promotion is
 better than republishing on every specification merge.
 
-`integration` needs to stay current with `main`, since `main` receives documentation commits
-independently. `.github/workflows/sync-integration.yml` runs on every push to `main` and
-merges `main` into `integration`, so a promotion pull request stays conflict-free. It runs
-on push rather than on a schedule because the divergence starts at the merge, and a nightly
-job would leave a day of drift for a promotion to collide with.
+**Promotion needs an owner and a trigger, or it does not happen.** This is the failure mode
+that costs the three-tier model everything and returns nothing: `integration` accrues
+specification work, `main` keeps publishing schemas that no longer match what contributors
+are reading, and the divergence is nobody's assigned problem. Two mechanisms close it.
+`.github/workflows/open-promotion.yml` runs weekly, the morning of the call, and opens or
+updates a promotion pull request whenever `integration` is ahead of `main`. A machine opening
+it means the decision in front of the core team is whether to merge rather than whether to
+remember. The project lead owns merging it, and promotion is a standing item on the weekly
+call agenda.
+
+`integration` also needs to stay current with `main`, since `main` receives documentation
+commits independently. `.github/workflows/sync-integration.yml` runs on every push to `main`
+and **opens a pull request** merging `main` into `integration`. It cannot push directly:
+`protect-integration` requires pull requests and blocks non-fast-forward updates, and
+`GITHUB_TOKEN` is not a bypass actor, so a workflow that pushed would fail on every run. The
+sync pull request is the one place where an automatic merge is safe to enable, because its
+content already passed review on `main`.
 
 ## Labels
 
@@ -211,6 +256,13 @@ Labels become prefixed axes rather than a flat pile, and the axes split by who s
 
 `priority:P0` is reserved for the four links in the plan's serial chain, so the label means
 something narrower than "important."
+
+**Minimum viable triage is two labels: `scope:` and `status:`.** Five axes means five
+decisions per issue, and under real volume a triager who owes five decisions makes none, so
+the backlog fills with issues carrying `status:needs-triage` and nothing else. `priority:`
+and `workstream:` are enrichment applied to accepted work, not entry requirements.
+Recording that here is the difference between a taxonomy that gets used and one that gets
+abandoned in month two.
 
 Dates live in GitHub Milestones rather than labels. Day 14 through Day 90 become milestones
 carrying the plan's committed outcomes as their descriptions, which gives the weekly call a
@@ -261,7 +313,7 @@ those four is unused before deleting rather than assuming it from a listing.
 `blank_issues_enabled` moves to `false`. Every issue arrives through a form, which is what
 makes automatic `type:` and `status:needs-triage` labeling reliable.
 
-Five forms, each with a distinct triage path:
+Six forms, each with a distinct triage path:
 
 1. **Bug report.** Something is broken: a schema error, a specification defect, the site, CI,
    or tooling. Fields cover what is broken, where, what the specification says, and the
@@ -278,6 +330,17 @@ Five forms, each with a distinct triage path:
    redirect to private vulnerability reporting, because this is the form most likely to
    surface a security gap.
 5. **Documentation.** The low-friction lane. Page, what is wrong or missing.
+6. **Something else.** One open text field and nothing else required.
+
+The sixth form is the most important one in the list and the easiest to leave out. The plan
+credits the strongest technical contribution the project has ever received from outside as
+the finding that tool declarations carry no integrity binding, so a same-version redefinition
+is invisible to dynamic inspection. That finding fits none of the other five. Turning
+off blank issues without providing an open door means the next contribution of that shape
+either goes to Discussions, where it gets a fraction of the attention, or does not get filed.
+That loss is undetectable, which is precisely why it has to be designed against rather than
+watched for. The form carries `type:proposal` and `status:needs-triage` and asks nothing
+else.
 
 Every form ends with the same required dropdown asking which part of the Current Priority
 Scope the work serves, including an honest option for "this is deferred or out of scope and
@@ -304,10 +367,22 @@ each carrying the plan's committed outcome as its description.
 
 ## Pull request gate
 
-A pull request that touches specification or code references an issue carrying
-`status:accepted`. A documentation-lane pull request to `main` needs no issue. The base
-branch therefore tells a reviewer which rule applies, which is the property that makes the
-gate cheap to explain.
+The gate keys on what a change *does*, not on which branch it targets. A pull request that
+changes behavior, alters normative text, or adds code references an issue carrying
+`status:accepted`. An editorial correction does not, wherever it lands: a typo, a grammar
+fix, a broken link, or a formatting repair that leaves the meaning untouched needs no issue.
+
+Version 1.0 keyed this on the documentation lane instead, and the premortem found that the
+security narrowing of that lane had silently widened the gate. Once `docs/concepts/**` moved
+to `integration` for good reasons, a one-word typo fix in a concepts page inherited the
+requirement for an accepted issue, and a first-time contributor fixing a spelling mistake
+would have hit a governance process. A security fix should not become a contribution
+barrier by side effect, so substance decides the gate and the base branch decides only the
+branch.
+
+The pull request template carries this as a single checkbox declaring the change editorial.
+Checking it falsely is visible in the diff and costs the contributor their credibility,
+which is the right enforcement for something this small.
 
 The important question is what happens to a pull request whose issue is filed but not yet
 accepted. It is neither closed nor reviewed. Closing destroys work and reads as hostile.
@@ -323,6 +398,21 @@ a base branch is a mechanical error with one correct answer and belongs in a req
 check. Missing acceptance is a queue state that resolves on its own, and turning it into a
 red required check would make the gate feel like a rejection.
 
+The trigger is `pull_request_target`, not `pull_request`. On a `pull_request` event from a
+fork, which is every external contribution, `GITHUB_TOKEN` is read-only and the workflow
+cannot apply a label or post a comment. `pull_request_target` is the privilege-escalation
+surface CODEOWNERS guards `.github/` against, so the workflow is written to give the
+escalation nothing to reach: it checks out no code, runs no contributor-supplied script, and
+declares `permissions: { pull-requests: write, issues: read }` and nothing more. It reads the
+pull request body through the event payload and treats it as data.
+
+**The gate needs a drain, not only an intake.** A pull request that is neither closed nor
+reviewed accumulates, and in six months a queue of stale submissions each carrying a polite
+bot comment costs more maintainer attention than reviewing them would have. A pull request
+carrying `status:needs-triage` with no maintainer activity for thirty days is closed with a
+comment naming the issue it needs accepted and an explicit invitation to reopen once that
+happens. Closing with a reopen path is courteous. Leaving it open forever is not.
+
 The pull request template changes in four ways. It asks which issue the work implements and
 states the documentation-lane exemption inline. It asks the contributor to confirm they
 synced their branch and ran the guards, which is Helen's requirement from the sync and the
@@ -333,17 +423,29 @@ the existing specification, DCO, style, and security sections, which are already
 
 ### Rulesets
 
-`protect-main` is rewritten and hardened. Its condition moves from `~DEFAULT_BRANCH` to the
-literal `refs/heads/main`, which removes the silent-failure mode where a future default
-change unprotects it. Required approvals rise from one to two. Required status checks gain
-the base-branch guard alongside `test` and `build`. Allowed merge methods gain `merge` for
-promotions. Deletion and non-fast-forward protection stay.
+`protect-main` is rewritten. Its condition moves from `~DEFAULT_BRANCH` to the literal
+`refs/heads/main`, which both removes the silent-failure mode where a future default change
+unprotects it and is the precondition for moving the default to `integration` at all.
+Required status checks gain `base-branch-guard` alongside `test` and `build`, using the exact
+job id. Allowed merge methods gain `merge` for promotions. Deletion and non-fast-forward
+protection stay.
 
-One honest limitation. The sync's phrasing was that nobody except a few key people can ever
-merge into `main`. GitHub rulesets do not offer a direct "only these accounts may merge a
-pull request" control, so this design approximates it with two required approvals plus the
-existing CODEOWNERS requirement. Implementation verifies whether the current ruleset schema
-exposes a stronger restriction before settling for the approximation.
+**Required approvals stay at one.** Version 1.0 raised them to two, and the premortem
+rejected that. Promotion is the operation the entire three-tier model depends on, the plan's
+risk register already names review capacity as thin, and three CODEOWNERS entries are inert
+pending invitation acceptance. Doubling the approval cost of the one operation that
+publishes would have throttled publication in the name of protecting it. What actually
+hardens `main` is that only promotion pull requests and editorial changes reach it, every
+path on it carries a CODEOWNERS requirement, and the guard is a required check.
+
+One limitation, now verified rather than assumed. The sync's phrasing was that nobody except
+a few key people can ever merge into `main`. GitHub rulesets have no rule that restricts
+which accounts may merge a pull request. The available rules govern what may be pushed and
+how a change must be made, and bypass permissions are the inverse of a whitelist. The
+closest available control is the CODEOWNERS requirement already in force, so "a few key
+people" is expressed as required review from named owners rather than as a merge
+restriction. Anyone claiming the stronger property is claiming something GitHub does not
+offer.
 
 `protect-integration` is new and mirrors the current `protect-main`: one approval, CODEOWNERS
 review, `test` and `build` required, stale-review dismissal, last-push approval, thread
@@ -454,27 +556,44 @@ broken on nearly every change to this suite. After implementation:
   real pull request, and the failure message names the file
 - A scratch branch touching only `docs/topics/` and targeting `main` passes
 - `gh label list` matches the taxonomy exactly, with no orphaned defaults
-- Opening each of the five forms produces the expected `type:` and `status:needs-triage`
+- Opening each of the six forms produces the expected `type:` and `status:needs-triage`
   labels and no decision label
 - The `integration` ruleset rejects a direct push
+- The `base-branch-guard` check run appears under exactly that name on a real pull request,
+  matching the string the ruleset requires
+- `protect-main` still names `refs/heads/main` after the default branch moves
 - `uv run mkdocs build --strict` still passes with the rewritten `CONTRIBUTING.md`
 
 ## Sequencing before Thursday
 
 The project lead's instruction is that everything lands before the kick-off. The ordering
-below exists because two of the six open pull requests are close to merge and the sync's
-plan was to merge #21, align #20, then review #22.
+below is not a preference. Three steps are order-dependent and one of them is a security
+regression if run out of order.
 
-Merging what is ready happens first, against `main`, before `integration` exists. Creating
-`integration` from `main` afterward means the remaining pull requests retarget onto a branch
-identical to their current base, so their diffs do not change and no contributor redoes any
-work. Retargeting before those merges would put a branch move in front of a demo.
+1. **Pin `protect-main` to `refs/heads/main`.** This happens before anything else. While its
+   condition reads `~DEFAULT_BRANCH`, moving the default would carry the protection with it
+   and leave `main` unprotected.
+2. **Merge what is ready to `main`.** The sync's plan was to merge #21, align #20, then
+   review #22. Doing this before `integration` exists means those pull requests never move.
+3. **Create `integration` from `main`.** The two branches are identical at this moment, which
+   is what makes the next step free.
+4. **Retarget the remaining pull requests.** #63, #24, #22, and #60 move to `integration` if
+   still open. #20, the FAQ, may stay on `main`. Because the branches are identical, no diff
+   changes and no contributor redoes any work.
+5. **Move the default branch to `integration`.** Last, after the protection is pinned and the
+   retargets are done.
 
-Retargeting is per pull request: #63, #24, #22, and #60 move to `integration` if still open,
-and #20, the FAQ, may stay on `main` under the documentation lane. Whether a base change
-re-triggers the required checks needs confirmation at the time rather than assumption, since
-this repository's workflows declare no `pull_request` types and a base change fires an
-`edited` event that the default type list does not include.
+Retargeting before step 2 would put a branch move in front of a demo of #60, which is the
+one avoidable way this evening damages Thursday.
+
+Whether a base change re-triggers required checks is not documented. GitHub's default
+`pull_request` activity types are `opened`, `synchronize`, and `reopened`, and the
+documentation does not say which type a base change fires or whether it fires one at all.
+This repository's workflows declare no `types`, so the safe assumption is that checks do not
+re-run. After each retarget, confirm the required checks report on the new base and close and
+reopen the pull request to force a run if they do not. Closing and reopening is the
+retrigger that costs nothing, where a rebase would cost the contributor their existing
+approvals.
 
 ## Out of scope, with reasons
 
@@ -508,3 +627,5 @@ somebody remembering this document exists.
 5. Release-branch versioning, since `sync_version.yml` moving to `integration` leaves the
    `release/*` case unspecified
 6. The DCO CI check in #52 stays indifferent to non-sign-off trailers
+7. Confirm whether Dependabot security updates honor a non-default `target-branch`, which
+   this design currently avoids needing to know
