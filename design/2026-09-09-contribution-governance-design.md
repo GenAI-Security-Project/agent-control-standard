@@ -196,6 +196,13 @@ merge forever, so it runs and passes rather than skipping. A mixed diff carrying
 documentation and specification fails, which forces the split instead of letting the
 specification ride in on a documentation change.
 
+**The promotion exemption requires the head repository to be this repository.** A pull
+request's head ref is a branch name the contributor chose, and a fork's branch may be named
+anything. Exempting on the ref alone lets somebody fork, create a branch named
+`integration`, and walk a specification change straight onto the publishing branch. The
+exemption therefore tests `head.repo.full_name` against `github.repository` first and the
+ref second. A fork cannot satisfy the first test.
+
 **The required status check context is the job name, not the workflow name.** GitHub matches
 a required check against the check run, so a ruleset requiring `base-branch-guard` while the
 workflow declares `jobs: { guard: ... }` never matches, never reports, and leaves every pull
