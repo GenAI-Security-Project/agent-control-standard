@@ -155,6 +155,38 @@ def test_issue_milestones_when_set_name_a_desired_milestone():
             assert issue.milestone in milestone_titles
 
 
+def test_no_seeded_issue_carries_priority_p0():
+    """P0 is reserved for the serial chain: the floor decision, adapters, Guardian, and
+    benchmark. GOVERNANCE.md lines 32-34 enforce this rule. The only P0 issues are PR
+    #21 (the floor decision) and PR #22 (the adapters), which are pull requests rather
+    than seeded issues. Runtime ports and other work are valuable but carry P1."""
+    p0_issues = []
+    for issue in desired_issues():
+        if "priority:P0" in issue.labels:
+            p0_issues.append(issue.title)
+    assert not p0_issues, (
+        f"The following issues carry priority:P0 but should not: {p0_issues}. "
+        f"GOVERNANCE.md reserves P0 for the serial chain links: the floor decision "
+        f"(PR #21), adapters (PR #22), the installable Guardian, and the interoperability "
+        f"benchmark. Runtime ports and other work are P1."
+    )
+
+
+def test_all_nine_seeded_issues_carry_scope_status_and_help_wanted():
+    """The nine seeded onramp issues must all carry scope:in-focus, status:accepted, and
+    help wanted. These three labels signal to contributors that the work is ready to
+    start without waiting on triage."""
+    required_labels = {"scope:in-focus", "status:accepted", "help wanted"}
+    seeded = [issue for issue in desired_issues() if "help wanted" in issue.labels]
+    assert len(seeded) == 9, f"expected 9 seeded onramp issues, found {len(seeded)}"
+    for issue in seeded:
+        issue_labels = set(issue.labels)
+        missing = required_labels - issue_labels
+        assert not missing, (
+            f"issue {issue.title!r} is missing labels {missing}"
+        )
+
+
 # --- Rulesets -----------------------------------------------------------------
 
 def test_desired_rulesets_are_protect_integration_and_protect_release():

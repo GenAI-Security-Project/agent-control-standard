@@ -316,6 +316,11 @@ def desired_issues() -> list[Issue]:
     without waiting on triage. The 7 follow-ups are real findings the plan surfaced
     while writing itself, but none sit on the ninety-day serial chain, so they carry
     `scope:deferred` and wait for a maintainer like anything else filed from outside.
+
+    No seeded issue carries `priority:P0`. Per GOVERNANCE.md lines 32-34, P0 is reserved
+    for work on the serial chain: PR #21 (the floor decision), PR #22 (the adapters),
+    the installable Guardian, and the interoperability benchmark. No seeded issue is one
+    of those four links. Maintainers will apply P0 to PRs #21 and #22 during triage.
     """
     onramp = ("scope:in-focus", "status:accepted", "help wanted")
     tracked = ("scope:deferred", "status:needs-triage")
@@ -324,35 +329,42 @@ def desired_issues() -> list[Issue]:
         Issue(
             title="Port the AGT reference implementation to Python",
             body=(
-                "Port the AGT reference implementation from PR #60 to Python. This is "
-                "on the serial chain to the interoperability benchmark: it is one of "
-                "the runtimes the ninety-day committed outcome names."
+                "Port the AGT reference implementation from PR #60 to Python. "
+                "Multi-language runtimes make the reference implementation more compelling "
+                "to enterprise evaluators and widen its reach across teams. This is valuable "
+                "parallel work that does not block the interoperability benchmark."
             ),
-            labels=onramp + ("workstream:coding-agents", "priority:P0"),
+            labels=onramp + ("workstream:coding-agents", "priority:P1"),
         ),
         Issue(
             title="Port the AGT reference implementation to Go",
             body=(
-                "Port the AGT reference implementation from PR #60 to Go. Same "
-                "serial-chain rationale as the Python port."
+                "Port the AGT reference implementation from PR #60 to Go. "
+                "Multi-language runtimes make the reference implementation more compelling "
+                "to enterprise evaluators and widen its reach across teams. This is valuable "
+                "parallel work that does not block the interoperability benchmark."
             ),
-            labels=onramp + ("workstream:coding-agents", "priority:P0"),
+            labels=onramp + ("workstream:coding-agents", "priority:P1"),
         ),
         Issue(
             title="Port the AGT reference implementation to Rust",
             body=(
-                "Port the AGT reference implementation from PR #60 to Rust. Same "
-                "serial-chain rationale as the Python port."
+                "Port the AGT reference implementation from PR #60 to Rust. "
+                "Multi-language runtimes make the reference implementation more compelling "
+                "to enterprise evaluators and widen its reach across teams. This is valuable "
+                "parallel work that does not block the interoperability benchmark."
             ),
-            labels=onramp + ("workstream:coding-agents", "priority:P0"),
+            labels=onramp + ("workstream:coding-agents", "priority:P1"),
         ),
         Issue(
             title="Build a reference implementation against Codex",
             body=(
                 "Build a Guardian reference implementation adapter against Codex, "
-                "alongside the Claude Code, Cursor, and NVIDIA NAT adapters in PR #22."
+                "alongside the Claude Code, Cursor, and NVIDIA NAT adapters in PR #22. "
+                "Additional adapters strengthen the reference implementation and showcase "
+                "ACS capability across platforms without blocking the benchmark."
             ),
-            labels=onramp + ("workstream:coding-agents", "priority:P0"),
+            labels=onramp + ("workstream:coding-agents", "priority:P1"),
         ),
         Issue(
             title="Add span batching to the reference implementation",
