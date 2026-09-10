@@ -724,3 +724,35 @@ def test_plan_step_3_6_7_are_represented_among_the_human_steps():
     assert "merge-ready-prs" in HUMAN_STEPS
     assert "retarget-prs" in HUMAN_STEPS
     assert "merge-phase1-pr" in HUMAN_STEPS
+
+
+def test_board_key_distinguishes_repositories_sharing_an_issue_number():
+    """The board is organization-owned, so a bare number is not a unique key on it.
+
+    GitHub numbers issues and pull requests in one sequence per repository, so two
+    repositories in the same organization both have a #92. Keying on the number alone
+    made them collide, and the reconciler would have written the wrong item's column
+    the first time somebody added a second repository's issue to this board, which is
+    the entire reason an organization-level board exists.
+    """
+    from apply_governance import _board_key
+
+    assert _board_key("org/alpha", 92) != _board_key("org/beta", 92)
+    assert _board_key("org/alpha", 92) == _board_key("org/alpha", 92)
+
+
+def test_a_fetch_that_returns_its_own_limit_is_refused():
+    """A truncated fetch reads exactly like a complete one, so it must fail loudly.
+
+    Silently accepting 500 rows when there are 600 makes the missing hundred look
+    absent from the board, so the tool adds duplicates of items already on it and
+    reconciles everything else against a view it cannot see all of.
+    """
+    import pytest
+
+    from apply_governance import FETCH_LIMIT, _reject_truncated
+
+    assert _reject_truncated([1, 2, 3], "short fetch") == [1, 2, 3]
+    with pytest.raises(SystemExit) as caught:
+        _reject_truncated(list(range(FETCH_LIMIT)), "project item-list")
+    assert "truncated" in str(caught.value)

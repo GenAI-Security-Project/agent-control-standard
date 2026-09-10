@@ -848,6 +848,16 @@ _SET_BOARD_STATUS_MUTATION = (
 )
 
 
+def _board_key(repository: object, number: object) -> str:
+    """Build the identity a board item and a repository item are matched on.
+
+    Repository and number together, never the number alone. GitHub numbers issues and
+    pull requests in one sequence per repository, so a number is unique inside a repo
+    and not across the organization-owned board this reconciles.
+    """
+    return f"{repository}#{number}"
+
+
 def desired_board_status(labels: Iterable[str], state: str, is_pull_request: bool) -> str:
     """Map one issue or pull request to the board status column it belongs in.
 
@@ -932,7 +942,7 @@ def plan_board_actions(
                 "-f", f"project={project_id}",
                 "-f", f"content={item['content_id']}",
             )
-            actions.append(Action("board", f"Add item #{item['key']} to the board", argv))
+            actions.append(Action("board", f"Add {item['key']} to the board", argv))
             continue
 
         current_status = current.get("status")
@@ -953,7 +963,7 @@ def plan_board_actions(
             "-f", f"option={status_option_ids[desired_status]}",
         )
         actions.append(
-            Action("board", f"Set item #{item['key']} status to {desired_status!r}", argv)
+            Action("board", f"Set {item['key']} status to {desired_status!r}", argv)
         )
     return actions
 
@@ -1017,7 +1027,24 @@ def run_action(action: Action) -> None:
 
 
 def _gh(*args: str) -> str:
-    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
+    completed = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        # A maintainer running this by hand gets a readable reason rather than a
+        # traceback. Rate limiting is called out because it is the failure this tool
+        # provokes on its own: a full reconciliation issues one mutation per action,
+        # and a burst of them trips GitHub's secondary limit while the hourly quota
+        # still reads as untouched, which makes the cause non-obvious.
+        if "rate limit" in stderr.lower():
+            raise SystemExit(
+                "GitHub rate limited this run.\n"
+                f"  {stderr}\n"
+                "  A burst of project mutations trips a secondary limit even when the\n"
+                "  hourly quota is full. Wait a few minutes and run again. This tool is\n"
+                "  idempotent, so a partly applied run resumes safely from where it got to."
+            )
+        raise SystemExit(f"gh {' '.join(args)} failed:\n  {stderr}")
+    return completed.stdout
 
 
 def _normalize_ruleset(detail: dict) -> dict:
@@ -1039,6 +1066,26 @@ def _normalize_ruleset(detail: dict) -> dict:
         "require_last_push_approval": pr_params.get("require_last_push_approval"),
         "required_review_thread_resolution": pr_params.get("required_review_thread_resolution"),
     }
+
+
+FETCH_LIMIT = 500
+
+
+def _reject_truncated(rows: list, what: str) -> list:
+    """Fail when a fetch returned exactly its limit, because that is indistinguishable
+    from a complete result and the caller would treat the missing rows as absent.
+
+    Treating a truncated board as complete is the worst available failure: items past
+    the limit look missing, so the tool adds duplicates of rows already there and
+    reconciles the rest against a board it cannot fully see.
+    """
+    if len(rows) >= FETCH_LIMIT:
+        raise SystemExit(
+            f"{what} returned {len(rows)} rows, the fetch limit. The result is probably "
+            "truncated and reconciling against a partial view would add duplicates. "
+            "Raise FETCH_LIMIT or add pagination before running this again."
+        )
+    return rows
 
 
 def _board_status_field(fields: list[dict]) -> dict:
@@ -1075,11 +1122,20 @@ def fetch_board_live_state() -> dict:
     raw_board_items = json.loads(
         _gh(
             "project", "item-list", str(BOARD_PROJECT_NUMBER), "--owner", BOARD_OWNER,
-            "--format", "json", "--limit", "500",
+            "--format", "json", "--limit", str(FETCH_LIMIT),
         )
     )["items"]
+    _reject_truncated(raw_board_items, "project item-list")
     board_items = [
-        {"key": str(entry["content"]["number"]), "item_id": entry["id"], "status": entry["status"]}
+        {
+            # Keyed by repository and number together. The board is organization-owned
+            # and may hold items from any repository in the org, so a bare number is
+            # not unique on it: another repo's #92 would collide with this one's and
+            # the reconciler would write the wrong item's column.
+            "key": _board_key(entry["content"].get("repository"), entry["content"]["number"]),
+            "item_id": entry["id"],
+            "status": entry["status"],
+        }
         for entry in raw_board_items
         # A draft issue item has no content.number. It carries no repository issue or
         # pull request to reconcile against, so it is outside this step's scope.
@@ -1088,19 +1144,21 @@ def fetch_board_live_state() -> dict:
 
     raw_issues = json.loads(
         _gh(
-            "issue", "list", "--repo", REPO, "--state", "all", "--limit", "500",
+            "issue", "list", "--repo", REPO, "--state", "all", "--limit", str(FETCH_LIMIT),
             "--json", "id,number,labels,state",
         )
     )
     raw_prs = json.loads(
         _gh(
-            "pr", "list", "--repo", REPO, "--state", "all", "--limit", "500",
+            "pr", "list", "--repo", REPO, "--state", "all", "--limit", str(FETCH_LIMIT),
             "--json", "id,number,labels,state",
         )
     )
+    _reject_truncated(raw_issues, "issue list")
+    _reject_truncated(raw_prs, "pr list")
     repo_items = [
         {
-            "key": str(entry["number"]),
+            "key": _board_key(REPO, entry["number"]),
             "content_id": entry["id"],
             "labels": [label["name"] for label in entry["labels"]],
             "state": entry["state"],
@@ -1140,7 +1198,7 @@ def fetch_live_state() -> dict:
     ]
 
     raw_issues = json.loads(
-        _gh("issue", "list", "--state", "all", "--limit", "500", "--json", "title,body,labels")
+        _gh("issue", "list", "--state", "all", "--limit", str(FETCH_LIMIT), "--json", "title,body,labels")
     )
     issues = [
         {"title": entry["title"], "body": entry.get("body") or "",
