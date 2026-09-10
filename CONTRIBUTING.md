@@ -26,7 +26,7 @@ the conformance evidence that makes either credible:
 
 - The mandatory floor decision in PR #21, which gates everything behind it
 - The Claude Code, Cursor, and NVIDIA NAT adapters in PR #22
-- The AGT reference implementation in PR #60
+- The AGT reference implementation in `reference-implementations/agt/`
 - Ports of that reference implementation to other runtimes: Python, Go, Rust, Codex
 - Production-hardening it, including span batching and OpenTelemetry collection
 - Resolving the fail-open default, which issues #32 and #37 attack from opposite ends
