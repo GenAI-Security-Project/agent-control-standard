@@ -39,13 +39,13 @@ Today, every agent framework logs differently, gates differently, and exposes a 
 
 ### What is a hook?
 
-A hook is a **checkpoint** the framework pauses at whenever the agent is about to do something consequential: call a tool, read or write memory, send a message, hand off to a sub-agent, load a skill. At the checkpoint the framework sends the proposed action and its context to the Guardian, and waits for a decision before proceeding.
+A hook is a **checkpoint** the framework pauses at whenever the agent is about to do something consequential: call a tool, read or write memory, send a message, hand off to a sub-agent, load a skill. At the checkpoint the framework sends the proposed action and its context to the Guardian, and at decision-eligible hooks waits for the decision before proceeding.
 
-The analogy: airport security. Every passenger crosses the same set of checkpoints before boarding. A passenger cannot bypass a checkpoint by being important or being in a hurry, and the framework cannot bypass a hook either. The checkpoint asks one question (should this proceed?), gets one decision (`allow` / `deny` / `modify` / `ask` / `defer`), and the journey continues based on the answer.
+The analogy: airport security. Every passenger crosses the same set of checkpoints before boarding. A passenger cannot bypass a checkpoint by being important or being in a hurry, and the framework cannot bypass a hook either. The checkpoint asks one question — should this proceed? — and the outcomes look familiar: most passengers walk through (`allow`), some are turned away (`deny`), some surrender the water bottle and continue (`modify`), some get pulled aside for a supervisor's judgment (`ask`), and some wait while a question gets resolved (`defer`). At the fourteen decision-eligible hooks the journey continues based on the answer; the audit-only hooks are cameras rather than gates — everything is recorded on the way through.
 
 ACS defines 19 `steps/*` lifecycle hooks. Fourteen of them are decision-eligible, meaning the Guardian can stop or change what happens next. The other five fire after the fact and are audit-only records: `postCompact`, `subagentStop`, `skillUnload`, `turnEnd`, and `sessionEnd`. Size your policy work and latency budget against the fourteen. The `agbom/*` methods are also decision-eligible, and `system/ping` is not, since a Guardian always answers it with `allow` ([§13](../spec/instrument/specification.md#13-liveness-system-methods)).
 
-A hook that is not decision-eligible still matters. It is how the audit chain learns that the thing finished.
+The audit-only hooks matter too: they are how the audit chain learns that the thing finished.
 
 ### How does it all combine in one session?
 
@@ -66,7 +66,7 @@ Three groups, with different motivations:
 - **Framework and platform builders** need a way to make their security story portable. Adopting ACS means their customers' existing security investments work against the framework on day one, without bespoke integration.
 - **Compliance and audit functions** need their agent governance to produce a record an outside auditor will trust — tamper-evident, cryptographically signed, and reconstructible after the fact. The first two groups want to prevent the wrong action in real time; this group needs to *prove* what happened, months later, in a form that survives a regulator's challenge. ACS-Audit (hash-chained audit log committing to request content) plus ACS-Crypto (signed envelopes, post-quantum-ready) produce that record; most off-the-shelf agent platforms cannot.
 
-This is true even for a single agent on a single framework. ACS adds four concrete things the framework does not provide on its own: actions intercepted before they execute (the framework calls the Guardian and waits before sending the email or making the API call), a hash-chained audit log of every action and decision, a policy authority that sits outside the agent's LLM context, and OTel + OCSF event streams the SIEM consumes without bespoke parsing.
+This is true even for a single agent on a single framework. ACS adds four concrete things on top of what the framework provides: actions intercepted before they execute (the framework calls the Guardian and waits before sending the email or making the API call), a hash-chained audit log of every action and decision, a policy authority that sits outside the agent's LLM context, and OTel + OCSF event streams the SIEM consumes without bespoke parsing.
 
 On that third one, be precise about what "outside" buys you. A deterministic Guardian running Cedar or Rego evaluates policy the agent's context cannot reach. A deployment that also enables the optional LLM-backed Agent layer puts a second model in the path, and that model does read attacker-reachable content, which is why [§12.2](../spec/instrument/specification.md#122-agent-layer) requires it to treat untrusted data as data and to wrap untrusted fields. The deterministic layer always runs first.
 
@@ -126,16 +126,16 @@ You are building ten things:
 
 - **A handshake.** `handshake/hello`, where both sides declare what they support and negotiate the session.
 - **An envelope.** JSON-RPC 2.0 carrying `request_id`, `timestamp`, `acs_version`, and `metadata`.
-- **A hook surface.** Enough of the lifecycle that a Guardian sees the session start, the agent's inputs and outputs, tool calls going out and coming back, and the session end.
-- **The disposition vocabulary.** `allow`, `deny`, `modify`, `ask`, `defer`, each with its required fields.
+- **A hook surface.** Enough of the lifecycle that a Guardian sees the session start, the agent's inputs and outputs, tool calls going out and coming back, sub-agent spawns where the framework has them (`subagentStart` — the gate against cross-agent propagation), and the session end.
+- **The disposition vocabulary.** `allow`, `deny`, `ask`, and `defer` are Core requirements; `modify` support is recommended. A Guardian substitutes `deny` for clients that cannot apply `modify` ([Specification §6.5](../spec/instrument/specification.md#65-modify-incapable-clients-normative)).
 - **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
 - **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default, which is fail-open) and record every fail-open proceed as an audit event.
-- **Liveness.** `system/ping`.
-- **Wrapped MCP.** `protocols/MCP/*`, so one Guardian governs MCP tool calls and native tool calls the same way.
+- **Liveness.** `system/ping`, or a declared alternative (transport keepalive, process supervision, or continuous hook traffic).
+- **Wrapped MCP.** `protocols/MCP/*` when sessions involve MCP. `tools/call` may collapse into the generic tool hooks; the wrapped forms carry what those hooks cannot see (capability negotiation, prompt fetches, resource reads, notifications).
 
-The remaining hooks (`turnStart`/`turnEnd`, `preCompact`/`postCompact`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `skillRegister`/`skillLoad`/`skillUnload`) are defined in the spec and worth implementing wherever your framework can observe the matching event. The handshake declares what you implement and the Guardian negotiates against it.
+The remaining hooks (`turnStart`/`turnEnd`, `preCompact`/`postCompact`, `subagentStop`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `skillRegister`/`skillLoad`/`skillUnload`) are defined in the spec and worth implementing wherever your framework can observe the matching event. The handshake declares what you implement and the Guardian negotiates against it.
 
 Check the conformance chapter for which of these are strictly required and which your deployment can decline and still claim ACS-Core. That line moves as the spec evolves, and this page deliberately does not duplicate it.
 
@@ -165,7 +165,7 @@ Profiles compose: a minimal IDE harness declares `["acs-core"]`; a full-coverage
 
 ### What if my framework does not have a particular hook surface?
 
-If the framework cannot observe the event a hook is meant to gate, the framework does not advertise that hook in `methods_implemented` at handshake time. The Guardian's `methods_evaluated` response names the subset it will actually evaluate against policy, and the Guardian may refuse the session if a hook its policy requires is absent. So the negotiation is explicit on both sides — the framework says what it can emit, the Guardian says what it needs to see, and they either agree to proceed or the session does not start.
+The framework advertises in `methods_implemented` at handshake time exactly the hooks whose events it can observe. The Guardian's `methods_evaluated` response names the subset it will actually evaluate against policy, and the Guardian may refuse the session if a hook its policy requires is absent. So the negotiation is explicit on both sides — the framework says what it can emit, the Guardian says what it needs to see, and they either agree to proceed or the session does not start.
 
 The conformance line is between *not having the surface* and *suppressing the hook for an event that did happen*. The first is fine and negotiated explicitly. The second is non-conformant: a framework that observed the event and skipped the hook is in violation, regardless of which surrounding hooks it did fire.
 
@@ -208,8 +208,6 @@ Each gated action costs one Guardian round trip. Hooks fire on actions that cros
 
 Two costs are easy to miss when estimating. Where the adapter spawns a process per hook rather than holding a connection, that spawn can dominate the Guardian's own evaluation time. And a deployment that routes some escalations to the optional LLM-backed Guardian layer pays inference cost per escalation on top, which is the tuning knob.
 
-A deployment that adds the LLM-backed Guardian layer for some escalations pays per-escalation inference cost on top of that, which is the deployment's tuning knob.
-
 ### What happens when the Guardian fails?
 
 The default is fail-open with mandatory audit: if the Guardian times out, the transport fails, or the Guardian returns an error, the action proceeds and the bypass is recorded as an audit event. Deployments that prefer fail-closed flip one field in the handshake (`on_decision_failure: deny`). One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. Silence fails open; expressed-but-unresolved concerns fail closed. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative).
@@ -249,19 +247,20 @@ Through the Trace pillar. ACS-Trace requires every step to emit at least one of 
 
 ACS exposes control points and audit surface; the deployment's policy library decides what gets caught. The mapping is mechanism-to-control, not promise-to-eliminate.
 
-**OWASP Agentic Top 10 (2026):**
+**[OWASP Top 10 for Agentic Applications (2026)](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/):**
 
 | OWASP risk | ACS mechanism |
 |---|---|
-| ASI01 Cognitive injection | Hook surface intercepts the action the injected reasoning produces; the Guardian sits outside the LLM context |
-| ASI02 Over-broad skill manifests | `skillRegister` exposes `declared_capabilities`; Guardian compares against the capabilities the composed tools actually expose |
-| ASI04 Compositional skill payloads (SkillTrojan) | `skillRegister` exposes the whole skill definition for compositional static analysis before any action runs |
-| ASI06 Tampered skill artifacts (BADSKILL) | `definition.digest` commits to the complete loadable artifact including bundled model weights; `registration_provenance` attests origin |
-| ASI08 Load-time activation | `skillLoad` correlates to an approved `skillRegister` by `(skill_id, digest)`; uncorrelated or digest-mismatched loads are denied |
-| ASI10 Load/unload churn evasion | `skillUnload` plus AgBOM inventory keep churn auditable |
-| Memory poisoning | `memoryStore` and `memoryContextRetrieval` hooks; provenance travels with stored content so retrieval recovers the original trust basis |
-| Excessive agency / capability scope | SessionContext + Intent with IBAC-style enforcement; `Intent.parsed` immutable to the runtime LLM |
-| Confused deputy / cross-agent propagation | `protocols/A2A/*` wrapping (v0.2); `subagentStart`/`subagentStop` govern in-process subagents |
+| ASI01 Agent Goal Hijack | `Intent.parsed` is established at session start or the first `agentTrigger` and is immutable to the runtime LLM; IBAC-style policy checks actions against it, while `userMessage` and `agentTrigger` gate new inputs before they enter reasoning |
+| ASI02 Tool Misuse & Exploitation | `toolCallRequest` gates every outward action before execution; where `modify` is supported, policy can redact or override arguments in flight |
+| ASI03 Identity & Privilege Abuse | Core hook envelopes carry replay protection and a signature using a per-session HKDF-derived key; `subagentStart.intent_derivation` lets policy deny delegation that would widen the parent's authority |
+| ASI04 Agentic Supply Chain Vulnerabilities | AgBOM inventories components and `agbom/changed` is decision-eligible on mutation; `skillRegister` exposes the definition, `declared_capabilities`, digest, and `registration_provenance` for vetting before any action runs, and `skillLoad` correlates each activation to an approved `(skill_id, digest)` |
+| ASI05 Unexpected Code Execution (RCE) | Process, code, and shell actions that escape the agent's reasoning context cross `toolCallRequest` before execution, so policy sees the exact command or code proposed |
+| ASI06 Memory & Context Poisoning | `memoryStore` and `memoryContextRetrieval` gate memory writes and reads; with ACS-Provenance, lineage travels with stored content and `preCompact` / `postCompact` bind a summary to the entries it compacts |
+| ASI07 Insecure Inter-Agent Communication | In-process spawning crosses the decision-eligible `subagentStart`; `subagentStop` records termination when emitted. Core hook envelopes carry replay protection and a baseline signature; A2A wrapping (`protocols/A2A/*`) is reserved for v0.2 |
+| ASI08 Cascading Failures | A Guardian `deny` at `subagentStart` stops a spawn cascade at the boundary; parent and child session references preserve the propagation path in the audit record |
+| ASI09 Human-Agent Trust Exploitation | ASK routes decisions to a human approver as a wire-level primitive; `agentResponse` gates agent output before delivery and records the proposed response together with the Guardian's decision |
+| ASI10 Rogue Agents | Handshake identity and, with ACS-Inspect, the AgBOM baseline the agent's composition; continuous hook traffic makes behavior observable, and the Guardian can deny at any decision-eligible hook |
 
 **NIST AI RMF:** the framework requires identification, measurement, and management of AI risks, with traceability and human-control obligations. ACS contributes the runtime traceability layer — ACS-Audit's hash-chained record, ACS-Inspect's AgBOM, ACS-Trace's events — and the ASK disposition gives human oversight as a wire-level primitive.
 
