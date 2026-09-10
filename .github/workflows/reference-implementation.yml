@@ -55,6 +55,15 @@ jobs:
       - name: Install dependencies from the lockfile
         run: bun install --frozen-lockfile
 
+      # The test helpers delete fixture directories with `trash` rather than `rm -rf`,
+      # a deliberate safety choice by the author. `trash` is not an npm dependency of
+      # this tree and `bun install` never provides it, so 26 tests fail on any machine
+      # without it, including a clean runner. Pinned to an exact version because an
+      # unpinned global install is a supply-chain surface. The undeclared dependency
+      # itself is tracked as an issue rather than papered over here.
+      - name: Install the trash CLI the test helpers shell out to
+        run: bun add --global trash-cli@7.2.0
+
       - name: Type check
         run: bun run typecheck
 
