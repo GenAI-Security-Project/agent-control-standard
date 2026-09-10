@@ -22,6 +22,20 @@ Two parties on the wire:
     - **Deterministic layer** (Cedar/Rego): always runs first.
     - **Agent layer** (LLM): invoked only when the deterministic layer's chain config delegates (`*`, `on_ask`, or pattern-based).
 
+The diagram below shows the two-layer decision path: the deterministic layer evaluates every hook first and may delegate to the LLM layer, which sees only the deterministic layer's intermediate output and no policy code.
+
+```mermaid
+flowchart LR
+    OA["Observed Agent"] -->|"hook, JSON-RPC 2.0"| DET
+    subgraph Guardian["Guardian Agent"]
+        DET["Deterministic layer<br/>Cedar/Rego, evaluates first"]
+        LLM["Agent layer (LLM)<br/>invoked only if delegated"]
+        DET -.->|"intermediate output,<br/>no policy code"| LLM
+        LLM -.->|"reasoned decision"| DET
+    end
+    DET -->|"allow / deny / modify / ask / defer"| OA
+```
+
 ### 2.1 End-to-end flow
 
 ```
@@ -69,6 +83,17 @@ Required at session start, before any hook traffic. Wire method: `handshake/hell
 **Guardian Agent → Observed Agent (ServerHello):** `negotiated_version`, `methods_evaluated`, `selected_transport`, `signature_algorithms_supported`, `timeout_config` (default and per-method), `on_decision_failure` (failure posture, §6.4), `skew_window_ms` (request-timestamp skew tolerance for replay protection, §10.3), `approver_types_supported`, `policy_requires_provenance`, `agbom_serializations_supported` (Inspect-pillar serialization formats the Guardian renders on request), `trace_emission` (whether the Guardian emits OTel and/or OCSF for the Trace pillar, plus optional OTLP collector endpoint), `profiles_accepted`.
 
 Version mismatch terminates with `UNSUPPORTED_VERSION` (`-32001`, §17.1). Unknown fields MUST be ignored. If the client declares `provenance_producer: "none"` and the Guardian's `policy_requires_provenance` is true, the Guardian MUST refuse the session at handshake time with `PROVENANCE_REQUIRED` (`-32002`, §17.1) rather than silently degrading enforcement.
+
+The sequence below shows the handshake: the Observed Agent sends ClientHello, the Guardian answers with ServerHello, and hook traffic begins only after negotiation succeeds.
+
+```mermaid
+sequenceDiagram
+    participant OA as Observed Agent
+    participant GA as Guardian Agent
+    OA->>GA: ClientHello (versions, methods, transports, profiles supported)
+    GA->>OA: ServerHello (negotiated version, selected transport, profiles accepted)
+    Note over OA,GA: Hook traffic begins only after negotiation succeeds
+```
 
 ### 4.1 Handshake failure (normative)
 
@@ -119,6 +144,22 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session.
 
 `timeout_decision` defaulting to `deny` is deliberately the opposite of `on_decision_failure` defaulting to `proceed` (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, not one that never answered: a degraded Guardian that can still emit DEFER fails closed where a silent one fails open.
+
+The diagram below shows the five dispositions. ALLOW, DENY, and MODIFY resolve immediately. ASK and DEFER pause the step until it resolves.
+
+```mermaid
+flowchart TB
+    G["Guardian decision"] --> ALLOW["ALLOW<br/>proceed"]:::allow
+    G --> DENY["DENY<br/>blocked"]:::deny
+    G --> MODIFY["MODIFY<br/>proceed, changed"]:::modify
+    G --> ASK["ASK<br/>paused for approval"]:::pending
+    G --> DEFER["DEFER<br/>paused, not yet resolved"]:::pending
+
+    classDef allow fill:#1f8a4c,stroke:#0e5a30,color:#fff;
+    classDef deny fill:#b3261e,stroke:#7a1a15,color:#fff;
+    classDef modify fill:#1f6feb,stroke:#0b3d91,color:#fff;
+    classDef pending fill:#e67e22,stroke:#a85a10,color:#fff;
+```
 
 ### 6.1 Decision result fields
 

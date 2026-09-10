@@ -10,6 +10,19 @@ Profiles are declared in the handshake. ClientHello includes `profiles_supported
 
 A Guardian MAY refuse a session if the client does not declare a profile the Guardian's policy requires (e.g. a Guardian whose policy needs provenance MAY refuse a client that does not declare `acs-provenance`).
 
+The diagram below shows the six optional profiles layering on the mandatory ACS-Core floor. Each layer is a self-declared claim from the handshake, not a verified fact.
+
+```mermaid
+flowchart BT
+    CORE["ACS-Core<br/>(mandatory floor)"]
+    CORE --> TRACE["ACS-Trace"]
+    CORE --> INSPECT["ACS-Inspect"]
+    CORE --> PROVENANCE["ACS-Provenance"]
+    CORE --> CRYPTO["ACS-Crypto"]
+    CORE --> AUDIT["ACS-Audit"]
+    INSPECT --> INSPECTDYN["ACS-Inspect-Dynamic"]
+```
+
 ## ACS-Core (mandatory baseline)
 
 A v0.1.0-conformant deployment MUST implement ACS-Core. ACS-Core comprises:

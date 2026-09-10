@@ -4,6 +4,14 @@ Every agent step that produces an ACS hook is recordable as a Trace event. The T
 
 Trace emission is the subject of the **ACS-Trace** [conformance profile](../conformance.md#acs-trace). Deployments that implement only ACS-Core (Instrument) without Trace are v0.1.0-conformant but do not claim ACS-Trace.
 
+The diagram below shows one ACS step mapping in parallel into an OTel span and an OCSF event class. Neither mapping depends on the other.
+
+```mermaid
+flowchart LR
+    STEP["ACS step<br/>(hook boundary)"] --> OTELSPAN["OTel span"]
+    STEP --> OCSFEVENT["OCSF event class"]
+```
+
 ## OpenTelemetry semantic conventions
 
 Each ACS step produces a span whose `name` and required attributes are fixed by the table below. Decisions are recorded as span events on the parent step span, not as separate spans, so the enforcement verdict and the action it gates share a parent.
