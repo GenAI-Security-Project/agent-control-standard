@@ -1,0 +1,65 @@
+# Runs the reference implementation's own tests and type check.
+#
+# The tree under reference-implementations/agt/ arrived with roughly 2,900 lines of
+# tests, a pinned-upstream verifier, and a conformance harness, and none of it ran in
+# this repository. The `test` job in deploy-pages.yml runs pytest, which collects only
+# `tests/` per `testpaths` in pyproject.toml, so a TypeScript regression here would have
+# reached main with every check green.
+#
+# No workflow expression appears inside a `run:` block. The two that appear in the
+# concurrency group are an integer pull request number and a ref name GitHub validates,
+# and a concurrency group is not a shell context.
+#
+# Scoped by path. A documentation or schema change should not pay for a Bun install.
+name: Reference implementation
+
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/**"
+      - ".github/workflows/reference-implementation.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "reference-implementations/**"
+      - ".github/workflows/reference-implementation.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reference-implementation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agt:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Pinned to an exact version rather than a moving major. The bridge in
+      # packages/agt-bridge/src/opa-path.ts works around a Bun defect measured on a
+      # specific version, so the runtime version is part of this tree's contract
+      # rather than an implementation detail.
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.1
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install dependencies from the lockfile
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run typecheck
+
+      # Every envelope validates against ../../../../../specification/v0.1.0/ by
+      # relative path, so this also proves the implementation still matches the
+      # schemas in this repository rather than a copy of them.
+      - name: Run the tests
+        run: bun test
