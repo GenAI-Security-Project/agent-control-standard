@@ -34,6 +34,9 @@
         "steps/postCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99 },
         "steps/subagentStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1, "_note": "Subagent spawn opens a new session — modeled as Authentication/Logon for OCSF symmetry with sessionStart." },
         "steps/subagentStop": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
+        "steps/skillRegister": { "class_uid": 5001, "class_name": "Inventory Info", "_note": "Registration admits a skill to the component set and persists its definition ref and digest to the AgBOM — modeled as Inventory Info, the class agbom/* already uses." },
+        "steps/skillLoad": { "class_uid": 1007, "class_name": "Process Activity", "_note": "A load activates a digest-verified artifact into execution — modeled as Process Activity, the class of the toolCallRequest events its actions then raise." },
+        "steps/skillUnload": { "class_uid": 5001, "class_name": "Inventory Info" },
         "agbom/snapshot": { "class_uid": 5001, "class_name": "Inventory Info" },
         "agbom/changed": { "class_uid": 5001, "class_name": "Inventory Info" }
       }

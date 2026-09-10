@@ -8,7 +8,7 @@ ACS extends existing standards rather than reinventing them: JSON-RPC 2.0 for th
 
 ## What v0.1.0 ships
 
-- **ACS-Core** (mandatory baseline) — capability-negotiation handshake, JSON-RPC envelope, 16 native lifecycle hooks (`sessionStart`/`End`, `agentTrigger`, `userMessage`, `agentResponse`, `turnStart`/`End`, `toolCallRequest`/`Result`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `preCompact`/`postCompact`, `subagentStart`/`Stop`), wrapped MCP, five dispositions (`allow`, `deny`, `modify`, `ask`, `defer`), SessionContext with rolling SHA-256 chain hash, optional Intent with immutability rule, replay protection, and `system/ping` liveness.
+- **ACS-Core** (mandatory baseline) — capability-negotiation handshake, JSON-RPC envelope, 19 native lifecycle hooks (`sessionStart`/`End`, `agentTrigger`, `userMessage`, `agentResponse`, `turnStart`/`End`, `toolCallRequest`/`Result`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `preCompact`/`postCompact`, `subagentStart`/`Stop`, `skillRegister`/`Load`/`Unload`), wrapped MCP, five dispositions (`allow`, `deny`, `modify`, `ask`, `defer`), SessionContext with rolling SHA-256 chain hash, optional Intent with immutability rule, replay protection, and `system/ping` liveness.
 - **ACS-Trace** profile — OpenTelemetry semconv mapping + OCSF event-class mapping, with decisions emitted as span events on the parent step span.
 - **ACS-Inspect** / **ACS-Inspect-Dynamic** profiles — canonical AgBOM with `agbom/snapshot` and `agbom/changed`, deterministic CycloneDX / SPDX / SWID derivations.
 - **ACS-Provenance** profile — field-level `Provenance` objects with `origin`, `source_id`, `derived_from`, and an OPTIONAL wire-format `trust` enum that obeys the monotonicity rule.
