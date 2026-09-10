@@ -2,7 +2,7 @@
 
 ACS v0.1.0 defines 19 native `steps/*` hooks plus the wrapped `protocols/MCP/*` namespace, the Inspect-pillar `agbom/*` methods, and the `system/ping` liveness method. This page catalogs each hook: when it fires, the canonical schema, the disposition contract, and the audit-chain implications.
 
-The full per-hook payload schemas live under [`specification/v0.1.0/hooks/`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/). Common envelope rules — `request_id`, `timestamp`, `acs_version`, `metadata`, signature handling, replay protection — are documented in [Specification §3](./specification.md#3-wire-format) and [§10.3](./specification.md#103-replay-protection).
+The full per-hook payload schemas live under [`specification/v0.1.0/hooks/`](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification/v0.1.0/hooks). Common envelope rules — `request_id`, `timestamp`, `acs_version`, `metadata`, signature handling, replay protection — are documented in [Specification §3](./specification.md#3-wire-format) and [§10.3](./specification.md#103-replay-protection).
 
 ## Overview
 
@@ -36,7 +36,7 @@ The full per-hook payload schemas live under [`specification/v0.1.0/hooks/`](htt
 
 ## Common envelope
 
-Every native hook uses the standard request envelope from [`request-envelope.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/request-envelope.json):
+Every native hook uses the standard request envelope from [`request-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/request-envelope.json):
 
 ```json
 {
@@ -59,13 +59,13 @@ Every native hook uses the standard request envelope from [`request-envelope.jso
 }
 ```
 
-The decision envelope shape is documented in [Specification §6](./specification.md#6-disposition-vocabulary) and [`response-envelope.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/response-envelope.json).
+The decision envelope shape is documented in [Specification §6](./specification.md#6-disposition-vocabulary) and [`response-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json).
 
 ---
 
 ## sessionStart
 
-Schema: [`hooks/session-start.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/session-start.json).
+Schema: [`hooks/session-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json).
 
 Fires once per session, after the `handshake/hello` exchange completes and before any other `steps/*` hook for the same `session_id`. Establishes the audit chain root (`previous_hash: null`), session-level identity and policy bindings, and the initial `Intent` (when IBAC is the enforcement paradigm).
 
@@ -79,7 +79,7 @@ A deployment that does not emit `sessionStart` MAY allow the Guardian to implici
 
 ## agentTrigger
 
-Schema: [`hooks/agent-trigger.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/agent-trigger.json).
+Schema: [`hooks/agent-trigger.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agent-trigger.json).
 
 Fires when the agent is activated by an external triggering condition (event arrival, scheduled tick, A2A inbound message, user-initiated session, or system-issued activation). For A2A-mediated delegation, `trigger_type: "a2a_inbound"` carries the originating peer identity; for in-process subagent spawns, see [`subagentStart`](#subagentstart).
 
@@ -91,7 +91,7 @@ Fires when the agent is activated by an external triggering condition (event arr
 
 ## turnStart
 
-Schema: [`hooks/turn-start.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/turn-start.json).
+Schema: [`hooks/turn-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-start.json).
 
 Lightweight hook marking the start of an agent turn. Many policies key on per-turn state — "deny consequential actions in any turn after a turn that retrieved untrusted data," "limit tool-call count per turn," "reset cumulative-taint at turn boundary." Without an explicit turn boundary, every Guardian rolls its own heuristic for inferring turn breaks (usually pairing `userMessage` with the next `agentResponse`), and the heuristics don't agree under auto-continuation, planning loops, and multi-step ReAct cycles.
 
@@ -105,7 +105,7 @@ Lightweight hook marking the start of an agent turn. Many policies key on per-tu
 
 ## userMessage
 
-Schema: [`hooks/user-message.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/user-message.json).
+Schema: [`hooks/user-message.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/user-message.json).
 
 Fires when external user input arrives, before it is presented to the agent's reasoning context. Provenance: `origin: user_input`.
 
@@ -117,7 +117,7 @@ Fires when external user input arrives, before it is presented to the agent's re
 
 ## agentResponse
 
-Schema: [`hooks/agent-response.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/agent-response.json).
+Schema: [`hooks/agent-response.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agent-response.json).
 
 Fires after the agent has produced a response, before it is delivered to the recipient (user, A2A peer, parent agent, or external system). Provenance: `origin: agent_generated` with `derived_from` set to whatever inputs the response is derived from.
 
@@ -129,7 +129,7 @@ Fires after the agent has produced a response, before it is delivered to the rec
 
 ## knowledgeRetrieval
 
-Schema: [`hooks/knowledge-retrieval.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/knowledge-retrieval.json).
+Schema: [`hooks/knowledge-retrieval.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/knowledge-retrieval.json).
 
 Fires when the agent retrieves external knowledge (RAG, vector search, knowledge base lookup). Provenance: `origin: retrieved`, with `source_id` identifying the index or knowledge source.
 
@@ -141,7 +141,7 @@ Fires when the agent retrieves external knowledge (RAG, vector search, knowledge
 
 ## memoryContextRetrieval
 
-Schema: [`hooks/memory-context-retrieval.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/memory-context-retrieval.json).
+Schema: [`hooks/memory-context-retrieval.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/memory-context-retrieval.json).
 
 Memory read — long-term, session-scoped, or user-scoped — into the agent's working context. Provenance: `origin: retrieved`, `source_id` identifies the memory store.
 
@@ -153,7 +153,7 @@ Memory read — long-term, session-scoped, or user-scoped — into the agent's w
 
 ## memoryStore
 
-Schema: [`hooks/memory-store.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/memory-store.json).
+Schema: [`hooks/memory-store.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/memory-store.json).
 
 Memory write. The standard sink for cross-session influence; mediating it prevents memory poisoning.
 
@@ -165,7 +165,7 @@ Memory write. The standard sink for cross-session influence; mediating it preven
 
 ## toolCallRequest
 
-Schema: [`hooks/tool-call-request.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/tool-call-request.json).
+Schema: [`hooks/tool-call-request.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json).
 
 Fires after the framework has parsed a tool call from the LLM's output, but before the tool is dispatched to its handler. The central enforcement point for IBAC, FIDES, CaMeL, and AARM. Argument-level provenance attached to each `ToolArgumentValue` lets Guardians reason about the lineage of individual arguments, so policy can target specific data flows rather than the call as a whole.
 
@@ -179,7 +179,7 @@ Frameworks MUST fire `toolCallRequest` for every action that escapes the agent's
 
 ## toolCallResult
 
-Schema: [`hooks/tool-call-result.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/tool-call-result.json).
+Schema: [`hooks/tool-call-result.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-result.json).
 
 Fires after tool execution, before the result is ingested into the agent's reasoning context. Provenance: `origin: tool_output`, with `derived_from` set to the originating `toolCallRequest`'s provenance ids when the tool's output is data-derived.
 
@@ -191,7 +191,7 @@ Fires after tool execution, before the result is ingested into the agent's reaso
 
 ## preCompact
 
-Schema: [`hooks/pre-compact.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/pre-compact.json).
+Schema: [`hooks/pre-compact.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/pre-compact.json).
 
 Fires before context-window compaction. Compaction is the chokepoint where provenance can be laundered: when the runtime LLM compresses a long context window into a summary, the post-compaction text is new `agent_generated` content whose `derived_from` lineage spans every untrusted item that was in the pre-compaction context. Without an explicit hook, the framework has no clean place to attach the rule that *the compacted summary's lineage is the union of all summarized entries' lineage*. AARM cumulative-context tracking breaks across compaction without it, FIDES's monotonicity claim is unverifiable, and Guardians cannot enforce "don't compact across a trust boundary" policies.
 
@@ -203,7 +203,7 @@ Fires before context-window compaction. Compaction is the chokepoint where prove
 
 ## postCompact
 
-Schema: [`hooks/post-compact.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/post-compact.json).
+Schema: [`hooks/post-compact.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/post-compact.json).
 
 Fires after compaction. Audit + provenance-binding hook.
 
@@ -215,7 +215,7 @@ Fires after compaction. Audit + provenance-binding hook.
 
 ## subagentStart
 
-Schema: [`hooks/subagent-start.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/subagent-start.json).
+Schema: [`hooks/subagent-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-start.json).
 
 In-process delegation — a parent agent spawning a subagent within the same runtime, with no A2A boundary crossed — needs an explicit lifecycle event. A2A-mediated delegation already flows through [`agentTrigger`](#agenttrigger) with `trigger_type: a2a_inbound` on the subagent's side; `subagentStart` is for the same-runtime case.
 
@@ -231,7 +231,7 @@ Each subagent has its own SessionContext and audit chain; the parent–child rel
 
 ## subagentStop
 
-Schema: [`hooks/subagent-stop.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/subagent-stop.json).
+Schema: [`hooks/subagent-stop.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-stop.json).
 
 **Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`), the subagent's `final_chain_hash`, optional `summary` of what was returned to the parent. The summary's `provenance` follows the standard monotonicity rule.
 
@@ -241,7 +241,7 @@ Schema: [`hooks/subagent-stop.json`](https://github.com/afogel/ACS_official/blob
 
 ## skillRegister
 
-Schema: [`hooks/skill-register.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/skill-register.json).
+Schema: [`hooks/skill-register.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-register.json).
 
 Fires when a skill enters the agent's available set, before it is eligible to load or run. This is the static vetting gate: the one point where a Guardian sees the whole skill definition before any of its actions execute. A payload split across a skill's actions is benign at each action and malicious only in composition, so it escapes per-action hooks like [`toolCallRequest`](#toolcallrequest); `skillRegister` is where the whole definition is inspected.
 
@@ -255,7 +255,7 @@ A skill is the loadable, composed counterpart to the passive `agent_capability` 
 
 ## skillLoad
 
-Schema: [`hooks/skill-load.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/skill-load.json).
+Schema: [`hooks/skill-load.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-load.json).
 
 Fires when a registered skill activates into a session, before its actions run. Where `skillRegister` vets the artifact once and statically, `skillLoad` governs each activation in live context. It carries the load path, the ordered list of skills that led to the current load, so a Guardian can see and contain inter-skill cascades (skill A loads B loads C, each clean alone).
 
@@ -271,7 +271,7 @@ When a load is triggered by another skill, `load_trigger` is `skill_composition`
 
 ## skillUnload
 
-Schema: [`hooks/skill-unload.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/skill-unload.json).
+Schema: [`hooks/skill-unload.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-unload.json).
 
 Fires when a skill leaves the active set. Its enforcement value is low: by unload time the skill's actions have already run, so a Guardian typically observes rather than denies. It keeps the AgBOM's active inventory accurate, and repeated load/unload churn of the same skill is itself a signal worth tracing.
 
@@ -283,7 +283,7 @@ Fires when a skill leaves the active set. Its enforcement value is low: by unloa
 
 ## turnEnd
 
-Schema: [`hooks/turn-end.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/turn-end.json).
+Schema: [`hooks/turn-end.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-end.json).
 
 **Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`), `step_count`, optional `summary`.
 
@@ -293,7 +293,7 @@ Schema: [`hooks/turn-end.json`](https://github.com/afogel/ACS_official/blob/dev/
 
 ## sessionEnd
 
-Schema: [`hooks/session-end.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/session-end.json).
+Schema: [`hooks/session-end.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-end.json).
 
 Session termination, audit finalization. The Guardian seals the chain at this point.
 
@@ -305,7 +305,7 @@ Session termination, audit finalization. The Guardian seals the chain at this po
 
 ## agbom/snapshot
 
-Schema: [`hooks/agbom-snapshot.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/agbom-snapshot.json).
+Schema: [`hooks/agbom-snapshot.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-snapshot.json).
 
 Inspect-pillar method. Fires once per session, after `sessionStart` and before `agentTrigger` (the first content-bearing hook), and again after handshake-renegotiation. Carries the full AgBOM (the Observed Agent's component graph: models, MCP servers, A2A peers, tools, knowledge sources, memory stores, agent capabilities, skills).
 
@@ -317,7 +317,7 @@ See the [Inspect pillar](../inspect/README.md) for the full AgBOM schema and ser
 
 ## agbom/changed
 
-Schema: [`hooks/agbom-changed.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/agbom-changed.json).
+Schema: [`hooks/agbom-changed.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-changed.json).
 
 Inspect-pillar method. Fires whenever a component is added, removed, or version-changed mid-session. Carries either a full snapshot or a diff (`added[]`, `removed[]`, `changed[]`).
 
@@ -329,7 +329,7 @@ Inspect-pillar method. Fires whenever a component is added, removed, or version-
 
 ## system/ping
 
-Schema: [`hooks/system-ping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/hooks/system-ping.json). See [Specification §13](./specification.md#13-liveness-system-methods).
+Schema: [`hooks/system-ping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/system-ping.json). See [Specification §13](./specification.md#13-liveness-system-methods).
 
 > **Note:** `system/ping` is in the `system/*` namespace, not `steps/*`. It is not a hook in the enforcement sense: it carries no audit and bypasses signature requirements.
 
