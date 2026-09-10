@@ -4,6 +4,24 @@ ACS v0.1.0 defines 19 native `steps/*` hooks plus the wrapped `protocols/MCP/*` 
 
 The full per-hook payload schemas live under [`specification/v0.1.0/hooks/`](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification/v0.1.0/hooks). Common envelope rules — `request_id`, `timestamp`, `acs_version`, `metadata`, signature handling, replay protection — are documented in [Specification §3](./specification.md#3-wire-format) and [§10.3](./specification.md#103-replay-protection).
 
+The diagram below groups ACS's 22 methods by the boundary each one sits on, without listing every hook.
+
+```mermaid
+flowchart TB
+    subgraph Steps["steps/* (19 native hooks)"]
+        L["Session and turn lifecycle"]
+        M["Message I/O"]
+        K["Knowledge and memory"]
+        T["Tool execution"]
+        C["Context compaction"]
+        S["Subagent delegation"]
+        SK["Skill lifecycle"]
+    end
+    Wrapped["protocols/MCP/*<br/>wrapped MCP messages"]
+    Inspect["agbom/*<br/>2 Inspect-pillar methods"]
+    Liveness["system/ping<br/>liveness probe, no audit"]
+```
+
 ## Overview
 
 | Hook | When it fires | Decision-eligible | Audit-chain |
