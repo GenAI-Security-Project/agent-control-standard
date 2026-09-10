@@ -259,6 +259,73 @@ def test_ruleset_payload_includes_bypass_actors_at_top_level():
         )
 
 
+def test_required_status_checks_rule_carries_strict_and_enforce_fields():
+    """Every ruleset payload must include strict_required_status_checks_policy and
+    do_not_enforce_on_create in the required_status_checks rule parameters.
+
+    GitHub's ruleset API returns HTTP 422 with error message naming only the rule
+    index (/rules/3) rather than the missing field when these parameters are absent.
+    This opaque error is why the discovery overhead of a failing test here is worth
+    it: a later breakage will surface immediately, not as a cryptic 422 after
+    someone reruns the tool.
+    """
+    from apply_governance import _ruleset_payload
+
+    for ruleset in desired_rulesets():
+        payload = _ruleset_payload(ruleset)
+        # Find the required_status_checks rule
+        required_checks_rules = [
+            rule for rule in payload.get("rules", [])
+            if rule.get("type") == "required_status_checks"
+        ]
+        assert required_checks_rules, (
+            f"payload for {ruleset.name!r} has no required_status_checks rule"
+        )
+        rule = required_checks_rules[0]
+        params = rule.get("parameters", {})
+        assert "strict_required_status_checks_policy" in params, (
+            f"payload for {ruleset.name!r} required_status_checks rule is missing "
+            f"strict_required_status_checks_policy"
+        )
+        assert "do_not_enforce_on_create" in params, (
+            f"payload for {ruleset.name!r} required_status_checks rule is missing "
+            f"do_not_enforce_on_create"
+        )
+        assert params["strict_required_status_checks_policy"] is False, (
+            f"strict_required_status_checks_policy for {ruleset.name!r} should be False"
+        )
+        assert params["do_not_enforce_on_create"] is False, (
+            f"do_not_enforce_on_create for {ruleset.name!r} should be False"
+        )
+
+
+def test_required_status_checks_parameters_contains_exactly_three_keys():
+    """The required_status_checks rule parameters must contain exactly the three
+    expected keys: required_status_checks, strict_required_status_checks_policy, and
+    do_not_enforce_on_create. A stray key could trigger the same 422 error from the
+    other direction."""
+    from apply_governance import _ruleset_payload
+
+    expected_keys = {
+        "required_status_checks",
+        "strict_required_status_checks_policy",
+        "do_not_enforce_on_create"
+    }
+    for ruleset in desired_rulesets():
+        payload = _ruleset_payload(ruleset)
+        required_checks_rules = [
+            rule for rule in payload.get("rules", [])
+            if rule.get("type") == "required_status_checks"
+        ]
+        rule = required_checks_rules[0]
+        params = rule.get("parameters", {})
+        actual_keys = set(params.keys())
+        assert actual_keys == expected_keys, (
+            f"payload for {ruleset.name!r} required_status_checks parameters has "
+            f"keys {actual_keys} but expected exactly {expected_keys}"
+        )
+
+
 # --- plan_actions: idempotence and completeness ---------------------------------
 
 def _live_matching(desired) -> dict:

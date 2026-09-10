@@ -663,6 +663,12 @@ def _ruleset_payload(desired: Ruleset) -> dict:
                     "required_status_checks": [
                         {"context": check} for check in desired.required_status_checks
                     ],
+                    # GitHub returns HTTP 422 with the rule index (/rules/3) rather than
+                    # a field name if these two parameters are missing. Their presence is
+                    # required even when set to false. Set both false to match the
+                    # protect-main shape this repository already runs successfully.
+                    "strict_required_status_checks_policy": False,
+                    "do_not_enforce_on_create": False,
                 },
             },
         ],

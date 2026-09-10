@@ -585,7 +585,7 @@ regression if run out of order.
 3. **Create `integration` from `main`.** The two branches are identical at this moment, which
    is what makes the next step free.
 4. **Retarget the remaining pull requests.** #63, #24, #22, and #60 move to `integration` if
-   still open. #20, the FAQ, may stay on `main`. Because the branches are identical, no diff
+   still open, and so does #20. Because the branches are identical, no diff
    changes and no contributor redoes any work.
 5. **Move the default branch to `integration`.** Last, after the protection is pinned and the
    retargets are done.

@@ -1623,7 +1623,11 @@ done
 gh pr list --json number,baseRefName --jq '.[] | "#\(.number) -> \(.baseRefName)"'
 ```
 
-`#20`, the FAQ, may stay on `main`.
+`#20` moves too. Its title says FAQ and its prose is documentation, so it reads like a
+candidate for the documentation lane, and it is not: it also edits `mkdocs.yml`, which is
+excluded because it accepts a `hooks:` key that executes Python inside the build job. This
+was asserted from the title in an earlier draft and only caught by running the guard against
+the real file list. Check the files, never the title.
 
 After each retarget, confirm the required checks reported on the new base. Whether a base change re-triggers them is undocumented, and this repository's workflows declare no `pull_request` types. If a check is missing, close and reopen the pull request to force a run. Do not ask the contributor to rebase, which would cost them their existing approvals.
 
