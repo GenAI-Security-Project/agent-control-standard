@@ -42,19 +42,44 @@ def _chain(prev: Optional[str], envelope: dict) -> str:
     return hashlib.sha256((prev or "GENESIS").encode() + _canonical(envelope)).hexdigest()
 
 
-PolicyFn = Callable[[str, dict, dict], tuple[str, str]]
-"""policy(tool_name, arguments, context) -> (decision, reasoning).
-decision: "allow" | "deny". Anything else is treated as deny."""
+PolicyFn = Callable[[str, dict, dict], tuple]
+"""policy(tool_name, arguments, context) -> (decision, reasoning[, reason_codes]).
+
+decision: "allow" | "deny". Anything else is treated as deny. ``arguments``
+arrives unwrapped (plain values), so a policy author never has to think about
+the ACS ``{"value": ...}`` envelope form. Returning a third element is
+optional; when present it becomes ``result.reason_codes``, whose vocabulary
+is free in v0.1."""
 
 
-def sample_policy(tool_name: str, arguments: dict, context: dict) -> tuple[str, str]:
+def arguments_conform(arguments: Any) -> bool:
+    """True when every argument is an object carrying a ``value`` key.
+
+    ACS v0.1 requires this shape so provenance can attach per argument
+    (specification/v0.1.0/hooks/tool-call-request.json). A Guardian that
+    accepted raw scalars here would be validating something the standard
+    does not describe.
+    """
+    return isinstance(arguments, dict) and all(
+        isinstance(v, dict) and "value" in v for v in arguments.values())
+
+
+def unwrap_arguments(arguments: dict) -> dict:
+    """Strip the ACS ``{"value": ...}`` wrapper for the policy layer."""
+    return {k: v.get("value") for k, v in arguments.items()}
+
+
+def sample_policy(tool_name: str, arguments: dict, context: dict) -> tuple:
     """Demo policy: deny destructive tool names and path escapes."""
     lowered = tool_name.lower()
     if any(p in lowered for p in ("delete", "drop", "destroy", "rmtree", "format", "wipe")):
-        return "deny", f"tool {tool_name!r} matches the destructive-name blocklist"
+        return ("deny",
+                f"tool {tool_name!r} matches the destructive-name blocklist",
+                ["destructive_tool"])
     blob = json.dumps(arguments, default=str)
     if ".." in blob or re.search(r"ssh-rsa\s+[A-Za-z0-9+/=]+", blob):
-        return "deny", "arguments carry path-escape or key material"
+        return ("deny", "arguments carry path-escape or key material",
+                ["path_escape_or_key_material"])
     return "allow", f"tool {tool_name!r} not on any deny rule"
 
 
@@ -158,21 +183,31 @@ class Guardian:
         tool = payload.get("tool", {})
         tool_name = tool.get("name") if isinstance(tool, dict) else None
         arguments = payload.get("arguments")
-        if not tool_name or not isinstance(arguments, dict):
-            return _error(req_id, -32600, "payload.tool.name/arguments required")
+        if not tool_name:
+            return _error(req_id, -32600, "payload.tool.name required")
+        if not arguments_conform(arguments):
+            return _error(
+                req_id, -32600,
+                "payload.arguments must map each name to an object carrying a "
+                "'value' key (specification/v0.1.0/hooks/tool-call-request.json)")
 
         self._record(session_id, envelope, advance=True)
+        codes: Optional[list] = None
         try:
-            decision, reasoning = self.policy(
-                tool_name, arguments,
+            verdict = self.policy(
+                tool_name, unwrap_arguments(arguments),
                 {"agent_id": metadata.get("agent_id"), "session_id": session_id})
+            decision, reasoning = verdict[0], verdict[1]
+            if len(verdict) > 2:
+                codes = list(verdict[2]) or None
         except Exception as exc:
-            decision, reasoning = "deny", f"policy error (fail-closed): {exc}"[:300]
+            decision = "deny"
+            reasoning = f"policy error (fail-closed): {exc}"[:300]
+            codes = ["policy_error"]
         if decision not in ("allow", "deny"):
-            decision, reasoning = "deny", \
-                f"unknown policy verdict {decision!r} treated as deny"
-        codes = ["destructive_tool"] if decision == "deny" else []
-        return _result(req_id, request_id, decision, reasoning, codes or None)
+            reasoning = f"unknown policy verdict {decision!r} treated as deny"
+            decision, codes = "deny", ["unknown_verdict"]
+        return _result(req_id, request_id, decision, reasoning, codes)
 
 
 class _Handler(BaseHTTPRequestHandler):

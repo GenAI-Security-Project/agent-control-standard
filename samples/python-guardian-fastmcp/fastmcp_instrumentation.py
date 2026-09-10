@@ -34,7 +34,12 @@ def build_tool_call_envelope(tool: str, arguments: dict,
                              agent_id: str = "sample-agent",
                              session_id: Optional[str] = None,
                              acs_version: str = "0.1.0") -> dict:
-    """Pure envelope builder (no I/O, fully testable)."""
+    """Pure envelope builder (no I/O, fully testable).
+
+    ``arguments`` is taken as a plain mapping and wrapped into the ACS
+    ``{"value": ...}`` form on the way out, so callers keep writing
+    ordinary Python dicts.
+    """
     return {
         "jsonrpc": "2.0",
         "method": "steps/toolCallRequest",
@@ -49,7 +54,12 @@ def build_tool_call_envelope(tool: str, arguments: dict,
             },
             "payload": {
                 "tool": {"name": tool},
-                "arguments": arguments,
+                # ACS v0.1 wraps every argument as {"value": ...} so a
+                # provenance record can hang off each one independently.
+                # See specification/v0.1.0/hooks/tool-call-request.json:
+                # a raw scalar here fails validation.
+                "arguments": {k: {"value": v}
+                              for k, v in (arguments or {}).items()},
             },
         },
     }
