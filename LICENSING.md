@@ -18,6 +18,7 @@ Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors.
 | `overrides/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `design/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `landing/assets/fonts/**` | SIL Open Font License 1.1 | `OFL-1.1` |
+| `reference-implementations/agt/policy/lib/**` | MIT License, Copyright (c) Microsoft Corporation | `MIT` |
 | Everything else, including any new top-level directory | Apache License 2.0 | `Apache-2.0` |
 
 A more specific row wins over the catch-all. The catch-all exists so a directory added later is governed the day it lands rather than on the day someone notices it was never listed. Apache 2.0 is the default because a new directory is usually code, and an over-permissive grant on prose costs less than a ShareAlike obligation attaching by accident to reference code that adopters copy into their own systems. When a new directory holds prose, add an explicit `CC-BY-SA-4.0` row for it in the same pull request that creates it.
@@ -46,6 +47,21 @@ recorded checksum is in `landing/assets/fonts/CHECKSUMS.txt`.
 The documentation header inlines the GitHub mark from the Simple Icons set bundled with
 Material for MkDocs, dedicated to the public domain under CC0 1.0 Universal. It is
 included at build time rather than vendored, so no copy lives in this repository.
+
+## Provenance of the AGT reference implementation
+
+`reference-implementations/agt/` is a reference implementation that runs Microsoft's
+Agent Governance Toolkit (AGT) as an ACS Guardian. Its own code, tests, scripts,
+configuration and READMEs are covered by the catch-all row above, Apache 2.0.
+
+`reference-implementations/agt/policy/lib/` is AGT's stock policy bundle, copied byte
+for byte from the AGT commit recorded in `reference-implementations/agt/agt.lock`, plus
+one `data.json` this project wrote. The bundle is Microsoft's work under the MIT
+License, and each file keeps its own copyright header. The full license text is in
+[`reference-implementations/agt/policy/LICENSE-AGT`](./reference-implementations/agt/policy/LICENSE-AGT).
+The files carry no added header because a test compares them with upstream byte for
+byte; the MIT row above governs them instead. The AGT SDK the implementation depends on
+is installed from npm, also under MIT, and is not vendored.
 
 ## Why the split
 

@@ -8,7 +8,7 @@ Trace emission is the subject of the **ACS-Trace** [conformance profile](../conf
 
 Each ACS step produces a span whose `name` and required attributes are fixed by the table below. Decisions are recorded as span events on the parent step span, not as separate spans, so the enforcement verdict and the action it gates share a parent.
 
-The full mapping lives in [`trace/otel-mapping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/trace/otel-mapping.json). See [Extending OpenTelemetry](./extend_opentelemetry.md) for a deeper integration guide.
+The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json). See [Extending OpenTelemetry](./extend_opentelemetry.md) for a deeper integration guide.
 
 | ACS step | OTel span name | Required attributes |
 |---|---|---|
@@ -36,7 +36,7 @@ When Provenance is attached to a hook payload, the resulting span MUST carry `ac
 
 Each ACS step is representable as an OCSF event in the class shown below (OCSF 1.5+). Required class-specific attributes are populated from the ACS payload.
 
-The full mapping lives in [`trace/ocsf-mapping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/trace/ocsf-mapping.json). See [Extending OCSF](./extend_ocsf.md) for the deeper integration guide.
+The full mapping lives in [`trace/ocsf-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json). See [Extending OCSF](./extend_ocsf.md) for the deeper integration guide.
 
 | ACS step | OCSF class | Class UID |
 |---|---|---|

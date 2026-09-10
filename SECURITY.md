@@ -27,8 +27,16 @@ Partial reports are welcome. We would rather triage something incomplete than ne
 | Hook or event definitions that leak sensitive data by design | Missing security headers on sites we do not operate |
 | Supply-chain issues in this repository's dependencies | Social engineering of maintainers or contributors |
 | The published site at genai-security-project.github.io/agent-control-standard, including the landing page, the documentation, and the schema endpoints | Missing security response headers on the Pages site, which GitHub Pages does not allow us to set |
+| The reference implementation under `reference-implementations/`, which is runnable code people install and wire into a live development environment | Gaps the reference implementation documents about itself, which are tracked as issues rather than handled as reports |
 
 A specification flaw counts. If a hook definition forces implementers to log secrets, or an event schema makes an authorization bypass easy to write, that is a finding even though no code here executes.
+
+Code here does now execute. The reference implementation under `reference-implementations/`
+runs a Guardian process and installs hooks into a coding agent, so a report against it is
+in scope on the same terms as everything else above. Read that tree's own README first. It
+states plainly which ACS-Core requirements it does not yet meet, including request signing
+and replay protection, and a report that restates a documented gap is better filed as an
+issue where the discussion is public.
 
 ## Response commitments
 
