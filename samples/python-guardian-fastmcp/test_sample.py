@@ -73,7 +73,7 @@ def test_ping_allows_without_chain_advance(live, tmp_path):
 def test_allow_and_deny(live):
     ok = _post(live, _env("steps/toolCallRequest",
                            {"tool": {"name": "search_web"},
-                            "arguments": {"q": "x"}}))
+                            "arguments": {"q": {"value": "x"}}}))
     assert ok["result"]["decision"] == "allow"
     no = _post(live, _env("steps/toolCallRequest",
                            {"tool": {"name": "delete_volume"},
@@ -85,7 +85,7 @@ def test_allow_and_deny(live):
 def test_path_escape_denies(live):
     out = _post(live, _env("steps/toolCallRequest",
                             {"tool": {"name": "read_file"},
-                             "arguments": {"path": "../../etc/passwd"}}))
+                             "arguments": {"path": {"value": "../../etc/passwd"}}}))
     assert out["result"]["decision"] == "deny"
 
 
@@ -187,3 +187,35 @@ def test_envelope_builder_shape():
     assert env["method"] == "steps/toolCallRequest"
     assert env["params"]["metadata"]["agent_id"] == "agent-9"
     assert env["params"]["payload"]["tool"] == {"name": "t"}
+    # ACS v0.1 wraps each argument so provenance can attach per argument.
+    assert env["params"]["payload"]["arguments"] == {"a": {"value": 1}}
+
+
+def test_raw_arguments_are_rejected(live):
+    """A scalar argument is not the ACS shape, and must not reach the policy."""
+    out = _post(live, _env("steps/toolCallRequest",
+                            {"tool": {"name": "search_web"},
+                             "arguments": {"q": "x"}}))
+    assert "error" in out and out["error"]["code"] == -32600
+    assert "value" in out["error"]["message"]
+
+
+def test_policy_receives_unwrapped_values():
+    seen = {}
+
+    def spy(tool, args, ctx):
+        seen.update(args)
+        return "allow", "ok"
+
+    g = Guardian(policy=spy)
+    g.handle(_env("steps/toolCallRequest",
+                  {"tool": {"name": "t"},
+                   "arguments": {"path": {"value": "/tmp/x"}}}))
+    assert seen == {"path": "/tmp/x"}
+
+
+def test_reason_codes_reach_the_result(live):
+    out = _post(live, _env("steps/toolCallRequest",
+                            {"tool": {"name": "delete_volume"},
+                             "arguments": {}}))
+    assert out["result"]["reason_codes"] == ["destructive_tool"]
