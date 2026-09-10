@@ -24,7 +24,7 @@ Both methods follow the standard ACS request envelope and are written into the S
 
 ## Canonical schema
 
-Every component graph is expressed in the canonical AgBOM document ([`agbom/document.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/agbom/document.json)). Components are typed; the type set in v0.1.0 is:
+Every component graph is expressed in the canonical AgBOM document ([`agbom/document.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/document.json)). Components are typed; the type set in v0.1.0 is:
 
 | Type | Required fields | Optional fields |
 |---|---|---|
@@ -37,13 +37,13 @@ Every component graph is expressed in the canonical AgBOM document ([`agbom/docu
 | `agent_capability` | `id`, `name`, `description` | `tools[]`, `mcp_servers[]`, `a2a_peers[]` |
 | `skill` | `id`, `name`, `description`, `definition` (`ref`, `digest`) | `declared_capabilities[]`, `tools[]`, `mcp_servers[]`, `a2a_peers[]`, `models[]`, `composed_skills[]` |
 
-The full per-component schema is [`agbom/component.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/agbom/component.json).
+The full per-component schema is [`agbom/component.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/component.json).
 
 Every component SHOULD carry `registration_provenance` (who declared it — framework / configuration / runtime discovery) so AgBOM mutations are traceable in the same lineage system as data flow. Deployments claiming **ACS-Provenance** MUST populate `registration_provenance` on every component.
 
 ## Output format mappings
 
-The canonical document is the source of truth; serialized output is a deterministic derivation. The mapping rules live in [`inspect/format-mapping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/inspect/format-mapping.json).
+The canonical document is the source of truth; serialized output is a deterministic derivation. The mapping rules live in [`inspect/format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json).
 
 | Standard | ACS extension | Status |
 |---|---|---|

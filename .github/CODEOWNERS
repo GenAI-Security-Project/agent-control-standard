@@ -44,6 +44,13 @@
 /docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 
+# The reference implementation is runnable code that contributors install and wire
+# into their own development environments, which is a different risk class from the
+# rest of this repository. It arrived as roughly 41,000 lines from a single author, so
+# these entries exist to force a second reviewer on every later change rather than to
+# record who wrote it.
+/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+
 # CI runs with write access to the repository. Changes here are a
 # privilege-escalation surface, so this list stays narrower than the default
 # and who sits on it is a project-lead decision under GOVERNANCE.md.

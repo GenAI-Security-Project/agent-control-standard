@@ -1,6 +1,6 @@
 # Extending SWID
 
-SWID (ISO/IEC 19770-2) is one of the three normative AgBOM serializations in v0.1.0. The canonical AgBOM document is the source of truth; SWID tags are derived deterministically from it. The mapping rules live in [`inspect/format-mapping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/inspect/format-mapping.json).
+SWID (ISO/IEC 19770-2) is one of the three normative AgBOM serializations in v0.1.0. The canonical AgBOM document is the source of truth; SWID tags are derived deterministically from it. The mapping rules live in [`inspect/format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json).
 
 ## Component-type mapping
 
