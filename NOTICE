@@ -14,6 +14,11 @@ The landing page bundles the Inter typeface, Copyright (c) 2016 The Inter Projec
 Authors (https://github.com/rsms/inter), licensed under the SIL Open Font License,
 Version 1.1. See landing/assets/fonts/OFL.txt.
 
+The reference implementation under reference-implementations/agt/ includes the
+stock policy bundle of Microsoft's Agent Governance Toolkit, Copyright (c)
+Microsoft Corporation, licensed under the MIT License. See
+reference-implementations/agt/policy/LICENSE-AGT.
+
 See LICENSING.md for the full scope map.
 
 Prior history: releases up to and including v0.1.0 were published under the MIT

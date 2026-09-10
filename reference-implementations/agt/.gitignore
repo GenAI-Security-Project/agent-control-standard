@@ -1,0 +1,33 @@
+.DS_Store
+.idea/
+.vscode/
+node_modules/
+dist/
+build/
+*.log
+.venv/
+__pycache__/
+
+# The ACS envelope log and its siblings. Local demo artifacts; the envelope
+# log carries raw tool arguments unmodified, so none of them is ever committed.
+.acs/
+
+# Scratch tree for packages/guardian/test/server.test.ts's outer-net test: an
+# identical copy of packages/guardian/src, placed one directory deeper so its
+# schema path resolves to nothing. The test removes it in a `finally`; this
+# line only covers a run killed mid-test, so a stray copy of the Guardian's
+# source can never be committed as if it were source. Also excluded from
+# tsconfig.json, for the same reason: a killed run's leftover copy must not
+# make `bun run typecheck` see a stray duplicate of the Guardian's own
+# source. Fixed name (not mkdtemp's random one), so this one line covers it.
+packages/guardian/tmp-schemaless-scratch/
+
+# Same reasoning, two more scratch trees: server.test.ts's fake
+# validate-envelope.ts test doubles (a non-string .message, and a throwing
+# .message accessor), each alongside a real, unmodified copy of every other
+# file in packages/guardian/src. Two separate directories, not one, because
+# Bun's module cache keys by resolved path and these two fake sources differ
+# from each other -- sharing one directory would silently hand the second
+# test the first's already-loaded module.
+packages/guardian/tmp-undefined-message-scratch/
+packages/guardian/tmp-throwing-message-accessor-scratch/
