@@ -22,6 +22,7 @@ from apply_governance import (  # noqa: E402
     Ruleset,
     build_parser,
     collect_actions,
+    desired_board_status,
     desired_issues,
     desired_labels,
     desired_milestones,
@@ -29,6 +30,7 @@ from apply_governance import (  # noqa: E402
     desired_state,
     main,
     plan_actions,
+    plan_board_actions,
     plan_branch_actions,
     plan_default_branch_actions,
     plan_required_check_actions,
@@ -41,6 +43,25 @@ FORBIDDEN_ARGV_SUBSTRINGS = ("pr merge", "pr close", "pr edit", "label delete")
 
 FIVE_AXES = ("type:", "scope:", "status:", "priority:", "workstream:")
 STOCK_DEFAULTS = {"help wanted", "good first issue"}
+
+# Fake Status option ids for the board tests. Deliberately not the live project's real
+# ids, so a test that accidentally hardcoded a real id would still be caught by
+# test_board_option_ids_are_never_hardcoded_in_the_module below.
+BOARD_STATUS_OPTION_IDS = {
+    "Needs triage": "opt-triage",
+    "Deferred": "opt-deferred",
+    "Accepted": "opt-accepted",
+    "In progress": "opt-inprogress",
+    "Blocked": "opt-blocked",
+    "Done": "opt-done",
+}
+BOARD_PROJECT_ID = "PVT_test"
+BOARD_STATUS_FIELD_ID = "PVTSSF_test"
+
+# This project's real live Status option ids, captured once for the negative-hardcoding
+# assertion. Regenerated whenever a maintainer edits the field's options, which has
+# already happened once in this project's life (see apply_governance.py's board step).
+LIVE_BOARD_OPTION_IDS = ("035be0b0", "292b0c9f", "1ae0623e", "6e25e73d", "3f24090e", "b70371f3")
 
 
 # --- Label taxonomy -----------------------------------------------------------
@@ -326,6 +347,189 @@ def test_required_status_checks_parameters_contains_exactly_three_keys():
         )
 
 
+# --- Board status precedence -----------------------------------------------------
+#
+# Six rungs, highest first: state (Done) > status:blocked (Blocked) > open pull
+# request (In progress) > status:accepted (Accepted) > scope:deferred (Deferred) >
+# otherwise (Needs triage). The pull-request rung exists because an open pull
+# request is work in flight by definition, with or without a label: the live board
+# held nine open pull requests in In progress with no recognised label between them,
+# and an early version of this mapping would have swept all nine back out on the
+# first run.
+
+def test_desired_board_status_closed_or_merged_beats_every_label():
+    """The gotcha: a closed issue carrying status:accepted is Done, not Accepted."""
+    assert desired_board_status(("status:accepted",), "CLOSED", False) == "Done"
+    assert desired_board_status(("status:blocked", "status:accepted"), "CLOSED", False) == "Done"
+
+
+def test_desired_board_status_merged_pull_request_is_done():
+    """State still beats everything, including the pull-request rung."""
+    assert desired_board_status((), "MERGED", True) == "Done"
+
+
+def test_desired_board_status_blocked_beats_accepted():
+    """The gotcha: blocked-and-accepted resolves to Blocked, not Accepted."""
+    assert desired_board_status(("status:blocked", "status:accepted"), "OPEN", False) == "Blocked"
+
+
+def test_desired_board_status_blocked_pull_request_still_blocked():
+    """Proves the pull-request rung sits below Blocked: a blocked pull request reads
+    as Blocked, not In progress."""
+    assert desired_board_status(("status:blocked",), "OPEN", True) == "Blocked"
+
+
+def test_desired_board_status_open_pull_request_with_no_labels_is_in_progress():
+    """An open pull request needs no label to be work in flight."""
+    assert desired_board_status((), "OPEN", True) == "In progress"
+
+
+def test_desired_board_status_accepted():
+    assert desired_board_status(("status:accepted",), "OPEN", False) == "Accepted"
+
+
+def test_desired_board_status_deferred():
+    assert desired_board_status(("scope:deferred",), "OPEN", False) == "Deferred"
+
+
+def test_desired_board_status_otherwise_is_needs_triage():
+    assert desired_board_status((), "OPEN", False) == "Needs triage"
+
+
+def test_desired_board_status_unrecognized_labels_fall_through_to_needs_triage():
+    """An item with no recognised labels resolves to Needs triage, not a crash or a
+    silent match on some other rung."""
+    assert desired_board_status(("type:bug", "priority:P1"), "OPEN", False) == "Needs triage"
+
+
+# --- plan_board_actions: idempotence, add, set-status, and scope ------------------
+
+def _board_desired_items() -> list[dict]:
+    return [
+        {
+            "key": "1", "content_id": "I_1", "labels": ["status:accepted"],
+            "state": "OPEN", "is_pull_request": False,
+        },
+        {
+            "key": "2", "content_id": "I_2", "labels": ["scope:deferred"],
+            "state": "OPEN", "is_pull_request": False,
+        },
+        {
+            "key": "3", "content_id": "PR_3", "labels": ["status:accepted"],
+            "state": "MERGED", "is_pull_request": True,
+        },
+        {
+            "key": "4", "content_id": "PR_4", "labels": [],
+            "state": "OPEN", "is_pull_request": True,
+        },
+    ]
+
+
+def test_plan_board_actions_is_idempotent_against_matching_live_state():
+    desired = _board_desired_items()
+    live = [
+        {
+            "key": item["key"],
+            "item_id": f"PVTI_{item['key']}",
+            "status": desired_board_status(item["labels"], item["state"], item["is_pull_request"]),
+        }
+        for item in desired
+    ]
+    actions = plan_board_actions(
+        live, desired, BOARD_PROJECT_ID, BOARD_STATUS_FIELD_ID, BOARD_STATUS_OPTION_IDS
+    )
+    assert actions == []
+
+
+def test_plan_board_actions_against_empty_board_adds_one_action_per_open_item():
+    desired = [item for item in _board_desired_items() if item["state"] == "OPEN"]
+    actions = plan_board_actions(
+        [], desired, BOARD_PROJECT_ID, BOARD_STATUS_FIELD_ID, BOARD_STATUS_OPTION_IDS
+    )
+    assert len(actions) == len(desired)
+    for action in actions:
+        assert action.step == "board"
+        assert "addProjectV2ItemById" in " ".join(action.argv)
+
+
+def test_plan_board_actions_never_adds_a_closed_item_not_already_on_the_board():
+    """Backfilling a merged pull request that was never tracked is noise, per the
+    plan's scope note, so an empty board yields zero actions for it."""
+    desired = [item for item in _board_desired_items() if item["state"] != "OPEN"]
+    actions = plan_board_actions(
+        [], desired, BOARD_PROJECT_ID, BOARD_STATUS_FIELD_ID, BOARD_STATUS_OPTION_IDS
+    )
+    assert actions == []
+
+
+def test_plan_board_actions_wrong_status_yields_set_status_and_no_add():
+    desired = [
+        {
+            "key": "1", "content_id": "I_1", "labels": ["status:blocked"],
+            "state": "OPEN", "is_pull_request": False,
+        }
+    ]
+    live = [{"key": "1", "item_id": "PVTI_1", "status": "Needs triage"}]
+    actions = plan_board_actions(
+        live, desired, BOARD_PROJECT_ID, BOARD_STATUS_FIELD_ID, BOARD_STATUS_OPTION_IDS
+    )
+    assert len(actions) == 1
+    rendered = " ".join(actions[0].argv)
+    assert "updateProjectV2ItemFieldValue" in rendered
+    assert "addProjectV2ItemById" not in rendered
+
+
+def test_plan_board_actions_already_on_board_and_now_merged_moves_to_done():
+    """The drift this step exists to fix: a merged pull request sitting in a stale
+    status moves to Done rather than being skipped because it is closed."""
+    desired = [
+        {
+            "key": "3", "content_id": "PR_3", "labels": [],
+            "state": "MERGED", "is_pull_request": True,
+        }
+    ]
+    live = [{"key": "3", "item_id": "PVTI_3", "status": "In progress"}]
+    actions = plan_board_actions(
+        live, desired, BOARD_PROJECT_ID, BOARD_STATUS_FIELD_ID, BOARD_STATUS_OPTION_IDS
+    )
+    assert len(actions) == 1
+    assert BOARD_STATUS_OPTION_IDS["Done"] in actions[0].argv[-1]
+
+
+def test_plan_board_actions_leaves_an_open_issue_already_in_progress_alone():
+    """GitHub's built-in "Pull request linked to issue" workflow moves an issue to
+    In progress when a pull request links to it. Nothing in the label set records
+    that link, so reconciling this issue back to its label-derived column (Accepted,
+    here) would fight that workflow on every run. This proves the reconciler steps
+    aside instead of emitting a set-status action.
+    """
+    desired = [
+        {
+            "key": "5", "content_id": "I_5", "labels": ["status:accepted"],
+            "state": "OPEN", "is_pull_request": False,
+        }
+    ]
+    live = [{"key": "5", "item_id": "PVTI_5", "status": "In progress"}]
+    actions = plan_board_actions(
+        live, desired, BOARD_PROJECT_ID, BOARD_STATUS_FIELD_ID, BOARD_STATUS_OPTION_IDS
+    )
+    assert actions == []
+
+
+def test_board_option_ids_are_never_hardcoded_in_the_module():
+    """Option ids regenerate whenever the Status field's options are edited, which has
+    already happened once in this project's life. A hardcoded id is a bug waiting on
+    the next edit, so the module must fetch these at runtime instead."""
+    source = (REPO_ROOT / "tools" / "apply_governance.py").read_text(encoding="utf-8")
+    for option_id in LIVE_BOARD_OPTION_IDS:
+        assert option_id not in source, f"module source hardcodes board option id {option_id!r}"
+
+
+def test_board_is_an_automatable_step():
+    assert "board" in AUTOMATABLE_STEPS
+    assert "board" not in HUMAN_STEPS
+
+
 # --- plan_actions: idempotence and completeness ---------------------------------
 
 def _live_matching(desired) -> dict:
@@ -427,17 +631,35 @@ def _all_actions_for_safety_scan() -> list:
     sample" the safety property has to hold over.
     """
     desired = desired_state()
+    board_repo_items = _board_desired_items()
+
     matching_live = _live_matching(desired)
     matching_live["branches"] = ["main", "integration"]
     matching_live["default_branch"] = "integration"
     matching_live["protect_main"] = {
         "id": 1, "required_status_checks": ("test", "build", "base-branch-guard"),
     }
+    matching_live["board_project_id"] = BOARD_PROJECT_ID
+    matching_live["board_status_field_id"] = BOARD_STATUS_FIELD_ID
+    matching_live["board_status_option_ids"] = BOARD_STATUS_OPTION_IDS
+    matching_live["board_repo_items"] = board_repo_items
+    # Item "3" is wrong on purpose, so this live state exercises a set-status action
+    # alongside the already-correct items 1 and 2, rather than yielding zero actions.
+    matching_live["board_items"] = [
+        {"key": "1", "item_id": "PVTI_1", "status": "Accepted"},
+        {"key": "2", "item_id": "PVTI_2", "status": "Deferred"},
+        {"key": "3", "item_id": "PVTI_3", "status": "In progress"},
+    ]
 
     empty_live: dict = {"labels": [], "milestones": [], "issues": [], "rulesets": []}
     empty_live["branches"] = []
     empty_live["default_branch"] = "main"
     empty_live["protect_main"] = {"id": 1, "required_status_checks": ("test", "build")}
+    empty_live["board_project_id"] = BOARD_PROJECT_ID
+    empty_live["board_status_field_id"] = BOARD_STATUS_FIELD_ID
+    empty_live["board_status_option_ids"] = BOARD_STATUS_OPTION_IDS
+    empty_live["board_repo_items"] = board_repo_items
+    empty_live["board_items"] = []
 
     actions = []
     for live in (matching_live, empty_live):

@@ -20,6 +20,14 @@ or merge someone else's work) or destructive (a deleted label vanishes from ever
 that carried it). No function in this module builds a `gh` argv that merges, closes,
 or edits a pull request, or that deletes a label, and `HUMAN_STEPS` below says so out
 loud when asked for one of the steps that requires a person.
+
+The `board` step reconciles the org-level project board from the same label taxonomy,
+since the board's built-in GitHub workflows add, close, and merge an item but cannot
+move it when a maintainer applies a label, and the label is what the governance turns
+on. It only adds a project item or changes its Status field, never archives or removes
+one, and it runs under a maintainer's own `gh` credentials rather than a token stored
+in the repository, because the board is organization-owned and a workflow's
+`GITHUB_TOKEN` cannot write to it.
 """
 from __future__ import annotations
 
@@ -29,10 +37,16 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = "GenAI-Security-Project/agent-control-standard"
+
+# The org project board this tool reconciles. Owner is derived from REPO rather than
+# spelled out a second time, since the board and the repository share one org.
+BOARD_OWNER = REPO.split("/", 1)[0]
+BOARD_PROJECT_NUMBER = 9
 
 # The step names this tool will run. Anything else, including every step name in
 # HUMAN_STEPS, is refused rather than guessed at.
@@ -44,6 +58,7 @@ AUTOMATABLE_STEPS = (
     "issues",
     "default-branch",
     "required-check",
+    "board",
 )
 
 # Phase 2 steps this tool deliberately does not run, and why. Keyed by the name someone
@@ -812,6 +827,137 @@ def _protect_main_payload(protect_main: dict) -> dict:
     }
 
 
+# --- Board reconciliation -------------------------------------------------------
+
+# Every column the board step recognizes. "In progress" is never a label rung: it is
+# written either by GitHub's own "Pull request linked to issue" workflow or by this
+# module's own open-pull-request rule, never by a status: label.
+BOARD_STATUSES = ("Done", "Blocked", "In progress", "Accepted", "Deferred", "Needs triage")
+
+_ADD_BOARD_ITEM_MUTATION = (
+    "mutation($project: ID!, $content: ID!) { "
+    "addProjectV2ItemById(input: {projectId: $project, contentId: $content}) "
+    "{ item { id } } }"
+)
+
+_SET_BOARD_STATUS_MUTATION = (
+    "mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) { "
+    "updateProjectV2ItemFieldValue(input: {projectId: $project, itemId: $item, "
+    "fieldId: $field, value: {singleSelectOptionId: $option}}) "
+    "{ projectV2Item { id } } }"
+)
+
+
+def desired_board_status(labels: Iterable[str], state: str, is_pull_request: bool) -> str:
+    """Map one issue or pull request to the board status column it belongs in.
+
+    Precedence, highest first, spelled out as a table rather than a chain of ifs a
+    reader has to simulate:
+
+    1. state is CLOSED or MERGED -> Done. State beats every label, so a closed issue
+       carrying status:accepted is done, not accepted.
+    2. status:blocked -> Blocked. A blocked item names what is stuck, which stays
+       true even for a pull request that would otherwise read as merely in flight.
+    3. an open pull request -> In progress. A pull request open at all is work in
+       flight by definition, with or without a label, which is why this rung needs
+       none to fire. It sits below Blocked so a blocked pull request still reads as
+       blocked rather than only in flight.
+    4. status:accepted -> Accepted.
+    5. scope:deferred -> Deferred.
+    6. otherwise -> Needs triage.
+
+    `is_pull_request` is a parameter rather than something sniffed from the labels,
+    because nothing in the label taxonomy records issue versus pull request and
+    guessing from label names would be exactly the kind of implicit rule this
+    function exists to avoid.
+    """
+    label_set = set(labels)
+    if state in ("CLOSED", "MERGED"):
+        return "Done"
+    if "status:blocked" in label_set:
+        return "Blocked"
+    if is_pull_request:
+        return "In progress"
+    if "status:accepted" in label_set:
+        return "Accepted"
+    if "scope:deferred" in label_set:
+        return "Deferred"
+    return "Needs triage"
+
+
+def plan_board_actions(
+    live_items: list[dict],
+    desired_items: list[dict],
+    project_id: str,
+    status_field_id: str,
+    status_option_ids: dict[str, str],
+) -> list[Action]:
+    """Diff the org project board against every issue and pull request in the repo.
+
+    `desired_items` carries every issue and pull request, open or not, keyed by
+    `key`: the issue or pull request number, unique per repository because GitHub
+    issues and pull requests share one numbering sequence. `live_items` carries the
+    same key for whatever is already on the board, with its current column and the
+    project item id a status change would target.
+
+    An item missing from the board is added only while it is open. Backfilling a
+    closed item that was never tracked is history, not governance, so a closed or
+    merged item absent from the board is left alone, per the plan's scope note. An
+    item already on the board is reconciled regardless of open or closed state,
+    which is how a merged pull request that sat in In progress reaches Done.
+
+    An open issue already sitting at In progress is an exception. GitHub's built-in
+    "Pull request linked to issue" workflow puts it there when a pull request links
+    to it, and nothing in the label set records that link. Moving it back to a
+    label-derived column on the next run would fight that workflow every time this
+    tool runs, so an issue found there is left alone rather than relitigated against
+    a decision this function has no way to see the basis for.
+
+    Pure and idempotent: fed live state that already matches every desired item, it
+    returns an empty list.
+    """
+    live_by_key = {entry["key"]: entry for entry in live_items}
+    actions: list[Action] = []
+    for item in desired_items:
+        is_pr = item.get("is_pull_request", False)
+        desired_status = desired_board_status(item.get("labels", ()), item["state"], is_pr)
+        current = live_by_key.get(item["key"])
+
+        if current is None:
+            if item["state"] != "OPEN":
+                continue
+            argv = (
+                "gh", "api", "graphql",
+                "-f", f"query={_ADD_BOARD_ITEM_MUTATION}",
+                "-f", f"project={project_id}",
+                "-f", f"content={item['content_id']}",
+            )
+            actions.append(Action("board", f"Add item #{item['key']} to the board", argv))
+            continue
+
+        current_status = current.get("status")
+        if current_status == desired_status:
+            continue
+        if not is_pr and item["state"] == "OPEN" and current_status == "In progress":
+            # Sticky In progress for an open issue. See the docstring above: this
+            # column is written by a workflow this function cannot observe, and
+            # overwriting it would fight that workflow on every subsequent run.
+            continue
+
+        argv = (
+            "gh", "api", "graphql",
+            "-f", f"query={_SET_BOARD_STATUS_MUTATION}",
+            "-f", f"project={project_id}",
+            "-f", f"item={current['item_id']}",
+            "-f", f"field={status_field_id}",
+            "-f", f"option={status_option_ids[desired_status]}",
+        )
+        actions.append(
+            Action("board", f"Set item #{item['key']} status to {desired_status!r}", argv)
+        )
+    return actions
+
+
 def collect_actions(live_state: dict, only: str | None = None) -> list[Action]:
     """Combine every planner, filtered to one step when `only` names one."""
     steps: list[Action] = []
@@ -829,6 +975,14 @@ def collect_actions(live_state: dict, only: str | None = None) -> list[Action]:
         steps += plan_default_branch_actions(live_state)
     if only in (None, "required-check"):
         steps += plan_required_check_actions(live_state)
+    if only in (None, "board"):
+        steps += plan_board_actions(
+            live_state.get("board_items", []),
+            live_state.get("board_repo_items", []),
+            live_state.get("board_project_id", ""),
+            live_state.get("board_status_field_id", ""),
+            live_state.get("board_status_option_ids", {}),
+        )
     return steps
 
 
@@ -887,6 +1041,84 @@ def _normalize_ruleset(detail: dict) -> dict:
     }
 
 
+def _board_status_field(fields: list[dict]) -> dict:
+    """Find the Status single-select field in a `gh project field-list` response.
+
+    Raises rather than falling back to an empty map, because a missing Status field
+    means every board action this step would render is unsendable. A caller getting
+    an empty option map by default would misreport "nothing to do" instead of
+    failing loudly on a project whose shape changed.
+    """
+    for entry in fields:
+        if entry.get("name") == "Status" and entry.get("type") == "ProjectV2SingleSelectField":
+            return entry
+    raise RuntimeError(f"Project {BOARD_PROJECT_NUMBER} has no single-select Status field")
+
+
+def fetch_board_live_state() -> dict:
+    """Read the org project board and the repo's issues and pull requests via `gh`.
+
+    The project id, the Status field id, and its option ids are all read here, fresh
+    on every run, rather than written into this file. Option ids regenerate whenever
+    a maintainer edits the field's options, which has already happened once in this
+    project's life, so a hardcoded id is a bug waiting on the next edit.
+    """
+    project = json.loads(
+        _gh("project", "view", str(BOARD_PROJECT_NUMBER), "--owner", BOARD_OWNER, "--format", "json")
+    )
+    fields = json.loads(
+        _gh("project", "field-list", str(BOARD_PROJECT_NUMBER), "--owner", BOARD_OWNER, "--format", "json")
+    )["fields"]
+    status_field = _board_status_field(fields)
+    status_option_ids = {option["name"]: option["id"] for option in status_field["options"]}
+
+    raw_board_items = json.loads(
+        _gh(
+            "project", "item-list", str(BOARD_PROJECT_NUMBER), "--owner", BOARD_OWNER,
+            "--format", "json", "--limit", "500",
+        )
+    )["items"]
+    board_items = [
+        {"key": str(entry["content"]["number"]), "item_id": entry["id"], "status": entry["status"]}
+        for entry in raw_board_items
+        # A draft issue item has no content.number. It carries no repository issue or
+        # pull request to reconcile against, so it is outside this step's scope.
+        if "number" in entry.get("content", {})
+    ]
+
+    raw_issues = json.loads(
+        _gh(
+            "issue", "list", "--repo", REPO, "--state", "all", "--limit", "500",
+            "--json", "id,number,labels,state",
+        )
+    )
+    raw_prs = json.loads(
+        _gh(
+            "pr", "list", "--repo", REPO, "--state", "all", "--limit", "500",
+            "--json", "id,number,labels,state",
+        )
+    )
+    repo_items = [
+        {
+            "key": str(entry["number"]),
+            "content_id": entry["id"],
+            "labels": [label["name"] for label in entry["labels"]],
+            "state": entry["state"],
+            "is_pull_request": is_pull_request,
+        }
+        for is_pull_request, batch in ((False, raw_issues), (True, raw_prs))
+        for entry in batch
+    ]
+
+    return {
+        "board_project_id": project["id"],
+        "board_status_field_id": status_field["id"],
+        "board_status_option_ids": status_option_ids,
+        "board_items": board_items,
+        "board_repo_items": repo_items,
+    }
+
+
 def fetch_live_state() -> dict:
     """Read the current repository state through `gh`. The only function that does.
 
@@ -927,6 +1159,7 @@ def fetch_live_state() -> dict:
 
     branches = json.loads(_gh("api", f"repos/{REPO}/branches", "--paginate", "--jq", "[.[].name]"))
     repo_info = json.loads(_gh("api", f"repos/{REPO}"))
+    board = fetch_board_live_state()
 
     return {
         "labels": labels,
@@ -936,6 +1169,11 @@ def fetch_live_state() -> dict:
         "branches": branches,
         "default_branch": repo_info.get("default_branch"),
         "protect_main": details.get("protect-main"),
+        "board_project_id": board["board_project_id"],
+        "board_status_field_id": board["board_status_field_id"],
+        "board_status_option_ids": board["board_status_option_ids"],
+        "board_items": board["board_items"],
+        "board_repo_items": board["board_repo_items"],
     }
 
 
@@ -946,8 +1184,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="apply_governance.py",
         description=(
             "Apply Phase 2 of the contribution-governance plan: labels, milestones, "
-            "issues, and the integration and release rulesets. Prints the gh and git "
-            "commands it would run by default. Pass --apply to run them."
+            "issues, the integration and release rulesets, and the org project board. "
+            "Prints the gh and git commands it would run by default. Pass --apply to "
+            "run them."
         ),
     )
     parser.add_argument(
