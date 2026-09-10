@@ -1,0 +1,57 @@
+# Test fixture only -- NOT read by production code. Identical to the real
+# mapping.yaml except one row moves: "steps/toolCallRequest" is answered by the
+# `output` intervention point instead of `pre_tool_call`.
+#
+# AND except that no `intervention_points` row here carries a per-point
+# `modifications` block -- so this file has no point that can express a
+# transform at all. Nothing this fixture is used for reaches a `modify`,
+# which is why it was left that way rather than updated. But a later
+# transform test pointed at this file would get mapVerdict's "no
+# modifications rule for intervention point" throw instead of the shape it
+# meant to exercise, and the header used to say the file was identical.
+#
+# Used by packages/guardian/test/server.test.ts to
+# prove the runtime resolves the AGT intervention point out of THIS table
+# rather than hardcoding "pre_tool_call". `output` is a point AGT knows and
+# policy/manifest.yaml does not register, so honouring the table makes AGT fail
+# closed with `runtime_error:intervention_point_unknown`, while ignoring it
+# would evaluate pre_tool_call and allow a benign command. The two outcomes are
+# opposite, so the assertion cannot pass both ways.
+#
+# `output`'s own `policy_target_argument` is here so the request gate's
+# assembler has an argument to copy and reaches bridge.evaluate at all: the
+# Guardian resolves this row's argument before assembling now, and a row with
+# no table would be refused on this side before AGT ever saw the point --
+# which would prove the resolver ran, but not the fact this fixture exists to
+# pin, that AGT itself is what rejects an unregistered intervention point.
+acs_version: "0.1.0"
+agt_version: "0.3.1-beta"
+
+intervention_points:
+  output: { acs_method: "steps/toolCallRequest", policy_target_argument: { default: command } }
+  post_tool_call: { acs_method: "steps/toolCallResult" }
+  agent_startup: { acs_method: "steps/sessionStart" }
+  agent_shutdown: { acs_method: "steps/sessionEnd" }
+  input: { acs_method: "steps/userMessage" }
+  pre_tool_call: { acs_method: null, note: "deliberately unmapped for this fixture" }
+  pre_model_call: { acs_method: null, note: "no ACS v0.1.0 method carries a model call, so this point is unexpressed at every verdict" }
+  post_model_call: { acs_method: null, note: "no ACS v0.1.0 method carries a model call, so this point is unexpressed at every verdict" }
+
+verdicts:
+  allow: { decision: allow }
+  deny: { decision: deny }
+  warn: { decision: allow, require_policy_references: true }
+  escalate: { decision: ask }
+  transform: { decision: modify }
+
+field_synthesis:
+  reasoning:
+    source: verdict.message
+  reason_codes:
+    source: verdict.reason
+    wrap: array
+  policy_references:
+    rule_id:
+      source: verdict.reason
+    policy_id:
+      literal: agt_stock

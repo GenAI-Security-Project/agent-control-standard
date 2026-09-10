@@ -1,0 +1,191 @@
+# mapping.yaml — the ACS↔AGT translation table.
+#
+# This file is the single source of truth for how an AGT verdict becomes an
+# ACS decision. It is read by two consumers that must never disagree:
+#   1. The runtime (packages/guardian/src/map-verdict.ts), at decision time.
+#   2. The conformance harness (packages/conformance), which publishes a
+#      machine-checked ACS-to-AGT mapping table from this same file.
+#
+# Any change to the intervention_points / verdict / field_synthesis tables
+# below is a behavior change for both consumers. mapVerdict must implement
+# exactly this table — no verdict names, decisions, field derivations or
+# output keys hardcoded in code that aren't declared here.
+
+acs_version: "0.1.0"
+agt_version: "0.3.1-beta"
+
+# ACS intervention points AGT can be wired to. acs_method: null marks a
+# point AGT supports that ACS v0.1.0 has no equivalent for.
+#
+# READ BY THE RUNTIME, not only by the conformance harness. The Guardian
+# resolves the AGT intervention point for an arriving ACS method out of this
+# table (map-verdict.ts's resolveInterventionPoint, called from server.ts) --
+# it used to hardcode "pre_tool_call" while this table sat here claiming to be
+# the mapping, so the two could disagree and nothing would fail. Changing a
+# row below now changes which policy actually evaluates that method, which is
+# the only condition under which the published coverage matrix can be
+# trusted.
+#
+# One method must map to at most one point: two rows naming the same
+# acs_method is a throw, not a first-match win.
+#
+# `modifications` is per-point because it is the one part of the synthesis
+# that depends on WHICH payload is being edited: the request gate rewrites a
+# tool argument, the result gate rewrites the result payload's own leaf, and
+# the two are different ACS modification shapes for the same AGT transform.
+# Everything else a verdict becomes is point-independent and stays in
+# field_synthesis below. A point with no `modifications` rule cannot express a
+# transform at all, and mapVerdict throws for one rather than answering with a
+# MODIFY the host has nothing to apply.
+intervention_points:
+  pre_tool_call:
+    acs_method: "steps/toolCallRequest"
+    # Which argument this gate's policy target lives in, per tool.
+    #
+    # AGT's manifest gives an intervention point exactly ONE policy_target
+    # (manifest.schema.json declares intervention_point with
+    # additionalProperties: false), and AGT resolves that path before any rule
+    # runs. Measured: a WebFetch call under a target of
+    # "$.tool_call.args.command" is DENIED on runtime_error:path_missing --
+    # not evaluated and allowed; denied, with no rule consulted. So a
+    # deployment governing two tools whose arguments disagree about their names
+    # cannot express both with one literal path.
+    #
+    # The answer is this table plus a normalised leaf. The Guardian reads the
+    # argument named here, copies its value to the fixed snapshot leaf
+    # policy/manifest.yaml's policy_target points at, and every gate stays live
+    # in one Guardian -- the property a second manifest per gate would have
+    # cost.
+    #
+    # THE SAME ENTRY IS READ A SECOND TIME, and that is the whole reason it is
+    # one entry. AGT's transform names the leaf it rewrote by the literal
+    # "$policy_target"; ACS expresses that as modifications.parameter_overrides
+    # keyed by ARGUMENT NAME (modifications.json: "Replacement values for tool
+    # call arguments, keyed by argument name"). The argument a target is read
+    # FROM and the argument an override is written TO are the same argument.
+    # That used to be a second declaration (`into_argument: command`), and with
+    # one governed tool the two could not disagree. Widening to a second tool is
+    # exactly when they can: measured through the shipped mapVerdict, a
+    # redaction of a WebFetch url came out as parameter_overrides.command -- a
+    # key the tool has no argument for -- while url, still carrying the secret,
+    # shipped untouched. One entry read twice cannot do that.
+    #
+    # `default` is what an unlisted tool gets. A tool listed here that
+    # policy/manifest.yaml does not register is a failing case in
+    # test/path-dialects.test.ts.
+    policy_target_argument:
+      default: command
+      by_tool:
+        run_shell: command
+        Bash: command
+        bash: command
+        WebFetch: url
+        webfetch: url
+    modifications:
+      from: verdict.transform
+      when_path: "$policy_target"
+      into: parameter_overrides
+  post_tool_call:
+    acs_method: "steps/toolCallResult"
+    # AGT's redact rule returns the FULLY substituted text (verified against
+    # the pinned bundle), so `replacement` carries the finished string, not a
+    # marker the host would have to interpret.
+    #
+    # into_path is the ACS JSON pointer for the same leaf this point's
+    # policy_target addresses: policy/manifest.yaml declares
+    # policy_target: "$.tool_result.outputs[0].value", and the pointer into the
+    # result payload for that leaf is "/outputs/0/value". That agreement is now
+    # the ONLY direct place mapping.yaml and policy/manifest.yaml touch: the
+    # request gate above no longer names a leaf here at all, so its own
+    # agreement is between policy/manifest.yaml's policy_target and
+    # assemble-snapshot.ts's POLICY_TARGET_LEAF constant instead. Both
+    # agreements are derived and checked in test/path-dialects.test.ts rather
+    # than left to whoever edits one file remembering the other.
+    #
+    # The HOST's own dialect (the hookmap's outputs.from, "$.tool_response
+    # .stdout") is deliberately NOT derived from either: it addresses the host's
+    # payload, whose shape this project does not define. Absorbing that
+    # difference is what the hookmap is for and why the same adapter serves a
+    # second host.
+    modifications:
+      from: verdict.transform
+      when_path: "$policy_target"
+      into: redactions
+      into_path: "/outputs/0/value"
+  agent_startup: { acs_method: "steps/sessionStart" }
+  agent_shutdown: { acs_method: "steps/sessionEnd" }
+  input: { acs_method: "steps/userMessage" }
+  output: { acs_method: "steps/agentResponse" }
+  pre_model_call: { acs_method: null, note: "no ACS v0.1.0 method carries a model call, so this point is unexpressed at every verdict" }
+  post_model_call: { acs_method: null, note: "no ACS v0.1.0 method carries a model call, so this point is unexpressed at every verdict" }
+
+# AGT decision -> ACS decision. decision values are lowercase on the wire.
+# require_policy_references marks a verdict for which a non-empty
+# policy_references is load-bearing: it is what distinguishes an
+# observe-only allow (AGT warn) from a clean allow (AGT allow).
+verdicts:
+  allow: { decision: allow }
+  deny: { decision: deny }
+  warn: { decision: allow, require_policy_references: true }
+  escalate: { decision: ask }
+  transform: { decision: modify }
+
+# AGT carries no rule_id / reason_codes / reasoning — its verdict is
+# just {decision, reason, message, transform?, evidence?, result_labels?},
+# where `reason` is a single low-cardinality string and `message` is the
+# human-facing text. ACS's richer fields are synthesized from those two.
+#
+# Each leaf is either:
+#   { source: "verdict.<field>" }              — copy the field verbatim
+#   { source: "verdict.<field>", wrap: array }  — wrap the field in a
+#                                                  single-element array
+#   { literal: <value> }                        — a fixed value, not read
+#                                                  from the verdict at all
+field_synthesis:
+  # AGT writes verdict.message for an operator reading a log: patterns.rego
+  # sprintf's "matched pattern <regex> at offset <n>". policy/lib is vendored
+  # byte-identical from AGT — verify:pin re-clones and byte-diffs it — so the
+  # sentence a human or a model reads is composed HERE, on this side of the
+  # boundary, and the upstream bundle is never edited to change wording.
+  #
+  # Three parts in order: the summary this table gives the deciding rule, the
+  # rule's own name and the bundle it came from, and whatever detail AGT's own
+  # message carries.
+  reasoning:
+    source: verdict.message
+    template: "{summary} Policy: {rule_id}, from AGT's stock bundle ({policy_id}).{detail}"
+    # Keyed by AGT's rule name. A rule with no entry here takes `default`, so
+    # a rule an AGT release adds is still named and attributed rather than
+    # arriving as a bare sprintf.
+    #
+    # redaction_applied is the one rule needing a sentence per gate: the same
+    # rule rewrites the command at the request gate and the output at the
+    # result gate, and the rule name alone does not say which happened.
+    summaries:
+      default: "This step was decided by AGT's stock policy bundle."
+      destructive_shell_command_blocked: "This command was blocked because it matches a destructive-shell-command pattern."
+      approval_required: "This step needs human approval before it can run."
+      drift_detected: "This step was allowed, but flagged: the agent's behaviour drifted from its baseline."
+      redaction_applied:
+        pre_tool_call: "A secret in this step's arguments was replaced before it ran."
+        post_tool_call: "Secrets in this output were replaced before the model saw them."
+    # AGT's message, rendered for the reader the sentence above is for. The
+    # pattern form carries the regex that matched, which is the one part of
+    # the raw message a human gains nothing from, so the offset is kept and
+    # the regex dropped. Every other message is passed through whole: a shape
+    # this does not recognise is attributed, never dropped.
+    detail:
+      when_matches: "^matched pattern .+ at offset ([0-9]+)$"
+      render: " Matched at offset {1}."
+      otherwise: " AGT reported: {message}."
+  reason_codes:
+    source: verdict.reason
+    wrap: array
+  policy_references:
+    rule_id:
+      source: verdict.reason
+    policy_id:
+      literal: agt_stock
+# modifications is NOT here: it lives under each intervention_points row above,
+# because it is the one field whose synthesis depends on which payload the gate
+# is editing. See the two rows there.

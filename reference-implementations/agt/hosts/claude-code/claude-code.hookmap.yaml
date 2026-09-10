@@ -1,0 +1,257 @@
+# The per-host mapping table: with the hook shim, the only artifact in this
+# repository specific to Claude Code.
+#
+# Pure data. It maps Claude Code's own hook names and payload shape onto ACS
+# methods and arguments (read by `buildEnvelope`), and maps ACS decisions onto
+# the output Claude Code reads back (each hook's own `decisions` block, read
+# by `renderDecision`).
+#
+# `decisions` lives under the HOOK, not beside `hooks`. The shape Claude Code
+# reads back is a property of the gate -- `PreToolUse` answers with a
+# permission field, `PostToolUse` answers by replacing what the tool
+# produced, and neither field exists on the other event. One shared block
+# could only have described one of them.
+#
+# `tool_name` and `arguments` are JSONPath-lite references (`$.<field>`)
+# into the raw hook payload Claude Code delivers on stdin for this event.
+host: claude-code
+hooks:
+  PreToolUse:
+    acs_method: steps/toolCallRequest
+    tool_name: $.tool_name
+    arguments: $.tool_input
+    # ACS's own raw_command: the command line this step IS, verbatim, which is
+    # a different thing from the argument bag above and is why it gets its own
+    # path rather than being read back out of `arguments`.
+    #
+    # What reads it: the Guardian's egress annotator, which extracts a
+    # destination from it and answers at ["annotations", "egress",
+    # "destination"] -- one of the five paths `default_destination_paths` in
+    # policy/lib/egress.rego declares, so AGT published this address itself.
+    # The gate cannot simply be pointed at the command line instead:
+    # measured, its host_of() answers `echo hi` for `echo hi`, so a forwarded
+    # command always resolves a destination, no allowlist pattern matches a
+    # command line, and every benign shell step would be denied.
+    # packages/guardian/src/annotate-egress.ts carries the full measurement.
+    #
+    # Unresolvable is ORDINARY here, not a fault: WebFetch sends no `command`,
+    # and the field is optional in hooks/tool-call-request.json. buildEnvelope
+    # omits it rather than throwing, which is the opposite of what it does for
+    # the result gate's `outputs.from` -- see that function's own comment for
+    # why the two differ.
+    raw_command: $.tool_input.command
+    # This `decisions` block is where Claude Code's output field names live,
+    # and they appear nowhere in the shared adapter. Each entry declares an
+    # `output` block whose keys are dotted paths into the JSON object this
+    # host writes on stdout, and whose values say where each field's content
+    # comes from -- `value:` for a literal, `from:` for a field of the
+    # arriving ACS decision (copied only when the decision carries it, and
+    # only when it has the declared `type:`).
+    #
+    # The adapter assembles that object without knowing one name in it. That
+    # is what lets a second host be a shim and a hookmap rather than a fork of
+    # the shared module: a host that nests its decision differently, or names
+    # a field alongside the wrapper rather than inside it, or has no
+    # permission-style field at all, writes different paths here and changes
+    # no code.
+    #
+    # `hookEventName` is deliberately NOT declared here: it is not derived from
+    # the decision, it is the name of the hook that asked, and acs-hook.ts adds
+    # it as it wraps. Everything below is a function of the decision alone.
+    #
+    # `type: string` on every reason field is what keeps a Guardian that puts a
+    # non-string in `reasoning` from producing an output Claude Code cannot read:
+    # the field is left off instead, exactly as it is for a decision that carries
+    # no reasoning at all.
+    #
+    # hosts/claude-code/test/wire-shape.test.ts pins every one of these outputs
+    # as a literal, so changing one means stating the change there too.
+    #
+    # WHY `defer` RENDERS `deny`. Claude Code's PreToolUse output accepts only
+    # permissionDecision "allow", "deny" or "ask" (see Claude Code's own hook
+    # docs); there is no "defer" value on the wire, so an entry declaring
+    # `permissionDecision: defer` would never have been a legal output. ACS's
+    # own defer-details.json defaults an unresolved defer's `timeout_decision`
+    # to "deny", so `deny` is the spec-consistent fail-closed choice for a host
+    # with no native defer or pending state. That is the least-wrong mapping
+    # until a host that can represent deferral exists, not a considered
+    # posture. Nothing upstream of this hookmap produces an ACS `defer`
+    # decision today, so this entry is a guard against a Guardian that emits
+    # one rather than a path this deployment exercises.
+    decisions:
+      # A genuine Guardian allow only rarely carries a `reasoning` string, but
+      # `applyFailurePosture` always sets one -- a fail-open proceed renders as
+      # a plain allow, and this reason field is the only way its explanation
+      # ("no decision arrived...") reaches the transcript a human reads. An
+      # audited bypass that says nothing to the operator is the thing this
+      # avoids.
+      allow:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: allow }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      deny:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: deny }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      ask:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: ask }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      defer:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: deny }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      # `renderDecision` receives a decision that has already been validated,
+      # which applies the ACS specification's modification rules to the
+      # original tool arguments and puts the result in `applied_input`. Naming
+      # `modifications` here instead would hand Claude Code the raw ACS
+      # modifications object -- a shape its `updatedInput` does not accept, so
+      # the rewrite would be reported and never take effect.
+      #
+      # A reason path was the one thing this entry was missing. A policy-ordered
+      # rewrite is the only decision that changes what runs without the transcript
+      # saying anything: the command silently differs from the one that was asked
+      # for, and every sibling entry above carries an explanation while this one
+      # did not.
+      modify:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: allow }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.updatedInput:             { from: applied_input }
+  # The result gate. `outputs.from` is the leaf that becomes the ACS payload's
+  # outputs[0].value; `outputs.within` is the object a `modify` decision is
+  # applied back into, so the replacement handed to the host preserves every
+  # sibling field. Claude Code silently restores the ORIGINAL output when the
+  # replacement does not match the tool's own output shape -- so `within` is
+  # not a convenience, it is the difference between a redaction and an
+  # unredacted delivery with a log line.
+  PostToolUse:
+    acs_method: steps/toolCallResult
+    tool_name: $.tool_name
+    # THIS GATE'S MATCHER STAYS SINGLE-TOOL WHILE `outputs.from` IS A SINGLE
+    # PATH, and that is the fact to read before widening `^Bash$` in
+    # settings.json to match the request gate's `^(Bash|WebFetch)$`. JSON
+    # cannot carry a comment, so this entry is the only place it can be
+    # written down.
+    #
+    # Measured end to end: a `WebFetch` result carries no `stdout`, so
+    # `$.tool_response.stdout` resolves to `undefined`, the payload builder in
+    # packages/host-adapter/src/build-envelope.ts throws rather than asking the
+    # far end to govern a step whose output it cannot see, `governStep` catches
+    # that and answers with the deployment's negotiated delivery posture instead
+    # of a decision -- and under the shipped `proceed` the tool result is
+    # delivered UNGOVERNED, with an audit event and no Guardian request. Fail
+    # open, at the one gate whose job is to see what a call produced.
+    #
+    # So widening this matcher costs a fail-open on every fetch result and buys
+    # nothing: no gate in the pinned bundle reads a tool's output for a fetch.
+    # A second tool shape belongs here once `outputs` can name a path per tool,
+    # the way `mapping.yaml` already names the policy-target argument per tool
+    # for the request gate -- not before.
+    outputs:
+      from: $.tool_response.stdout
+      within: $.tool_response
+    # Claude Code fires a SEPARATE PostToolUseFailure event for the failing
+    # case (present in 2.1.227's hook schema, not wired in this slice), so
+    # this event genuinely means success. A literal, not a field read: the
+    # payload carries no exit code for this to be derived from, and deriving
+    # one from `interrupted` would be inventing a value the host never sent.
+    exit_status: { literal: success }
+    # The result gate's own output shape. Every field here is in Claude Code
+    # 2.1.227's PostToolUse schema, and not one of them exists on PreToolUse --
+    # there is no `permissionDecision` at this event, because the tool has
+    # already run and there is no longer a permission to grant.
+    #
+    # `decision`/`reason` carry NO dot: they land beside the
+    # `hookSpecificOutput` wrapper rather than inside it, which is where Claude
+    # Code reads them. The adapter needs no new vocabulary for that -- a dotless
+    # path has always meant top-level.
+    decisions:
+      # A clean result: nothing to change, so nothing is written, and the output
+      # is delivered as the tool produced it. The one field declared here is
+      # conditional, which is what makes that possible -- the RULE is non-empty
+      # (assertRenderableDecisions requires that of every entry), while the
+      # OUTPUT is empty whenever the decision carries no `reasoning`.
+      #
+      # An observe-only allow does carry one -- an AGT `warn` becomes an ACS
+      # allow with a non-empty `policy_references` -- and it must reach a
+      # reader rather than vanishing because the step was permitted. Same
+      # reason the request gate's `allow` names a reason field.
+      allow:
+        output:
+          hookSpecificOutput.additionalContext: { from: reasoning, type: string }
+      # A deny here withholds the output, and it takes BOTH fields to do that.
+      # `decision: block` alone injects a reason and suppresses nothing: the
+      # tool has already run and its result has already formed, so `block` on
+      # its own would report a withholding that never happened. The replacing
+      # output is the half that actually withholds; the block is what says why.
+      deny:
+        output:
+          decision:                             { value: block }
+          reason:                               { from: reasoning, type: string }
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+      # WHY `ask` AND `defer` RENDER EXACTLY WHAT `deny` RENDERS. Both are the
+      # same three fields above, deliberately, and the reason is not that this
+      # gate is careless about the difference -- it is that at this gate there
+      # is no difference left to express. The tool has already run and its
+      # result has already formed: there is no permission left to grant, so an
+      # ask has nothing to ask about that has not already happened, and no
+      # pending state to hold an output in, so a defer has nothing to defer.
+      # What survives of either is the only part this host can act on -- the
+      # output is not deliverable as it stands -- and that is a withholding.
+      # The same least-wrong substitution the request gate above makes for
+      # `defer`, made here for one more disposition and for a stronger reason:
+      # there `ask` is a real answer Claude Code accepts, and here it is not a
+      # field this event has.
+      #
+      # WHAT IS LOST, and it is a real loss rather than a technicality: Claude
+      # Code has no way to ask a human about an output that already exists.
+      # There is no prompt for "the tool ran, may the model read what it
+      # produced" and no way to release the output afterwards if the answer is
+      # yes -- once the model has read `[OUTPUT WITHHELD BY POLICY]`, the step's
+      # own answer is gone. So an ask that a human would have approved is
+      # over-blocked here, silently, and a Guardian that wants a human in the
+      # loop over tool OUTPUT will not get one from this host until Claude Code
+      # grows a way to hold a formed result pending. Over-blocking is the side
+      # to be wrong on: the alternative is what this deployment did before these
+      # two entries existed -- neither was declared, so `renderDecision` threw,
+      # `governStep` answered the throw with the negotiated failure posture, and
+      # under the shipped default (`proceed`) the output an ask was raised about
+      # was delivered in full, recorded as a decision that could not be
+      # rendered.
+      #
+      # These two entries are why `withResultOutput` attaches a replacing output
+      # to every withholding rather than to `deny` alone: `from: applied_output`
+      # renders nothing when the decision does not carry one, so an ask entry
+      # declaring the block WITHOUT the adapter's widened rule would be exactly
+      # the log-line-pretending-to-be-a-suppression that acs-hook.ts's own gate
+      # refuses. The declaration and the mechanism are one change in two files.
+      ask:
+        output:
+          decision:                             { value: block }
+          reason:                               { from: reasoning, type: string }
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+      defer:
+        output:
+          decision:                             { value: block }
+          reason:                               { from: reasoning, type: string }
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+      # The redaction itself. `applied_output` is the post-validation field
+      # name, for the same reason `modify` at the request gate names
+      # `applied_input` rather than `modifications`: what Claude Code accepts
+      # here is the tool's own output shape, not ACS's modifications object, and
+      # a replacement it declines means the ORIGINAL output is delivered.
+      #
+      # And it says why. A rewrite is the only decision that changes what runs
+      # without the transcript saying anything, and it is worse at this gate:
+      # what the model reads IS the redacted output, so without a reason field
+      # the model is handed altered text with nothing to say it was altered,
+      # and may take `[REDACTED]` for the command's real answer.
+      # `additionalContext` is this event's field for it, and the `allow`
+      # entry above already uses it, so the reason travels the same way at both
+      # dispositions of this gate that hand the model an output. The three that
+      # withhold one say why in `reason`, beside the block it belongs to.
+      modify:
+        output:
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+          hookSpecificOutput.additionalContext: { from: reasoning, type: string }
