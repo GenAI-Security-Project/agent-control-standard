@@ -20,6 +20,13 @@ proves the repository needs.
 Guard B checks the other direction: a link into the schema's own published namespace
 must still point at a schema that exists, under the exact URL the schema's own $id
 declares. That catches drift from a rename or move as readily as it catches a typo.
+
+The scan originally covered `docs/` only, which is exactly why the 44 dead links above
+lived undetected: root files ship straight to readers too, README.md most of all, and
+carried zero coverage. `ROOT_MARKDOWN_FILES` below adds the front-door files this repo
+actually renders for humans. `CONTRIBUTING.md` is deliberately absent from that list: a
+pull request open at the time this guard was extended rewrites it, and adding it here
+would race that rewrite rather than protect it.
 """
 import json
 import re
@@ -29,6 +36,19 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 SPECIFICATION = ROOT / "specification"
 
+# Repository-root markdown files that ship to readers the same way docs/ does, so they
+# get the same two guards. CONTRIBUTING.md is excluded on purpose; see the module
+# docstring.
+ROOT_MARKDOWN_FILES = (
+    "README.md",
+    "GOVERNANCE.md",
+    "SECURITY.md",
+    "LICENSING.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTORS.md",
+    "STYLE.md",
+)
+
 # The only GitHub repositories any doc may link to. Add an entry here only as a
 # deliberate decision: the point of a positive allowlist is that a new foreign
 # repository fails until someone does that on purpose.
@@ -36,6 +56,7 @@ ALLOWED_GITHUB_REPOS = frozenset({
     "GenAI-Security-Project/agent-control-standard",  # this project
     "prowler-cloud/py-ocsf-models",                   # OCSF Python models, cited in extend_ocsf.md
     "ocsf/examples",                                  # OCSF example events, cited in extend_ocsf.md
+    "orgs/GenAI-Security-Project",                     # the org's project board, not a repo; same regex shape
 })
 
 # The namespace every published schema's $id is served from. See tools/publish_schemas.py.
@@ -47,9 +68,16 @@ GITHUB_REPO = re.compile(r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-
 SCHEMA_LINK = re.compile(re.escape(SCHEMA_BASE) + r"([^\s)\]]+)")
 
 
+def _scanned_paths():
+    """Every markdown file this guard covers: all of docs/, plus the named root files."""
+    paths = list(DOCS.rglob("*.md"))
+    paths.extend(ROOT / name for name in ROOT_MARKDOWN_FILES)
+    return sorted(paths)
+
+
 def _doc_lines():
-    """Yield (path, line number, line text) for every line of every doc under docs/."""
-    for path in sorted(DOCS.rglob("*.md")):
+    """Yield (path, line number, line text) for every line of every scanned doc."""
+    for path in _scanned_paths():
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             yield path, lineno, line
 
@@ -88,3 +116,17 @@ def test_schema_namespace_links_match_a_published_id():
                     f"the schema's own $id ({declared!r})"
                 )
     assert not violations, "Schema links that do not match a published $id:\n" + "\n".join(violations)
+
+
+def test_root_markdown_files_are_scanned():
+    """Prove the guard covers the root files, not just docs/.
+
+    A silent path-list typo (a missing file, a wrong name) would otherwise leave a root
+    file unguarded while this suite still reports green, which is exactly how the 44
+    dead links in docs/spec/ went unnoticed for as long as they did.
+    """
+    scanned = _scanned_paths()
+    for name in ROOT_MARKDOWN_FILES:
+        path = ROOT / name
+        assert path.is_file(), f"{name} does not exist at the repository root"
+        assert path in scanned, f"{name} is not included in the scan"
