@@ -23,6 +23,7 @@ def page() -> str:
         (LANDING / "index.html").read_text(encoding="utf-8"),
         REPO / "specification",
         (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
+        (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         (LANDING / "assets" / "starburst.svg").read_text(encoding="utf-8"),
     )
 
