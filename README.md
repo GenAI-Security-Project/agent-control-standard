@@ -7,7 +7,106 @@
 
 ACS is a wire specification. It lets a separate Guardian Agent inspect what an AI agent
 is about to do and permit, deny, or modify that action before it happens, over an
-authenticated channel, with an audit trail that reconstructs after the fact.
+authenticated channel, with an audit trail that reconstructs after the fact. The fastest
+way to understand what that means is to make it deny something.
+
+## Run it, and tell us where it breaks
+
+This is the one ask that needs nothing from a maintainer first. Clone the repository,
+run a real Guardian against a real policy engine, and watch it deny a command sent by a
+real coding agent.
+
+The reference implementation runs [Microsoft's Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit)
+(AGT) behind the ACS wire contract, with host shims for Claude Code and OpenCode. It
+needs [`bun`](https://bun.sh) and nothing else to start.
+
+```bash
+git clone https://github.com/GenAI-Security-Project/agent-control-standard
+cd agent-control-standard/reference-implementations/agt
+bun install
+bun run guardian        # second terminal: bun run inspector
+```
+
+The Guardian prints this on startup:
+
+```
+Guardian listening at http://localhost:8787/acs
+Envelope log: .acs/envelopes.jsonl
+Session context log: .acs/session-context.jsonl
+Failure posture: proceed   (override with ACS_ON_DECISION_FAILURE=deny)
+```
+
+The `Failure posture: proceed` line matters more than it looks. Read on. In a second
+terminal, the Inspector reports `last_observed_posture=(none observed)` and
+`fail-open proceeds=0` until an envelope crosses the wire.
+
+Connect a coding agent to the running Guardian:
+
+```bash
+mkdir -p .claude && cp hosts/claude-code/settings.json .claude/settings.json
+claude
+```
+
+Ask Claude Code to run `echo rm -rf /`. AGT's stock destructive-pattern rule denies it,
+and the Inspector prints the denial as it crosses the wire, with the reason code
+`destructive_shell_command_blocked` and the policy reference `agt_stock`. Ask for
+`ls -la` in the same session and it runs. No coding agent installed, no problem: pipe a
+hook payload straight into the shim while the Guardian runs and get the same decision
+without one.
+
+```bash
+echo '{"session_id":"demo","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
+  | bun run hosts/claude-code/acs-hook.ts
+```
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0."}}
+```
+
+That JSON is a real deny from a real Guardian, not a transcript. A working Guardian and
+one verified deny is the whole ask. Stop here if that answered what brought you here
+today.
+
+### Two ways this breaks on the first try
+
+`bun install` does not install `trash`, because `trash` is a system command the test and
+verification scripts call, not an npm package. Running `bun test` without it on `PATH`
+fails 26 of the suite's 1,111 tests, all in the conformance and upstream-watch scripts
+that clean up scratch directories. Install `trash-cli` first, or expect those 26
+failures and ignore them.
+
+The Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
+is unreachable stops governing, silently, and the host proceeds as if nothing asked.
+Set `ACS_ON_DECISION_FAILURE=deny` on the Guardian before trusting it to fail closed.
+
+### Where this reference implementation stands
+
+Two gaps sit above the fold on purpose, because a project that hides its own gap list
+forfeits the right to be trusted on the rest of it.
+
+The wire is not authenticated. ACS-Core requires a baseline HMAC-SHA256 signature on
+every envelope. The reference Guardian implements none of it, so anything that can reach
+the port can read decisions and cause decisions. That gap is tracked as
+[issue #70](https://github.com/GenAI-Security-Project/agent-control-standard/issues/70).
+The default failure posture is fail-open, covered above and tracked as
+[issue #32](https://github.com/GenAI-Security-Project/agent-control-standard/issues/32)
+and [issue #37](https://github.com/GenAI-Security-Project/agent-control-standard/issues/37).
+
+The defensible claim for this tree is narrow: one Guardian, two agent clients, one wire
+contract, plus a published matrix of what ACS v0.1.0 can and cannot express of AGT
+today. Two of ACS's nineteen hook methods are evaluated live,
+`steps/toolCallRequest` and `steps/toolCallResult`. This is not a claim that ACS was
+benchmarked for interoperability with Microsoft AGT across the specification. The full
+limits list, requirement by requirement, is in the
+[reference implementation's own README](reference-implementations/agt/README.md#what-this-project-is-and-is-not),
+which is the deep tutorial this section only summarizes.
+
+### Report a disagreement
+
+When behavior does not match the specification, open an issue at
+[GenAI-Security-Project/agent-control-standard/issues](https://github.com/GenAI-Security-Project/agent-control-standard/issues)
+with four things: what was run, what was expected, the specification section that set
+that expectation, and what happened instead.
 
 ## A hook, on the wire
 
@@ -175,6 +274,40 @@ profiles** that a deployment declares at the handshake and adds independently.
 
 A reader who only wants to know whether ACS fits their problem can stop here.
 
+## Three more ways to help
+
+Running the reference implementation is the ask that needs no maintainer decision
+first. These three do, in the order they matter most right now.
+
+### Port it: Python, Go, Rust, Codex
+
+One Guardian exists, written in TypeScript against Bun. Python, Go, Rust, and a Codex
+host shim are open and unclaimed. "Done" for a port means it passes the same
+conformance harness the Bun tree does, `bun run conformance`, which prints the mapping
+table, the coverage matrix, and the trace rows against a live Guardian over HTTP. The
+harness measures the wire, not the language behind it.
+
+### Harden it for production
+
+Two gaps are named and open, not vague. The Guardian writes its envelope and audit logs
+as synchronous file appends on the decision path, with no batching, so trace spans need
+a batched writer before a Trace-pillar claim would hold up under load. No OpenTelemetry
+collector or exporter exists yet. The conformance harness only measures which
+attributes a consumer *could* emit from the envelopes, not that anything ships them.
+Start in [`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
+
+### Go deeper
+
+The concept pages under [`docs/concepts/`](docs/concepts/) are the source of truth for
+identity, intent, capability, provenance, and trust basis, the terms every pillar's
+specification references down into rather than restates. The rules a deployment's
+conformance claim has to satisfy are in
+[Conformance Profiles](docs/spec/conformance.md), which also says plainly that nobody
+verifies a self-declared claim in v0.1.0. The requirement-by-requirement ledger the
+reference implementation measures itself against is the table in
+[its own README](reference-implementations/agt/README.md#what-this-project-is-and-is-not).
+A second implementation would need the same kind of table.
+
 ## Contributing right now
 
 Governance changed for the OWASP relaunch, and it matters starting today.
@@ -231,6 +364,7 @@ from what that section says.
 
 ## Where to go next
 
+- [AGT reference implementation](reference-implementations/agt/README.md): the deep tutorial behind the walkthrough above, the Guardian, both host shims, and the full limits list.
 - [Documentation site](https://genai-security-project.github.io/agent-control-standard/docs/): the specification, concepts, and topic guides.
 - [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification): the JSON Schemas and normative prose in this repository.
 - [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions): questions and design conversation.

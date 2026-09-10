@@ -57,6 +57,7 @@ ALLOWED_GITHUB_REPOS = frozenset({
     "prowler-cloud/py-ocsf-models",                   # OCSF Python models, cited in extend_ocsf.md
     "ocsf/examples",                                  # OCSF example events, cited in extend_ocsf.md
     "orgs/GenAI-Security-Project",                     # the org's project board, not a repo; same regex shape
+    "microsoft/agent-governance-toolkit",             # upstream policy engine the AGT reference implementation governs, cited in README.md
 })
 
 # The namespace every published schema's $id is served from. See tools/publish_schemas.py.
