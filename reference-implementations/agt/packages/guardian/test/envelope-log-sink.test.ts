@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  createEnvelopeLogSink,
+  createEnvelopeLogSink as createSink,
   extractRpcId,
   NULL_ENVELOPE_LOG_SINK,
   type EnvelopeLogEntry,
@@ -12,11 +12,19 @@ import {
 /** A temp directory per test. Cleanup is deliberately non-recursive --
  * unlink the one file we created, then rmdir -- so a stray file makes the
  * test fail loudly instead of being silently blown away. */
-function withTempDir(run: (dir: string) => void): void {
+async function withTempDir(
+  run: (dir: string, createEnvelopeLogSink: typeof createSink) => Promise<void>,
+): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "acs-envelope-log-"));
+  const sinks: ReturnType<typeof createSink>[] = [];
   try {
-    run(dir);
+    await run(dir, (options) => {
+      const sink = createSink(options);
+      sinks.push(sink);
+      return sink;
+    });
   } finally {
+    await Promise.all(sinks.map((sink) => sink.close()));
     try {
       unlinkSync(join(dir, "envelopes.jsonl"));
     } catch {
@@ -37,14 +45,27 @@ const REQUEST = { jsonrpc: "2.0", method: "steps/toolCallRequest", id: 7, params
 const RESPONSE = { jsonrpc: "2.0", id: 7, result: { decision: "deny" } };
 
 describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
-  it("writes one line per call, with a monotonic seq starting at 1", () => {
-    withTempDir((dir) => {
+  it("buffers a short burst instead of appending on the caller's stack", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
+      const path = join(dir, "envelopes.jsonl");
+      const sink = createEnvelopeLogSink({ path });
+      sink.write("request", REQUEST, "steps/toolCallRequest");
+      sink.write("response", RESPONSE, "steps/toolCallRequest");
+      expect(existsSync(path) ? readFileSync(path, "utf8") : "").toBe("");
+      await sink.close();
+      expect(readEntries(path).map((entry) => entry.seq)).toEqual([1, 2]);
+    });
+  });
+
+  it("writes one line per call, with a monotonic seq starting at 1", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
       const sink = createEnvelopeLogSink({ path });
 
       sink.write("request", REQUEST, "steps/toolCallRequest");
       sink.write("response", RESPONSE, "steps/toolCallRequest");
 
+      await sink.close();
       const entries = readEntries(path);
       expect(entries.map((e) => e.seq)).toEqual([1, 2]);
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);
@@ -55,43 +76,49 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
   // nothing stripped, nothing reordered. This is not byte identity with the
   // wire: the sink is handed the already-parsed result of `await
   // req.json()`.
-  it("records the envelope unmodified -- no reformatting or stripping", () => {
-    withTempDir((dir) => {
+  it("records the envelope unmodified -- no reformatting or stripping", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
-      createEnvelopeLogSink({ path }).write("request", REQUEST, "steps/toolCallRequest");
+      const sink = createEnvelopeLogSink({ path });
+      sink.write("request", REQUEST, "steps/toolCallRequest");
 
+      await sink.close();
       expect(readEntries(path)[0]?.envelope).toEqual(REQUEST);
     });
   });
 
-  it("carries rpc_id from both directions, so the Inspector can pair them", () => {
-    withTempDir((dir) => {
+  it("carries rpc_id from both directions, so the Inspector can pair them", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
       const sink = createEnvelopeLogSink({ path });
 
       sink.write("request", REQUEST, "steps/toolCallRequest");
       sink.write("response", RESPONSE, "steps/toolCallRequest");
 
+      await sink.close();
       expect(readEntries(path).map((e) => e.rpc_id)).toEqual([7, 7]);
     });
   });
 
-  it("stamps recorded_at from the injected clock", () => {
-    withTempDir((dir) => {
+  it("stamps recorded_at from the injected clock", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
       const sink = createEnvelopeLogSink({ path, now: () => new Date("2026-08-09T12:04:31.221Z") });
 
       sink.write("request", REQUEST, "steps/toolCallRequest");
 
+      await sink.close();
       expect(readEntries(path)[0]?.recorded_at).toBe("2026-08-09T12:04:31.221Z");
     });
   });
 
-  it("records method as null when the caller cannot determine one", () => {
-    withTempDir((dir) => {
+  it("records method as null when the caller cannot determine one", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
-      createEnvelopeLogSink({ path }).write("response", { jsonrpc: "2.0", id: null, error: { code: -32700 } }, null);
+      const sink = createEnvelopeLogSink({ path });
+      sink.write("response", { jsonrpc: "2.0", id: null, error: { code: -32700 } }, null);
 
+      await sink.close();
       const entry = readEntries(path)[0];
       expect(entry?.method).toBeNull();
       expect(entry?.rpc_id).toBeNull();
@@ -100,8 +127,8 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
 
   // The whole reason the sink is a module rather than three inline
   // appendFileSync calls.
-  it("never throws when the log path is unwritable, reports once, and goes quiet", () => {
-    withTempDir((dir) => {
+  it("never throws when the log path is unwritable, reports once, and goes quiet", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const blocker = join(dir, "envelopes.jsonl");
       writeFileSync(blocker, "");
       // A path *through* a regular file: mkdirSync and appendFileSync both
@@ -116,8 +143,8 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
     });
   });
 
-  it("never throws on an envelope JSON.stringify cannot serialize", () => {
-    withTempDir((dir) => {
+  it("never throws on an envelope JSON.stringify cannot serialize", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
       const errors: unknown[] = [];
       const sink = createEnvelopeLogSink({ path, onError: (error) => errors.push(error) });
@@ -129,8 +156,8 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
     });
   });
 
-  it("never throws when onError itself throws at construction time", () => {
-    withTempDir((dir) => {
+  it("never throws when onError itself throws at construction time", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const blocker = join(dir, "envelopes.jsonl");
       writeFileSync(blocker, "");
       const path = join(blocker, "nested", "envelopes.jsonl");
@@ -146,8 +173,8 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
     });
   });
 
-  it("never throws when onError itself throws at write time, and disables the sink", () => {
-    withTempDir((dir) => {
+  it("never throws when onError itself throws at write time, and disables the sink", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
       const path = join(dir, "envelopes.jsonl");
       const blocker = join(dir, "envelopes.jsonl");
       writeFileSync(blocker, "");
@@ -162,6 +189,21 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
       expect(() => sink.write("request", REQUEST, "steps/toolCallRequest")).not.toThrow();
       // The sink should be disabled, so the second write is a silent no-op
       expect(() => sink.write("response", RESPONSE, "steps/toolCallRequest")).not.toThrow();
+    });
+  });
+
+  it("reports once when serialization fails while a disk failure is pending", async () => {
+    await withTempDir(async (dir, createEnvelopeLogSink) => {
+      const errors: unknown[] = [];
+      // Opening a directory for append fails asynchronously, after write returns.
+      const sink = createEnvelopeLogSink({ path: dir, onError: (error) => errors.push(error) });
+      sink.write("request", REQUEST, "steps/toolCallRequest");
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      sink.write("request", circular, "steps/toolCallRequest");
+      await sink.close();
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toBeInstanceOf(TypeError);
     });
   });
 

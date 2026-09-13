@@ -18,6 +18,9 @@
  * rather than a JSON value, costing the Inspector its pretty-printing and
  * the round-trip contract test; the accurate sentence is the better trade.
  *
+ * Records are serialized at arrival, then batched for asynchronous append.
+ * close() drains accepted records before a reader takes a final snapshot.
+ *
  * Total by construction. Every write is wrapped: a failure disables the sink
  * for the process lifetime, reports once, and is never propagated to the
  * caller. The sink sits on the decision path: an observability feature that
@@ -25,8 +28,7 @@
  * mode this module must never have. Observability degrades; governance does
  * not.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { createBatchedFileLog } from "./batched-log-writer.ts";
 
 /** Which side of the exchange one envelope-log line recorded. */
 export type EnvelopeLogDirection = "request" | "response";
@@ -53,6 +55,7 @@ export type EnvelopeLogEntry = {
 export type EnvelopeLogSink = {
   write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null): void;
   readonly path: string | null;
+  close(): Promise<void>;
 };
 
 export type CreateEnvelopeLogSinkOptions = {
@@ -69,6 +72,7 @@ export type CreateEnvelopeLogSinkOptions = {
 export const NULL_ENVELOPE_LOG_SINK: EnvelopeLogSink = {
   path: null,
   write(): void {},
+  async close() {},
 };
 
 /** The JSON-RPC id, when it is a scalar. Both request and response envelopes
@@ -92,6 +96,7 @@ export function createEnvelopeLogSink({
   let disabled = false;
 
   const fail = (error: unknown): void => {
+    if (disabled) return;
     disabled = true;
     try {
       if (onError) {
@@ -106,14 +111,11 @@ export function createEnvelopeLogSink({
     }
   };
 
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-  } catch (error) {
-    fail(error);
-  }
+  const writer = createBatchedFileLog(path, fail);
 
   return {
     path,
+    close: () => writer.close(),
     write(direction, envelope, method): void {
       if (disabled) {
         return;
@@ -128,7 +130,7 @@ export function createEnvelopeLogSink({
           envelope,
         };
         const line = `${JSON.stringify(entry)}\n`;
-        appendFileSync(path, line);
+        writer.write(line);
         seq += 1;
       } catch (error) {
         fail(error);
