@@ -1,0 +1,203 @@
+agent_control_specification_version: "0.3.1-beta"
+metadata:
+  name: "acs-reference-implementation"
+policies:
+  agt_stock:
+    type: rego
+    # Relative to this manifest's own directory (policy/), NOT the process
+    # cwd — confirmed empirically by tracing the opa subprocess AGT spawns.
+    # "policy/lib" here would join to ".../policy/policy/lib" and every
+    # evaluation would hard-fail with runtime_error:policy_invocation_failed
+    # (opa: no such file or directory) instead of allow/deny. No leading
+    # "./" either: OPA's bundle loader mis-derives the data mount path from
+    # a literal "/./" segment and silently drops data.json, which disables
+    # every rule while still answering allow.
+    bundle: lib
+    query: data.agt.defaults.verdict
+# The one annotator this deployment declares, and the only way `annotations`
+# reaches policy input at all -- five other placements were tried against the
+# ACS snapshot and every one was dropped silently; see
+# policy/manifest.drift.yaml's header.
+#
+# `classifier` is AGT's own type for a host-supplied judgement about a step.
+# Here the judgement is "which destination does this command reach", which the
+# Guardian answers from ACS's raw_command because AGT's own host_of() cannot:
+# it has a second branch for strings with no "://" that returns the command's
+# leading word, so a forwarded command line ALWAYS resolves a destination
+# (measured: `echo hi` answers `echo hi`), no allowlist pattern matches a
+# command line, and every benign shell step would be denied.
+# packages/guardian/src/annotate-egress.ts carries the full measurement.
+#
+# The value lands at ["annotations", "egress", "destination"], one of the five
+# paths `default_destination_paths` in policy/lib/egress.rego declares, so this
+# seam is AGT's own published address rather than anything invented here.
+#
+# WHAT MUST BE TRUE FOR THIS BLOCK TO BE SAFE, measured rather than assumed: a
+# manifest that declares an annotator and is evaluated by a bridge built
+# WITHOUT a dispatcher denies every call -- benign ones included -- with
+# runtime_error:annotation_failed. startGuardian therefore supplies its
+# built-in dispatcher unconditionally, and a test asserting a benign call is
+# not denied under this manifest is the backstop.
+annotators:
+  egress:
+    type: classifier
+intervention_points:
+  pre_tool_call:
+    # ONE target for every tool, which is all AGT's manifest schema allows:
+    # intervention_point is additionalProperties: false with exactly one
+    # policy_target, and AGT resolves it before any rule runs. So this target
+    # is NOT any host's argument -- it is the normalised leaf the Guardian
+    # writes, and mapping.yaml's policy_target_argument table is what says
+    # which of each tool's own arguments was copied into it.
+    #
+    # Measured, and the reason this is no longer "$.tool_call.args.command": a
+    # benign WebFetch call under that target is DENIED on
+    # runtime_error:path_missing, with no rule consulted. One literal argument
+    # name can only serve a deployment that governs one tool shape.
+    #
+    # test/path-dialects.test.ts checks the two agreements this leaf sits
+    # between: that this path names the leaf assemble-snapshot.ts writes, and
+    # that every argument mapping.yaml's by_tool table names is keyed by a tool
+    # this file's own tools: registry knows.
+    policy_target: "$.tool_call.args.acs_policy_target"
+    policy_target_kind: tool_args
+    tool_name_from: "$.tool_call.name"
+    # Wires the annotator above into this gate. `from` is a LIVENESS
+    # PRECONDITION, not a projection, and both halves of that are measured:
+    # AGT requires this path to resolve or it denies the whole call on
+    # runtime_error:path_missing with the annotator never dispatched, and the
+    # value it resolves is NOT what the annotator receives -- the dispatcher
+    # gets the entire preliminary policy input and reads the command out of it
+    # by name.
+    #
+    # So this path names the one snapshot member assemble-snapshot.ts
+    # guarantees is always present: raw_command, the empty string when the wire
+    # carried none. A path that could be absent for some tool would make every
+    # call by that tool a total deny.
+    annotations:
+      egress:
+        from: "$.tool_call.raw_command"
+    policy:
+      id: agt_stock
+  # Additive: nothing evaluates this point until a steps/toolCallResult
+  # envelope arrives, and pre_tool_call above is unaffected.
+  #
+  # The target indexes into the ACS payload's own `outputs` array, which
+  # AGT's JSONPath supports directly (verified). `tool_name_from` is
+  # load-bearing here and not decoration: without a `tool_call.name` in the
+  # snapshot AGT fails closed with runtime_error:path_missing before any
+  # rule runs, so `assemblePostToolCallSnapshot` synthesizes it from the
+  # payload's `tool.name`.
+  #
+  # That is the result-gate assembler in
+  # packages/guardian/src/assemble-snapshot.ts, NOT
+  # `assemblePreToolCallSnapshot` beside it: the two are separate functions
+  # over separate envelope types, and only the result one can read a
+  # `tool.name` out of a result payload. A reader sent to the pre-tool
+  # assembler instead finds no `tool_result` in sight, and could only
+  # conclude the synthesis was missing.
+  post_tool_call:
+    # The result-gate half. This leaf must agree with
+    # mapping.yaml's intervention_points.post_tool_call.modifications
+    # .into_path, which is how AGT's transform ($policy_target) lands as
+    # an ACS redaction: the two address the SAME leaf in two notations --
+    # "$.tool_result.outputs[0].value" here is AGT's JSONPath over the
+    # snapshot, "/outputs/0/value" there is the ACS JSON pointer into the
+    # result payload the host applies it to. This is the one place
+    # mapping.yaml and this file still touch directly: the request gate's
+    # own leaf-name agreement above is now with assemble-snapshot.ts's
+    # POLICY_TARGET_LEAF constant, not with mapping.yaml, since mapping.yaml
+    # no longer names that leaf at all. Move this leaf and mapping.yaml is
+    # wrong, and nothing in either FILE can tell.
+    #
+    # test/path-dialects.test.ts is what tells: it derives the ACS pointer
+    # from this JSONPath and fails if the two stop describing one leaf, for
+    # every point mapping.yaml gives a modifications rule. Before it, the
+    # agreement was three comments telling a reader to go and check another
+    # file, which is a tax every new host or gate multiplies. The end-to-end
+    # test below still matters for what it covers, and it is no longer the
+    # only thing standing between an edit here and a demo that quietly stops
+    # redacting.
+    #
+    # That end-to-end test is packages/guardian/test/server.test.ts's
+    # result-gate redaction test: it evaluates through this manifest and
+    # asserts the pointer mapping.yaml supplies comes back on the wire, which
+    # makes it the only test whose assertion spans both halves. Moving this
+    # leaf fails other tests too, but those assert AGT's raw verdict and
+    # cannot tell whether the ACS pointer still names the leaf AGT rewrote.
+    policy_target: "$.tool_result.outputs[0].value"
+    policy_target_kind: tool_result
+    tool_name_from: "$.tool_call.name"
+    policy:
+      id: agt_stock
+tools:
+  run_shell:
+    type: Tool
+    id: run_shell
+    security_labels: [shell]
+  # An unregistered tool_call.name fails AGT's own evaluation closed with a
+  # generic runtime_error:tool_unknown deny, before the destructive-command
+  # pattern check ever runs -- found by posting a real Claude Code
+  # PreToolUse envelope (tool.name "Bash") through a live Guardian.
+  # "run_shell" above is AGT's own stock example name and stays for the
+  # bridge and Guardian tests that fixture against it; "Bash" is Claude
+  # Code's actual tool name for shell execution, so it must be registered
+  # too for a real Claude Code payload to be evaluated rather than denied as
+  # an unknown tool.
+  Bash:
+    type: Tool
+    id: Bash
+    security_labels: [shell]
+  # "bash" (lowercase) is OpenCode's own real tool name for shell execution
+  # -- measured on 1.18.15, distinct from Claude Code's "Bash" above -- and
+  # pre_tool_call's policy_target is evaluated by AGT before any rule runs,
+  # independent of which tool sent the request: an unregistered
+  # tool_call.name fails closed on runtime_error:tool_unknown, the identical
+  # mechanism the "Bash" entry above exists to avoid for Claude Code.
+  # Additive: registering it changes
+  # nothing for any existing caller (measured, suite byte-identical with and
+  # without this entry), and security_labels: [shell] is inert under this
+  # manifest's own policy/lib/data.json config: the egress gate is the bundle's
+  # only reader of security_labels, and it reads them only as a fallback for a
+  # cfg.egress with no `allowlist` of its own -- which data.json sets, and only
+  # while it does. The WebFetch entry below carries the full reasoning.
+  bash:
+    type: Tool
+    id: bash
+    security_labels: [shell]
+  # Claude Code's own real tool name for a web fetch, and OpenCode's, for the
+  # identical reason "Bash" and "bash" are both here: an unregistered
+  # tool_call.name fails AGT's evaluation closed on runtime_error:tool_unknown
+  # before any rule runs. Both spellings are registered because one manifest
+  # serves both hosts -- so this registry deliberately names more tools than
+  # either host dispatches.
+  #
+  # security_labels: [shell] is carried for the same reason every other entry
+  # carries it, and it stays inert only because of a key in another file.
+  # policy/lib/data.json now configures cfg.egress, so the egress gate is
+  # live for every tool here -- and AGT's allowlist(rules) falls back to
+  # input.tool.security_labels whenever cfg.egress carries no `allowlist` of
+  # its own. That fallback would hand the gate ["shell"], which matches no
+  # destination, and every fetch and every command with a URL in it would be
+  # denied on egress_destination_not_allowed. data.json therefore sets
+  # `allowlist` explicitly, and policy/lib/egress.rego is the bundle's only
+  # reader of security_labels at all -- so FOR AS LONG AS THAT KEY IS SET,
+  # and only for that long, nothing reads these labels. Delete the labels and
+  # nothing changes; delete data.json's `allowlist` and they become the
+  # allowlist for every tool here.
+  #
+  # WHAT IS IN THAT ALLOWLIST AND WHY, since JSON carries no comments to say
+  # so: `*.anthropic.com` is the host this repository's own demos and tests
+  # fetch from, and `docs.example.com` is a second, deliberately inert entry
+  # -- it proves the allowlist is a LIST rather than a single value, and
+  # gives a runbook reader an obvious slot to edit when adding their own
+  # host. No test depends on the second entry; every test that depends on the
+  # first fetches an anthropic.com URL.
+  WebFetch:
+    type: Tool
+    id: WebFetch
+    security_labels: [shell]
+  webfetch:
+    type: Tool
+    id: webfetch
+    security_labels: [shell]

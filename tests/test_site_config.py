@@ -80,3 +80,57 @@ def test_only_scripts_the_pinned_theme_ships_reach_the_site(built_site):
 
     stray = stray_scripts(built_site)
     assert stray == [], f"script not shipped by the pinned theme: {stray}"
+
+
+# Package CDNs exist to serve executable code. A licence link or a documentation link
+# never points at one, so any occurrence in built JavaScript is a runtime fetch that
+# puts third-party code in a reader's browser.
+#
+# This guard exists because that is exactly what happened and nothing caught it. The
+# theme's bundle lazily fetched mermaid from unpkg on every page carrying a diagram,
+# and the third-party guard passed, because it allowlists the theme bundle by digest
+# and never reads what is inside it.
+CODE_CDN_HOSTS = (
+    "unpkg.com",
+    "cdn.jsdelivr.net",
+    "cdnjs.cloudflare.com",
+    "esm.sh",
+    "cdn.skypack.dev",
+    "ajax.googleapis.com",
+)
+
+# Occurrences reviewed and accepted, by host. The theme bundle is vendored byte for
+# byte from the pinned mkdocs-material package and is proven so by the digest check
+# above, so editing it out is not available without breaking that proof.
+#
+# unpkg.com appears three times, none of which can fire:
+#   - two mermaid loader references, dead because this project's diagram fences carry
+#     class `acs-diagram` rather than `mermaid`, so the theme never recognises a
+#     diagram and never reaches its loader
+#   - one ResizeObserver polyfill, guarded by `typeof ResizeObserver == "undefined"`,
+#     which no browser this site supports satisfies
+REVIEWED_CDN_OCCURRENCES = {"unpkg.com": 3}
+
+
+def test_no_unreviewed_package_cdn_reference_in_built_javascript(built_site):
+    """Fail when built JavaScript gains a package-CDN reference nobody reviewed."""
+    import re
+
+    counts: dict[str, int] = {}
+    for path in built_site.rglob("*.js"):
+        if path.name.endswith(".map"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for host in CODE_CDN_HOSTS:
+            found = len(re.findall(re.escape(host), text))
+            if found:
+                counts[host] = counts.get(host, 0) + found
+
+    assert counts == REVIEWED_CDN_OCCURRENCES, (
+        "package-CDN references in built JavaScript changed.\n"
+        f"  found:    {counts}\n"
+        f"  reviewed: {REVIEWED_CDN_OCCURRENCES}\n"
+        "Every one of these loads executable code from a third party at runtime. "
+        "Confirm the new reference cannot fire, or remove it, then update "
+        "REVIEWED_CDN_OCCURRENCES with the reason."
+    )

@@ -10,6 +10,10 @@
 # keeps a poisoned version from landing in a PR that looks routine.
 
 version: 2
+# No target-branch key. Dependabot follows the default branch, which is `integration`,
+# so both routine and security updates land there and never meet the base-branch guard.
+# Setting target-branch would make this depend on undocumented security-update targeting
+# behavior for no benefit.
 updates:
   # GitHub Actions run with write access to the repository. Actions are pinned
   # to commit SHAs in the workflows, and Dependabot understands SHA pins and

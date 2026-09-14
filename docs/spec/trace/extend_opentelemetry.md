@@ -2,7 +2,7 @@
 
 ACS reuses OpenTelemetry as the primary observability transport. Each ACS step becomes a span; each Guardian decision becomes a span event on the parent step span. The result is an end-to-end view of agent behavior — reasoning, retrieval, tool calls, decisions — already shaped to fit existing OTel-based tooling.
 
-The normative span-name and required-attribute table is on the [Trace Events](./events.md) page. The machine-readable mapping lives at [`trace/otel-mapping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/trace/otel-mapping.json). This page describes how to *use* the mapping in practice.
+The normative span-name and required-attribute table is on the [Trace Events](./events.md) page. The machine-readable mapping lives at [`trace/otel-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json). This page describes how to *use* the mapping in practice.
 
 ## Span hierarchy
 

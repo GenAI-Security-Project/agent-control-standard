@@ -14,10 +14,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import render_landing
 from publish_schemas import BASE
 from render_landing import (
-    RenderError, parse_workstreams, render, render_workstreams, schema_count, spec_version,
+    RenderError, parse_priority_scope, parse_workstreams, render, render_priority_scope,
+    render_workstreams, schema_count, spec_version,
 )
 
 REPO = Path(__file__).resolve().parents[1]
+
+CONTRIBUTING = """# Contributing to ACS
+
+## Current Priority Scope
+
+Reviewed at each milestone. Current window: Day 0 to Day 30.
+
+The project has one committed outcome:
+
+> A runnable Guardian Agent reference implementation, benchmarked for
+> interoperability against Microsoft Agent Governance Toolkit, in the hands
+> of external evaluators within ninety days of the September 10, 2026
+> kick-off.
+
+Every issue and every pull request is accepted against that sentence.
+
+## How work gets accepted
+
+Anyone may open an issue.
+"""
+
+CONTRIBUTING_SCOPE = (
+    "A runnable Guardian Agent reference implementation, benchmarked for "
+    "interoperability against Microsoft Agent Governance Toolkit, in the hands "
+    "of external evaluators within ninety days of the September 10, 2026 "
+    "kick-off."
+)
 
 GOVERNANCE = """# Governance
 
@@ -43,7 +71,9 @@ Not a workstream.
 
 FULL_TEMPLATE = (
     "<!--ACS:SPEC_VERSION--><!--ACS:SCHEMA_COUNT--><!--ACS:SCHEMA_HREF-->"
-    "<tbody><!--ACS:WORKSTREAMS--></tbody><div><!--ACS:STARBURST--></div>"
+    "<tbody><!--ACS:WORKSTREAMS--></tbody>"
+    "<blockquote><!--ACS:PRIORITY_SCOPE--></blockquote>"
+    "<div><!--ACS:STARBURST--></div>"
 )
 
 
@@ -167,6 +197,36 @@ def test_parse_workstreams_handles_the_real_file():
     assert len(parse_workstreams((REPO / "GOVERNANCE.md").read_text(encoding="utf-8"))) == 5
 
 
+# --- priority scope parsing ------------------------------------------------
+
+def test_parse_priority_scope_reads_the_committed_outcome():
+    assert parse_priority_scope(CONTRIBUTING) == CONTRIBUTING_SCOPE
+
+
+def test_parse_priority_scope_fails_without_the_heading():
+    with pytest.raises(RenderError, match="Current Priority Scope"):
+        parse_priority_scope("# Contributing to ACS\n\nNothing here.\n")
+
+
+def test_parse_priority_scope_fails_without_a_blockquote():
+    """A heading with prose but no committed-outcome quote must not render silently."""
+    text = CONTRIBUTING.replace(
+        "> A runnable Guardian Agent reference implementation, benchmarked for\n"
+        "> interoperability against Microsoft Agent Governance Toolkit, in the hands\n"
+        "> of external evaluators within ninety days of the September 10, 2026\n"
+        "> kick-off.\n",
+        "",
+    )
+    with pytest.raises(RenderError, match="blockquote"):
+        parse_priority_scope(text)
+
+
+def test_parse_priority_scope_handles_the_real_file():
+    scope = parse_priority_scope((REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"))
+    assert scope.startswith("A runnable Guardian Agent reference implementation")
+    assert "Microsoft Agent Governance Toolkit" in scope
+
+
 # --- escaping -------------------------------------------------------------
 
 def test_render_workstreams_converts_markdown_links_to_html():
@@ -217,15 +277,27 @@ def test_render_workstreams_escapes_raw_html():
     assert "&lt;script&gt;" in html
 
 
+def test_render_priority_scope_escapes_raw_html():
+    """The blockquote is a build input like GOVERNANCE.md, reviewed for wording, not markup."""
+    scope = parse_priority_scope(CONTRIBUTING.replace(
+        "A runnable Guardian Agent reference implementation,",
+        "A runnable Guardian Agent <script>alert(1)</script> reference implementation,",
+    ))
+    out = render_priority_scope(scope)
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+
 # --- placeholders ---------------------------------------------------------
 
 def test_render_fills_every_placeholder(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, "<svg id='sb'/>")
+    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, "<svg id='sb'/>")
     assert "v0.1.0" in out and "Identity" in out and "<svg id='sb'/>" in out
+    assert CONTRIBUTING_SCOPE in out
 
 
 def test_render_derives_the_schema_href_from_the_version(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, "<svg/>")
+    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, "<svg/>")
     assert "schema/v0.1.0/acs_schema.json" in out
 
 
@@ -233,12 +305,12 @@ def test_render_fails_when_the_template_drops_a_placeholder(spec_tree):
     """A template missing the hero would otherwise ship a blank div with no error."""
     without = FULL_TEMPLATE.replace("<!--ACS:STARBURST-->", "")
     with pytest.raises(RenderError, match="STARBURST"):
-        render(without, spec_tree, GOVERNANCE, "<svg/>")
+        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, "<svg/>")
 
 
 def test_render_fails_when_an_unknown_placeholder_survives(spec_tree):
     with pytest.raises(RenderError, match="unfilled placeholder"):
-        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, GOVERNANCE, "<svg/>")
+        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, GOVERNANCE, CONTRIBUTING, "<svg/>")
 
 
 def test_main_does_not_republish_the_inlined_diagram(tmp_path):

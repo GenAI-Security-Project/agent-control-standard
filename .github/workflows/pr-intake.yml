@@ -1,0 +1,65 @@
+# Tells a contributor why their pull request is waiting, and labels it so the queue is
+# visible.
+#
+# pull_request_target is used deliberately: GITHUB_TOKEN is read-only on a pull_request
+# event from a fork, and every external contribution is a fork. That trigger runs with
+# repository write scope against the base branch, so this workflow checks out no code,
+# runs no contributor-supplied script, and reads the pull request body from the event
+# payload as data.
+name: PR intake
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened]
+
+permissions: {}
+
+concurrency:
+  group: pr-intake-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: read
+    steps:
+      - name: Check whether a referenced issue is accepted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # Issue numbers are extracted from the body text, which is untrusted input. It
+          # is matched against a digit pattern and never evaluated.
+          NUMBERS="$(printf '%s' "${PR_BODY:-}" | grep -oE '#[0-9]+' | tr -d '#' | sort -u || true)"
+          if printf '%s' "${PR_BODY:-}" | grep -qiE '^\s*-\s*\[x\]\s*This is an editorial correction'; then
+            echo "Declared editorial. No issue required."
+            exit 0
+          fi
+          # The `edited` trigger fires every time anyone touches the body, so without
+          # this the queue comment gets reposted on every edit. The Actions bot reports
+          # as `github-actions` in some payloads and `github-actions[bot]` in others, so
+          # the check is a prefix match rather than an exact one.
+          if gh pr view "$PR_NUMBER" --repo "$REPO" --json comments \
+             --jq '[.comments[] | select(.author.login | startswith("github-actions"))] | length' \
+             | grep -qv '^0$'; then
+            echo "Already commented on this pull request."
+            exit 0
+          fi
+          for n in $NUMBERS; do
+            if gh issue view "$n" --repo "$REPO" --json labels \
+               --jq '.labels[].name' 2>/dev/null | grep -qx 'status:accepted'; then
+              echo "Issue #$n is accepted."
+              exit 0
+            fi
+          done
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label 'status:needs-triage'
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Thanks for this. It is queued rather than ignored.
+
+          This pull request does not reference an issue carrying \`status:accepted\`, so a maintainer has not looked at it yet and will not until the underlying issue is triaged. Nothing here is rejected. See [Current Priority Scope](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md#current-priority-scope) for what the project is working on, and [\`help wanted\`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) for work that is already accepted.
+
+          If this is an editorial correction, tick that box in the description and this comment stops applying."

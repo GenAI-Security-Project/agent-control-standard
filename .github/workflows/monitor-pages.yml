@@ -21,6 +21,13 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A scheduled workflow runs from the default branch. Once the default moves to
+          # integration, checking out the default here would verify integration's schema
+          # set against a site that publishes from main, failing every six hours between
+          # promotions. The site publishes from main regardless of which branch is
+          # default, so this must always check out main.
+          ref: main
 
       - name: Verify the published schemas still resolve
         env:

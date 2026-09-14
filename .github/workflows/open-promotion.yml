@@ -1,0 +1,47 @@
+# Opens the weekly promotion pull request from integration to main.
+#
+# A three-tier branching model pays its whole cost up front and returns nothing until a
+# promotion happens. Leaving promotion to memory is how integration accrues specification
+# work while main keeps publishing schemas nobody is reading.
+name: Open promotion pull request
+
+on:
+  schedule:
+    # 13:00 UTC Thursday, the morning of the weekly call.
+    - cron: "0 13 * * 4"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Open the promotion pull request if integration is ahead
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # integration does not exist until the branch migration runs. Exit quietly rather
+          # than failing a scheduled job on a branch nobody has created yet.
+          git rev-parse --verify origin/integration >/dev/null 2>&1 || { echo "integration does not exist yet."; exit 0; }
+          AHEAD="$(git rev-list --count origin/main..origin/integration)"
+          if [ "$AHEAD" -eq 0 ]; then
+            echo "integration is not ahead of main. Nothing to promote."
+            exit 0
+          fi
+          if [ "$(gh pr list --base main --head integration --state open --json number --jq 'length')" -gt 0 ]; then
+            echo "A promotion pull request is already open."
+            exit 0
+          fi
+          gh pr create --base main --head integration \
+            --title "Promote integration to main" \
+            --body "${AHEAD} commit(s) ahead. Merging publishes the site and every schema \$id URI. Merge with a merge commit, not a squash: squashing flattens the specification history that makes a schema change reviewable later."

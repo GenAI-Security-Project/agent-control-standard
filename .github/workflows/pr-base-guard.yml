@@ -1,0 +1,49 @@
+# Keeps specification and code changes off the branch that publishes on merge.
+#
+# The job id below is the check run name the protect-main ruleset requires. Renaming the
+# job without renaming the required check leaves a required status check that never
+# reports, which blocks every pull request to main permanently.
+name: PR base guard
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions: {}
+
+concurrency:
+  group: pr-base-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  base-branch-guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Both endpoints of the diff have to be present to compute a merge base.
+          fetch-depth: 0
+
+      - name: List the changed paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Three-dot compares against the merge base, so commits that landed on the
+          # base branch after this pull request opened do not count as its changes.
+          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > changed.txt
+          cat changed.txt
+
+      - name: Enforce the documentation lane
+        env:
+          # Passed through the environment rather than interpolated into the shell. A
+          # head ref is contributor-controlled text and ${{ }} inside run: executes.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: python3 tools/base_branch_guard.py changed.txt

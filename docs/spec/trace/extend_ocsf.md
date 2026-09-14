@@ -2,7 +2,7 @@
 
 The Open Cybersecurity Schema Framework (OCSF) integration enables standardized security-event logging for AI agent activity. ACS-shaped events drop directly into existing SIEM pipelines without bespoke parsers.
 
-ACS events map to OCSF 1.5+ event classes. The normative class assignments and the disposition → `severity_id` mapping live on the [Trace Events](./events.md) page; the machine-readable mapping is at [`trace/ocsf-mapping.json`](https://github.com/afogel/ACS_official/blob/dev/specification/v0.1.0/trace/ocsf-mapping.json). This page describes how to assemble the events themselves and provides representative wire examples.
+ACS events map to OCSF 1.5+ event classes. The normative class assignments and the disposition → `severity_id` mapping live on the [Trace Events](./events.md) page; the machine-readable mapping is at [`trace/ocsf-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json). This page describes how to assemble the events themselves and provides representative wire examples.
 
 ## Class assignments at a glance
 

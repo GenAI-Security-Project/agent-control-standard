@@ -1,0 +1,106 @@
+# A second manifest whose only purpose is to turn on AGT's stock drift gate,
+# so an observe-only warn verdict is reachable. Not policy/manifest.yaml,
+# which stays untouched: this is a separate, sibling manifest so a deployment
+# that wants no annotator has none, and every demo that reads the ordinary
+# manifest keeps reading exactly the manifest it always has.
+#
+# Same bundle, same query as policy/manifest.yaml -- `bundle: lib` here
+# resolves to this file's own directory (policy/), i.e. the same pinned
+# policy/lib this whole project vendors, per agt.lock. This file adds
+# exactly two blocks on top of that: an `annotators` declaration, and a
+# `pre_tool_call.annotations` entry wiring it in. Nothing else differs.
+#
+# WHY A DEDICATED MANIFEST, PLAINLY: AGT's own stock drift gate
+# (policy/lib/drift.rego) reads `input.annotations.drift_score`, and
+# `annotations` reaches policy input from exactly one place -- a
+# manifest-declared annotator, dispatched through the SDK's
+# `annotatorDispatcher` (see packages/agt-bridge/src/index.ts). Five other
+# placements were tried against the ACS snapshot while this was designed and
+# every one was dropped silently; none of them are how `annotations` actually
+# arrives.
+#
+# WHY A HOST-SUPPLIED SCORE, PLAINLY -- this is a fact about ACS
+# v0.1.0's wire coverage, never a deficiency in AGT: the `steps/toolCallRequest`
+# payload (specification/v0.1.0/hooks/tool-call-request.json) carries
+# `tool`, `operation`, `capability`, `arguments`, `raw_command`, `intent` --
+# nothing a drift score could be derived from on this wire. That is not an
+# oversight this manifest works around; it is AGT's own design working as
+# intended. AGT's specification puts behaviour-drift detection OUTSIDE the
+# policy engine on purpose (see policy/lib/drift.rego's own header: "Hosts
+# run a behaviour-drift detector outside the policy engine and attach its
+# score under `input.annotations.drift_score`"). The `classifier` annotator
+# type below is exactly that seam: a deployment wires its own drift
+# detector to it; this project's demo wires a stub that returns a fixed
+# score, to make the wiring visible without building a real detector.
+#
+# Zero Rego authored here either: the drift THRESHOLD and the annotator's
+# wiring are both configuration (this manifest, and policy/lib/data.json's
+# `agt.defaults.config.drift.warn_threshold`), never a new Rego rule.
+agent_control_specification_version: "0.3.1-beta"
+metadata:
+  name: "acs-reference-implementation-drift-demo"
+policies:
+  agt_stock:
+    type: rego
+    bundle: lib
+    query: data.agt.defaults.verdict
+annotators:
+  drift_score:
+    type: classifier
+intervention_points:
+  pre_tool_call:
+    # The same normalised leaf policy/manifest.yaml points at, and for the same
+    # reason: AGT resolves policy_target before any rule runs, so a target
+    # naming one tool's own argument denies every call by a tool that has no
+    # such argument, on runtime_error:path_missing with no rule consulted.
+    # "$.tool_call.args.command" still resolved for Bash today only because the
+    # assembler leaves each tool's own arguments beside the leaf -- so leaving
+    # it there would have gone on working until the first non-shell tool anyone
+    # ran this demo with, and then denied it silently.
+    #
+    # `annotations.drift_score.from` moves with it because that path is a
+    # LIVENESS PRECONDITION: it must resolve or AGT denies the whole call
+    # before the annotator is dispatched at all.
+    policy_target: "$.tool_call.args.acs_policy_target"
+    policy_target_kind: tool_args
+    tool_name_from: "$.tool_call.name"
+    annotations:
+      drift_score:
+        from: "$.tool_call.args.acs_policy_target"
+    policy:
+      id: agt_stock
+tools:
+  run_shell:
+    type: Tool
+    id: run_shell
+    security_labels: [shell]
+  Bash:
+    type: Tool
+    id: Bash
+    security_labels: [shell]
+  # The identical addition policy/manifest.yaml gains for the identical
+  # reason: OpenCode's own real (lowercase) tool name, unregistered here,
+  # fails every tool call closed on runtime_error:tool_unknown before
+  # pre_tool_call's warn/drift rule ever runs -- the same wall the drift
+  # demo hits without this entry. Additive.
+  bash:
+    type: Tool
+    id: bash
+    security_labels: [shell]
+  # A tool whose own arguments carry no `command` -- which is the whole point
+  # of it being here. This manifest's policy_target and its annotation `from`
+  # both name the normalised leaf now, so a non-shell tool shape resolves them;
+  # pointed at "$.tool_call.args.command", as they were, this call denied on
+  # runtime_error:path_missing before any rule ran. Registered because an
+  # unregistered tool_call.name denies on runtime_error:tool_unknown first,
+  # which would make that property untestable through this manifest at all.
+  # Both spellings, for the reason policy/manifest.yaml gives: one manifest
+  # serves both hosts.
+  WebFetch:
+    type: Tool
+    id: WebFetch
+    security_labels: [shell]
+  webfetch:
+    type: Tool
+    id: webfetch
+    security_labels: [shell]

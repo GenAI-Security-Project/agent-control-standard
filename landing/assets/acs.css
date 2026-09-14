@@ -218,6 +218,18 @@ section:first-of-type { border-top: 0; }
 .card { padding: 1.5rem; border: 1px solid var(--acs-border); border-radius: 14px; background-color: var(--acs-surface); }
 .card h3 { margin-top: 0; }
 
+/* Reuses the tier accent-border pattern so the committed outcome reads as a callout,
+   not as a quoted aside, without adding a second visual language to the page. */
+blockquote {
+  margin: 1.5rem 0;
+  padding: 1rem 1.5rem;
+  border-left: 4px solid var(--acs-accent-navy);
+  border-radius: 0 12px 12px 0;
+  background-color: var(--acs-surface);
+  color: var(--acs-text-soft);
+  font-style: italic;
+}
+
 .standards {
   list-style: none;
   padding: 0;
@@ -249,7 +261,8 @@ section:first-of-type { border-top: 0; }
    standards grids set their own widths and are excluded. */
 main section > p,
 main section > ul:not(.standards),
-main section > table { max-width: 72ch; }
+main section > table,
+main section > blockquote { max-width: 72ch; }
 
 .tier { border-left: 4px solid var(--acs-border-strong); padding-left: 1rem; margin-bottom: 1.25rem; }
 .tier-1 { border-left-color: var(--acs-tier-1); }

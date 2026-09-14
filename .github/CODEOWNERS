@@ -15,11 +15,11 @@
 # Default owners for anything not matched below.
 *                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
 
-/CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/STYLE.md        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/CONTRIBUTING.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/design/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+/CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/STYLE.md        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/CONTRIBUTING.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/design/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 
 # The specification is the highest-blast-radius surface in the repository.
 # A schema change propagates to every downstream implementer.
@@ -33,24 +33,32 @@
 # the build renders into every page, which carries the same reach.
 # The docs stylesheet and asset directories render into every documentation page and
 # can reach a third party through url(), @font-face, or @import with no script at all.
-/tools/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/GOVERNANCE.md  @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+/tools/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/GOVERNANCE.md  @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+
+# The reference implementation is runnable code that contributors install and wire
+# into their own development environments, which is a different risk class from the
+# rest of this repository. It arrived as roughly 41,000 lines from a single author, so
+# these entries exist to force a second reviewer on every later change rather than to
+# record who wrote it.
+/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # CI runs with write access to the repository. Changes here are a
-# privilege-escalation surface and warrant admin review.
-/.github/               @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+# privilege-escalation surface, so this list stays narrower than the default
+# and who sits on it is a project-lead decision under GOVERNANCE.md.
+/.github/               @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 
 # Licensing and security policy changes are governance decisions.
-/LICENSE                @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/LICENSE-DOCS           @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/LICENSING.md           @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/NOTICE                 @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
-/SECURITY.md            @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+/LICENSE                @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/LICENSE-DOCS           @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/LICENSING.md           @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/NOTICE                 @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/SECURITY.md            @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule

@@ -10,15 +10,37 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 
 ## Workstream leads
 
-Each workstream owns a slice of the standard and runs its own review. Two leads per workstream keeps decisions moving when one is unavailable.
+Each workstream owns a slice of the standard and runs its own review. Two leads per
+workstream keeps decisions moving when one is unavailable.
+
+Identity currently runs with one lead. That second seat is open, and it is open in the
+same sense as the Reference Implementation, Documentation, and Testing and Validation
+seats: the work continues, and a single point of failure sits on it until somebody
+takes it.
 
 | Workstream | Leads |
 | --- | --- |
 | Coding Agents | Almog Langleben ([@almogbhl](https://github.com/almogbhl)), Stefano Amorelli ([@stefanoamorelli](https://github.com/stefanoamorelli)) |
 | Development (SDK) | Rock Lambros ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
-| Identity | Eva Benn ([@evabenn](https://github.com/evabenn)), Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
+| Identity | Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
+
+## Triage authority
+
+Workstream leads and the project lead apply the decision labels: `scope:`, `priority:`,
+`workstream:`, and `status:accepted`. Nobody else does, and no issue form can.
+
+Minimum triage on a new issue is two labels, `scope:` and `status:`. `priority:` and
+`workstream:` are enrichment applied to accepted work. Requiring four decisions per issue
+is how a taxonomy stops getting used in month two.
+
+`priority:P0` is reserved for work on the serial chain the Strategic Adoption Plan names:
+the mandatory floor decision, the adapters, the installable Guardian, and the
+interoperability benchmark. It does not mean important.
+
+Triage runs on the weekly call. Promotion from `integration` to `main` is a standing item
+on the same call, and the project lead owns merging it.
 
 ## Origins
 

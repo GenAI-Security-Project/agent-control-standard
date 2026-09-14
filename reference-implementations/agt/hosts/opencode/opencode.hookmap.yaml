@@ -1,0 +1,340 @@
+# The per-host mapping table for OpenCode: with the plugin shim, the only
+# artifact in this repository specific to this host.
+#
+# Same shape as claude-code.hookmap.yaml, against the same adapter. What differs
+# is entirely data, which is the whole claim of adding a second host.
+#
+# Every path below was MEASURED against OpenCode 1.18.15 with a probe plugin,
+# not read off its published types -- where the two disagree, the measurement
+# wins. The measurements themselves are recorded inline below, each at the
+# declaration it pins.
+#
+# `reason.text` IS CURRENTLY INERT ON THIS HOST. It is declared at every
+# disposition below because an empty `output` block fails
+# `assertRenderableDecisions` -- the field is structurally required, not
+# functionally wired. OpenCode's hooks return `void` and expose no field this
+# host reads an explanation back from; the one channel that DOES carry text is
+# the thrown message on a request-gate deny (see `refuse.reason` below). So a
+# rewrite's or a redaction's reasoning has nowhere to land on this host yet.
+# It stays declared-inert deliberately -- stated here so it does not silently
+# look wired.
+# SOME THINGS IN THIS FILE ARE NOT FREE CHOICES, and acs-plugin.ts's
+# `assertEntryMatchesGate` refuses this file at load if any of them changes
+# -- each of them measured as a live fail-open first.
+#
+# NO COUNT HERE, DELIBERATELY. This heading said "THREE THINGS" while the list
+# below it grew to four, and that is not the first quoted count in this file to
+# go stale on the line quoting it. The list is the list; count it by reading it:
+#
+#   - each hook's PAYLOAD SHAPE must match the gate the shim runs it as: the
+#     request hook declares `arguments`, the result hook declares `outputs`,
+#     and neither declares the other. governStep reads gate KIND off the
+#     entry's shape while the shim reads it off the hook NAME, and when the
+#     two disagree the arriving decision is shaped for the other gate --
+#     measured, a request hook declaring `outputs:` got `applied_output`
+#     where its own `modify` sink expects `applied_input`, so the rewrite
+#     landed nowhere and governStep still reported `stage: honoured`.
+#   - `tool_name` must be `$.tool` at both hooks. `$.tool` is where the shim
+#     puts OpenCode's own `input.tool`, and `tool_name` is what buildEnvelope
+#     reads to name the tool ON THE WIRE -- point it elsewhere and the policy
+#     runtime is asked about something that is not the tool that ran.
+#     Measured with `tool_name: $.args.command`: the step was governed and
+#     audited normally, `stage: honoured`, while the envelope carried
+#     `payload.tool.name: "rm -rf /"` where this file puts `bash`. (This
+#     bullet once named a different fault instead: the shim scoped on
+#     `input.tool` while governStep re-derived a name from `tool_name`, and a
+#     divergence made governStep skip a governed step as `ungoverned` with no
+#     Guardian request and no audit entry. The shim now TELLS governStep the
+#     tool it scoped on, so that one is closed in the adapter for every host.)
+#   - `outputs.within` must be `$.result`, because that is where the shim puts
+#     the live object it hands the applier. `applied_output` is a patched
+#     clone OF that container, so naming another one lands the clone at a
+#     depth the applier merges wrongly -- measured with `within: $`, the leaf
+#     AND its metadata.output mirror both kept the plaintext.
+#   - `outputs.from` must be `$.result.output`, and this is the sharpest of
+#     them: that leaf is what goes ON THE WIRE as this step's
+#     `outputs[0].value`, i.e. the value the policy runtime is asked ABOUT.
+#     Point it elsewhere and the Guardian is not asked a wrong question about
+#     the output -- it is asked about a different value, answers it correctly,
+#     and the step is audited as a clean allow. Measured with
+#     `from: $.result.title`: envelope carried the title, decision `allow`,
+#     and `rm -rf /` was delivered in leaf and mirror.
+#
+# `outputs.mirrors` is deliberately NOT fixed, and the asymmetry is the point:
+# `metadata` is PER-TOOL on this host (the measurement table on the result
+# gate below), so a deployment scoping this gate to another tool names a
+# different mirror, or none, and nothing in the shim could say which is right.
+# KNOWN AND PARKED, stated rather than implied: a hookmap that simply OMITS
+# `mirrors` is therefore not refused, and it leaks -- measured with this file's
+# own `mirrors` line deleted, a real `deny` landed the withheld marker on the
+# leaf and left the plaintext in `metadata.output`. Not closable without taking
+# from a hookmap the one thing only it can know.
+#
+# THAT LEAK IS WEAKER THAN THE FAULTS ABOVE ONLY WHILE THE RESULT GATE KEEPS
+# ITS `tools: [bash]`, and the condition matters. Scoped, the model does see
+# the redaction, so what is lost is the session record rather than the secret.
+# Unscoped, that is not what happens: `tools` is absent from the not-free-
+# choices list above, and nothing else pins it either -- `assertEntryMatchesGate`
+# fixes `tool_name`, `outputs.from`, `outputs.within` and each hook's payload
+# shape, and has no opinion about the tool list -- and MEASURED with the
+# result gate's `tools: [bash]` deleted
+# (which registers clean through the plugin), a `read` call reaches this gate,
+# `$.result.metadata.exit` resolves to nothing, buildEnvelope throws, the
+# delivery posture answers, and under `proceed` the file's contents stand in
+# the leaf with the step audited as proceeded -- unasked, and with `read`'s own
+# mirror (`metadata.preview`, per the table below) not even named here. Measured
+# with `mirrors` present AND absent: identical, because that throw lands before
+# the adapter ever asks whether a withholding could be built. Where `mirrors`
+# DOES stop something is the other route -- a payload whose envelope builds but
+# whose declared mirror is missing from it is refused there as a loud stop.
+# That guard is DESIGNED for exactly that (`replacingOutput`'s own doc comment,
+# result-output.ts: a declared mirror resolving to no value "adds a field the
+# tool never produced, the same defect an absent `from` would be"); what nobody
+# designed is that the line arming it is THIS one, declared for the
+# session-record leak above. The check runs over the mirrors a hookmap declared,
+# so a deployment declaring none never fires it -- correctly, by that guard's
+# own design -- and the protection travels with a declaration nothing requires.
+# So the two lines are independent, deleting either is load-clean, and neither
+# is closed here: acs-plugin.ts's `GateEntryShape` doc comment carries the
+# measurements.
+#
+# And every decision name below must be one this shim has an expectation for:
+# a `decisions.` entry it does not know is refused rather than skipped, for
+# the same reason an unmapped HOOK is.
+host: opencode
+hooks:
+  # The request gate. OpenCode hands the plugin `{tool, sessionID, callID}` and a
+  # mutable `{args}`; the shim (acs-plugin.ts) assembles those into one payload
+  # object so these paths have something to resolve against.
+  #
+  # `tools` -- REVERSING a claim this comment used to make ("No tools:
+  # here, and none belongs here ... it governs everything"). That claim checked
+  # only that THIS gate's own paths ($.tool, $.args) resolve for every tool
+  # OpenCode fires the hook for, which is true and was never the right question.
+  # policy/manifest.yaml's own pre_tool_call.policy_target is a single fixed
+  # target, checked before any authored rule runs, independent of the tool
+  # registry; a tool this deployment's manifest has not registered denies
+  # unconditionally on a configuration mismatch, not a policy decision.
+  # MEASURED against the shipped manifest before this line existed: every
+  # tool OpenCode can call except the one name it registers denied, unasked
+  # by any rule. `tools` here lets this deployment decline to ask at all for
+  # a tool it cannot express a target for, rather than asking and reporting
+  # that mismatch as governance. Enacted by `governsTool`
+  # (packages/host-adapter/src/govern-step.ts), which `governStep` asks
+  # before it builds anything and the shim (acs-plugin.ts) asks one call
+  # earlier still -- earlier being where it also saves the session handshake.
+  # That rule lives in the adapter rather than in the shim: while only a shim
+  # enacted it, a third host would load this line and govern every tool
+  # regardless.
+  tool.execute.before:
+    acs_method: steps/toolCallRequest
+    tool_name: $.tool
+    arguments: $.args
+    # The same declaration Claude Code's hookmap makes, at this host's own
+    # field: OpenCode hands the plugin a mutable `{args}`, so the shell tool's
+    # command line is `$.args.command` where host #1 has `$.tool_input.command`.
+    # Absorbing that difference is what a hookmap is for.
+    raw_command: $.args.command
+    # `webfetch` joins `bash` because the manifest can now express a policy
+    # target for it: mapping.yaml names which argument each tool's target lives
+    # in, and the Guardian copies it to the one leaf the manifest points at. The
+    # paragraph above still holds for every OTHER tool this host can call --
+    # they are declined here, not asked and mis-answered.
+    tools: [bash, webfetch]
+    decisions:
+      # `refuse.reason` is this host's deny channel AT THIS GATE and there is
+      # no other here: measured, `output.status = "deny"` and
+      # `output.decision = "deny"` are both ACCEPTED and IGNORED, and the tool
+      # runs. Throwing is what stops it. (At the RESULT gate below the deny
+      # channel is `result` instead, and throwing is the wrong move there --
+      # see that entry's own `deny` comment. Said explicitly here because an
+      # unqualified "there is no other" reads as a whole-host claim, and the
+      # gate that enforces this file's shape covers both gates rather than this
+      # one alone.)
+      #
+      # `refuse.denied: { value: true }` is UNCONDITIONAL, beside
+      # `refuse.reason`'s own `from:`. A `from:` field renders NOTHING when the
+      # arriving decision does not carry that source, or carries it as the
+      # wrong type (render-decision.ts) -- so `deny`, `ask` and `defer` below,
+      # each built ONLY from `refuse.reason` before this line existed, could
+      # render `{}` on a Guardian's minimal or malformed decision message.
+      # Measured: `{"decision":"deny"}` and
+      # `{"decision":"deny","reasoning":{"code":"R7"}}` both rendered `{}` --
+      # this host's applier saw no keys, applied nothing, threw nothing, and
+      # the tool ran, indistinguishable from a clean allow. `acs-plugin.ts`'s
+      # own load-time gate (`assertHostAcceptsEveryDecision`) now refuses to
+      # register a hookmap missing this marker on any of the three; it is
+      # declared on all three here so this file passes that gate rather than
+      # relying on it to catch an omission. That gate covers the RESULT gate
+      # below too -- see this file's own `tool.execute.after` deny comment.
+      allow:
+        output:
+          reason.text: { from: reasoning, type: string }
+      deny:
+        output:
+          refuse.denied: { value: true }
+          refuse.reason: { from: reasoning, type: string }
+      # No native "ask" at this hook -- `permission.ask` is a different event
+      # this host mapping does not wire -- so ask fails CLOSED, the same
+      # least-wrong mapping claude-code.hookmap.yaml makes for Claude Code's
+      # absent `defer`.
+      ask:
+        output:
+          refuse.denied: { value: true }
+          refuse.reason: { from: reasoning, type: string }
+      defer:
+        output:
+          refuse.denied: { value: true }
+          refuse.reason: { from: reasoning, type: string }
+      # `args: { from: applied_input }` is REQUIRED, not conventional:
+      # `acs-plugin.ts`'s `assertHostAcceptsEveryDecision` refuses a request-gate `modify` that
+      # declares anything else -- the exact key (a path under it merges one
+      # level too deep, landing the whole rewrite bag in a single argument) and
+      # the exact source (a `from:` naming a field the decision does not carry
+      # renders nothing, and a `value:` beside it wins outright). An author who
+      # would rather BLOCK the tool than rewrite its arguments may declare
+      # `refuse.denied: { value: true }` here instead -- also accepted, and
+      # strictly more conservative. Measured with this line removed, against a live
+      # Guardian: a real `modify` carrying
+      # `applied_input: {command: "echo [REDACTED]"}` rendered `{}`, the
+      # applier applied nothing and threw nothing, and the command ran
+      # unredacted -- while `governStep` reported `stage: "honoured"`, so the
+      # audit trail recorded the rewrite as honoured rather than as never
+      # landed.
+      modify:
+        output:
+          args: { from: applied_input }
+          reason.text: { from: reasoning, type: string }
+  # The result gate.
+  tool.execute.after:
+    acs_method: steps/toolCallResult
+    tool_name: $.tool
+    # SCOPED TO bash ONLY, and this is data because OpenCode has no matcher to
+    # get it from. OpenCode fires this hook for EVERY tool, and `metadata` is
+    # PER-TOOL -- measured on 1.18.15 across four tools: `bash`'s metadata is
+    # {exit, output, truncated}, which is what `outputs`/`exit_status` below
+    # are shaped for; `read`'s is {display, loaded, preview, truncated} (no
+    # `exit`, and `preview` is ITS OWN mirror, not this one); `grep`'s is
+    # {matches, truncated}; an invalid call's is {truncated} alone. Claude Code
+    # gets this scoping for free from settings.json's anchored `^Bash$`
+    # matcher -- there, the exposure is the matcher's to hold rather than the
+    # gate's; OpenCode has no matcher, so the equivalent has to be declared
+    # here instead. The adapter both shape-checks the list (`loadHookmap`) and
+    # acts on it (`governsTool`, asked at the top of `governStep`), which is
+    # the division `outputs.mirrors` below already had. The shim still asks
+    # the same function first -- see the request gate's own comment, above.
+    tools: [bash]
+    outputs:
+      from: $.result.output
+      within: $.result
+      # THE MIRROR. `metadata` carries its own copy of the output; a redaction
+      # that patches only the leaf leaves the plaintext in OpenCode's session
+      # record while the model correctly sees the redaction. Measured.
+      mirrors:
+        - $.result.metadata.output
+    # A REAL field read, not a literal. Claude Code's PostToolUse payload carries
+    # no exit code, so claude-code.hookmap.yaml declares `{literal: success}`
+    # and records the gap; OpenCode's `metadata.exit` supplies one.
+    exit_status: { from: $.result.metadata.exit }
+    decisions:
+      allow:
+        output:
+          reason.text: { from: reasoning, type: string }
+      # Deny WITHHOLDS BY REPLACING, and deliberately does not throw. A throw
+      # here does withhold from the model -- better than Claude Code, where
+      # `block` delivers the real stdout -- but OpenCode DISCARDS the plugin's
+      # mutations on the throw path and rebuilds `metadata` from its own pre-hook
+      # copy, so the secret survives on disk however early it is scrubbed.
+      # Measured both ways.
+      #
+      # `result`, NOT `result.output`:
+      # `applied_output` is the WHOLE patched clone of the object at
+      # `outputs.within` -- `replacingOutput` returns `patchedClone(container,
+      # ...)`, container included, mirror included -- not the leaf alone.
+      # Claude Code's own `hookSpecificOutput.updatedToolOutput` is correct by
+      # construction because it genuinely takes the whole payload object; this
+      # host's equivalent sink is `result` itself, the same relation the
+      # request gate's `args: { from: applied_input }` already has to
+      # `outputs.within`'s counterpart on that side. Naming the leaf
+      # (`result.output`) would assign the WHOLE container to a field that is
+      # a string on this host, burying the mirror's own patched copy one level
+      # too deep for OpenCode to ever apply.
+      #
+      # THE WHOLE LINE IS NOW REFUSED AT LOAD IF IT IS WRONG, RATHER THAN ONLY
+      # DOCUMENTED HERE. `acs-plugin.ts`'s `assertHostAcceptsEveryDecision` requires
+      # `result: { from: applied_output }` EXACTLY -- that key, that source --
+      # on every decision this gate declares that withholds anything -- which
+      # is `deny`, `modify`, `ask` and `defer`, i.e. everything but `allow`.
+      # `ask`/`defer` used to be held to a REFUSAL here instead, because
+      # `withResultOutput` attached `applied_output` for `deny` alone and
+      # returned those two untouched, so a sink on either rendered nothing
+      # however correctly it was written. `withholdsAtResultGate`
+      # (result-output.ts) ended that: the rule is now every disposition but
+      # `allow` and `modify`, and this file declares all four sinks. The hook
+      # must also declare the `outputs:` block above: without it governStep
+      # builds no output location, withResultOutput no-ops for EVERY decision,
+      # and the sink below is unfillable by construction.
+      # The shapes it refuses are below, each measured through a live Guardian
+      # before it was refused. No count on this line, for the reason this
+      # file's own header gives: the list grew and the count did not.
+      #   - the sink dropped entirely -- a real `deny` rendered `{reason}`, a
+      #     real `modify` rendered `{}`, both applied nothing and threw
+      #     nothing, and the tool's output was delivered in the leaf and the
+      #     mirror both, indistinguishable from a clean allow;
+      #   - the LEAF named instead of the container (`result.output`) -- the
+      #     container lands in a string field and the mirror is never written;
+      #   - the right key sourced from the WRONG FIELD
+      #     (`result: { from: applied_input }`, one copy-paste from the request
+      #     gate above) -- renders no `result` key at all, same delivery. That
+      #     one passed the first version of the gate, which asked only whether
+      #     the key was present;
+      #   - the right key AND the right source, declared so it can never
+      #     RENDER -- `{ from: applied_output, type: string }` (a `typeof`
+      #     filter, and `applied_output` is an object, so it is dropped every
+      #     time -- and every OTHER `from:` field in this file carries
+      #     `type: string`, so house style leads straight to it), or
+      #     `{ value: {}, from: applied_output }` (renderDecision reads `value`
+      #     first and never looks at `from`). Both passed the SECOND version of
+      #     the gate, which checked what the sink named and not whether it
+      #     could render.
+      # `withResultOutput` guaranteed the DECISION carried `applied_output` the
+      # whole time; nothing guaranteed this file declared anywhere to put it.
+      #
+      # A REFUSAL IS THE OTHER ACCEPTED ANSWER, not a third refused shape: a
+      # decision here may declare `refuse.denied: { value: true }` instead of a
+      # sink, and the gate accepts it. That throws -- the model never sees the
+      # output -- which is weaker than replacing (the plaintext survives in
+      # OpenCode's own session record, per this file's header) but is not a
+      # silent no-op, and refusing such a hookmap at LOAD would leave the
+      # plugin unloaded and the whole session ungoverned. This file replaces,
+      # because replacing is the stronger of the two.
+      deny:
+        output:
+          result: { from: applied_output }
+          reason.text: { from: reasoning, type: string }
+      # `ask` and `defer` replace here rather than refuse, and they are
+      # byte-identical to `deny` above because at this gate they ARE a deny.
+      # The step has already run: there is no permission left to seek and no
+      # pending state to hold, so what survives of both is that the output is
+      # not deliverable as it stands. `withholdsAtResultGate` in the adapter
+      # is the single statement of that rule, and `withResultOutput` attaches
+      # `applied_output` for every disposition it admits -- so these render
+      # the same patched clone `deny` does, leaf and mirror both.
+      #
+      # What it costs: OpenCode has no way to put a question to a human about
+      # an output that already exists, and no way to release one afterwards.
+      # An `ask` a human would have approved is over-blocked, silently. The
+      # request gate above keeps its own three-valued reading of `ask`; this
+      # asymmetry between the two gates is the honest part, not an oversight.
+      ask:
+        output:
+          result: { from: applied_output }
+          reason.text: { from: reasoning, type: string }
+      defer:
+        output:
+          result: { from: applied_output }
+          reason.text: { from: reasoning, type: string }
+      modify:
+        output:
+          result: { from: applied_output }
+          reason.text: { from: reasoning, type: string }

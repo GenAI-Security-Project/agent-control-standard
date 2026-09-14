@@ -1,0 +1,12 @@
+{
+  "name": "claude-code-host",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "dependencies": {
+    "host-adapter": "workspace:*"
+  },
+  "devDependencies": {
+    "guardian": "workspace:*"
+  }
+}

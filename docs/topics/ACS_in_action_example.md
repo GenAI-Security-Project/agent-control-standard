@@ -4,39 +4,31 @@ A worked example of an Observed Agent calling the `email.send` tool, with a Guar
 
 ## Sequence
 
-```
-Observed Agent          Guardian Agent          Trace sink (OTLP/SIEM)
-══════════════          ══════════════          ══════════════════════
-  │                          │                          │
-  │ 1. handshake/hello       │                          │
-  ├─────────────────────────>│                          │
-  │ 2. ServerHello           │                          │
-  │<─────────────────────────┤                          │
-  │ 3. agbom/snapshot        │                          │
-  ├─────────────────────────>│                          │
-  │                          │ 4. Trace: acs.agbom      │
-  │                          ├─────────────────────────>│
-  │ 5. allow                 │                          │
-  │<─────────────────────────┤                          │
-  │ 6. steps/sessionStart    │                          │
-  ├─────────────────────────>│ 7. Open chain root       │
-  │ 8. allow                 │                          │
-  │<─────────────────────────┤                          │
-  │ 9. steps/userMessage     │                          │
-  ├─────────────────────────>│                          │
-  │ 10. allow                │                          │
-  │<─────────────────────────┤                          │
-  │ 11. steps/toolCallRequest│                          │
-  ├─────────────────────────>│ 12. Evaluate IBAC + FIDES│
-  │                          │ 13. Trace: acs.decision  │
-  │                          ├─────────────────────────>│
-  │ 14. allow                │                          │
-  │<─────────────────────────┤                          │
-  │ 15. Execute tool         │                          │
-  │ 16. steps/toolCallResult │                          │
-  ├─────────────────────────>│                          │
-  │ 17. allow                │                          │
-  │<─────────────────────────┤                          │
+The diagram below shows the whole walkthrough: one handshake, one AgBOM snapshot, a tool call the Guardian evaluates and traces, and the result.
+
+```mermaid
+sequenceDiagram
+    participant O as Observed Agent
+    participant G as Guardian Agent
+    participant T as Trace sink
+
+    O->>G: handshake/hello
+    G-->>O: ServerHello
+    O->>G: agbom/snapshot
+    G->>T: Trace acs.agbom
+    G-->>O: allow
+    O->>G: steps/sessionStart
+    Note right of G: Open chain root
+    G-->>O: allow
+    O->>G: steps/userMessage
+    G-->>O: allow
+    O->>G: steps/toolCallRequest
+    Note right of G: Evaluate IBAC + FIDES
+    G->>T: Trace acs.decision
+    G-->>O: allow
+    Note left of O: Execute tool
+    O->>G: steps/toolCallResult
+    G-->>O: allow
 ```
 
 ## The decision point: `steps/toolCallRequest`

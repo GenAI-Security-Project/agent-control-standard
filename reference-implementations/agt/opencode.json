@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["./hosts/opencode/acs-plugin.ts"],
+  "permission": { "bash": "allow" }
+}

@@ -1,0 +1,49 @@
+# Opens an issue when the Current Priority Scope review date passes.
+#
+# It opens an issue rather than failing a build. A stale scope is a governance problem,
+# and blocking a documentation deploy on one helps nobody.
+name: Scope review reminder
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Open a review issue if the date has passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The date is read from CONTRIBUTING.md so the document stays the single source.
+          DUE="$(grep -oE 'Next review [A-Z][a-z]+ [0-9]{1,2}, [0-9]{4}' CONTRIBUTING.md \
+                 | head -1 | sed 's/^Next review //')"
+          if [ -z "$DUE" ]; then
+            echo "::error file=CONTRIBUTING.md::No 'Next review <date>' line found"
+            exit 1
+          fi
+          DUE_EPOCH="$(date -u -d "$DUE" +%s)"
+          NOW_EPOCH="$(date -u +%s)"
+          if [ "$NOW_EPOCH" -lt "$DUE_EPOCH" ]; then
+            echo "Scope review not due until $DUE."
+            exit 0
+          fi
+          TITLE="Review the Current Priority Scope (was due $DUE)"
+          if [ "$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')" -gt 0 ]; then
+            echo "Reminder already open."
+            exit 0
+          fi
+          gh issue create --title "$TITLE" \
+            --label 'status:needs-triage' \
+            --body "The Current Priority Scope in CONTRIBUTING.md passed its review date of $DUE. Confirm what is still in focus, move what has shipped, and set the next review date. This is a standing item for the weekly call."
