@@ -9,11 +9,13 @@ ACS events map to OCSF 1.5+ event classes. The normative class assignments and t
 | ACS step | OCSF class | Class UID |
 |---|---|---|
 | `steps/sessionStart`, `steps/sessionEnd`, `steps/subagentStart`, `steps/subagentStop` | Authentication | 3002 |
-| `steps/userMessage`, `steps/agentResponse`, `steps/turnStart`, `steps/turnEnd` | Application Activity | 6002 |
+| `steps/agentTrigger`, `steps/userMessage`, `steps/agentResponse`, `steps/turnStart`, `steps/turnEnd` | Application Activity | 6002 |
 | `steps/toolCallRequest`, `steps/toolCallResult` | Process Activity | 1007 |
+| `steps/skillLoad` | Process Activity | 1007 |
 | `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval`, `steps/preCompact`, `steps/postCompact` | Datastore Activity | 6005 |
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
 | `agbom/snapshot`, `agbom/changed` | Inventory Info | 5001 |
+| `steps/skillRegister`, `steps/skillUnload` | Inventory Info | 5001 |
 
 ## Severity mapping
 
