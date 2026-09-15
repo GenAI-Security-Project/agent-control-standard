@@ -4,7 +4,7 @@
   "title": "steps/subagentStop payload",
   "description": "Fires when an in-process subagent terminates. The envelope's metadata.session_id is the PARENT's session (the parent receives the subagent-stop notification on its own audit chain); the subagent's own session has by this point already emitted its sessionEnd with its own final_chain_hash. This hook lets the parent's audit chain reference the subagent's terminal state without merging the two chains. Not decision-eligible — the subagent has already terminated.",
   "type": "object",
-  "required": ["subagent_session_id", "outcome", "final_chain_hash"],
+  "required": ["subagent_session_id", "outcome"],
   "properties": {
     "subagent_session_id": {
       "type": "string",
@@ -19,7 +19,7 @@
     "final_chain_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "The subagent's final SessionContext chain_hash at sessionEnd. Lets parent-side audit replay verify the subagent's chain integrity without the parent maintaining a copy of it."
+      "description": "OPTIONAL. The subagent's final SessionContext chain_hash at sessionEnd. When present, lets parent-side audit replay verify the subagent's chain integrity without the parent maintaining a copy of it. Frameworks that maintain no session-chain (e.g., shell-hook integrations without an internal audit chain) omit this field rather than fabricate a value; Guardian handling of the omission is specified in \u00a78.6 of the specification."
     },
     "summary": {
       "type": "object",
