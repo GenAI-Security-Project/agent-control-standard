@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.1.3] — 2026-09-09
 
-### Changed — ACS-Core baseline (relaxations)
+### Changed — ACS-Core baseline
 
 - `MODIFY` is now SHOULD-support rather than MUST-support. Deployments whose framework cannot mutate a request (shell-hook integrations, IDE plugins without an argument-mutation surface) or that disable `MODIFY` for auditability reasons are conformant without it. See new [§6.5 MODIFY-incapable clients](docs/spec/instrument/specification.md#65-modify-incapable-clients-normative).
 - `subagentStart` is promoted from SHOULD-emit to MUST-emit for subagent-capable frameworks; `subagentStop` remains SHOULD-emit, unchanged since 0.1.0. A client whose framework has no sub-agent abstraction has nothing to emit; the Guardian determines client subagent-emission capability by deployment-defined means (mirroring the [§9.2 ASK precedent](docs/spec/instrument/specification.md#92-approver-incapable-clients-normative)).
@@ -27,6 +27,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `specification/v0.1.0/hooks/subagent-stop.json`: `final_chain_hash` moved from `required` to optional. Frameworks that maintain no session-chain (shell-hook integrations without an internal audit chain) MAY omit the field rather than fabricate a value; fabrication would corrupt the exact artifact the field exists to produce. Guardian handling of the omission lives in §8.6.
 
+### Repository
+
+- Commits land under human authorship ([#61](https://github.com/GenAI-Security-Project/agent-control-standard/pull/61)).
+
 ### Related issues
 
 - Guardian-side hook-coverage unfalsifiability tracked at [#31](https://github.com/GenAI-Security-Project/agent-control-standard/issues/31); out of scope for this release, needed for the enforcement side of `subagentStart`'s security rationale to be checkable.
@@ -39,7 +43,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The skill lifecycle hooks (`skillRegister`, `skillLoad`, `skillUnload`) joined the Specification §5 taxonomy table, with a guard test that reads the schema titles so the views cannot drift again ([#56](https://github.com/GenAI-Security-Project/agent-control-standard/pull/56)).
 - The Identity for Agents workstream overview and standards survey landed, with identity woven into the core concepts.
 - A third-party content guard protects the published site, with its residual gaps recorded.
-- Governance reconciliation: `GOVERNANCE.md` as the authoritative roster, OWASP Nest project metadata, the single-contact policy, and the human-authorship rule for commits ([#61](https://github.com/GenAI-Security-Project/agent-control-standard/pull/61)).
+- Governance reconciliation: `GOVERNANCE.md` as the authoritative roster, OWASP Nest project metadata, and the single-contact policy.
 
 ## [0.1.1] — 2026-08-11
 
