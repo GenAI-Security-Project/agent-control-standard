@@ -78,7 +78,7 @@ Existing efforts solve one slice each. Vendor governance tools come with each ve
 
 ACS is an OWASP project. It is a vendor-neutral community effort: workstream leads come from multiple organizations, no single company owns or steers the standard, and every pull request goes through community review.
 
-Work is split across five workstreams, each owning a slice of the standard and running its own review. **[GOVERNANCE.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md) is the authoritative roster**, naming the project lead, the two leads per workstream, and the founding credit. It is kept in sync with repository write access and `CODEOWNERS`, which a table copied into this page would not be. Read it there rather than here.
+Work is split across five workstreams, each owning a slice of the standard and running its own review. **[GOVERNANCE.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md) is the authoritative roster**, naming the project lead, the leads for each workstream, and the founding credit. It is kept in sync with repository write access and `CODEOWNERS`, which a table copied into this page would not be. Read it there rather than here.
 
 Contribution guidance is in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md).
 
@@ -92,7 +92,7 @@ No. Agent frameworks and ACS sit at different layers. A framework builds the age
 
 ### Does ACS replace MCP or A2A?
 
-No. ACS wraps them. MCP messages flow through `protocols/MCP/*` ACS methods so the same Guardian can govern an MCP tool call as a native tool call. A2A wrapping arrives in v0.2 ([Specification §extend_a2a](../spec/instrument/a2a/extend_a2a.md)). The composition rule: every protocol-spanning message crosses an ACS hook on the way out and on the way back.
+No. ACS wraps them. MCP traffic reaches the Guardian through ACS hooks, either the `protocols/MCP/*` methods or, for tool calls, the generic tool hooks, so the same Guardian can govern an MCP tool call as a native tool call. A2A wrapping arrives in v0.2 ([Specification §extend_a2a](../spec/instrument/a2a/extend_a2a.md)). The composition rule: every protocol-spanning message crosses an ACS hook on the way out and on the way back.
 
 ### Does ACS define what policies to enforce?
 
@@ -126,18 +126,18 @@ You are building ten things:
 
 - **A handshake.** `handshake/hello`, where both sides declare what they support and negotiate the session.
 - **An envelope.** JSON-RPC 2.0 carrying `request_id`, `timestamp`, `acs_version`, and `metadata`.
-- **A hook surface.** Enough of the lifecycle that a Guardian sees the session start, the agent's inputs and outputs, tool calls going out and coming back, sub-agent spawns where the framework has them (`subagentStart` — the gate against cross-agent propagation), and the session end.
-- **The disposition vocabulary.** `allow`, `deny`, `ask`, and `defer` are Core requirements; `modify` support is recommended. A Guardian substitutes `deny` for clients that cannot apply `modify` ([Specification §6.5](../spec/instrument/specification.md#65-modify-incapable-clients-normative)).
+- **A hook surface.** Enough of the lifecycle that a Guardian sees the session start, the agent's inputs and outputs, tool calls going out and coming back, sub-agent spawns where the framework has them, and the session end.
+- **The disposition vocabulary.** The five dispositions: `allow`, `deny`, `modify`, `ask`, and `defer`.
 - **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
 - **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default, which is fail-open) and record every fail-open proceed as an audit event.
-- **Liveness.** `system/ping`, or a declared alternative (transport keepalive, process supervision, or continuous hook traffic).
-- **Wrapped MCP.** `protocols/MCP/*` when sessions involve MCP. `tools/call` may collapse into the generic tool hooks; the wrapped forms carry what those hooks cannot see (capability negotiation, prompt fetches, resource reads, notifications).
+- **Liveness.** A way to notice that the Guardian has stopped answering.
+- **MCP coverage.** The `protocols/MCP/*` methods for MCP traffic.
 
 The remaining hooks (`turnStart`/`turnEnd`, `preCompact`/`postCompact`, `subagentStop`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `skillRegister`/`skillLoad`/`skillUnload`) are defined in the spec and worth implementing wherever your framework can observe the matching event. The handshake declares what you implement and the Guardian negotiates against it.
 
-Check the conformance chapter for which of these are strictly required and which your deployment can decline and still claim ACS-Core. That line moves as the spec evolves, and this page deliberately does not duplicate it.
+Check the [conformance chapter](../spec/conformance.md) for which of these are strictly required and which your deployment can decline and still claim ACS-Core. That line moves as the spec evolves, and this page deliberately does not duplicate it.
 
 ACS-Core asks for none of field-level Provenance, Trace event emission, AgBOM, asymmetric or post-quantum signatures, or `request_hash` on ContextEntry. Those are optional profiles you layer on.
 
@@ -165,7 +165,7 @@ Profiles compose: a minimal IDE harness declares `["acs-core"]`; a full-coverage
 
 ### What if my framework does not have a particular hook surface?
 
-The framework advertises in `methods_implemented` at handshake time exactly the hooks whose events it can observe. The Guardian's `methods_evaluated` response names the subset it will actually evaluate against policy, and the Guardian may refuse the session if a hook its policy requires is absent. So the negotiation is explicit on both sides — the framework says what it can emit, the Guardian says what it needs to see, and they either agree to proceed or the session does not start.
+The framework advertises in `methods_implemented` at handshake time the hooks it implements. The Guardian's `methods_evaluated` response names the subset it will actually evaluate against policy, and the Guardian may refuse the session if a hook its policy requires is absent. So the negotiation is explicit on both sides — the framework says what it can emit, the Guardian says what it needs to see, and they either agree to proceed or the session does not start.
 
 The conformance line is between *not having the surface* and *suppressing the hook for an event that did happen*. The first is fine and negotiated explicitly. The second is non-conformant: a framework that observed the event and skipped the hook is in violation, regardless of which surrounding hooks it did fire.
 
@@ -260,7 +260,7 @@ ACS exposes control points and audit surface; the deployment's policy library de
 | ASI07 Insecure Inter-Agent Communication | In-process spawning crosses the decision-eligible `subagentStart`; `subagentStop` records termination when emitted. Core hook envelopes carry replay protection and a baseline signature; A2A wrapping (`protocols/A2A/*`) is reserved for v0.2 |
 | ASI08 Cascading Failures | A Guardian `deny` at `subagentStart` stops a spawn cascade at the boundary; parent and child session references preserve the propagation path in the audit record |
 | ASI09 Human-Agent Trust Exploitation | ASK routes decisions to a human approver as a wire-level primitive; `agentResponse` gates agent output before delivery and records the proposed response together with the Guardian's decision |
-| ASI10 Rogue Agents | Handshake identity and, with ACS-Inspect, the AgBOM baseline the agent's composition; continuous hook traffic makes behavior observable, and the Guardian can deny at any decision-eligible hook |
+| ASI10 Rogue Agents | Handshake identity and, with ACS-Inspect, an AgBOM baseline of the agent's composition; continuous hook traffic makes behavior observable, and the Guardian can deny at any decision-eligible hook |
 
 **NIST AI RMF:** the framework requires identification, measurement, and management of AI risks, with traceability and human-control obligations. ACS contributes the runtime traceability layer — ACS-Audit's hash-chained record, ACS-Inspect's AgBOM, ACS-Trace's events — and the ASK disposition gives human oversight as a wire-level primitive.
 
@@ -336,7 +336,7 @@ ACS-Core (mandatory), and six optional profiles: ACS-Trace, ACS-Inspect, ACS-Ins
 
 ### What is coming in v0.2?
 
-A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1), the sensitivity / timeout model with method/capability mapping rules, multi-tenant isolation rules, batching and streaming hook semantics, and a Policy Attestation profile that binds policy references to verifiable author signatures. Conformance test machinery and a public registry are also v0.2 work.
+A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1), the sensitivity / timeout model with method/capability mapping rules, multi-tenant isolation rules, batching and streaming hook semantics, and a Policy Attestation profile that binds policy references to verifiable author signatures. A conformance certification suite and a public registry are also v0.2 work.
 
 ### How do I follow or contribute?
 
