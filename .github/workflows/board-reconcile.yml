@@ -107,11 +107,32 @@ jobs:
           # A scheduled run always applies. A manual run defaults to printing the plan
           # so a maintainer can read what would change before letting it change.
           APPLY: ${{ github.event_name == 'schedule' && 'true' || inputs.apply }}
+        # Two passes, and the second is not belt-and-braces.
+        #
+        # Adding an item triggers the project's own "Item added to project" workflow,
+        # which stamps a default Status asynchronously. The reconciler builds its whole
+        # plan up front, so on a run that adds anything it has already decided the
+        # Status actions before those items exist on the board, and the default lands
+        # after it finishes. A single pass therefore leaves every newly added item whose
+        # correct Status is not the default sitting wrong until the next run.
+        #
+        # Measured on the 2026-09-17 backfill: the first pass added 40 items, and a
+        # second pass immediately after had 5 Status corrections waiting, two issues
+        # labelled status:accepted and three open pull requests. Nightly, that is up to
+        # a day of wrong Status after any add.
+        #
+        # The reconciler is idempotent and converges, so the second pass is a no-op on
+        # a run that added nothing, which is every run once auto-add is enabled.
         run: |
           set -euo pipefail
-          if [ "$APPLY" = "true" ]; then
-            python3 tools/apply_governance.py --only board --apply
-          else
+          if [ "$APPLY" != "true" ]; then
             echo "Dry run. Pass apply=true to run these commands."
             python3 tools/apply_governance.py --only board
+            exit 0
           fi
+          echo "::group::Pass 1, adds and the Status changes known before them"
+          python3 tools/apply_governance.py --only board --apply
+          echo "::endgroup::"
+          echo "::group::Pass 2, Status for anything pass 1 added"
+          python3 tools/apply_governance.py --only board --apply
+          echo "::endgroup::"
