@@ -20,6 +20,11 @@ import run_conformance as rc  # noqa: E402
 
 
 class PlatformSelection(unittest.TestCase):
+    def test_codex_runs_shared_checks_and_deduplicates(self):
+        args = rc._parse_args(["codex", "codex", "--strict"])
+        self.assertEqual([suite[0] for suite in rc._select_suites(args.platforms)],
+                         ["guardian-conformance", "_common", "codex"])
+
     def test_one_platform_runs_shared_checks_and_that_platform(self):
         labels = [suite[0] for suite in rc._select_suites(["cursor"])]
         self.assertEqual(

@@ -804,7 +804,7 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
     Guardian fixture repeating the same expectation.
     """
 
-    def _capture_client_hello(self, secret: str | None) -> dict:
+    def _capture_client_hello(self, secret: str | None, **capabilities) -> dict:
         saved = {name: os.environ.get(name) for name in
                  ("ACS_HMAC_SECRET", "ACS_HMAC_SECRET_FILE")}
         try:
@@ -831,6 +831,7 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
                     agent_id="capability-test",
                     platform="test",
                     methods_implemented=["steps/toolCallRequest"],
+                    **capabilities,
                 )
             self.assertIsNone(result)
             self.assertEqual(len(captured), 1)
@@ -848,6 +849,7 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
 
         signed_payload = signed["params"]["payload"]
         self.assertEqual(signed_payload["profiles_supported"], ["acs-core"])
+        self.assertEqual(signed_payload["transports_supported"], ["http", "stdio"])
         self.assertEqual(signed_payload["signature_algorithms_supported"],
                          ["HMAC-SHA256"])
         self.assertIn("signature", signed["params"],
@@ -859,6 +861,13 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
         self.assertEqual(unsigned_payload["signature_algorithms_supported"], [])
         self.assertNotIn("signature", unsigned["params"],
             "unsigned development mode must be explicit on the wire")
+
+    def test_partial_signed_adapter_can_advertise_no_profile(self) -> None:
+        hello = self._capture_client_hello(
+            "capability-secret", profiles_supported=[], transports_supported=["http"])
+        self.assertIn("signature", hello["params"])
+        self.assertEqual(hello["params"]["payload"]["profiles_supported"], [])
+        self.assertEqual(hello["params"]["payload"]["transports_supported"], ["http"])
 
 
 if __name__ == "__main__":

@@ -637,6 +637,8 @@ def ensure_session_handshake(
     methods_implemented: list[str],
     wrapped_protocols: list[str] | None = None,
     timeout: float | None = None,
+    profiles_supported: list[str] | None = None,
+    transports_supported: list[str] | None = None,
 ) -> dict | None:
     """Idempotently ensure a handshake/hello has happened for this session.
 
@@ -657,6 +659,9 @@ def ensure_session_handshake(
     Returns the ServerHello (cached or freshly fetched), or None on
     failure (Guardian unreachable, etc.) — adapters fall to their
     startup posture in that case (§4.1).
+
+    Partial adapters can explicitly advertise no profiles and only their
+    implemented transports. None preserves the existing adapter defaults.
 
     Hardening:
       - The ServerHello signature is verified before caching or return.
@@ -716,14 +721,16 @@ def ensure_session_handshake(
             "payload": {
                 "acs_versions_supported": [ACS_VERSION],
                 "methods_implemented": methods_implemented,
-                "transports_supported": ["http", "stdio"],
+                "transports_supported": (transports_supported if transports_supported
+                                         is not None else ["http", "stdio"]),
                 "max_payload_size_bytes": 1_000_000,
                 "provenance_producer": "none",
                 "wrapped_protocols": wrapped_protocols or [],
                 # An unsigned session does not meet acs-core's signed-
                 # envelope floor (§10), so it must not advertise the profile.
                 "profiles_supported": (
-                    ["acs-core"] if _signing_secret() else []
+                    (profiles_supported if profiles_supported is not None
+                     else ["acs-core"]) if _signing_secret() else []
                 ),
                 "signature_algorithms_supported": (
                     ["HMAC-SHA256"] if _signing_secret() else []

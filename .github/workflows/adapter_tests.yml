@@ -89,7 +89,7 @@ jobs:
           # fails the build; only real-product smoke tests on the exact
           # EXPECTED_SKIPS allowlist are tolerated. The runner prints
           # every skip by name + reason.
-          python run_conformance.py claude cursor nat
+          python run_conformance.py claude cursor nat codex
 
   conformance:
     # Single-file suite at adapters/test_acs_core_conformance.py:
@@ -128,6 +128,7 @@ jobs:
           - {adapter: _common,     install_nat: false}
           - {adapter: claude-code, install_nat: false}
           - {adapter: cursor,      install_nat: false}
+          - {adapter: codex,       install_nat: false}
           - {adapter: nat,         install_nat: true }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4

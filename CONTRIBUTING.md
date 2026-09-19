@@ -40,10 +40,10 @@ For changes under `adapters/` (the reference adapters, example Guardian, and the
 ```bash
 pip install -r adapters/requirements-test.txt
 cd adapters
-python3 run_conformance.py claude cursor     # shared Guardian checks + those adapter suites
+python3 run_conformance.py claude cursor codex  # shared checks + those adapter suites
 # NAT needs the NVIDIA runtime; run its suite with an interpreter that has
 # nvidia-nat-core installed (see adapters/nat/requirements.txt):
-python3 run_conformance.py claude cursor nat
+python3 run_conformance.py claude cursor nat codex
 ```
 
 The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. See `adapters/README.md` for what the suite proves and its scope.

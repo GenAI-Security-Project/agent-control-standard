@@ -2,6 +2,13 @@
 
 Reference implementations that wire popular agent frameworks to an ACS Guardian. The goal: a framework adopts ACS through **configuration only**, with no agent code changes.
 
+The [Codex adapter](codex/README.md) adds a deliberately partial `PreToolUse`
+slice: signed tool-call requests and native allow/deny/input rewriting. It
+advertises no ACS-Core profile. Its subprocess suite is selected with `codex`;
+the separate live procedure verifies real Codex shell enforcement with a local
+scripted model endpoint. The broader three-adapter comparison below describes
+Claude Code, Cursor, and NAT; Codex's exact coverage is in its own mapping.
+
 ## What is a Guardian?
 
 The **Guardian** is the policy enforcement point: a long-running HTTP service that receives every ACS envelope from the adapter, evaluates it against the deployment's policy, and returns one of five dispositions (allow / deny / modify / ask / defer). It's the "decider"; the adapter is the "messenger."
@@ -21,7 +28,7 @@ Running the Guardian — terminal window, `launchd`, `systemd`, container — is
 
 Known limitations kept in view: Cursor's real-framework wiring is a manual GUI procedure; Wrapped MCP is validated for namespace shape only, not full wrapping. PR #21 proposes relaxing its Core status to SHOULD/MAY, but this branch does **not** contain that change; against the current branch specification, Wrapped MCP remains a Core gap. Milestone #33 tracks the reference-stack side.
 
-One authoritative command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. At least one platform is required; there is no implicit run-all default. Name one, two, or all three platforms in any order:
+One authoritative command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. At least one platform is required; there is no implicit run-all default. Select from `claude`, `cursor`, `nat`, and `codex` in any order:
 
 ```bash
 cd adapters
@@ -29,12 +36,15 @@ cd adapters
 # One platform
 python3 run_conformance.py cursor
 
+# Codex first-slice subprocess checks, with no skips allowed
+python3 run_conformance.py codex --strict
+
 # Two platforms
 python3 run_conformance.py claude cursor
 
 # All platforms. Use an interpreter with nvidia-nat-core when NAT is
 # selected, or the NAT suite's skips count as unexpected and fail.
-nat/.nat-venv/bin/python run_conformance.py claude cursor nat
+nat/.nat-venv/bin/python run_conformance.py claude cursor nat codex
 ```
 
 `claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. Guardian and `_common` checks run once for every command, regardless of the platform selection.

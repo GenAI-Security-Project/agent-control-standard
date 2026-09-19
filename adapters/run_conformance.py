@@ -33,6 +33,7 @@ Usage:
   python3 run_conformance.py claude cursor
   python3 run_conformance.py claude cursor nat
   python3 run_conformance.py cursor --strict
+  python3 run_conformance.py codex --strict
 
 At least one platform is required; there is no implicit "run all"
 default. `claude-code` is accepted as an alias for `claude`. Shared
@@ -57,12 +58,14 @@ SHARED_SUITES = (
 )
 
 PLATFORM_SUITES = {
+    "codex": ("codex", HERE / "codex", ("discover", "tests")),
     "claude": ("claude-code", HERE / "claude-code", ("discover", "tests")),
     "cursor": ("cursor", HERE / "cursor", ("discover", "tests")),
     "nat": ("nat", HERE / "nat", ("discover", "tests")),
 }
 
 PLATFORM_ALIASES = {
+    "codex": "codex",
     "claude": "claude",
     "claude-code": "claude",
     "cursor": "cursor",
@@ -114,7 +117,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PLATFORM",
         nargs="+",
         choices=tuple(PLATFORM_ALIASES),
-        help="one or more of: claude, cursor, nat",
+        help="one or more of: claude, cursor, nat, codex",
     )
     parser.add_argument(
         "--strict",
