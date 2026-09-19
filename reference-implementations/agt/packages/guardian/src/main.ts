@@ -49,3 +49,10 @@ console.log(`Guardian listening at ${guardian.url}`);
 console.log(`Envelope log: ${envelopeLogPath}`);
 console.log(`Session context log: ${sessionContextLog}`);
 console.log(`Failure posture: ${posture}   (override with ACS_ON_DECISION_FAILURE=deny)`);
+
+// Finish active decisions and drain both log streams before a normal shutdown.
+const shutdown = (): void => {
+  void guardian.close().then(() => process.exit(0));
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);

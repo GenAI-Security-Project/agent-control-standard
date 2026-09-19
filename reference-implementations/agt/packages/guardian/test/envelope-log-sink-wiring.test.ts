@@ -46,13 +46,13 @@ function readEntries(path: string): EnvelopeLogEntry[] {
 /** Non-recursive cleanup, as in envelope-log-sink.test.ts. */
 async function withGuardian(
   logPathFor: (dir: string) => string,
-  run: (url: string, logPath: string) => Promise<void>,
+  run: (url: string, logPath: string, close: () => Promise<void>) => Promise<void>,
 ): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "acs-envelope-log-wiring-"));
   const logPath = logPathFor(dir);
   const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", envelopeLogPath: logPath });
   try {
-    await run(guardian.url, logPath);
+    await run(guardian.url, logPath, () => guardian.close());
   } finally {
     await guardian.close();
     try {
@@ -77,9 +77,10 @@ const logIn = (dir: string) => join(dir, "envelopes.jsonl");
 
 describe("Guardian envelope log wiring", () => {
   it("records one request and one response per exchange, paired by rpc_id", async () => {
-    await withGuardian(logIn, async (url, logPath) => {
+    await withGuardian(logIn, async (url, logPath, close) => {
       await postRaw(url, JSON.stringify(toolCallEnvelope("rm -rf /", { id: 11 })));
 
+      await close();
       const entries = readEntries(logPath);
       expect(entries.length).toBe(2);
       expect(entries[0]?.direction).toBe("request");
@@ -93,9 +94,10 @@ describe("Guardian envelope log wiring", () => {
   });
 
   it("records handshake/hello in both directions", async () => {
-    await withGuardian(logIn, async (url, logPath) => {
+    await withGuardian(logIn, async (url, logPath, close) => {
       await postRaw(url, JSON.stringify(makeEnvelope("handshake/hello", {}, { id: 42 })));
 
+      await close();
       const entries = readEntries(logPath);
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);
       expect(entries.every((e) => e.method === "handshake/hello")).toBe(true);
@@ -110,12 +112,13 @@ describe("Guardian envelope log wiring", () => {
   // recorded in both directions the same as any other response (asserted
   // below).
   it("records a schema-invalid steps/* request, then its deny decision", async () => {
-    await withGuardian(logIn, async (url, logPath) => {
+    await withGuardian(logIn, async (url, logPath, close) => {
       const bad = toolCallEnvelope("rm -rf /", { id: 12 });
       delete (bad.params as Record<string, unknown>).acs_version;
 
       await postRaw(url, JSON.stringify(bad));
 
+      await close();
       const entries = readEntries(logPath);
       expect(entries.length).toBe(2);
       expect(entries[0]?.direction).toBe("request");
@@ -130,9 +133,10 @@ describe("Guardian envelope log wiring", () => {
   });
 
   it("records an unparseable body as a lone response with rpc_id null -- no request line to pair with", async () => {
-    await withGuardian(logIn, async (url, logPath) => {
+    await withGuardian(logIn, async (url, logPath, close) => {
       await postRaw(url, "{not json");
 
+      await close();
       const entries = readEntries(logPath);
       expect(entries.length).toBe(1);
       expect(entries[0]?.direction).toBe("response");
