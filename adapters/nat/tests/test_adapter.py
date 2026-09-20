@@ -115,7 +115,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
 
         def hello(req: dict) -> dict:
             result = g._default_handshake(req)
-            result["payload"]["timeout_config"] = {"default_ms": 100}
+            result["timeout_config"] = {"default_ms": 100}
             return result
 
         def delayed_deny(req: dict) -> dict:

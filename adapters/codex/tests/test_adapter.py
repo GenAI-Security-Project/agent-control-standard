@@ -256,7 +256,7 @@ class AdapterTests(unittest.TestCase):
             return self.guardian._default_allow(req)
         def hello(req):
             result = self.guardian._default_handshake(req)
-            result["payload"].update(on_decision_failure="proceed", timeout_config={"default_ms": 50})
+            result.update(on_decision_failure="proceed", timeout_config={"default_ms": 50})
             return result
         self.guardian.handlers["handshake/hello"] = hello
         self.guardian.handlers["steps/toolCallRequest"] = slow
@@ -273,7 +273,7 @@ class AdapterTests(unittest.TestCase):
                 self.env["ACS_HANDSHAKE_CACHE"] = cache
                 def hello(req):
                     result = self.guardian._default_handshake(req)
-                    result["payload"].update(change)
+                    result.update(change)
                     return result
                 self.guardian.handlers["handshake/hello"] = hello
                 out, _ = self.invoke()
@@ -286,7 +286,7 @@ class AdapterTests(unittest.TestCase):
                 self.env["ACS_HANDSHAKE_CACHE"] = cache
                 def hello(req):
                     result = self.guardian._default_handshake(req)
-                    result["payload"].update(on_decision_failure=posture, timeout_config={"default_ms": 50})
+                    result.update(on_decision_failure=posture, timeout_config={"default_ms": 50})
                     return result
                 def slow(req):
                     time.sleep(0.15)

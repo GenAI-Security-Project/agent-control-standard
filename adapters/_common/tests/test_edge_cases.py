@@ -187,10 +187,11 @@ class Item05_HandshakeCacheTtl(unittest.TestCase):
                 import importlib
                 importlib.reload(acs_common)
                 url = "http://127.0.0.1:1/dead"
-                fake_payload = {"negotiated_version": "0.1.0", "_synthetic": True}
+                fake_payload = {"negotiated_version": "0.1.0", "_synthetic": True,
+                                "methods_evaluated": [], "selected_transport": "http",
+                                "timeout_config": {"default_ms": 5000}}
                 envelope = {"jsonrpc": "2.0", "id": "cache-test",
-                            "result": {"type": "final", "acs_version": "0.1.0",
-                                       "payload": fake_payload}}
+                            "result": fake_payload}
                 cache_path = acs_common._handshake_cache_path("sess1", url)
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(json.dumps(envelope))

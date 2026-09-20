@@ -205,7 +205,7 @@ class Core01_Handshake(CoreHarness):
     def test_handshake_returns_server_hello(self) -> None:
         """conformance.md:17 — 'Handshake — handshake/hello with
         ClientHello/ServerHello'. A Guardian MUST respond to
-        handshake/hello with a ServerHello in result.payload, AND
+        handshake/hello with a ServerHello directly in result, AND
         the response envelope itself MUST validate against
         response-envelope.json."""
         env = self._make_envelope("handshake/hello", payload={
@@ -223,8 +223,15 @@ class Core01_Handshake(CoreHarness):
         self.assertEqual(errors, [],
             f"handshake response fails response-envelope.json:\n  - "
             + "\n  - ".join(errors))
-        result = resp["result"]
-        server_hello = result.get("payload", {})
+        server_hello = resp["result"]
+        # The general envelope accepts several method-dependent result
+        # variants. Check the handshake-specific branch as well.
+        from jsonschema import Draft202012Validator
+        schema, resolver = _build_local_resolver("handshake.json")
+        Draft202012Validator(
+            schema["$defs"]["ServerHello"], resolver=resolver,
+            format_checker=Draft202012Validator.FORMAT_CHECKER,
+        ).validate(server_hello)
         # handshake.json:70 — ServerHello required
         for required_field in ("negotiated_version", "methods_evaluated",
                                "selected_transport", "timeout_config"):
@@ -247,7 +254,7 @@ class Core01_Handshake(CoreHarness):
         resp = self._post(env)
         self.assertIn("result", resp,
             f"a matching-major (0.1.1) ClientHello must be accepted; got {resp}")
-        self.assertEqual(resp["result"]["payload"]["negotiated_version"], "0.1.0")
+        self.assertEqual(resp["result"]["negotiated_version"], "0.1.0")
 
     def test_client_hello_missing_required_field_refused(self) -> None:
         """handshake.json $defs/ClientHello requires acs_versions_supported,
@@ -1783,7 +1790,7 @@ class Core08b_NegotiatedDecisionTimeout(unittest.TestCase):
 
                 def hello(req: dict) -> dict:
                     result = guardian._default_handshake(req)
-                    result["payload"]["timeout_config"] = {"default_ms": 100}
+                    result["timeout_config"] = {"default_ms": 100}
                     return result
 
                 def delayed_deny(req: dict) -> dict:

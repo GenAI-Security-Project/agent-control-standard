@@ -694,7 +694,13 @@ def ensure_session_handshake(
                                 detail="cached ServerHello failed verification; "
                                        "re-handshaking")
                     raise ValueError("cached ServerHello signature invalid")
-                return (cached.get("result") or {}).get("payload")
+                # handshake/hello returns ServerHello directly in result.
+                # A signed legacy AcsResult wrapper is still the wrong shape:
+                # treat it as a cache miss and negotiate again.
+                server_hello = cached.get("result")
+                if not isinstance(server_hello, dict) or "negotiated_version" not in server_hello:
+                    raise ValueError("legacy or invalid cached ServerHello")
+                return server_hello
             # Else: cache is stale, fall through to re-handshake
         except (json.JSONDecodeError, OSError, ValueError):
             pass
@@ -779,9 +785,11 @@ def ensure_session_handshake(
         _record_failure("server_hello_signature_invalid")
         return None
 
-    result = response.get("result") or {}
-    server_hello = result.get("payload")
-    if server_hello:
+    # ServerHello is the handshake result, not an AcsResult payload.
+    # Leave capability/posture validation to the adapter as before; this
+    # discriminator prevents an old wrapper from becoming a cached hello.
+    server_hello = response.get("result")
+    if isinstance(server_hello, dict) and "negotiated_version" in server_hello:
         try:
             _HANDSHAKE_CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
@@ -790,7 +798,7 @@ def ensure_session_handshake(
                 pass
             fd = os.open(str(cache), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
-                # Store the whole signed response, not result.payload, so the
+                # Store the whole signed response, not the bare result, so the
                 # read path can re-verify it (§10 binds the signature to the
                 # envelope, so a bare payload cannot be checked at all).
                 json.dump(response, f)
@@ -802,7 +810,8 @@ def ensure_session_handshake(
         except OSError:
             pass
     else:
-        _record_failure("no_server_hello_payload")
+        _record_failure("invalid_server_hello")
+        return None
     return server_hello
 
 
