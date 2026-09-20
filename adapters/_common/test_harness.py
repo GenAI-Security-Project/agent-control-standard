@@ -376,20 +376,17 @@ class ProgrammableGuardian:
     # ─── Default handlers ───
 
     def _default_handshake(self, req: dict) -> dict:
+        # The HTTP handler wraps this ServerHello in result and signs the
+        # complete JSON-RPC envelope. Handshakes do not carry a decision.
         return {
-            "type": "final", "acs_version": "0.1.0",
-            "request_id": req["params"]["request_id"],
-            "decision": "allow",
-            "payload": {
-                "negotiated_version": "0.1.0",
-                "methods_evaluated": req["params"]["payload"].get("methods_implemented", []),
-                "selected_transport": "http",
-                "signature_algorithms_supported": ["HMAC-SHA256"],
-                "timeout_config": {"default_ms": 5000},
-                "skew_window_ms": 300000,
-                "on_decision_failure": "proceed",
-                "profiles_accepted": ["acs-core"],
-            },
+            "negotiated_version": "0.1.0",
+            "methods_evaluated": req["params"]["payload"].get("methods_implemented", []),
+            "selected_transport": "http",
+            "signature_algorithms_supported": ["HMAC-SHA256"],
+            "timeout_config": {"default_ms": 5000},
+            "skew_window_ms": 300000,
+            "on_decision_failure": "proceed",
+            "profiles_accepted": ["acs-core"],
         }
 
     def _default_allow(self, req: dict) -> dict:

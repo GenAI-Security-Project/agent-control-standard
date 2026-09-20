@@ -474,7 +474,7 @@ def _major(version: str) -> str | None:
 
 
 def evaluate_handshake(params: dict, request_id: str) -> dict:
-    """§4: ClientHello in payload; return ServerHello in result.payload."""
+    """§4: ClientHello in payload; return ServerHello directly in result."""
     client_hello = params.get("payload") or {}
 
     # Required ClientHello fields (handshake.json $defs/ClientHello) MUST
@@ -506,13 +506,8 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
         "policy_requires_provenance": False,
         "profiles_accepted": ["acs-core"],
     }
-    return {
-        "type": "final",
-        "acs_version": ACS_VERSION,
-        "request_id": request_id,
-        "decision": "allow",
-        "payload": server_hello,
-    }
+    # handle_request wraps and signs this direct ServerHello as result.
+    return server_hello
 
 
 def evaluate_ping(params: dict, request_id: str) -> dict:

@@ -696,20 +696,15 @@ class Item22_CachedServerHelloReverified(unittest.TestCase):
     def _hello(self, *, on_decision_failure: str):
         def handler(req: dict) -> dict:
             return {
-                "type": "final", "acs_version": "0.1.0",
-                "request_id": req["params"]["request_id"],
-                "decision": "allow",
-                "payload": {
-                    "negotiated_version": "0.1.0",
-                    "methods_evaluated":
-                        req["params"]["payload"].get("methods_implemented", []),
-                    "selected_transport": "http",
-                    "signature_algorithms_supported": ["HMAC-SHA256"],
-                    "timeout_config": {"default_ms": 5000},
-                    "skew_window_ms": 300000,
-                    "on_decision_failure": on_decision_failure,
-                    "profiles_accepted": ["acs-core"],
-                },
+                "negotiated_version": "0.1.0",
+                "methods_evaluated":
+                    req["params"]["payload"].get("methods_implemented", []),
+                "selected_transport": "http",
+                "signature_algorithms_supported": ["HMAC-SHA256"],
+                "timeout_config": {"default_ms": 5000},
+                "skew_window_ms": 300000,
+                "on_decision_failure": on_decision_failure,
+                "profiles_accepted": ["acs-core"],
             }
         return handler
 
@@ -761,11 +756,9 @@ class Item22_CachedServerHelloReverified(unittest.TestCase):
 
         # Edit one word in the cached envelope: deny -> proceed.
         entry = json.loads(cache.read_text())
-        # Keep the regression runnable against the reviewed implementation,
-        # which cached the bare ServerHello payload.  A red-before result must
-        # demonstrate the security behavior (the edit is trusted), not abort
-        # while arranging the fixture because the cache format later changed.
-        payload = (entry.get("result") or {}).get("payload", entry)
+        # Change the direct ServerHello while leaving its signature intact.
+        # This must exercise the tamper check, not a legacy payload fallback.
+        payload = entry["result"]
         self.assertEqual(payload["on_decision_failure"], "deny")
         payload["on_decision_failure"] = "proceed"
         cache.write_text(json.dumps(entry))
