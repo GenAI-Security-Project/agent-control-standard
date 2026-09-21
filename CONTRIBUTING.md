@@ -170,6 +170,11 @@ That is worth more to this project than a patch nobody asked for.
 
 Project maintainers handle formal releases. Focus on contributing great features and fixes.
 
+A release is tagged automatically. When a change to `version.txt` reaches `main`, the
+`Tag release` workflow tags that commit `v<version>`. It refuses when `version.txt`,
+`pyproject.toml`, and `uv.lock` disagree, so a mismatched release fails loudly instead of
+shipping.
+
 ## Reporting Security Issues
 
 **Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. We'll acknowledge within 72 hours and coordinate a fix and disclosure timeline with you.
