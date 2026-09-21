@@ -56,8 +56,7 @@ quarter is not a finding without value.
 
 ## How work gets accepted
 
-Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog,
-and only a maintainer applies that label.
+Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
 A pull request that changes behavior, alters normative text, or adds code references an
 accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
@@ -70,9 +69,9 @@ request that sits untriaged for a long time may be closed with an invitation to 
 once its issue is accepted. Start from an issue labeled `help wanted` if you want work
 that is already accepted.
 
-Maintainers apply `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue
-form can apply them, which is what makes the rule hold rather than depend on everyone
-remembering it.
+[Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who applies
+`scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue form can apply them,
+which is what makes the rule hold rather than depend on everyone remembering it.
 
 ## Code of Conduct
 
