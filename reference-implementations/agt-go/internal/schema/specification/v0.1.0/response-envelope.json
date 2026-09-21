@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json",
+  "title": "ACS Response Envelope",
+  "description": "JSON-RPC 2.0 response envelope with ACS extensions. Sent by the Guardian Agent to the Observed Agent.",
+  "type": "object",
+  "required": ["jsonrpc", "id"],
+  "additionalProperties": false,
+  "properties": {
+    "jsonrpc": { "const": "2.0" },
+    "id": {
+      "type": ["string", "number", "null"],
+      "description": "Echoes the request id. Per JSON-RPC 2.0, MUST be null when the id cannot be determined (e.g. parse error or invalid request); otherwise matches the request id. A successful (result) response always carries the original non-null id."
+    },
+    "result": {
+      "description": "Method-dependent. Hook, wrapped-protocol, agbom/* and system/* methods return an AcsResult. handshake/hello returns a ServerHello (handshake.json), which carries no decision. The two shapes share no required field, so a conformant response matches exactly one branch: a ServerHello has no 'decision' and an AcsResult has no 'negotiated_version'.",
+      "oneOf": [
+        { "$ref": "#/$defs/AcsResult" },
+        { "$ref": "handshake.json#/$defs/ServerHello" }
+      ]
+    },
+    "error": { "$ref": "#/$defs/JsonRpcError" }
+  },
+  "oneOf": [
+    { "required": ["result"], "not": { "required": ["error"] }, "properties": { "id": { "type": ["string", "number"] } } },
+    { "required": ["error"], "not": { "required": ["result"] } }
+  ],
+  "$defs": {
+    "AcsResult": {
+      "type": "object",
+      "required": ["type", "acs_version", "request_id", "decision"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "final",
+          "description": "Discriminator. v0.1 only emits 'final'. v0.2 adds 'progress' and 'interruption'."
+        },
+        "acs_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "request_id": { "type": "string", "format": "uuid" },
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "deny", "modify", "ask", "defer"]
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Human-renderable explanation of the verdict. REQUIRED on 'deny', 'modify', 'ask', and 'defer' (these decisions affect or interrupt the agent's action and the operator/end-user needs an explanation). RECOMMENDED on 'allow' when the deployment expects user-visible audit trails. This is the single explanation field — it serves both end-user display and audit/agent-internal consumption; deployments that want different text for those audiences SHOULD compose them client-side from reasoning + policy_data + reason_codes rather than expecting separate fields here."
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Optional machine-readable categorization of why the decision was reached. Free vocabulary in v0.1 (a registry MAY be layered in a future version once patterns stabilize). Common categories that fall out of the v0.1 paradigms: 'fides_p_t_violation', 'fides_p_f_violation', 'untrusted_into_consequential', 'ibac_intent_mismatch', 'ibac_scope_mode_strict', 'aarm_cumulative_taint', 'camel_dependency_graph_violation', 'pii_detected', 'rate_limited', 'chain_mismatch' (the submitted chain_hash does not match the Guardian's computed head; see Specification 8). UIs and meta-policies SHOULD switch on these codes rather than parsing reasoning text or policy/rule ids (which are bundle-specific)."
+        },
+        "policy_references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "policy_id": { "type": "string" },
+              "policy_version": {
+                "type": "string",
+                "description": "Optional deployment-chosen version identifier for the referenced policy bundle or document. Lets audit replay reconstruct the exact historical policy state without prescribing a ledger or versioning scheme."
+              },
+              "policy_name": { "type": "string" },
+              "rule_id": { "type": "string" }
+            }
+          },
+          "description": "The policies/rules that fired. A single decision MAY cite multiple — when IBAC + FIDES + AARM all reject the same action, expect three entries here, one per paradigm. policy_version is optional and deployment-defined, but SHOULD be populated when the deployment supports replay or ledger-backed policy state. Audit replay walks this list to reconstruct which rules contributed."
+        },
+        "policy_data": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Paradigm-specific or policy-specific structured payload. Free-form escape hatch for facts the policy wants to surface beyond reasoning text — e.g., FIDES exposes the violating argument path and lineage; IBAC exposes the requested capability and closest Intent.parsed match; AARM exposes the earliest policy-untrusted step_id and lookback_distance computed by the Guardian (v0.1 carries factual provenance on the wire and the Guardian projects it onto its trust classification — see §7.1). When multiple paradigms fire on the same decision, the convention is to key by paradigm name: { 'ibac': {...}, 'fides': {...}, 'aarm': {...} }, so each payload is independently parseable. Unstructured 'data' from earlier ACS drafts maps here."
+        },
+        "cited_provenance_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Optional. The provenance_ids whose facts drove this decision. FIDES P-T denials cite the lineage edge that violated trust; CaMeL violations cite the dependency-graph node; AARM cites the earliest untrusted step's provenance; IBAC 'allow with possibly-tainted contents' decisions cite the lineage that justified the call. Lifting this to a standard top-level field gives audit tooling one place to look for 'which provenance objects drove this verdict' without parsing per-paradigm policy_data payloads, and lets a verifier walk derived_from chains from these ids to confirm the verdict is consistent with the chain."
+        },
+        "modifications": { "$ref": "modifications.json" },
+        "ask_details": { "$ref": "ask-details.json" },
+        "defer_details": { "$ref": "defer-details.json" },
+        "payload": {
+          "type": "object",
+          "description": "Method-specific response data. Used by system/* methods (e.g., system/ping returns { status, echo, server_timestamp }) and other methods that carry structured data alongside the decision. Not used by standard Instrument hooks — those communicate via modifications, ask_details, or defer_details."
+        },
+        "chain_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Rolling SHA-256 audit-chain head (lowercase hex) after this step's ContextEntry was appended. The Guardian MUST include it on every response for a step where it wrote a ContextEntry, the content-bearing steps (Specification 8). Publishing the head on the wire lets an observer that records traffic detect a chain rewritten after the fact. It is covered by the response signature. Under the HMAC baseline this gives integrity and tamper-evidence to a key-holder and supports cross-Guardian comparison; non-repudiation against a compromised Guardian requires the asymmetric ACS-Crypto profile."
+        },
+        "signature": {
+          "$ref": "request-envelope.json#/$defs/Signature",
+          "description": "Signature over this response envelope, computed on the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed). Optional in the schema; mandatory under ACS-Core. Required for a published chain_hash to be verifiable."
+        },
+        "metadata": {
+          "type": "object",
+          "description": "ACS-defined evaluator and observability metadata. NOT for policy-emitted facts (use policy_data for those) — keeping the split clean lets Trace consumers key on a stable shape.",
+          "properties": {
+            "evaluator": {
+              "type": "string",
+              "enum": ["deterministic", "agent", "composite"]
+            },
+            "evaluator_version": { "type": "string" },
+            "evaluation_duration_ms": { "type": "integer", "minimum": 0 },
+            "model_id": { "type": "string", "description": "Required if evaluator is 'agent' or 'composite'" },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "decision": { "const": "deny" } }, "required": ["decision"] }, "then": { "required": ["reasoning"] } },
+        { "if": { "properties": { "decision": { "const": "modify" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "modifications"] } },
+        { "if": { "properties": { "decision": { "const": "ask" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "ask_details"] } },
+        { "if": { "properties": { "decision": { "const": "defer" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "defer_details"] } }
+      ]
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "description": "JSON-RPC error code. ACS reserves -32000 to -32099 for application errors."
+        },
+        "message": { "type": "string" },
+        "data": {}
+      }
+    }
+  }
+}

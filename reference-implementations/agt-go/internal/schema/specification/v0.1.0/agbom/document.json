@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/document.json",
+  "title": "ACS AgBOM Document",
+  "description": "Canonical AgBOM document. Wire-shape for the Inspect pillar. Serializations to CycloneDX 1.6, SPDX 3.0, and SWID are deterministic derivations from this canonical form (see inspect/format-mapping.json). The Observed Agent always emits this canonical form on the wire; the Guardian renders serializations on request from downstream consumers.",
+  "type": "object",
+  "required": ["agbom_version", "agent", "components"],
+  "properties": {
+    "agbom_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version of the AgBOM schema (independent of the ACS spec version, so AgBOM can evolve faster). v0.1 of this schema is '0.1.0'."
+    },
+    "agent": {
+      "type": "object",
+      "required": ["agent_id"],
+      "properties": {
+        "agent_id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "vendor": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": { "$ref": "component.json" },
+      "description": "Flat list of components. Inter-component references (an agent_capability listing its tools, an mcp_server listing its tools) are by component id, not by nesting, so the document remains diffable."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of AgBOM construction."
+    },
+    "agbom_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase-hex SHA-256 of the RFC 8785 (JCS) canonicalization of this object with the agbom_hash field REMOVED. Lets Guardians and downstream consumers detect AgBOM mutations even when re-emitted snapshots are byte-identical to what they had before. RECOMMENDED."
+    }
+  }
+}

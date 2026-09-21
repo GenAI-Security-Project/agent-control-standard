@@ -1,0 +1,1486 @@
+{
+  "ts_commit": "375855b223e47ac265c22f828ae31c76fb96eda6",
+  "spec_version": "0.1.2",
+  "cases": [
+    {
+      "name": "argument_named_like_the_leaf",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "acs_policy_target": {
+                "value": "x"
+              },
+              "command": {
+                "value": "ls"
+              }
+            },
+            "raw_command": "ls",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "tool \"Bash\" sent an argument named \"acs_policy_target\", which is the leaf this Guardian writes its policy target to -- one of the two would have to be overwritten, and neither may be",
+            "reason_codes": [
+              "evaluation_failed"
+            ],
+            "policy_references": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "aws_key_in_command",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "export K=AKIAABCDEFGHIJKLMNOP"
+              }
+            },
+            "raw_command": "export K=AKIAABCDEFGHIJKLMNOP",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "modify",
+            "reasoning": "A secret in this step's arguments was replaced before it ran. Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+            "reason_codes": [
+              "redaction_applied"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "redaction_applied"
+              }
+            ],
+            "modifications": {
+              "parameter_overrides": {
+                "command": "export K=[REDACTED]"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "benign_empty",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": ""
+              }
+            },
+            "raw_command": "",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "benign_install",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "npm install"
+              }
+            },
+            "raw_command": "npm install",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "benign_listing",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "ls -la"
+              }
+            },
+            "raw_command": "ls -la",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "command_not_a_string",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": 5
+              }
+            },
+            "raw_command": "5",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_current_directory",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "rm -rf ./"
+              }
+            },
+            "raw_command": "rm -rf ./",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_echoed",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "echo rm -rf /"
+              }
+            },
+            "raw_command": "echo rm -rf /",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 5.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_flags_reversed",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "rm -fr /"
+              }
+            },
+            "raw_command": "rm -fr /",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_parent_directory",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "rm -rf .."
+              }
+            },
+            "raw_command": "rm -rf ..",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_root",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "rm -rf /"
+              }
+            },
+            "raw_command": "rm -rf /",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_upper_case",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "RM -RF /"
+              }
+            },
+            "raw_command": "RM -RF /",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "destructive_with_sudo",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "sudo rm -rf / --no-preserve-root"
+              }
+            },
+            "raw_command": "sudo rm -rf / --no-preserve-root",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 5.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_clone",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "git clone https://example.org/r"
+              }
+            },
+            "raw_command": "git clone https://example.org/r",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination example.org not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_default_port",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com:443/"
+              }
+            },
+            "raw_command": "curl https://docs.example.com:443/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_dotted_ipv4",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl http://127.0.0.1/"
+              }
+            },
+            "raw_command": "curl http://127.0.0.1/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination 127.0.0.1 not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_first_url_counts",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com/?next=https://evil.example.net"
+              }
+            },
+            "raw_command": "curl https://docs.example.com/?next=https://evil.example.net",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_ftp_ignored",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl ftp://evil.example.net/"
+              }
+            },
+            "raw_command": "curl ftp://evil.example.net/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_hex_ipv4",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "wget http://0x7f.1/"
+              }
+            },
+            "raw_command": "wget http://0x7f.1/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination 127.0.0.1 not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_invalid_punycode",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://xn--zz.example.net/"
+              }
+            },
+            "raw_command": "curl https://xn--zz.example.net/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination unresolved.invalid not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_off_allowlist",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://evil.example.net/x"
+              }
+            },
+            "raw_command": "curl https://evil.example.net/x",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination evil.example.net not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_on_allowlist",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com/a"
+              }
+            },
+            "raw_command": "curl https://docs.example.com/a",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_other_port",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com:8443/"
+              }
+            },
+            "raw_command": "curl https://docs.example.com:8443/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_port_out_of_range",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com:70000/"
+              }
+            },
+            "raw_command": "curl https://docs.example.com:70000/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination unresolved.invalid not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_quoted",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "echo 'https://docs.example.com/q'"
+              }
+            },
+            "raw_command": "echo 'https://docs.example.com/q'",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_suffix_confusion",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com.evil.example.net/"
+              }
+            },
+            "raw_command": "curl https://docs.example.com.evil.example.net/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination docs.example.com.evil.example.net not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_trailing_dot",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://docs.example.com./"
+              }
+            },
+            "raw_command": "curl https://docs.example.com./",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination docs.example.com. not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_upper_case_host",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl http://DOCS.EXAMPLE.COM/"
+              }
+            },
+            "raw_command": "curl http://DOCS.EXAMPLE.COM/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_upper_case_scheme",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl HTTPS://evil.example.net/"
+              }
+            },
+            "raw_command": "curl HTTPS://evil.example.net/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "egress_userinfo",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://user@evil.example.net/"
+              }
+            },
+            "raw_command": "curl https://user@evil.example.net/",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination unresolved.invalid not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch_lower_case_tool",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "url": {
+                "value": "https://evil.example.net/"
+              }
+            },
+            "tool": {
+              "name": "webfetch"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination evil.example.net not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch_off_allowlist",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "url": {
+                "value": "https://evil.example.net/"
+              }
+            },
+            "tool": {
+              "name": "WebFetch"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination evil.example.net not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch_on_allowlist",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "url": {
+                "value": "https://docs.example.com/en"
+              }
+            },
+            "tool": {
+              "name": "WebFetch"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch_url_not_a_string",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "url": {
+                "value": 42
+              }
+            },
+            "tool": {
+              "name": "WebFetch"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch_userinfo_soft_spot",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "url": {
+                "value": "https://docs.example.com@evil.example.net/"
+              }
+            },
+            "tool": {
+              "name": "WebFetch"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination docs.example.com@evil.example.net not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "labels_across_steps",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "ls"
+              }
+            },
+            "raw_command": "ls",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        },
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "file"
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        },
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "cat file"
+              }
+            },
+            "raw_command": "cat file",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        },
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "TOKEN=ghp_ABCDEF123456"
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "modify",
+            "reasoning": "Secrets in this output were replaced before the model saw them. Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+            "reason_codes": [
+              "redaction_applied"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "redaction_applied"
+              }
+            ],
+            "modifications": {
+              "redactions": [
+                {
+                  "path": "/outputs/0/value",
+                  "replacement": "TOKEN=[REDACTED]"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "rm -rf /"
+              }
+            },
+            "raw_command": "rm -rf /",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.",
+            "reason_codes": [
+              "destructive_shell_command_blocked"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "destructive_shell_command_blocked"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "policy_target_argument_missing",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "cmd": {
+                "value": "ls"
+              }
+            },
+            "raw_command": "ls",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "mapping.yaml reads tool \"Bash\"'s policy target from argument \"command\", but this call sent no such argument (it sent: cmd)",
+            "reason_codes": [
+              "evaluation_failed"
+            ],
+            "policy_references": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "raw_command_absent",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "curl https://evil.example.net/"
+              }
+            },
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_aws_key_redacted",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "key AKIAABCDEFGHIJKLMNOP end"
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "modify",
+            "reasoning": "Secrets in this output were replaced before the model saw them. Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+            "reason_codes": [
+              "redaction_applied"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "redaction_applied"
+              }
+            ],
+            "modifications": {
+              "redactions": [
+                {
+                  "path": "/outputs/0/value",
+                  "replacement": "key [REDACTED] end"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_clean",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "total 0"
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_no_outputs",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: runtime_error:path_missing, from AGT's stock bundle (agt_stock). AGT reported: Request blocked by Agent Control Specification..",
+            "reason_codes": [
+              "runtime_error:path_missing"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "runtime_error:path_missing"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_output_is_an_object",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": {
+                  "stdout": "ghp_ABCDEF123456"
+                }
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_secret_in_second_output",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "clean"
+              },
+              {
+                "value": "ghp_ABCDEF123456"
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_secret_redacted",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "TOKEN=ghp_ABCDEF123456"
+              }
+            ],
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "modify",
+            "reasoning": "Secrets in this output were replaced before the model saw them. Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+            "reason_codes": [
+              "redaction_applied"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "redaction_applied"
+              }
+            ],
+            "modifications": {
+              "redactions": [
+                {
+                  "path": "/outputs/0/value",
+                  "replacement": "TOKEN=[REDACTED]"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "result_unregistered_tool",
+      "steps": [
+        {
+          "method": "steps/toolCallResult",
+          "payload": {
+            "exit_status": "success",
+            "outputs": [
+              {
+                "value": "ok"
+              }
+            ],
+            "tool": {
+              "name": "Write"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: runtime_error:tool_unknown, from AGT's stock bundle (agt_stock). AGT reported: Request blocked by Agent Control Specification..",
+            "reason_codes": [
+              "runtime_error:tool_unknown"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "runtime_error:tool_unknown"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "secret_in_command",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "echo ghp_abcdefgh1234"
+              }
+            },
+            "raw_command": "echo ghp_abcdefgh1234",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "modify",
+            "reasoning": "A secret in this step's arguments was replaced before it ran. Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+            "reason_codes": [
+              "redaction_applied"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "redaction_applied"
+              }
+            ],
+            "modifications": {
+              "parameter_overrides": {
+                "command": "echo [REDACTED]"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "split_flags_not_matched",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "rm -r -f /"
+              }
+            },
+            "raw_command": "rm -r -f /",
+            "tool": {
+              "name": "Bash"
+            }
+          },
+          "result": {
+            "decision": "allow"
+          }
+        }
+      ]
+    },
+    {
+      "name": "unregistered_tool",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "x"
+              }
+            },
+            "tool": {
+              "name": "Write"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: runtime_error:tool_unknown, from AGT's stock bundle (agt_stock). AGT reported: Request blocked by Agent Control Specification..",
+            "reason_codes": [
+              "runtime_error:tool_unknown"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "runtime_error:tool_unknown"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "url_argument_on_shell",
+      "steps": [
+        {
+          "method": "steps/toolCallRequest",
+          "payload": {
+            "arguments": {
+              "command": {
+                "value": "ls"
+              },
+              "url": {
+                "value": "https://evil.example.net/"
+              }
+            },
+            "raw_command": "ls",
+            "tool": {
+              "name": "bash"
+            }
+          },
+          "result": {
+            "decision": "deny",
+            "reasoning": "This step was decided by AGT's stock policy bundle. Policy: egress_destination_not_allowed, from AGT's stock bundle (agt_stock). AGT reported: destination evil.example.net not in allowlist [\"*.anthropic.com\", \"docs.example.com\"].",
+            "reason_codes": [
+              "egress_destination_not_allowed"
+            ],
+            "policy_references": [
+              {
+                "policy_id": "agt_stock",
+                "rule_id": "egress_destination_not_allowed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

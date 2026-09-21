@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json",
+  "title": "ACS AgBOM Serialization Format Mapping",
+  "description": "Normative mapping from the canonical AgBOM (agbom/document.json) into the three v0.1.0 serialization targets: CycloneDX 1.6, SPDX 3.0, and SWID (ISO/IEC 19770-2). This is a documentation-shaped JSON Schema — its body describes the transformation rules; conformant Guardians MUST be able to render at least one of these on request from a downstream consumer.",
+  "type": "object",
+  "properties": {
+    "cyclonedx_1_6": {
+      "type": "object",
+      "description": "CycloneDX 1.6 JSON. Each canonical component → one entry in components[]. The CycloneDX bom-ref equals the canonical component id. Type mapping: model → 'machine-learning-model' (CycloneDX bom-types extension); mcp_server, a2a_peer, knowledge_source → 'service'; tool → 'application'; memory_store → 'data' (with type='database' subtype where applicable); agent_capability → represented in CycloneDX 'composition' aggregating its referenced components; skill → 'application' carrying its definition digest in component 'hashes' and a CycloneDX 'composition' aggregating its referenced components. The CycloneDX 'metadata.tools' SHOULD include the Observed Agent's framework as the BOM generator. Provenance attached to a component MUST be carried into CycloneDX 'evidence' or 'properties' (acs:provenance:origin, and acs:provenance:source_id when present). v0.1 carries factual provenance only; trust classification is computed by the Guardian against local policy and is not exported in CycloneDX (see §7.1)."
+    },
+    "spdx_3_0": {
+      "type": "object",
+      "description": "SPDX 3.0 JSON-LD. Each canonical component → one Element node. Type mapping: model → spdx:AIPackage (SPDX 3.0 AI profile); tool → spdx:SoftwarePackage; mcp_server, a2a_peer, knowledge_source → spdx:Service; memory_store → spdx:DatasetPackage; agent_capability → spdx:Bundle aggregating its referenced components via 'contains' relationships; skill → spdx:SoftwarePackage with a verified checksum derived from its definition digest, aggregating its referenced components via 'contains' relationships. The graph is wired with SPDX relationships: agent_capability--CONTAINS-->{tool,mcp_server,a2a_peer}; skill--CONTAINS-->{tool,mcp_server,a2a_peer,skill}; mcp_server--EXPOSES-->tool. AgBOM-level metadata (agent.id, generated_at, agbom_hash) maps to spdx:CreationInfo and spdx:Element identifiers."
+    },
+    "swid": {
+      "type": "object",
+      "description": "SWID (ISO/IEC 19770-2) XML. Each canonical component → one SoftwareIdentity tag with @tagId = component id, @name = component name, @version = component version. Provider maps to <Entity role='softwareCreator' name='...'/>. agent_capability components emit a SoftwareIdentity with @corpus='true' and use <Link rel='requires' href='...'/> to reference their constituent components. skill components emit a SoftwareIdentity carrying the definition digest in a <Payload><File @SHA256:hash='...'/></Payload> element and use <Link rel='requires' href='...'/> to reference their constituent components and composed skills. Endpoint URIs map to <Meta @location='...'/>. The AgBOM-level agent and timestamps populate the root <SoftwareIdentity @tagId=agent.agent_id> wrapping the per-component tags."
+    }
+  }
+}

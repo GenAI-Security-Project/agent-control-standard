@@ -1,0 +1,42 @@
+# Runnable local configuration.
+# Sessions are in memory; audit files contain raw ACS envelopes.
+server:
+  host: 127.0.0.1
+  port: "8787"
+  read_header_timeout: 10s
+  read_timeout: 30s
+  write_timeout: 30s
+  idle_timeout: 2m
+  shutdown_grace: 10s
+
+policy:
+  deployment_dir: ../agt
+  manifest: policy/manifest.yaml
+  mapping: mapping.yaml
+  ask_substitution: deny
+  tool_aliases:
+    shell: bash
+
+security:
+  hmac_key_id: default
+  hmac_secret_file: .acs/hmac-secret
+
+audit:
+  envelope_log: .acs/envelopes.jsonl
+  event_log: .acs/guardian-events.jsonl
+
+protocol:
+  on_decision_failure: deny
+  decision_timeout: 5s
+  skew_window: 5m
+
+limits:
+  max_sessions: 1024
+  max_entries: 10000
+  max_reservations: 20000
+  max_skill_approvals: 4096
+  max_engine_calls: 256
+  max_policy_state_bytes: 65536
+  max_body_bytes: 1048576
+  max_deferrals: 3
+  session_retention: 1h

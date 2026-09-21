@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json",
+  "title": "steps/toolCallRequest payload",
+  "description": "Payload for the toolCallRequest hook. Fires before tool execution. Primary enforcement gate.",
+  "type": "object",
+  "required": ["tool", "arguments"],
+  "properties": {
+    "tool": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "provider": { "type": "string" }
+      }
+    },
+    "operation": {
+      "type": "string",
+      "description": "Optional sub-operation when the tool exposes multiple verbs"
+    },
+    "capability": {
+      "type": "string",
+      "description": "Abstract capability identifier (e.g., filesystem.delete, network.egress, process.execute)"
+    },
+    "arguments": {
+      "type": "object",
+      "description": "Tool arguments. Under provenance_producer: deterministic, each argument value carries its own provenance (ACS-Provenance).",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "value": {},
+          "provenance": {
+            "$ref": "../provenance.json",
+            "description": "OPTIONAL in the base schema; REQUIRED on every argument under provenance_producer: deterministic (ACS-Provenance). Validate against tool-call-request.acs-provenance.json when the profile is claimed. See Specification section 7."
+          }
+        }
+      }
+    },
+    "raw_command": {
+      "type": "string",
+      "description": "Optional shell-style command string for tools that accept one"
+    },
+    "intent": {
+      "type": "object",
+      "description": "Optional natural-language framing of why the tool is being called",
+      "properties": {
+        "description": { "type": "string" },
+        "goal": { "type": "string" }
+      }
+    }
+  }
+}

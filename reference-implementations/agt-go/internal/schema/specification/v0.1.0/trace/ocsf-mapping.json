@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json",
+  "title": "ACS Trace → OCSF event-class mapping",
+  "description": "Normative mapping from ACS hooks and decisions to OCSF (Open Cybersecurity Schema Framework) event classes. v0.1.0 conformance requires that a deployment emitting OCSF for the Trace pillar uses these class UIDs and severity rules verbatim. OCSF classes are referenced by their stable class_uid as of OCSF 1.5+.",
+  "type": "object",
+  "properties": {
+    "step_to_class": {
+      "type": "object",
+      "description": "Map ACS step methods to OCSF class UIDs.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["class_uid", "class_name"],
+        "properties": {
+          "class_uid": { "type": "integer" },
+          "class_name": { "type": "string" },
+          "activity_id": { "type": "integer", "description": "OCSF activity_id within the class (e.g., 1=Logon, 2=Logoff for Authentication)." }
+        }
+      },
+      "default": {
+        "steps/sessionStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1 },
+        "steps/sessionEnd": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
+        "steps/userMessage": { "class_uid": 6002, "class_name": "Application Activity" },
+        "steps/agentResponse": { "class_uid": 6002, "class_name": "Application Activity" },
+        "steps/agentTrigger": { "class_uid": 6002, "class_name": "Application Activity" },
+        "steps/turnStart": { "class_uid": 6002, "class_name": "Application Activity" },
+        "steps/turnEnd": { "class_uid": 6002, "class_name": "Application Activity" },
+        "steps/toolCallRequest": { "class_uid": 1007, "class_name": "Process Activity" },
+        "steps/toolCallResult": { "class_uid": 1007, "class_name": "Process Activity" },
+        "steps/knowledgeRetrieval": { "class_uid": 6005, "class_name": "Datastore Activity" },
+        "steps/memoryStore": { "class_uid": 6005, "class_name": "Datastore Activity" },
+        "steps/memoryContextRetrieval": { "class_uid": 6005, "class_name": "Datastore Activity" },
+        "steps/preCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99, "_note": "Compaction is a derived-data write into the agent's working context — modeled as Datastore Activity with a custom activity_id for the compaction subtype." },
+        "steps/postCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99 },
+        "steps/subagentStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1, "_note": "Subagent spawn opens a new session — modeled as Authentication/Logon for OCSF symmetry with sessionStart." },
+        "steps/subagentStop": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
+        "agbom/snapshot": { "class_uid": 5001, "class_name": "Inventory Info" },
+        "agbom/changed": { "class_uid": 5001, "class_name": "Inventory Info" }
+      }
+    },
+    "decision_class": {
+      "type": "object",
+      "description": "Decisions (deny/modify/ask/defer) are emitted as Detection Finding events. 'allow' is normally emitted as Application Activity with informational severity rather than as a finding, unless the deployment elects to record allows as findings for full audit symmetry.",
+      "properties": {
+        "class_uid": { "type": "integer", "const": 2004 },
+        "class_name": { "type": "string", "const": "Detection Finding" },
+        "required_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["finding.title", "finding.uid", "evidences", "verdict_id"]
+        }
+      }
+    },
+    "severity_mapping": {
+      "type": "object",
+      "description": "OCSF severity_id values for decision events, keyed by ACS disposition.",
+      "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 6 },
+      "default": {
+        "allow": 1,
+        "modify": 2,
+        "ask": 3,
+        "defer": 3,
+        "deny": 4
+      }
+    },
+    "provenance_metadata": {
+      "type": "object",
+      "description": "When Provenance is attached to the originating hook, the OCSF event MUST carry provenance facts in 'enrichments' (an OCSF-recognized extensibility field). Each enrichment carries name='acs_provenance_*' and value={origin, source_id, ...}. v0.1 carries factual provenance in enrichments; trust classification is computed by the Guardian against local policy and is not a v0.1 enrichment (see §7.1).",
+      "properties": {
+        "required_enrichments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs_provenance_origin"]
+        },
+        "optional_enrichments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs_provenance_source_id", "acs_provenance_lineage_depth"]
+        }
+      }
+    }
+  }
+}

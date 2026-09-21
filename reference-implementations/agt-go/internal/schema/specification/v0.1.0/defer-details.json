@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/defer-details.json",
+  "title": "ACS DEFER Details",
+  "description": "Deferral metadata when the Guardian could not reach a verdict. Required when decision is 'defer'.",
+  "type": "object",
+  "required": ["reason", "resolution_method", "resolution_timeout_ms"],
+  "properties": {
+    "reason": {
+      "type": "string",
+      "enum": [
+        "insufficient_context",
+        "conflicting_policies",
+        "low_confidence",
+        "pending_dependency"
+      ]
+    },
+    "resolution_method": {
+      "type": "string",
+      "enum": ["additional_context", "human_approval", "timeout"]
+    },
+    "resolution_timeout_ms": { "type": "integer", "minimum": 0 },
+    "timeout_decision": {
+      "type": "string",
+      "enum": ["deny", "ask"],
+      "default": "deny"
+    },
+    "required_context": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of inputs whose presence would resolve the deferral"
+    }
+  }
+}

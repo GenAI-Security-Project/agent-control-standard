@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/modifications.json",
+  "title": "ACS Modifications",
+  "description": "Modifications applied when decision is 'modify'. Two mutually exclusive shapes: wholesale replacement via 'modified_content', or structured edits via 'redactions' and/or 'parameter_overrides'. The two shapes never combine, and structured edits MUST target disjoint paths so the effective payload is order-independent (Specification 6.3). The provenance of values introduced by 'parameter_overrides' is not defined in v0.1.",
+  "type": "object",
+  "properties": {
+    "modified_content": {
+      "type": "string",
+      "description": "Replacement content for the entire payload. Exclusive: MUST NOT be combined with 'redactions' or 'parameter_overrides', which have no path to address inside an opaque replacement."
+    },
+    "redactions": {
+      "type": "array",
+      "description": "Targeted redactions applied to specific fields. Each path MUST be disjoint from every 'parameter_overrides' target (Specification 6.3).",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "description": "JSON pointer to the field" },
+          "replacement": { "type": "string", "description": "Replacement text (default '[REDACTED]')" }
+        }
+      }
+    },
+    "parameter_overrides": {
+      "type": "object",
+      "description": "Replacement values for tool call arguments, keyed by argument name. Each target MUST be disjoint from every 'redactions' path (Specification 6.3).",
+      "additionalProperties": true
+    }
+  },
+  "oneOf": [
+    {
+      "title": "Wholesale replacement: modified_content only.",
+      "required": ["modified_content"],
+      "not": { "anyOf": [{ "required": ["redactions"] }, { "required": ["parameter_overrides"] }] }
+    },
+    {
+      "title": "Structured edits: redactions and/or parameter_overrides on disjoint targets, never modified_content.",
+      "not": { "required": ["modified_content"] },
+      "anyOf": [{ "required": ["redactions"] }, { "required": ["parameter_overrides"] }]
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+# Builds and tests the Go port of the reference implementation.
+#
+# Scoped by path, like reference-implementation.yml, and separate from it so a Go
+# change does not pay for a Bun install. specification/ is in the path list because
+# the module embeds a copy of the schemas and a test fails when the copy stops
+# matching them. The AGT bundle and mapping are in it because the Go Guardian reads
+# them from reference-implementations/agt/. The shared conformance package is
+# included because make check runs it against the Go Guardian.
+#
+# No workflow expression appears inside a `run:` block.
+name: Reference implementation (Go)
+
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/agt-go/**"
+      - "reference-implementations/agt/policy/**"
+      - "reference-implementations/agt/mapping.yaml"
+      - "reference-implementations/agt/agt.lock"
+      - "reference-implementations/agt/packages/guardian/src/**"
+      - "reference-implementations/agt/packages/agt-bridge/src/**"
+      - "reference-implementations/agt/packages/conformance/**"
+      - "reference-implementations/agt/package.json"
+      - "reference-implementations/agt/bun.lock"
+      - "specification/**"
+      - "docs/spec/**"
+      - ".github/workflows/reference-implementation-go.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "reference-implementations/agt-go/**"
+      - "reference-implementations/agt/policy/**"
+      - "reference-implementations/agt/mapping.yaml"
+      - "reference-implementations/agt/agt.lock"
+      - "reference-implementations/agt/packages/guardian/src/**"
+      - "reference-implementations/agt/packages/agt-bridge/src/**"
+      - "reference-implementations/agt/packages/conformance/**"
+      - "reference-implementations/agt/package.json"
+      - "reference-implementations/agt/bun.lock"
+      - "specification/**"
+      - "docs/spec/**"
+      - ".github/workflows/reference-implementation-go.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reference-implementation-go-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agt-go:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt-go
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # TestRecordingIsCurrent compares the recorded AGT cases with Git history.
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: reference-implementations/agt-go/go.mod
+          cache-dependency-path: reference-implementations/agt-go/go.sum
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.1
+        with:
+          bun-version: "1.3.11"
+
+      - name: Prepare the Go Guardian quality gate
+        run: make setup
+
+      - name: Run the Go Guardian quality gate
+        run: make check

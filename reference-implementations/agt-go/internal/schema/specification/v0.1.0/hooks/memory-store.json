@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/memory-store.json",
+  "title": "steps/memoryStore payload",
+  "description": "Payload for the memoryStore hook. Fires before the agent writes to persistent memory.",
+  "type": "object",
+  "required": ["content"],
+  "properties": {
+    "memory_id": {
+      "type": "string",
+      "description": "Identifier for the memory entry being written or updated"
+    },
+    "memory_store": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "scope": { "type": "string", "enum": ["session", "user", "tenant", "global"] }
+      }
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["create", "update", "delete"]
+    },
+    "content": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "value": {},
+        "provenance": {
+          "$ref": "../provenance.json",
+          "description": "OPTIONAL in the base schema; REQUIRED under provenance_producer: deterministic (ACS-Provenance). Validate against memory-store.acs-provenance.json when the profile is claimed. See Specification section 7."
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

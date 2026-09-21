@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/handshake.json",
+  "title": "ACS Handshake",
+  "description": "Capability negotiation messages exchanged at session start, before any hook traffic. The Observed Agent sends a ClientHello; the Guardian Agent responds with a ServerHello. Version mismatch terminates with an UNSUPPORTED_VERSION error in the JSON-RPC error envelope. Unknown fields MUST be ignored at every level. This file defines both message shapes via $defs; the wire encoding wraps them in the standard request/response envelope using method 'handshake/hello'.",
+  "type": "object",
+  "$defs": {
+    "ClientHello": {
+      "type": "object",
+      "required": [
+        "acs_versions_supported",
+        "methods_implemented",
+        "transports_supported",
+        "provenance_producer"
+      ],
+      "properties": {
+        "acs_versions_supported": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+          "minItems": 1,
+          "description": "Spec versions the Observed Agent can speak (semver). Guardian selects one in ServerHello.negotiated_version."
+        },
+        "methods_implemented": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(steps/|protocols/|agbom/|trace/|system/|handshake/|wrapped:).+"
+          },
+          "description": "Hook and wrapped-protocol method names the Observed Agent will emit during this session. Reserved namespaces: steps/* (Instrument hooks), protocols/* (wrapped MCP/A2A), agbom/* (Inspect AgBOM methods — required when ACS-Inspect profile is claimed; agbom/changed additionally required under ACS-Inspect-Dynamic), handshake/* (capability negotiation), trace/* (reserved for future ACS-native trace methods), system/* (low-level transport/control; system/ping for liveness — clients SHOULD include it), wrapped: (explicit-version wrapped form). Used by the Guardian to know which hooks to expect and which it can safely treat as not-emitted."
+        },
+        "transports_supported": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["http", "https", "stdio"] },
+          "minItems": 1
+        },
+        "max_payload_size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum payload size the Observed Agent is willing to send in a single request."
+        },
+        "provenance_producer": {
+          "type": "string",
+          "enum": ["deterministic", "none"],
+          "description": "Declares whether Provenance objects are populated by deterministic code outside the LLM output path. 'deterministic' is REQUIRED for information-flow paradigms and for deployments claiming ACS-Provenance. 'none' = no Provenance is emitted; Guardians whose policies require Provenance MUST refuse the session at handshake time rather than silently degrading enforcement. LLM-authored Provenance is not a conformant producer mode."
+        },
+        "wrapped_protocols": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["protocol", "version"],
+            "properties": {
+              "protocol": { "type": "string", "enum": ["MCP", "A2A"] },
+              "version": { "type": "string", "description": "Version of the wrapped protocol (e.g., '2025-06-18')." }
+            }
+          },
+          "description": "Wrapped sub-protocols this Observed Agent will tunnel over ACS. Each entry pins a specific version so the Guardian can validate wrapped payloads. In v0.1, only MCP wrapping is specified (protocols/MCP/*); A2A is reserved for v0.2 and MAY be advertised for forward-compatibility but has no normative wrapping semantics in v0.1."
+        },
+        "profiles_supported": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["acs-core", "acs-trace", "acs-inspect", "acs-inspect-dynamic", "acs-provenance", "acs-crypto", "acs-audit"]
+          },
+          "description": "Conformance profiles this Observed Agent implements. 'acs-core' is the mandatory baseline and SHOULD always be included. Other profiles are optional and independently claimable. See Section 4 (Conformance Profiles) for definitions."
+        }
+      }
+    },
+    "ServerHello": {
+      "type": "object",
+      "required": ["negotiated_version", "methods_evaluated", "selected_transport", "timeout_config"],
+      "properties": {
+        "negotiated_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Version selected by the Guardian from the client's acs_versions_supported. MUST match the client's major version."
+        },
+        "methods_evaluated": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Subset of the client's methods_implemented that this Guardian will actually evaluate. Methods listed by the client but absent here are NOT evaluated; the Guardian's enforcement does not cover them. Clients MAY still emit them for audit but MUST treat them as ALLOW-by-default."
+        },
+        "selected_transport": {
+          "type": "string",
+          "enum": ["http", "https", "stdio"]
+        },
+        "signature_algorithms_supported": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "HMAC-SHA256",
+              "ECDSA-P256",
+              "RSA-PSS-SHA256",
+              "ML-DSA-65",
+              "ML-DSA-44",
+              "ML-DSA-87",
+              "SLH-DSA-128s",
+              "SLH-DSA-128f",
+              "ML-DSA-65+ECDSA-P256",
+              "ML-DSA-65+RSA-PSS-SHA256"
+            ]
+          },
+          "description": "Signature algorithms the Guardian can verify on incoming requests. Empty array = signatures not supported / not required. 'HMAC-SHA256' is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256') and PQC ('ML-DSA-*', 'SLH-DSA-*') are OPTIONAL. A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures."
+        },
+        "timeout_config": {
+          "type": "object",
+          "required": ["default_ms"],
+          "properties": {
+            "default_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Default timeout for any method not listed in per_method_ms. Every millisecond of timeout is worst-case latency added to the step while the Observed Agent waits, so deployments SHOULD budget per-method timeouts against each step's latency tolerance rather than rely on one generous default."
+            },
+            "per_method_ms": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 1 },
+              "description": "Per-method timeout overrides. Keys are method names (e.g., 'steps/toolCallRequest')."
+            }
+          }
+        },
+        "skew_window_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300000,
+          "description": "Maximum clock skew, in milliseconds, the Guardian tolerates between a request's 'timestamp' and its own clock, in either direction. Bounds timestamp freshness for replay protection (Specification 10.3); a request whose 'timestamp' is further than this from the Guardian's clock is rejected with TIMESTAMP_OUT_OF_WINDOW (-32006, Specification 17.1). When omitted the RECOMMENDED default is 300000 (5 minutes); deployments with well-synchronized clocks SHOULD tighten it. The Observed Agent uses the value for clock-drift diagnostics and MAY surface it on Trace events."
+        },
+        "on_decision_failure": {
+          "type": "string",
+          "enum": ["proceed", "deny"],
+          "default": "proceed",
+          "description": "Posture the Observed Agent applies on a decision failure: no usable decision within the negotiated timeout, whether the Guardian is silent, the transport fails, or an error response carries no decision (Specification 6.4). 'proceed' (default) is fail-open, so a slow, erroring, or unreachable Guardian does not halt production; 'deny' is fail-closed. Every fail-open proceed MUST be recorded as an audit event (Specification 6.4). A decision that arrives within the timeout MUST be honored regardless of this posture."
+        },
+        "approver_types_supported": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["human", "agent", "service"] },
+          "description": "Approver types this Guardian can route ASK decisions to."
+        },
+        "policy_requires_provenance": {
+          "type": "boolean",
+          "description": "If true, this Guardian's policy requires Provenance on data-bearing fields; clients with provenance_producer='none' MUST be rejected before session starts."
+        },
+        "agbom_serializations_supported": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["canonical", "cyclonedx-1.6", "spdx-3.0", "swid"]
+          },
+          "description": "Inspect-pillar serializations this Guardian can render the canonical AgBOM into on request. Deployments claiming ACS-Inspect MUST include at least one of {cyclonedx-1.6, spdx-3.0, swid} in addition to 'canonical' (the wire-shape). Guardians not claiming ACS-Inspect MAY omit this field. The Observed Agent always emits the canonical form on the wire; serializations are derivations the Guardian produces for downstream consumers."
+        },
+        "trace_emission": {
+          "type": "object",
+          "description": "Trace-pillar negotiation. Deployments claiming ACS-Trace MUST emit Trace events under at least one of OTel or OCSF for every supported ACS step. Deployments not claiming ACS-Trace SHOULD still emit Trace events where feasible.",
+          "properties": {
+            "otel_enabled": { "type": "boolean", "description": "Guardian (or its co-deployed Trace sink) emits OTel spans per the Section 3.15 mapping." },
+            "ocsf_enabled": { "type": "boolean", "description": "Guardian (or its co-deployed Trace sink) emits OCSF events per the Section 3.15 mapping." },
+            "otel_collector_endpoint": { "type": "string", "format": "uri", "description": "Optional OTLP endpoint the Observed Agent MAY send spans to directly (when the deployment splits trace emission across both sides)." }
+          }
+        },
+        "profiles_accepted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["acs-core", "acs-trace", "acs-inspect", "acs-inspect-dynamic", "acs-provenance", "acs-crypto", "acs-audit"]
+          },
+          "description": "Conformance profiles accepted for this session. The Guardian selects from the client's profiles_supported based on its own capabilities and policy requirements. A Guardian MAY refuse a session if the client does not declare a profile the Guardian's policy requires."
+        }
+      }
+    }
+  }
+}
