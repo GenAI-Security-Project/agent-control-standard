@@ -13,23 +13,31 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 Each workstream owns a slice of the standard and runs its own review. Two leads per
 workstream keeps decisions moving when one is unavailable.
 
-Identity currently runs with one lead. That second seat is open, and it is open in the
-same sense as the Reference Implementation, Documentation, and Testing and Validation
-seats: the work continues, and a single point of failure sits on it until somebody
-takes it.
+Reference Implementation runs with one lead so far, and Documentation and Testing and
+Validation have none. The work in each continues, but it carries a single point of
+failure, or no owner at all, until somebody takes the open seats.
 
 | Workstream | Leads |
 | --- | --- |
 | Coding Agents | Almog Langleben ([@almogbhl](https://github.com/almogbhl)), Stefano Amorelli ([@stefanoamorelli](https://github.com/stefanoamorelli)) |
 | Development (SDK) | Rock Lambros ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
-| Identity | Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
+| Documentation | Open |
+| Identity | Eva Benn ([@evabenn](https://github.com/evabenn)), Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
+| Reference Implementation | Evgeniy Kokuykin ([@artmaro](https://github.com/artmaro)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
+| Testing and Validation | Open |
 
 ## Triage authority
 
 Workstream leads and the project lead apply the decision labels: `scope:`, `priority:`,
-`workstream:`, and `status:accepted`. Nobody else does, and no issue form can.
+`workstream:`, and `status:accepted`. No issue form can apply one.
+
+A workstream lead or the project lead may assign a volunteer or contributor to triage
+alongside them. An assigned volunteer applies any label, decision labels included, and the
+lead who assigned them reviews those calls and owns them. The project lead grants them the
+repository's `triage` role and write access to the
+[project board](https://github.com/orgs/GenAI-Security-Project/projects/9).
 
 Minimum triage on a new issue is two labels, `scope:` and `status:`. `priority:` and
 `workstream:` are enrichment applied to accepted work. Requiring four decisions per issue

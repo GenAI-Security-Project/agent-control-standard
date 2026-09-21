@@ -194,7 +194,7 @@ def test_parse_workstreams_fails_without_the_section():
 
 
 def test_parse_workstreams_handles_the_real_file():
-    assert len(parse_workstreams((REPO / "GOVERNANCE.md").read_text(encoding="utf-8"))) == 5
+    assert len(parse_workstreams((REPO / "GOVERNANCE.md").read_text(encoding="utf-8"))) == 8
 
 
 # --- priority scope parsing ------------------------------------------------
