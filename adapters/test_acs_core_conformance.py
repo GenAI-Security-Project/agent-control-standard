@@ -2,8 +2,9 @@
 ACS v0.1.0 Guardian checks (summary-level Core + emission support).
 
 SCOPE — read before trusting a green run. This suite exercises the
-Core requirements enumerated in `docs/spec/conformance.md`'s SUMMARY
-(lines 13-26) plus the normative sections those bullets cite, and
+Core requirements enumerated in `docs/spec/conformance.md`'s
+'ACS-Core (mandatory baseline)' section plus the normative sections
+those bullets cite, and
 reference-stack coverage of the SHOULD/conditional items (MODIFY,
 system/ping, Wrapped-MCP shape). It is deliberately NOT a
 requirement-by-requirement audit of every normative MUST/REQUIRED in
@@ -18,7 +19,8 @@ alone — is a separate tracked milestone (requirement ledger + missing
 behavioral tests).
 
 Each test docstring quotes the spec text it falsifies; CitationGuard
-pins the cited lines so spec edits that move/rewrite them go red.
+pins the named summary requirements within the ACS-Core section.
+Editorial changes elsewhere may move that section without breaking citations.
 
 Run from the adapters/ directory:
 
@@ -33,7 +35,7 @@ Result: any FAIL/ERROR names the specific requirement that broke, with
 the spec citation in the test docstring.
 
 Adopter workflow: copy our adapters, modify for your stack, run this
-file. A failure tells you which spec line you broke. A deployment that
+file. A failure identifies the cited requirement. A deployment that
 legitimately omits a SHOULD/conditional item (no MODIFY support, no
 MCP) may need to prune the corresponding reference-stack tests — the
 MUST tests are not prunable.
@@ -191,7 +193,7 @@ class CoreHarness(unittest.TestCase):
 
 
 # =============================================================================
-# CORE-01 — Handshake (conformance.md:17, §4)
+# CORE-01 — Handshake (conformance.md, ACS-Core / Handshake, §4)
 # =============================================================================
 #
 # "Handshake — handshake/hello with ClientHello/ServerHello"
@@ -203,7 +205,7 @@ class CoreHarness(unittest.TestCase):
 class Core01_Handshake(CoreHarness):
 
     def test_handshake_returns_server_hello(self) -> None:
-        """conformance.md:17 — 'Handshake — handshake/hello with
+        """conformance.md, ACS-Core / Handshake — 'Handshake — handshake/hello with
         ClientHello/ServerHello'. A Guardian MUST respond to
         handshake/hello with a ServerHello directly in result, AND
         the response envelope itself MUST validate against
@@ -214,7 +216,7 @@ class Core01_Handshake(CoreHarness):
             "transports_supported": ["http"],
             "provenance_producer": "none",
             "profiles_supported": ["acs-core"],
-        })  # signed — conformance.md:23 exempts only system/ping
+        })  # signed — conformance.md, ACS-Core / Baseline integrity exempts only system/ping
         resp = self._post(env)
         self.assertIn("result", resp,
             f"handshake/hello must return a result; got {resp}")
@@ -301,7 +303,7 @@ class Core01_Handshake(CoreHarness):
         self.assertEqual(resp["error"]["code"], -32600)
 
     def test_unsigned_client_hello_is_refused(self) -> None:
-        """conformance.md:23 — 'every request and response carries a
+        """conformance.md, ACS-Core / Baseline integrity — 'every request and response carries a
         signature'; the only exemption is system/ping (§13). An unsigned
         ClientHello to a signing-required Guardian MUST be refused with
         -32004: the HMAC key derives from the pre-shared secret +
@@ -337,7 +339,7 @@ class Core01_Handshake(CoreHarness):
 
 
 # =============================================================================
-# CORE-02 — Request envelope shape (conformance.md:18, §3, request-envelope.json)
+# CORE-02 — Request envelope shape (conformance.md, ACS-Core / Request/response envelope, §3, request-envelope.json)
 # =============================================================================
 #
 # "JSON-RPC 2.0 with ACS extensions. request_id, timestamp, acs_version,
@@ -354,7 +356,7 @@ class Core01_Handshake(CoreHarness):
 class Core02_EnvelopeShape(CoreHarness):
 
     def test_valid_envelope_passes_canonical_schema(self) -> None:
-        """conformance.md:18 — 'request_id, timestamp, acs_version,
+        """conformance.md, ACS-Core / Request/response envelope — 'request_id, timestamp, acs_version,
         metadata required on every request'. A correctly-built envelope
         MUST pass request-envelope.json validation including
         format-checker (uuid, date-time)."""
@@ -458,7 +460,7 @@ class Core02_EnvelopeShape(CoreHarness):
 
 
 # =============================================================================
-# CORE-03 — Hook taxonomy minimum (conformance.md:19)
+# CORE-03 — Hook taxonomy minimum (conformance.md, ACS-Core / Hook taxonomy)
 # =============================================================================
 #
 # "At minimum: sessionStart, userMessage or agentTrigger, toolCallRequest,
@@ -534,7 +536,7 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
         ]
 
     def test_each_minimum_hook_returns_known_disposition(self) -> None:
-        """conformance.md:19 — each hook in the Core minimum set must
+        """conformance.md, ACS-Core / Hook taxonomy — each hook in the Core minimum set must
         produce a known disposition (allow/deny/modify/ask/defer). The
         set's membership is #21-sensitive: six hooks on this branch's
         spec text; PR #21 proposes subagentStart joining the floor.
@@ -624,7 +626,7 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
 
 
 # =============================================================================
-# CORE-04 — Dispositions (conformance.md:20, §6)
+# CORE-04 — Dispositions (conformance.md, ACS-Core / Dispositions, §6)
 # =============================================================================
 #
 # This branch's spec text: "All five (ALLOW, DENY, MODIFY, ASK, DEFER)
@@ -1152,7 +1154,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
 
 
 # =============================================================================
-# CORE-05 — SessionContext + chain head (conformance.md:21, §8)
+# CORE-05 — SessionContext + chain head (conformance.md, ACS-Core / SessionContext and Intent, §8)
 # =============================================================================
 #
 # "session_id, chain_hash (rolling SHA-256), append-only ContextEntry chain,
@@ -1164,7 +1166,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
 class Core05_SessionContext(CoreHarness):
 
     def test_response_carries_chain_hash(self) -> None:
-        """conformance.md:21 — 'Guardian publishing the chain head
+        """conformance.md, ACS-Core / SessionContext and Intent — 'Guardian publishing the chain head
         (chain_hash) on responses for content-bearing steps'."""
         resp = self._post(self._make_envelope("steps/sessionStart", {}))
         self.assertIn("chain_hash", resp["result"],
@@ -1254,7 +1256,7 @@ class Core05_SessionContext(CoreHarness):
 
 
 # =============================================================================
-# CORE-06 — Replay protection (conformance.md:22, §10.3)
+# CORE-06 — Replay protection (conformance.md, ACS-Core / Replay protection, §10.3)
 # =============================================================================
 #
 # "request_id (UUID) and timestamp on every request; Guardians MUST reject
@@ -1339,7 +1341,7 @@ class Core06_ReplayProtection(CoreHarness):
 
 
 # =============================================================================
-# CORE-07 — Baseline integrity (conformance.md:23, §10)
+# CORE-07 — Baseline integrity (conformance.md, ACS-Core / Baseline integrity, §10)
 # =============================================================================
 #
 # "every request and response carries a signature over the canonical
@@ -1352,14 +1354,14 @@ class Core06_ReplayProtection(CoreHarness):
 class Core07_BaselineIntegrity(CoreHarness):
 
     def test_signed_request_accepted(self) -> None:
-        """conformance.md:23 — signed request with HMAC-SHA256 baseline
+        """conformance.md, ACS-Core / Baseline integrity — signed request with HMAC-SHA256 baseline
         MUST be accepted by a Guardian that requires signing."""
         resp = self._post(self._make_envelope("steps/sessionStart", {}))
         self.assertIn("result", resp,
             f"signed request was rejected; got {resp}")
 
     def test_unsigned_request_rejected_when_secret_configured(self) -> None:
-        """conformance.md:23 — when signing is required, an unsigned
+        """conformance.md, ACS-Core / Baseline integrity — when signing is required, an unsigned
         request MUST be rejected."""
         env = self._make_envelope("steps/sessionStart", {}, sign=False)
         resp = self._post(env)
@@ -1380,7 +1382,7 @@ class Core07_BaselineIntegrity(CoreHarness):
         self.assertEqual(resp["error"]["code"], -32004)
 
     def test_response_is_signed_and_verifies(self) -> None:
-        """conformance.md:23 — 'every request and response carries a
+        """conformance.md, ACS-Core / Baseline integrity — 'every request and response carries a
         signature'. The Guardian's response MUST be signed; a client
         MUST be able to verify it with the same HKDF-derived key."""
         sid = str(uuid.uuid4())
@@ -1397,7 +1399,7 @@ class Core07_BaselineIntegrity(CoreHarness):
             "HKDF-derived per-session key")
 
     def test_error_response_is_signed_and_verifies(self) -> None:
-        """conformance.md:23 — 'every request and response carries a
+        """conformance.md, ACS-Core / Baseline integrity — 'every request and response carries a
         signature' includes ERROR responses (a spoofable unsigned error
         under fail-open is an allow). Elicit a real error (replay →
         -32005) and assert the error envelope carries a signature that
@@ -1417,7 +1419,7 @@ class Core07_BaselineIntegrity(CoreHarness):
         sig = resp["error"].get("signature")
         self.assertIsNotNone(sig,
             "error response missing `signature` — errors are responses "
-            "too; conformance.md:23 exempts only system/ping")
+            "too; conformance.md, ACS-Core / Baseline integrity exempts only system/ping")
         key = acs_common.derive_session_key(self.HMAC_SECRET.encode(), sid)
         self.assertTrue(acs_common.verify_signature(resp, key=key),
             "error-response signature must verify with the per-session key")
@@ -1460,7 +1462,7 @@ class Core07_BaselineIntegrity(CoreHarness):
 
 
 # =============================================================================
-# CORE-08 — Decision honoring (conformance.md:24, §6.4)
+# CORE-08 — Decision honoring (conformance.md, ACS-Core / Decision honoring, §6.4)
 # =============================================================================
 #
 # Adapter-side property — covered end-to-end in the per-adapter test
@@ -1817,7 +1819,7 @@ class Core08b_NegotiatedDecisionTimeout(unittest.TestCase):
 
 
 # =============================================================================
-# CORE-09 — Liveness system/ping (conformance.md:25, §13)
+# CORE-09 — Liveness system/ping (conformance.md, ACS-Core / Liveness, §13)
 # =============================================================================
 #
 # §13: "Guardians MUST always return decision: allow for system/ping
@@ -1874,7 +1876,7 @@ class Core09_SystemPing(CoreHarness):
 
 
 # =============================================================================
-# CORE-10 — Wrapped MCP (conformance.md:26)
+# CORE-10 — Wrapped MCP (conformance.md, ACS-Core / Wrapped MCP)
 # =============================================================================
 #
 # "Wrapped MCP — protocols/MCP/*"
@@ -1889,7 +1891,7 @@ class Core09_SystemPing(CoreHarness):
 class Core10_WrappedMcp(CoreHarness):
 
     def test_mcp_namespace_method_validates(self) -> None:
-        """conformance.md:26 — the protocols/MCP/* namespace shape
+        """conformance.md, ACS-Core / Wrapped MCP — the protocols/MCP/* namespace shape
         (an unconditional MUST on this branch's spec text; PR #21 —
         open, not in this branch — proposes MUST only for deployments
         whose sessions involve MCP. This reference stack exercises the
@@ -1921,43 +1923,71 @@ class Core10_WrappedMcp(CoreHarness):
             f"response to protocols/MCP/* envelope is malformed: {errors}")
 
 class CitationGuard(unittest.TestCase):
-    """Every conformance.md line this suite cites must still say what
-    the citing test thinks it says."""
+    """Keep summary citations tied to ACS-Core, independent of line numbers."""
 
-    # line number in docs/spec/conformance.md → fragment that must
-    # appear on exactly that line. Update BOTH this table and the tests
-    # citing the line when the spec text changes.
-    CITED_LINES = {
-        17: "Handshake",
-        18: "Request/response envelope",
-        19: "Hook taxonomy",
-        20: "Dispositions",
-        21: "SessionContext and Intent",
-        22: "Replay protection",
-        23: "Baseline integrity",
-        24: "Decision honoring",
-        25: "Liveness",
-        26: "Wrapped MCP",
-    }
+    CORE_HEADING = "## ACS-Core (mandatory baseline)"
+    # Named bullets cited by the tests above, in specification order.
+    # Re-review those tests when a requirement is added, removed, or renamed.
+    CITED_REQUIREMENTS = [
+        "Handshake",
+        "Request/response envelope",
+        "Hook taxonomy",
+        "Dispositions",
+        "SessionContext and Intent",
+        "Replay protection",
+        "Baseline integrity",
+        "Decision honoring",
+        "Liveness",
+        "Wrapped MCP",
+    ]
 
-    def test_cited_lines_still_carry_their_content(self) -> None:
+    def setUp(self) -> None:
         conformance = (Path(__file__).resolve().parents[1]
                        / "docs" / "spec" / "conformance.md")
         self.assertTrue(conformance.exists(),
             f"conformance.md not found at {conformance} — the suite's "
             "docstring citations have nothing to cite")
-        lines = conformance.read_text().splitlines()
-        for lineno, fragment in self.CITED_LINES.items():
-            with self.subTest(line=lineno, expects=fragment):
-                self.assertGreater(len(lines), lineno - 1,
-                    f"conformance.md has no line {lineno}")
-                actual = lines[lineno - 1]
-                self.assertIn(fragment, actual,
-                    f"conformance.md:{lineno} no longer contains "
-                    f"{fragment!r} — it now reads:\n  {actual}\n"
-                    f"A spec edit moved or rewrote a line this suite "
-                    f"cites. Re-verify every test citing "
-                    f"conformance.md:{lineno}, then update CITED_LINES.")
+        self.text = conformance.read_text()
+
+    def assert_core_citations(self, text: str) -> None:
+        sections = re.split(r"^" + re.escape(self.CORE_HEADING) + r"$",
+                            text, flags=re.MULTILINE)
+        self.assertEqual(len(sections), 2,
+            "conformance.md must contain exactly one ACS-Core baseline section")
+        core = re.split(r"^## ", sections[1], maxsplit=1, flags=re.MULTILINE)[0]
+        requirements = re.findall(r"^- \*\*([^*]+)\*\*", core, flags=re.MULTILINE)
+        self.assertEqual(requirements, self.CITED_REQUIREMENTS,
+            "ACS-Core summary requirements changed. Re-review the citing tests "
+            "before updating CITED_REQUIREMENTS.")
+
+    def test_cited_requirements_remain_in_core(self) -> None:
+        self.assert_core_citations(self.text)
+
+    def test_editorial_insertions_preserve_citations(self) -> None:
+        diagram = "\n```mermaid\nflowchart BT\n    CORE --> TRACE\n```\n\n"
+        moved = self.text.replace(self.CORE_HEADING, diagram + self.CORE_HEADING, 1)
+        self.assert_core_citations(moved)
+
+    def test_missing_or_renamed_requirements_are_rejected(self) -> None:
+        for requirement in self.CITED_REQUIREMENTS:
+            bullet = next(line for line in self.text.splitlines(keepends=True)
+                          if line.startswith(f"- **{requirement}**"))
+            variants = {
+                "removed": self.text.replace(bullet, "", 1),
+                "renamed": self.text.replace(bullet, bullet.replace(
+                    f"**{requirement}**", "**Different requirement**", 1), 1),
+                "outside_core": self.text.replace(bullet, "", 1)
+                                + "\n## Unrelated section\n" + bullet,
+            }
+            for change, text in variants.items():
+                with self.subTest(requirement=requirement, change=change):
+                    with self.assertRaises(AssertionError):
+                        self.assert_core_citations(text)
+
+    def test_missing_core_section_is_rejected(self) -> None:
+        with self.assertRaises(AssertionError):
+            self.assert_core_citations(self.text.replace(
+                self.CORE_HEADING, "## Different section", 1))
 
 
 # =============================================================================
