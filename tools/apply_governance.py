@@ -332,10 +332,11 @@ def desired_issues() -> list[Issue]:
     while writing itself, but none sit on the ninety-day serial chain, so they carry
     `scope:deferred` and wait for a maintainer like anything else filed from outside.
 
-    No seeded issue carries `priority:P0`. Per GOVERNANCE.md lines 32-34, P0 is reserved
-    for work on the serial chain: PR #21 (the floor decision), PR #22 (the adapters),
-    the installable Guardian, and the interoperability benchmark. No seeded issue is one
-    of those four links. Maintainers will apply P0 to PRs #21 and #22 during triage.
+    No seeded issue carries `priority:P0`. Per GOVERNANCE.md Triage authority, P0 is
+    reserved for work on the serial chain: PR #21 (the floor decision), PR #22 (the
+    adapters), the installable Guardian, and the interoperability benchmark. No seeded
+    issue is one of those four links. Maintainers will apply P0 to PRs #21 and #22 during
+    triage.
     """
     onramp = ("scope:in-focus", "status:accepted", "help wanted")
     tracked = ("scope:deferred", "status:needs-triage")
