@@ -272,6 +272,18 @@ def desired_labels() -> list[Label]:
             name="workstream:outreach", color="c5def5",
             description="Owning workstream. Maintainers only",
         ),
+        Label(
+            name="workstream:refimpl", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
+        Label(
+            name="workstream:docs", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
+        Label(
+            name="workstream:testing", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
         # Stock GitHub defaults. Not created by Step 2, but relied on by Step 12.
         Label(
             name="help wanted", color="008672",
