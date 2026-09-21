@@ -29,7 +29,13 @@ takes it.
 ## Triage authority
 
 Workstream leads and the project lead apply the decision labels: `scope:`, `priority:`,
-`workstream:`, and `status:accepted`. Nobody else does, and no issue form can.
+`workstream:`, and `status:accepted`. No issue form can apply one.
+
+A workstream lead or the project lead may assign a volunteer or contributor to triage
+alongside them. An assigned volunteer applies any label, decision labels included, and the
+lead who assigned them reviews those calls and owns them. The project lead grants them the
+repository's `triage` role and write access to the
+[project board](https://github.com/orgs/GenAI-Security-Project/projects/9).
 
 Minimum triage on a new issue is two labels, `scope:` and `status:`. `priority:` and
 `workstream:` are enrichment applied to accepted work. Requiring four decisions per issue
