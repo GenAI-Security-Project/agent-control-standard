@@ -86,6 +86,31 @@ the repository schemas and independently recomputes their signatures. Tests
 exercise decisions, input preservation, request binding, failure postures,
 timeouts, malformed messages, and the honest capability declaration.
 
+## Check TypeScript Guardian compatibility
+
+The separate `typescript-interop` CI job starts the repository's actual
+TypeScript Guardian and validates its direct `result` against the ServerHello
+schema. It also checks that the shared signed helper rejects the unsigned reply
+without caching it, and that the Codex adapter with `ACS_DEFAULT_DENY=1` emits a
+native denial before sending a tool request. A nonempty key is configured and
+signature verification remains enabled throughout.
+
+From the repository root, with Python test dependencies and Bun 1.3.14 installed:
+
+```sh
+(cd reference-implementations/agt && bun install --frozen-lockfile --ignore-scripts)
+.venv/bin/python adapters/_common/tests/test_serverhello_contract.py
+.venv/bin/python adapters/interop/test_typescript_guardian.py
+```
+
+Missing Bun or workspace dependencies fail this explicit check; they do not
+produce a skip. The TypeScript Guardian currently returns unsigned responses,
+as described in its [security boundary](../../reference-implementations/agt/packages/guardian/README.md).
+Passing these tests establishes wire-shape compatibility and rejection of an
+unsigned peer. Successful signed end-to-end interoperability still requires
+TypeScript signing support. The Codex test runs the production adapter as a
+subprocess; it does not run the Codex CLI or execute a tool.
+
 ## Verify real Codex enforcement
 
 From the repository root:
