@@ -30,7 +30,10 @@ jobs:
     permissions:
       contents: write   # push the tag
     steps:
-      - name: Check out the repository
+      # The tag push below authenticates with the token this checkout persists, so it
+      # has to stay. The job uploads no artifacts, which is the leak zizmor's
+      # artipacked audit guards against.
+      - name: Check out the repository # zizmor: ignore[artipacked]
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Tag the release unless it is tagged already
