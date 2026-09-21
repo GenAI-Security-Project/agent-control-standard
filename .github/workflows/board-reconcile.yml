@@ -101,16 +101,6 @@ jobs:
           # pull requests, which is the whole grant. It cannot write code, change
           # settings, or reach any other repository.
           owner: ${{ github.repository_owner }}
-          # The same grant, stated again here so the token cannot outgrow it. The
-          # installation's settings live outside this repository and have drifted once
-          # already. With these lines a wider installation still mints a narrow token.
-          # The repository is named literally because a scheduled run carries no
-          # repository in its event payload. A rename fails the token request loudly.
-          repositories: agent-control-standard
-          permission-organization-projects: write
-          permission-issues: read
-          permission-pull-requests: read
-          permission-metadata: read
 
       - name: Reconcile the board
         env:
