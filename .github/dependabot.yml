@@ -2,7 +2,9 @@
 #
 # Security updates are enabled separately in repository settings and fire on
 # advisories regardless of this file. This config covers routine version
-# drift, so a dependency is current before it becomes a CVE.
+# drift, so a dependency is current before it becomes a CVE. Bun is the
+# exception: Dependabot has no security updates for it, so the Bun entry below
+# is the only automated update path for the AGT reference implementation.
 #
 # Every ecosystem sets a cooldown. A compromised release is most dangerous in
 # the hours after publication, and registry takeovers are usually caught and
@@ -58,3 +60,25 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # The AGT reference implementation is a Bun workspace. Dependabot reads the
+  # workspace list from the root package.json, so this one entry covers every
+  # package and host under it and updates bun.lock in the same PR.
+  - package-ecosystem: "bun"
+    directory: "/reference-implementations/agt"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+    ignore:
+      # agt.lock pins this SDK to the vendored AGT commit, and test/pin.test.ts
+      # fails when package.json and the lock disagree. The SDK moves together
+      # with agt_ref as one deliberate change, so a Dependabot bump of the SDK
+      # alone would always go red in CI.
+      - dependency-name: "agent-control-specification*"
