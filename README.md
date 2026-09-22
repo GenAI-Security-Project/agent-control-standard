@@ -352,15 +352,12 @@ taxonomy, and the sign-off every commit needs. Start there, not here.
 
 ## What's next
 
-Specification v0.1.0 ships today. The tagged release is v0.1.1. The next specification
-release, v0.2.0, targets March 2027. A v1.0 date has not been set.
+Specification v0.1.0 ships today. Every tagged release is listed on the
+[tags page](https://github.com/GenAI-Security-Project/agent-control-standard/tags). The
+next specification release, v0.2.0, targets March 2027. A v1.0 date has not been set.
 
-The near term runs against four GitHub milestones: Day 14 (September 24), Day 30
-(October 9), Day 60 (November 6), and Day 90 (December 4, 2026). Each carries the
-project's committed outcome as its description. What is in focus for the current window
-lives in one place, the Current Priority Scope in
-[CONTRIBUTING.md](./CONTRIBUTING.md), reviewed at every milestone so it never drifts
-from what that section says.
+What is in focus right now lives in one place, the Current Priority Scope in
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Where to go next
 
@@ -372,7 +369,7 @@ from what that section says.
 - [CONTRIBUTING.md](./CONTRIBUTING.md): how work gets accepted.
 - [SECURITY.md](./SECURITY.md): how to report a vulnerability.
 - [GOVERNANCE.md](./GOVERNANCE.md): who leads which workstream.
-- [Project board](https://github.com/orgs/GenAI-Security-Project/projects/9): tracked work across the milestones above.
+- [Project board](https://github.com/orgs/GenAI-Security-Project/projects/9): open work and where each item stands.
 
 ## About
 
