@@ -8,6 +8,10 @@ dependencies = [ "mike>=1.2.0", "mkdocs-material>=9.6.14", "pymdown-extensions>=
 
 [dependency-groups]
 dev = [ "pytest>=8.0", "jsonschema>=4.25.0",]
+# Workflow security analysis, run by .github/workflows/zizmor.yml. A named group rather
+# than dev, so the docs build and the test gate never install it. The lockfile pins the
+# version with hashes, and Dependabot moves it under the usual cooldown.
+zizmor = [ "zizmor>=1.30.1",]
 
 [tool.pytest.ini_options]
 # The deploy workflow runs a bare `uv run pytest -v` as the gate the site build
