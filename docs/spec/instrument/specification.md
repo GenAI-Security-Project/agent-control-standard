@@ -429,6 +429,7 @@ A liveness method is required for connection-health checks, transport-debugging,
 | Sensitivity / four-level timeout model | v0.2 | Categorization-from-facts is non-trivial; v0.1 uses a single handshake-negotiated default timeout |
 | Recursive ASK + quorum | v0.2 | Bounded delegation and tie-breaking need careful spec |
 | Multi-tenant isolation rules | v0.2 | Touches policy, SessionContext, audit, A2A |
+| Bootstrap authority and delegation-chain attestation | v0.2 | Whether Guardian policy, initial Intent, and Approver configuration were adopted through an accountable process, and whether a claimed human or institutional authority is backed by a documented delegation chain, is verified outside the protocol in v0.1. ASK intent-extension (§9.1) can widen `Intent.parsed` in-session but cannot create the source of that authority. The policy-author attestation profile (§16) is the first step; ACS-Trace and ACS-Audit can record the result where it exists |
 | `protocols/A2A/*` wrapping specification | v0.2 | A2A hook wrapping is reserved (namespace exists); detailed method mapping waits |
 | AgBOM federation across A2A peers | v0.2 | Single-agent AgBOM is in v0.1; federated views need an A2A-side discovery method first |
 | gRPC, unix_socket transports | v0.2+ | HTTP + stdio cover IDE/SaaS/on-prem in v0.1 |
