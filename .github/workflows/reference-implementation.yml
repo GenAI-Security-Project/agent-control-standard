@@ -16,12 +16,12 @@ name: Reference implementation
 on:
   pull_request:
     paths:
-      - "reference-implementations/**"
+      - "reference-implementations/agt/**"
       - ".github/workflows/reference-implementation.yml"
   push:
     branches: ["main", "integration"]
     paths:
-      - "reference-implementations/**"
+      - "reference-implementations/agt/**"
       - ".github/workflows/reference-implementation.yml"
   workflow_dispatch:
 
