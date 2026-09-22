@@ -47,3 +47,20 @@ def test_tampering_with_a_stored_entry_breaks_verification() -> None:
     serialized = [entry.to_dict() for entry in chain.entries]
     serialized[0]["step_id"] = "s-forged"
     assert not verify_chain(serialized)
+
+
+def test_rewriting_the_linkage_breaks_verification() -> None:
+    """A chain whose previous_hash was rewritten must fail, not be silently re-linked."""
+    chain = AuditChain()
+    chain.append(step_id="s-1", step_type="steps/sessionStart")
+    chain.append(step_id="s-2", step_type="steps/toolCallRequest")
+    serialized = [entry.to_dict() for entry in chain.entries]
+    assert verify_chain(serialized)
+
+    serialized[1]["previous_hash"] = "0" * 64
+    assert not verify_chain(serialized)
+
+    # And a first entry that claims a predecessor fails too.
+    serialized = [entry.to_dict() for entry in chain.entries]
+    serialized[0]["previous_hash"] = "0" * 64
+    assert not verify_chain(serialized)

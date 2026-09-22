@@ -145,6 +145,16 @@ class SchemaRegistry:
                 data={"pointer": pointer, "method": method},
             )
 
+    def check(self, relative_path: str, instance: Any) -> str | None:
+        """Validate an instance against a schema by relative path; return a finding or None."""
+        try:
+            for error in self._validator(relative_path).iter_errors(instance):
+                message, _ = _first_error_message(error)
+                return message
+        except Exception as exc:  # a schema that will not load is a finding, not a raise
+            return f"could not be checked: {exc}"
+        return None
+
     def hook_schema_id(self, method: str) -> str | None:
         """The ``$id`` of a hook's schema, so tests can pin the method -> file mapping."""
         relative = _HOOK_SCHEMAS.get(method)

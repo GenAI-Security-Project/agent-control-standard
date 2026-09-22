@@ -27,20 +27,17 @@ the ones this tree follows, so the two are intended to interoperate.
 | Replay protection: duplicate `request_id`/`nonce`, timestamp skew (`-32005`, `-32006`) | Met | `server.py`, `tests/test_server.py` |
 | Baseline integrity: HKDF-SHA256 session key, HMAC-SHA256 signature | Met | `crypto.py`, `tests/test_crypto_vectors.py` |
 | Liveness, `system/ping` | Met | `server.py`, `tests/test_server.py` |
-| **Wrapped MCP, `protocols/MCP/*`** | **Not implemented** | not negotiated until it is; see below |
+| Wrapped MCP, `protocols/MCP/*` and `wrapped:mcp-<version>/*` | Met | `mcp.py`, `methods.py`, `tests/test_wrapped_mcp.py` |
+| Dispositions a hook does not permit are substituted, never sent | Met | `methods.py` (`PERMITTED`), `server.py` |
 | Decision honoring (§6.4) | Observed Agent responsibility | the host adapter's, not this tree's |
-| Trace pillar (OTel/OCSF), AgBOM (`agbom/*`) | Not claimed | v1 roadmap items |
+| Trace pillar (OTel/OCSF), AgBOM (`agbom/*`) | Not claimed | v1 roadmap items; `agbom/*` is refused with `-32003` |
+| Intent handling (IBAC) | Not claimed | Intent is optional and IBAC-conditional; `ask_details` passes through |
 
-**The ACS-Core claim is deliberately partial**: `protocols/MCP/*` is a
-mandatory ACS-Core item and this tree does not implement it yet, so the
-ServerHello answers `profiles_accepted: []` — the honest wire signal, since a
-client reads that field, not this table. The work is tracked as the next
-increment; until then this tree does not claim `acs-core`, `acs-trace`,
-`acs-inspect`, `acs-provenance`, `acs-crypto`, or `acs-audit`, and the rows
-above say exactly which parts are implemented.
-
-ACS v0.1.0 has no certification mechanism: this tree self-declares what it
-implements and each claimed row names the tests that cover it.
+Every ACS-Core item in `docs/spec/conformance.md` is implemented, so the
+ServerHello accepts `acs-core`. ACS v0.1.0 has no certification mechanism:
+this tree self-declares what it implements and each claimed row names the
+tests that cover it. `acs-trace`, `acs-inspect`, `acs-provenance`,
+`acs-crypto`, and `acs-audit` are not claimed.
 
 ## Run it
 
@@ -72,10 +69,12 @@ conformance harness's external mode — envelope refusal, pre-session refusal,
 transport refusal, handshake, an allowed call, three replay checks, invalid
 params, and an unnegotiated method. Nine of the ten are signature-verified;
 the first sends a bare envelope with no session, which the harness does not
-sign either. The external mode itself is contributed in the open PR #169 (not
-merged at the time of writing); until it lands, this test is the local gate.
-Once it lands, the official mode runs against this Guardian from
-`reference-implementations/agt`:
+sign either. `tests/test_wrapped_mcp.py` covers the wrapped MCP contract, and
+`tests/test_server.py` the hook dispositions, §6.3 modification composition,
+session close, and the session bindings. The external mode itself is
+contributed in the open PR #169 (not merged at the time of writing); until it
+lands, the probe port is the local gate. Once it lands, the official mode runs
+against this Guardian from `reference-implementations/agt`:
 
 ```bash
 ACS_CONFORMANCE_GUARDIAN_URL=http://127.0.0.1:8787/acs \
@@ -104,10 +103,32 @@ documents in its "Behavior that ACS v0.1.0 leaves undefined" table:
   other's write time, and the field is inside the hashed content, so a
   deterministic input is what makes cross-implementation `entry_hash`
   comparison possible at all.
-- A refusal that is not a version or provenance refusal during the handshake is
-  `SESSION_REFUSED` (`-32000`): nothing has been exercised, so
-  `CAPABILITY_NOT_NEGOTIATED` (`-32003`) does not apply until hook traffic
-  starts.
+- A wrapped MCP message's method must equal the part after `protocols/MCP/`
+  for a request (a response carries no method and is wrapped under the method
+  it answers). A `parameter_overrides` key names a member of the wrapped
+  message's `params.arguments`; a native hook's names a tool argument (a
+  `/arguments/<name>` pointer).
+- Method routing follows the standard's own distinctions: an undefined method
+  is `METHOD_NOT_FOUND` (`-32601`), a defined but never-negotiated method
+  (`agbom/*`) and a defined method the handshake did not negotiate are
+  `CAPABILITY_NOT_NEGOTIATED` (`-32003`). An empty `methods_evaluated` is a
+  valid ServerHello, not a refusal.
+- `steps/sessionEnd` closes the session: a later step is answered with a DENY
+  `session_closed`, while replay history survives so a replayed step is still
+  `REPLAY_DETECTED`. A key_id or agent_id other than the session's is answered
+  with a signed DENY (`key_not_bound`, `agent_id_not_bound`), not an error —
+  an error would leave the agent to its failure posture.
+
+### A deliberate deviation from an `extend_mcp.md` example
+
+The examples in `docs/spec/instrument/extend_mcp.md` show a wrapped MCP
+message placed directly in the ACS envelope's `params`, with no
+`acs_version`/`request_id`/`timestamp`/`metadata`/`payload` — a shape
+`request-envelope.json` rejects (`params` requires all five). The spec
+contradicts itself there, and this tree follows the schema: the MCP message is
+carried intact in `params.payload` (as the Go port in open PR #169 does). The
+inconsistency is worth an upstream issue; this tree does not silently pick a
+side without saying so.
 
 ## Non-goals
 
@@ -117,9 +138,9 @@ documents in its "Behavior that ACS v0.1.0 leaves undefined" table:
 - **Not a conformance suite or registry.** The community's suite owns the
   vectors; this tree is an implementation under test.
 - **No session eviction.** The default store is in-memory and keeps sessions
-  for the process lifetime, so replay history survives `steps/sessionEnd` (a
-  step after sessionEnd is still a replay). A long-lived deployment passes its
-  own `SessionStore` (with TTL or capacity limits) as `GuardianConfig.session_store`;
-  that is the seam.
+  for the process lifetime, so replay history survives `steps/sessionEnd` even
+  though a step after it is denied with `session_closed`. A long-lived
+  deployment passes its own `SessionStore` (with TTL or capacity limits) as
+  `GuardianConfig.session_store`; that is the seam.
 - **No host adapters.** Honoring decisions is the Observed Agent's job; the
   TypeScript tree ships the Claude Code and OpenCode adapters.

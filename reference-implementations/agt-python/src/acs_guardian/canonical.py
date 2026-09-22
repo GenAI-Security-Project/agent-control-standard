@@ -4,7 +4,7 @@ The signed input is the RFC 8785 (JCS) canonicalization of the request or
 response envelope with the ``signature`` field removed, encoded as UTF-8
 (Specification §10). A request carries its signature at ``params.signature``;
 a response carries it at ``result.signature`` or ``error.signature`` (the
-location the Go reference implementation uses for the two shapes
+location the Go port in open PR #169 uses for the two shapes
 ``response-envelope.json`` defines no signature field for: a ``ServerHello``
 result and an error).
 

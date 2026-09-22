@@ -79,20 +79,17 @@ def test_provenance_requirement_accepts_a_deterministic_producer() -> None:
     assert terms.negotiated_version == "0.1.0"
 
 
-def test_no_shared_method_refuses_the_session() -> None:
-    # -32000, not -32003: nothing was exercised, so no capability failed to
-    # negotiate; the session itself cannot be governed usefully (§17.1).
-    with pytest.raises(AcsError) as caught:
-        negotiate(_hello(methods_implemented=["protocols/MCP/tools/call"]))
-    assert caught.value.code == SESSION_REFUSED
-    assert caught.value.data["reason"] == "no_common_method"
+def test_no_shared_method_negotiates_an_empty_set() -> None:
+    # An empty methods_evaluated is a valid ServerHello: every method is then
+    # ALLOW-by-default to the client, which is told so. Not a refusal.
+    assert negotiate(_hello(methods_implemented=["protocols/MCP/tools/call"])).methods_evaluated == ()
 
 
 def test_profiles_accepted_is_the_intersection() -> None:
-    # Empty today: the Guardian accepts no profile until Wrapped MCP (a
-    # mandatory ACS-Core item) is implemented — the honest wire signal.
+    # acs-core is accepted (every ACS-Core item is implemented); the optional
+    # profiles are not claimed.
     terms = negotiate(_hello(profiles_supported=["acs-core", "acs-trace"]))
-    assert terms.profiles_accepted == ()
+    assert terms.profiles_accepted == ("acs-core",)
 
 
 def test_server_hello_carries_the_negotiated_terms() -> None:

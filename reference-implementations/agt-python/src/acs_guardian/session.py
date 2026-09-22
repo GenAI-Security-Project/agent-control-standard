@@ -36,6 +36,10 @@ class Session:
     chain: AuditChain = field(default_factory=AuditChain)
     seen_request_ids: set[str] = field(default_factory=set)
     seen_nonces: set[str] = field(default_factory=set)
+    # steps/sessionEnd closes the session: no later step is evaluated (the Go
+    # reference answers one with a session_closed denial), while replay
+    # history survives so a replayed step is still REPLAY_DETECTED.
+    closed: bool = False
     # Guards the session's mutable state against the HTTP server's threads.
     # The store's own lock protects the session table, not session contents:
     # without this, two concurrent copies of one request both pass the
