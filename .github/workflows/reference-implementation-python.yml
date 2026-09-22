@@ -1,0 +1,54 @@
+# Runs the Python reference implementation's own tests.
+#
+# The suite in reference-implementations/agt-python/ validates envelopes against
+# the repository's schemas by relative path, pins the cross-implementation
+# signature vectors, and replays the conformance harness's external probes, so a
+# schema, crypto, or wire drift fails here rather than at the conformance run.
+#
+# Scoped by path: a docs-only change should not pay for a Python environment.
+name: Reference implementation (Python)
+
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/agt-python/**"
+      - "specification/**"
+      - ".github/workflows/reference-implementation-python.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "reference-implementations/agt-python/**"
+      - "specification/**"
+      - ".github/workflows/reference-implementation-python.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reference-implementation-python-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agt-python:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt-python
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason
+          # to stay behind in .git/config.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked
+
+      - name: Run the tests
+        run: uv run pytest -v
