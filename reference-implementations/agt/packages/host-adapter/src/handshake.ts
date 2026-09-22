@@ -295,9 +295,11 @@ export async function negotiateSessionConfig(
  */
 export type ResolvedSessionConfig = {
   /**
-   * The config to apply to this step -- the stored one when a handshake has
-   * already completed for this session, otherwise the one this process just
-   * negotiated (including one it negotiated but could not persist).
+   * The config to apply to this step -- the stored one when a handshake had
+   * already completed for this session before the call, otherwise the one this
+   * exchange just negotiated (including one it negotiated but could not
+   * persist). Only when this exchange negotiated nothing is it a config an
+   * overlapping resolution stored in the meantime.
    * `undefined` means nothing was negotiated and the ACS default governs,
    * which is what `posture_source: "default"` records.
    */
@@ -345,23 +347,31 @@ export async function resolveSessionConfig(
   options: HandshakeOptions,
   store: SessionConfigStore,
 ): Promise<ResolvedSessionConfig> {
+  // One read, taken before anything awaits. Hooks in a session run in parallel
+  // against one store, so a read after the handshake could return a config an
+  // overlapping resolution published, and this step would fail by a posture
+  // its own exchange never negotiated.
+  const stored = store.get();
+  if (stored !== undefined) {
+    return { config: stored, failure: undefined };
+  }
+
   let failure: unknown;
   let negotiated: SessionConfig | undefined;
-
-  if (store.get() === undefined) {
-    try {
-      negotiated = await negotiateSessionConfig(options, store);
-    } catch (error) {
-      failure = error;
-      if (error instanceof SessionConfigNotStoredError) {
-        negotiated = error.config;
-      }
+  try {
+    negotiated = await negotiateSessionConfig(options, store);
+  } catch (error) {
+    failure = error;
+    if (error instanceof SessionConfigNotStoredError) {
+      negotiated = error.config;
     }
   }
 
-  // The stored config when there is one; otherwise whatever was negotiated and
-  // could not be stored. `failure` still travels either way, so a persistence
-  // failure stays visible rather than being papered over by the value being
-  // usable anyway.
-  return { config: store.get() ?? negotiated, failure };
+  // This exchange's own answer wins, including one it negotiated but could not
+  // store. The store gets a second look only when this exchange negotiated
+  // nothing, because a config another resolution stored from the same Guardian
+  // is a better posture than the ACS default. `failure` travels either way, so
+  // a persistence failure stays visible rather than being papered over by the
+  // value being usable anyway.
+  return { config: negotiated ?? store.get(), failure };
 }

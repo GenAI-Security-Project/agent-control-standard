@@ -71,8 +71,8 @@ today.
 
 `bun install` does not install `trash`, because `trash` is a system command the test and
 verification scripts call, not an npm package. Running `bun test` without it on `PATH`
-fails 26 of the suite's 1,111 tests, all in the conformance and upstream-watch scripts
-that clean up scratch directories. Install `trash-cli` first, or expect those 26
+fails 26 tests, all in the conformance and upstream-watch scripts that clean up scratch
+directories. Install `trash-cli` first, or expect those 26
 failures and ignore them.
 
 The Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
