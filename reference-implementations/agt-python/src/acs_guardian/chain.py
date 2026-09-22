@@ -111,9 +111,16 @@ class AuditChain:
 
 
 def verify_chain(entries: list[dict[str, Any]]) -> bool:
-    """Recompute a serialized chain's hashes; used by tests and external auditors."""
+    """Recompute a serialized chain's hashes; used by tests and external auditors.
+
+    The stored ``previous_hash`` is checked against the recomputed one, not
+    just overwritten by it: a chain whose linkage was rewritten must fail,
+    which is the property an auditor runs this for.
+    """
     previous: str | None = None
     for entry in entries:
+        if entry.get("previous_hash") != previous:
+            return False
         expected = compute_entry_hash(entry, previous)
         if entry.get("entry_hash") != expected:
             return False

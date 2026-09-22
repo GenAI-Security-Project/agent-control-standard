@@ -86,14 +86,29 @@ def _flatten_strings(value: Any) -> list[str]:
     return []
 
 
+def _tool_call_texts(method: str, payload: dict[str, Any]) -> list[str] | None:
+    """The strings a destructive-command rule reads, or None when this is not a tool call.
+
+    A native ``steps/toolCallRequest`` carries its arguments at ``arguments``
+    and a raw command at ``raw_command``; a wrapped MCP ``tools/call`` carries
+    the intact message, whose arguments live under ``params.arguments``.
+    """
+    if method == "steps/toolCallRequest":
+        return [payload.get("raw_command", ""), *_flatten_strings(payload.get("arguments", {}))]
+    if method.endswith("/tools/call"):
+        params = payload.get("params")
+        if isinstance(params, dict):
+            return _flatten_strings(params.get("arguments", {}))
+    return None
+
+
 class BuiltinEngine:
     """Allow by default; deny destructive shell commands on tool calls."""
 
     def evaluate(self, request: EvaluationRequest) -> Evaluation:
-        if request.method != "steps/toolCallRequest":
+        candidates = _tool_call_texts(request.method, request.payload)
+        if candidates is None:
             return Evaluation(decision=ALLOW)
-        candidates = [request.payload.get("raw_command", "")]
-        candidates.extend(_flatten_strings(request.payload.get("arguments", {})))
         for text in candidates:
             if not isinstance(text, str):
                 continue

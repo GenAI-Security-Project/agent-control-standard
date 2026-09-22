@@ -6,10 +6,11 @@ implementation is the natural place for it — and the Guardian raises a subset
 today: ``PARSE_ERROR``, ``INVALID_REQUEST``, ``INVALID_PARAMS``,
 ``INTERNAL_ERROR``, ``SESSION_REFUSED``, ``UNSUPPORTED_VERSION``,
 ``PROVENANCE_REQUIRED``, ``CAPABILITY_NOT_NEGOTIATED``, ``SIGNATURE_INVALID``,
-``REPLAY_DETECTED`` and ``TIMESTAMP_OUT_OF_WINDOW``. ``METHOD_NOT_FOUND`` and
-``CHAIN_MISMATCH`` are defined but not yet raised (an unnegotiated method is
-``CAPABILITY_NOT_NEGOTIATED``, and no cross-check path submits a chain head
-yet).
+``REPLAY_DETECTED``, ``TIMESTAMP_OUT_OF_WINDOW`` and ``METHOD_NOT_FOUND``.
+``METHOD_NOT_FOUND`` answers a method the standard does not define;
+``CAPABILITY_NOT_NEGOTIATED`` answers a defined one the handshake did not
+negotiate. ``CHAIN_MISMATCH`` is defined but not yet raised: no cross-check
+path submits a chain head yet.
 
 The Guardian mints no codes of its own: the TypeScript reference implementation
 uses three private codes from the reserved band (-32010, -32011, -32020) for
@@ -47,7 +48,7 @@ class AcsError(Exception):
     ``signable`` records whether the request authenticated: a request that did
     not establish a key (no session_id, or a failed signature) gets an
     unsigned answer, because signing it would claim a key relationship that
-    does not exist (the Go reference implementation's rule).
+    does not exist (the Go port's rule in open PR #169).
     """
 
     def __init__(
