@@ -3,13 +3,13 @@
 ## MCP protocol
 The Model Context Protocol ([MCP](https://modelcontextprotocol.io/introduction)) is an open standard for connecting AI agents to external tools, prompts, resources, and servers.
 
-ACS-Core remains protocol-agnostic: ordinary tool invocations can be governed through `steps/toolCallRequest` and `steps/toolCallResult` regardless of whether the underlying transport is MCP, HTTP, a local function call, or another mechanism. The `protocols/MCP/*` namespace is an optional precision layer for deployments that need to preserve MCP-specific semantics on the wire.
+ACS-Core remains protocol-agnostic for tool invocations: `steps/toolCallRequest` and `steps/toolCallResult` govern them regardless of whether the underlying transport is MCP, HTTP, a local function call, or another mechanism. The `protocols/MCP/*` namespace preserves MCP-specific semantics on the wire, and ACS-Core requires it for any deployment whose sessions involve MCP ([Conformance › ACS-Core](../conformance.md#acs-core-mandatory-baseline)): capability negotiation, prompt fetches, `resources/read`, and notifications are invisible to the generic tool hooks, and `resources/read` is the canonical prompt-injection ingress. Only deployments whose sessions never involve MCP omit the namespace.
 
 ## MCP support
 
 ACS wrapping for MCP carries MCP messages between the Observed Agent and the Guardian while preserving the underlying MCP method and payload. This lets a Guardian apply the standard ACS disposition contract to MCP traffic without making MCP the only tool-governance path.
 
-Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCallRequest` / `steps/toolCallResult` hooks when tool-level policy is sufficient. Deployments SHOULD use `protocols/MCP/*` when policy needs MCP-level distinctions that generic tool hooks would erase, including:
+Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCallRequest` / `steps/toolCallResult` hooks when tool-level policy is sufficient. Every other MCP surface MUST be wrapped in sessions that involve MCP, because the generic tool hooks erase these distinctions:
 
 - `initialize` capability negotiation, including server instructions and capability grants that occur before the first tool call.
 - `prompts/get`, where a server-authored prompt template is fetched and may later enter the agent's LLM context.
@@ -17,8 +17,8 @@ Deployments MAY collapse MCP `tools/call` traffic into the generic `steps/toolCa
 - `notifications/*`, which represent asynchronous MCP signals.
 
 #### To extend MCP protocol:
-1. Agents using MCP and claiming MCP wrapping ***must*** deliver wrapped MCP messages to the Guardian using [`protocols/MCP/*`](hooks.md#protocolsmcp).
-2. Agents using MCP wrapping ***must*** understand and enforce ACS responses before forwarding outbound MCP messages or consuming inbound MCP results.
+1. Agents whose sessions involve MCP ***must*** deliver wrapped MCP messages to the Guardian using [`protocols/MCP/*`](hooks.md#protocolsmcp) (`tools/call` MAY instead flow through the generic tool hooks, above).
+2. Agents delivering wrapped MCP messages ***must*** understand and enforce ACS responses before forwarding outbound MCP messages or consuming inbound MCP results.
 
 #### The following flow explains how this should be done:
 1. Agent **A** prepares an MCP-compliant message.
