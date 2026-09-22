@@ -184,14 +184,23 @@ def test_a_handshake_nonce_replay_is_replay_detected(server) -> None:
     expect_error(signed_post(server.url, again, session_id), -32005)
 
 
+def _recv_all(sock) -> bytes:
+    """Read a socket to EOF; the server closing is what ends the loop."""
+    chunks = []
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
 def test_a_bad_content_length_is_refused_and_the_connection_closes(server) -> None:
     import json
     import socket
 
     with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as sock:
         sock.sendall(b"POST /acs HTTP/1.1\r\nHost: x\r\nContent-Length: -5\r\n\r\n")
-        raw = sock.recv(4096).decode()
-        assert sock.recv(4096) == b""  # the server closed, as it said it would
+        raw = _recv_all(sock).decode()
     head, _, body = raw.partition("\r\n\r\n")
     assert "200" in head.splitlines()[0]
     assert "connection: close" in head.lower()
@@ -204,8 +213,7 @@ def test_a_request_without_content_length_is_refused(server) -> None:
 
     with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as sock:
         sock.sendall(b"POST /acs HTTP/1.1\r\nHost: x\r\n\r\n")
-        raw = sock.recv(4096).decode()
-        assert sock.recv(4096) == b""
+        raw = _recv_all(sock).decode()
     _, _, body = raw.partition("\r\n\r\n")
     expect_error(json.loads(body), -32600)
 
