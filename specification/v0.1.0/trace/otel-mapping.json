@@ -89,6 +89,20 @@
           "span_name": "acs.subagent.end",
           "required_attributes": ["acs.subagent.session_id", "acs.subagent.outcome", "acs.subagent.final_chain_hash"]
         },
+        "steps/skillRegister": {
+          "span_name": "acs.skill.register",
+          "required_attributes": ["acs.skill.id", "acs.skill.digest", "acs.skill.declared_capabilities"]
+        },
+        "steps/skillLoad": {
+          "span_name": "acs.skill.load",
+          "required_attributes": ["acs.skill.id", "acs.skill.digest", "acs.skill.load_trigger", "acs.skill.load_path"],
+          "optional_attributes": ["acs.skill.digest_verified", "acs.skill.registration_ref"]
+        },
+        "steps/skillUnload": {
+          "span_name": "acs.skill.unload",
+          "required_attributes": ["acs.skill.id", "acs.skill.reason"],
+          "optional_attributes": ["acs.skill.replaced_by"]
+        },
         "agbom/snapshot": {
           "span_name": "acs.agbom",
           "required_attributes": ["acs.agbom.format", "acs.agbom.component_count"]
