@@ -1,0 +1,90 @@
+# Audits every workflow, composite action, and dependabot.yml with zizmor.
+#
+# CodeQL's actions analysis covers the common injection paths. zizmor is the defense in
+# depth the OWASP GitHub Actions Security Cheat Sheet recommends beside it, and it checks
+# what CodeQL does not: hash pins no tag points to, version comments that disagree with
+# their pin, App tokens broader than the workflow needs, and credentials a checkout
+# leaves behind in .git/config.
+#
+# Findings go to the Security tab instead of failing this job. Code scanning tracks them
+# across runs, and a ruleset can gate merges on them. A tool or upload failure still
+# fails the job, so the scan cannot skip itself quietly.
+name: zizmor
+
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+      - "**/action.yml"
+      - "**/action.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - ".github/**"
+      - "**/action.yml"
+      - "**/action.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+  schedule:
+    # Weekly even when no workflow changed, because the online audits compare pinned
+    # actions against advisories that are published after the pin.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Deny by default. The one job below grants itself only what it needs.
+permissions: {}
+
+concurrency:
+  group: zizmor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload the SARIF report to code scanning
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+
+      # zizmor runs from its own dependency group in uv.lock, so its version is pinned
+      # with hashes and --locked refuses a lockfile that drifted from pyproject.toml.
+      - name: Audit workflows and actions
+        env:
+          # The online audits read the public API: impostor commits, version comments,
+          # and known-vulnerable actions. The job's read-only token is all they use.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          uv run --locked --only-group zizmor \
+            zizmor --no-progress --no-exit-codes --format sarif . > zizmor.sarif
+
+      - name: Upload the report to code scanning
+        # A pull request from a fork runs with a read-only token and cannot upload.
+        # Its findings print as annotations in the next step instead.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
+
+      - name: Annotate a pull request from a fork
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          uv run --locked --only-group zizmor \
+            zizmor --no-progress --no-exit-codes --format github .

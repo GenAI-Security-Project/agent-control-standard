@@ -62,7 +62,7 @@ That file therefore names three people: the project lead and the two creators. T
 
 ## How leadership changes
 
-Existing leads propose additions and removals. The project lead confirms the change, then opens a pull request that touches this file, `project.owasp.yaml`, and `.github/CODEOWNERS` together.
+Existing leads propose additions and removals. The project lead confirms the change, then opens a pull request that updates this file and `.github/CODEOWNERS` together. When the change touches the project lead or a creator, the same pull request updates `project.owasp.yaml`, since those are the only people it names.
 
 The CODEOWNERS update is not optional. A lead who loses write access stops being a valid owner, and GitHub fails the entry silently rather than flagging it.
 

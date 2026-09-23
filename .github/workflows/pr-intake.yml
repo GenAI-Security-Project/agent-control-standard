@@ -9,7 +9,8 @@
 name: PR intake
 
 on:
-  pull_request_target:
+  # zizmor flags every pull_request_target. The paragraph above is why this one is safe.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened, edited, reopened]
 
 permissions: {}

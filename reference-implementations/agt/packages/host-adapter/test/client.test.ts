@@ -720,6 +720,50 @@ describe("resolveSessionConfig — the session, as a message rather than a throw
     expect((resolved.failure as ServerHelloInvalidError).config).toBeUndefined();
   });
 
+  // Claude Code runs hooks in parallel, and every hook in a session shares one
+  // store. A second resolution can publish its own config after this exchange
+  // stores its answer and before this one returns. The posture this exchange
+  // negotiated is the one its step must fail by, so a later publication in
+  // the shared store must not take its place.
+  it("keeps the posture its own exchange negotiated when an overlapping resolution publishes another", async () => {
+    const OTHER = { ...HELLO, on_decision_failure: "proceed" as const };
+    const shared = createMemorySessionConfigStore();
+    const racing = {
+      get: () => shared.get(),
+      set: (config: Parameters<typeof shared.set>[0]) => {
+        shared.set(config);
+        shared.set(OTHER); // the overlapping resolution, landing right after this one
+      },
+    };
+    const resolved = await against(HELLO, (url) => resolveVia(url, racing));
+    // The overlap happened: the shared store now holds the other publication.
+    expect(shared.get()).toEqual(OTHER);
+    expect(resolved).toEqual({ config: HELLO, failure: undefined });
+  });
+
+  // The fallback that fix must not remove. When this exchange's own answer was
+  // unusable, it negotiated nothing, and a valid config another resolution
+  // stored from the same Guardian is the better posture than the ACS default.
+  // Returning only what this exchange produced would fail open here.
+  it("falls back to a config another resolution stored when its own ServerHello was unusable", async () => {
+    const store = createMemorySessionConfigStore();
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const { id } = (await req.json()) as { id: string | number };
+        store.set(HELLO); // the overlapping resolution publishes while this one waits
+        return Response.json({ jsonrpc: "2.0", id, result: { on_decision_failure: "maybe" } });
+      },
+    });
+    try {
+      const resolved = await resolveVia(`http://localhost:${server.port}/acs`, store);
+      expect(resolved.config).toEqual(HELLO);
+      expect(resolved.failure).toBeInstanceOf(ServerHelloInvalidError);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   it("answers rather than throwing when the Guardian was never reachable", async () => {
     const store = createMemorySessionConfigStore();
     const resolved = await resolveVia("http://127.0.0.1:1/acs", store);
