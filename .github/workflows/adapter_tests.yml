@@ -1,0 +1,184 @@
+name: adapter-tests
+
+# Runs the adapter + conformance test suites on every push/PR that
+# touches adapter or spec source. Pinned dependencies + Python 3.12 so
+# NAT-dependent tests run (don't skip). Skipped tests in the NAT job
+# fail the build — addresses the "skips read as passes" failure mode
+# that motivated this workflow (PR #22 review).
+
+on:
+  push:
+    paths:
+      - 'adapters/**'
+      - 'specification/**'
+      - 'docs/spec/**'
+      - '.github/workflows/adapter_tests.yml'
+  pull_request:
+    paths:
+      - 'adapters/**'
+      - 'specification/**'
+      - 'docs/spec/**'
+      - '.github/workflows/adapter_tests.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Explicit `shell: bash` turns on `-o pipefail`. GitHub's implicit
+    # run shell is `bash -e {0}` WITHOUT pipefail, so `unittest | tee`
+    # would report tee's exit code (always 0) and a failing suite would
+    # go green (PR #22 review).
+    shell: bash
+
+jobs:
+  dco:
+    # Every commit needs a Signed-off-by trailer (CONTRIBUTING.md's DCO
+    # requirement). Checked in CI so it stops being a manual thing three
+    # PRs get asked to rebase for separately (PR #22 review).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every PR commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          while read -r sha; do
+            if ! git log -1 --format=%B "$sha" | grep -qi '^Signed-off-by: .*<.*@.*>'; then
+              echo "::error::commit $sha has no Signed-off-by trailer (CONTRIBUTING.md DCO)"
+              missing=1
+            fi
+          done < <(git rev-list "$BASE_SHA..$HEAD_SHA" --no-merges)
+          exit $missing
+
+  authoritative:
+    # The one authoritative conformance command (PR #22 emission review):
+    # Guardian conformance + shared-lib + every adapter suite, including
+    # the emission matrix that captures each real adapter's bytes against
+    # the canonical schemas. Installs everything installable in headless
+    # CI — test deps AND nvidia-nat — so the NAT emission/lifecycle tests
+    # actually RUN here rather than skip. Reports pass/skip/fail
+    # separately and fails on any failure. (Dependency-gated skips that
+    # CANNOT be satisfied headless — the `claude` CLI live test, the
+    # Cursor manual placeholder — are the only expected skips; the
+    # per-adapter matrix jobs below enforce the stricter NAT no-skip
+    # rule where NAT is the gated dependency.)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.12'
+      - name: Install all installable deps (test + NAT)
+        run: |
+          pip install -r adapters/requirements-test.txt
+          pip install -r adapters/nat/requirements.txt
+          pip install nvidia-nat-langchain==1.7.0
+      - name: Run the authoritative conformance command
+        run: |
+          cd adapters
+          # Non-strict: fails on any failure AND any UNEXPECTED skip.
+          # NAT is installed in this job, so a NAT skip is unexpected and
+          # fails the build; only real-product smoke tests on the exact
+          # EXPECTED_SKIPS allowlist are tolerated. The runner prints
+          # every skip by name + reason.
+          python run_conformance.py claude cursor nat
+
+  conformance:
+    # Single-file suite at adapters/test_acs_core_conformance.py:
+    # ACS-Core MUSTs plus reference-stack SHOULD/conditional coverage,
+    # asserted against the canonical schemas (see the suite docstring
+    # for the precise coverage claim — post-#21 some items are SHOULD).
+    # Runs without any framework deps — only the schema validators.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.12'
+      - name: Install shared test deps
+        run: pip install -r adapters/requirements-test.txt
+      - name: Run ACS-Core conformance suite
+        env:
+          ACS_SPEC_DIR: ${{ github.workspace }}/specification/v0.1.0
+        run: |
+          cd adapters
+          python -m unittest test_acs_core_conformance -v 2>&1 | tee out.log
+          # Conformance is the spec floor; ZERO skips allowed.
+          if grep -E "skipped=[1-9]" out.log; then
+            echo "::error::Conformance tests skipped — every spec MUST must execute"
+            exit 1
+          fi
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {adapter: _common,     install_nat: false}
+          - {adapter: claude-code, install_nat: false}
+          - {adapter: cursor,      install_nat: false}
+          - {adapter: nat,         install_nat: true }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          # NAT 1.7.0 supports 3.10–3.12; 3.13 has no wheel.
+          python-version: '3.12'
+
+      - name: Install shared test deps
+        run: pip install -r adapters/requirements-test.txt
+
+      - name: Install NAT runtime (pinned)
+        if: matrix.install_nat
+        # Pinned `nvidia-nat-core==1.7.0` per PR #22 review — an
+        # unpinned install would let a future NAT release shift the
+        # `InvocationContext` shape under us without test signal.
+        # `nvidia-nat-langchain` is the bridge `test_live.py` needs
+        # for end-to-end NAT-runtime tests; pinned to the matching
+        # NAT version.
+        run: |
+          pip install -r adapters/nat/requirements.txt
+          pip install nvidia-nat-langchain==1.7.0
+
+      - name: Run ${{ matrix.adapter }} tests
+        env:
+          ACS_SPEC_DIR: ${{ github.workspace }}/specification/v0.1.0
+        run: |
+          cd adapters/${{ matrix.adapter }}
+          python -m unittest discover -v tests 2>&1 | tee out.log
+
+      - name: Fail on unexpected skips in NAT job
+        # NAT IS installed in this job, so any test that skips on
+        # "NAT not installed" is a test-gating bug. Hard fail.
+        if: matrix.install_nat
+        run: |
+          cd adapters/${{ matrix.adapter }}
+          if grep -E "skipped=[1-9]" out.log; then
+            echo "::error::NAT job had skipped tests — NAT is installed, gating is broken"
+            cat out.log
+            exit 1
+          fi
+
+      - name: Surface skips in other adapters
+        # Claude Code's `test_live.py` gates on the `claude` CLI being
+        # on PATH; we don't install the CLI in CI. Cursor's `test_live.py`
+        # is a manual-procedure placeholder. Both legitimate. Warn so
+        # operators can see them; don't fail the build.
+        if: ${{ !matrix.install_nat }}
+        run: |
+          cd adapters/${{ matrix.adapter }}
+          if grep -E "skipped=[1-9]" out.log; then
+            echo "::warning::Tests skipped in ${{ matrix.adapter }} — review out.log"
+            grep -E "skipped|SKIPPED" out.log || true
+          fi

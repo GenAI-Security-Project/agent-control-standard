@@ -1,0 +1,36 @@
+# Example NAT workflow YAML wiring the ACS adapter.
+# Replace `target_function_or_group` and the surrounding workflow definition
+# with your real workflow; the middleware block is the only adapter-specific
+# part.
+#
+# Environment (set on the NAT process — the adapter is in-process):
+#   ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key
+#       REQUIRED for ACS-Core baseline integrity (§10). Without a secret
+#       both ends run unsigned and any local process that binds the
+#       Guardian port becomes the Guardian. Generate:
+#         mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key
+#       and give the SAME file to the Guardian.
+#   ACS_AUDIT_FILE=/path/to/.acs/audit.log
+#       Durable sink for §6.4 audit events (created 0600) in addition
+#       to stderr.
+#   ACS_DISABLED=1
+#       Incident kill switch: the middleware passes everything through
+#       with no Guardian traffic.
+
+middleware:
+  acs_guardian:
+    _type: acs_guardian              # registered name from acs_adapter.py
+    guardian_url: http://127.0.0.1:8787/acs
+    default_deny: true
+    timeout_s: 5.0
+    # session_id is auto-generated per process if omitted
+    # target_function_or_group: my_tools
+
+function_groups:
+  my_tools:
+    middleware: [acs_guardian]
+
+workflow:
+  _type: react_agent
+  middleware: [acs_guardian]
+  # ... rest of your workflow definition (LLM, tools, etc.)
