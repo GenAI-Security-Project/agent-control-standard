@@ -78,6 +78,7 @@ try:
         is_guardian_refusal,
         iso8601_now,
         load_session_state,
+        method_evaluated,
         modify_composition_violation,
         normalize_decision,
         record_step,
@@ -1103,23 +1104,27 @@ def main() -> int:
     # MAY deny to block the whole turn — which blocks the prompt (exit 2).
     if event_name == "beforeSubmitPrompt":
         turn_id = str(uuid.uuid4())
-        ts_response, terminal = _guardian_roundtrip(
-            build_turn_start_request(event, turn_id), "beforeSubmitPrompt", event)
-        if terminal is not None:
-            return terminal
-        ts_decision, ts_reason, _ = normalize_decision(ts_response.get("result"))
-        if ts_decision != "allow":
-            # A turn boundary can't be modify/ask'd — any non-allow
-            # blocks the prompt (exit 2).
-            audit_event("turn_start_blocked", turn_id=turn_id,
-                        disposition=ts_decision or "(unusable)",
-                        event="beforeSubmitPrompt")
-            msg = (f"turn blocked at start ({ts_decision or 'unusable'}): "
-                   f"{ts_reason}")
-            sys.stderr.write(f"acs-adapter: {msg}\n")
-            sys.stdout.write(json.dumps({"continue": False,
-                                         "user_message": msg}) + "\n")
-            return 2
+        if method_evaluated(server_hello, "steps/turnStart"):
+            ts_response, terminal = _guardian_roundtrip(
+                build_turn_start_request(event, turn_id), "beforeSubmitPrompt", event)
+            if terminal is not None:
+                return terminal
+            ts_decision, ts_reason, _ = normalize_decision(ts_response.get("result"))
+            if ts_decision != "allow":
+                # A turn boundary can't be modify/ask'd — any non-allow
+                # blocks the prompt (exit 2).
+                audit_event("turn_start_blocked", turn_id=turn_id,
+                            disposition=ts_decision or "(unusable)",
+                            event="beforeSubmitPrompt")
+                msg = (f"turn blocked at start ({ts_decision or 'unusable'}): "
+                       f"{ts_reason}")
+                sys.stderr.write(f"acs-adapter: {msg}\n")
+                sys.stdout.write(json.dumps({"continue": False,
+                                             "user_message": msg}) + "\n")
+                return 2
+        else:
+            audit_event("method_not_evaluated", method="steps/turnStart",
+                        event=event_name, session_id=session_id)
         _open_turn(event, turn_id)
 
     try:
@@ -1134,6 +1139,21 @@ def main() -> int:
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {event_name}\n")
         return _fail(event_name, session_id, cause="adapter_build_failed")
+
+    method = request.get("method", "")
+    if not method_evaluated(server_hello, method):
+        # ALLOW-by-default (handshake.json): audited and skipped, never sent,
+        # tracked as a step, or counted as a decision failure.
+        audit_event("method_not_evaluated", method=method, event=event_name,
+                    session_id=session_id)
+        if event_name == "stop":
+            _close_turn(event)
+        return _unevaluated_proceed(event_name)
+    if (method == "steps/toolCallResult"
+            and not method_evaluated(server_hello, "steps/toolCallRequest")
+            and request["params"]["payload"].pop("request_id_ref", None) is not None):
+        # The originating request was never sent, so citing it would dangle.
+        sign_envelope(request, session_id=request["params"]["metadata"]["session_id"])
 
     # Track this step in session state so subsequent subagentStart /
     # preCompact events can cite a real parent_step_id / entries_to_compact.
@@ -1180,6 +1200,17 @@ def main() -> int:
         return exit_code
 
     _emit(out)
+    return 0
+
+
+def _unevaluated_proceed(event_name: str) -> int:
+    """ALLOW-by-default for a method the Guardian does not evaluate; failClosed
+    gates read an empty reply as a failed hook, so gates and the prompt hook
+    get their explicit allow shapes."""
+    if event_name in PERMISSION_EVENTS:
+        _emit(_permission_response("allow"))
+    elif event_name == "beforeSubmitPrompt":
+        sys.stdout.write(json.dumps({"continue": True}) + "\n")
     return 0
 
 

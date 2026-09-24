@@ -71,6 +71,7 @@ try:
         guardian_error_cause,
         is_guardian_refusal,
         iso8601_now as _common_iso8601_now,
+        method_evaluated,
         modify_composition_violation,
         normalize_decision,
         response_matches_request,
@@ -408,6 +409,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         target = getattr(config, "target_function_or_group", None) or "nat"
         self._agent_id = os.environ.get("ACS_AGENT_ID") or f"nat:{hashlib.sha256(target.encode()).hexdigest()[:8]}"
         self._handshake_done = False
+        self._server_hello: dict | None = None
         self._lifecycle_subscribed = False
         self._lifecycle_subscription = None
         # Locks the check-then-set in _ensure_lifecycle_subscribed
@@ -447,6 +449,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             default_ms = (server_hello.get("timeout_config") or {}).get("default_ms")
             if isinstance(default_ms, (int, float)) and default_ms > 0:
                 self._negotiated_timeout_s = default_ms / 1000.0
+        self._server_hello = server_hello
         self._handshake_done = True
 
     def _effective_default_deny(self) -> bool:
@@ -518,6 +521,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         """Build, sign, and POST a lifecycle hook; errors are audited but
         never interrupt the workflow (enforcement lives in
         pre_invoke/post_invoke)."""
+        if not method_evaluated(self._server_hello, method):
+            audit_event("method_not_evaluated", method=method,
+                        session_id=self._session_id)
+            return
         request = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -585,6 +592,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return None
         self._ensure_handshake()
         self._ensure_lifecycle_subscribed()
+        if not method_evaluated(self._server_hello, "steps/toolCallRequest"):
+            # ALLOW-by-default (handshake.json): the call proceeds unsent.
+            audit_event("method_not_evaluated", method="steps/toolCallRequest",
+                        session_id=self._session_id)
+            return None
         correlation_id = self._correlation_request_id(context)
         try:
             request = self._build_request(
@@ -742,16 +754,22 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallResult",
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
+        if not method_evaluated(self._server_hello, "steps/toolCallResult"):
+            audit_event("method_not_evaluated", method="steps/toolCallResult",
+                        session_id=self._session_id)
+            return None
         # request_id_ref correlates the result with its originating
-        # toolCallRequest (tool-call-result.json:19-23).
+        # toolCallRequest (tool-call-result.json:19-23); an unsent request
+        # is never cited.
         correlation_id = self._correlation_request_id(context)
+        request_sent = method_evaluated(self._server_hello, "steps/toolCallRequest")
         try:
             request = self._build_request(
                 method="steps/toolCallResult",
                 tool_name=context.function_context.name,
                 tool_arguments=_extract_arguments(context),
                 result=context.output,
-                request_id_ref=correlation_id,
+                request_id_ref=correlation_id if request_sent else None,
             )
             response = self._call_guardian(request)
         except RequestTooLargeError as e:

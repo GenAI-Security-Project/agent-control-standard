@@ -157,6 +157,50 @@ class NATMiddlewareIntegration(unittest.TestCase):
             else:
                 os.environ["ACS_HMAC_SECRET_FILE"] = saved_secret_file
 
+    def test_unevaluated_tool_call_proceeds_unsent(self) -> None:
+        """handshake.json: methods absent from methods_evaluated are
+        ALLOW-by-default. Under default_deny, an unevaluated toolCallRequest
+        proceeds without Guardian traffic, and the evaluated result never
+        cites the unsent request."""
+        g = ProgrammableGuardian()
+
+        def hello(req: dict) -> dict:
+            result = g._default_handshake(req)
+            result["methods_evaluated"] = ["steps/toolCallResult"]
+            return result
+
+        g.handlers["handshake/hello"] = hello
+        saved_secret = os.environ.get("ACS_HMAC_SECRET")
+        saved_secret_file = os.environ.get("ACS_HMAC_SECRET_FILE")
+        try:
+            os.environ["ACS_HMAC_SECRET"] = g.hmac_secret
+            os.environ.pop("ACS_HMAC_SECRET_FILE", None)
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(acs_common, "_HANDSHAKE_CACHE_DIR",
+                                      Path(d)), g:
+                mw = ACSMiddleware(ACSMiddlewareConfig(
+                    guardian_url=g.url(), default_deny=True,
+                    session_id=str(uuid.uuid4()),
+                ))
+                ctx = _make_context("Bash", {"command": "echo hi"})
+                self.assertIsNone(asyncio.run(mw.pre_invoke(ctx)))
+                ctx.output = "hi"
+                self.assertIsNone(asyncio.run(mw.post_invoke(ctx)))
+            methods = [r.get("method") for r in g.received]
+            self.assertNotIn("steps/toolCallRequest", methods)
+            results = [r for r in g.received if r.get("method") == "steps/toolCallResult"]
+            self.assertEqual(len(results), 1)
+            self.assertNotIn("request_id_ref", results[0]["params"]["payload"])
+        finally:
+            if saved_secret is None:
+                os.environ.pop("ACS_HMAC_SECRET", None)
+            else:
+                os.environ["ACS_HMAC_SECRET"] = saved_secret
+            if saved_secret_file is None:
+                os.environ.pop("ACS_HMAC_SECRET_FILE", None)
+            else:
+                os.environ["ACS_HMAC_SECRET_FILE"] = saved_secret_file
+
     def test_acs_disabled_bypass_is_written_to_the_durable_sink(self) -> None:
         """Both NAT bypass boundaries must leave structured durable records."""
         saved_disabled = os.environ.get("ACS_DISABLED")

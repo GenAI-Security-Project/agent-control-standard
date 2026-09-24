@@ -72,6 +72,7 @@ try:
         is_guardian_refusal,
         iso8601_now,
         load_session_state,
+        method_evaluated,
         modify_composition_violation,
         normalize_decision,
         response_matches_request,
@@ -425,7 +426,11 @@ def _is_subagent_spawn(event: dict[str, Any]) -> bool:
     fetched 2026-08-22); older builds named it `Task`, so match both.
     The separate `TaskCreate` / task-list feature is not a spawn."""
     return (event.get("hook_event_name") == "PreToolUse"
-            and (event.get("tool_name") or "").lower() in ("agent", "task"))
+            and _is_subagent_tool(event.get("tool_name")))
+
+
+def _is_subagent_tool(tool_name: str | None) -> bool:
+    return (tool_name or "").lower() in ("agent", "task")
 
 
 def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
@@ -929,20 +934,24 @@ def main() -> int:
     # the prompt's own block shape so the prompt is blocked.
     if hook_name == "UserPromptSubmit":
         turn_id = str(uuid.uuid4())
-        ts_response, terminal = _guardian_roundtrip(
-            build_turn_start_request(event, turn_id), "UserPromptSubmit", session_id)
-        if terminal is not None:
-            return terminal
-        ts_decision, ts_reason, _ = normalize_decision(ts_response.get("result"))
-        if ts_decision != "allow":
-            # turnStart is a gate boundary — the host can't apply
-            # modify/ask/defer to "a turn is starting", so any non-allow
-            # blocks the prompt (fail closed). Audited.
-            audit_event("turn_start_blocked", turn_id=turn_id,
-                        disposition=ts_decision or "(unusable)")
-            _emit(_block_response(
-                f"turn blocked at start ({ts_decision or 'unusable'}): {ts_reason}"))
-            return 0
+        if method_evaluated(server_hello, "steps/turnStart"):
+            ts_response, terminal = _guardian_roundtrip(
+                build_turn_start_request(event, turn_id), "UserPromptSubmit", session_id)
+            if terminal is not None:
+                return terminal
+            ts_decision, ts_reason, _ = normalize_decision(ts_response.get("result"))
+            if ts_decision != "allow":
+                # turnStart is a gate boundary — the host can't apply
+                # modify/ask/defer to "a turn is starting", so any non-allow
+                # blocks the prompt (fail closed). Audited.
+                audit_event("turn_start_blocked", turn_id=turn_id,
+                            disposition=ts_decision or "(unusable)")
+                _emit(_block_response(
+                    f"turn blocked at start ({ts_decision or 'unusable'}): {ts_reason}"))
+                return 0
+        else:
+            audit_event("method_not_evaluated", method="steps/turnStart",
+                        hook=hook_name, session_id=session_id)
         _open_turn(session_id, turn_id, event)
 
     try:
@@ -958,6 +967,23 @@ def main() -> int:
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {hook_name}\n")
         return _fail(hook_name, session_id, cause="adapter_build_failed")
+
+    method = request.get("method", "")
+    if not method_evaluated(server_hello, method):
+        # ALLOW-by-default (handshake.json): recorded and skipped, never sent
+        # or counted as a decision failure.
+        audit_event("method_not_evaluated", method=method, hook=hook_name,
+                    session_id=session_id)
+        if hook_name == "Stop":
+            _close_turn(session_id, event)
+        return 0
+    if method == "steps/toolCallResult":
+        origin = ("steps/subagentStart" if _is_subagent_tool(event.get("tool_name"))
+                  else "steps/toolCallRequest")
+        if (not method_evaluated(server_hello, origin)
+                and request["params"]["payload"].pop("request_id_ref", None) is not None):
+            # The originating request was never sent, so citing it would dangle.
+            sign_envelope(request, session_id=request["params"]["metadata"]["session_id"])
 
     response, terminal = _guardian_roundtrip(request, hook_name, session_id)
     if terminal is not None:
