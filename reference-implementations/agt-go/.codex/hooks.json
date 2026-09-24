@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".acs/bin/acs-codex-hook --hmac-secret-file .acs/hmac-secret --state-dir .acs/codex --audit-log .acs/codex-audit.jsonl",
+            "statusMessage": "Checking Bash with ACS"
+          }
+        ]
+      }
+    ]
+  }
+}

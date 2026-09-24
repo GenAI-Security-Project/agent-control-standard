@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-end.json",
+  "title": "steps/sessionEnd payload",
+  "description": "Payload for the sessionEnd hook. Fires when the session terminates. Asynchronous; does not block agent.",
+  "type": "object",
+  "required": ["reason"],
+  "properties": {
+    "reason": {
+      "type": "string",
+      "enum": ["completed", "cancelled", "error", "timeout", "abandoned"]
+    },
+    "summary": {
+      "type": "object",
+      "description": "Optional summary written by the agent's framework",
+      "properties": {
+        "outcome": { "type": "string" },
+        "step_count": { "type": "integer", "minimum": 0 },
+        "errors": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "final_chain_hash": {
+      "type": "string",
+      "description": "Final SessionContext chain hash from the agent's perspective. Guardian SHOULD verify against its own chain."
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/context-entry.json",
+  "title": "ACS ContextEntry",
+  "description": "Append-only entry in a SessionContext's audit chain. Maintained server-side by the Guardian; not transmitted in full on the wire (the wire-visible commitment is chain_hash inside the request envelope's metadata.session_state). Defined here so that hash-chain verification is portable across implementations: any conformant Guardian MUST produce the same entry_hash for the same step content under the rules below, otherwise cross-implementation audit comparison and chain-mismatch detection break. Storage representation is implementation-defined (in-memory, append-only log, SQL row, etc.); this schema constrains the canonical form used for hashing and audit export, not how Guardians store the data internally.",
+  "type": "object",
+  "required": ["entry_id", "step_id", "step_type", "entry_hash"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Identifier for this entry, unique within the session."
+    },
+    "step_id": {
+      "type": "string",
+      "description": "Identifier of the step that produced this entry. SHOULD equal the request_id of the originating envelope."
+    },
+    "step_type": {
+      "type": "string",
+      "description": "The method name from the originating request envelope (e.g., 'steps/toolCallRequest', 'steps/toolCallResult')."
+    },
+    "request_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase-hex SHA-256 of the JCS-canonicalized (RFC 8785) request envelope's params object. RECOMMENDED. Without request_hash, the chain commits only to step metadata (step_id, step_type) and not to the actual request content; retroactive request-content tampering would be undetectable from the chain alone. RECOMMENDED for any deployment that relies on the chain for tamper-evidence."
+    },
+    "provenance_summary": {
+      "$ref": "provenance-summary.json",
+      "description": "Optional condensed view of provenance facts at this step. Included in the entry's content (and therefore committed to by entry_hash) when present."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the entry was written. RECOMMENDED for audit reconstruction. Included in the entry's content when present."
+    },
+    "previous_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase-hex SHA-256 entry_hash of the previous ContextEntry in the chain. NULL (or absent) for the first entry in a session. MUST be present and non-null for every entry except the first."
+    },
+    "entry_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase-hex SHA-256 commitment to this entry plus the prior chain. Computed deterministically as SHA-256(content_bytes || prev_hash_bytes), where: (1) content_bytes is the UTF-8 encoding of the RFC 8785 (JCS) canonicalization of this object with the entry_hash and previous_hash fields REMOVED; (2) prev_hash_bytes is the raw 32-byte decoding of previous_hash, or the empty byte string if previous_hash is null/absent (first entry); (3) || denotes byte concatenation. Conformant Guardians MUST follow this rule exactly for chains to be cross-implementation verifiable. Alternative canonicalization schemes are NOT permitted within v0.1; future versions MAY negotiate alternatives via the handshake."
+    }
+  }
+}
