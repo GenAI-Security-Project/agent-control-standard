@@ -30,7 +30,7 @@ by `codex login`; it does not supply an API key or create separate model billing
 The target enables this checkout's project hook without a trust prompt and grants
 workspace network access so the hook can reach the loopback Guardian. Both settings
 apply only to the Codex process started by this command. Network access is not
-limited to the hook: it also opens the network to the commands the agent itself
+limited to the hook: it also opens the network to the commands Codex itself
 runs in that session, so the policy alone decides what may leave the machine.
 Inspect [`.codex/hooks.json`](../../.codex/hooks.json) before running it.
 

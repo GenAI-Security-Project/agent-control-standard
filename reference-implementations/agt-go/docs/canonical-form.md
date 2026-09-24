@@ -2,7 +2,7 @@
 
 Two Guardians compare chains and verify each other's signatures only if they hash and
 sign the same bytes. ACS fixes those bytes as the RFC 8785 JSON Canonicalization Scheme
-(JCS) form, and permits no other (§8.2, §10). This page says where the Go implementation produces
+(JCS) form, and permits no other (§8.2, §10). This page says where the Go Guardian produces
 that form and how each use is proved.
 
 ## Canonicalize once, the same way everywhere
@@ -12,7 +12,7 @@ that form and how each use is proved.
 implements RFC 8785 directly. Go's `encoding/json` v1 never produces canonical bytes: it
 escapes `<`, `>`, `&`, U+2028 and U+2029, and formats numbers its own way.
 
-The same package decodes every request. It refuses a duplicate member name, invalid UTF-8
+`internal/envelope` decodes every request with the same JSON library. It refuses a duplicate member name, invalid UTF-8
 and an unpaired surrogate, and it matches member names case-sensitively. A request two
 parsers could read two ways never reaches a signature check, so a signature always covers
 exactly one meaning.
@@ -25,12 +25,9 @@ exactly one meaning.
 | `request_hash` | Lowercase-hex SHA-256 of the request's `params`, signature included. | §8.1 |
 | `entry_hash` | Lowercase-hex SHA-256 of the entry without `entry_hash` and `previous_hash`, then the raw 32 bytes of `previous_hash`, or nothing for a session's first entry. | §8.2 |
 
-The HMAC-SHA256 signer derives a separate key for each session with HKDF (RFC
-5869). It uses SHA-256, supplies no salt, uses the UTF-8 bytes of `session_id` as
-the HKDF `info` input, and asks HKDF for 32 bytes. `salt` and `info` are inputs to
-HKDF; they are not fields in an ACS message. Section 10 requires HKDF but does
-not define those inputs. Two implementations must use the same values to verify
-each other's signatures. The signature value is standard base64 with padding.
+The HMAC-SHA256 signer derives a separate key for each session with HKDF (RFC 5869); its
+inputs are listed in [conformance](conformance.md#behavior-that-acs-v010-leaves-undefined).
+The signature value is standard base64 with padding.
 
 ## Tests
 

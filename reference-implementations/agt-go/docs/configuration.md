@@ -16,7 +16,7 @@ policy deployment, and choose limits for its workload.
 | `server.port` | Listener port or service name. `0` asks the operating system for a free port. | Non-empty. |
 | `server.read_header_timeout` | Maximum time to read HTTP headers. | Positive duration. |
 | `server.read_timeout` | Maximum time to read a complete request. | Positive duration. |
-| `server.write_timeout` | Maximum time to write a response. | Must exceed `protocol.decision_timeout`. |
+| `server.write_timeout` | Maximum time to write an HTTP response. | Must exceed `protocol.decision_timeout`. |
 | `server.idle_timeout` | HTTP keep-alive idle limit. | Positive duration. |
 | `server.shutdown_grace` | Duration given to each shutdown phase: in-flight work, cancellation-answer delivery, and audit flush. | Positive duration. |
 
@@ -33,7 +33,7 @@ enabled only after the policy engine and Guardian are ready.
 | `policy.ask_substitution` | Endpoint behavior when ASK cannot be completed. | `none`, `deny` or `defer`. |
 | `policy.tool_aliases` | Optional map from an Observed Agent's tool name to the manifest's tool name. | Both names must be non-empty. |
 
-`ask_substitution: none` returns ASK unchanged. `deny` returns DENY
+`ask_substitution: none` leaves an ASK from the engine unchanged. `deny` returns DENY
 `approver_unavailable`. `defer` returns DEFER with a deny timeout decision. The
 setting belongs to this Guardian endpoint; it is not tied to a particular host
 product. The reference configuration uses `deny` because its host examples do
@@ -51,7 +51,7 @@ SessionContext chain and audit records keep the original tool name.
 | `audit.envelope_log` | JSONL file for inbound and outbound ACS envelopes. | Absolute path, or relative to the configuration file. |
 | `audit.event_log` | JSONL file for Guardian audit events. | Absolute path, or relative to the configuration file. |
 
-Envelope records contain raw requests and responses, including tool arguments
+Envelope records contain raw requests and answers, including tool arguments
 and results. Treat both audit files as sensitive. The writer is asynchronous
 and bounded. Shutdown gives the writer its own `server.shutdown_grace`; failure
 to flush makes the command exit with an error.
@@ -114,6 +114,7 @@ configuration surface: an override for a key absent from the declared schema
 is rejected.
 
 The checked-in configuration uses port `8787` for `make run`. Automated checks
-and interactive host examples override only `ACS__SERVER__PORT` with `0`. They
-read the chosen address from the Guardian at startup and leave `guardian.yaml`
-unchanged.
+and interactive host examples set `ACS__SERVER__PORT` to `0` and point the audit
+logs at a temporary directory; the conformance check also sets its own HMAC key.
+They read the chosen address from the Guardian at startup and leave
+`guardian.yaml` unchanged.

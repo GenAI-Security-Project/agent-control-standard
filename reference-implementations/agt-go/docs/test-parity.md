@@ -1,7 +1,7 @@
-# Coverage relative to the TypeScript reference
+# TypeScript test parity
 
 This table accounts for the TypeScript reference's 69 test files. Where the
-same behavior exists in the Go implementation, it names the corresponding Go
+same behavior exists in the Go Guardian, it names the corresponding Go
 tests. Otherwise it records why the test does not apply. The table does not
 claim identical test structure or general behavioral equivalence.
 
@@ -40,7 +40,7 @@ Go tests are named `<package directory>.<test>`, run from this directory with
 | `test/session-context-roundtrip.test.ts` | `guardian.TestReserveAndAppendAtomicity`, `guardian.TestMemoryStoreRefusesWhenFull` |
 | `test/envelope-log-sink-roundtrip.test.ts` | `guardian.TestJSONLAuditLog` (the Inspector's line shape) |
 | `test/readme-captures.test.ts` | Does not apply. The Go command's runnable configuration and commands are documented directly in `README.md`. |
-| `test/pin.test.ts` | Does not apply: the Go implementation copies no policy files; it reads `../agt/policy/lib/`, whose version that test fixes. |
+| `test/pin.test.ts` | Does not apply: the Go Guardian copies no policy files; it reads `../agt/policy/lib/`, whose version that test fixes. |
 | `test/audit-sink-roundtrip.test.ts` | Does not apply: the host adapter's audit log. |
 
 ## Conformance harness
@@ -49,7 +49,7 @@ The existing TypeScript command still measures what ACS can express of AGT.
 When `ACS_CONFORMANCE_GUARDIAN_URL` is set, the same command also sends fixed,
 signed ACS requests to an external Guardian. `make conformance` starts the Go
 Guardian on a free port and runs that external mode. `make docs-check` checks
-the Go implementation's ACS-Core table and its references to Go tests.
+the Go Guardian's ACS-Core table and its references to Go tests.
 
 | TypeScript test | Go counterpart |
 | --- | --- |
@@ -61,7 +61,7 @@ the Go implementation's ACS-Core table and its references to Go tests.
 
 ## Hosts, host adapter and Inspector
 
-The Go implementation ships Codex `PreToolUse` and OpenCode V2 `execute.before` and
+The Go Guardian ships Codex `PreToolUse` and OpenCode V2 `execute.before` and
 `execute.after` examples. `internal/hostadapter` owns their shared signed session,
 handshake, timeout, failure-posture and audit behavior; each example contains only the
 host event conversion and decision application. `internal/observedagent` is the lower

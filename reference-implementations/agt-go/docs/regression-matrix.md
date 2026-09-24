@@ -2,7 +2,7 @@
 
 This matrix records the external ACS findings checked against the Go Guardian.
 It links each independently described failure to the test that exercises the
-same observable contract here. The external data is not copied into this tree.
+same observable behavior here. The external data is not copied into this tree.
 
 ## Open reference-implementation findings
 
@@ -23,7 +23,7 @@ The [ACS-Core negative conformance suite](https://github.com/probityai/agent-evi
 contains 32 declarations. Nineteen cite a requirement assigned to the Guardian.
 Twelve of those exercise behavior implemented by the Guardian itself.
 
-| External vector | Contract | Go tests |
+| External vector | Required behavior | Go tests |
 | --- | --- | --- |
 | `v412653087b92cb07`, `v78927805373a6c06`, `vae2037ee96435463` | Negotiate a compatible `0.1.x` version and reject another major version. | `guardian.TestHandshakeRefusals`, `internal/handshake.TestSelectVersion` |
 | `vb87b86b4930665ca`, `vd67cd207a4eb6798` | Reject an invalid signature over the complete canonical request. | `guardian.TestSignatureRequired`, `internal/envelope.TestSigningInputCoversEverythingButTheSignature` |
@@ -36,7 +36,7 @@ Twelve of those exercise behavior implemented by the Guardian itself.
 therefore creates no executable expectation.
 
 The remaining six Guardian-labelled vectors concern approver authentication or
-strict-scope policy. In this implementation those decisions belong to the
+strict-scope policy. In the Go Guardian those decisions belong to the
 injected `guardian.PolicyEngine`; the Guardian validates the returned ACS shape
 and maintains the session chain, but it must not invent deployment identity or
 authorization policy. `guardian.TestIntentExtension` and

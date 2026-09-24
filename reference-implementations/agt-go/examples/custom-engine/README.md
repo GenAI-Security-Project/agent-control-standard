@@ -1,7 +1,7 @@
 # Custom engine example
 
 This standalone module embeds the Guardian without AGT. It demonstrates the
-four deployment interfaces:
+four interfaces with its own implementations:
 
 - `PolicyEngine`: denies commands containing `rm -rf` or `mkfs`;
 - `Signer`: looks up HMAC keying material by `key_id`;
@@ -19,5 +19,5 @@ The default endpoint is `http://127.0.0.1:8788/acs`. Use `--listen` to select
 another address.
 
 This module uses a local `replace` directive so it tests the current checkout.
-For the interface contracts, ordering and durable-store requirements, read
-[embedding](../../docs/embedding.md).
+For what each implementation must do, read
+[extend the Guardian](../../docs/extending.md).
