@@ -66,6 +66,11 @@ use the local posture. Missing dependencies, invalid input, invalid signatures,
 misbound decisions, unsupported decisions, and HTTP refusals deny independently
 of that posture. Each substitution or failure emits an `ACS_AUDIT` event.
 
+When a valid ServerHello excludes `steps/toolCallRequest` from
+`methods_evaluated`, the Guardian has not agreed to evaluate tool calls. The
+adapter records `method_not_evaluated`, sends no tool-call request, and leaves
+the decision to Codex's own permissions, even with `ACS_DEFAULT_DENY=1`.
+
 The handshake timeout is five seconds. A positive negotiated decision timeout
 up to ten seconds is supported; larger or invalid values deny before the step
 is sent. Keep the host hook timeout above these budgets (the example uses 30s).

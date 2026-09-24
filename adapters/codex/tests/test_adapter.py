@@ -267,7 +267,10 @@ class AdapterTests(unittest.TestCase):
     def test_unsupported_negotiation_denies_before_step(self):
         for change in ({"timeout_config": {"default_ms": 30000}},
                        {"timeout_config": {"default_ms": True}},
-                       {"selected_transport": "stdio"}, {"methods_evaluated": []},
+                       {"selected_transport": "stdio"},
+                       {"methods_evaluated": None},
+                       {"methods_evaluated": "steps/toolCallRequest"},
+                       {"methods_evaluated": [None]},
                        {"on_decision_failure": "unknown"}, {"negotiated_version": "9.0.0"}):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as cache:
                 self.env["ACS_HANDSHAKE_CACHE"] = cache
@@ -279,6 +282,53 @@ class AdapterTests(unittest.TestCase):
                 out, _ = self.invoke()
                 self.assertEqual(out["permissionDecision"], "deny")
         self.assertNotIn("steps/toolCallRequest", self.guardian.methods())
+
+    def test_unevaluated_method_leaves_codex_permission_flow_in_charge(self):
+        for local_posture in ("0", "1"):
+            for negotiated_posture in ("proceed", "deny"):
+                with self.subTest(local_posture=local_posture,
+                                  negotiated_posture=negotiated_posture), \
+                        tempfile.TemporaryDirectory() as cache:
+                    self.env["ACS_HANDSHAKE_CACHE"] = cache
+                    self.env["ACS_DEFAULT_DENY"] = local_posture
+
+                    def hello(req):
+                        result = self.guardian._default_handshake(req)
+                        result.update(methods_evaluated=[],
+                                      on_decision_failure=negotiated_posture)
+                        return result
+
+                    self.guardian.handlers["handshake/hello"] = hello
+                    before = len(self.guardian.received)
+                    out, audit = self.invoke()
+                    self.assertEqual(out, {})
+                    self.assertIn("method_not_evaluated", audit)
+                    self.assertNotIn("fail_open_bypass", audit)
+                    self.assertNotIn("decision_failure_fail_closed", audit)
+                    self.assertEqual(self.guardian.methods()[before:], ["handshake/hello"])
+
+                    before = len(self.guardian.received)
+                    cached_out, cached_audit = self.invoke(event(tool_use_id="call_cached"))
+                    self.assertEqual(cached_out, {})
+                    self.assertIn("method_not_evaluated", cached_audit)
+                    self.assertEqual(self.guardian.methods()[before:], [])
+        self.guardian.assert_all_valid(self)
+
+    def test_unevaluated_method_does_not_bypass_handshake_verification(self):
+        self.env["ACS_DEFAULT_DENY"] = "1"
+        self.guardian.sign_responses = False
+
+        def hello(req):
+            result = self.guardian._default_handshake(req)
+            result["methods_evaluated"] = []
+            return result
+
+        self.guardian.handlers["handshake/hello"] = hello
+        out, audit = self.invoke()
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("handshake_failed", audit)
+        self.assertNotIn("method_not_evaluated", audit)
+        self.assertEqual(self.guardian.methods(), ["handshake/hello"])
 
     def test_negotiated_timeout_and_posture(self):
         for posture in ("proceed", "deny"):

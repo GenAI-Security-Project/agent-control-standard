@@ -231,7 +231,9 @@ def run(event: dict) -> dict:
         return failure("handshake_failed", default_deny)
     if not isinstance(hello, dict) or hello.get("negotiated_version") != ACS_VERSION:
         return denied("invalid_server_hello")
-    if hello.get("selected_transport") != "http" or METHOD not in hello.get("methods_evaluated", []):
+    evaluated = hello.get("methods_evaluated")
+    if (hello.get("selected_transport") != "http" or not isinstance(evaluated, list)
+            or not all(isinstance(method, str) for method in evaluated)):
         return denied("unsupported_negotiation")
     if hello.get("on_decision_failure", "proceed") not in ("deny", "proceed"):
         return denied("invalid_negotiated_posture")
@@ -240,6 +242,10 @@ def run(event: dict) -> dict:
     if (isinstance(milliseconds, bool) or not isinstance(milliseconds, (int, float))
             or not math.isfinite(milliseconds) or not 0 < milliseconds <= MAX_DECISION_SECONDS * 1000):
         return denied("unsupported_decision_timeout")
+    if METHOD not in evaluated:
+        # ACS leaves unevaluated methods to the host's own permission flow.
+        audit_event("method_not_evaluated", method=METHOD, hook="PreToolUse")
+        return {}
     request = build_request(event)
     try:
         result = call_guardian(url, request, milliseconds / 1000)

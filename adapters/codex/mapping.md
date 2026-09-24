@@ -22,6 +22,13 @@ advertises exactly one step method, HTTP, no Wrapped MCP, and no conformance
 profiles. Signing alone is not ACS-Core conformance. No session or turn lifecycle
 events, tool results, heartbeat, or subagent-specific gates are emitted.
 
+If a valid ServerHello omits `steps/toolCallRequest` from `methods_evaluated`,
+the Guardian is not evaluating this method. The adapter audits
+`method_not_evaluated`, sends no tool-call request, and returns no ACS decision,
+leaving Codex's own permission flow in charge. This is not a decision failure;
+neither local nor negotiated fail-closed posture changes it to an ACS denial.
+Malformed negotiation still denies.
+
 ## Decision mapping
 
 | Guardian decision | Codex `hookSpecificOutput` for `PreToolUse` |
@@ -45,8 +52,9 @@ the call. `PermissionRequest` is a different event and cannot implement a
 universal ASK path for calls that never require approval.
 
 Signed responses must bind both the JSON-RPC ID and ACS request ID to the
-outstanding request. Only a final decision for the negotiated ACS version can
-authorize execution. Signature failures, malformed messages, and refusals deny.
+outstanding request. For evaluated methods, only a final decision for the
+negotiated ACS version can authorize execution through ACS. Signature failures,
+malformed messages, and refusals deny.
 Transport failures and signed non-refusal RPC errors follow the configured
 failure posture and emit an audit event. The shared handshake treats failed
 negotiation as a startup failure; `ACS_DEFAULT_DENY=1` blocks that path.
