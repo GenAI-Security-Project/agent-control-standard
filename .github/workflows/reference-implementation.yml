@@ -76,3 +76,40 @@ jobs:
       # schemas in this repository rather than a copy of them.
       - name: Run the tests
         run: bun test
+
+  agt-rust:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt-rust
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust tooling
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.98.1
+
+      - name: Install AGT's pinned OPA binary
+        run: |
+          npm install --prefix "$RUNNER_TEMP/agt-opa" --no-save agent-control-specification-opa-linux-x64@0.3.1-beta.0
+          echo "ACS_OPA_PATH=$RUNNER_TEMP/agt-opa/node_modules/agent-control-specification-opa-linux-x64/bin/opa" >> "$GITHUB_ENV"
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust workspace
+        run: cargo check --workspace --locked
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test Rust Guardian with AGT policy
+        env:
+          ACS_OPA_TIMEOUT_MS: "30000"
+        run: cargo test --workspace --all-features --locked
