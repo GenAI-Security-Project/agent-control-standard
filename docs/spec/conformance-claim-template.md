@@ -28,11 +28,11 @@ cannot name anything else.
 | If no, which profile carries integrity beyond the shared secret | `<acs-crypto / acs-audit / none, and why>` |
 
 This block is not optional and it is not a formality. ACS-Core's baseline integrity is
-HMAC-SHA256, which is symmetric, so the boundary it establishes holds only for agents the
-deployment itself hosts. Two deployments can fill the rest of this page identically and
-truthfully while one governs agents it hosts and the other governs a customer's agents behind an
-independently operated Guardian. The second is making a much weaker claim. Without this block
-the page does not show it.
+HMAC-SHA256 is symmetric, so integrity depends on how the shared key is distributed and which
+parties operate the endpoints. It authenticates possession of the shared key, but it does not
+provide non-repudiation or independent attribution between parties that share that key. Two
+deployments can therefore fill the rest of this page identically while relying on materially
+different trust topologies. Without this block the page does not show that distinction.
 
 ## 3. Profile matrix
 
@@ -99,8 +99,8 @@ enforcement.
 
 | Field | Value |
 |---|---|
-| `on_decision_failure` posture as configured (§6.4) | `<proceed / block>` |
-| Startup posture on handshake failure (§4.1) | `<proceed / block>` |
+| `on_decision_failure` posture as configured (§6.4) | `<proceed / deny>` |
+| Startup posture on handshake failure (§4.1) | `<proceed / refuse>` |
 | Sessions observed in this run | `<n>` |
 | Steps that proceeded without a decision | `<n>` |
 | Sessions started unguarded after handshake failure | `<n>` |
