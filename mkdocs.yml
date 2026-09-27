@@ -76,6 +76,7 @@ nav:
     - Trust Basis: concepts/trust.md
   - Specification:
     - Conformance Profiles: spec/conformance.md
+    - Conformance Claim Template: spec/conformance-claim-template.md
     - Instrument:
       - Overview: spec/instrument/README.md
       - Supported Hooks: spec/instrument/hooks.md
