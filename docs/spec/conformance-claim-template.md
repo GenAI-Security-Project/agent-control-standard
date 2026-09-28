@@ -12,7 +12,7 @@ reader can fetch it unchanged.
 | Date of claim | `<date>` |
 | Claimant | `<organisation or individual>` |
 | Published at | `<URL that resolves to fixed bytes>` |
-| SHA-256 of this filled copy | `<digest>` and `<filename it belongs to>` |
+| SHA-256 of this filled copy, computed with this field left empty | `<digest>` and `<filename it belongs to>` |
 
 Pin the specification by tag and full commit SHA. A tag can move, and `version.txt` has
 disagreed with the latest tag before (`Issue #143`). A full SHA is computed from the bytes and
@@ -29,7 +29,7 @@ cannot name anything else.
 
 This block is not optional and it is not a formality. ACS-Core's baseline integrity is
 HMAC-SHA256, which is symmetric, so the boundary it establishes holds only for agents the
-deployment itself hosts. Two deployments can fill the rest of this page identically and
+deployment itself operates. Two deployments can fill the rest of this page identically and
 truthfully while one governs agents it hosts and the other governs a customer's agents behind an
 independently operated Guardian. The second is making a much weaker claim. Without this block
 the page does not show it.
@@ -99,8 +99,8 @@ enforcement.
 
 | Field | Value |
 |---|---|
-| `on_decision_failure` posture as configured (§6.4) | `<proceed / block>` |
-| Startup posture on handshake failure (§4.1) | `<proceed / block>` |
+| `on_decision_failure` posture as configured (§6.4) | `<proceed / deny>` |
+| Startup posture on handshake failure (§4.1) | `<proceed / refuse>` |
 | Sessions observed in this run | `<n>` |
 | Steps that proceeded without a decision | `<n>` |
 | Sessions started unguarded after handshake failure | `<n>` |
@@ -116,7 +116,18 @@ recorded and where.
 ## 6. Limits of this claim
 
 State what the claim does not cover, in the claimant's own words. At minimum, any cell marked
-`NOT ESTABLISHED`, and whether the environment in which the run happened still exists.
+`NOT ESTABLISHED`, whether the environment in which the run happened still exists, and who
+authored the policy and answered the ASKs.
+
+| Field | Value |
+|---|---|
+| Policy authorship | `<human-authored / generated / vendor default>` |
+| ASK responses during this run | `<human-answered / service-answered / mixed / no ASKs occurred>` |
+
+ACS-Core checks that the channel is authenticated and the Observed Agent honors decisions. It
+does not check who wrote the policy or who answered an ASK. A deployment whose policy was
+generated and whose ASKs were all answered by a service is fully conformant, and a claim that
+stays silent on it lets a reader supply oversight that ACS never checked.
 
 `<free text>`
 
