@@ -61,7 +61,7 @@ jobs:
 
       - name: Install the pinned conformance vectors
         run: |
-          uv venv "$RUNNER_TEMP/vectors-venv"
+          uv venv --python 3.13 "$RUNNER_TEMP/vectors-venv"
           uv pip install --python "$RUNNER_TEMP/vectors-venv/bin/python" \
             --require-hashes -r conformance/acs-core-vectors.txt
 
