@@ -12,7 +12,7 @@ reader can fetch it unchanged.
 | Date of claim | `<date>` |
 | Claimant | `<organisation or individual>` |
 | Published at | `<URL that resolves to fixed bytes>` |
-| SHA-256 of this filled copy, computed with this field left empty | `<digest>` and `<filename it belongs to>` |
+| SHA-256 of this filled copy, computed with the digest replaced by the literal `<digest>` | `<digest>` and `<filename it belongs to>` |
 
 Pin the specification by tag and full commit SHA. A tag can move, and `version.txt` has
 disagreed with the latest tag before (`Issue #143`). A full SHA is computed from the bytes and
@@ -28,11 +28,12 @@ cannot name anything else.
 | If no, which profile carries integrity beyond the shared secret | `<acs-crypto / acs-audit / none, and why>` |
 
 This block is not optional and it is not a formality. ACS-Core's baseline integrity is
-HMAC-SHA256, which is symmetric, so the boundary it establishes holds only for agents the
-deployment itself operates. Two deployments can fill the rest of this page identically and
-truthfully while one governs agents it hosts and the other governs a customer's agents behind an
-independently operated Guardian. The second is making a much weaker claim. Without this block
-the page does not show it.
+HMAC-SHA256 with an HKDF-derived per-session key from deployment-provided key material. It is
+symmetric, so it authenticates possession of that key but cannot give the non-repudiation and
+external verifiability that ACS-Crypto adds. Two deployments can fill the rest of this page
+identically and truthfully while one operates both ends and the other governs a customer's
+agents behind an independently operated Guardian. The second is making a much weaker claim.
+Without this block the page does not show it.
 
 ## 3. Profile matrix
 
