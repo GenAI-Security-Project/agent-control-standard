@@ -21,7 +21,7 @@ designed for contributors. The spreadsheet only defines the shape of the skill's
 ## Goal
 
 A contributor can open one page and see each deliverable the project has committed to, its
-due date, and how much of it is done, without reading a label or opening the board. A
+target quarter, and how much of it is done, without reading a label or opening the board. A
 maintainer can say "Update the roadmap for OWASP" in any Claude surface and get rows ready
 to paste.
 
@@ -31,6 +31,7 @@ to paste.
 | --- | --- | --- |
 | Unit of the roadmap | One GitHub milestone is one deliverable | A milestone already carries a title, a due date, a description, and a set of issues. Nothing else in the repository has a date. |
 | Which milestones | New milestones named for what ships, replacing the Day 14/30/60/90 checkpoints | Each Day N description bundles three or four unrelated outcomes under a title that says nothing to an outsider. |
+| Target granularity | Calendar quarter, such as `Q4 2026`. A milestone's `due_on` is set to the last day of its quarter and never shown as a date. | A day-level date promises a precision the project cannot staff, and a missed day reads as a broken promise. GitHub milestones only take a date, so the quarter's last day carries it, which keeps sorting and overdue detection working. |
 | Freshness | Nightly rebuild of static HTML | The site renders with JavaScript disabled. A browser fetch would break that and share an anonymous limit of 60 requests an hour per IP. |
 | Page and spreadsheet | Decoupled | The page answers to contributors. The spreadsheet is a quarterly report for OWASP. |
 | Where the OWASP procedure lives | A personal skill named `owasp-acs-roadmap`, outside this repository | OWASP reporting is an administrative chore, not part of the standard, and nothing in CI depends on it. |
@@ -58,11 +59,11 @@ The fixed introduction says when the page was generated and links to
 [Current Priority Scope](../CONTRIBUTING.md#current-priority-scope). That section declares
 itself the only place scope is stated, so the page links to it and never restates it.
 
-Below the introduction, each open milestone renders as a card, ordered by due date with
-undated milestones last. A card carries:
+Below the introduction, each open milestone renders as a card, ordered by target quarter and then
+by title, with undated milestones last. A card carries:
 
 - the milestone title, linked to the milestone on GitHub
-- the due date, or "No date set"
+- the target quarter derived from `due_on`, such as `Q4 2026`, or "Ongoing" when there is none
 - a progress bar and a count, such as "4 of 9 done"
 - the milestone description as plain text
 - the counted issues, each with its number, title, and open or closed state, linked to GitHub
@@ -308,9 +309,11 @@ A guard test pins the workflow's shape the way the refresh workflow's test does.
 the exact trigger set, the exact permissions per job, and that no step checks out a pull
 request ref.
 
-The board card for a newly accepted issue moves on the nightly board reconcile, not
-instantly, because a label added by `GITHUB_TOKEN` triggers no other workflow. Whether the
-project's built-in workflows also ignore token-made changes is unverified.
+The board card for a newly accepted issue reaches the Accepted column on the nightly board
+reconcile. That is true whoever applies the label, a maintainer or this workflow, because
+the project's built-in workflows add, close, and merge items but cannot move one when a
+label changes. `tools/apply_governance.py` says so in its module docstring, and it is the
+reason the board reconciler exists.
 
 ## The OWASP report skill
 
@@ -331,7 +334,7 @@ starting at the Deliverable ID column.
 | Workstream Lead | that workstream's leads from the `GOVERNANCE.md` table |
 | Status | rule below |
 | Target Quarter | calendar quarter of `due_on`, written as `Q4 2026` |
-| Target Publication Date | `due_on` as `YYYY-MM-DD` |
+| Target Publication Date | blank. The project commits to quarters, not days, and several existing rows already leave it blank. |
 | Milestone & Strategic Objective | milestone description |
 | Repository Link | milestone URL |
 
@@ -364,22 +367,22 @@ it has run once on the web.
 ## Milestone migration
 
 The starting set below comes from a gap analysis of the Strategic Adoption Plan v3 against
-open issues and pull requests on October 4, 2026. It is proposed, not agreed. Issue
-assignments were made from titles, and the dates from November onward are estimates.
+open issues and pull requests on October 4, 2026. It is proposed, not agreed, and issue
+assignments were made from titles. A milestone due in Q4 2026 gets `due_on` 2026-12-31.
 
 | Milestone | Issues and pull requests | Due |
 | --- | --- | --- |
-| Conformance claim template | #93, PR #168, #136, PR #24 | 2026-10-09 |
-| Fail-open decision | #32, #37 | 2026-10-23 |
-| Reference adapters on main (Claude Code, Cursor, NAT) | #132, PR #21, #134, PR #22, #131, PR #20 | 2026-10-30 |
-| Spec v0.1 errata | #194 to #198, #146, #148, #149, #120, #121, #57, #58, PR #63 | 2026-11-06 |
-| ACS-Core conformant reference Guardian | the Reference Guardian bugs and conformance reports, #188, PR #193, #71 to #73 | 2026-11-20 |
-| Installable reference Guardian | #94, #91, #90, PR #112, #127, PR #126 | 2026-12-04 |
-| AGT interoperability benchmark | #92, PR #113, #171 | 2026-12-04 |
-| Governance under OWASP | open lead seats, domain transfer, OpenSSF Best Practices, marketing site retirement, #144, #145, #178 | 2026-12-04 |
-| Host adapter coverage | #162, #170, #89, #114, #107 to #111 | none |
-| Language ports | #86 to #88, #135, PRs #183, #78, #169, #187 | none |
-| v0.2.0 | every `scope:deferred` issue, #53, #29 | 2027-03-09 |
+| Conformance claim template | #93, PR #168, #136, PR #24 | Q4 2026 |
+| Fail-open decision | #32, #37 | Q4 2026 |
+| Reference adapters on main (Claude Code, Cursor, NAT) | #132, PR #21, #134, PR #22, #131, PR #20 | Q4 2026 |
+| Spec v0.1 errata | #194 to #198, #146, #148, #149, #120, #121, #57, #58, PR #63 | Q4 2026 |
+| ACS-Core conformant reference Guardian | the Reference Guardian bugs and conformance reports, #188, PR #193, #71 to #73 | Q4 2026 |
+| Installable reference Guardian | #94, #91, #90, PR #112, #127, PR #126 | Q4 2026 |
+| AGT interoperability benchmark | #92, PR #113, #171 | Q4 2026 |
+| Governance under OWASP | open lead seats, domain transfer, OpenSSF Best Practices, marketing site retirement, #144, #145, #178 | Q4 2026 |
+| Host adapter coverage | #162, #170, #89, #114, #107 to #111 | Ongoing |
+| Language ports | #86 to #88, #135, PRs #183, #78, #169, #187 | Ongoing |
+| v0.2.0 | every `scope:deferred` issue, #53, #29 | Q1 2027 |
 
 The governance work has no issues today, so it is invisible to the page until it does.
 Filing it means one issue for each open lead seat (Reference Implementation, one seat.
@@ -390,7 +393,7 @@ not applicable, since ACS already operates as an initiative under ASI.
 
 The migration runs once, in this order:
 
-1. Agree the set above, then create each milestone with a due date and a description
+1. Agree the set above, then create each milestone with its quarter's last day as `due_on` and a description
    written for an outside reader.
 2. File the governance issues.
 3. Put each issue in its milestone. The sync workflow applies `status:accepted` as each
@@ -427,7 +430,4 @@ milestones and comparing the output with the sheet's existing rows.
 
 ## Open questions
 
-1. Is the proposed milestone set in Milestone migration right, including its dates?
-2. Do the project's built-in board workflows react to a label that `GITHUB_TOKEN` applies?
-   If they do not, a newly accepted issue reaches the Accepted column on the nightly board
-   reconcile rather than at once. Verified during implementation.
+1. Is the proposed milestone set in Milestone migration right, including its quarters?
