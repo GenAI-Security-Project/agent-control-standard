@@ -1,6 +1,6 @@
 # A live community roadmap, and an OWASP report on demand
 
-Version: 1.4
+Version: 1.5
 Owner: ACS project lead
 Date: 2026-10-04
 Status: design, awaiting approval of the written spec
@@ -20,8 +20,15 @@ trusted seven read-role accounts and distrusted six leads. Version 1.4 answers b
 the fetch is a step inside the build job again, trust comes from the roster the project already
 maintains, and the OWASP script reads a JSON file the build publishes instead of calling GitHub.
 
-The weekly promotion to `main` has failed since September 24, so nothing in this design can reach
-the published site until it is repaired. That repair is a separate decision.
+Round five, the last, did not converge. It found that the progress bar counts closed issues in a
+repository where 2 of the last 50 merged pull requests closed one, that an author can drop their own
+issue as not planned and move a milestone toward Published, and that several choices in this design
+are governance decisions that belong to the project lead rather than to its implementation. Version
+1.5 fixes the mechanical findings and lists the rest under Decisions for the project lead.
+
+The weekly promotion to `main` succeeded on its scheduled runs of September 10 and 17 and has failed
+since September 24, so nothing in this design can reach the published site until it is repaired.
+That repair is a separate decision.
 
 ## Goal
 
@@ -58,10 +65,23 @@ reading the clock, and carries a `RULES_VERSION` string that changes whenever a 
 
 ### Trusted logins
 
-`roadmap_model.trusted_logins(repo_root)` returns every GitHub handle named in
-`.github/CODEOWNERS` and in the `GOVERNANCE.md` project lead and workstream lead tables, which
-`tools/render_landing.parse_workstreams` already parses. GOVERNANCE.md requires a leadership change
-to update both files in one pull request, so this list costs nothing new to maintain.
+`roadmap_model.trusted_logins(repo_root)` returns every GitHub handle named in `.github/CODEOWNERS`
+rule lines and in the `GOVERNANCE.md` project lead and workstream lead tables. GOVERNANCE.md requires
+a leadership change to update both files in one pull request, so this list costs nothing new to
+maintain. Parsing is strict, because CODEOWNERS is prose as well as patterns:
+
+- CODEOWNERS comments are stripped line by line before any token is read. A whole-file `@handle`
+  match picks up `@import` and `@font-face` from a comment, and `font-face` is a real outside account.
+- Every owner token must match `^@[A-Za-z0-9-]+$`. A team or an email address fails a test that runs
+  on every pull request, so the pull request that adds one fails rather than the nightly build.
+- In GOVERNANCE.md, a handle counts only when the link text and the URL name the same login, so
+  `[@rocklambros](https://github.com/someone-else)` fails the test.
+- Logins are compared casefolded.
+- `render_landing.parse_workstreams` reads only the workstream table and returns raw cells, so the
+  model adds its own parser for both tables rather than reusing it.
+
+Whether the creators named under Origins and assigned triage volunteers are trusted is a decision for
+the project lead, listed below.
 
 Version 1.3 used `author_association`. The live API showed `MEMBER` means organization membership:
 all seven read-role collaborators are organization members, six leads with admin, maintain, or
@@ -76,7 +96,8 @@ them before showing the description.
 - `Committed: 2026-12-09` names a date the project promised. It drives target-passed detection in
   place of the quarter's end, and the page shows it next to the quarter.
 - `Workstream: Reference Implementation` names the owning workstream. Its value must match a row of
-  the `GOVERNANCE.md` workstream table.
+  the `GOVERNANCE.md` workstream table, or be `Project`, which maps to the project lead table and
+  covers the Governance under OWASP milestone.
 - `Type: Open Source tool` names the OWASP deliverable type, one of Document, Cheat Sheet, Open
   Source tool, Application/Tool, Code Sample, Agent Skill, or Other.
 
@@ -89,18 +110,23 @@ The rules are checked in order:
 
 | Class | Rule | Counts toward progress |
 | --- | --- | --- |
-| Dropped | closed with `state_reason` `not_planned` or `duplicate`, or with any `state_reason` this version does not know | no |
-| Done | closed with `state_reason` `completed` by a trusted login | yes, as done |
-| Unverified | closed with `state_reason` `completed` by a login that is not trusted | yes, as remaining, marked "closed by its author, awaiting review" |
+| Unverified | closed, with any `state_reason`, by a login that is not trusted | yes, as remaining, marked "closed by a non-maintainer, awaiting review" |
+| Dropped | closed by a trusted login with `state_reason` `not_planned` or `duplicate`, or with any `state_reason` this version does not know | no |
+| Done | closed by a trusted login with `state_reason` `completed` | yes, as done |
 | Planned | open and carrying `status:accepted` | yes, as remaining |
 | Deferred | open and carrying `scope:deferred` | no, listed separately |
 | Untriaged | any other open issue | no, reported |
 
 The closing login comes from the issue's `ClosedEvent.actor`. A merged pull request closes its
 issues with the merging maintainer as the actor, so ordinary delivery counts as Done. An outsider
-who closes their own issue as completed cannot move progress until a trusted login reopens and
-recloses it or a maintainer accepts it as is by closing it again. An unknown `state_reason` is
-reported in the health issue.
+who closes their own issue, whether as completed or as not planned, cannot move progress in either
+direction until a trusted login reopens and recloses it. An unknown `state_reason` is reported in the
+health issue.
+
+A merge credits whatever the pull request body says it closes, and the squash message is the pull
+request body, so an outsider's "Closes #132" in a typo fix would mark #132 Done under the merging
+maintainer. `pr-intake.yml` therefore posts a fixed-text comment on any pull request whose body uses
+a closing keyword on an issue that sits in a milestone, so the merger confirms it on purpose.
 
 `status:accepted` is checked before `scope:deferred`, matching `desired_board_status`.
 
@@ -120,7 +146,7 @@ means unverified plus planned.
 | Skipped | open, no done, remaining, or deferred issues | not shown | no row |
 | Deferred | open, no done, no remaining, at least one deferred | card, "N deferred issues", no progress bar | Planning |
 | Ongoing | open, no `due_on` | card, quarter reads "Ongoing" | Ongoing |
-| Ready to publish | open, at least one done, no remaining, no deferred | card, "work complete, awaiting release" | In Review |
+| Ready to publish | open, at least one done, no remaining | card, "work complete, awaiting release", with any deferred issues listed as carried forward | In Review |
 | In progress | open, at least one done | card | In Progress |
 | Planning | open, otherwise | card | Planning |
 
@@ -210,9 +236,11 @@ The fetch is the first step of the existing `build` job in `deploy-pages.yml`, b
 before any package is installed, so no third-party code has run in the job when the token is in use.
 
 - It runs `python3 -I -S tools/fetch_roadmap.py --out roadmap-data.json`, standard library only, with
-  no imports from `tools/`.
-- It is the only step with `GH_TOKEN: ${{ github.token }}` in its `env:`. The `build` job gains
-  `issues: read`.
+  no imports from `tools/`. It comes after the gate and checkout steps and before `setup-uv`.
+- It is the only step given `GH_TOKEN: ${{ github.token }}` explicitly. The `build` job gains
+  `issues: read`. `setup-uv` defaults its own `github-token` input to the job token, so the workflow
+  sets that input to an empty string and pins `version`. `actions/configure-pages` receives the token
+  by design, as a first-party GitHub action, which is unchanged from today.
 - It calls `/usr/bin/gh`, where GitHub's Ubuntu runner images install it from the `.deb`, with an
   explicit minimal environment: `PATH`, a temporary `HOME`, `GH_TOKEN`, and `GH_HOST=github.com`. A
   `--gh` argument exists for tests only, and a guard test asserts the workflow never passes it.
@@ -221,10 +249,13 @@ before any package is installed, so no third-party code has run in the job when 
   reads that file, so no step outcome or job dependency carries the result and nothing can be
   silently skipped.
 
-The fetch makes one paginated GraphQL query over the repository's milestones, their issues, each
-issue's labels, author, state, `stateReason`, the actor of its last `ClosedEvent`, its first
+The fetch lists milestones, then queries each milestone's issues 50 at a time, with each issue's
+first 20 labels, author, state, `stateReason`, the actor of its last `ClosedEvent`, its first
 `MilestonedEvent`, and its last 20 `RenamedTitleEvent`s. Pagination follows GraphQL cursors in
-Python. GraphQL's milestone `issues.totalCount` counts issues alone, so pull requests never enter the
+Python. A single query over all milestones at page size 100 measured about 1.23 million nodes, over
+GitHub's 500,000 limit, so a unit test computes the node bound of the query the code builds and fails
+above 100,000. `MAX_NODE_LIMIT_EXCEEDED` is classed as a code defect. Fixtures cover a null `actor`
+and a null `author`, which deleted accounts produce. GraphQL's milestone `issues.totalCount` counts issues alone, so pull requests never enter the
 data. The completeness check requires, for every milestone, that the issues fetched equal that count.
 A mismatch, a transport error, an HTTP 5xx, or a rate-limit response triggers up to two refetches,
 20 seconds apart.
@@ -247,21 +278,45 @@ check over it, so every change exercises the renderer and the guard without spen
 fork pull requests, and whatever the switch says. A `disabled` render is never a failure.
 
 A preview run uploads the built `roadmap/index.html` and `roadmap.json` as an artifact with
-`retention-days: 7`, so rollout step 3 has a rendered page to inspect.
+`retention-days: 1`, so rollout step 3 has a rendered page to inspect. `preview` overrides the render
+switch, so any account that can dispatch a workflow can render live data during an incident. That
+account can already push a workflow that does the same, so the runbook says not to dispatch previews
+while the switch is off rather than pretending the switch prevents it.
+
+The `build` job exposes the gate's `publish` value as a job output. The `deploy` job's `if` becomes
+`needs.build.outputs.publish == 'true'`, keeping the existing event and ref checks, so a preview run on
+`main` skips deploy instead of failing it for want of an artifact. `inputs.preview` is read as a
+boolean, which is null on push events.
+
+`roadmap.json` carries a `schema_version`, `RULES_VERSION`, `status`, `generated`, `commit`, the project
+lead and workstream lead names, and per milestone its number, URL, title, stripped description, the
+three description lines, state, OWASP status, quarter, and counts. When the status is `disabled` or
+`unavailable` it carries no milestones. A test round-trips the build's output through `owasp_rows.py`.
 
 ### Failure behavior
 
 The roadmap must never stop a schema from publishing or a pull request from merging.
 
+One step, `python3 tools/build_roadmap_site.py`, runs after the fetch and owns the whole sequence:
+render, `mkdocs build`, the structural check, the fallback, the second check, and writing
+`roadmap.json` last from the status that survived. It receives the event name, the `source` input,
+and the switch value, and exits non-zero only where the table below says the build fails. Plain
+workflow steps cannot express "if this check fails, rebuild and check again" without `if:` chains
+that would collide with the guard test's exact pins.
+
 | Failure | Pull request build | `source=nightly` dispatch | Any other build |
 | --- | --- | --- | --- |
-| Data failure, rate limit, timeout, permission defect, or unexpected exception in fetch, model, or render | not applicable, fixture rendered | build fails when the published page's `acs-roadmap-commit` equals this commit, so Pages keeps the last good page. Otherwise it degrades, like any other build. | status `unavailable`, region reads "Roadmap data is temporarily unavailable", build passes |
+| Data failure, rate limit, timeout, permission defect, or unexpected exception in fetch, model, or render | not applicable, fixture rendered | build fails when the published `roadmap.json` reports this commit, so Pages keeps the last good page. Otherwise it degrades, like any other build. | status `unavailable`, region reads "Roadmap data is temporarily unavailable", build passes |
 | Unexpected exception rendering the fixture | build fails, a code defect | not applicable | not applicable |
-| Structural check violation | build fails | build fails | `docs/roadmap.md` is reset to an `unavailable` placeholder, `mkdocs build` runs again so the search index is rebuilt too, the check runs again, and the build passes only if that check is clean |
+| Structural check violation | build fails | build fails | `docs/roadmap.md` is reset to an `unavailable` placeholder, `mkdocs build` runs again so the search index is rebuilt too, the check runs again, `roadmap.json` is written with status `unavailable` and no milestones, and the build passes only if that check is clean |
 | Marker missing or duplicated, in source or in built output | build fails | build fails | build fails |
 
-The nightly dispatch fails only when the site already serves this commit, read from the published
-page's `acs-roadmap-commit` meta. If an earlier push deploy failed and the site is behind, the nightly
+The nightly dispatch fails only when the site already serves this commit. The driver reads `commit`
+from the published `roadmap.json`, at the Pages base URL from `configure-pages` with the constant
+already in `deploy-pages.yml` as the fallback, with a ten-second timeout, `Cache-Control: no-cache`,
+and redirects followed. A 404, a timeout, an unreadable body, or a missing field all mean "not the same
+commit", so the build degrades rather than failing closed on the first deploy or during an outage that
+also broke the page read. If an earlier push deploy failed and the site is behind, the nightly
 carries a schema change too, and it degrades so the schema still publishes. Version 1.3 failed every
 publishing run on a permission defect, which contradicted the rule that the roadmap never blocks a
 schema. Every non-nightly build now degrades instead, and the roadmap monitor reports
@@ -456,10 +511,11 @@ One further grant is needed and is **not yet approved**: `pull-requests: read` o
 pull-request permission cannot read pull requests. Until it is approved, the sweep lists Ready to
 publish milestones without the on-`main` split and says to verify by hand.
 
-`pr-intake.yml` changes in one place. It checks every `#N` in a pull request body against the shared
-`GITHUB_TOKEN` budget of 1,000 requests an hour per repository, with no cap, so one pull request body
-holding thousands of references could exhaust the budget the roadmap fetch and sync also draw on. It
-checks only the first 20 references.
+`pr-intake.yml` changes in two places. Today it calls `gh issue view` once for every `#N` in a pull
+request body, re-run on every edit, against the shared `GITHUB_TOKEN` budget of 1,000 requests an hour
+per repository that the roadmap fetch and sync also draw on. It instead makes one call listing
+`status:accepted` issues and intersects the references with that list, so its cost no longer depends on
+the body. It also posts the closing-keyword comment described under Issue classes.
 
 ## Health reporting
 
@@ -478,7 +534,8 @@ who closes milestones.
   for the variable to be set and the issue pinned. A test asserts the creator filter's exact spelling,
   since a wrong value returns an empty list with status 200.
 - The sweep locks the conversation on creation and again on every run.
-- The body never quotes fetched titles, and logins are written in code formatting without `@`.
+- The body never quotes fetched titles. Logins appear only for maintainer actions, such as who set a
+  milestone, in code formatting without `@`. Contributors are never named.
 
 The body opens with a machine-read status line in a fixed format:
 `<!-- acs-sweep: <ok|degraded> <ISO-8601 UTC> run <run id> [failed sections] -->`. When any read fails,
@@ -489,11 +546,12 @@ and exits non-zero.
 
 | Section | Contents |
 | --- | --- |
-| Ready to publish | Ready-to-publish milestones. With `pull-requests: read`, each is split by verification: a done issue is verified when its `ClosedEvent.closer` is a merged pull request whose `mergeCommit` is on `main`, meaning `compare/{sha}...main` returns `ahead` or `identical`. A milestone is "on `main`" only when every done issue is verified, and otherwise "awaiting promotion or verification" with the reason per issue and days waiting. |
+| Ready to publish | Ready-to-publish milestones. Without `pull-requests: read`, they are listed with "verify on `main` by hand". With `pull-requests: read`, each is split by verification: a done issue is verified when its `ClosedEvent.closer` is a merged pull request whose `mergeCommit` is on `main`, meaning `compare/{sha}...main` returns `ahead` or `identical`. A milestone is "on `main`" only when every done issue is verified, and otherwise "awaiting promotion or verification" with the reason per issue and days waiting. |
 | Closed with open work | Closed milestones that still hold remaining issues |
 | Target passed | Open milestones past their committed date or quarter |
 | Untriaged in a milestone | Untriaged-class issues, plus issues the event job declined because of a standing triage label other than `scope:deferred` |
-| Closed by an untrusted login | Unverified-class issues |
+| Awaiting maintainer confirmation | Unverified-class issues, by number only |
+| Closed with open work and nothing done | Closed milestones with no done issues but remaining issues, which render as Withdrawn |
 | In focus without a milestone | Open `scope:in-focus` issues with no milestone |
 | Accepted without a milestone | Open `status:accepted` issues with no milestone |
 | Accepted by milestone this week | Issues the bot accepted in the last eight days, with the login that set the milestone |
@@ -518,9 +576,10 @@ turning sync off does not silence the page check.
 - While `ROADMAP_RENDER_ENABLED` is `true`, it fails when the published page returns anything but 200,
   lacks the status meta, carries a status other than `ok`, or carries an `ok` with a generated time
   older than 36 hours.
-- While `ROADMAP_SYNC_ENABLED` and `ROADMAP_HEALTH_ISSUE` are set, it fails when the health issue's
-  status line is missing, says `degraded`, carries a time more than 50 hours old, or carries a time in
-  the future.
+- While `ROADMAP_SYNC_ENABLED` is `true`, it fails when `ROADMAP_HEALTH_ISSUE` is unset or not an
+  integer, when that issue's author is not `github-actions[bot]` or its body lacks the marker, or when
+  its status line is missing, says `degraded`, carries a time more than 50 hours old, or carries a
+  time in the future.
 
 It reads the sweep's own status line rather than the issue's `updated_at`, which a comment or a label
 change also moves. Failed scheduled runs notify the account that last changed the workflow's cron line
@@ -543,8 +602,13 @@ TSV itself, and to tell the user the TSV's path and which rows changed, by miles
 Code's documentation says `allowed-tools` pre-approves tools rather than restricting them, so the skill
 relies on keeping untrusted text out of the context.
 
-The script refuses a `roadmap.json` whose `generated` time is more than 48 hours old or whose status is
-not `ok`, and says why.
+The script refuses a `roadmap.json` whose `generated` time is more than 48 hours old, whose status is
+not `ok`, or whose `schema_version` it does not know, and a CSV response whose `Content-Type` is not
+`text/csv`, which catches a sign-in page served with status 200. Its `main` is wrapped in a catch-all
+that prints only a fixed error code and sends any traceback to a file, because a Python traceback
+prints the offending value and the model reads standard error. Every summary field is checked against
+an integer or enum allowlist before it is printed. A test feeds a hostile title and a hostile sheet
+cell and asserts neither appears in standard output or standard error.
 
 ### What it produces
 
@@ -583,23 +647,27 @@ alignment and the visible leading `'`. `owasp_rows.py` ships with its own tests,
 
 ## Rollout
 
-The weekly promotion workflow has failed on both scheduled runs since it was added, with "GitHub
-Actions is not permitted to create or approve pull requests", and `main` has not moved since September
-10. Everything here runs from `main`, so the rollout has a gate this design cannot open.
+The weekly promotion workflow has failed on its scheduled runs of September 24 and October 1, with
+"GitHub Actions is not permitted to create or approve pull requests", and `main` has not moved since
+September 10. Everything here runs from `main`, so the rollout has a gate this design cannot open.
 
 1. Create the three switches at repository level with the value `false`. Merge the implementation to
    `integration`. Nothing runs and nothing is published.
 2. Promote to `main`, by the repaired workflow or by hand. Confirm the push deploy's `deploy` job ran.
-3. Dispatch deploy-pages on `main` with `preview` set. The gate does not publish. Check the uploaded
-   page for status `ok`, at least one card, and a clean structural check. Run `roadmap_sync.py` without
-   `--apply` in the workflow, under its real token, for both jobs, by dispatching the sweep's dry run.
+3. Dispatch deploy-pages on `main` with `preview` set. The gate does not publish and the deploy job is
+   skipped. Check the uploaded page for status `ok`, at least one card, and a clean structural check,
+   and confirm `ClosedEvent.actor` resolved under the build token. Dispatch the sync workflow's `dryrun`
+   job and read both plans.
 4. Set `ROADMAP_SYNC_ENABLED` to `true` and run the milestone migration below. Once the sweep creates
-   the health issue, set `ROADMAP_HEALTH_ISSUE` and pin it.
+   the health issue, confirm the `creator=github-actions[bot]` listing returns it, then set
+   `ROADMAP_HEALTH_ISSUE` and pin it.
 5. Set `ROADMAP_RENDER_ENABLED` and `ROADMAP_REFRESH_ENABLED` to `true`, and dispatch deploy-pages on
    `main`.
 
-The sync workflow gains a `workflow_dispatch` trigger whose only effect is a sweep without `--apply`,
-so step 3 can run under the real token. The guard test pins it.
+The sync workflow gains a third job, `dryrun`, triggered only by `workflow_dispatch`, holding only
+`issues: read` and `contents: read`, and running whatever the switches say, since it cannot write. It
+runs the sweep planner and, given an issue number as a dispatch input passed through `env:`, the event
+planner, and prints both plans. The guard test pins it as the one `run:` without `--apply`.
 
 ## Milestone migration
 
@@ -633,8 +701,10 @@ The migration runs in rollout step 4:
 
 1. Run `tools/roadmap_sync.py migrate <table.json>`, a dry run. It prints each entry's type, author,
    title, and current `scope:` and `status:` labels, refuses any pull request or closed issue, lists
-   every entry the event rule would decline or accept, and lists any issue milestoned during the
-   rollout gate that lacks `status:accepted`. The project lead triages each unlabeled or
+   every entry the event rule would decline or accept, lists any issue milestoned during the rollout
+   gate that lacks `status:accepted`, and lists open table entries referenced by a merged pull request
+   as possibly delivered, so the project lead can close what already shipped before the page counts
+   it as zero. The project lead triages each unlabeled or
    `status:needs-triage` entry, places the eight unassigned in-focus issues, and decides #144, #145, and
    #178. Set one test milestone's due date in the GitHub UI from a non-UTC browser and read `due_on`
    back.
@@ -667,7 +737,7 @@ scope-governance decision for the project lead.
 | Drop an issue from the roadmap | Clear its milestone | It stays accepted and leaves the page. The health issue lists it until it gets a milestone or loses `status:accepted`. |
 | Add a deliverable | Create a milestone | It appears once it holds a counted issue. The health issue flags missing description lines. |
 | Rename or reword a deliverable | Edit the milestone's title or description | The OWASP script matches rows by milestone URL, so the existing row updates. |
-| Ship a deliverable | Close the milestone once the health issue lists it as on `main` | Delivered section, Published. |
+| Ship a deliverable | Close the milestone once the health issue lists it as on `main`, or after checking by hand while `pull-requests: read` is pending | Delivered section, Published. |
 | Withdraw a deliverable that delivered nothing | Close the milestone | Withdrawn section. The OWASP script reports its row for removal. |
 | Close a deliverable that delivered part of its work | Close the milestone, leaving the rest open or closing it as not planned | With remaining work left open it reads "closed with open work" and the health issue flags it. With the rest closed as not planned it reads Published, with the dropped count shown. |
 
@@ -686,12 +756,31 @@ None of the automation stores a milestone's title, number, or quarter.
 | `tests/test_roadmap_monitor.py` | every monitor condition, including a future status-line time and each switch combination |
 | `tests/test_roadmap_refresh_workflow.py`, `tests/test_roadmap_sync_workflow.py`, `tests/test_deploy_pages_workflow.py`, `tests/test_monitor_roadmap_workflow.py` | the workflow guard tests |
 | `tests/test_apply_governance.py` | updated for the removed Day N milestones |
-| `tests/test_pr_intake_workflow.py` | the 20-reference cap |
+| `tests/test_pr_intake_workflow.py` | the single listing call and the closing-keyword comment |
 
 End to end, rollout step 3 must produce a previewed page with status `ok`, at least one card, and a clean
 structural check, and the sweep's dry run must succeed under the real token. After step 5, the published
 page must carry a fresh generated time and this commit, `roadmap.json` must load in `owasp_rows.py`, the
 health issue must exist, be pinned and locked, and carry `ok`, and the roadmap monitor must pass once.
+
+## Decisions for the project lead
+
+The premortem's fifth round found that several choices in this design are governance decisions. The
+implementation should not settle them by default. Each is listed with the design's current default.
+
+| # | Decision | Current default | Why it is yours |
+| --- | --- | --- | --- |
+| 1 | Build the custom page now, or run a phase 0 first: migrate milestones, run the sync job and the health issue, link the landing nav to GitHub's own `/milestones` page, and build the page only once milestones have stayed current for several weekly calls | Build the page now | GitHub's milestone page already shows title, due date, description, and percent complete, with no code and no injection surface. The September 9 design also made milestones the weekly burndown, and today 2 of 18 accepted issues carry one. |
+| 2 | Adopt "Closes #N" in pull requests for accepted work, enforced by `pr-intake.yml` | Not adopted | 2 of the last 50 merged pull requests closed an issue, and only 4 issues have ever closed. Without the convention every card launches near "0 of N" while work merges. |
+| 3 | Whether setting a milestone is an acceptance decision, and whether only a trusted login's milestone counts | Any triage-role milestone accepts, and adds `scope:in-focus` | GOVERNANCE.md gives acceptance to workstream leads and the project lead. The triage role is wider, and includes org owners who are not leads. |
+| 4 | Who is trusted: CODEOWNERS and the lead tables only, or also the creators under Origins and assigned triage volunteers | Lead tables and CODEOWNERS only | The creators and the current triage volunteer would otherwise show as non-maintainers on the page. |
+| 5 | The OWASP Co-Owners column: the project lead, or the three leaders in `project.owasp.yaml` | The project lead | It is a credit decision shown to OWASP, and `project.owasp.yaml` already names three. |
+| 6 | The Day N milestones: close them into a public Withdrawn section, or delete them | Close into Withdrawn | Withdrawn keeps a record, but a first public view showing the ninety-day plan "withdrawn" reads as an abandoned plan. |
+| 7 | Whether #178 was accepted on September 24 | Undecided | A comment on #178 records acceptance "per our meeting today". If adopted, the `scope:` labels this design reads change, and it should land first. |
+| 8 | Realistic quarters: keep eight deliverables in Q4 2026, or keep only the serial-chain items there | Eight in Q4 2026 | Most cards would read "target passed" in January, in public and in the OWASP report. |
+| 9 | Approve `pull-requests: read` on the sweep job | Not approved | It is a token scope change. Without it, Ready to publish says to verify on `main` by hand. |
+| 10 | Who closes milestones, and where monitor failures go | The project lead, by email | One person already owns promotion, which has failed since September 24. Allowing any lead to close after the weekly call, and routing monitor failures to an issue, would need an `issues: write` grant on the monitor. |
+| 11 | Repair promotion, restrict `main` to merge commits, and require the project lead's review on `.github/CODEOWNERS` and `GOVERNANCE.md` | None changed | Each is a repository permission or ruleset change, and the last two also protect the trust roster. |
 
 ## Out of scope
 
@@ -710,7 +799,7 @@ health issue must exist, be pinned and locked, and carry `ok`, and the roadmap m
 - **Promotion.** Until promotion works, nothing here reaches the site, and every renderer fix waits on
   it.
 - **Triage throughput.** Milestones only stay true if the weekly pass happens.
-- **Nine deliverables in one quarter.** The target-passed marker and the health issue will show the slip
+- **Eight deliverables in one quarter.** The target-passed marker and the health issue will show the slip
   in January.
 - **One alarm inbox.** Scheduled-run failure email reaches whoever last changed the cron line. A failed
   nightly deploy is started by `github-actions[bot]` and emails no one, so the first signal is the
