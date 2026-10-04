@@ -31,6 +31,7 @@ ATTEMPTS = 3
 RETRY_SECONDS = 20
 ISSUE_PAGE = 50
 LABEL_PAGE = 50
+PERMISSION_TYPES = frozenset({"FORBIDDEN", "INSUFFICIENT_SCOPES", "UNAUTHORIZED"})
 TRANSIENT = frozenset({"transport", "server", "rate_limit", "mismatch"})
 
 MILESTONES_QUERY = (
@@ -83,8 +84,10 @@ def classify_response(returncode: int, stdout: str, stderr: str) -> dict:
         raise FetchFailure("transport", stderr.strip() or f"gh exited {returncode} with no output")
     status, headers, body = _split_http(stdout)
     lowered = body.lower()
-    if status in (403, 429) and (
-        headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers or "rate limit" in lowered
+    # 429 is a rate limit by definition. 403 needs a marker to tell it from a permission denial.
+    if status == 429 or (
+        status == 403
+        and (headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers or "rate limit" in lowered)
     ):
         raise FetchFailure("rate_limit", f"HTTP {status}")
     if status in (401, 403):
@@ -102,6 +105,8 @@ def classify_response(returncode: int, stdout: str, stderr: str) -> dict:
         raise FetchFailure("rate_limit", "GraphQL RATE_LIMITED")
     if "MAX_NODE_LIMIT_EXCEEDED" in types:
         raise FetchFailure("code_defect", "GraphQL MAX_NODE_LIMIT_EXCEEDED")
+    if types & PERMISSION_TYPES:
+        raise FetchFailure("permission", f"GraphQL errors {sorted(str(t) for t in types)}")
     if types:
         raise FetchFailure("data", f"GraphQL errors {sorted(str(t) for t in types)}")
     return payload["data"]
@@ -211,14 +216,19 @@ def fetch(run, repo: str, deadline: float, sleep, clock) -> dict:
 
 
 def _runner(gh: str):
+    token = os.environ.get("GH_TOKEN", "")
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": tempfile.mkdtemp(prefix="roadmap-gh-"),
-        "GH_TOKEN": os.environ.get("GH_TOKEN", ""),
+        "GH_TOKEN": token,
         "GH_HOST": "github.com",
     }
 
     def run(args: list[str]) -> tuple[int, str, str]:
+        if not token:
+            # Without a token gh would prompt or fall back to ambient credentials. A synthetic 401
+            # classifies as permission, which is never retried.
+            return 0, "HTTP/2.0 401 Unauthorized\r\n\r\n{}", ""
         try:
             done = subprocess.run([gh, *args], env=env, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
@@ -243,8 +253,17 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - the contract is a record, never a traceback
         result = {"status": "failed", "class": "code_defect", "detail": type(exc).__name__}
     result["fetched_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(result, handle)
+    try:
+        parent = os.path.dirname(os.path.abspath(args.out))
+        os.makedirs(parent, exist_ok=True)
+        # Write beside the target then rename, so a reader never sees a half-written file.
+        temporary = f"{args.out}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(result, handle)
+        os.replace(temporary, args.out)
+    except OSError:
+        print("roadmap fetch: failed write_error")
+        return 0
     print(f"roadmap fetch: {result['status']} {result.get('class', '')}".rstrip())
     return 0
 

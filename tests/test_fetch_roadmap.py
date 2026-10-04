@@ -7,6 +7,7 @@ rather than on the first push to main.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +85,10 @@ def test_mismatch_retries_then_fails():
         (200, {}, '{"errors": [{"type": "RATE_LIMITED"}]}', "rate_limit"),
         (200, {}, '{"errors": [{"type": "MAX_NODE_LIMIT_EXCEEDED"}]}', "code_defect"),
         (200, {}, '{"errors": [{"type": "NOT_FOUND"}]}', "data"),
+        (200, {}, '{"errors": [{"type": "FORBIDDEN"}]}', "permission"),
+        (200, {}, '{"errors": [{"type": "INSUFFICIENT_SCOPES"}]}', "permission"),
+        (200, {}, '{"errors": [{"type": "UNAUTHORIZED"}]}', "permission"),
+        (429, {}, "{}", "rate_limit"),
         (200, {}, "not json", "data"),
     ],
 )
@@ -143,7 +148,7 @@ def test_runs_isolated_as_a_subprocess(tmp_path):
     out = tmp_path / "out.json"
     completed = subprocess.run(
         [sys.executable, "-I", "-S", str(SCRIPT), "--out", str(out), "--gh", str(stub)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, env={**os.environ, "GH_TOKEN": "t"},
     )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(out.read_text())["status"] == "ok"
@@ -157,3 +162,95 @@ def test_unexpected_exception_still_writes_a_record(tmp_path, monkeypatch):
     assert fetch_roadmap.main(["--out", str(out)]) == 0
     record = json.loads(out.read_text())
     assert record["status"] == "failed" and record["class"] == "code_defect"
+
+
+def test_empty_token_is_permission_and_not_retried(monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    calls = []
+    inner = fetch_roadmap._runner("/nonexistent/gh")
+
+    def run(args):
+        calls.append(args)
+        return inner(args)
+
+    result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
+    assert result["class"] == "permission" and len(calls) == 1
+
+
+ENV_STUB = """#!/usr/bin/env python3
+import json, os, sys
+open({dump!r}, "w").write(json.dumps(sorted(os.environ)))
+data = json.load(open({path!r}))
+query = next(a for a in sys.argv[1:] if a.startswith("query="))
+sys.stdout.write(data["issues" if "milestone(number" in query else "milestones"])
+"""
+
+
+def test_gh_environment_is_exactly_the_minimal_set(tmp_path):
+    fixture = tmp_path / "responses.json"
+    fixture.write_text(json.dumps({"milestones": http(200, MILESTONES), "issues": http(200, ISSUES)}))
+    dump = tmp_path / "env.json"
+    stub = tmp_path / "gh"
+    # Use the real interpreter in the shebang. The macOS /usr/bin/python3 shim injects SDKROOT,
+    # CPATH and similar variables, which would mask what the script passed.
+    body = ENV_STUB.format(dump=str(dump), path=str(fixture)).replace("/usr/bin/env python3", sys.executable, 1)
+    stub.write_text(body)
+    stub.chmod(0o755)
+    poisoned = {**os.environ, "GH_TOKEN": "t", "GH_REPO": "evil/repo", "GH_CONFIG_DIR": "/tmp/evil",
+                "LD_PRELOAD": "/tmp/evil.so"}
+    subprocess.run([sys.executable, "-I", "-S", str(SCRIPT), "--out", str(tmp_path / "o.json"),
+                    "--gh", str(stub)], capture_output=True, text=True, timeout=60, env=poisoned)
+    # CPython (locale coercion) and macOS add these two themselves, whatever the caller passes.
+    keys = set(json.loads(dump.read_text())) - {"__CF_USER_TEXT_ENCODING", "LC_CTYPE"}
+    assert keys == {"PATH", "HOME", "GH_TOKEN", "GH_HOST"}
+
+
+def page(nodes, more, cursor):
+    return {"data": {"repository": {"milestone": {"issues": {
+        "pageInfo": {"hasNextPage": more, "endCursor": cursor}, "nodes": nodes}}}}}
+
+
+def issue_node(number=9, label_count=1):
+    return {"number": number, "state": "OPEN", "stateReason": None, "author": {"login": "a"},
+            "labels": {"totalCount": label_count, "nodes": [{"name": "x"}]},
+            "timelineItems": {"nodes": []}}
+
+
+def test_issue_pages_carry_cursor_and_dedupe():
+    pages = [http(200, page([issue_node(9)], True, "c1")), http(200, page([issue_node(9)], False, None))]
+    run, calls = fake_run({"milestones": http(200, MILESTONES), "issues": pages})
+    result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
+    assert result["status"] == "ok" and len(result["milestones"][0]["issues"]) == 1
+    assert "cursor=c1" in calls[2]
+    assert "cursor=c1" not in calls[1]
+
+
+def test_max_pages_overflow_is_code_defect(monkeypatch):
+    monkeypatch.setattr(fetch_roadmap, "MAX_PAGES", 2)
+    run, _ = fake_run({"milestones": http(200, MILESTONES),
+                       "issues": http(200, page([issue_node(9)], True, "c"))})
+    result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
+    assert result["class"] == "code_defect"
+
+
+def test_too_many_labels_is_code_defect():
+    run, _ = fake_run({"milestones": http(200, MILESTONES),
+                       "issues": http(200, page([issue_node(9, label_count=51)], False, None))})
+    result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
+    assert result["class"] == "code_defect"
+
+
+def test_unwritable_output_still_returns_zero(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(fetch_roadmap, "fetch", lambda *a, **k: {"status": "ok", "milestones": []})
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    assert fetch_roadmap.main(["--out", str(blocker / "sub" / "out.json")]) == 0
+    assert "failed write_error" in capsys.readouterr().out
+
+
+def test_output_creates_parent_and_leaves_no_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(fetch_roadmap, "fetch", lambda *a, **k: {"status": "ok", "milestones": []})
+    out = tmp_path / "new" / "out.json"
+    assert fetch_roadmap.main(["--out", str(out)]) == 0
+    assert json.loads(out.read_text())["status"] == "ok"
+    assert not (tmp_path / "new" / "out.json.tmp").exists()
