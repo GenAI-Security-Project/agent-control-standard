@@ -12,6 +12,7 @@ site already serves this commit, where failing keeps yesterday's good file.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import sys
 import urllib.request
@@ -19,6 +20,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import roadmap_model as model
+
+
+# Failure classes the fetch step and this step emit. The class string comes from a file
+# written by an earlier step, so anything outside this set becomes "unknown" before it
+# reaches a workflow annotation or roadmap.json.
+FAILURE_CLASSES = frozenset({
+    "transport", "server", "rate_limit", "permission", "mismatch", "data",
+    "code_defect", "timeout", "missing", "write_error",
+})
 
 
 class DataFailure(Exception):
@@ -52,6 +62,15 @@ def _write(path: str, doc: dict) -> None:
     target.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _safe_write(path: str, doc: dict) -> None:
+    """Write roadmap.json, degrading to a warning so a disk fault cannot fail a push build."""
+    try:
+        _write(path, doc)
+    except OSError as exc:
+        name = errno.errorcode.get(exc.errno or 0, "unknown")
+        print(f"::warning::Could not write roadmap.json ({name})")
+
+
 def _build(data: dict, repo_root: Path, today, generated: str, commit: str, run_id: str) -> dict:
     roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
     trusted = model.trusted_logins(repo_root)
@@ -72,8 +91,13 @@ def _summary(path: str | None, doc: dict) -> None:
         f"| {m['counts']['planned']} | {m['counts']['deferred']} |"
         for m in doc["milestones"]
     ]
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as exc:
+        # The summary is a convenience, so a failed append never changes the exit code.
+        name = errno.errorcode.get(exc.errno or 0, "unknown")
+        print(f"::warning::Could not write the run summary ({name})")
 
 
 def run(args: argparse.Namespace, opener=urllib.request.urlopen, now: datetime | None = None) -> int:
@@ -92,7 +116,7 @@ def run(args: argparse.Namespace, opener=urllib.request.urlopen, now: datetime |
         return 0
 
     if args.render_enabled != "true" and args.preview != "true":
-        _write(args.out, model.empty_roadmap("disabled", generated, args.commit, args.run))
+        _safe_write(args.out, model.empty_roadmap("disabled", generated, args.commit, args.run))
         return 0
 
     try:
@@ -101,7 +125,8 @@ def run(args: argparse.Namespace, opener=urllib.request.urlopen, now: datetime |
             raise DataFailure("missing")
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("status") != "ok":
-            raise DataFailure(str(data.get("class", "unknown")))
+            raw = data.get("class")
+            raise DataFailure(raw if isinstance(raw, str) and raw in FAILURE_CLASSES else "unknown")
         doc = _build(data, repo_root, moment.date(), generated, args.commit, args.run)
     except Exception as exc:  # noqa: BLE001 - every failure is classed, never a traceback
         reason = exc.reason if isinstance(exc, DataFailure) else "code_defect"
@@ -109,10 +134,10 @@ def run(args: argparse.Namespace, opener=urllib.request.urlopen, now: datetime |
             print(f"::error::Roadmap data failed ({reason}) and the site already serves this commit. Keeping it.")
             return 1
         print(f"::warning::Roadmap data failed ({reason}). Publishing status 'unavailable'.")
-        _write(args.out, model.empty_roadmap("unavailable", generated, args.commit, args.run, reason=reason))
+        _safe_write(args.out, model.empty_roadmap("unavailable", generated, args.commit, args.run, reason=reason))
         return 0
 
-    _write(args.out, doc)
+    _safe_write(args.out, doc)
     _summary(args.summary, doc)
     return 0
 
