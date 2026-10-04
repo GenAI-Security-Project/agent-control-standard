@@ -471,8 +471,7 @@ so the guard tests pin shapes.
   expected dictionary exactly.
 - `tests/test_roadmap_sync_workflow.py` checks `roadmap-sync.yml` against an allowlist of keys at every
   level and asserts:
-  - the exact trigger set, permissions, `if`, and concurrency per job, including `queue: max`, which
-    the pinned zizmor 1.30.1 does not validate and actionlint 1.7.12 rejects
+  - the exact trigger set, permissions, `if`, and concurrency per job
   - every `env:` map equals an exact expected dictionary
   - every `run:` is free of `${{`, invokes `python3 -I -S tools/roadmap_sync.py`, passes `--apply`, and
     installs nothing
@@ -512,9 +511,13 @@ Adding `scope:in-focus` keeps GOVERNANCE.md's two-label minimum true for every i
 Removing `status:needs-triage` is the only removal in this design, and a 404 because the label is
 already gone counts as success.
 
-The job's concurrency group is keyed by issue number, with `queue: max` and
-`cancel-in-progress: false`. GitHub's default keeps only one pending run per group and cancels the
-rest, which would have dropped most of the migration's acceptance events.
+The job's concurrency group is keyed by issue number, with `cancel-in-progress: false`. Milestone
+edits across many issues therefore run in parallel. For one issue, GitHub keeps a single pending run
+and replaces an older pending run with a newer one, which loses nothing, because each run re-reads
+the issue's live state before acting. Version 1.3 used `queue: max` here. The plan premortem dropped
+it: actionlint 1.7.12 rejects the key, zizmor does not validate it, a user has reported it stalling
+job dispatch, and the per-issue group already makes it unnecessary. The migration applies its writes
+directly in one process, so it never depended on events surviving a burst.
 
 ### The sweep job
 
