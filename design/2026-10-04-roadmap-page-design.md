@@ -34,6 +34,7 @@ to paste.
 | Freshness | Nightly rebuild of static HTML | The site renders with JavaScript disabled. A browser fetch would break that and share an anonymous limit of 60 requests an hour per IP. |
 | Page and spreadsheet | Decoupled | The page answers to contributors. The spreadsheet is a quarterly report for OWASP. |
 | Where the OWASP procedure lives | A personal skill named `owasp-acs-roadmap`, outside this repository | OWASP reporting is an administrative chore, not part of the standard, and nothing in CI depends on it. |
+| Milestone upkeep | Automated on the event, with a nightly sweep under it. Setting a milestone is the only human act. | The project has no capacity to keep milestones current by hand, so any rule that depends on a person remembering it will drift. |
 
 ## The roadmap page
 
@@ -230,6 +231,83 @@ trivial, and zizmor does not flag a widened trigger or an added step as a policy
 PyYAML loads the key `on` as the boolean `True`. The test reads the trigger block through
 that key and says why in a comment, so the next reader does not "fix" it.
 
+## Keeping milestones synced
+
+Milestones are the single source of truth. The page, the board, and the OWASP rows all
+derive from them, so a milestone that drifts makes all three wrong at once. Nobody on the
+project has time to keep milestones current by hand, which makes this a hard requirement
+rather than a convenience.
+
+### The one human act
+
+Triage puts an accepted issue in its deliverable milestone. Everything after that is
+automated. Triage may also apply `status:accepted` by hand, and the automation fills in
+whichever half is missing. Two manual steps drift apart within a week at this staffing, so
+the design never depends on both happening.
+
+### The sync workflow
+
+A new `.github/workflows/roadmap-sync.yml` reacts to events as they happen:
+
+| Event | Action |
+| --- | --- |
+| `issues: milestoned` | Add `status:accepted` if the issue is open and lacks it |
+| `issues: labeled` with `status:accepted`, no milestone | Write a job-summary warning naming the issue. The deliverable is a human call, so the workflow never guesses one. |
+| `issues: closed` | Close the issue's milestone if it now has no open issues or pull requests |
+| `issues: reopened` | Reopen the issue's milestone if it is closed |
+| `pull_request_target: opened, edited` | Give the pull request the milestone of the issue it closes, when the pull request has none and exactly one milestone is found |
+
+A closed milestone renders as Published on the page and in the OWASP rows, so closing it is
+how a deliverable ships.
+
+The workflow only adds a label, sets a milestone, closes a milestone, or reopens one. It
+never removes a label and never clears a milestone. When a maintainer pulls an issue out of
+a milestone on purpose, the automation leaves that decision alone. This is the same
+add-only property that makes the board reconciler safe to run unattended.
+
+### The nightly sweep
+
+Events get missed. Changes made by `GITHUB_TOKEN` trigger no workflow, bulk edits can drop
+events, and an Actions outage loses whatever fired during it. The same workflow therefore
+also runs on a nightly `schedule` and applies every rule above to the whole repository.
+
+This is the two-layer pattern the board already uses: the event path keeps things current
+in seconds, and the sweep repairs anything the event path missed. A date passing fires no
+event, so overdue milestones are reported only by the sweep's summary and by the roadmap
+page, which marks them when it renders.
+
+### Structure
+
+`tools/roadmap_sync.py` follows the split `tools/apply_governance.py` uses. Pure planning
+functions take an event or a repository snapshot and return a list of `Action` records.
+One executor runs them through `gh`. A `--dry-run` flag prints the plan without running it.
+Every rule is tested against JSON fixtures, with no network.
+
+### Security
+
+`issues: write` and `pull-requests: write` on the workflow's own `GITHUB_TOKEN` were
+reviewed and approved during design. Labels and milestones are repository resources, so
+the org project App's grant does not change.
+
+A fork pull request's token cannot write, so the pull request rule needs
+`pull_request_target`. That trigger runs with a write token in the context of the base
+repository, so the job follows the pattern `pr-intake.yml` already uses:
+
+- It checks out the base branch's tools only, never the pull request's head.
+- The pull request number comes from the event payload through `env:`. The linked issues
+  come from GitHub's `closingIssuesReferences` field, never from parsing the pull request
+  body.
+- No `${{ }}` expression appears in a `run:` line.
+- Each job declares only the permissions its trigger needs.
+
+A guard test pins the workflow's shape the way the refresh workflow's test does. It asserts
+the exact trigger set, the exact permissions per job, and that no step checks out a pull
+request ref.
+
+The board card for a newly accepted issue moves on the nightly board reconcile, not
+instantly, because a label added by `GITHUB_TOKEN` triggers no other workflow. Whether the
+project's built-in workflows also ignore token-made changes is unverified.
+
 ## The OWASP report skill
 
 ### What it produces
@@ -281,12 +359,39 @@ it has run once on the web.
 
 ## Milestone migration
 
-This is maintainer work in the GitHub UI, not code.
+The starting set below comes from a gap analysis of the Strategic Adoption Plan v3 against
+open issues and pull requests on October 4, 2026. It is proposed, not agreed. Issue
+assignments were made from titles, and the dates from November onward are estimates.
 
-1. Create one milestone per deliverable, each with a due date and a description written for
-   an outside reader.
-2. Move each accepted issue into its deliverable milestone.
-3. Close the four Day N milestones once they are empty.
+| Milestone | Issues and pull requests | Due |
+| --- | --- | --- |
+| Conformance claim template | #93, PR #168, #136, PR #24 | 2026-10-09 |
+| Fail-open decision | #32, #37 | 2026-10-23 |
+| Reference adapters on main (Claude Code, Cursor, NAT) | #132, PR #21, #134, PR #22, #131, PR #20 | 2026-10-30 |
+| Spec v0.1 errata | #194 to #198, #146, #148, #149, #120, #121, #57, #58, PR #63 | 2026-11-06 |
+| ACS-Core conformant reference Guardian | the Reference Guardian bugs and conformance reports, #188, PR #193, #71 to #73 | 2026-11-20 |
+| Installable reference Guardian | #94, #91, #90, PR #112, #127, PR #126 | 2026-12-04 |
+| AGT interoperability benchmark | #92, PR #113, #171 | 2026-12-04 |
+| Governance under OWASP | open lead seats, domain transfer, OpenSSF Best Practices, marketing site retirement, #144, #145, #178 | 2026-12-04 |
+| Host adapter coverage | #162, #170, #89, #114, #107 to #111 | none |
+| Language ports | #86 to #88, #135, PRs #183, #78, #169, #187 | none |
+| v0.2.0 | every `scope:deferred` issue, #53, #29 | 2027-03-09 |
+
+The governance work has no issues today, so it is invisible to the page until it does.
+Filing it means one issue for each open lead seat (Reference Implementation, one seat.
+Documentation, two seats. Testing and Validation, two seats), one each for the domain
+transfer, OpenSSF Best Practices registration, and retiring the marketing site
+repository. The Strategic Adoption Plan's "ASI governance milestones" item is closed as
+not applicable, since ACS already operates as an initiative under ASI.
+
+The migration runs once, in this order:
+
+1. Agree the set above, then create each milestone with a due date and a description
+   written for an outside reader.
+2. File the governance issues.
+3. Put each issue in its milestone. The sync workflow applies `status:accepted` as each
+   one lands, so this step also accepts any issue triage has not yet labeled.
+4. Close the four Day N milestones once they are empty.
 
 `tools/apply_governance.py` declares the Day N milestones as desired state, and it creates
 or updates any milestone it declares. Left alone, it would rewrite the Day N descriptions
@@ -300,7 +405,9 @@ changes, not when a pull request to the governance tool merges.
 | --- | --- |
 | `tests/test_render_roadmap.py` | ordering, the counted-issue rule, pull request exclusion, empty-milestone skipping, the warning for unaccepted issues, completeness mismatch, and escaping, using JSON fixtures with no network |
 | `tests/test_render_roadmap.py` | an issue title carrying `<script>`, an `onerror=` attribute, a Markdown link, and a `javascript:` URL, each rendered inert |
-| `tests/test_roadmap_refresh_workflow.py` | the guard test above |
+| `tests/test_roadmap_refresh_workflow.py` | the refresh workflow guard test |
+| `tests/test_roadmap_sync.py` | every sync rule against event and snapshot fixtures, including the add-only property: no planned action removes a label or clears a milestone |
+| `tests/test_roadmap_sync_workflow.py` | the sync workflow guard test |
 | existing `tests/test_site_config.py` and `tests/conftest.py` guards | the built page fetches nothing from a third party |
 
 The skill is tested by running it, once in Claude Code and once on claude.ai, against live
@@ -316,6 +423,7 @@ milestones and comparing the output with the sheet's existing rows.
 
 ## Open questions
 
-1. Which deliverables become the first milestones, and with what due dates? A gap analysis
-   of the Strategic Adoption Plan v3 against open issues and pull requests proposes a set.
-   The milestones are created only once that set is agreed.
+1. Is the proposed milestone set in Milestone migration right, including its dates?
+2. Do the project's built-in board workflows react to a label that `GITHUB_TOKEN` applies?
+   If they do not, a newly accepted issue reaches the Accepted column on the nightly board
+   reconcile rather than at once. Verified during implementation.
