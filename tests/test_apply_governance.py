@@ -125,14 +125,15 @@ def test_issue_forms_never_stamp_a_decision_label():
 
 # --- Milestones -----------------------------------------------------------------
 
-def test_milestone_due_dates_are_exact():
-    due_dates = {milestone.title: milestone.due_on for milestone in desired_milestones()}
-    assert due_dates == {
-        "Day 14": "2026-09-24",
-        "Day 30": "2026-10-09",
-        "Day 60": "2026-11-06",
-        "Day 90": "2026-12-04",
-    }
+def test_governance_tool_declares_no_milestones():
+    # Roadmap milestones are maintained in the GitHub UI and kept true by roadmap-sync.yml.
+    # Declaring any here would rewrite them on every run of this tool.
+    assert desired_milestones() == []
+
+
+def test_deferred_label_no_longer_names_day_90():
+    deferred = next(label for label in desired_labels() if label.name == "scope:deferred")
+    assert "Day 90" not in (deferred.description or "")
 
 
 # --- Issues -----------------------------------------------------------------------

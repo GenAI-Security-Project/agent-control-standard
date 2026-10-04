@@ -50,6 +50,9 @@ interoperability benchmark. It does not mean important.
 Triage runs on the weekly call. Promotion from `integration` to `main` is a standing item
 on the same call, and the project lead owns merging it.
 
+The pinned "Roadmap health" issue, rewritten nightly by the roadmap sweep, is the weekly
+call's triage agenda.
+
 ## Origins
 
 Michael Bargury ([@mbrg](https://github.com/mbrg)) and Ory Segal ([@oorryy](https://github.com/oorryy)) created ACS. Both remain project leaders.
