@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""Shared rules for the ACS roadmap: who is trusted, and what an issue or a milestone means.
+
+Version 1.0. Owner: ACS project lead. Spec: design/2026-10-04-roadmap-page-design.md.
+
+Three callers run this module: the deploy build, the sync workflow under `python3 -I -S`,
+and the test suite. It is therefore standard library only and never touches the network.
+The current date is always a parameter, never read from the clock, so a quarter boundary
+cannot change a test result or a pull request build.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO = "GenAI-Security-Project/agent-control-standard"
+# Changes whenever any rule in this module changes, so a health report or a roadmap.json
+# names the rules that produced it.
+RULES_VERSION = "2026-10-04.1"
+SCHEMA_VERSION = 1
+
+# Spec decision 4. The creators named under Origins hold read access today, so trusting
+# them is a governance call for the project lead rather than a default of this module.
+TRUST_ORIGINS = False
+
+Person = tuple[str, str]
+
+
+class RosterError(ValueError):
+    """A roster file does not parse into plain, unambiguous logins."""
+
+
+_OWNER_TOKEN = re.compile(r"^@[A-Za-z0-9-]+$")
+_LINK = re.compile(r"\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)")
+_PERSON = re.compile(r"([^,()|]+?)\s*\(\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)\)")
+_SPLIT_CELLS = re.compile(r"(?<!\\)\|")
+
+
+def parse_codeowners_logins(text: str) -> set[str]:
+    """Return every owner login in CODEOWNERS rule lines, casefolded.
+
+    Comments are stripped per line before any token is read. A whole-file match would pick
+    up `@import` and `@font-face` from a comment, and `font-face` is a real outside account.
+    Teams and email addresses raise, so the pull request that adds one fails its tests
+    rather than silently distrusting everyone the team contains.
+    """
+    logins: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        for token in line.split()[1:]:
+            if not _OWNER_TOKEN.match(token):
+                raise RosterError(
+                    f"CODEOWNERS owner {token!r} is not a plain @login. The roadmap trusts "
+                    "individual logins only, so teams and email addresses are refused."
+                )
+            logins.add(token[1:].casefold())
+    return logins
+
+
+def _section(text: str, heading: str) -> list[str]:
+    lines = text.splitlines()
+    pattern = re.compile(rf"^##\s+{re.escape(heading)}\s*$", re.IGNORECASE)
+    start = next((i for i, line in enumerate(lines) if pattern.match(line)), None)
+    if start is None:
+        raise RosterError(f"GOVERNANCE.md: no '## {heading}' section")
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return body
+
+
+def _table_rows(lines: list[str], heading: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in _SPLIT_CELLS.split(stripped.strip("|"))]
+        if set(cells[0]) <= set("-: "):
+            continue
+        rows.append(cells)
+    if len(rows) < 2:
+        raise RosterError(f"GOVERNANCE.md: the '{heading}' table is empty")
+    return rows[1:]  # drop the header row
+
+
+def _people(cell: str) -> tuple[Person, ...]:
+    links = _LINK.findall(cell)
+    people = _PERSON.findall(cell)
+    for text_login, url_login in links:
+        if text_login.casefold() != url_login.casefold():
+            raise RosterError(
+                f"GOVERNANCE.md: link text @{text_login} points at github.com/{url_login}. "
+                "A reviewer reads the text, so the two must name the same account."
+            )
+    if len(people) != len(links):
+        raise RosterError(f"GOVERNANCE.md: cannot read every person in {cell!r}")
+    # A cell is either exactly "Open" or a list of linked people. Anything else, including
+    # a trailing slash on a profile URL or a name with no link, would otherwise parse as an
+    # empty seat and silently distrust a lead.
+    if cell.strip() != "Open" and (not people or cell.count("github.com/") != len(people)):
+        raise RosterError(f"GOVERNANCE.md: cannot read every person in {cell!r}")
+    result: list[Person] = []
+    for name, _text_login, url_login in people:
+        cleaned = re.sub(r"^(and|&)\s+", "", name.strip(), flags=re.IGNORECASE)
+        result.append((cleaned, url_login))
+    return tuple(result)
+
+
+@dataclass(frozen=True)
+class Roster:
+    project_leads: tuple[Person, ...]
+    workstreams: dict[str, tuple[Person, ...]] = field(default_factory=dict)
+    origins: tuple[Person, ...] = ()
+
+
+def parse_governance(text: str) -> Roster:
+    """Read the project lead table, the workstream leads table, and the Origins prose."""
+    leads: list[Person] = []
+    for cells in _table_rows(_section(text, "Project lead"), "Project lead"):
+        if len(cells) != 2:
+            raise RosterError(f"GOVERNANCE.md: project lead row has {len(cells)} cells")
+        leads.extend(_people(cells[1]))
+    workstreams: dict[str, tuple[Person, ...]] = {}
+    for cells in _table_rows(_section(text, "Workstream leads"), "Workstream leads"):
+        if len(cells) != 2:
+            raise RosterError(f"GOVERNANCE.md: workstream row has {len(cells)} cells")
+        workstreams[cells[0]] = _people(cells[1])
+    origins = tuple(
+        (re.sub(r"^(and|&)\s+", "", name.strip(), flags=re.IGNORECASE), url_login)
+        for name, _text_login, url_login in _PERSON.findall(" ".join(_section(text, "Origins")))
+    )
+    if not leads:
+        raise RosterError("GOVERNANCE.md: no project lead")
+    return Roster(project_leads=tuple(leads), workstreams=workstreams, origins=origins)
+
+
+def trusted_logins(repo_root: Path) -> frozenset[str]:
+    """Logins whose closes count as delivered. Spec section "Trusted logins"."""
+    codeowners = (repo_root / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    roster = parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
+    logins = set(parse_codeowners_logins(codeowners))
+    people = list(roster.project_leads)
+    for leads in roster.workstreams.values():
+        people.extend(leads)
+    if TRUST_ORIGINS:
+        people.extend(roster.origins)
+    logins.update(login.casefold() for _name, login in people)
+    return frozenset(logins)
+
+# --- Labels and decision constants --------------------------------------------------
+# Spec decision defaults that code reads sit here: decision 3 (MILESTONE_ACCEPTS, ADD_IN_FOCUS_ON_ACCEPT), decision 4 (TRUST_ORIGINS, above), and decision 5 (CO_OWNERS_SOURCE). Decisions 6 to 8 are rollout data, not code.
+
+from datetime import date, timedelta  # noqa: E402
+
+ACCEPTED = "status:accepted"
+NEEDS_TRIAGE = "status:needs-triage"
+DEFERRED = "scope:deferred"
+IN_FOCUS = "scope:in-focus"
+SCOPE_PREFIX = "scope:"
+# Spec decision 3. Setting a milestone accepts the issue, and adds scope:in-focus when the
+# issue carries no scope label. Turning MILESTONE_ACCEPTS off makes the event job a no-op.
+MILESTONE_ACCEPTS = True
+ADD_IN_FOCUS_ON_ACCEPT = True
+# Spec decision 5. "project_lead" names the GOVERNANCE.md project lead table. "origins"
+# adds the creators named under Origins.
+CO_OWNERS_SOURCE = "project_lead"
+# A milestone set on an issue carrying one of these is a standing triage decision the
+# event job must not overrule.
+DECLINE_LABELS = frozenset(
+    {DEFERRED, "scope:out", "status:blocked", "status:needs-info", "wontfix", "invalid", "duplicate"}
+)
+# The value a milestone's Workstream line uses for project-level work, which maps to the
+# project lead table rather than to a workstream row.
+PROJECT_WORKSTREAM = "Project"
+DELIVERABLE_TYPES = (
+    "Document", "Cheat Sheet", "Open Source tool", "Application/Tool", "Code Sample", "Agent Skill", "Other",
+)
+# The health issue is found by this marker plus its bot author, never by title.
+HEALTH_MARKER = "<!-- acs-roadmap-health -->"
+BOT_LOGIN = "github-actions[bot]"
+
+CLASSES = ("done", "unverified", "planned", "deferred", "dropped", "untriaged")
+KNOWN_REASONS = frozenset({"COMPLETED", "NOT_PLANNED", "DUPLICATE"})
+
+
+@dataclass(frozen=True)
+class IssueRecord:
+    number: int
+    state: str
+    state_reason: str | None
+    labels: frozenset[str]
+    author: str | None
+    closed_by: str | None
+
+
+def classify(issue: IssueRecord, trusted: frozenset[str]) -> str:
+    """Spec section "Issue classes". Checked in order, first match wins.
+
+    Any close by a login outside the roster is unverified, whatever its reason, so an
+    author cannot move progress in either direction by closing their own issue. A null
+    closer, which a deleted account produces, is treated the same way.
+    """
+    if issue.state == "CLOSED":
+        if issue.closed_by is None or issue.closed_by.casefold() not in trusted:
+            return "unverified"
+        return "done" if issue.state_reason == "COMPLETED" else "dropped"
+    if ACCEPTED in issue.labels:
+        return "planned"
+    if DEFERRED in issue.labels:
+        return "deferred"
+    return "untriaged"
+
+
+def unknown_reason(issue: IssueRecord) -> bool:
+    return issue.state == "CLOSED" and issue.state_reason not in KNOWN_REASONS
+
+
+def milestone_state(closed: bool, has_due: bool, counts: dict[str, int]) -> str:
+    """Spec section "Milestone states". Closed milestones first, then open ones."""
+    done = counts.get("done", 0)
+    remaining = counts.get("unverified", 0) + counts.get("planned", 0)
+    deferred = counts.get("deferred", 0)
+    if closed:
+        if done == 0:
+            return "withdrawn"
+        return "published" if remaining == 0 else "closed_with_open_work"
+    if done == 0 and remaining == 0:
+        return "deferred" if deferred else "skipped"
+    if not has_due:
+        return "ongoing"
+    if remaining == 0:
+        return "ready"
+    if done:
+        return "in_progress"
+    return "planning"
+
+
+OWASP_STATUS: dict[str, str | None] = {
+    "withdrawn": None,
+    "published": "Published",
+    "closed_with_open_work": "In Review",
+    "skipped": None,
+    "deferred": "Planning",
+    "ongoing": "Ongoing",
+    "ready": "In Review",
+    "in_progress": "In Progress",
+    "planning": "Planning",
+}
+
+
+# --- Dates ---------------------------------------------------------------------------
+
+def due_date(due_on: str | None) -> date | None:
+    """The calendar date a maintainer chose. GitHub stores it at 00:00Z on that date."""
+    return date.fromisoformat(due_on[:10]) if due_on else None
+
+
+def _quarter(day: date) -> tuple[int, int]:
+    return day.year, (day.month - 1) // 3 + 1
+
+
+def quarter_label(day: date) -> str:
+    year, q = _quarter(day)
+    return f"Q{q} {year}"
+
+
+def is_quarter_end(day: date) -> bool:
+    return day.month in (3, 6, 9, 12) and (day + timedelta(days=1)).month != day.month
+
+
+def target_passed(due: date | None, committed: date | None, today: date) -> bool:
+    if committed is not None:
+        return today > committed
+    if due is not None:
+        return _quarter(today) > _quarter(due)
+    return False
+
+
+# --- Milestone descriptions ----------------------------------------------------------
+
+_DESCRIPTION_LINE = re.compile(r"^(Committed|Workstream|Type):[ \t]*(.*?)[ \t]*$")
+
+
+@dataclass(frozen=True)
+class Description:
+    text: str
+    committed: date | None
+    workstream: str | None
+    deliverable_type: str | None
+    errors: tuple[str, ...]
+
+
+def parse_description(raw: str | None, workstream_names: set[str]) -> Description:
+    """Split the three machine-read lines from the prose. Spec "Milestone description lines"."""
+    values: dict[str, str] = {}
+    prose: list[str] = []
+    for line in (raw or "").splitlines():
+        match = _DESCRIPTION_LINE.match(line.strip())
+        if match:
+            values[match.group(1)] = match.group(2)
+        else:
+            prose.append(line.rstrip())
+    errors: list[str] = []
+    committed = None
+    if "Committed" in values:
+        try:
+            committed = date.fromisoformat(values["Committed"])
+        except ValueError:
+            errors.append("committed")
+    workstream = values.get("Workstream")
+    if workstream not in workstream_names | {PROJECT_WORKSTREAM}:
+        errors.append("workstream")
+        workstream = None
+    deliverable_type = values.get("Type")
+    if deliverable_type not in DELIVERABLE_TYPES:
+        errors.append("type")
+        deliverable_type = None
+    return Description(
+        text="\n".join(prose).strip(),
+        committed=committed,
+        workstream=workstream,
+        deliverable_type=deliverable_type,
+        errors=tuple(errors),
+    )
+
+
+# --- roadmap.json --------------------------------------------------------------------
+
+def _record(raw: dict) -> IssueRecord:
+    return IssueRecord(
+        number=int(raw["number"]),
+        state=raw["state"],
+        state_reason=raw.get("stateReason"),
+        labels=frozenset(raw.get("labels") or ()),
+        author=raw.get("author"),
+        closed_by=raw.get("closedBy"),
+    )
+
+
+def _names(people: tuple[Person, ...]) -> list[str]:
+    return [name for name, _login in people]
+
+
+def empty_roadmap(status: str, generated: str, commit: str, run: str, reason: str | None = None) -> dict:
+    """The document written when publishing is off or the data could not be built."""
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "rules_version": RULES_VERSION,
+        "status": status,
+        "generated": generated,
+        "commit": commit,
+        "run": run,
+        "project_leads": [],
+        "co_owners": [],
+        "workstreams": {},
+        "milestones": [],
+    }
+    if reason is not None:
+        doc["reason"] = reason
+    return doc
+
+
+def build_roadmap(
+    milestones: list[dict],
+    roster: Roster,
+    trusted: frozenset[str],
+    today: date,
+    generated: str,
+    commit: str,
+    run: str,
+) -> dict:
+    """Classify every milestone. Carries numbers and maintainer-written milestone text only.
+
+    Issue titles never enter the document, so phase 0 publishes no text an outsider wrote.
+    """
+    doc = empty_roadmap("ok", generated, commit, run)
+    doc["project_leads"] = _names(roster.project_leads)
+    co_owners = list(roster.project_leads)
+    if CO_OWNERS_SOURCE == "origins":
+        co_owners += list(roster.origins)
+    doc["co_owners"] = _names(tuple(co_owners))
+    doc["workstreams"] = {name: _names(people) for name, people in roster.workstreams.items()}
+    doc["workstreams"][PROJECT_WORKSTREAM] = _names(roster.project_leads)
+    names = set(roster.workstreams)
+    entries: list[dict] = []
+    for milestone in milestones:
+        records = [_record(raw) for raw in milestone.get("issues") or ()]
+        by_class: dict[str, list[int]] = {name: [] for name in CLASSES}
+        for record in records:
+            by_class[classify(record, trusted)].append(record.number)
+        counts = {name: len(numbers) for name, numbers in by_class.items()}
+        due = due_date(milestone.get("dueOn"))
+        description = parse_description(milestone.get("description"), names)
+        state = milestone_state(milestone["state"] == "CLOSED", due is not None, counts)
+        entries.append(
+            {
+                "number": int(milestone["number"]),
+                "url": milestone["url"],
+                "title": milestone["title"],
+                "description": description.text,
+                "committed": description.committed.isoformat() if description.committed else None,
+                "workstream": description.workstream,
+                "type": description.deliverable_type,
+                "description_errors": list(description.errors),
+                "state": state,
+                "owasp_status": OWASP_STATUS[state],
+                "quarter": quarter_label(due) if due else None,
+                "due_on": due.isoformat() if due else None,
+                "target_passed": milestone["state"] == "OPEN" and state != "skipped" and target_passed(due, description.committed, today),
+                "counts": counts,
+                "issues": {name: sorted(numbers) for name, numbers in by_class.items()},
+                "unknown_reasons": sorted(r.number for r in records if unknown_reason(r)),
+            }
+        )
+    entries.sort(key=lambda e: (e["due_on"] is None, e["due_on"] or "", e["title"].casefold()))
+    doc["milestones"] = entries
+    return doc

@@ -8,7 +8,7 @@ Search existing issues and pull requests to avoid duplicating efforts.
 
 ## Current Priority Scope
 
-Reviewed at each milestone. Current window: Day 0 to Day 30. Next review October 9, 2026.
+Reviewed at each milestone. Current window: the open milestones on the [milestones page](https://github.com/GenAI-Security-Project/agent-control-standard/milestones). Next review October 9, 2026.
 
 The project has one committed outcome:
 
@@ -35,7 +35,7 @@ the conformance evidence that makes either credible:
 - Closing the Cursor file-read gap
 - Conformance and dogfooding reports that document where ACS fails in practice
 
-**Deferred to v0.2.0.** Real work, tracked, landing after Day 90: async and composition,
+**Deferred to v0.2.0.** Real work, tracked, landing in a later release: async and composition,
 streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
 binding, and AgBOM federation across A2A peers. Negative conformance vectors sit here
 too, in #53.
