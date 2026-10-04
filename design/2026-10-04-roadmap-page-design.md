@@ -3,7 +3,7 @@
 Version: 1.0
 Owner: ACS project lead
 Date: 2026-10-04
-Status: design, awaiting review
+Status: design, awaiting approval of the written spec
 
 Contributors arriving from the OWASP relaunch can see what the project accepts, but not
 when any of it lands. The accepted backlog lives in labels and on an org project board,
@@ -55,7 +55,8 @@ token or network access.
 
 ### What it shows
 
-The fixed introduction says when the page was generated and links to
+The fixed introduction says the roadmap shows targets set by volunteers, which move as
+capacity does. It also says when the page was generated and links to
 [Current Priority Scope](../CONTRIBUTING.md#current-priority-scope). That section declares
 itself the only place scope is stated, so the page links to it and never restates it.
 
@@ -63,7 +64,9 @@ Below the introduction, each open milestone renders as a card, ordered by target
 by title, with undated milestones last. A card carries:
 
 - the milestone title, linked to the milestone on GitHub
-- the target quarter derived from `due_on`, such as `Q4 2026`, or "Ongoing" when there is none
+- the target quarter derived from `due_on`, such as `Q4 2026`, or "Ongoing" when there is none.
+  A quarter that has ended while the milestone is open reads "Q3 2026, under review", which
+  states the fact without treating a volunteer project's slip as a failure.
 - a progress bar and a count, such as "4 of 9 done"
 - the milestone description as plain text
 - the counted issues, each with its number, title, and open or closed state, linked to GitHub
@@ -367,8 +370,8 @@ it has run once on the web.
 ## Milestone migration
 
 The starting set below comes from a gap analysis of the Strategic Adoption Plan v3 against
-open issues and pull requests on October 4, 2026. It is proposed, not agreed, and issue
-assignments were made from titles. A milestone due in Q4 2026 gets `due_on` 2026-12-31.
+open issues and pull requests on October 4, 2026. It was agreed on October 4, 2026, as a
+starting point that will change, and issue assignments were made from titles. A milestone due in Q4 2026 gets `due_on` 2026-12-31.
 
 | Milestone | Issues and pull requests | Due |
 | --- | --- | --- |
@@ -393,12 +396,29 @@ not applicable, since ACS already operates as an initiative under ASI.
 
 The migration runs once, in this order:
 
-1. Agree the set above, then create each milestone with its quarter's last day as `due_on` and a description
+1. Create each milestone with its quarter's last day as `due_on` and a description
    written for an outside reader.
 2. File the governance issues.
 3. Put each issue in its milestone. The sync workflow applies `status:accepted` as each
    one lands, so this step also accepts any issue triage has not yet labeled.
 4. Close the four Day N milestones once they are empty.
+
+### Changing the roadmap
+
+This is a volunteer project, so the roadmap changes whenever capacity does, and a change
+must cost one edit in the GitHub UI. No pull request, file, or rebuild request is involved.
+
+| Change | The one edit | What follows automatically |
+| --- | --- | --- |
+| Move a deliverable to another quarter | Change the milestone's due date to that quarter's last day | The page reorders it on the next nightly build. The OWASP rows pick it up the next time the skill runs. |
+| Move an issue to another deliverable | Change the issue's milestone | The issue keeps `status:accepted`. Both milestones' progress updates on the next build. |
+| Drop an issue from the roadmap | Clear its milestone | The sync workflow is add-only, so it leaves `status:accepted` alone. The issue stays accepted and leaves the page. |
+| Add a deliverable | Create a milestone | It appears once it holds an accepted issue. |
+| Rename or reword a deliverable | Edit the milestone's title or description | Nothing else references the title, so nothing breaks. |
+| Retire a deliverable | Move its issues, then close or delete the milestone | A closed milestone shows as Published, so delete one that was abandoned rather than delivered. |
+
+None of the automation stores a milestone's title, number, or quarter. Every run reads the
+current state from GitHub, so no edit can leave a stale copy behind.
 
 `tools/apply_governance.py` declares the Day N milestones as desired state, and it creates
 or updates any milestone it declares. Left alone, it would rewrite the Day N descriptions
@@ -427,7 +447,3 @@ milestones and comparing the output with the sheet's existing rows.
 - Burndown history or velocity. The page shows current state only.
 - The label migration. This design depends only on `status:accepted`, which both taxonomies
   keep.
-
-## Open questions
-
-1. Is the proposed milestone set in Milestone migration right, including its quarters?
