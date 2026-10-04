@@ -263,6 +263,261 @@ def cmd_migrate(args) -> int:
     return 0
 
 
+import os  # noqa: E402
+from datetime import date, datetime, timedelta, timezone  # noqa: E402
+
+SECTION_TITLES = (
+    ("ready_to_publish", "Ready to publish", "Work complete. Verify each milestone's work is on main by hand, then close it."),
+    ("closed_with_open_work", "Closed with open work", "Closed milestones that still hold remaining issues."),
+    ("closed_nothing_done", "Closed with open work and nothing done", "Closed milestones with no done issues but remaining ones. They show as withdrawn. Reopen any closed by mistake."),
+    ("target_passed", "Target passed", "Open milestones past their committed date or quarter."),
+    ("untriaged_in_milestone", "Untriaged in a milestone", "Open issues in a milestone with no acceptance decision."),
+    ("declined_by_triage_label", "Milestoned against a triage decision", "The event job declined these because of a standing triage label."),
+    ("awaiting_confirmation", "Awaiting maintainer confirmation", "Closed by someone outside the roster. A maintainer reopens and recloses to confirm."),
+    ("in_focus_without_milestone", "In focus without a milestone", "Open in-focus issues not yet placed on the roadmap."),
+    ("accepted_without_milestone", "Accepted without a milestone", "Open accepted issues not yet placed on the roadmap."),
+    ("accepted_this_week", "Accepted by milestone this week", "Issues the bot accepted in the last eight days, with who set the milestone."),
+    ("unknown_close_reasons", "Unknown close reasons", "Closed with a reason this version does not know."),
+    ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
+    ("missing_description_lines", "Missing description lines", "Milestones without a valid Workstream or Type line."),
+    ("switches", "Switches", "Roadmap variables holding something other than true or false."),
+)
+
+
+def record_from_rest(issue: dict, closed_by: str | None) -> model.IssueRecord:
+    reason = issue.get("state_reason")
+    return model.IssueRecord(
+        number=int(issue["number"]),
+        state=str(issue["state"]).upper(),
+        state_reason=reason.upper() if reason else None,
+        labels=frozenset(_labels(issue)),
+        author=(issue.get("user") or {}).get("login"),
+        closed_by=closed_by,
+    )
+
+
+def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[str], today: date, switches: dict[str, str]) -> dict:
+    """Spec "Health reporting", sections. Numbers and maintainer logins only."""
+    report: dict[str, list] = {key: [] for key, _title, _note in SECTION_TITLES}
+    by_milestone: dict[int, list[model.IssueRecord]] = {}
+    for raw in snapshot["milestoned"]:
+        record = record_from_rest(raw, snapshot["closed_by"].get(int(raw["number"])))
+        by_milestone.setdefault(int(raw["milestone"]["number"]), []).append(record)
+        cls = model.classify(record, trusted)
+        if record.state == "OPEN" and record.labels & model.DECLINE_LABELS - {model.DEFERRED}:
+            report["declined_by_triage_label"].append(record.number)
+        elif cls == "untriaged":
+            report["untriaged_in_milestone"].append(record.number)
+        if cls == "unverified":
+            report["awaiting_confirmation"].append(record.number)
+        if model.unknown_reason(record):
+            report["unknown_close_reasons"].append(record.number)
+    for milestone in snapshot["milestones"]:
+        number = int(milestone["number"])
+        records = by_milestone.get(number, [])
+        counts = {name: 0 for name in model.CLASSES}
+        for record in records:
+            counts[model.classify(record, trusted)] += 1
+        due = model.due_date(milestone.get("due_on"))
+        description = model.parse_description(milestone.get("description"), workstream_names)
+        closed = milestone.get("state") == "closed"
+        state = model.milestone_state(closed, due is not None, counts)
+        if state == "ready":
+            report["ready_to_publish"].append(number)
+        if state == "closed_with_open_work":
+            report["closed_with_open_work"].append(number)
+        if closed and counts["done"] == 0 and counts["unverified"] + counts["planned"] > 0:
+            report["closed_nothing_done"].append(number)
+        if not closed and model.target_passed(due, description.committed, today) and state != "skipped":
+            report["target_passed"].append(number)
+        if due is not None and not model.is_quarter_end(due) and not closed:
+            report["off_quarter_dates"].append(number)
+        if not closed and {"workstream", "type"} & set(description.errors):
+            report["missing_description_lines"].append(number)
+    for raw in snapshot["unmilestoned_open"]:
+        names = _labels(raw)
+        if model.IN_FOCUS in names:
+            report["in_focus_without_milestone"].append(int(raw["number"]))
+        if model.ACCEPTED in names:
+            report["accepted_without_milestone"].append(int(raw["number"]))
+    report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
+    # Every switch is listed, so the weekly call sees that rendering is off, not only that a
+    # value is odd. The third element flags anything other than true or false.
+    report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
+    for key in report:
+        if key not in ("accepted_this_week", "switches"):
+            report[key] = sorted(set(report[key]))
+    return report
+
+
+def status_line(status: str, stamp: str, run_id: str, failed: list[str]) -> str:
+    tail = f" {' '.join(failed)}" if failed else ""
+    return f"<!-- acs-sweep: {status} {stamp} run {run_id}{tail} -->"
+
+
+def render_health(report: dict, status: str, stamp: str, run_id: str, failed: list[str]) -> str:
+    repo_url = f"https://github.com/{model.REPO}"
+    lines = [
+        status_line(status, stamp, run_id, failed),
+        model.HEALTH_MARKER,
+        "",
+        "This issue is rewritten every night by the roadmap sweep. It is the weekly call's "
+        "triage agenda. Fix what it lists in GitHub, and the next sweep clears the line.",
+        "",
+        f"Written {stamp}, run [{run_id}]({repo_url}/actions/runs/{run_id}), rules {model.RULES_VERSION}.",
+    ]
+    for key, title, note in SECTION_TITLES:
+        lines += ["", f"## {title}", "", note, ""]
+        if key in failed:
+            lines.append("Could not be read on this run.")
+            continue
+        items = report.get(key) or []
+        if not items:
+            lines.append("None.")
+        elif key == "accepted_this_week":
+            lines += [f"- #{number}, milestone set by `{login}`" for number, login in items]
+        elif key == "switches":
+            for name, value, odd in items:
+                shown = f"`{value}`" if value else "unset"
+                lines.append(f"- `{name}` is {shown}" + (" (only `true` turns it on)" if odd else ""))
+        elif key in ("ready_to_publish", "closed_with_open_work", "target_passed", "off_quarter_dates", "missing_description_lines"):
+            lines += [f"- [milestone {number}]({repo_url}/milestone/{number})" for number in items]
+        else:
+            lines += [f"- #{number}" for number in items]
+    return "\n".join(lines) + "\n"
+
+
+def choose_health_issue(candidates: list[dict]) -> dict | None:
+    """Bot-authored and marked, or nothing. A marked issue by anyone else is ignored."""
+    matches = [
+        issue for issue in candidates
+        if "pull_request" not in issue
+        and (issue.get("user") or {}).get("login") == model.BOT_LOGIN
+        and model.HEALTH_MARKER in (issue.get("body") or "")
+    ]
+    if len(matches) > 1:
+        raise SyncError(f"more than one health issue: {sorted(i['number'] for i in matches)}. Close the extras.")
+    return matches[0] if matches else None
+
+
+def _snapshot(gh: GitHub, today: date, failed: list[str]) -> dict:
+    base = f"repos/{model.REPO}"
+    snapshot = {"milestones": [], "milestoned": [], "unmilestoned_open": [], "closed_by": {}, "bot_accepted": []}
+    snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
+    snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
+    # Closers come from the same GraphQL ClosedEvent.actor the build uses, through the same
+    # fetch code, so the health issue and roadmap.json never classify an issue differently.
+    # It is also one query per milestone rather than one request per closed issue.
+    fetched = fetch_roadmap.fetch(gh.call_list, model.REPO, 240, time.sleep, time.monotonic)
+    if fetched["status"] != "ok":
+        raise SyncError(f"closer fetch failed: {fetched['class']}")
+    for milestone in fetched["milestones"]:
+        for item in milestone["issues"]:
+            if item["state"] == "CLOSED":
+                snapshot["closed_by"][int(item["number"])] = item["closedBy"]
+    try:
+        snapshot["unmilestoned_open"] = [
+            i for i in gh.paginate(f"{base}/issues?milestone=none&state=open&per_page=100") if "pull_request" not in i
+        ]
+    except SyncError:
+        failed += ["in_focus_without_milestone", "accepted_without_milestone"]
+    cutoff = datetime.combine(today - timedelta(days=8), datetime.min.time(), timezone.utc)
+    try:
+        for raw in snapshot["milestoned"]:
+            if raw["state"] != "open" or model.ACCEPTED not in _labels(raw):
+                continue
+            if datetime.fromisoformat(raw["updated_at"].replace("Z", "+00:00")) < cutoff:
+                continue
+            events = gh.paginate(f"{base}/issues/{raw['number']}/events?per_page=100")
+            accepted_by_bot = any(
+                e.get("event") == "labeled" and (e.get("label") or {}).get("name") == model.ACCEPTED
+                and (e.get("actor") or {}).get("login") == model.BOT_LOGIN
+                and datetime.fromisoformat(e["created_at"].replace("Z", "+00:00")) >= cutoff
+                for e in events
+            )
+            setters = [(e.get("actor") or {}).get("login") for e in events if e.get("event") == "milestoned"]
+            if accepted_by_bot and setters and setters[-1]:
+                snapshot["bot_accepted"].append([int(raw["number"]), setters[-1]])
+    except SyncError:
+        failed.append("accepted_this_week")
+    return snapshot
+
+
+# The creator filter must be spelled exactly. A wrong value returns an empty list with
+# status 200, which would create a duplicate health issue every night.
+HEALTH_LISTING = f"repos/{model.REPO}/issues?creator=github-actions%5Bbot%5D&state=all&per_page=100"
+
+
+def _switches() -> dict[str, str]:
+    names = ("ROADMAP_RENDER_ENABLED", "ROADMAP_REFRESH_ENABLED", "ROADMAP_SYNC_ENABLED")
+    return {name: os.environ.get(name, "") for name in names}
+
+
+def _sweep(apply: bool) -> int:
+    gh = GitHub()
+    repo_root = Path(__file__).resolve().parents[1]
+    trusted = model.trusted_logins(repo_root)
+    roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
+    now = datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_id = os.environ.get("RUN_ID", "local")
+    failed: list[str] = []
+    try:
+        snapshot = _snapshot(gh, now.date(), failed)
+        report = build_report(snapshot, trusted, set(roster.workstreams), now.date(), _switches())
+    except SyncError as exc:
+        print(f"::warning::{exc}")
+        failed = [key for key, _title, _note in SECTION_TITLES]
+        report = {}
+    status = "degraded" if failed else "ok"
+    body = render_health(report, status, stamp, run_id, failed)
+    if not apply:
+        print(body)
+        return 1 if failed else 0
+    target = _health_issue(gh)
+    base = f"repos/{model.REPO}/issues"
+    if target is None:
+        created = json.loads(gh._check(
+            gh.call("api", "-X", "POST", base, "-f", "title=Roadmap health", "-f", f"body={body}"), "create health issue"
+        ))
+        number = int(created["number"])
+        message = f"Created the health issue #{number}. Set the repository variable ROADMAP_HEALTH_ISSUE to {number} and pin the issue."
+        print(f"::notice::{message}")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as handle:
+                handle.write(message + "\n")
+    else:
+        number = int(target["number"])
+        gh._check(gh.call("api", "-X", "PATCH", f"{base}/{number}", "-f", f"body={body}", "-f", "state=open"), "update health issue")
+    gh._check(gh.call("api", "-X", "PUT", f"{base}/{number}/lock", "-f", "lock_reason=resolved"), "lock health issue")
+    return 1 if failed else 0
+
+
+def _health_issue(gh: GitHub) -> dict | None:
+    configured = os.environ.get("ROADMAP_HEALTH_ISSUE", "").strip()
+    if configured:
+        if not configured.isdigit():
+            raise SyncError(f"ROADMAP_HEALTH_ISSUE is {configured!r}, not an issue number")
+        issue = gh.get(f"repos/{model.REPO}/issues/{configured}")
+        chosen = choose_health_issue([issue])
+        if chosen is None:
+            raise SyncError(f"issue #{configured} is not a bot-authored health issue")
+        return chosen
+    return choose_health_issue(gh.paginate(HEALTH_LISTING))
+
+
+def cmd_sweep(args) -> int:
+    return _sweep(args.apply)
+
+
+def cmd_dryrun(args) -> int:
+    code = _sweep(False)
+    if args.issue:
+        cmd_event(argparse.Namespace(issue=args.issue, apply=False))
+    return code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -272,10 +527,14 @@ def build_parser() -> argparse.ArgumentParser:
     migrate = sub.add_parser("migrate")
     migrate.add_argument("table")
     migrate.add_argument("--apply", action="store_true")
+    sweep = sub.add_parser("sweep")
+    sweep.add_argument("--apply", action="store_true")
+    dryrun = sub.add_parser("dryrun")
+    dryrun.add_argument("--issue", default="")
     return parser
 
 
-COMMANDS = {"event": cmd_event, "migrate": cmd_migrate}
+COMMANDS = {"event": cmd_event, "migrate": cmd_migrate, "sweep": cmd_sweep, "dryrun": cmd_dryrun}
 
 
 def main(argv: list[str] | None = None) -> int:
