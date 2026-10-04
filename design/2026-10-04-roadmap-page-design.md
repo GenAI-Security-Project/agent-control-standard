@@ -241,7 +241,7 @@ starting at the Deliverable ID column.
 | Column | Value |
 | --- | --- |
 | Deliverable ID | blank, matching every existing row |
-| Initiative | the ACS initiative name (see Open questions) |
+| Initiative | `Agent Control Standard` |
 | Work Item Title | milestone title |
 | Deliverable Type | proposed from the milestone's content, confirmed with the user before printing |
 | Initiative Co-Owners | Project lead from `GOVERNANCE.md` |
@@ -255,7 +255,7 @@ starting at the Deliverable ID column.
 
 Status uses the sheet's existing vocabulary, applied as the first rule that matches:
 
-1. Milestone closed: the sheet's completed status (see Open questions)
+1. Milestone closed: Published
 2. No due date: Ongoing
 3. Every counted issue closed, milestone still open: In Review
 4. Any counted issue closed: In Progress
@@ -316,9 +316,6 @@ milestones and comparing the output with the sheet's existing rows.
 
 ## Open questions
 
-1. What Initiative name should ACS rows carry in the OWASP sheet? Other projects use names
-   such as "Agentic Security Initaitive" and "AI Red Teaming".
-2. What status word does the sheet use for finished work? The visible rows use only
-   Planning, In Progress, In Review, and Ongoing.
-3. Which deliverables become the first milestones, and with what due dates? The Day N
-   descriptions are the starting material.
+1. Which deliverables become the first milestones, and with what due dates? A gap analysis
+   of the Strategic Adoption Plan v3 against open issues and pull requests proposes a set.
+   The milestones are created only once that set is agreed.
