@@ -1,6 +1,6 @@
 # A live community roadmap, and an OWASP report on demand
 
-Version: 1.5
+Version: 1.6
 Owner: ACS project lead
 Date: 2026-10-04
 Status: design, awaiting approval of the written spec
@@ -29,6 +29,45 @@ are governance decisions that belong to the project lead rather than to its impl
 The weekly promotion to `main` succeeded on its scheduled runs of September 10 and 17 and has failed
 since September 24, so nothing in this design can reach the published site until it is repaired.
 That repair is a separate decision.
+
+## Phase 0, decided October 4, 2026
+
+The project lead chose decision 1 below: prove the milestone practice before building the custom
+page. Phase 0 ships the parts of this design that keep milestones true and feed the OWASP report, and
+defers the parts that exist only to render a page on the project's own domain.
+
+**In phase 0:**
+
+- `tools/roadmap_model.py`, the shared rules: trusted logins, issue classes, milestone states,
+  quarters, and description lines.
+- `tools/fetch_roadmap.py` and a fetch step in the `build` job of `deploy-pages.yml`.
+- `tools/build_roadmap_data.py`, which writes `/roadmap/roadmap.json` into the published site at the
+  site root, outside the MkDocs tree. It carries milestone fields and issue counts and numbers, and no
+  issue titles, so phase 0 publishes no text an outsider wrote.
+- `.github/workflows/roadmap-refresh.yml`, the nightly dispatcher, with its exact-shape guard test.
+- `.github/workflows/roadmap-sync.yml` with the `event`, `sweep`, and `dryrun` jobs,
+  `tools/roadmap_sync.py`, the health issue, and the migration command.
+- `.github/workflows/monitor-roadmap.yml`, watching `roadmap.json` freshness and the health issue.
+- The `pr-intake.yml` changes: one listing call, and the closing-keyword comment.
+- `tools/apply_governance.py` losing the Day N milestones, the CONTRIBUTING.md wording changes, and a
+  landing page nav link to the repository's `/milestones` page in place of a custom roadmap page.
+- The `owasp-acs-roadmap` skill and its `owasp_rows.py` script, reading `/roadmap/roadmap.json`.
+
+**Deferred to phase 1**, once milestones have stayed current through about four weekly calls: the
+`/docs/roadmap/` page, its region markers and placeholder, the untrusted-title rule, the structural
+check and `tools/site_guards.py`, and the page incident runbook.
+
+**In phase 0, `ROADMAP_RENDER_ENABLED`** governs publishing `roadmap.json`. When it is not `true`, the
+build writes a `roadmap.json` with status `disabled` and no milestones. The failure table applies to
+`roadmap.json` alone: a data failure on a nightly dispatch fails the build when the published
+`roadmap.json` already reports this commit, and every other build writes status `unavailable` and
+passes.
+
+**Not in the implementation:** running the migration against the live repository, creating
+milestones or issues, setting repository variables, and pinning the health issue. Those are rollout
+steps the project lead runs after deciding decisions 2 through 11, and after promotion is repaired.
+The implementation carries the current defaults for decisions 3 through 8 behind constants in
+`tools/roadmap_model.py`, so each can change in one place.
 
 ## Goal
 
