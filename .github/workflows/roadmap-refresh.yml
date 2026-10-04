@@ -1,0 +1,33 @@
+# Starts a nightly deploy of main so /roadmap/roadmap.json stays current between merges.
+#
+# Scheduled workflows run only on the default branch, which is integration, and the deploy
+# gate publishes only from main. Letting a scheduled run deploy would let the less protected
+# branch control production, so this dispatches main's own deploy-pages instead.
+#
+# actions: write also covers re-running, cancelling, and deleting runs. This job checks out
+# nothing, runs one constant command, and lives two minutes, and
+# tests/test_roadmap_refresh_workflow.py pins the whole file, so any change is reviewed.
+name: Refresh roadmap
+
+on:
+  schedule:
+    # 05:15 UTC. Scheduler start delays of up to two hours were observed on this repository,
+    # which the roadmap monitor's thresholds absorb.
+    - cron: "15 5 * * *"
+
+permissions: {}
+
+jobs:
+  dispatch:
+    # Off unless the repository variable is exactly "true". Turn it off before rolling
+    # Pages back to an older artifact, or the next nightly run redeploys main.
+    if: vars.ROADMAP_REFRESH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Start a nightly deploy of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-pages.yml --repo "$GITHUB_REPOSITORY" --ref main -f source=nightly
