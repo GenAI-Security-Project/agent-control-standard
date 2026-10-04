@@ -1,6 +1,8 @@
 """Tests for the roadmap monitor's conditions."""
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,3 +95,64 @@ def test_evaluate_runs_only_switched_on_checks(render, sync, expected):
     env = {"ROADMAP_RENDER_ENABLED": render, "ROADMAP_SYNC_ENABLED": sync, "ROADMAP_HEALTH_ISSUE": "12"}
     problems = evaluate(env, read_json=lambda url: None, read_issue=lambda n: None, now=NOW)
     assert len(problems) == expected
+
+
+def test_check_page_never_echoes_fetched_status():
+    hostile = "bad\n::error::injected"
+    problems = check_page({"status": hostile, "generated": "2026-11-02T05:20:00Z"}, NOW)
+    assert problems == ["roadmap.json status is not ok"]
+    assert "injected" not in "".join(problems)
+    assert check_page({"status": "disabled", "generated": "x"}, NOW) == ["roadmap.json status is 'disabled'"]
+
+
+@pytest.mark.parametrize("doc", [[], "text", 5, [{"status": "ok"}]])
+def test_check_page_non_object_is_unreadable(doc):
+    assert check_page(doc, NOW) == ["roadmap.json could not be read"]
+
+
+@pytest.mark.parametrize("generated", ["2026-11-02T05:20:00", 5, None, "junk"])
+def test_check_page_unparseable_generated(generated):
+    problems = check_page({"status": "ok", "generated": generated}, NOW)
+    assert problems == ["roadmap.json has no readable generated time"]
+
+
+def test_check_health_time_without_zone_is_unparseable():
+    problems = check_health("12", health("<!-- acs-sweep: ok 2026-11-02T04:12:00 run 5 -->"), NOW)
+    assert problems == ["the status line time does not parse"]
+
+
+def test_check_health_malformed_issue_shapes():
+    assert len(check_health("12", {"user": "x", "body": "b"}, NOW)) == 1
+    assert len(check_health("12", {"user": {"login": "github-actions[bot]"}, "body": 5}, NOW)) == 1
+
+
+@pytest.mark.parametrize("failure", [
+    subprocess.TimeoutExpired(cmd="gh", timeout=60),
+    json.JSONDecodeError("bad", "doc", 0),
+])
+def test_read_issue_failures_return_none(monkeypatch, failure):
+    import monitor_roadmap
+
+    def boom(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(monitor_roadmap.subprocess, "run", boom)
+    assert monitor_roadmap._read_issue("12") is None
+
+
+def test_read_issue_non_object_returns_none(monkeypatch):
+    import monitor_roadmap
+
+    done = subprocess.CompletedProcess([], 0, stdout="[1]", stderr="")
+    monkeypatch.setattr(monitor_roadmap.subprocess, "run", lambda *a, **k: done)
+    assert monitor_roadmap._read_issue("12") is None
+
+
+@pytest.mark.parametrize("value, passed", [(" 12 ", "12"), ("\u0661\u0662", None), ("1 2", None), ("", None)])
+def test_evaluate_validates_and_strips_issue_number(value, passed):
+    from monitor_roadmap import evaluate
+    seen = []
+    env = {"ROADMAP_RENDER_ENABLED": "false", "ROADMAP_SYNC_ENABLED": "true", "ROADMAP_HEALTH_ISSUE": value}
+    problems = evaluate(env, read_json=lambda url: None, read_issue=lambda n: seen.append(n), now=NOW)
+    assert seen == ([passed] if passed else [])
+    assert len(problems) == 1

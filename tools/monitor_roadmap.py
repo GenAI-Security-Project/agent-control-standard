@@ -30,30 +30,51 @@ CLOCK_SKEW = timedelta(minutes=10)
 STATUS = re.compile(r"<!-- acs-sweep: (ok|degraded) (\S+) run (\S+)")
 
 
+SAFE_STATUSES = {"unavailable", "disabled", "placeholder"}
+
+
 def _time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    """Parse an ISO time. A time without a zone cannot be compared to now, so it is a ValueError."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("no timezone")
+    return parsed
+
+
+def _issue_number(configured: str) -> str | None:
+    """The stripped ASCII issue number, or None. str.isdigit alone accepts non-ASCII digits."""
+    stripped = configured.strip()
+    return stripped if stripped.isascii() and stripped.isdigit() else None
 
 
 def check_page(doc: dict | None, now: datetime) -> list[str]:
-    if doc is None:
+    if not isinstance(doc, dict):
         return ["roadmap.json could not be read"]
-    if doc.get("status") != "ok":
-        return [f"roadmap.json status is {doc.get('status')!r}"]
+    status = doc.get("status")
+    if status != "ok":
+        # Fetched text never reaches the log. Only a known status word is echoed.
+        if isinstance(status, str) and status in SAFE_STATUSES:
+            return [f"roadmap.json status is {status!r}"]
+        return ["roadmap.json status is not ok"]
     try:
         age = now - _time(doc["generated"])
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError, AttributeError):
         return ["roadmap.json has no readable generated time"]
     return [f"roadmap.json is {age} old"] if age > PAGE_MAX_AGE else []
 
 
 def check_health(configured: str, issue: dict | None, now: datetime) -> list[str]:
-    if not configured.strip().isdigit():
+    number = _issue_number(configured)
+    if number is None:
         return [f"ROADMAP_HEALTH_ISSUE is {configured!r}, not an issue number"]
-    if issue is None:
+    configured = number
+    if not isinstance(issue, dict):
         return [f"health issue #{configured} could not be read"]
-    if (issue.get("user") or {}).get("login") != model.BOT_LOGIN:
+    user = issue.get("user")
+    if not isinstance(user, dict) or user.get("login") != model.BOT_LOGIN:
         return [f"health issue #{configured} is not authored by {model.BOT_LOGIN}"]
-    body = issue.get("body") or ""
+    body = issue.get("body")
+    body = body if isinstance(body, str) else ""
     if model.HEALTH_MARKER not in body:
         return [f"health issue #{configured} lacks the marker"]
     match = STATUS.search(body)
@@ -77,18 +98,23 @@ def _read_json(url: str) -> dict | None:
     request = urllib.request.Request(url, headers={"Cache-Control": "no-cache", "User-Agent": "acs-roadmap"})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode("utf-8"))
+            data = json.loads(response.read().decode("utf-8"))
+        return data if isinstance(data, dict) else None
     except Exception:  # noqa: BLE001 - unreadable is reported as a problem by check_page
         return None
 
 
 def _read_issue(number: str) -> dict | None:
-    done = subprocess.run(
-        ["gh", "api", f"repos/{model.REPO}/issues/{number}"], capture_output=True, text=True, timeout=60
-    )
-    if done.returncode != 0:
+    try:
+        done = subprocess.run(
+            ["gh", "api", f"repos/{model.REPO}/issues/{number}"], capture_output=True, text=True, timeout=60
+        )
+        if done.returncode != 0:
+            return None
+        data = json.loads(done.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
         return None
-    return json.loads(done.stdout)
+    return data if isinstance(data, dict) else None
 
 
 def evaluate(env: dict, read_json, read_issue, now: datetime) -> list[str]:
@@ -99,7 +125,8 @@ def evaluate(env: dict, read_json, read_issue, now: datetime) -> list[str]:
         problems += check_page(read_json(f"{base.rstrip('/')}/roadmap/roadmap.json"), now)
     if env.get("ROADMAP_SYNC_ENABLED") == "true":
         configured = env.get("ROADMAP_HEALTH_ISSUE", "")
-        issue = read_issue(configured) if configured.strip().isdigit() else None
+        number = _issue_number(configured)
+        issue = read_issue(number) if number else None
         problems += check_health(configured, issue, now)
     return problems
 
