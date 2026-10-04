@@ -291,9 +291,13 @@ the org project App's grant does not change.
 
 A fork pull request's token cannot write, so the pull request rule needs
 `pull_request_target`. That trigger runs with a write token in the context of the base
-repository, so the job follows the pattern `pr-intake.yml` already uses:
+repository. `pr-intake.yml` already runs on it safely by checking out nothing. This job
+has to run `tools/roadmap_sync.py`, so it adds one checkout and keeps the rest of that
+pattern:
 
-- It checks out the base branch's tools only, never the pull request's head.
+- It checks out the base branch, which is the default for `pull_request_target`, with
+  `persist-credentials: false`. It never checks out the pull request's head, so no code a
+  contributor wrote runs with the write token.
 - The pull request number comes from the event payload through `env:`. The linked issues
   come from GitHub's `closingIssuesReferences` field, never from parsing the pull request
   body.
