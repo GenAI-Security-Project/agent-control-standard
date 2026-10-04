@@ -13,6 +13,8 @@ permissions: {}
 
 jobs:
   check:
+    # Scheduled runs come from the default branch but check out main, which may lack the monitor yet.
+    if: vars.ROADMAP_RENDER_ENABLED == 'true' || vars.ROADMAP_SYNC_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

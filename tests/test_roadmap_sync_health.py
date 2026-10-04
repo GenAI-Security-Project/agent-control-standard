@@ -6,6 +6,7 @@ issue text or contributor login ever appears in it.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -153,3 +154,47 @@ def test_health_issue_selection_by_variable_and_listing(monkeypatch):
     monkeypatch.delenv("ROADMAP_HEALTH_ISSUE")
     assert _health_issue(FakeHealthGitHub(listing=[])) is None
     assert _health_issue(FakeHealthGitHub(listing=[bot(3)]))["number"] == 3
+
+
+class TimeoutGitHub:
+    def paginate(self, path):
+        raise subprocess.TimeoutExpired(["gh"], 120)
+
+
+def test_sweep_survives_a_non_sync_error_and_still_renders_switches(monkeypatch, capsys):
+    import roadmap_sync
+    monkeypatch.setattr(roadmap_sync, "GitHub", TimeoutGitHub)
+    monkeypatch.setenv("ROADMAP_RENDER_ENABLED", "true")
+    code = roadmap_sync._sweep(False)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "<!-- acs-sweep: degraded" in out and "switches" not in out.splitlines()[0]
+    assert "Could not be read on this run." in out
+    assert "`ROADMAP_RENDER_ENABLED` is `true`" in out
+    assert "TimeoutExpired" in out and "120" not in out.split("::warning::")[1].splitlines()[0]
+
+
+class MigrateGitHub:
+    def __init__(self, graphql):
+        self.graphql = graphql
+
+    def paginate(self, path):
+        return []
+
+    def get(self, path):
+        return {"number": int(path.rsplit("/", 1)[1]), "state": "open", "labels": [], "user": {"login": "x"}, "html_url": "u"}
+
+    def call(self, *args):
+        return self.graphql
+
+
+@pytest.mark.parametrize("graphql", [(1, "", "boom"), (0, "not json", ""), (0, "{}", "")])
+def test_migrate_says_when_it_could_not_check(monkeypatch, tmp_path, capsys, graphql):
+    import argparse
+    import json as _json
+    import roadmap_sync
+    monkeypatch.setattr(roadmap_sync, "GitHub", lambda: MigrateGitHub(graphql))
+    table = tmp_path / "t.json"
+    table.write_text(_json.dumps({"assignments": {"M": [5]}}))
+    roadmap_sync.cmd_migrate(argparse.Namespace(table=str(table), apply=False))
+    assert "COULD NOT CHECK #5" in capsys.readouterr().out

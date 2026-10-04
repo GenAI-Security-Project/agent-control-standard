@@ -194,3 +194,11 @@ def test_build_roadmap_shape_and_no_issue_titles():
 def test_empty_roadmap():
     out = empty_roadmap("unavailable", "t", "c", "r", reason="rate_limit")
     assert out["milestones"] == [] and out["status"] == "unavailable" and out["reason"] == "rate_limit"
+
+
+def test_skipped_milestone_never_reports_target_passed():
+    # The sweep excludes skipped milestones, so roadmap.json must agree.
+    milestones = [{"number": 8, "title": "Empty", "description": None, "state": "OPEN", "dueOn": "2026-03-31T00:00:00Z", "url": "u", "issues": []}]
+    out = build_roadmap(milestones, ROSTER, TRUSTED, date(2026, 11, 1), "t", "c", "r")
+    entry = out["milestones"][0]
+    assert entry["state"] == "skipped" and entry["target_passed"] is False

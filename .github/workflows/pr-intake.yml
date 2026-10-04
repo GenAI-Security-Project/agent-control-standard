@@ -54,7 +54,8 @@ jobs:
           # One listing call, whatever the body holds. A per-reference lookup let one pull
           # request body spend the repository's shared GITHUB_TOKEN budget, which the roadmap
           # fetch and sync also draw on.
-          ACCEPTED="$(gh issue list --repo "$REPO" --label status:accepted --state all --limit 1000 --json number --jq '.[].number')"
+          # A failed listing is not fatal. Nothing is then accepted, so the pull request is queued.
+          ACCEPTED="$(gh issue list --repo "$REPO" --label status:accepted --state all --limit 1000 --json number --jq '.[].number')" || ACCEPTED=""
           for n in $NUMBERS; do
             if printf '%s\n' "$ACCEPTED" | grep -qx "$n"; then
               echo "Issue #$n is accepted."
@@ -74,7 +75,7 @@ jobs:
         # Advisory only: it never fails the job, and edits that leave the body alone skip it.
         # It runs even when the step above exited early, because exit 0 is success and the
         # keyword check does not depend on whether the pull request is queued.
-        if: github.event.action != 'edited' || github.event.changes.body
+        if: always() && (github.event.action != 'edited' || github.event.changes.body)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

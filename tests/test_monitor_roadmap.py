@@ -60,6 +60,7 @@ EXPECTED = {
     True: {"schedule": [{"cron": "47 */6 * * *"}], "workflow_dispatch": None},
     "permissions": {},
     "jobs": {"check": {
+        "if": "vars.ROADMAP_RENDER_ENABLED == 'true' || vars.ROADMAP_SYNC_ENABLED == 'true'",
         "runs-on": "ubuntu-latest", "timeout-minutes": 5,
         "permissions": {"contents": "read", "issues": "read"},
         "steps": [

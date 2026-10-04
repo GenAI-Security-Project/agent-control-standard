@@ -67,3 +67,9 @@ def test_no_run_passes_a_gh_override_or_interpolates():
             run = step.get("run", "")
             assert "--gh" not in run
             assert "${{" not in run
+
+
+def test_fetch_step_condition_is_exact():
+    steps = load()["jobs"]["build"]["steps"]
+    fetch = next(step for step in steps if step.get("name") == "Fetch roadmap data")
+    assert fetch["if"] == "github.event_name != 'pull_request' && (vars.ROADMAP_RENDER_ENABLED == 'true' || inputs.preview)"

@@ -241,11 +241,17 @@ def cmd_migrate(args) -> int:
             "api", "graphql", "-f", f"query={CROSS_REFERENCES}",
             "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={number}",
         )
-        if code == 0:
+        if code != 0:
+            print(f"COULD NOT CHECK #{number}")
+            continue
+        try:
             nodes = json.loads(out)["data"]["repository"]["issue"]["timelineItems"]["nodes"]
             prs = delivered_by(nodes)
-            if prs:
-                print(f"POSSIBLY DELIVERED #{number} by merged pull request {', '.join(f'#{p}' for p in prs)}")
+        except (ValueError, KeyError, TypeError, AttributeError):
+            print(f"COULD NOT CHECK #{number}")
+            continue
+        if prs:
+            print(f"POSSIBLY DELIVERED #{number} by merged pull request {', '.join(f'#{p}' for p in prs)}")
     milestoned = gh.paginate(f"repos/{model.REPO}/issues?milestone=*&state=open&per_page=100")
     for number in missing_acceptance(milestoned):
         print(f"MILESTONED WITHOUT ACCEPTANCE #{number}")
@@ -448,6 +454,13 @@ def _snapshot(gh: GitHub, today: date, failed: list[str]) -> dict:
 HEALTH_LISTING = f"repos/{model.REPO}/issues?creator=github-actions%5Bbot%5D&state=all&per_page=100"
 
 
+def _degraded() -> tuple[list[str], dict]:
+    # The switches come from the environment, not from GitHub, so they still render.
+    rows = [[name, value, value not in ("true", "false")] for name, value in sorted(_switches().items())]
+    failed = [key for key, _title, _note in SECTION_TITLES if key != "switches"]
+    return failed, {"switches": rows}
+
+
 def _switches() -> dict[str, str]:
     names = ("ROADMAP_RENDER_ENABLED", "ROADMAP_REFRESH_ENABLED", "ROADMAP_SYNC_ENABLED")
     return {name: os.environ.get(name, "") for name in names}
@@ -467,8 +480,11 @@ def _sweep(apply: bool) -> int:
         report = build_report(snapshot, trusted, set(roster.workstreams), now.date(), _switches())
     except SyncError as exc:
         print(f"::warning::{exc}")
-        failed = [key for key, _title, _note in SECTION_TITLES]
-        report = {}
+        failed, report = _degraded()
+    except Exception as exc:  # noqa: BLE001 - the health issue write must happen even on a code defect
+        # Only the type name is printed. The message can carry fetched text.
+        print(f"::warning::sweep failed: {type(exc).__name__}")
+        failed, report = _degraded()
     status = "degraded" if failed else "ok"
     body = render_health(report, status, stamp, run_id, failed)
     if not apply:

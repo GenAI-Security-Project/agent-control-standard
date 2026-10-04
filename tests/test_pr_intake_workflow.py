@@ -1,7 +1,7 @@
 """Runs pr-intake's shell steps against a fake gh, as the workflow would.
 
 pr-intake checks out no code by design, so its logic lives in the YAML. These tests lift
-each step's script out of the YAML and run it, so the behavior is tested, not just read.
+each step's script out of the YAML and run it, so the behavior is tested, not only read.
 """
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ with open(log, "a") as handle:
 args = sys.argv[1:]
 state = json.loads(os.environ["GH_STATE"])
 if args[:2] == ["issue", "list"]:
+    if state.get("fail_list"):
+        sys.exit(1)
     print("\n".join(str(n) for n in state["accepted"]))
 elif args[:1] == ["api"] and "milestone=*" in " ".join(args):
     print("\n".join(str(n) for n in state["milestoned"]))
@@ -106,3 +108,18 @@ def test_keyword_comment_does_not_suppress_the_queue_comment(tmp_path):
 def test_no_step_interpolates_into_run():
     steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["triage"]["steps"]
     assert all("${{" not in s.get("run", "") for s in steps)
+
+
+def test_failed_accepted_listing_queues_the_pull_request_and_exits_zero(tmp_path):
+    done, calls = run_step(
+        tmp_path, "Check whether a referenced issue is accepted", "Closes #132",
+        {"accepted": [132], "milestoned": [], "fail_list": True},
+    )
+    assert done.returncode == 0, done.stderr
+    assert any(c[:2] == ["pr", "comment"] for c in calls)
+
+
+def test_keyword_step_runs_after_an_earlier_failure_but_skips_body_free_edits():
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["triage"]["steps"]
+    flag = next(s for s in steps if s["name"] == "Flag closing keywords on roadmap issues")
+    assert flag["if"] == "always() && (github.event.action != 'edited' || github.event.changes.body)"

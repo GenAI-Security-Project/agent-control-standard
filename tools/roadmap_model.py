@@ -412,7 +412,7 @@ def build_roadmap(
                 "owasp_status": OWASP_STATUS[state],
                 "quarter": quarter_label(due) if due else None,
                 "due_on": due.isoformat() if due else None,
-                "target_passed": milestone["state"] == "OPEN" and target_passed(due, description.committed, today),
+                "target_passed": milestone["state"] == "OPEN" and state != "skipped" and target_passed(due, description.committed, today),
                 "counts": counts,
                 "issues": {name: sorted(numbers) for name, numbers in by_class.items()},
                 "unknown_reasons": sorted(r.number for r in records if unknown_reason(r)),
