@@ -714,19 +714,19 @@ The starting set below comes from a gap analysis of the Strategic Adoption Plan 
 and pull requests on October 4, 2026, corrected by a coverage diff against the Day N milestones it
 replaces. It was agreed on October 4, 2026, as a starting point that will change.
 
-| Milestone | Issues | Quarter |
-| --- | --- | --- |
-| Conformance claim template | #93, #136, #106 | Q4 2026 |
-| Fail-open decision | #32, #37 | Q4 2026 |
-| Reference adapters on main (Claude Code, Cursor, NAT) | #132, #134, #131 | Q4 2026 |
-| Spec and docs fixes for v0.1 | #194 to #198, #146, #148, #149, #120, #121, #57, #58, #133 | Q4 2026 |
-| ACS-Core conformant reference Guardian | #33, #188, #70 to #73, and the Reference Guardian bugs and conformance reports | Q4 2026 |
-| Installable reference Guardian | #94, #91, #90, #127 | Q4 2026 |
-| AGT interoperability benchmark | #92, #171, plus new issues for the Cursor file-read gap and the AARM mapping session | Q4 2026, `Committed: 2026-12-09` |
-| Governance under OWASP | #144, #145, plus new issues for the open lead seats, domain transfer, OpenSSF Best Practices, and retiring the marketing site | Q4 2026 |
-| Host adapter coverage | #170, #89, #114, #107 to #111 | Ongoing |
-| Language ports | #86 to #88, #135 | Ongoing |
-| v0.2.0 | every open `scope:deferred` issue, #53, #29 | Q1 2027 |
+| Milestone | Issues | Open pull requests | Quarter |
+| --- | --- | --- | --- |
+| Conformance claim template | #93, #136, #106 | PR #168 (closes #93), PR #24 (closes #136) | Q4 2026 |
+| Fail-open decision | #32, #37 | none | Q4 2026 |
+| Reference adapters on main (Claude Code, Cursor, NAT) | #132, #134, #131 | PR #21 (closes #132), PR #22 (closes #134) | Q4 2026 |
+| Spec and docs fixes for v0.1 | #194 to #198, #146, #148, #149, #120, #121, #57, #58, #133 | PR #63 (closes #57, #58), PR #20 (closes #133) | Q4 2026 |
+| ACS-Core conformant reference Guardian | #33, #188, #70 to #73, and the Reference Guardian bugs and conformance reports | PR #193 (for #188, no closing reference) | Q4 2026 |
+| Installable reference Guardian | #94, #91, #90, #127 | PR #112 (closes #90), PR #126 (closes #127) | Q4 2026 |
+| AGT interoperability benchmark | #92, #171, plus new issues for the Cursor file-read gap and the AARM mapping session | PR #113 (for #92, no closing reference) | Q4 2026, `Committed: 2026-12-09` |
+| Governance under OWASP | #144, #145, plus new issues for the open lead seats, domain transfer, OpenSSF Best Practices, and retiring the marketing site | none | Q4 2026 |
+| Host adapter coverage | #170, #89, #114, #107 to #111 | PR #162 (closes #170) | Ongoing |
+| Language ports | #86 to #88, #135 | PR #183 (closes #86), PR #169 (closes #87), PR #187 (Rust, no closing reference), PR #78 (for #135, no closing reference) | Ongoing |
+| v0.2.0 | every open `scope:deferred` issue, #53, #29 | none | Q1 2027 |
 
 Eight open `scope:in-focus` issues are in no row: #16, #19, #31, #43, #51, #52, #67, and #74. Placing
 them is a triage decision made in step 1. #178 proposes replacing the `scope:` labels this design's
