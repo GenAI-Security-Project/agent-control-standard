@@ -152,3 +152,272 @@ def trusted_logins(repo_root: Path) -> frozenset[str]:
         people.extend(roster.origins)
     logins.update(login.casefold() for _name, login in people)
     return frozenset(logins)
+
+# --- Labels and decision constants --------------------------------------------------
+# Spec decision defaults that code reads sit here: decision 3 (MILESTONE_ACCEPTS, ADD_IN_FOCUS_ON_ACCEPT), decision 4 (TRUST_ORIGINS, above), and decision 5 (CO_OWNERS_SOURCE). Decisions 6 to 8 are rollout data, not code.
+
+from datetime import date, timedelta  # noqa: E402
+
+ACCEPTED = "status:accepted"
+NEEDS_TRIAGE = "status:needs-triage"
+DEFERRED = "scope:deferred"
+IN_FOCUS = "scope:in-focus"
+SCOPE_PREFIX = "scope:"
+# Spec decision 3. Setting a milestone accepts the issue, and adds scope:in-focus when the
+# issue carries no scope label. Turning MILESTONE_ACCEPTS off makes the event job a no-op.
+MILESTONE_ACCEPTS = True
+ADD_IN_FOCUS_ON_ACCEPT = True
+# Spec decision 5. "project_lead" names the GOVERNANCE.md project lead table. "origins"
+# adds the creators named under Origins.
+CO_OWNERS_SOURCE = "project_lead"
+# A milestone set on an issue carrying one of these is a standing triage decision the
+# event job must not overrule.
+DECLINE_LABELS = frozenset(
+    {DEFERRED, "scope:out", "status:blocked", "status:needs-info", "wontfix", "invalid", "duplicate"}
+)
+# The value a milestone's Workstream line uses for project-level work, which maps to the
+# project lead table rather than to a workstream row.
+PROJECT_WORKSTREAM = "Project"
+DELIVERABLE_TYPES = (
+    "Document", "Cheat Sheet", "Open Source tool", "Application/Tool", "Code Sample", "Agent Skill", "Other",
+)
+# The health issue is found by this marker plus its bot author, never by title.
+HEALTH_MARKER = "<!-- acs-roadmap-health -->"
+BOT_LOGIN = "github-actions[bot]"
+
+CLASSES = ("done", "unverified", "planned", "deferred", "dropped", "untriaged")
+KNOWN_REASONS = frozenset({"COMPLETED", "NOT_PLANNED", "DUPLICATE"})
+
+
+@dataclass(frozen=True)
+class IssueRecord:
+    number: int
+    state: str
+    state_reason: str | None
+    labels: frozenset[str]
+    author: str | None
+    closed_by: str | None
+
+
+def classify(issue: IssueRecord, trusted: frozenset[str]) -> str:
+    """Spec section "Issue classes". Checked in order, first match wins.
+
+    Any close by a login outside the roster is unverified, whatever its reason, so an
+    author cannot move progress in either direction by closing their own issue. A null
+    closer, which a deleted account produces, is treated the same way.
+    """
+    if issue.state == "CLOSED":
+        if issue.closed_by is None or issue.closed_by.casefold() not in trusted:
+            return "unverified"
+        return "done" if issue.state_reason == "COMPLETED" else "dropped"
+    if ACCEPTED in issue.labels:
+        return "planned"
+    if DEFERRED in issue.labels:
+        return "deferred"
+    return "untriaged"
+
+
+def unknown_reason(issue: IssueRecord) -> bool:
+    return issue.state == "CLOSED" and issue.state_reason not in KNOWN_REASONS
+
+
+def milestone_state(closed: bool, has_due: bool, counts: dict[str, int]) -> str:
+    """Spec section "Milestone states". Closed milestones first, then open ones."""
+    done = counts.get("done", 0)
+    remaining = counts.get("unverified", 0) + counts.get("planned", 0)
+    deferred = counts.get("deferred", 0)
+    if closed:
+        if done == 0:
+            return "withdrawn"
+        return "published" if remaining == 0 else "closed_with_open_work"
+    if done == 0 and remaining == 0:
+        return "deferred" if deferred else "skipped"
+    if not has_due:
+        return "ongoing"
+    if remaining == 0:
+        return "ready"
+    if done:
+        return "in_progress"
+    return "planning"
+
+
+OWASP_STATUS: dict[str, str | None] = {
+    "withdrawn": None,
+    "published": "Published",
+    "closed_with_open_work": "In Review",
+    "skipped": None,
+    "deferred": "Planning",
+    "ongoing": "Ongoing",
+    "ready": "In Review",
+    "in_progress": "In Progress",
+    "planning": "Planning",
+}
+
+
+# --- Dates ---------------------------------------------------------------------------
+
+def due_date(due_on: str | None) -> date | None:
+    """The calendar date a maintainer chose. GitHub stores it at 00:00Z on that date."""
+    return date.fromisoformat(due_on[:10]) if due_on else None
+
+
+def _quarter(day: date) -> tuple[int, int]:
+    return day.year, (day.month - 1) // 3 + 1
+
+
+def quarter_label(day: date) -> str:
+    year, q = _quarter(day)
+    return f"Q{q} {year}"
+
+
+def is_quarter_end(day: date) -> bool:
+    return day.month in (3, 6, 9, 12) and (day + timedelta(days=1)).month != day.month
+
+
+def target_passed(due: date | None, committed: date | None, today: date) -> bool:
+    if committed is not None:
+        return today > committed
+    if due is not None:
+        return _quarter(today) > _quarter(due)
+    return False
+
+
+# --- Milestone descriptions ----------------------------------------------------------
+
+_DESCRIPTION_LINE = re.compile(r"^(Committed|Workstream|Type):[ \t]*(.*?)[ \t]*$")
+
+
+@dataclass(frozen=True)
+class Description:
+    text: str
+    committed: date | None
+    workstream: str | None
+    deliverable_type: str | None
+    errors: tuple[str, ...]
+
+
+def parse_description(raw: str | None, workstream_names: set[str]) -> Description:
+    """Split the three machine-read lines from the prose. Spec "Milestone description lines"."""
+    values: dict[str, str] = {}
+    prose: list[str] = []
+    for line in (raw or "").splitlines():
+        match = _DESCRIPTION_LINE.match(line.strip())
+        if match:
+            values[match.group(1)] = match.group(2)
+        else:
+            prose.append(line.rstrip())
+    errors: list[str] = []
+    committed = None
+    if "Committed" in values:
+        try:
+            committed = date.fromisoformat(values["Committed"])
+        except ValueError:
+            errors.append("committed")
+    workstream = values.get("Workstream")
+    if workstream not in workstream_names | {PROJECT_WORKSTREAM}:
+        errors.append("workstream")
+        workstream = None
+    deliverable_type = values.get("Type")
+    if deliverable_type not in DELIVERABLE_TYPES:
+        errors.append("type")
+        deliverable_type = None
+    return Description(
+        text="\n".join(prose).strip(),
+        committed=committed,
+        workstream=workstream,
+        deliverable_type=deliverable_type,
+        errors=tuple(errors),
+    )
+
+
+# --- roadmap.json --------------------------------------------------------------------
+
+def _record(raw: dict) -> IssueRecord:
+    return IssueRecord(
+        number=int(raw["number"]),
+        state=raw["state"],
+        state_reason=raw.get("stateReason"),
+        labels=frozenset(raw.get("labels") or ()),
+        author=raw.get("author"),
+        closed_by=raw.get("closedBy"),
+    )
+
+
+def _names(people: tuple[Person, ...]) -> list[str]:
+    return [name for name, _login in people]
+
+
+def empty_roadmap(status: str, generated: str, commit: str, run: str, reason: str | None = None) -> dict:
+    """The document written when publishing is off or the data could not be built."""
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "rules_version": RULES_VERSION,
+        "status": status,
+        "generated": generated,
+        "commit": commit,
+        "run": run,
+        "project_leads": [],
+        "co_owners": [],
+        "workstreams": {},
+        "milestones": [],
+    }
+    if reason is not None:
+        doc["reason"] = reason
+    return doc
+
+
+def build_roadmap(
+    milestones: list[dict],
+    roster: Roster,
+    trusted: frozenset[str],
+    today: date,
+    generated: str,
+    commit: str,
+    run: str,
+) -> dict:
+    """Classify every milestone. Carries numbers and maintainer-written milestone text only.
+
+    Issue titles never enter the document, so phase 0 publishes no text an outsider wrote.
+    """
+    doc = empty_roadmap("ok", generated, commit, run)
+    doc["project_leads"] = _names(roster.project_leads)
+    co_owners = list(roster.project_leads)
+    if CO_OWNERS_SOURCE == "origins":
+        co_owners += list(roster.origins)
+    doc["co_owners"] = _names(tuple(co_owners))
+    doc["workstreams"] = {name: _names(people) for name, people in roster.workstreams.items()}
+    doc["workstreams"][PROJECT_WORKSTREAM] = _names(roster.project_leads)
+    names = set(roster.workstreams)
+    entries: list[dict] = []
+    for milestone in milestones:
+        records = [_record(raw) for raw in milestone.get("issues") or ()]
+        by_class: dict[str, list[int]] = {name: [] for name in CLASSES}
+        for record in records:
+            by_class[classify(record, trusted)].append(record.number)
+        counts = {name: len(numbers) for name, numbers in by_class.items()}
+        due = due_date(milestone.get("dueOn"))
+        description = parse_description(milestone.get("description"), names)
+        state = milestone_state(milestone["state"] == "CLOSED", due is not None, counts)
+        entries.append(
+            {
+                "number": int(milestone["number"]),
+                "url": milestone["url"],
+                "title": milestone["title"],
+                "description": description.text,
+                "committed": description.committed.isoformat() if description.committed else None,
+                "workstream": description.workstream,
+                "type": description.deliverable_type,
+                "description_errors": list(description.errors),
+                "state": state,
+                "owasp_status": OWASP_STATUS[state],
+                "quarter": quarter_label(due) if due else None,
+                "due_on": due.isoformat() if due else None,
+                "target_passed": milestone["state"] == "OPEN" and target_passed(due, description.committed, today),
+                "counts": counts,
+                "issues": {name: sorted(numbers) for name, numbers in by_class.items()},
+                "unknown_reasons": sorted(r.number for r in records if unknown_reason(r)),
+            }
+        )
+    entries.sort(key=lambda e: (e["due_on"] is None, e["due_on"] or "", e["title"].casefold()))
+    doc["milestones"] = entries
+    return doc
