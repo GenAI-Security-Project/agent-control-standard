@@ -15,9 +15,12 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 Each workstream owns a slice of the standard and runs its own review. Two leads per
 workstream keeps decisions moving when one is unavailable.
 
-Reference Implementation runs with one lead so far, and Documentation and Testing and
-Validation have none. The work in each continues, but it carries a single point of
-failure, or no owner at all, until somebody takes the open seats.
+Reference Implementation runs with one lead so far, and Documentation has none. The work in
+each continues, but it carries a single point of failure, or no owner at all, until somebody
+takes the open seats.
+
+There is no Testing and Validation workstream for now. Whoever reviews a change checks it
+against the conformance requirements it touches.
 
 | Workstream | Leads |
 | --- | --- |
@@ -28,7 +31,6 @@ failure, or no owner at all, until somebody takes the open seats.
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
 | Reference Implementation | Evgeniy Kokuykin ([@artmaro](https://github.com/artmaro)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
-| Testing and Validation | Open |
 
 ## Triage authority
 
