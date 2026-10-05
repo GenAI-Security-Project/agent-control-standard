@@ -469,13 +469,15 @@ def _switches() -> dict[str, str]:
 def _sweep(apply: bool) -> int:
     gh = GitHub()
     repo_root = Path(__file__).resolve().parents[1]
-    trusted = model.trusted_logins(repo_root)
-    roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
     now = datetime.now(timezone.utc)
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     run_id = os.environ.get("RUN_ID", "local")
     failed: list[str] = []
     try:
+        # Inside the try, so a GOVERNANCE.md that does not parse degrades the health issue
+        # rather than crashing the job before it writes anything.
+        trusted = model.trusted_logins(repo_root)
+        roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
         snapshot = _snapshot(gh, now.date(), failed)
         report = build_report(snapshot, trusted, set(roster.workstreams), now.date(), _switches())
     except SyncError as exc:

@@ -198,3 +198,19 @@ def test_migrate_says_when_it_could_not_check(monkeypatch, tmp_path, capsys, gra
     table.write_text(_json.dumps({"assignments": {"M": [5]}}))
     roadmap_sync.cmd_migrate(argparse.Namespace(table=str(table), apply=False))
     assert "COULD NOT CHECK #5" in capsys.readouterr().out
+
+
+def test_sweep_degrades_on_a_roster_that_does_not_parse(monkeypatch, capsys):
+    import roadmap_sync
+
+    def unreadable(_repo_root):
+        raise roadmap_sync.model.RosterError("GOVERNANCE.md: cannot read every person")
+
+    monkeypatch.setattr(roadmap_sync.model, "trusted_logins", unreadable)
+    monkeypatch.setattr(roadmap_sync, "GitHub", TimeoutGitHub)
+    code = roadmap_sync._sweep(False)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "<!-- acs-sweep: degraded" in out
+    assert "::warning::sweep failed: RosterError" in out
+    assert "cannot read every person" not in out

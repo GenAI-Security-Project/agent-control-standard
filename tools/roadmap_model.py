@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Shared rules for the ACS roadmap: who is trusted, and what an issue or a milestone means.
 
-Version 1.0. Owner: ACS project lead. Spec: design/2026-10-04-roadmap-page-design.md.
+Version 1.1. Owner: ACS project leads. Spec: design/2026-10-04-roadmap-page-design.md and
+design/2026-10-04-roadmap-rollout-design.md.
 
 Three callers run this module: the deploy build, the sync workflow under `python3 -I -S`,
 and the test suite. It is therefore standard library only and never touches the network.
@@ -74,7 +75,17 @@ def _section(text: str, heading: str) -> list[str]:
     return body
 
 
-def _table_rows(lines: list[str], heading: str) -> list[list[str]]:
+def _first_section(text: str, *headings: str) -> list[str]:
+    """The first heading that exists wins, so a rename can land before every reader moves."""
+    for heading in headings:
+        try:
+            return _section(text, heading)
+        except RosterError:
+            continue
+    raise RosterError(f"GOVERNANCE.md: no '## {headings[0]}' section")
+
+
+def _table_rows(lines: list[str], heading: str, allow_empty: bool = False) -> list[list[str]]:
     rows: list[list[str]] = []
     for line in lines:
         stripped = line.strip()
@@ -85,6 +96,8 @@ def _table_rows(lines: list[str], heading: str) -> list[list[str]]:
             continue
         rows.append(cells)
     if len(rows) < 2:
+        if allow_empty:
+            return []
         raise RosterError(f"GOVERNANCE.md: the '{heading}' table is empty")
     return rows[1:]  # drop the header row
 
@@ -117,12 +130,46 @@ class Roster:
     project_leads: tuple[Person, ...]
     workstreams: dict[str, tuple[Person, ...]] = field(default_factory=dict)
     origins: tuple[Person, ...] = ()
+    triage_volunteers: tuple[Person, ...] = ()
+
+
+# GitHub hides an HTML comment when it renders the file, so a reviewer never sees a row
+# inside one. An unterminated comment hides everything after it, so it is stripped to the
+# end of the text rather than left in place.
+_HTML_COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+TRIAGE_VOLUNTEERS = "Triage volunteers"
+
+
+def _volunteers(text: str) -> tuple[Person, ...]:
+    """The Triage volunteers table. Absent or empty means nobody, never a parse failure.
+
+    Each Volunteer cell holds exactly one linked handle under the lead tables' checks, so
+    an "Open" placeholder or a cell naming two people raises rather than trusting either.
+    """
+    try:
+        lines = _section(text, TRIAGE_VOLUNTEERS)
+    except RosterError:
+        return ()
+    people: list[Person] = []
+    for cells in _table_rows(lines, TRIAGE_VOLUNTEERS, allow_empty=True):
+        if len(cells) != 2:
+            raise RosterError(f"GOVERNANCE.md: triage volunteer row has {len(cells)} cells")
+        found = _people(cells[0])
+        if len(found) != 1:
+            raise RosterError(f"GOVERNANCE.md: a triage volunteer cell must name one person: {cells[0]!r}")
+        people.extend(found)
+    return tuple(people)
 
 
 def parse_governance(text: str) -> Roster:
-    """Read the project lead table, the workstream leads table, and the Origins prose."""
+    """Read the project leads, workstream leads, and triage volunteer tables, and Origins.
+
+    "Project leads" is the heading since the October 2026 leadership change. "Project lead"
+    is still read, so an older checkout of GOVERNANCE.md keeps parsing.
+    """
+    text = _HTML_COMMENT.sub("", text)
     leads: list[Person] = []
-    for cells in _table_rows(_section(text, "Project lead"), "Project lead"):
+    for cells in _table_rows(_first_section(text, "Project leads", "Project lead"), "Project leads"):
         if len(cells) != 2:
             raise RosterError(f"GOVERNANCE.md: project lead row has {len(cells)} cells")
         leads.extend(_people(cells[1]))
@@ -137,15 +184,23 @@ def parse_governance(text: str) -> Roster:
     )
     if not leads:
         raise RosterError("GOVERNANCE.md: no project lead")
-    return Roster(project_leads=tuple(leads), workstreams=workstreams, origins=origins)
+    return Roster(
+        project_leads=tuple(leads), workstreams=workstreams, origins=origins,
+        triage_volunteers=_volunteers(text),
+    )
+
+
+def project_lead_logins(roster: Roster) -> frozenset[str]:
+    """Casefolded project lead logins. Spec decision 12: only these attest a hand close."""
+    return frozenset(login.casefold() for _name, login in roster.project_leads)
 
 
 def trusted_logins(repo_root: Path) -> frozenset[str]:
-    """Logins whose closes count as delivered. Spec section "Trusted logins"."""
+    """Logins whose closes count as delivered. Spec decision 4, narrowed by decision 12."""
     codeowners = (repo_root / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
     roster = parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
     logins = set(parse_codeowners_logins(codeowners))
-    people = list(roster.project_leads)
+    people = list(roster.project_leads) + list(roster.triage_volunteers)
     for leads in roster.workstreams.values():
         people.extend(leads)
     if TRUST_ORIGINS:
