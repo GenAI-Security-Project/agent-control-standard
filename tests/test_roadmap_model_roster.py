@@ -220,3 +220,10 @@ def test_volunteers_join_the_trusted_set(tmp_path):
     (tmp_path / "GOVERNANCE.md").write_text(with_volunteers(VOLUNTEERS), encoding="utf-8")
     trusted = trusted_logins(tmp_path)
     assert {"victorm-hernandez", "afogel", "rocklambros"} <= trusted
+
+
+def test_real_governance_names_the_three_project_leads_and_the_volunteers():
+    roster = parse_governance((REPO_ROOT / "GOVERNANCE.md").read_text(encoding="utf-8"))
+    assert project_lead_logins(roster) == frozenset({"rocklambros", "afogel", "bar-capsule"})
+    assert ("Victor Hernandez", "victorm-hernandez") in roster.triage_volunteers
+    assert "victorm-hernandez" in trusted_logins(REPO_ROOT)
