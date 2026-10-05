@@ -1,0 +1,50 @@
+name: Reference implementation work
+description: A port to another runtime, a hardening task, or a new adapter.
+title: "[RefImpl] "
+labels: ["type:refimpl", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        This is the work the project needs most. Check the open issues labeled
+        `help wanted` before filing, since the one you want may already be accepted.
+  - type: input
+    id: target
+    attributes:
+      label: Target runtime or language
+      description: For example Python, Go, Rust, Codex, or an existing implementation to harden.
+    validations:
+      required: true
+  - type: textarea
+    id: proves
+    attributes:
+      label: What this proves
+      description: >-
+        A reference implementation earns its place by demonstrating something the
+        specification alone cannot. Say what.
+    validations:
+      required: true
+  - type: dropdown
+    id: intent
+    attributes:
+      label: Do you intend to implement this yourself
+      options:
+        - "Yes, I want this assigned to me"
+        - "No, I am proposing it for someone else"
+    validations:
+      required: true
+  - type: dropdown
+    id: priority-scope
+    attributes:
+      label: Current Priority Scope
+      description: >-
+        Read the Current Priority Scope in CONTRIBUTING.md before answering. An honest
+        "deferred" is more useful to us than a hopeful "in focus".
+      options:
+        - Feeds the runnable Guardian reference implementation
+        - Feeds the AGT interoperability benchmark
+        - Feeds conformance evidence
+        - This is deferred or out of scope and I am filing it to be tracked
+        - I am not sure
+    validations:
+      required: true

@@ -19,6 +19,11 @@ stock policy bundle of Microsoft's Agent Governance Toolkit, Copyright (c)
 Microsoft Corporation, licensed under the MIT License. See
 reference-implementations/agt/policy/LICENSE-AGT.
 
+The documentation site bundles Mermaid 11.17.2, Copyright (c) 2014-2022 Knut Sveidqvist
+(https://github.com/mermaid-js/mermaid), licensed under the MIT License. It is served
+from docs/assets/javascripts/ so that the published site renders diagrams without
+fetching code from a third party.
+
 See LICENSING.md for the full scope map.
 
 Prior history: releases up to and including v0.1.0 were published under the MIT

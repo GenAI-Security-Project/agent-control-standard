@@ -1,0 +1,47 @@
+name: Conformance or dogfooding report
+description: You ran ACS against a real harness and it did not behave as specified.
+title: "[Conformance] "
+labels: ["type:conformance", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Stop if you found a security vulnerability.** A dogfooding run is the most
+        likely place to find one. Do not describe it here. Use private vulnerability
+        reporting: see SECURITY.md.
+  - type: textarea
+    id: setup
+    attributes:
+      label: What you ran
+      description: Harness, adapter, Guardian, versions, and configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Cite the specification section that led you to expect it.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include the wire payload if you have it, with secrets removed.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority-scope
+    attributes:
+      label: Current Priority Scope
+      description: >-
+        Read the Current Priority Scope in CONTRIBUTING.md before answering. An honest
+        "deferred" is more useful to us than a hopeful "in focus".
+      options:
+        - Feeds the runnable Guardian reference implementation
+        - Feeds the AGT interoperability benchmark
+        - Feeds conformance evidence
+        - This is deferred or out of scope and I am filing it to be tracked
+        - I am not sure
+    validations:
+      required: true

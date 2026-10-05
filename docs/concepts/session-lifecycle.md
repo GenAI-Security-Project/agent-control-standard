@@ -26,6 +26,22 @@ When a parent agent spawns a subagent in the same runtime, the spawn is observed
 
 Delegation that crosses an A2A boundary is not a subagent spawn; it flows through `agentTrigger` and is reserved for v0.2.
 
+The diagram below shows how a session moves through turns and steps until it ends.
+
+```mermaid
+stateDiagram-v2
+    [*] --> SessionActive : sessionStart
+    SessionActive --> TurnActive : turnStart
+    TurnActive --> TurnActive : step
+    TurnActive --> SessionActive : turnEnd
+    SessionActive --> [*] : sessionEnd
+
+    note right of SessionActive
+        A subagent spawn opens its own
+        nested session with its own chain.
+    end note
+```
+
 ---
 
 **Referenced by**

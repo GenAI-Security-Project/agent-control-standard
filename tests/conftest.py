@@ -270,14 +270,27 @@ def theme_script_digests() -> set[str]:
     return {hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*.js")}
 
 
+def first_party_script_digests() -> set[str]:
+    """Return a digest of every script this repository serves from its own source tree.
+
+    mkdocs copies docs/assets/ into the same output directory as the theme's bundle, so
+    a path check cannot tell the two apart. Comparing digests against the source tree
+    proves a built script is byte-identical to the one committed here, which is the
+    property that matters: it catches a script altered or injected during the build,
+    while still allowing the library this project deliberately vendors.
+    """
+    root = Path(__file__).resolve().parent.parent / "docs" / "assets" / "javascripts"
+    if not root.is_dir():
+        return set()
+    return {hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*.js")}
+
+
 def stray_scripts(built_site: Path) -> list[str]:
-    """Return every built script the pinned theme does not ship, byte for byte."""
-    digests = theme_script_digests()
+    """Return every built script neither the pinned theme nor this repository ships."""
+    digests = theme_script_digests() | first_party_script_digests()
     stray: list[str] = []
     for path in built_site.rglob("*.js"):
         rel = path.relative_to(built_site).as_posix()
-        if not rel.startswith(VENDORED_PREFIX):
-            stray.append(rel)
-        elif hashlib.sha256(path.read_bytes()).hexdigest() not in digests:
+        if hashlib.sha256(path.read_bytes()).hexdigest() not in digests:
             stray.append(rel)
     return stray

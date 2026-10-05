@@ -6,9 +6,23 @@ Agents that implement ACS-Core run every step through a Guardian over an authent
 
 ACS extends existing standards rather than reinventing them: JSON-RPC 2.0 for the wire format, OpenTelemetry and OCSF for observability, CycloneDX / SPDX / SWID for the AgBOM, MCP and A2A intact for tool and peer communication.
 
+The diagram below shows a hook's round trip: the Observed Agent sends it to the Guardian, the deterministic layer evaluates first, and one of five dispositions returns.
+
+```mermaid
+flowchart LR
+    OA["Observed Agent"] -->|"hook, JSON-RPC 2.0"| DET
+    subgraph Guardian["Guardian Agent"]
+        DET["Deterministic policy engine<br/>evaluates first"]
+        LLM["LLM layer<br/>optional delegation"]
+        DET -.-> LLM
+        LLM -.-> DET
+    end
+    DET -->|"allow / deny / modify / ask / defer"| OA
+```
+
 ## What v0.1.0 ships
 
-- **ACS-Core** (mandatory baseline) — capability-negotiation handshake, JSON-RPC envelope, 16 native lifecycle hooks (`sessionStart`/`End`, `agentTrigger`, `userMessage`, `agentResponse`, `turnStart`/`End`, `toolCallRequest`/`Result`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `preCompact`/`postCompact`, `subagentStart`/`Stop`), wrapped MCP, five dispositions (`allow`, `deny`, `modify`, `ask`, `defer`), SessionContext with rolling SHA-256 chain hash, optional Intent with immutability rule, replay protection, and `system/ping` liveness.
+- **ACS-Core** (mandatory baseline) — capability-negotiation handshake, JSON-RPC envelope, minimum hook set (`sessionStart`, `userMessage` or `agentTrigger`, `toolCallRequest`/`Result`, `agentResponse`, `sessionEnd`, `subagentStart` for subagent-capable frameworks), four MUST-support dispositions (`allow`, `deny`, `ask`, `defer`) with `modify` SHOULD-support, SessionContext with rolling SHA-256 chain hash, optional Intent with immutability rule, replay protection, baseline HMAC-SHA256 signature, decision honoring, declared liveness mechanism (`system/ping` or a transport-level alternative), and Wrapped MCP when sessions involve MCP. Additional hooks (`turnStart`/`End`, `preCompact`/`postCompact`, `subagentStop`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `skillRegister`/`Load`/`Unload`) are normatively defined and SHOULD be implemented when the harness can observe the corresponding event.
 - **ACS-Trace** profile — OpenTelemetry semconv mapping + OCSF event-class mapping, with decisions emitted as span events on the parent step span.
 - **ACS-Inspect** / **ACS-Inspect-Dynamic** profiles — canonical AgBOM with `agbom/snapshot` and `agbom/changed`, deterministic CycloneDX / SPDX / SWID derivations.
 - **ACS-Provenance** profile — field-level `Provenance` objects with `origin`, `source_id`, `derived_from`, and an OPTIONAL wire-format `trust` enum that obeys the monotonicity rule.

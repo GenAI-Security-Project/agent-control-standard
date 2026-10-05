@@ -22,6 +22,20 @@ Two parties on the wire:
     - **Deterministic layer** (Cedar/Rego): always runs first.
     - **Agent layer** (LLM): invoked only when the deterministic layer's chain config delegates (`*`, `on_ask`, or pattern-based).
 
+The diagram below shows the two-layer decision path: the deterministic layer evaluates every hook first and may delegate to the LLM layer, which sees only the deterministic layer's intermediate output and no policy code.
+
+```mermaid
+flowchart LR
+    OA["Observed Agent"] -->|"hook, JSON-RPC 2.0"| DET
+    subgraph Guardian["Guardian Agent"]
+        DET["Deterministic layer<br/>Cedar/Rego, evaluates first"]
+        LLM["Agent layer (LLM)<br/>invoked only if delegated"]
+        DET -.->|"intermediate output,<br/>no policy code"| LLM
+        LLM -.->|"reasoned decision"| DET
+    end
+    DET -->|"allow / deny / modify / ask / defer"| OA
+```
+
 ### 2.1 End-to-end flow
 
 ```
@@ -70,6 +84,17 @@ Required at session start, before any hook traffic. Wire method: `handshake/hell
 
 Version mismatch terminates with `UNSUPPORTED_VERSION` (`-32001`, §17.1). Unknown fields MUST be ignored. If the client declares `provenance_producer: "none"` and the Guardian's `policy_requires_provenance` is true, the Guardian MUST refuse the session at handshake time with `PROVENANCE_REQUIRED` (`-32002`, §17.1) rather than silently degrading enforcement.
 
+The sequence below shows the handshake: the Observed Agent sends ClientHello, the Guardian answers with ServerHello, and hook traffic begins only after negotiation succeeds.
+
+```mermaid
+sequenceDiagram
+    participant OA as Observed Agent
+    participant GA as Guardian Agent
+    OA->>GA: ClientHello (versions, methods, transports, profiles supported)
+    GA->>OA: ServerHello (negotiated version, selected transport, profiles accepted)
+    Note over OA,GA: Hook traffic begins only after negotiation succeeds
+```
+
 ### 4.1 Handshake failure (normative)
 
 `on_decision_failure` is negotiated in the handshake, so it cannot govern a handshake that never completes. When `handshake/hello` fails — the Guardian is unreachable, silent past the deployment's connection timeout, or errors without producing a ServerHello — the Observed Agent applies its **startup posture**, configured out of band: `proceed` starts the session unguarded, `refuse` does not start it. The default is `proceed`, matching `on_decision_failure`, so a Guardian outage does not block new sessions.
@@ -112,13 +137,29 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 |---|---|---|
 | `ALLOW` | Proceed | none (`reasoning` RECOMMENDED when user-visible audit trails are expected) |
 | `DENY` | Block | `reasoning` |
-| `MODIFY` | Proceed with changes (covers redaction via `modifications.redactions`; composition rules in [§6.3](#63-modify-composition-normative)) | `reasoning`, `modifications` |
+| `MODIFY` | Proceed with changes (covers redaction via `modifications.redactions`; composition rules in [§6.3](#63-modify-composition-normative); substituted with `DENY` for MODIFY-incapable clients, see [§6.5](#65-modify-incapable-clients-normative)) | `reasoning`, `modifications` |
 | `ASK` | Pause and request approval (substituted with `DEFER` or `DENY` for approver-incapable clients; see [§9.2](#92-approver-incapable-clients-normative)) | `reasoning`, `ask_details` |
 | `DEFER` | Verdict not yet reachable | `reasoning`, `defer_details` |
 
 DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session.
 
 `timeout_decision` defaulting to `deny` is deliberately the opposite of `on_decision_failure` defaulting to `proceed` (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, not one that never answered: a degraded Guardian that can still emit DEFER fails closed where a silent one fails open.
+
+The diagram below shows the five dispositions. ALLOW, DENY, and MODIFY resolve immediately. ASK and DEFER pause the step until it resolves.
+
+```mermaid
+flowchart TB
+    G["Guardian decision"] --> ALLOW["ALLOW<br/>proceed"]:::allow
+    G --> DENY["DENY<br/>blocked"]:::deny
+    G --> MODIFY["MODIFY<br/>proceed, changed"]:::modify
+    G --> ASK["ASK<br/>paused for approval"]:::pending
+    G --> DEFER["DEFER<br/>paused, not yet resolved"]:::pending
+
+    classDef allow fill:#1f8a4c,stroke:#0e5a30,color:#fff;
+    classDef deny fill:#b3261e,stroke:#7a1a15,color:#fff;
+    classDef modify fill:#1f6feb,stroke:#0b3d91,color:#fff;
+    classDef pending fill:#e67e22,stroke:#a85a10,color:#fff;
+```
 
 ### 6.1 Decision result fields
 
@@ -146,7 +187,7 @@ These fields support the v0.1 paradigm targets (FIDES, CaMeL, AARM-style cumulat
 - **Wholesale replacement.** `modified_content` replaces the entire payload. It is exclusive: a MODIFY that carries `modified_content` MUST NOT also carry `redactions` or `parameter_overrides`, because path-addressed edits have nothing to address inside an opaque replacement string.
 - **Structured edits.** `redactions` and `parameter_overrides` MAY appear together, but their targets MUST be disjoint: no `redactions` path may address the same field as a `parameter_overrides` key, nor an ancestor or descendant of it. Disjoint edits commute, so the effective payload is well-defined with no apply-order rule.
 
-A Guardian MUST NOT emit a `modifications` object that violates either rule. An Observed Agent that receives one cannot determine the Guardian's intent and MUST fail closed, treating the decision as `DENY`, and SHOULD record an audit event.
+A Guardian MUST NOT emit a `modifications` object that violates either rule. An Observed Agent that receives one cannot determine the Guardian's intent and MUST fail closed, treating the decision as `DENY`, and MUST record an audit event so the enforcement gap is visible.
 
 The disjoint-target rule is deliberately narrower than a precedence rule. A fixed apply-order would force every overlap to silently pick a winner, and either order has a failure mode: applying overrides last can re-expose a field a redaction just removed, and applying redactions last lets arbitrary replacement text overwrite a value an override deliberately sanitized. Requiring disjoint targets removes the conflict rather than resolving it by an order the Guardian cannot observe.
 
@@ -154,11 +195,23 @@ The provenance of a value introduced by `parameter_overrides` (its `origin`, and
 
 ### 6.4 Honoring decisions (normative)
 
-A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3), `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant.
+A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3) — or, for a client that cannot apply it, falls back per [§6.5](#65-modify-incapable-clients-normative) — `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant; the one defined substitution is §6.5's MODIFY fallback, which blocks rather than proceeds unmodified at every hook except `postCompact`, where compaction has already happened, so the client keeps the original summary and records an audit event (§6.5).
 
 A step suffers a **decision failure** when no usable decision arrives within the negotiated timeout: the Guardian stays silent, the transport fails (connection refused, TLS failure, malformed response), or the Guardian returns an error instead of a decision. All three resolve the same way: the Observed Agent applies the deployment's failure posture, declared as `on_decision_failure` in the handshake (§4) and defaulting to `proceed` (fail-open) so that a slow, erroring, or unreachable Guardian does not halt production. A deployment MAY set `on_decision_failure: deny` (fail-closed). The negotiated timeout bounds every failure mode: an error from the §17.1 registry carries a recovery action the agent MAY attempt within the remaining budget, and an unambiguous failure (a refused connection) MAY resolve immediately rather than waiting out the clock.
 
 Every step that proceeds without a decision MUST be recorded as an audit event, so the bypass is visible rather than silent. When a decision does arrive within the timeout, the agent MUST honor it regardless of the posture. Fail-open trades enforcement for availability under disruption: an adversary who can disrupt the channel converts control into audit. Deployments for which that trade is unacceptable set `on_decision_failure: deny`.
+
+### 6.5 MODIFY-incapable clients (normative)
+
+Some Observed Agents cannot apply a `MODIFY` disposition. This covers both framework constraints (shell-hook integrations whose hook API returns allow/deny only, IDE plugins without a mid-flight argument-mutation surface) and deployment preferences (organizations that disable MODIFY for auditability, so the executed action always equals the requested action). The Guardian determines client MODIFY-handling capability by deployment-defined means such as agent identity bound at handshake, policy keyed on `agent_id`, organizational configuration, or any other out-of-band signal the deployment trusts. ACS does not put this declaration on the wire in v0.1; it is part of the Guardian's policy bundle, mirroring the ASK precedent in [§9.2](#92-approver-incapable-clients-normative).
+
+When the Guardian determines that the client cannot apply `MODIFY`, the Guardian MUST NOT return `MODIFY`. The Guardian MUST instead substitute `DENY` with `reason_codes: ["modify_unsupported"]` and `reasoning` that names the intended modification, and MUST record the substitution as an audit event so the enforcement gap is visible.
+
+If a client receives a `MODIFY` it cannot apply — from a Guardian that misjudged capability, or a Guardian that did not consult the declaration — the client MUST treat the decision as `DENY` and MUST record an audit event with `reason_codes: ["modify_unsupported"]`. Proceeding with the original payload is non-conformant: a Guardian that intended to redact a secret out of a tool argument would otherwise get the unredacted secret shipped while the audit log recorded a modification that never happened.
+
+This rule preserves the security guarantee (actions that would have been rewritten by the Guardian are not silently allowed with the unmodified payload) while letting clients whose framework cannot mutate requests, or deployments that choose strict allow/deny for auditability, participate in ACS sessions as fully conformant ACS-Core deployments.
+
+**Exception — `postCompact`.** `postCompact` fires after compaction has occurred and `DENY` is not a legal disposition there ([Hooks › postCompact](hooks.md#postcompact)), so the substitution above has no legal answer at that hook. For a MODIFY-incapable client the Guardian MUST return `ALLOW` at `postCompact` and MUST record an audit event with `reason_codes: ["modify_unsupported"]` naming the rewrite it could not deliver, so the unmodified summary standing is visible rather than silent. A client that receives a `MODIFY` it cannot apply at `postCompact` keeps the original summary and MUST record the same audit event; substituting `DENY` there would record a denial that changed nothing.
 
 ## 7. Provenance
 
@@ -255,6 +308,8 @@ For every step where the Guardian writes a ContextEntry (the content-bearing ste
 
 `CHAIN_MISMATCH` is the named integrity condition, exposed two ways for two detectors. A Guardian that receives an Observed Agent's `chain_hash` (cross-check) that disagrees with its own computed head MAY DENY with `reason_codes: ["chain_mismatch"]`, or return the `CHAIN_MISMATCH` error (`-32007`, §17.1) when it cannot proceed at all. An Observed Agent or external auditor that finds a published `chain_hash` inconsistent with the recomputed chain SHOULD treat it as an integrity event, not a transient error.
 
+A `subagentStop` payload MAY omit `final_chain_hash`: a framework that maintains no session-chain omits the field rather than fabricate a value, since fabrication corrupts the artifact the field exists to produce. A Guardian MUST treat the omission as "chain not maintained by this framework," not as an integrity failure; integrity claims about that subagent's chain are simply unavailable.
+
 Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline the published, signed head gives integrity against a network tamperer and lets a key-holder verify the chain, but it does not bind the Guardian itself: the Guardian holds the symmetric key and can re-sign a rewritten head. Non-repudiation, proving to a third party that a specific Guardian issued a specific head, requires the asymmetric ACS-Crypto profile. The baseline detects accidental divergence and cross-Guardian disagreement; defeating a determined, compromised Guardian is a profile-level guarantee, not a Core one.
 
 ## 9. Approver Model
@@ -283,6 +338,8 @@ When the Guardian determines that the client cannot resolve `ASK`, the Guardian 
 
 1. `DEFER` with `timeout_decision: "deny"`: when the underlying issue might resolve through retry, an out-of-band escalation, or a later state change. The deferred verdict still counts toward cascading-deferral limits (§6).
 2. `DENY` with `reason_codes: ["approver_unavailable"]` and `reasoning` that names the missing capability: when no recovery path exists.
+
+In either case, the Guardian MUST record the substitution as an audit event so the enforcement gap is visible. Without a recorded substitution the substitution rate is only reachable by grepping log prose, which defeats the one metric that catches a client misdeclaring its capability.
 
 The choice is policy-driven: deployments SHOULD prefer `DEFER` when the request is potentially recoverable through a different surface, and `DENY` when the action is unconditionally outside the client's reachable authority.
 
@@ -358,7 +415,7 @@ OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 
 ## 13. Liveness / System Methods
 
-A liveness method is required for connection-health checks, transport-debugging, and timeout tuning. It carries no enforcement semantics and is not part of the audit chain.
+`system/ping` SHOULD be implemented for connection-health checks, transport debugging, and timeout tuning; a deployment MAY omit it only with a declared alternative liveness mechanism ([Conformance › ACS-Core](../conformance.md#acs-core-mandatory-baseline)). It carries no enforcement semantics and is not part of the audit chain.
 
 **Method:** `system/ping`. Schema: [`hooks/system-ping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/system-ping.json).
 

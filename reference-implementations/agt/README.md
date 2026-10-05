@@ -2,6 +2,8 @@
 
 This tree shows what Microsoft's [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (AGT) looks like when it talks to agent clients over the [Agent Control Standard](../../README.md) (ACS) wire contract.
 
+### NOTE: This current work represents a Proof of Concept, not a production system
+
 AGT's policy engine runs unchanged. Two different agent clients send it ACS envelopes. One Guardian process answers both. No client has AGT code in it, and AGT has no client code in it.
 
 The tree validates every envelope against the schemas in this repository's own [`specification/v0.1.0/`](../../specification/v0.1.0/), so the implementation and the specification cannot drift apart. The code reaches those schemas by a relative path, so the tree has to stay at this depth, `reference-implementations/agt`.

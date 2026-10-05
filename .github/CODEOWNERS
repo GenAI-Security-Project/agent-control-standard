@@ -5,15 +5,16 @@
 # effect, and fails the entry silently when the handle lacks it.
 #
 # Keep this file in sync with repository collaborator roles and with the
-# leadership roster in GOVERNANCE.md.
+# leadership roster in GOVERNANCE.md. The project leads are @rocklambros,
+# @afogel, and @bar-capsule.
 #
-# Invited to write access and pending acceptance: @evabenn @RbBuiltWrong
-# @aruneeshsalhotra. An invitation grants nothing until the invitee accepts,
-# so these three entries are inert until then. The other owners on their lines
-# still apply, so review coverage holds meanwhile.
+# @artmaro holds write access. The write invitations to @evabenn,
+# @RbBuiltWrong, and @aruneeshsalhotra lapsed and are not being re-sent, so
+# their entries stay inert. The other owners on their lines still apply, so
+# review coverage holds.
 
 # Default owners for anything not matched below.
-*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
+*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
 
 /CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -23,8 +24,8 @@
 
 # The specification is the highest-blast-radius surface in the repository.
 # A schema change propagates to every downstream implementer.
-/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
-/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
+/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
+/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
 
 # These generate and publish the public site, or feed the build that does. A change
 # here alters what the front door says, which is the same class of privilege the
@@ -35,7 +36,8 @@
 # can reach a third party through url(), @font-face, or @import with no script at all.
 /tools/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/GOVERNANCE.md  @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/GOVERNANCE.md  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+/project.owasp.yaml @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -44,17 +46,24 @@
 /docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 
+# The roster files and the code that turns them into trust decide whose closes count as
+# delivered, so a project lead approves every change to them (decision 11). These lines
+# follow /tools/ because the last matching pattern wins.
+/tools/roadmap_model.py  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+/tools/fetch_roadmap.py  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+/tools/closing_choice.py @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+
 # The reference implementation is runnable code that contributors install and wire
 # into their own development environments, which is a different risk class from the
 # rest of this repository. It arrived as roughly 41,000 lines from a single author, so
 # these entries exist to force a second reviewer on every later change rather than to
 # record who wrote it.
-/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro
 
-# CI runs with write access to the repository. Changes here are a
-# privilege-escalation surface, so this list stays narrower than the default
-# and who sits on it is a project-lead decision under GOVERNANCE.md.
-/.github/               @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+# CI runs with write access to the repository, and this directory holds CODEOWNERS
+# itself. Changes here are a privilege-escalation surface, so a project lead
+# approves them (decision 11).
+/.github/               @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # Licensing and security policy changes are governance decisions.
 /LICENSE                @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule

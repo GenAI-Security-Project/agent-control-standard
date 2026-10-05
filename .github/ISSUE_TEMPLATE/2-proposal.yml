@@ -1,0 +1,67 @@
+name: Feature or specification proposal
+description: A new capability, hook, event, or AgBOM component.
+title: "[Proposal] "
+labels: ["type:proposal", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Specification changes affect every downstream implementer. Open a Discussion
+        first and link it below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What cannot be done today. Describe the problem, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: wire
+    attributes:
+      label: Why the wire has to carry it
+      description: >-
+        SPEC_REVIEW_PRINCIPLES.md principle 3 is that something goes on the wire only if
+        it is lost otherwise. Make that case.
+    validations:
+      required: true
+  - type: checkboxes
+    id: constituencies
+    attributes:
+      label: Which constituencies this affects
+      description: From SPEC_REVIEW_PRINCIPLES.md principle 2.
+      options:
+        - label: Observed Agent implementers
+        - label: Guardian implementers
+        - label: Policy authors
+        - label: Auditors and incident responders
+        - label: Platform and harness vendors
+        - label: Enterprise deployers
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including riding an existing element rather than adding one.
+    validations:
+      required: true
+  - type: input
+    id: discussion
+    attributes:
+      label: Discussion link
+      description: The Discussion thread where this was raised.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority-scope
+    attributes:
+      label: Current Priority Scope
+      description: >-
+        Read the Current Priority Scope in CONTRIBUTING.md before answering. An honest
+        "deferred" is more useful to us than a hopeful "in focus".
+      options:
+        - Feeds the runnable Guardian reference implementation
+        - Feeds the AGT interoperability benchmark
+        - Feeds conformance evidence
+        - This is deferred or out of scope and I am filing it to be tracked
+        - I am not sure
+    validations:
+      required: true

@@ -98,6 +98,21 @@ nav:
 extra_css:
   - stylesheets/extra.css
 
+# Mermaid, served from this repository rather than fetched from a CDN.
+#
+# mkdocs-material's bundle lazily loads mermaid from https://unpkg.com/mermaid@11/
+# whenever it meets a diagram, which puts third-party executable code in a visitor's
+# browser on every page that has one. That defeats the premise of the third-party guard
+# in tests/, and the version there is a range rather than a pin, so unpkg decides which
+# 11.x a reader runs. Declaring the library here defines `window.mermaid` before the
+# theme checks for it, and the theme's own guard clause then skips the fetch.
+#
+# Pinned at 11.17.2. The byte-for-byte digest is asserted by tests/test_site_config.py,
+# so a silent swap fails the build rather than shipping.
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+  - assets/javascripts/mermaid-init.js
+
 markdown_extensions:
   # Emojis
   - attr_list
@@ -113,8 +128,16 @@ markdown_extensions:
   - pymdownx.snippets
   - pymdownx.superfences:
       custom_fences:
+        # The class is deliberately NOT `mermaid`. mkdocs-material scans for that
+        # class, and finding it does two unwanted things: it fetches the mermaid
+        # library from https://unpkg.com at runtime, and its own rendering pass empties
+        # the block before drawing anything, which is why the one diagram already in
+        # this documentation has never rendered on the published site. Naming the class
+        # something the theme does not recognise leaves both to
+        # assets/javascripts/mermaid-init.js, which renders from the copy of the library
+        # this repository serves. Authors still write ```mermaid fences.
         - name: mermaid
-          class: mermaid
+          class: acs-diagram
           format: !!python/name:pymdownx.superfences.fence_code_format
   # Callouts
   - admonition

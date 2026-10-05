@@ -45,6 +45,15 @@ Every component SHOULD carry `registration_provenance` (who declared it — fram
 
 The canonical document is the source of truth; serialized output is a deterministic derivation. The mapping rules live in [`inspect/format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json).
 
+The diagram below shows the canonical AgBOM deriving into three serialization formats. The derivation runs one way, from the canonical graph outward.
+
+```mermaid
+flowchart LR
+    AGBOM["Canonical AgBOM<br/>(component graph)"] --> CDX["CycloneDX 1.6"]
+    AGBOM --> SPDX["SPDX 3.0"]
+    AGBOM --> SWID["SWID"]
+```
+
 | Standard | ACS extension | Status |
 |---|---|---|
 | [CycloneDX 1.6](https://cyclonedx.org/) | [Extending CycloneDX](./extend_cyclonedx.md) | Working draft |
