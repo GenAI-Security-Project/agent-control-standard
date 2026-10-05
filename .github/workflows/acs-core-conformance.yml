@@ -1,0 +1,86 @@
+# Posts the published ACS-Core conformance vectors to the reference Guardian and writes a
+# per-requirement report to the job summary.
+#
+# Informational on purpose. The vectors quote MUST sentences the reference Guardian does not
+# yet implement (signature, replay, staleness), so a gating job would block every merge until
+# those land. The job fails only when it could not measure: the Guardian did not start, or it
+# answered no request.
+#
+# The vectors are a pinned, hash-checked dependency (reference-implementations/agt/conformance/
+# acs-core-vectors.txt). Moving to a newer corpus is a one-line change reviewed like any other.
+#
+# No workflow expression appears inside a `run:` block.
+name: ACS-Core conformance report
+
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/agt/**"
+      - "specification/**"
+      - ".github/workflows/acs-core-conformance.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "reference-implementations/agt/**"
+      - "specification/**"
+      - ".github/workflows/acs-core-conformance.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: acs-core-conformance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt
+    env:
+      ACS_GUARDIAN_PORT: "18787"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Install dependencies from the lockfile
+        run: bun install --frozen-lockfile
+
+      - name: Install the pinned conformance vectors
+        run: |
+          uv venv --python 3.13 "$RUNNER_TEMP/vectors-venv"
+          uv pip install --python "$RUNNER_TEMP/vectors-venv/bin/python" \
+            --require-hashes -r conformance/acs-core-vectors.txt
+
+      - name: Start the reference Guardian
+        run: |
+          ACS_ENVELOPE_LOG="$RUNNER_TEMP/envelopes.jsonl" \
+          ACS_SESSION_CONTEXT_LOG="$RUNNER_TEMP/session-context.jsonl" \
+            nohup bun run guardian > "$RUNNER_TEMP/guardian.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if grep -q "Guardian listening" "$RUNNER_TEMP/guardian.log"; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/guardian.log"
+          echo "The Guardian did not start within 60 seconds" >&2
+          exit 1
+
+      - name: Post the vectors and write the report
+        run: |
+          "$RUNNER_TEMP/vectors-venv/bin/python" scripts/run-acs-core-vectors.py \
+            --guardian "http://127.0.0.1:$ACS_GUARDIAN_PORT/acs" \
+            --out "$RUNNER_TEMP/acs-core-results.jsonl" \
+            --summary "$GITHUB_STEP_SUMMARY"
