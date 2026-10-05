@@ -3,6 +3,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
+    io::{self, Write},
     sync::Mutex,
 };
 
@@ -55,13 +56,19 @@ fn ensure_session<'a>(inner: &'a mut Inner, session_id: &str) -> &'a mut Session
             break;
         };
         inner.sessions.remove(&evicted);
-        eprintln!(
-            "evicted session {evicted} from the session-context store: the retained-session cap was reached. \
-A further step on this session starts a new chain at seq 1, which the Inspector renders as a chain break."
-        );
+        warn_evicted_session(&evicted);
     }
 
     inner.sessions.entry(session_id.to_owned()).or_default()
+}
+
+fn warn_evicted_session(session_id: &str) {
+    let mut stderr = io::stderr().lock();
+    let _ = writeln!(
+        stderr,
+        "evicted session {session_id} from the session-context store: the retained-session cap was reached. \
+A further step on this session starts a new chain at seq 1, which the Inspector renders as a chain break."
+    );
 }
 
 impl SessionStore {
