@@ -110,7 +110,7 @@ impl SessionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionStore;
+    use super::{SessionStore, MAX_SESSIONS};
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
 
