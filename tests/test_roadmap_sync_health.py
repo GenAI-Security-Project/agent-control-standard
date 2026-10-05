@@ -312,3 +312,11 @@ def test_migrate_dry_run_prints_each_current_milestone(monkeypatch, tmp_path, ca
     out = capsys.readouterr().out
     assert "#5 issue by x open [] milestone 7 u" in out
     assert "#6 issue by x open [] milestone none u" in out
+
+
+def test_switches_heading_says_every_value_is_listed():
+    # The section lists every switch so the weekly call sees rendering turned off, and only
+    # flags odd values. The heading must not claim it lists odd values alone.
+    import roadmap_sync
+    note = dict((key, note) for key, _title, note in roadmap_sync.SECTION_TITLES)["switches"]
+    assert note == "The current value of each roadmap variable, flagged when it is neither true nor false."
