@@ -125,3 +125,79 @@ def test_promotion_command_uses_the_open_promotion_title_and_body():
 def test_open_promotion_runs_on_dispatch_only():
     # PyYAML reads the key `on` as the boolean True.
     assert yaml.safe_load(OPEN_PROMOTION.read_text(encoding="utf-8"))[True] == {"workflow_dispatch": None}
+
+
+
+# --- Bypasses -------------------------------------------------------------------------
+
+from datetime import date  # noqa: E402
+
+from roadmap_sync import bypasses  # noqa: E402
+
+
+class FakeGitHub:
+    """Answers the bypass reads from a table. Pulls carry number, base, merged_at, reviews, and files."""
+
+    def __init__(self, pulls: list[dict], commit_pulls: dict[str, list], authors: dict[str, str | None]):
+        self.pulls, self.commit_pulls, self.authors = pulls, commit_pulls, authors
+
+    def get(self, path: str):
+        if "/pulls?state=closed" in path:
+            base = re.search(r"base=(\w+)", path).group(1)
+            return [p for p in self.pulls if p["base"] == base]
+        if path.endswith("/pulls"):
+            return self.commit_pulls.get(path.split("/")[-2], [])
+        oid = path.rsplit("/", 1)[1]
+        login = self.authors.get(oid)
+        return {"author": {"login": login} if login else None}
+
+    def paginate(self, path: str):
+        number = int(re.search(r"/pulls/(\d+)/", path).group(1))
+        pull = next(p for p in self.pulls if p["number"] == number)
+        if "/reviews" in path:
+            return [{"state": state} for state in pull["reviews"]]
+        return [{"filename": name} for name in pull["files"]]
+
+
+def pull(number, base, merged_at, reviews=(), files=("docs/a.md",)):
+    return {"number": number, "base": base, "merged_at": merged_at, "reviews": list(reviews), "files": list(files)}
+
+
+def test_bypasses_count_unapproved_merges_and_flag_roster_changes(repo):
+    repo.publish()
+    gh = FakeGitHub(
+        pulls=[
+            pull(1, "integration", "2026-10-03T00:00:00Z", reviews=["APPROVED"]),
+            pull(2, "integration", "2026-10-03T00:00:00Z", reviews=["COMMENTED"]),
+            pull(3, "main", "2026-10-02T00:00:00Z", files=["GOVERNANCE.md"]),
+            pull(4, "integration", "2026-10-01T00:00:00Z", files=["tools/closing_choice.py"]),
+            pull(5, "integration", "2026-09-01T00:00:00Z", files=["GOVERNANCE.md"]),
+            pull(6, "integration", None, files=["GOVERNANCE.md"]),
+        ],
+        commit_pulls={}, authors={},
+    )
+    found = bypasses(gh, lambda args: (0, ""), date(2026, 10, 4))
+    assert found == [["count", 3], ["pull", 4, "integration"], ["pull", 3, "main"]]
+
+
+def test_direct_pushes_are_listed_with_a_checked_login(repo):
+    pushed = repo.commit("x.md", "x\n", "Pushed straight to main", when="2026-10-03T00:00:00Z")
+    merged = repo.commit("y.md", "y\n", "Merge pull request #9", when="2026-10-03T01:00:00Z")
+    repo.git("checkout", "-q", "integration")
+    odd = repo.commit("z.md", "z\n", "Pushed by a bot", when="2026-10-03T02:00:00Z")
+    repo.publish()
+    gh = FakeGitHub(pulls=[], commit_pulls={merged: [{"number": 9}]},
+                    authors={pushed: "rocklambros", odd: "evil\n::error::x"})
+    found = bypasses(gh, repo.runner(), date(2026, 10, 4))
+    assert found == [["count", 0], ["push", "main", "rocklambros"], ["push", "integration", None]]
+    body = health({"bypasses": found})
+    assert "- Direct push to `main` by `rocklambros`." in body
+    assert "- Direct push to `integration` by an account this report does not name." in body
+    assert "::error::" not in body
+
+
+def test_a_quiet_week_reports_none(repo):
+    repo.publish()
+    gh = FakeGitHub(pulls=[], commit_pulls={}, authors={})
+    assert bypasses(gh, repo.runner(), date(2030, 1, 1)) == []
+    assert "## Bypasses\n\nMerges into" in health({"bypasses": []})

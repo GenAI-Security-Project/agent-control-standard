@@ -297,6 +297,7 @@ SECTION_TITLES = (
     ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
     ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
     ("promotion", "Promotion", "Work on integration that main lacks. A project lead opens and merges the promotion."),
+    ("bypasses", "Bypasses", "Merges into integration or main in the last seven days with no approving review, and direct pushes. Admins can bypass the rulesets, so this is where a bypass shows."),
     ("switches", "Switches", "Roadmap variables holding something other than true or false."),
 )
 
@@ -343,6 +344,61 @@ def promotion_pending(git) -> tuple[str, int] | None:
     if not _DAY.fullmatch(day):
         raise SyncError("git did not report a commit date")
     return day, len(pending)
+
+
+# A merge that bypassed review and touched one of these gets its own line: the roster files
+# and the code that turns the roster into trust.
+WATCHED_PATHS = frozenset({
+    "GOVERNANCE.md", ".github/CODEOWNERS", "project.owasp.yaml",
+    "tools/roadmap_model.py", "tools/fetch_roadmap.py", "tools/closing_choice.py",
+})
+_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+_OID = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _merged_at(pull: dict) -> datetime | None:
+    value = pull.get("merged_at")
+    if not isinstance(value, str):
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def bypasses(gh, git, today: date) -> list[list]:
+    """Merges with no approving review and direct pushes, in the last seven days.
+
+    Every ruleset here requires one approval, so a merge without one is an admin bypass.
+    A first-parent commit that no pull request carries is a direct push. Only numbers,
+    branch names, and logins that match GitHub's login pattern are kept.
+    """
+    since = today - timedelta(days=7)
+    cutoff = datetime.combine(since, datetime.min.time(), timezone.utc)
+    base_path = f"repos/{model.REPO}"
+    unapproved = 0
+    lines: list[list] = []
+    for branch in ("integration", "main"):
+        pulls = gh.get(f"{base_path}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page=100")
+        for pull in pulls:
+            merged = _merged_at(pull)
+            if merged is None or merged < cutoff:
+                continue
+            number = int(pull["number"])
+            reviews = gh.paginate(f"{base_path}/pulls/{number}/reviews?per_page=100")
+            if any(review.get("state") == "APPROVED" for review in reviews):
+                continue
+            unapproved += 1
+            files = gh.paginate(f"{base_path}/pulls/{number}/files?per_page=100")
+            if any(entry.get("filename") in WATCHED_PATHS for entry in files):
+                lines.append(["pull", number, branch])
+    for branch in ("main", "integration"):
+        out = _git(git, ["rev-list", "--first-parent", f"--since={since.isoformat()}", f"refs/remotes/origin/{branch}"], "git rev-list")
+        for oid in out.split():
+            if not _OID.fullmatch(oid) or gh.get(f"{base_path}/commits/{oid}/pulls"):
+                continue
+            login = (gh.get(f"{base_path}/commits/{oid}").get("author") or {}).get("login")
+            lines.append(["push", branch, login if isinstance(login, str) and _LOGIN.fullmatch(login) else None])
+    if not unapproved and not lines:
+        return []
+    return [["count", unapproved], *lines]
 
 
 # One remedy per reason code. A close that is not on main, or was reverted, is fixed by
@@ -435,12 +491,13 @@ def build_report(
             report["accepted_without_milestone"].append(int(raw["number"]))
     report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
     report["promotion"] = list(snapshot.get("promotion") or [])
+    report["bypasses"] = [list(line) for line in snapshot.get("bypasses") or []]
     # Every switch is listed, so the weekly call sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
     report["unverified_closes"].sort()
     for key in report:
-        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion"):
+        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses"):
             report[key] = sorted(set(report[key]))
     return report
 
@@ -490,6 +547,15 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
                     f"--title '{PROMOTION_TITLE}' --body '{body}'",
                     "```",
                 ]
+        elif key == "bypasses":
+            for line in items:
+                if line[0] == "count":
+                    lines.append(f"Merged without an approving review in the last seven days: {int(line[1])}.")
+                elif line[0] == "pull":
+                    lines.append(f"- #{int(line[1])} into `{line[2]}` changed a roster file or roadmap trust code without an approving review.")
+                else:
+                    who = f"`{line[2]}`" if line[2] else "an account this report does not name"
+                    lines.append(f"- Direct push to `{line[1]}` by {who}.")
         elif key == "unverified_closes":
             lines += [
                 f"- #{number} in [milestone {milestone}]({repo_url}/milestone/{milestone}): `{reason}`. {REMEDIES[reason]}"
@@ -519,6 +585,7 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
     snapshot = {
         "milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": [], "promotion": [],
+        "bypasses": [],
     }
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
@@ -552,6 +619,10 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
             snapshot["promotion"] = [pending[0], pending[1], numbers[0] if numbers else None]
     except (SyncError, ValueError, TypeError):
         failed.append("promotion")
+    try:
+        snapshot["bypasses"] = bypasses(gh, git, today)
+    except (SyncError, KeyError, ValueError, TypeError, AttributeError):
+        failed.append("bypasses")
     cutoff = datetime.combine(today - timedelta(days=8), datetime.min.time(), timezone.utc)
     try:
         for raw in snapshot["milestoned"]:
