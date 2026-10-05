@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/envelope"
 )
 
 const testSecret = "0123456789abcdef0123456789abcdef"
@@ -76,11 +80,18 @@ func TestRunTranslatesDecisions(t *testing.T) {
 				engine.policy.ApproverTypes = []acs.ApproverType{acs.ApproverHuman}
 			}
 			url, _ := testGuardian(t, engine)
+			stateDir := t.TempDir()
 			var output bytes.Buffer
-			if err := run(optionsFor(url, writeSecret(t), t.TempDir()), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+			if err := run(optionsFor(url, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output); err != nil {
 				t.Fatal(err)
 			}
 			assertOutput(t, output.Bytes(), tt.wantDecision, tt.wantReason, tt.wantCommand)
+			audit := readAudit(t, stateDir)
+			refused := tt.wantReason == "the Codex hook cannot apply the Guardian modification"
+			if refused != strings.Contains(audit, `"event":"modify_unsupported"`) ||
+				refused != strings.Contains(audit, `"reason_codes":["modify_unsupported"]`) {
+				t.Fatalf("audit log = %q", audit)
+			}
 		})
 	}
 }
@@ -114,19 +125,88 @@ func TestRunRecordsAProceedFailure(t *testing.T) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(server.Close)
-	auditLog := filepath.Join(t.TempDir(), "audit.jsonl")
-	args := append(optionsFor(server.URL, writeSecret(t), t.TempDir()), "--audit-log", auditLog)
+	stateDir := t.TempDir()
+	var output bytes.Buffer
+	if err := run(optionsFor(server.URL, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+		t.Fatal(err)
+	}
+	assertOutput(t, output.Bytes(), "", "", "")
+	if audit := readAudit(t, stateDir); !strings.Contains(audit, `"event":"decision_failure"`) {
+		t.Fatalf("audit event = %s", audit)
+	}
+}
+
+// A refused modification stays denied when its audit record cannot be written,
+// and the reason says so.
+func TestRunDeniesWhenTheAuditRecordFails(t *testing.T) {
+	engine := &testEngine{decision: acs.Decision{Disposition: acs.Modify, Reasoning: "policy decision", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/raw_command"}}}}}
+	url, _ := testGuardian(t, engine)
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append(optionsFor(url, writeSecret(t), t.TempDir()), "--audit-log", filepath.Join(blocker, "audit.jsonl"))
 	var output bytes.Buffer
 	if err := run(args, bytes.NewBufferString(event("tool-1")), &output); err != nil {
 		t.Fatal(err)
 	}
-	assertOutput(t, output.Bytes(), "", "", "")
-	audit, err := os.ReadFile(auditLog)
+	assertOutput(t, output.Bytes(), "deny", "the Codex hook cannot apply the Guardian modification; the local audit record could not be written", "")
+}
+
+// §6.3: a signed MODIFY combining a replacement with edits is DENY, and the
+// substitution is recorded.
+func TestRunRecordsAnInvalidModification(t *testing.T) {
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: []byte(testSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(audit), `"event":"decision_failure"`) {
-		t.Fatalf("audit event = %s", audit)
+	g, err := guardian.New(guardian.Config{Engine: &testEngine{}, Signer: signer, OnDecisionFailure: acs.FailureProceed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var request acs.Request
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Error(err)
+			return
+		}
+		if request.Method != acs.StepToolCallRequest {
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			g.ServeHTTP(w, r)
+			return
+		}
+		unsigned := `{"jsonrpc":"2.0","id":` + string(request.ID) + `,"result":{"type":"final","acs_version":"0.1.0","request_id":"` + request.Params.RequestID + `","decision":"modify","reasoning":"rewrite command","modifications":{"modified_content":"{}","parameter_overrides":{}}}}`
+		input, _, err := envelope.ResponseSigningInput([]byte(unsigned))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		signature, err := signer.Sign(r.Context(), request.Params.Metadata.SessionID, "", input)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		signed, err := json.Marshal(signature)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = w.Write([]byte(strings.TrimSuffix(unsigned, "}}") + `,"signature":` + string(signed) + `}}`))
+	}))
+	t.Cleanup(server.Close)
+	stateDir := t.TempDir()
+	var output bytes.Buffer
+	if err := run(optionsFor(server.URL, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+		t.Fatal(err)
+	}
+	assertOutput(t, output.Bytes(), "deny", "rewrite command", "")
+	if audit := readAudit(t, stateDir); !strings.Contains(audit, `"event":"modify_invalid"`) {
+		t.Fatalf("audit log = %q", audit)
 	}
 }
 
@@ -218,7 +298,20 @@ func writeSecret(t *testing.T) string {
 }
 
 func optionsFor(url, secretFile, stateDir string) []string {
-	return []string{"--guardian-url", url, "--hmac-secret-file", secretFile, "--state-dir", stateDir}
+	return []string{"--guardian-url", url, "--hmac-secret-file", secretFile, "--state-dir", stateDir, "--audit-log", filepath.Join(stateDir, "audit.jsonl")}
+}
+
+// readAudit returns the audit log optionsFor names, or "" when nothing was recorded.
+func readAudit(t *testing.T, stateDir string) string {
+	t.Helper()
+	audit, err := os.ReadFile(filepath.Join(stateDir, "audit.jsonl"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(audit)
 }
 
 func event(toolUseID string) string {

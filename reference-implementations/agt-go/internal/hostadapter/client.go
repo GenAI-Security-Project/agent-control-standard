@@ -21,6 +21,7 @@ import (
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/observedagent"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/schema"
 )
@@ -145,9 +146,12 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 	}
 	decision, failedOpen := observedagent.Honour(result, err, state.Hello.OnDecisionFailure)
 	if failedOpen {
-		if auditErr := recordDecisionFailure(c.config.AuditLog, step, decision.Reasoning); auditErr != nil {
+		if auditErr := recordAuditEvent(c.config.AuditLog, step, "decision_failure", decision); auditErr != nil {
 			return Evaluation{Decision: acs.Decision{Disposition: acs.Deny, Reasoning: "the Guardian decision failed and the local audit record could not be written"}}, nil
 		}
+	}
+	if result.InvalidModification {
+		return Evaluation{Decision: c.recordDenial(step, "modify_invalid", decision)}, nil
 	}
 	evaluation := Evaluation{Decision: decision}
 	if err != nil || result.Result == nil || !result.Verified || decision.Disposition != acs.Modify {
@@ -159,9 +163,25 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 	}
 	evaluation.ModifiedPayload, err = observedagent.Apply(decision, raw)
 	if err != nil {
-		return Evaluation{Decision: acs.Decision{Disposition: acs.Deny, Reasoning: "the host cannot apply the Guardian modification"}}, nil
+		return Evaluation{Decision: c.RefuseModification(step, "the host cannot apply the Guardian modification")}, nil
 	}
 	return evaluation, nil
+}
+
+// RefuseModification answers a MODIFY the host cannot apply as §6.5 requires:
+// DENY with modify_unsupported, recorded in the local audit log.
+func (c *Client) RefuseModification(step Step, reasoning string) acs.Decision {
+	decision := acs.Decision{Disposition: acs.Deny, Reasoning: reasoning, ReasonCodes: []string{disposition.ReasonModifyUnsupported}}
+	return c.recordDenial(step, "modify_unsupported", decision)
+}
+
+// recordDenial records a DENY the host put in place of a Guardian decision.
+// The step stays denied when the record cannot be written; the reasoning says so.
+func (c *Client) recordDenial(step Step, event string, decision acs.Decision) acs.Decision {
+	if err := recordAuditEvent(c.config.AuditLog, step, event, decision); err != nil {
+		decision.Reasoning += "; the local audit record could not be written"
+	}
+	return decision
 }
 
 func ToolCallRequest(toolName string, rawInput json.RawMessage) (acs.ToolCallRequestPayload, error) {
@@ -254,7 +274,7 @@ func httpTransport(url string, maxBytes int64) observedagent.Transport {
 	}
 }
 
-func recordDecisionFailure(path string, step Step, reason string) error {
+func recordAuditEvent(path string, step Step, event string, decision acs.Decision) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -264,16 +284,18 @@ func recordDecisionFailure(path string, step Step, reason string) error {
 	}
 	defer file.Close()
 	return json.NewEncoder(file).Encode(struct {
-		Event      string    `json:"event"`
-		RecordedAt time.Time `json:"recorded_at"`
-		SessionKey string    `json:"session_key"`
-		TurnID     string    `json:"turn_id"`
-		CallID     string    `json:"call_id"`
-		Method     string    `json:"method"`
-		Reason     string    `json:"reason"`
+		Event       string    `json:"event"`
+		RecordedAt  time.Time `json:"recorded_at"`
+		SessionKey  string    `json:"session_key"`
+		TurnID      string    `json:"turn_id"`
+		CallID      string    `json:"call_id"`
+		Method      string    `json:"method"`
+		Reason      string    `json:"reason"`
+		ReasonCodes []string  `json:"reason_codes,omitempty"`
 	}{
-		Event: "decision_failure", RecordedAt: time.Now().UTC(), SessionKey: step.SessionKey,
-		TurnID: step.TurnID, CallID: step.CallID, Method: step.Method, Reason: reason,
+		Event: event, RecordedAt: time.Now().UTC(), SessionKey: step.SessionKey,
+		TurnID: step.TurnID, CallID: step.CallID, Method: step.Method,
+		Reason: decision.Reasoning, ReasonCodes: decision.ReasonCodes,
 	})
 }
 

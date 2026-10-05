@@ -90,6 +90,36 @@ func TestRunBlocksEveryNonProceedingDisposition(t *testing.T) {
 	}
 }
 
+// §6.5: whether the shared adapter or the OpenCode projection refuses the
+// MODIFY, the answer is DENY modify_unsupported and the audit log records it.
+func TestRunRefusesAModificationItCannotApply(t *testing.T) {
+	tests := []struct {
+		name, wantReason string
+		modifications    acs.Modifications
+	}{
+		{name: "override_of_a_missing_argument", wantReason: "the host cannot apply the Guardian modification", modifications: acs.Modifications{ParameterOverrides: map[string]json.RawMessage{"timeout": json.RawMessage(`5`)}}},
+		{name: "redaction_of_the_tool_name", wantReason: "the OpenCode plugin cannot apply the Guardian modification", modifications: acs.Modifications{Redactions: []acs.Redaction{{Path: "/tool/name"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := &testEngine{decisions: []acs.Decision{{Disposition: acs.Modify, Reasoning: "modify", Modifications: &tt.modifications}}}
+			url, _ := testGuardian(t, engine)
+			stateDir := t.TempDir()
+			response := runEvent(t, optionsFor(url, writeSecret(t), stateDir), `{"event":"execute.before","session_id":"session","message_id":"message","call_id":"call","tool":"bash","input":{"command":"echo safe"}}`)
+			if response.Decision != acs.Deny || response.Reasoning != tt.wantReason {
+				t.Fatalf("response = %+v", response)
+			}
+			audit, err := os.ReadFile(filepath.Join(stateDir, "audit.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(audit), `"event":"modify_unsupported"`) || !strings.Contains(string(audit), `"reason_codes":["modify_unsupported"]`) {
+				t.Fatalf("audit log = %s", audit)
+			}
+		})
+	}
+}
+
 func TestExecuteFailsClosed(t *testing.T) {
 	var output, diagnostics bytes.Buffer
 	status := execute([]string{"--hmac-secret-file", "/missing"}, bytes.NewBufferString("not JSON"), &output, &diagnostics)
@@ -186,5 +216,5 @@ func writeSecret(t *testing.T) string {
 }
 
 func optionsFor(url, secretFile, stateDir string) []string {
-	return []string{"--guardian-url", url, "--hmac-secret-file", secretFile, "--state-dir", stateDir}
+	return []string{"--guardian-url", url, "--hmac-secret-file", secretFile, "--state-dir", stateDir, "--audit-log", filepath.Join(stateDir, "audit.jsonl")}
 }

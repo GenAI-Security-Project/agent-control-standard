@@ -56,6 +56,9 @@ type Outcome struct {
 	Error  *acs.Error
 	// Verified reports whether the answer's signature verified.
 	Verified bool
+	// InvalidModification reports that Result is the DENY replacing a signed
+	// MODIFY of invalid shape (§6.3); the caller must record it.
+	InvalidModification bool
 }
 
 // Request describes one request to send; zero fields take fresh values.
@@ -293,7 +296,8 @@ func (c *Client) invalidModifyDenial(ctx context.Context, raw []byte, response a
 				Reasoning:   reason,
 			},
 		},
-		Verified: true,
+		Verified:            true,
+		InvalidModification: true,
 	}, true
 }
 

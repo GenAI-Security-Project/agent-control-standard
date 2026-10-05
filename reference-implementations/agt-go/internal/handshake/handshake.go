@@ -43,7 +43,8 @@ type Refusal struct {
 	Data acs.ErrorData
 }
 
-// CoreMethods returns the ACS-Core hooks a complete Observed Agent implements.
+// CoreMethods returns the ACS-Core hook minimum; a subagent-capable Observed
+// Agent also implements subagentStart.
 // A Guardian negotiates the subset each Observed Agent actually offers.
 func CoreMethods() []string {
 	return []string{

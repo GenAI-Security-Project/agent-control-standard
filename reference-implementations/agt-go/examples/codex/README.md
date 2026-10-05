@@ -42,8 +42,14 @@ Ask Codex to run `ls -la`; the checked-in policy allows it. Ask Codex to run
 `echo rm -rf /`; the checked-in policy denies it before Bash runs.
 
 For a deployment, provide a separate Guardian configuration and HMAC secret. The hook
-state contains only the negotiated ServerHello. It holds no keying material. When a
-negotiated `proceed` failure posture lets a tool call continue without a verified
-decision, the hook appends a local event to `.acs/codex-audit.jsonl`.
+state contains only the negotiated ServerHello. It holds no keying material. The hook
+appends a local event to `.acs/codex-audit.jsonl` when:
+
+- a negotiated `proceed` failure posture lets a tool call continue without a verified
+  decision;
+- it denies a modification it cannot apply.
+
+If that write fails, the tool call is denied and the reason says the record is missing.
+
 If the initial handshake produces no ServerHello, this example uses the ACS startup
 posture `refuse` and denies the tool call.

@@ -89,13 +89,14 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	evaluation, err := client.Evaluate(context.Background(), hostadapter.Step{
+	step := hostadapter.Step{
 		SessionKey: event.SessionID,
 		TurnID:     event.TurnID,
 		CallID:     event.ToolUseID,
 		Method:     acs.StepToolCallRequest,
 		Payload:    payload,
-	})
+	}
+	evaluation, err := client.Evaluate(context.Background(), step)
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		}
 		update = modified
 		if err != nil {
-			evaluation.Decision = acs.Decision{Disposition: acs.Deny, Reasoning: "the Codex hook cannot apply the Guardian modification"}
+			evaluation.Decision = client.RefuseModification(step, "the Codex hook cannot apply the Guardian modification")
 		}
 	}
 	return writeDecision(output, evaluation.Decision, event.Event, update)
@@ -127,7 +128,7 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&options.guardianURL, "guardian-url", guardianURL, "ACS Guardian endpoint")
 	flags.StringVar(&options.secretFile, "hmac-secret-file", "", "file holding shared HMAC keying material")
 	flags.StringVar(&options.stateDir, "state-dir", ".acs/codex", "directory for negotiated session state")
-	flags.StringVar(&options.auditLog, "audit-log", ".acs/codex-audit.jsonl", "file for fail-open decision audit events")
+	flags.StringVar(&options.auditLog, "audit-log", ".acs/codex-audit.jsonl", "file for local audit events: fail-open decisions and refused modifications")
 	flags.StringVar(&options.agentID, "agent-id", defaultAgentID, "ACS agent identity")
 	flags.DurationVar(&options.timeout, "timeout", defaultTimeout, "maximum handshake round trip")
 	flags.Int64Var(&options.maxInputBytes, "max-input-bytes", defaultMaxInput, "largest hook input accepted")

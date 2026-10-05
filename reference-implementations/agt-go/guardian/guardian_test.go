@@ -42,7 +42,7 @@ var hookPayloads = map[string]any{
 	acs.StepPreCompact:             map[string]any{"entries_to_compact": []any{"s1"}, "triggered_by": "manual"},
 	acs.StepPostCompact:            map[string]any{"summary": map[string]any{"value": "sum", "provenance": map[string]any{"provenance_id": "p", "origin": "agent_generated"}}, "entries_compacted": []any{"s1"}, "pre_compact_chain_hash": hash64, "post_compact_chain_hash": hash64},
 	acs.StepSubagentStart:          map[string]any{"subagent_session_id": observedagent.NewUUID(), "parent_session_id": observedagent.NewUUID(), "parent_step_id": "s1", "intent_derivation": "fresh"},
-	acs.StepSubagentStop:           map[string]any{"subagent_session_id": observedagent.NewUUID(), "outcome": "completed", "final_chain_hash": hash64},
+	acs.StepSubagentStop:           map[string]any{"subagent_session_id": observedagent.NewUUID(), "outcome": "completed"},
 	acs.StepSkillRegister:          map[string]any{"skill_id": "sk", "definition": map[string]any{"digest": map[string]any{"algorithm": "sha-256", "value": "v"}}, "declared_capabilities": []any{}},
 	acs.StepSkillLoad:              map[string]any{"skill_id": "sk", "load_trigger": "user", "load_path": []any{map[string]any{"skill_id": "sk"}}, "digest": map[string]any{"algorithm": "sha-256", "value": "v"}},
 	acs.StepSkillUnload:            map[string]any{"skill_id": "sk", "reason": "explicit_unload"},

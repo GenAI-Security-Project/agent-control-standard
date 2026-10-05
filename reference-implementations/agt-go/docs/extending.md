@@ -31,7 +31,7 @@ Declared in [`policy_engine.go`](../guardian/policy_engine.go).
 | a decision missing a field its disposition requires, or a MODIFY breaking §6.3 | DENY `evaluation_failed` |
 | `DelegateToAgent` | DENY `agent_layer_unavailable`; this Guardian has no agent layer |
 | a disposition the hook does not permit | DENY, or ALLOW where the hook permits no DENY, with reason code `disposition_not_permitted` |
-| `Client.CannotApplyModify` with a MODIFY | DENY `modify_unsupported`, or ALLOW at postCompact (PR #21's proposed §6.5) |
+| `Client.CannotApplyModify` with a MODIFY | DENY `modify_unsupported`, or ALLOW at postCompact (§6.5) |
 | `Config.AskSubstitution` set to `deny` or `defer` with an ASK | the configured §9.2 substitute for this endpoint |
 | `Client.CannotResolveAsk` with an ASK | `Client.AskSubstitute`, DEFER or DENY (§9.2) |
 | a DEFER past the session's bound | DENY `deferral_bound_exceeded` |

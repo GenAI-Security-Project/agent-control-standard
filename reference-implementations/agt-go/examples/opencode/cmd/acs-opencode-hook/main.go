@@ -93,13 +93,14 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	evaluation, err := client.Evaluate(context.Background(), hostadapter.Step{
+	step := hostadapter.Step{
 		SessionKey: event.SessionID,
 		TurnID:     event.MessageID,
 		CallID:     event.CallID,
 		Method:     method,
 		Payload:    payload,
-	})
+	}
+	evaluation, err := client.Evaluate(context.Background(), step)
 	if err != nil {
 		return err
 	}
@@ -112,7 +113,8 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			response.UpdatedResult, err = hostadapter.ModifiedToolCallResult(evaluation.ModifiedPayload, payload.(acs.ToolCallResultPayload))
 		}
 		if err != nil {
-			response = hookOutput{Decision: acs.Deny, Reasoning: "the OpenCode plugin cannot apply the Guardian modification"}
+			refusal := client.RefuseModification(step, "the OpenCode plugin cannot apply the Guardian modification")
+			response = hookOutput{Decision: refusal.Disposition, Reasoning: refusal.Reasoning}
 		}
 	}
 	return writeOutput(output, response)
@@ -125,7 +127,7 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&options.guardianURL, "guardian-url", defaultGuardianURL, "ACS Guardian endpoint")
 	flags.StringVar(&options.secretFile, "hmac-secret-file", "", "file holding shared HMAC keying material")
 	flags.StringVar(&options.stateDir, "state-dir", ".acs/opencode", "directory for negotiated session state")
-	flags.StringVar(&options.auditLog, "audit-log", ".acs/opencode-audit.jsonl", "file for fail-open decision audit events")
+	flags.StringVar(&options.auditLog, "audit-log", ".acs/opencode-audit.jsonl", "file for local audit events: fail-open decisions and refused modifications")
 	flags.StringVar(&options.agentID, "agent-id", defaultAgentID, "ACS agent identity")
 	flags.DurationVar(&options.timeout, "timeout", defaultTimeout, "maximum handshake round trip")
 	flags.Int64Var(&options.maxInputBytes, "max-input-bytes", defaultMaxInput, "largest hook input accepted")

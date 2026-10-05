@@ -160,7 +160,7 @@ func TestSendFailsClosedForMixedModifyShapes(t *testing.T) {
 				Payload:   map[string]any{},
 				RequestID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 			})
-			if err != nil || outcome.Result == nil || outcome.Result.Disposition != acs.Deny || !outcome.Verified {
+			if err != nil || outcome.Result == nil || outcome.Result.Disposition != acs.Deny || !outcome.Verified || !outcome.InvalidModification {
 				t.Fatalf("outcome = %+v, error = %v", outcome, err)
 			}
 			if decision, failedOpen := Honour(outcome, nil, acs.FailureProceed); decision.Disposition != acs.Deny || failedOpen {
