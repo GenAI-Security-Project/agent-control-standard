@@ -1,0 +1,13 @@
+# Test-only dependencies. The sample code itself imports nothing outside the
+# standard library, which is the point of it.
+#
+# Exact pins rather than ranges: this file decides what the sample is proven
+# against, and a resolver picking a different jsonschema on a Tuesday would
+# change that silently.
+#
+# Deliberately not added to uv.lock. The docs deploy gate installs from that
+# lockfile, and nothing the site build needs should grow because a sample
+# gained a test dependency.
+pytest==8.4.2
+jsonschema==4.26.0
+referencing==0.37.0
