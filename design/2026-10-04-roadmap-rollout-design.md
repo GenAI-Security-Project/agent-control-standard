@@ -265,7 +265,10 @@ alarm to every project lead.
   it.
 - If `ROADMAP_HEALTH_ISSUE` is unset or the comment fails, the run still fails, and the cron
   editor's email is the fallback.
-- Tests cover the transition to failing, a repeated failure, recovery, a missing variable, a
+- `monitor-roadmap.yml`'s `workflow_dispatch` gains a boolean `test_alarm` input, false by
+  default, which runs the failing-then-recovery comment pair without a real failure.
+- Tests cover a locked issue, the test input, the transition to failing, a repeated failure,
+  recovery, a missing variable, a
   failed comment, and a comment by another login carrying the marker.
 
 #### Sweep and model housekeeping
@@ -328,9 +331,9 @@ these changes:
 - A project lead then sets `ROADMAP_SYNC_ENABLED`, dispatches `roadmap-sync.yml` with
   `mode: sweep`, pins the health issue, and sets `ROADMAP_HEALTH_ISSUE`.
   `ROADMAP_RENDER_ENABLED` and `ROADMAP_REFRESH_ENABLED` follow.
-- While the monitor is failing on purpose during this step, before `ROADMAP_HEALTH_ISSUE` is
-  set, it is dispatched once more after the variable is set, and each project lead confirms the
-  @mention arrived.
+- After `ROADMAP_HEALTH_ISSUE` is set, a lead dispatches `monitor-roadmap.yml` with its
+  `test_alarm` input, which posts the failing comment and then the recovery comment through the
+  real unlock, comment, and relock path. Each project lead confirms the @mention arrived.
 - The Day N milestones are deleted once Day 30 holds no open issues.
 - The skill's first run reports the hand-entered ACS rows as orphaned, and Rock replaces them.
 
