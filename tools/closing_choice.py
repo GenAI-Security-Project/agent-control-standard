@@ -16,13 +16,24 @@ stall the job.
 """
 from __future__ import annotations
 
+import os
 import re
+import sys
 from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
 
 REPO = "GenAI-Security-Project/agent-control-standard"
 MAX_CHARS = 65_536
 CLOSING = frozenset({"close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"})
 CONTRIBUTING = frozenset({"part of", "refs", "contributes to"})
+SECTION = "## Which issue does this implement"
+SPELLINGS = (
+    "Close an issue with Closes, Fixes, or Resolves. "
+    "Contribute to it without closing it with Part of, Refs, or Contributes to."
+)
+EDITORIAL = re.compile(r"^[ \t]*-[ \t]*\[[xX]\][ \t]*This is an editorial correction", re.MULTILINE)
+DEPENDABOT = "dependabot[bot]"
 
 _LINK = re.compile(r"\[([^\[\]\n]{0,500})\]\([^()\s]{0,2048}\)")
 _REF = re.compile(
@@ -139,3 +150,138 @@ def declared_closes(message: str | None, number: int) -> tuple[bool, bool]:
     closes = any(ref.number == number and ref.kind == "close" for ref in refs)
     contributes = any(ref.number == number and ref.kind == "contribute" for ref in refs)
     return closes, contributes
+
+
+
+def _section_bounds(text: str) -> tuple[int, int] | None:
+    offset = 0
+    start = None
+    for line in text.split("\n"):
+        if start is None and line.rstrip() == SECTION:
+            start = offset + len(line) + 1
+        elif start is not None and line.startswith("## "):
+            return start, offset
+        offset += len(line) + 1
+    return (start, len(text)) if start is not None else None
+
+
+@dataclass(frozen=True)
+class Verdict:
+    passed: bool
+    notices: tuple[str, ...]
+    errors: tuple[str, ...]
+
+
+def violations(title: str | None, body: str | None) -> list[str]:
+    """The rule's failures, as fixed text plus issue numbers. Empty means the rule holds."""
+    text = normalize(body)
+    refs = parse_references(text)
+    bounds = _section_bounds(text)
+    found: list[str] = []
+    if bounds is None:
+        found.append(f"The description has no '{SECTION}' section.")
+    inside = [ref for ref in refs if bounds and bounds[0] <= ref.start < bounds[1]]
+    outside = [ref for ref in refs if not (bounds and bounds[0] <= ref.start < bounds[1])]
+    for ref in inside:
+        if ref.kind == "none":
+            found.append(f"The issue section names #{ref.number} without a spelling.")
+    closed = {ref.number for ref in refs if ref.kind == "close"}
+    contributed = {ref.number for ref in refs if ref.kind == "contribute"}
+    for number in sorted(closed & contributed):
+        found.append(f"#{number} is both closed and contributed to.")
+    for number in sorted({ref.number for ref in outside if ref.kind == "close"}):
+        found.append(f"A closing keyword before #{number} sits outside the issue section.")
+    for number in sorted({ref.number for ref in parse_references(normalize(title)) if ref.kind == "close"}):
+        found.append(f"The title closes #{number}. Closing keywords belong in the issue section.")
+    return found
+
+
+def _closes_anything(title: str | None, body: str | None) -> bool:
+    return any(
+        ref.kind == "close"
+        for text in (title, body)
+        for ref in parse_references(normalize(text))
+    )
+
+
+def _since(raw: str | None) -> date | None:
+    try:
+        return date.fromisoformat((raw or "").strip())
+    except ValueError:
+        return None
+
+
+def _created(raw: str | None) -> date | None:
+    try:
+        return datetime.fromisoformat((raw or "").strip().replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def evaluate(
+    title: str | None,
+    body: str | None,
+    *,
+    author: str,
+    head_ref: str,
+    head_repo: str,
+    created_at: str | None,
+    since: str | None,
+    trusted: frozenset[str],
+) -> Verdict:
+    """Apply the exemptions, then the rule, then the CLOSING_CHOICE_SINCE date gate."""
+    if head_repo.casefold() == REPO.casefold() and head_ref == "main" and author.casefold() in trusted:
+        return Verdict(True, ("This is the sync pull request from main, so the check does not apply.",), ())
+    closes = _closes_anything(title, body)
+    if not closes and EDITORIAL.search(normalize(body)):
+        return Verdict(True, ("Declared editorial and closes nothing, so the check does not apply.",), ())
+    if not closes and author == DEPENDABOT:
+        return Verdict(True, ("A Dependabot update that closes nothing, so the check does not apply.",), ())
+    found = violations(title, body)
+    if not found:
+        return Verdict(True, (), ())
+    gate = _since(since)
+    created = _created(created_at)
+    if gate is None or created is None or created < gate:
+        # The kill switch. Unset, or a pull request opened before the date, passes and
+        # says what it would have failed, so contributors see the rule before it binds.
+        reason = "CLOSING_CHOICE_SINCE is unset" if gate is None else "this pull request predates CLOSING_CHOICE_SINCE"
+        return Verdict(True, tuple(f"Would fail once enforced ({reason}): {line}" for line in found) + (SPELLINGS,), ())
+    return Verdict(False, (), tuple(found) + (SPELLINGS,))
+
+
+def _trusted(repo_root: Path) -> frozenset[str]:
+    """The roster from main's checkout. A roster that does not parse trusts nobody."""
+    sys.path.insert(0, str(repo_root / "tools"))
+    try:
+        import roadmap_model
+
+        return roadmap_model.trusted_logins(repo_root)
+    except Exception as exc:  # noqa: BLE001 - only the sync exemption depends on this
+        print(f"::warning::The roster did not parse ({type(exc).__name__}), so no pull request is exempt as the sync.")
+        return frozenset()
+
+
+def main() -> int:
+    env = os.environ
+    verdict = evaluate(
+        env.get("PR_TITLE"),
+        env.get("PR_BODY"),
+        author=env.get("PR_AUTHOR", ""),
+        head_ref=env.get("PR_HEAD_REF", ""),
+        head_repo=env.get("PR_HEAD_REPO", ""),
+        created_at=env.get("PR_CREATED_AT"),
+        since=env.get("CLOSING_CHOICE_SINCE"),
+        trusted=_trusted(Path(__file__).resolve().parents[1]),
+    )
+    for line in verdict.notices:
+        print(f"::notice::{line}")
+    for line in verdict.errors:
+        print(f"::error::{line}")
+    if verdict.passed:
+        print("closing choice: pass")
+    return 0 if verdict.passed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
