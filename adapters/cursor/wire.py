@@ -75,7 +75,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 DEFAULT_ADAPTER_PATH = HERE / "acs_adapter.py"
 
-# This branch's ACS-Core minimum in Cursor's vocabulary maps to:
+# The six unconditional ACS-Core minimum hooks in Cursor's vocabulary:
 #   sessionStart       — ACS sessionStart
 #   beforeSubmitPrompt — ACS userMessage
 #   preToolUse         — ACS toolCallRequest
@@ -91,9 +91,9 @@ CURRENT_CORE_HOOKS = [
     "sessionEnd",
 ]
 
-# PR #21 (open; not in this branch) proposes subagentStart for the Core
-# floor when the client supports subagents; Cursor exposes that boundary,
-# so the default wires the confused-deputy gate now.
+# ACS-Core requires subagentStart of a subagent-capable client. Cursor
+# exposes that boundary, so the default wires the confused-deputy gate.
+# The constant keeps its earlier name because the tests import it.
 PR21_PROPOSED_HOOKS = [
     "subagentStart",
 ]
@@ -313,9 +313,9 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
                 f"({', '.join(CURRENT_CORE_HOOKS)}).")
         if "subagentStart" not in args.hooks:
             warnings.append(
-                "NOTE: subagentStart is not wired. PR #21 (open; not in "
-                "this branch) proposes it as a conditional Core gate for "
-                "subagent-capable clients; Cursor exposes that boundary.")
+                "NOTE: subagentStart is not wired. ACS-Core requires it "
+                "of subagent-capable clients, and Cursor exposes that "
+                "boundary.")
 
     return warnings
 

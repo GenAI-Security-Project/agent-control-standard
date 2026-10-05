@@ -436,9 +436,8 @@ def _is_subagent_tool(tool_name: str | None) -> bool:
 def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
     """steps/subagentStart from PreToolUse on the Agent tool (or legacy Task).
 
-    subagentStart is the confused-deputy spawn gate (PR #21, open and not
-    in this branch, proposes promoting it to the Core floor). Field
-    sources:
+    subagentStart is the confused-deputy spawn gate, which ACS-Core
+    requires of a subagent-capable client. Field sources:
       - parent_step_id: this PreToolUse's own deterministic request_id
         (uuid5 of tool_use_id) — the spawn event is the delegation step.
       - subagent_session_id: uuid5 of the tool_use_id under a distinct

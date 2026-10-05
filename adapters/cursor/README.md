@@ -86,7 +86,7 @@ python3 wire.py \
   --write
 ```
 
-What it wires by default: this branch's six-hook ACS-Core minimum set, plus the `subagentStart` gate proposed by PR #21 (open; not in this branch).
+What it wires by default: the six unconditional hooks of the ACS-Core minimum set, plus `subagentStart`, which ACS-Core requires of a subagent-capable client such as Cursor.
 
 | Cursor event | ACS step method | Posture |
 |---|---|---|
@@ -96,7 +96,7 @@ What it wires by default: this branch's six-hook ACS-Core minimum set, plus the 
 | `postToolUse` | toolCallResult | fail-open |
 | `afterAgentResponse` | agentResponse | fail-open |
 | `sessionEnd` | sessionEnd | fail-open |
-| `subagentStart` | subagentStart | **fail-CLOSED** (gate — confused-deputy spawn gate; PR #21 proposes it for the Core floor) |
+| `subagentStart` | subagentStart | **fail-CLOSED** (gate. The confused-deputy spawn gate, required by ACS-Core for subagent-capable clients.) |
 
 Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true` (Cursor's native flag) — defense in depth: two independent mechanisms that both must fail open for a gate to leak.
 
@@ -304,22 +304,22 @@ The adapter is invoked as `python3 acs_adapter.py <event_name>`, where `<event_n
 
 ## Conformance status
 
-Honest, item-by-item against `docs/spec/conformance.md`. (PR #21 — open, not in this branch — proposes relaxing some items to SHOULD/conditional; the row notes say which. Against this branch's spec text those items remain as written.)
+Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`. Some Core items are conditional or SHOULD-level: `subagentStart` binds subagent-capable clients, MODIFY and `system/ping` are SHOULD, and Wrapped MCP binds sessions that involve MCP. The row notes say how each one applies here.
 
 | ACS-Core item | Status |
 |---|---|
 | Handshake (`handshake/hello`) | ✓ on first session call; cached per-session |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema for every mapped hook (emission suite), with format checking |
-| Hook taxonomy (Core minimum set) | ✓ this branch's six-hook minimum set is covered. `subagentStart` is also covered as the gate proposed by PR #21 (open; not in this branch). Seventeen Cursor events are mapped in total; `subagentStop` is intentionally omitted — see the honesty table below. |
+| Hook taxonomy (Core minimum set) | ✓ the six unconditional hooks are covered, and so is `subagentStart`, which ACS-Core requires of a subagent-capable client. Cursor exposes the spawn boundary, and the default wiring gates it fail-closed. Seventeen Cursor events are mapped in total; `subagentStop` is intentionally omitted — see the honesty table below. |
 | Dispositions | ALLOW / DENY / ASK supported on **permission (pre-execution) events** (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeSubmitPrompt`, `subagentStart`). DEFER substituted to ASK (Cursor has no defer). MODIFY supported on `preToolUse` via `updated_input`. **Lifecycle / post-execution hooks (`afterAgentResponse → steps/agentResponse`, `sessionStart`, `sessionEnd`, `afterShellExecution`, etc.) are observation-only** — Cursor fires them after the message / side effect has occurred; a Guardian `deny` cannot undo it. See `mapping.md`. |
 | Unknown-disposition fail posture | ✓ |
 | SessionContext + published `chain_hash` | ✓ session_id coerced to UUID; Guardian computes rolling SHA-256 chain |
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006) |
 | Baseline integrity (HMAC-SHA256) | ✓ when `ACS_HMAC_SECRET[_FILE]` is set; SIGNATURE_INVALID -32004 on tamper |
 | Decision honoring (§6.4) | ✓ Cursor blocks on permission deny; adapter uses exit-2 where stdout JSON is not available; fail-open emits `ACS_AUDIT` event; audit `cause` field distinguishes failure modes (transport vs signature vs malformed envelope vs replay vs skew) |
-| Liveness `system/ping` | ✓ Guardian-side only — the adapter does NOT emit system/ping; liveness is the Guardian answering probes (§13). |
+| Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1 |
-| Wrapped MCP `protocols/MCP/*` | ⚠ partial — Cursor's `beforeMCPExecution` is mapped to `steps/toolCallRequest`, not to the `protocols/MCP/*` wrapped form. Real wrapping requires forwarding the full MCP request shape, not flattening it; this adapter does not do that. |
+| Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: it maps `beforeMCPExecution` to `steps/toolCallRequest` and `afterMCPExecution` to `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. Known limitation. |
 
 ### Per-hook honesty table
 

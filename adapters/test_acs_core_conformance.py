@@ -504,8 +504,7 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
         ("steps/sessionEnd", {"reason": "completed"},
          {"reason": "nonsense"},  # not in enum
          "hooks/session-end.json"),
-        # PR #21 (open; not in this branch) proposes adding
-        # steps/subagentStart to the Core floor for subagent-capable
+        # ACS-Core requires steps/subagentStart of subagent-capable
         # clients. The valid case must be accepted with a known
         # disposition (the example policy's default deny IS one); the
         # broken case must fail the canonical schema.
@@ -538,8 +537,8 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
     def test_each_minimum_hook_returns_known_disposition(self) -> None:
         """conformance.md, ACS-Core / Hook taxonomy — each hook in the Core minimum set must
         produce a known disposition (allow/deny/modify/ask/defer). The
-        set's membership is #21-sensitive: six hooks on this branch's
-        spec text; PR #21 proposes subagentStart joining the floor.
+        set is the six unconditional hooks plus subagentStart, which
+        ACS-Core requires of subagent-capable clients.
         This proves wire acceptance only — enforcement is
         `test_guardian_actually_denies_what_policy_forbids`."""
         KNOWN = {"allow", "deny", "modify", "ask", "defer"}
@@ -629,10 +628,10 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
 # CORE-04 — Dispositions (conformance.md, ACS-Core / Dispositions, §6)
 # =============================================================================
 #
-# This branch's spec text: "All five (ALLOW, DENY, MODIFY, ASK, DEFER)
-# with required fields per §6". PR #21 (open; not in this branch)
-# proposes relaxing MODIFY to SHOULD-support — the MODIFY tests below
-# are reference-stack coverage (this stack implements it) either way.
+# ACS-Core: "Four MUST-support: ALLOW, DENY, ASK, DEFER, with required
+# fields per §6. MODIFY is SHOULD-support" (§6.5 covers MODIFY-incapable
+# clients). The MODIFY tests below are reference-stack coverage, since
+# this stack implements MODIFY.
 # See the suite docstring's coverage claim.
 # response-envelope.json:107-110 — conditional requirements:
 #   deny -> reasoning required
@@ -1822,6 +1821,10 @@ class Core08b_NegotiatedDecisionTimeout(unittest.TestCase):
 # CORE-09 — Liveness system/ping (conformance.md, ACS-Core / Liveness, §13)
 # =============================================================================
 #
+# ACS-Core: "system/ping SHOULD be implemented: the Observed Agent declares
+# it in methods_implemented and sends it, and the Guardian answers it."
+# These tests cover the Guardian side only. The adapters do not send ping.
+#
 # §13: "Guardians MUST always return decision: allow for system/ping
 #       regardless of policy, signature, or session state."
 # §13: "system/ping MUST NOT be written into SessionContext as a ContextEntry"
@@ -1892,10 +1895,9 @@ class Core10_WrappedMcp(CoreHarness):
 
     def test_mcp_namespace_method_validates(self) -> None:
         """conformance.md, ACS-Core / Wrapped MCP — the protocols/MCP/* namespace shape
-        (an unconditional MUST on this branch's spec text; PR #21 —
-        open, not in this branch — proposes MUST only for deployments
-        whose sessions involve MCP. This reference stack exercises the
-        shape either way). The envelope MUST
+        (ACS-Core requires it of deployments whose sessions involve
+        MCP. This reference stack exercises the shape regardless.)
+        The envelope MUST
         be a valid wire-level form. request-envelope.json:13-14
         regex includes ^protocols/ so any protocols/MCP/* method
         passes schema validation."""

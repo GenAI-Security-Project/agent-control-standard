@@ -2,9 +2,9 @@
 wire.py installer tests for the Cursor adapter.
 
 Guards the DEFAULT install path against silently dropping a documented
-gate: subagentStart is the confused-deputy spawn gate proposed by PR #21
-(open; not in this branch). These tests run the real CLI and assert the
-generated hooks.json.
+gate: subagentStart is the confused-deputy spawn gate, which ACS-Core
+requires of a subagent-capable client. These tests run the real CLI and
+assert the generated hooks.json.
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ class DefaultWiringMatchesDocumentedSet(unittest.TestCase):
             f"{entry.get('command')!r}")
 
     def test_default_covers_current_core_and_proposed_gate(self) -> None:
-        """The default covers current Core plus the proposed spawn gate."""
+        """The default covers the unconditional Core hooks plus the spawn gate."""
         sys.path.insert(0, str(WIRE.parent))
         import wire  # noqa: E402
         self.assertEqual(

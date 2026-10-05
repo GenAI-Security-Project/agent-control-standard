@@ -276,22 +276,22 @@ The adapter is configured by environment variables, typically set per-hook by `w
 
 ## Conformance status
 
-Honest, item-by-item against `docs/spec/conformance.md`. (PR #21 — open, not in this branch — proposes relaxing some items to SHOULD/conditional; the row notes say which. Against this branch's spec text those items remain as written.)
+Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`. Some Core items are conditional or SHOULD-level: `subagentStart` binds subagent-capable clients, MODIFY and `system/ping` are SHOULD, and Wrapped MCP binds sessions that involve MCP. The row notes say how each one applies here.
 
 | ACS-Core item | Status |
 |---|---|
 | Handshake (`handshake/hello`) | ✓ adapter sends ClientHello on first session call; cached in `~/.cache/acs-adapter-handshake/`. |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema for every mapped hook (`tests/test_envelope_schema.py`); format checking enforces `uuid` and `date-time`. |
-| Hook taxonomy (Core minimum set) | ✓ `sessionStart`, `userMessage`, `toolCallRequest`, `toolCallResult`, `agentResponse`, `sessionEnd`; plus `subagentStart` via the PreToolUse(Agent — legacy Task) remap (proposed Core floor in PR #21, which is not part of this branch; see mapping.md), with `subagentStop` deliberately unmapped (final_chain_hash required by the current schema and unknowable — see mapping.md), and the turn boundary: `turnStart` (emitted on UserPromptSubmit) / `turnEnd` (Stop). `preCompact` deliberately unmapped — the platform exposes no entry list (mapping.md). |
+| Hook taxonomy (Core minimum set) | ✓ `sessionStart`, `userMessage`, `toolCallRequest`, `toolCallResult`, `agentResponse`, `sessionEnd`; plus `subagentStart`, which ACS-Core requires of a subagent-capable client. Claude Code spawns subagents through the Agent tool (legacy `Task`), and the adapter remaps that PreToolUse to `steps/subagentStart` (see mapping.md). `subagentStop`, which ACS-Core lists as SHOULD-emit, stays deliberately unmapped (see mapping.md). The adapter also emits the turn boundary: `turnStart` (emitted on UserPromptSubmit) / `turnEnd` (Stop). `preCompact` deliberately unmapped — the platform exposes no entry list (mapping.md). |
 | Dispositions (ALLOW/DENY/ASK/DEFER) | ✓ on **pre-execution** hooks (`PreToolUse`, `UserPromptSubmit`, `turnStart`); MODIFY partial (`PreToolUse` with `parameter_overrides`, merged onto the original input). **Post-execution and lifecycle hooks (`PostToolUse`, `Notification → agentResponse`, `Stop → turnEnd`, `SessionEnd`) are observation-only** — Claude Code fires them after the side effect / message / turn has occurred; a Guardian `deny` on those cannot undo it. See `mapping.md`. |
 | Unknown-disposition fail posture | ✓ default-deny honored on unknown verdicts when `ACS_DEFAULT_DENY=1`; spec-default fail-open path emits audit event. |
 | SessionContext + published `chain_hash` | ✓ session_id propagated; Guardian computes rolling SHA-256 chain per §8.2 (`adapters/test_acs_core_conformance.py::Core05_SessionContext`). |
 | Replay protection (`request_id` + `timestamp`) | ✓ adapter sends both; Guardian rejects duplicate `request_id` (REPLAY_DETECTED -32005) and timestamps outside skew window (TIMESTAMP_OUT_OF_WINDOW -32006) per §10.3. |
 | Baseline integrity (HMAC-SHA256 signature) | ✓ HKDF-derived per-session key signs every request and response when `ACS_HMAC_SECRET[_FILE]` is set; Guardian rejects unsigned/tampered with SIGNATURE_INVALID -32004. |
 | Decision honoring (§6.4) | ✓ adapter blocks on subprocess return; spec-default fail-open posture emits structured `ACS_AUDIT` event on every bypass; audit `cause` field distinguishes failure modes. |
-| Liveness `system/ping` | ✓ Guardian-side only — Guardian implements an always-allow ping bypassing chain/replay/signature (§13); the adapter does NOT emit it. |
+| Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1. |
-| Wrapped MCP `protocols/MCP/*` | ✗ not implemented; Claude Code's MCP traffic flows through its own mechanism and would need a separate wrapping path. |
+| Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: Claude Code surfaces MCP tool calls as `mcp__*` tools, and the adapter sends them as `steps/toolCallRequest` and `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. Known limitation. |
 
 ## Troubleshooting
 
