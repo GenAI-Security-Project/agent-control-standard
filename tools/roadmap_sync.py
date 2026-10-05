@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 import urllib.parse  # noqa: E402
@@ -295,8 +296,53 @@ SECTION_TITLES = (
     ("unknown_close_reasons", "Unknown close reasons", "Closed with a reason this version does not know."),
     ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
     ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
+    ("promotion", "Promotion", "Work on integration that main lacks. A project lead opens and merges the promotion."),
     ("switches", "Switches", "Roadmap variables holding something other than true or false."),
 )
+
+
+# The title and body open-promotion.yml uses, so a promotion opened from the health issue
+# reads the same as one opened by dispatching that workflow.
+PROMOTION_TITLE = "Promote integration to main"
+PROMOTION_BODY = (
+    "{ahead} commit(s) ahead. Merging publishes the site and every schema $id URI. Merge with a "
+    "merge commit, not a squash: squashing flattens the specification history that makes a schema "
+    "change reviewable later."
+)
+INTEGRATION_REF = "refs/remotes/origin/integration"
+_DAY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _git(git, args: list[str], what: str, ok: tuple[int, ...] = (0,)) -> str:
+    try:
+        code, out = git(args)
+    except fetch_roadmap.FetchFailure as failure:
+        raise SyncError(f"{what}: {failure.cls}") from None
+    if code not in ok:
+        raise SyncError(f"{what} failed")
+    return out
+
+
+def promotion_pending(git) -> tuple[str, int] | None:
+    """The committer date of the oldest commit integration holds that main lacks, and how
+    many there are. None when main already has integration's content.
+
+    A squashed sync from main leaves integration holding commits main lacks while the trees
+    match, so the tree comparison, not the commit count, decides.
+    """
+    pending = _git(git, ["rev-list", "--reverse", f"{fetch_roadmap.MAIN_REF}..{INTEGRATION_REF}"], "git rev-list").split()
+    if not pending:
+        return None
+    # merge-tree exits 1 on a conflict and still prints the tree first, which differs from
+    # main's tree, so a conflicted promotion still reads as pending.
+    merged = _git(git, ["merge-tree", "--write-tree", fetch_roadmap.MAIN_REF, INTEGRATION_REF], "git merge-tree", (0, 1))
+    tree = _git(git, ["rev-parse", f"{fetch_roadmap.MAIN_REF}^{{tree}}"], "git rev-parse")
+    if merged.split("\n", 1)[0].strip() == tree.strip():
+        return None
+    day = _git(git, ["show", "-s", "--format=%cs", pending[0]], "git show").strip()
+    if not _DAY.fullmatch(day):
+        raise SyncError("git did not report a commit date")
+    return day, len(pending)
 
 
 # One remedy per reason code. A close that is not on main, or was reverted, is fixed by
@@ -388,12 +434,13 @@ def build_report(
         if model.ACCEPTED in names:
             report["accepted_without_milestone"].append(int(raw["number"]))
     report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
+    report["promotion"] = list(snapshot.get("promotion") or [])
     # Every switch is listed, so the weekly call sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
     report["unverified_closes"].sort()
     for key in report:
-        if key not in ("accepted_this_week", "switches", "unverified_closes"):
+        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion"):
             report[key] = sorted(set(report[key]))
     return report
 
@@ -428,6 +475,21 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
             for name, value, odd in items:
                 shown = f"`{value}`" if value else "unset"
                 lines.append(f"- `{name}` is {shown}" + (" (only `true` turns it on)" if odd else ""))
+        elif key == "promotion":
+            day, ahead, number = items
+            lines.append(f"Promotion pending since {day}.")
+            if number:
+                lines.append(f"Promotion pull request #{number} is open. A project lead merges it with a merge commit.")
+            else:
+                body = PROMOTION_BODY.format(ahead=int(ahead))
+                lines += [
+                    "No promotion pull request is open. A project lead opens one:",
+                    "",
+                    "```",
+                    f"gh pr create --repo {model.REPO} --base main --head integration "
+                    f"--title '{PROMOTION_TITLE}' --body '{body}'",
+                    "```",
+                ]
         elif key == "unverified_closes":
             lines += [
                 f"- #{number} in [milestone {milestone}]({repo_url}/milestone/{milestone}): `{reason}`. {REMEDIES[reason]}"
@@ -455,7 +517,9 @@ def choose_health_issue(candidates: list[dict]) -> dict | None:
 
 def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
-    snapshot = {"milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": []}
+    snapshot = {
+        "milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": [], "promotion": [],
+    }
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
     # Close facts come from the same fetch and git checks the build uses, so the health
@@ -479,6 +543,15 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
         ]
     except SyncError:
         failed += ["in_focus_without_milestone", "accepted_without_milestone"]
+    try:
+        pending = promotion_pending(git)
+        if pending is not None:
+            owner = model.REPO.split("/", 1)[0]
+            pulls = gh.get(f"{base}/pulls?state=open&base=main&head={owner}:integration&per_page=10")
+            numbers = sorted(int(pull["number"]) for pull in pulls if isinstance(pull, dict) and "number" in pull)
+            snapshot["promotion"] = [pending[0], pending[1], numbers[0] if numbers else None]
+    except (SyncError, ValueError, TypeError):
+        failed.append("promotion")
     cutoff = datetime.combine(today - timedelta(days=8), datetime.min.time(), timezone.utc)
     try:
         for raw in snapshot["milestoned"]:
