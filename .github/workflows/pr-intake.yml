@@ -9,7 +9,8 @@
 name: PR intake
 
 on:
-  pull_request_target:
+  # zizmor flags every pull_request_target. The paragraph above is why this one is safe.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened, edited, reopened]
 
 permissions: {}
@@ -45,14 +46,18 @@ jobs:
           # as `github-actions` in some payloads and `github-actions[bot]` in others, so
           # the check is a prefix match rather than an exact one.
           if gh pr view "$PR_NUMBER" --repo "$REPO" --json comments \
-             --jq '[.comments[] | select(.author.login | startswith("github-actions"))] | length' \
+             --jq '[.comments[] | select(.author.login | startswith("github-actions")) | select(.body | contains("<!-- acs-closing-keyword") | not)] | length' \
              | grep -qv '^0$'; then
             echo "Already commented on this pull request."
             exit 0
           fi
+          # One listing call, whatever the body holds. A per-reference lookup let one pull
+          # request body spend the repository's shared GITHUB_TOKEN budget, which the roadmap
+          # fetch and sync also draw on.
+          # A failed listing is not fatal. Nothing is then accepted, so the pull request is queued.
+          ACCEPTED="$(gh issue list --repo "$REPO" --label status:accepted --state all --limit 1000 --json number --jq '.[].number')" || ACCEPTED=""
           for n in $NUMBERS; do
-            if gh issue view "$n" --repo "$REPO" --json labels \
-               --jq '.labels[].name' 2>/dev/null | grep -qx 'status:accepted'; then
+            if printf '%s\n' "$ACCEPTED" | grep -qx "$n"; then
               echo "Issue #$n is accepted."
               exit 0
             fi
@@ -63,3 +68,42 @@ jobs:
           This pull request does not reference an issue carrying \`status:accepted\`, so a maintainer has not looked at it yet and will not until the underlying issue is triaged. Nothing here is rejected. See [Current Priority Scope](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md#current-priority-scope) for what the project is working on, and [\`help wanted\`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) for work that is already accepted.
 
           If this is an editorial correction, tick that box in the description and this comment stops applying."
+
+      - name: Flag closing keywords on roadmap issues
+        # A merge closes whatever the body says it closes, with the merging maintainer as the
+        # actor, so the roadmap would count it as delivered. This asks the merger to confirm.
+        # Advisory only: it never fails the job, and edits that leave the body alone skip it.
+        # It runs even when the step above exited early, because exit 0 is success and the
+        # keyword check does not depend on whether the pull request is queued.
+        if: always() && (github.event.action != 'edited' || github.event.changes.body)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # The body is untrusted. Only digits after a closing keyword are taken from it.
+          REFS="$(printf '%s' "${PR_BODY:-}" \
+            | grep -oiE '(^|[^[:alnum:]_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+((GenAI-Security-Project/agent-control-standard)?#|https://github\.com/GenAI-Security-Project/agent-control-standard/issues/)[0-9]+' \
+            | grep -oE '[0-9]+$' | sort -u || true)"
+          [ -n "$REFS" ] || exit 0
+          MILESTONED="$(gh api --paginate "repos/$REPO/issues?milestone=*&state=open&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')"
+          HITS=""
+          for n in $REFS; do
+            if printf '%s\n' "$MILESTONED" | grep -qx "$n"; then HITS="$HITS #$n"; fi
+          done
+          [ -n "$HITS" ] || exit 0
+          # The marker names the issues it covers, so a later edit that closes a different
+          # roadmap issue is flagged again. Only the bot's own comments count, so a PR author
+          # cannot suppress the warning by commenting the marker themselves.
+          MARK="<!-- acs-closing-keyword:$(printf '%s' "$HITS" | tr -d '#' | xargs | tr ' ' ',') -->"
+          if gh pr view "$PR_NUMBER" --repo "$REPO" --json comments \
+             --jq '.comments[] | select(.author.login | startswith("github-actions")) | .body' \
+             | grep -qF "$MARK"; then
+            exit 0
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$MARK
+          This pull request's description says it closes$HITS, which is on the project roadmap. When it merges, GitHub closes that issue and the roadmap counts it as delivered. Please confirm the change delivers the whole issue before merging."

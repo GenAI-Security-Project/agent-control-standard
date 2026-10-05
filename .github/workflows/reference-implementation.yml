@@ -42,13 +42,17 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
 
       # Pinned to an exact version rather than a moving major. The bridge in
       # packages/agt-bridge/src/opa-path.ts works around a Bun defect measured on a
       # specific version, so the runtime version is part of this tree's contract
       # rather than an implementation detail.
       - name: Install Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.1
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
           bun-version: "1.3.11"
 

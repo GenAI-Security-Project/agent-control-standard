@@ -4,9 +4,12 @@
 
 ## Which issue does this implement
 
-Closes #
+<!-- Write one spelling right before each issue number, on the same line.
+     Close an issue this change completes with Closes, Fixes, or Resolves.
+     Contribute to an issue without closing it with Part of, Refs, or Contributes to.
+     The closing-choice check fails a reference with neither.
 
-<!-- A change that alters behavior, normative text, or adds code needs an issue carrying
+     A change that alters behavior, normative text, or adds code needs an issue carrying
      `status:accepted`. If yours is not accepted yet, open the PR anyway. It will wait
      rather than be closed. See Current Priority Scope in CONTRIBUTING.md. -->
 
