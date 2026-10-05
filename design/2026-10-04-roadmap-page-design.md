@@ -137,8 +137,9 @@ them before showing the description.
 - `Workstream: Reference Implementation` names the owning workstream. Its value must match a row of
   the `GOVERNANCE.md` workstream table, or be `Project`, which maps to the project lead table and
   covers the Governance under OWASP milestone.
-- `Type: Open Source tool` names the OWASP deliverable type, one of Document, Cheat Sheet, Open
-  Source tool, Application/Tool, Code Sample, Agent Skill, or Other.
+- `Type: Document` names the OWASP deliverable type. Its value must be one of the
+  `DELIVERABLE_TYPES` tuple in `tools/roadmap_model.py`, which copies the OWASP sheet's
+  Deliverable Type dropdown.
 
 Creating or editing a milestone needs the Write role or higher.
 

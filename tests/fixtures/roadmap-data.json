@@ -5,15 +5,18 @@
   "milestones": [
     {"number": 1, "title": "Conformance claim template", "description": "Publish the template.\nWorkstream: Spec\nType: Document", "state": "OPEN", "dueOn": "2026-12-31T00:00:00Z", "url": "https://github.com/GenAI-Security-Project/agent-control-standard/milestone/1",
      "issues": [
-       {"number": 93, "state": "CLOSED", "stateReason": "COMPLETED", "author": "rocklambros", "labels": ["status:accepted"], "closedBy": "rocklambros"},
-       {"number": 136, "state": "OPEN", "stateReason": null, "author": "someone", "labels": ["status:accepted"], "closedBy": null}
+       {"number": 93, "state": "CLOSED", "stateReason": "COMPLETED", "author": "rocklambros", "labels": ["status:accepted"], "closedBy": "rocklambros", "closerKind": "pull_request", "closerInRepo": true, "declaresClose": true, "declaresContribution": false, "unparsed": false, "closerLanding": "on_main", "referencesLanding": "on_main"},
+       {"number": 136, "state": "OPEN", "stateReason": null, "author": "someone", "labels": ["status:accepted"], "closedBy": null, "closerKind": "none", "closerInRepo": false, "declaresClose": false, "declaresContribution": false, "unparsed": false, "closerLanding": null, "referencesLanding": "on_main"}
      ]},
-    {"number": 2, "title": "Language ports", "description": "Ports.\nWorkstream: Reference Implementation\nType: Open Source tool", "state": "OPEN", "dueOn": null, "url": "https://github.com/GenAI-Security-Project/agent-control-standard/milestone/2",
-     "issues": [{"number": 86, "state": "OPEN", "stateReason": null, "author": null, "labels": ["status:accepted"], "closedBy": null}]},
+    {"number": 2, "title": "Language ports", "description": "Ports.\nWorkstream: Reference Implementation\nType: OSS Project", "state": "OPEN", "dueOn": null, "url": "https://github.com/GenAI-Security-Project/agent-control-standard/milestone/2",
+     "issues": [{"number": 86, "state": "OPEN", "stateReason": null, "author": null, "labels": ["status:accepted"], "closedBy": null, "closerKind": "none", "closerInRepo": false, "declaresClose": false, "declaresContribution": false, "unparsed": false, "closerLanding": null, "referencesLanding": "on_main"}]},
     {"number": 3, "title": "v0.2.0", "description": null, "state": "OPEN", "dueOn": "2027-03-31T00:00:00Z", "url": "https://github.com/GenAI-Security-Project/agent-control-standard/milestone/3",
-     "issues": [{"number": 53, "state": "OPEN", "stateReason": null, "author": "x", "labels": ["scope:deferred"], "closedBy": null}]},
+     "issues": [{"number": 53, "state": "OPEN", "stateReason": null, "author": "x", "labels": ["scope:deferred"], "closedBy": null, "closerKind": "none", "closerInRepo": false, "declaresClose": false, "declaresContribution": false, "unparsed": false, "closerLanding": null, "referencesLanding": "on_main"}]},
     {"number": 4, "title": "Day 14", "description": "Superseded by the roadmap on 2026-10-04.", "state": "CLOSED", "dueOn": "2026-09-24T00:00:00Z", "url": "https://github.com/GenAI-Security-Project/agent-control-standard/milestone/4", "issues": []},
     {"number": 5, "title": "Author self-close", "description": "Workstream: Project\nType: Other", "state": "OPEN", "dueOn": "2026-12-31T00:00:00Z", "url": "https://github.com/GenAI-Security-Project/agent-control-standard/milestone/5",
-     "issues": [{"number": 200, "state": "CLOSED", "stateReason": "COMPLETED", "author": "outsider", "labels": [], "closedBy": "outsider"}]}
+     "issues": [
+       {"number": 200, "state": "CLOSED", "stateReason": "COMPLETED", "author": "outsider", "labels": [], "closedBy": "outsider", "closerKind": "none", "closerInRepo": false, "declaresClose": false, "declaresContribution": false, "unparsed": false, "closerLanding": null, "referencesLanding": "on_main"},
+       {"number": 201, "state": "CLOSED", "stateReason": "COMPLETED", "author": "rocklambros", "labels": ["status:accepted"], "closedBy": "rocklambros", "closerKind": "pull_request", "closerInRepo": true, "declaresClose": true, "declaresContribution": false, "unparsed": false, "closerLanding": "not_on_main", "referencesLanding": "on_main"}
+     ]}
   ]
 }

@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = "GenAI-Security-Project/agent-control-standard"
 # Changes whenever any rule in this module changes, so a health report or a roadmap.json
 # names the rules that produced it.
-RULES_VERSION = "2026-10-04.1"
+RULES_VERSION = "2026-10-04.2"
 SCHEMA_VERSION = 1
 
 # Spec decision 4. The creators named under Origins hold read access today, so trusting
@@ -233,9 +233,9 @@ DECLINE_LABELS = frozenset(
 # The value a milestone's Workstream line uses for project-level work, which maps to the
 # project lead table rather than to a workstream row.
 PROJECT_WORKSTREAM = "Project"
-DELIVERABLE_TYPES = (
-    "Document", "Cheat Sheet", "Open Source tool", "Application/Tool", "Code Sample", "Agent Skill", "Other",
-)
+# The OWASP sheet's Deliverable Type dropdown, spelled as the sheet spells it. The roadmap
+# design points here rather than repeating the list.
+DELIVERABLE_TYPES = ("Application/Tool", "Cheat Sheet", "Code Sample", "Document", "OSS Project", "Other")
 # The health issue is found by this marker plus its bot author, never by title.
 HEALTH_MARKER = "<!-- acs-roadmap-health -->"
 BOT_LOGIN = "github-actions[bot]"
@@ -244,52 +244,130 @@ CLASSES = ("done", "unverified", "planned", "deferred", "dropped", "untriaged")
 KNOWN_REASONS = frozenset({"COMPLETED", "NOT_PLANNED", "DUPLICATE"})
 
 
+# Rollout design, package D. Each unverified close carries exactly one of these.
+REASON_CODES = (
+    "not_on_main", "reverted", "no_close_declared", "contributing", "other_repository",
+    "not_a_lead", "untrusted_closer", "unparsed", "unknown_closer",
+)
+# Where a commit stands against main, as the fetch's git check reports it.
+LANDINGS = ("on_main", "not_on_main", "reverted")
+
+
 @dataclass(frozen=True)
 class IssueRecord:
+    """One issue plus the close facts the fetch wrote. Every fact defaults to the reading
+    that verifies nothing, so a record built without them can never count as done."""
+
     number: int
     state: str
     state_reason: str | None
     labels: frozenset[str]
     author: str | None
     closed_by: str | None
+    closer_kind: str = "unknown"
+    closer_in_repo: bool = False
+    declares_close: bool = False
+    declares_contribution: bool = False
+    unparsed: bool = False
+    closer_landing: str | None = None
+    references_landing: str = "not_on_main"
 
 
-def classify(issue: IssueRecord, trusted: frozenset[str]) -> str:
-    """Spec section "Issue classes". Checked in order, first match wins.
+def closer_facts(raw: dict) -> dict:
+    """IssueRecord keyword arguments from the fetch's camelCase close facts."""
+    return {
+        "closer_kind": raw.get("closerKind") or "unknown",
+        "closer_in_repo": raw.get("closerInRepo") is True,
+        "declares_close": raw.get("declaresClose") is True,
+        "declares_contribution": raw.get("declaresContribution") is True,
+        "unparsed": raw.get("unparsed") is True,
+        "closer_landing": raw.get("closerLanding"),
+        "references_landing": raw.get("referencesLanding") or "not_on_main",
+    }
 
-    Any close by a login outside the roster is unverified, whatever its reason, so an
-    author cannot move progress in either direction by closing their own issue. A null
-    closer, which a deleted account produces, is treated the same way.
+
+def _landing_reason(landing: str | None) -> str | None:
+    if landing == "on_main":
+        return None
+    return "reverted" if landing == "reverted" else "not_on_main"
+
+
+def assess(issue: IssueRecord, trusted: frozenset[str], leads: frozenset[str]) -> tuple[str, str | None]:
+    """Spec "The rule". The class, plus the reason code when the class is unverified.
+
+    A close counts as done only when the data says so: a pull request in this repository
+    or a commit whose message closes the issue and contributes to it nowhere, whose commit
+    is on main and not reverted, or a project lead's hand close. In both cases every merged
+    pull request that references the issue must also be on main.
     """
     if issue.state == "CLOSED":
         if issue.closed_by is None or issue.closed_by.casefold() not in trusted:
-            return "unverified"
-        return "done" if issue.state_reason == "COMPLETED" else "dropped"
+            return "unverified", "untrusted_closer"
+        if issue.state_reason != "COMPLETED":
+            return "dropped", None
+        if issue.unparsed:
+            return "unverified", "unparsed"
+        if issue.closer_kind == "none":
+            if issue.closed_by.casefold() not in leads:
+                return "unverified", "not_a_lead"
+        elif issue.closer_kind in ("pull_request", "commit"):
+            if not issue.closer_in_repo:
+                return "unverified", "other_repository"
+            if issue.declares_contribution:
+                return "unverified", "contributing"
+            if not issue.declares_close:
+                return "unverified", "no_close_declared"
+            reason = _landing_reason(issue.closer_landing)
+            if reason:
+                return "unverified", reason
+        else:
+            return "unverified", "unknown_closer"
+        reason = _landing_reason(issue.references_landing)
+        if reason:
+            return "unverified", reason
+        return "done", None
     if ACCEPTED in issue.labels:
-        return "planned"
+        return "planned", None
     if DEFERRED in issue.labels:
-        return "deferred"
-    return "untriaged"
+        return "deferred", None
+    return "untriaged", None
+
+
+def classify(issue: IssueRecord, trusted: frozenset[str], leads: frozenset[str]) -> str:
+    """The class alone. See assess for the rule and its reason codes."""
+    return assess(issue, trusted, leads)[0]
 
 
 def unknown_reason(issue: IssueRecord) -> bool:
     return issue.state == "CLOSED" and issue.state_reason not in KNOWN_REASONS
 
 
+def remaining(counts: dict[str, int]) -> int:
+    """Work a milestone still owes: unverified closes and every open issue in it.
+
+    An open issue counts whatever its labels, so one whose status:accepted was replaced by
+    status:blocked, or one nobody triaged, still holds the milestone open.
+    """
+    return sum(counts.get(name, 0) for name in ("unverified", "planned", "deferred", "untriaged"))
+
+
 def milestone_state(closed: bool, has_due: bool, counts: dict[str, int]) -> str:
-    """Spec section "Milestone states". Closed milestones first, then open ones."""
+    """Spec section "Milestone states", with every open issue counted as remaining.
+
+    A milestone with remaining work never reads published or ready. One holding only
+    deferred issues and nothing done still reads deferred, which OWASP reports as Planning.
+    """
     done = counts.get("done", 0)
-    remaining = counts.get("unverified", 0) + counts.get("planned", 0)
-    deferred = counts.get("deferred", 0)
+    left = remaining(counts)
     if closed:
         if done == 0:
             return "withdrawn"
-        return "published" if remaining == 0 else "closed_with_open_work"
-    if done == 0 and remaining == 0:
-        return "deferred" if deferred else "skipped"
+        return "published" if left == 0 else "closed_with_open_work"
+    if done == 0 and left == counts.get("deferred", 0):
+        return "deferred" if left else "skipped"
     if not has_due:
         return "ongoing"
-    if remaining == 0:
+    if left == 0:
         return "ready"
     if done:
         return "in_progress"
@@ -395,6 +473,7 @@ def _record(raw: dict) -> IssueRecord:
         labels=frozenset(raw.get("labels") or ()),
         author=raw.get("author"),
         closed_by=raw.get("closedBy"),
+        **closer_facts(raw),
     )
 
 
@@ -443,12 +522,17 @@ def build_roadmap(
     doc["workstreams"] = {name: _names(people) for name, people in roster.workstreams.items()}
     doc["workstreams"][PROJECT_WORKSTREAM] = _names(roster.project_leads)
     names = set(roster.workstreams)
+    leads = project_lead_logins(roster)
     entries: list[dict] = []
     for milestone in milestones:
         records = [_record(raw) for raw in milestone.get("issues") or ()]
         by_class: dict[str, list[int]] = {name: [] for name in CLASSES}
+        reasons: dict[str, str] = {}
         for record in records:
-            by_class[classify(record, trusted)].append(record.number)
+            cls, reason = assess(record, trusted, leads)
+            by_class[cls].append(record.number)
+            if reason is not None:
+                reasons[str(record.number)] = reason
         counts = {name: len(numbers) for name, numbers in by_class.items()}
         due = due_date(milestone.get("dueOn"))
         description = parse_description(milestone.get("description"), names)
@@ -471,6 +555,8 @@ def build_roadmap(
                 "counts": counts,
                 "issues": {name: sorted(numbers) for name, numbers in by_class.items()},
                 "unknown_reasons": sorted(r.number for r in records if unknown_reason(r)),
+                # Issue number to reason code. Codes only, so no fetched text reaches it.
+                "unverified_reasons": dict(sorted(reasons.items(), key=lambda item: int(item[0]))),
             }
         )
     entries.sort(key=lambda e: (e["due_on"] is None, e["due_on"] or "", e["title"].casefold()))

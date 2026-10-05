@@ -57,6 +57,9 @@ def test_pull_request_renders_the_fixture(tmp_path):
     assert doc["status"] == "ok"
     states = {m["number"]: m["state"] for m in doc["milestones"]}
     assert states == {1: "in_progress", 2: "ongoing", 3: "deferred", 4: "withdrawn", 5: "planning"}
+    reasons = {m["number"]: m["unverified_reasons"] for m in doc["milestones"]}
+    assert reasons[5] == {"200": "untrusted_closer", "201": "not_on_main"}
+    assert reasons[1] == {}
 
 
 def test_switch_off_writes_disabled(tmp_path):

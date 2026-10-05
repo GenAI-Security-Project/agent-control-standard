@@ -26,6 +26,15 @@ from roadmap_sync import (  # noqa: E402
 )
 
 TRUSTED = frozenset({"rocklambros"})
+LEADS = frozenset({"rocklambros"})
+
+
+def landed(login: str) -> dict:
+    """Close facts for a merged pull request here that declares the close and reached main."""
+    return {
+        "closedBy": login, "closerKind": "pull_request", "closerInRepo": True, "declaresClose": True,
+        "declaresContribution": False, "unparsed": False, "closerLanding": "on_main", "referencesLanding": "on_main",
+    }
 
 
 def issue(number, labels=(), state="open", milestone=1, reason=None, title="SECRET TITLE", author="outsider"):
@@ -57,19 +66,23 @@ SNAPSHOT = {
         issue(70, ["status:accepted"], milestone=5),
     ],
     "unmilestoned_open": [issue(60, ["scope:in-focus"], milestone=None), issue(61, ["status:accepted"], milestone=None)],
-    "closed_by": {10: "rocklambros", 30: "outsider", 41: "rocklambros", 50: "outsider"},
+    "facts": {10: landed("rocklambros"), 30: landed("outsider"), 41: landed("rocklambros"), 50: {"closedBy": "outsider"}},
     "bot_accepted": [[20, "rocklambros"]],
 }
 SWITCHES = {"ROADMAP_RENDER_ENABLED": "true", "ROADMAP_REFRESH_ENABLED": "yes", "ROADMAP_SYNC_ENABLED": "true"}
 
 
 def report():
-    return build_report(SNAPSHOT, TRUSTED, {"Spec"}, date(2026, 11, 1), SWITCHES)
+    return build_report(SNAPSHOT, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)
 
 
 def test_record_from_rest_uppercases_reason():
-    record = record_from_rest(issue(10, state="closed", reason="not_planned"), "x")
+    record = record_from_rest(issue(10, state="closed", reason="not_planned"), {"closedBy": "x"})
     assert record.state == "CLOSED" and record.state_reason == "NOT_PLANNED" and record.closed_by == "x"
+    assert record.closer_kind == "unknown"
+    landed_record = record_from_rest(issue(10, state="closed", reason="completed"), landed("rocklambros"))
+    assert landed_record.closer_kind == "pull_request" and landed_record.closer_landing == "on_main"
+    assert record_from_rest(issue(11), None).closed_by is None
 
 
 def test_sections():

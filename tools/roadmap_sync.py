@@ -290,26 +290,40 @@ SECTION_TITLES = (
 )
 
 
-def record_from_rest(issue: dict, closed_by: str | None) -> model.IssueRecord:
+def record_from_rest(issue: dict, facts: dict | None) -> model.IssueRecord:
+    """A REST issue plus the close facts the fetch wrote for it.
+
+    Missing facts mean the fetch did not see the issue, so every close fact takes the
+    reading that verifies nothing and the issue can only count as unverified.
+    """
     reason = issue.get("state_reason")
+    facts = facts or {}
     return model.IssueRecord(
         number=int(issue["number"]),
         state=str(issue["state"]).upper(),
         state_reason=reason.upper() if reason else None,
         labels=frozenset(_labels(issue)),
         author=(issue.get("user") or {}).get("login"),
-        closed_by=closed_by,
+        closed_by=facts.get("closedBy"),
+        **model.closer_facts(facts),
     )
 
 
-def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[str], today: date, switches: dict[str, str]) -> dict:
-    """Spec "Health reporting", sections. Numbers and maintainer logins only."""
+def build_report(
+    snapshot: dict,
+    trusted: frozenset[str],
+    leads: frozenset[str],
+    workstream_names: set[str],
+    today: date,
+    switches: dict[str, str],
+) -> dict:
+    """Spec "Health reporting", sections. Numbers, reason codes, and maintainer logins only."""
     report: dict[str, list] = {key: [] for key, _title, _note in SECTION_TITLES}
     by_milestone: dict[int, list[model.IssueRecord]] = {}
     for raw in snapshot["milestoned"]:
-        record = record_from_rest(raw, snapshot["closed_by"].get(int(raw["number"])))
+        record = record_from_rest(raw, snapshot["facts"].get(int(raw["number"])))
         by_milestone.setdefault(int(raw["milestone"]["number"]), []).append(record)
-        cls = model.classify(record, trusted)
+        cls = model.classify(record, trusted, leads)
         if record.state == "OPEN" and record.labels & model.DECLINE_LABELS - {model.DEFERRED}:
             report["declined_by_triage_label"].append(record.number)
         elif cls == "untriaged":
@@ -323,7 +337,7 @@ def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[
         records = by_milestone.get(number, [])
         counts = {name: 0 for name in model.CLASSES}
         for record in records:
-            counts[model.classify(record, trusted)] += 1
+            counts[model.classify(record, trusted, leads)] += 1
         due = model.due_date(milestone.get("due_on"))
         description = model.parse_description(milestone.get("description"), workstream_names)
         closed = milestone.get("state") == "closed"
@@ -332,7 +346,7 @@ def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[
             report["ready_to_publish"].append(number)
         if state == "closed_with_open_work":
             report["closed_with_open_work"].append(number)
-        if closed and counts["done"] == 0 and counts["unverified"] + counts["planned"] > 0:
+        if closed and counts["done"] == 0 and model.remaining(counts) > 0:
             report["closed_nothing_done"].append(number)
         if not closed and model.target_passed(due, description.committed, today) and state != "skipped":
             report["target_passed"].append(number)
@@ -408,7 +422,7 @@ def choose_health_issue(candidates: list[dict]) -> dict | None:
 
 def _snapshot(gh: GitHub, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
-    snapshot = {"milestones": [], "milestoned": [], "unmilestoned_open": [], "closed_by": {}, "bot_accepted": []}
+    snapshot = {"milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": []}
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
     # Closers come from the same GraphQL ClosedEvent.actor the build uses, through the same
@@ -419,8 +433,7 @@ def _snapshot(gh: GitHub, today: date, failed: list[str]) -> dict:
         raise SyncError(f"closer fetch failed: {fetched['class']}")
     for milestone in fetched["milestones"]:
         for item in milestone["issues"]:
-            if item["state"] == "CLOSED":
-                snapshot["closed_by"][int(item["number"])] = item["closedBy"]
+            snapshot["facts"][int(item["number"])] = item
     try:
         snapshot["unmilestoned_open"] = [
             i for i in gh.paginate(f"{base}/issues?milestone=none&state=open&per_page=100") if "pull_request" not in i
@@ -478,8 +491,9 @@ def _sweep(apply: bool) -> int:
         # rather than crashing the job before it writes anything.
         trusted = model.trusted_logins(repo_root)
         roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
+        leads = model.project_lead_logins(roster)
         snapshot = _snapshot(gh, now.date(), failed)
-        report = build_report(snapshot, trusted, set(roster.workstreams), now.date(), _switches())
+        report = build_report(snapshot, trusted, leads, set(roster.workstreams), now.date(), _switches())
     except SyncError as exc:
         print(f"::warning::{exc}")
         failed, report = _degraded()
