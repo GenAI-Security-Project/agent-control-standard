@@ -126,11 +126,11 @@ events with no checkout.
 
 ### F. Access grants
 
-- Project board 9 write access for Victor Hernandez and Akira Brand, as GOVERNANCE.md gives
-  every triage volunteer. This needs the `project` scope on the project lead's `gh` token, which
-  they add with `gh auth refresh -s project`.
-- The three lapsed lead invitations, for Eva Benn, Richard Bird, and Aruneesh Salhotra, are a
-  separate decision for the project leads, since re-sending them re-grants write access.
+- Project board 9 write access for Victor Hernandez and Akira Brand was granted by the project
+  lead on October 4, 2026.
+- The three lapsed lead invitations, for Eva Benn, Richard Bird, and Aruneesh Salhotra, are not
+  re-sent. The Identity workstream may be retired, so its inert CODEOWNERS entries are accepted
+  for now.
 
 ### G. Milestone migration
 
@@ -139,8 +139,17 @@ remaining issues. It follows the migration steps in the roadmap design, with the
 the decisions:
 
 - The milestone table is the one agreed on October 4, without #178.
-- The project leads place the eight unassigned in-focus issues: #16, #19, #31, #43, #51, #52,
-  #67, and #74.
+- The eight in-focus issues missing from the October 4 table are placed as follows, agreed on
+  October 4, 2026:
+
+  | Issue | Milestone |
+  | --- | --- |
+  | #16, #31, #51 | Spec and docs fixes for v0.1 |
+  | #19 | Conformance claim template |
+  | #74 | Installable reference Guardian |
+  | #43 | v0.2.0 |
+  | #52 | Governance under OWASP. Its `status:blocked` label keeps the bot from accepting it. |
+  | #67 | None. The `protect-branch-existence` ruleset now blocks deleting `integration`, so #67 is verified against that ruleset and closed with a note instead of placed. |
 - Every milestone description carries `Type:` and `Workstream:` lines, and the benchmark carries
   `Committed: 2026-12-09`.
 - The Day N milestones are deleted, not closed, after #93 and #94 move.
@@ -154,8 +163,7 @@ the decisions:
 
 1. A, B, C, D, and E's merge-commit rule land as one pull request to `integration`, then a
    promotion. They share no files except tests.
-2. E's team rule and F wait on org permissions and the project scope, and run when those
-   arrive.
+2. E's team rule waits on org permissions and runs when they arrive.
 3. G runs after step 1 reaches `main`.
 
 ## Out of scope
