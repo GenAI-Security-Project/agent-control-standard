@@ -224,7 +224,7 @@ def desired_labels() -> list[Label]:
         ),
         Label(
             name="scope:deferred", color="fbca04",
-            description="Real work, tracked, lands after Day 90. Maintainers only",
+            description="Real work, tracked, lands in a later release. Maintainers only",
         ),
         Label(
             name="scope:out", color="e4e669",
@@ -272,6 +272,18 @@ def desired_labels() -> list[Label]:
             name="workstream:outreach", color="c5def5",
             description="Owning workstream. Maintainers only",
         ),
+        Label(
+            name="workstream:refimpl", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
+        Label(
+            name="workstream:docs", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
+        Label(
+            name="workstream:testing", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
         # Stock GitHub defaults. Not created by Step 2, but relied on by Step 12.
         Label(
             name="help wanted", color="008672",
@@ -282,44 +294,14 @@ def desired_labels() -> list[Label]:
 
 
 def desired_milestones() -> list[Milestone]:
-    """The four milestones from Phase 2 Step 11, dates and descriptions verbatim."""
-    return [
-        Milestone(
-            title="Day 14",
-            due_on="2026-09-24",
-            description=(
-                "Reference Implementation lead named. PR #21 floor decision closed. "
-                "Discussions seeded. Domain transfer counterpart identified."
-            ),
-        ),
-        Milestone(
-            title="Day 30",
-            due_on="2026-10-09",
-            description=(
-                "PR #22 merged with the emission-conformance suite in CI. Documentation "
-                "and Testing lead seats filled. Conformance claim template published. "
-                "Fail-open resolution decided."
-            ),
-        ),
-        Milestone(
-            title="Day 60",
-            due_on="2026-11-06",
-            description=(
-                "Installable reference Guardian published. Milestone #33 requirement "
-                "ledger drafted. AARM mapping session held. Domains transferred. "
-                "OpenSSF registered."
-            ),
-        ),
-        Milestone(
-            title="Day 90",
-            due_on="2026-12-04",
-            description=(
-                "AGT interoperability benchmark published with results and "
-                "disagreements. Cursor file-read gap closed. One external ACS-Core "
-                "compatibility claim."
-            ),
-        ),
-    ]
+    """No milestones are declared here any more.
+
+    The Day 14/30/60/90 checkpoints were replaced by deliverable milestones on
+    2026-10-04 (design/2026-10-04-roadmap-page-design.md). Those change whenever triage
+    does, in the GitHub UI, so declaring them as desired state would rewrite them on every
+    run of this tool.
+    """
+    return []
 
 
 def desired_issues() -> list[Issue]:
@@ -332,10 +314,11 @@ def desired_issues() -> list[Issue]:
     while writing itself, but none sit on the ninety-day serial chain, so they carry
     `scope:deferred` and wait for a maintainer like anything else filed from outside.
 
-    No seeded issue carries `priority:P0`. Per GOVERNANCE.md lines 32-34, P0 is reserved
-    for work on the serial chain: PR #21 (the floor decision), PR #22 (the adapters),
-    the installable Guardian, and the interoperability benchmark. No seeded issue is one
-    of those four links. Maintainers will apply P0 to PRs #21 and #22 during triage.
+    No seeded issue carries `priority:P0`. Per GOVERNANCE.md Triage authority, P0 is
+    reserved for work on the serial chain: PR #21 (the floor decision), PR #22 (the
+    adapters), the installable Guardian, and the interoperability benchmark. No seeded
+    issue is one of those four links. Maintainers will apply P0 to PRs #21 and #22 during
+    triage.
     """
     onramp = ("scope:in-focus", "status:accepted", "help wanted")
     tracked = ("scope:deferred", "status:needs-triage")
@@ -418,7 +401,6 @@ def desired_issues() -> list[Issue]:
                 "make an ACS-Core conformance claim. Open decision, Day 30 date."
             ),
             labels=onramp + ("workstream:spec", "priority:P1"),
-            milestone="Day 30",
         ),
         Issue(
             title=(
@@ -431,7 +413,6 @@ def desired_issues() -> list[Issue]:
                 "decision, Day 30 date."
             ),
             labels=onramp + ("workstream:coding-agents", "priority:P1"),
-            milestone="Day 30",
         ),
     ]
 

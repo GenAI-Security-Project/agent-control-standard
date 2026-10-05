@@ -8,12 +8,13 @@
 # leadership roster in GOVERNANCE.md.
 #
 # Invited to write access and pending acceptance: @evabenn @RbBuiltWrong
-# @aruneeshsalhotra. An invitation grants nothing until the invitee accepts,
-# so these three entries are inert until then. The other owners on their lines
-# still apply, so review coverage holds meanwhile.
+# @aruneeshsalhotra @artmaro. An invitation grants nothing until the invitee
+# accepts, and GitHub drops it unaccepted after seven days, so these entries are
+# inert until then. The first three lapsed once and were re-sent. The other
+# owners on their lines still apply, so review coverage holds meanwhile.
 
 # Default owners for anything not matched below.
-*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
+*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
 
 /CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -23,8 +24,8 @@
 
 # The specification is the highest-blast-radius surface in the repository.
 # A schema change propagates to every downstream implementer.
-/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
-/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra
+/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
+/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
 
 # These generate and publish the public site, or feed the build that does. A change
 # here alters what the front door says, which is the same class of privilege the
@@ -49,7 +50,7 @@
 # rest of this repository. It arrived as roughly 41,000 lines from a single author, so
 # these entries exist to force a second reviewer on every later change rather than to
 # record who wrote it.
-/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp
+/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro
 
 # CI runs with write access to the repository. Changes here are a
 # privilege-escalation surface, so this list stays narrower than the default

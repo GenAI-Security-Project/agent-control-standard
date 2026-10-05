@@ -1,0 +1,99 @@
+# Keeps roadmap milestones true with no manual upkeep beyond triage.
+#
+# event:  when an issue is milestoned, applies the acceptance rule in tools/roadmap_sync.py.
+# sweep:  nightly, rewrites the pinned "Roadmap health" issue. It changes no other issue.
+# dryrun: on demand, read-only, prints both plans so rollout can check them under this token.
+#
+# Each job checks out main, because the published roadmap is built from main and the two
+# must classify milestones by the same rules. Neither write job runs on an event a fork
+# author can trigger, and no job installs packages, so no third-party code runs beside the
+# write token. tests/test_roadmap_sync_workflow.py pins every key of this file.
+name: Roadmap sync
+
+on:
+  issues:
+    types: [milestoned]
+  schedule:
+    # 04:10 UTC, before the 04:40 board reconcile.
+    - cron: "10 4 * * *"
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number for the event planner's dry run. Leave empty to plan the sweep only."
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  event:
+    if: github.event_name == 'issues' && vars.ROADMAP_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    # Keyed per issue, so a burst of milestone edits across many issues runs in parallel. A
+    # newer pending run replacing an older one for the same issue loses nothing, because each
+    # run re-reads the issue's live state before acting.
+    concurrency:
+      group: roadmap-event-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Apply the acceptance rule
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: python3 -I -S tools/roadmap_sync.py event --issue "$ISSUE_NUMBER" --apply
+
+  sweep:
+    if: github.event_name == 'schedule' && vars.ROADMAP_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: roadmap-sweep
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Rewrite the health issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          ROADMAP_RENDER_ENABLED: ${{ vars.ROADMAP_RENDER_ENABLED }}
+          ROADMAP_REFRESH_ENABLED: ${{ vars.ROADMAP_REFRESH_ENABLED }}
+          ROADMAP_SYNC_ENABLED: ${{ vars.ROADMAP_SYNC_ENABLED }}
+          ROADMAP_HEALTH_ISSUE: ${{ vars.ROADMAP_HEALTH_ISSUE }}
+        run: python3 -I -S tools/roadmap_sync.py sweep --apply
+
+  dryrun:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Print both plans
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          ISSUE_NUMBER: ${{ inputs.issue }}
+          ROADMAP_RENDER_ENABLED: ${{ vars.ROADMAP_RENDER_ENABLED }}
+          ROADMAP_REFRESH_ENABLED: ${{ vars.ROADMAP_REFRESH_ENABLED }}
+          ROADMAP_SYNC_ENABLED: ${{ vars.ROADMAP_SYNC_ENABLED }}
+          ROADMAP_HEALTH_ISSUE: ${{ vars.ROADMAP_HEALTH_ISSUE }}
+        run: python3 -I -S tools/roadmap_sync.py dryrun --issue "$ISSUE_NUMBER"

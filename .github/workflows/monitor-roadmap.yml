@@ -1,0 +1,35 @@
+# Watches the published roadmap.json and the roadmap health issue. Kept apart from
+# monitor-pages.yml so the schema contract's alarm never shares a result with roadmap noise.
+# A failed scheduled run emails whoever last changed this file's cron line, so the project
+# lead merges this file personally.
+name: Monitor roadmap
+
+on:
+  schedule:
+    - cron: "47 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    # Scheduled runs come from the default branch but check out main, which may lack the monitor yet.
+    if: vars.ROADMAP_RENDER_ENABLED == 'true' || vars.ROADMAP_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Check the roadmap outputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGE_URL: https://genai-security-project.github.io/agent-control-standard
+          ROADMAP_RENDER_ENABLED: ${{ vars.ROADMAP_RENDER_ENABLED }}
+          ROADMAP_SYNC_ENABLED: ${{ vars.ROADMAP_SYNC_ENABLED }}
+          ROADMAP_HEALTH_ISSUE: ${{ vars.ROADMAP_HEALTH_ISSUE }}
+        run: python3 -I -S tools/monitor_roadmap.py
