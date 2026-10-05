@@ -3,7 +3,7 @@
 Version: 1.4
 Owner: ACS project leads
 Date: 2026-10-04
-Status: design, premortem rounds 1 to 4 folded in
+Status: design, five premortem rounds folded in
 
 Phase 0 of the roadmap merged as #201 and reached `main` with promotion #203. It is inert
 until three repository variables are set. This document records the project leads' answers to
@@ -210,8 +210,11 @@ also be on `main`. Any other close as completed is `unverified`, with one reason
 `not_a_lead`, `untrusted_closer`, `unparsed`, or `unknown_closer`. That last code covers any
 other closer kind, such as a project board.
 
-`unverified` already counts as remaining work, so a milestone with an unverified issue reads In
-Progress while open and In Review once closed. It never reads Published.
+`unverified` already counts as remaining work. So does every open issue in a milestone,
+whatever its labels: an issue whose `status:accepted` was replaced by `status:blocked` is still
+open work. `milestone_state` and the progress total count untriaged issues as remaining, and the
+state tests change to match. A milestone with remaining work reads In Progress while open and
+In Review once closed. It never reads Published.
 
 `roadmap.json` keeps its integer lists and gains `unverified_reasons`, a map from issue number to
 reason code, which the contract test pins. `RULES_VERSION` is bumped.
@@ -252,6 +255,9 @@ alarm to every project lead.
   `ROADMAP_HEALTH_ISSUE`, @mentioning each project lead read from GOVERNANCE.md. When the result
   returns to passing, it comments once more without mentions. A run whose result matches the
   last comment posts nothing, so a failure that lasts days produces one comment.
+- The sweep locks the health issue every night, and GitHub refuses comments on a locked issue
+  even from the Actions token. On a state change only, the monitor unlocks the issue, comments,
+  and locks it again. If the relock fails, the next sweep relocks it.
 - The last state is read from a marker in the bot's most recent such comment,
   `<!-- acs-roadmap-alarm: failing -->` or `<!-- acs-roadmap-alarm: passing -->`, counting only
   comments by `github-actions[bot]`.
@@ -322,6 +328,9 @@ these changes:
 - A project lead then sets `ROADMAP_SYNC_ENABLED`, dispatches `roadmap-sync.yml` with
   `mode: sweep`, pins the health issue, and sets `ROADMAP_HEALTH_ISSUE`.
   `ROADMAP_RENDER_ENABLED` and `ROADMAP_REFRESH_ENABLED` follow.
+- While the monitor is failing on purpose during this step, before `ROADMAP_HEALTH_ISSUE` is
+  set, it is dispatched once more after the variable is set, and each project lead confirms the
+  @mention arrived.
 - The Day N milestones are deleted once Day 30 holds no open issues.
 - The skill's first run reports the hand-entered ACS rows as orphaned, and Rock replaces them.
 
