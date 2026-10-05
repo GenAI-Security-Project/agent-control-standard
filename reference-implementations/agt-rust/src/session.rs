@@ -118,12 +118,7 @@ mod tests {
     fn replace_labels_recreates_an_evicted_session_and_keeps_it_bounded() {
         let store = SessionStore::default();
         store
-            .append(
-                "evicted",
-                "steps/toolCallRequest",
-                "initial",
-                "Bash",
-            )
+            .append("evicted", "steps/toolCallRequest", "initial", "Bash")
             .expect("initial append");
 
         for index in 0..1024 {
@@ -150,12 +145,7 @@ mod tests {
             .expect("replace labels");
 
         let (entry, labels) = store
-            .append(
-                "evicted",
-                "steps/toolCallResult",
-                "after-eviction",
-                "Bash",
-            )
+            .append("evicted", "steps/toolCallResult", "after-eviction", "Bash")
             .expect("append recreated session");
 
         assert_eq!(entry.seq, 1);
