@@ -42,7 +42,7 @@ ACS_OPA_PATH=/absolute/path/to/opa ACS_OPA_TIMEOUT_MS=30000 cargo test --workspa
 
 The integration test starts a real HTTP Guardian and uses the pinned AGT bundle for handshake, allow, deny, request and result redaction, egress denial, WebFetch allowance, malformed payload, unknown method, parse error, oversized body, and log cases. It requires OPA. The test command gives slow test machines a longer OPA subprocess deadline; the server's default AGT deadline remains five seconds. The existing TypeScript tests are a separate baseline and can be run from `../agt` with Bun 1.3.11.
 
-For a direct wire comparison, start the Rust Guardian on port 8787 and the TypeScript Guardian on port 8788 with the same AGT policy bundle, then run `node tests/compare-guardians.mjs` from this directory. It sends nine identical requests to both servers and fails on any JSON response difference. `RUST_GUARDIAN_URL` and `TS_GUARDIAN_URL` can override the endpoints.
+For a direct wire comparison, start the Rust Guardian on port 8787 and the TypeScript Guardian on port 8788 with the same AGT policy bundle, then run `node tests/compare-guardians.mjs` from this directory. It sends nine identical requests to both servers and fails on any JSON response difference. `RUST_GUARDIAN_URL` and `TS_GUARDIAN_URL` can override the endpoints. CI also starts both Guardians and runs this comparison on every relevant pull request, so cross-language response drift fails the `Reference implementation` workflow rather than relying on a manual check.
 
 ## Scope and parity
 
