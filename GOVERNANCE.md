@@ -15,20 +15,21 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 Each workstream owns a slice of the standard and runs its own review. Two leads per
 workstream keeps decisions moving when one is unavailable.
 
-Reference Implementation runs with one lead so far, and Documentation and Testing and
-Validation have none. The work in each continues, but it carries a single point of
-failure, or no owner at all, until somebody takes the open seats.
+Reference Implementation and Documentation run with one lead each so far. The work in each
+continues, but it carries a single point of failure until somebody takes the second seat.
+
+There is no Testing and Validation workstream for now. Whoever reviews a change checks it
+against the conformance requirements it touches.
 
 | Workstream | Leads |
 | --- | --- |
 | Coding Agents | Almog Langleben ([@almogbhl](https://github.com/almogbhl)), Stefano Amorelli ([@stefanoamorelli](https://github.com/stefanoamorelli)) |
 | Development (SDK) | Rock Lambros ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
-| Documentation | Open |
+| Documentation | Lance Dye ([@Lrd0036](https://github.com/Lrd0036)) |
 | Identity | Eva Benn ([@evabenn](https://github.com/evabenn)), Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
 | Reference Implementation | Evgeniy Kokuykin ([@artmaro](https://github.com/artmaro)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
-| Testing and Validation | Open |
 
 ## Triage authority
 
