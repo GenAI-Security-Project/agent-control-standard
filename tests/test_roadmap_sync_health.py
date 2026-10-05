@@ -92,7 +92,7 @@ def test_sections():
     assert r["closed_with_open_work"] == [4]
     assert r["untriaged_in_milestone"] == [21]
     assert r["declined_by_triage_label"] == [22]
-    assert r["awaiting_confirmation"] == [30, 50]
+    assert r["unverified_closes"] == [[30, 3, "untrusted_closer"], [50, 2, "untrusted_closer"]]
     assert r["in_focus_without_milestone"] == [60]
     assert r["accepted_without_milestone"] == [61]
     assert r["accepted_this_week"] == [[20, "rocklambros"]]
@@ -227,3 +227,66 @@ def test_sweep_degrades_on_a_roster_that_does_not_parse(monkeypatch, capsys):
     assert "<!-- acs-sweep: degraded" in out
     assert "::warning::sweep failed: RosterError" in out
     assert "cannot read every person" not in out
+
+
+
+def test_every_reason_code_has_one_remedy():
+    from roadmap_model import REASON_CODES
+    from roadmap_sync import REMEDIES
+    assert set(REMEDIES) == set(REASON_CODES)
+    # Reclosing a close the data rejects only restates the claim.
+    for code in ("not_on_main", "reverted"):
+        assert "reclose" not in REMEDIES[code].lower() and "Do not close it again" in REMEDIES[code]
+    assert "project lead recloses" in REMEDIES["not_a_lead"]
+
+
+def test_unverified_close_lines_carry_numbers_codes_and_remedies_only():
+    snapshot = dict(SNAPSHOT, facts=dict(SNAPSHOT["facts"]))
+    snapshot["facts"][10] = dict(landed("rocklambros"), closerLanding="not_on_main")
+    body = render_health(build_report(snapshot, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES), "ok", "t", "1", [])
+    assert ("- #10 in [milestone 1](https://github.com/GenAI-Security-Project/agent-control-standard/milestone/1): "
+            "`not_on_main`. Promote integration to main, or reopen the issue. Do not close it again.") in body
+    assert "## Unverified closes" in body and "Awaiting maintainer confirmation" not in body
+
+
+def test_a_missing_workstream_line_alone_is_not_reported():
+    snapshot = dict(SNAPSHOT, milestones=[
+        {"number": 6, "title": "No workstream", "state": "open", "due_on": "2026-12-31T00:00:00Z", "description": "Type: Document"},
+        {"number": 7, "title": "No type", "state": "open", "due_on": "2026-12-31T00:00:00Z", "description": "Workstream: Spec"},
+    ])
+    assert build_report(snapshot, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)["missing_description_lines"] == [7]
+
+
+def test_gh_calls_time_out_after_thirty_seconds(monkeypatch):
+    import roadmap_sync
+    seen = {}
+
+    def slow(args, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(roadmap_sync.subprocess, "run", slow)
+    assert roadmap_sync.GitHub().call("api", "x") == (124, "", "gh timed out after 30 seconds")
+    assert seen["timeout"] == 30
+    with pytest.raises(SyncError):
+        roadmap_sync.GitHub().get("x")
+
+
+class FactsGitHub:
+    def paginate(self, path):
+        return []
+
+    def call_list(self, args):
+        import json as _json
+        empty = {"data": {"repository": {"milestones": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}}}
+        return 0, "HTTP/2.0 200 OK\r\n\r\n" + _json.dumps(empty), ""
+
+
+def test_snapshot_degrades_when_close_verification_fails():
+    import roadmap_sync
+
+    def shallow_git(args):
+        return 0, "true\n"
+
+    with pytest.raises(SyncError, match="verification"):
+        roadmap_sync._snapshot(FactsGitHub(), shallow_git, date(2026, 11, 1), [])

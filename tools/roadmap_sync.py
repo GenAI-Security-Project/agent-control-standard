@@ -27,8 +27,12 @@ import time  # noqa: E402
 import urllib.parse  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 
+import closing_choice  # noqa: E402
 import fetch_roadmap  # noqa: E402
 import roadmap_model as model  # noqa: E402
+
+
+GH_TIMEOUT_SECONDS = 30
 
 
 class SyncError(RuntimeError):
@@ -77,7 +81,12 @@ class GitHub:
         self.repo = repo
 
     def call(self, *args: str) -> tuple[int, str, str]:
-        done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=120)
+        # Thirty seconds per call keeps the sweep inside its fifteen-minute job limit. A
+        # timeout reads as a failed call, so the section that made it degrades.
+        try:
+            done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return 124, "", f"gh timed out after {GH_TIMEOUT_SECONDS} seconds"
         return done.returncode, done.stdout, done.stderr
 
     def call_list(self, args: list[str]) -> tuple[int, str, str]:
@@ -273,21 +282,36 @@ import os  # noqa: E402
 from datetime import date, datetime, timedelta, timezone  # noqa: E402
 
 SECTION_TITLES = (
-    ("ready_to_publish", "Ready to publish", "Work complete. Verify each milestone's work is on main by hand, then close it."),
+    ("ready_to_publish", "Ready to publish", "Every issue is done and its work is on main. A project lead closes the milestone."),
     ("closed_with_open_work", "Closed with open work", "Closed milestones that still hold remaining issues."),
     ("closed_nothing_done", "Closed with open work and nothing done", "Closed milestones with no done issues but remaining ones. They show as withdrawn. Reopen any closed by mistake."),
     ("target_passed", "Target passed", "Open milestones past their committed date or quarter."),
     ("untriaged_in_milestone", "Untriaged in a milestone", "Open issues in a milestone with no acceptance decision."),
     ("declined_by_triage_label", "Milestoned against a triage decision", "The event job declined these because of a standing triage label."),
-    ("awaiting_confirmation", "Awaiting maintainer confirmation", "Closed by someone outside the roster. A maintainer reopens and recloses to confirm."),
+    ("unverified_closes", "Unverified closes", "Closed as completed, but the data does not show delivery. Each line gives its milestone, its reason code, and the one remedy for that code."),
     ("in_focus_without_milestone", "In focus without a milestone", "Open in-focus issues not yet placed on the roadmap."),
     ("accepted_without_milestone", "Accepted without a milestone", "Open accepted issues not yet placed on the roadmap."),
     ("accepted_this_week", "Accepted by milestone this week", "Issues the bot accepted in the last eight days, with who set the milestone."),
     ("unknown_close_reasons", "Unknown close reasons", "Closed with a reason this version does not know."),
     ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
-    ("missing_description_lines", "Missing description lines", "Milestones without a valid Workstream or Type line."),
+    ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
     ("switches", "Switches", "Roadmap variables holding something other than true or false."),
 )
+
+
+# One remedy per reason code. A close that is not on main, or was reverted, is fixed by
+# promoting or reopening. Closing it again would only restate the claim the data rejects.
+REMEDIES = {
+    "not_on_main": "Promote integration to main, or reopen the issue. Do not close it again.",
+    "reverted": "The change was reverted on main. Reopen the issue. Do not close it again.",
+    "no_close_declared": "The landed commit does not close this issue. Reopen it, or a project lead recloses it by hand to attest delivery.",
+    "contributing": "The landed commit only contributes to this issue. Reopen it until the closing change lands.",
+    "other_repository": "Another repository closed it. A project lead recloses it by hand once the work is on main.",
+    "not_a_lead": "A project lead recloses it to attest delivery.",
+    "untrusted_closer": "Someone outside the roster closed it. A project lead reopens it, and recloses it if the work is delivered.",
+    "unparsed": "The closing message could not be read. A project lead checks it and recloses it by hand.",
+    "unknown_closer": "Something other than a person, a pull request, or a commit closed it. A project lead reopens it and recloses it by hand.",
+}
 
 
 def record_from_rest(issue: dict, facts: dict | None) -> model.IssueRecord:
@@ -322,14 +346,15 @@ def build_report(
     by_milestone: dict[int, list[model.IssueRecord]] = {}
     for raw in snapshot["milestoned"]:
         record = record_from_rest(raw, snapshot["facts"].get(int(raw["number"])))
-        by_milestone.setdefault(int(raw["milestone"]["number"]), []).append(record)
-        cls = model.classify(record, trusted, leads)
+        milestone_number = int(raw["milestone"]["number"])
+        by_milestone.setdefault(milestone_number, []).append(record)
+        cls, reason = model.assess(record, trusted, leads)
         if record.state == "OPEN" and record.labels & model.DECLINE_LABELS - {model.DEFERRED}:
             report["declined_by_triage_label"].append(record.number)
         elif cls == "untriaged":
             report["untriaged_in_milestone"].append(record.number)
         if cls == "unverified":
-            report["awaiting_confirmation"].append(record.number)
+            report["unverified_closes"].append([record.number, milestone_number, reason])
         if model.unknown_reason(record):
             report["unknown_close_reasons"].append(record.number)
     for milestone in snapshot["milestones"]:
@@ -352,7 +377,9 @@ def build_report(
             report["target_passed"].append(number)
         if due is not None and not model.is_quarter_end(due) and not closed:
             report["off_quarter_dates"].append(number)
-        if not closed and {"workstream", "type"} & set(description.errors):
+        # The OWASP report writes the same Workstream Name on every row, so only the
+        # Type line is an OWASP problem.
+        if not closed and "type" in description.errors:
             report["missing_description_lines"].append(number)
     for raw in snapshot["unmilestoned_open"]:
         names = _labels(raw)
@@ -364,8 +391,9 @@ def build_report(
     # Every switch is listed, so the weekly call sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
+    report["unverified_closes"].sort()
     for key in report:
-        if key not in ("accepted_this_week", "switches"):
+        if key not in ("accepted_this_week", "switches", "unverified_closes"):
             report[key] = sorted(set(report[key]))
     return report
 
@@ -400,6 +428,11 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
             for name, value, odd in items:
                 shown = f"`{value}`" if value else "unset"
                 lines.append(f"- `{name}` is {shown}" + (" (only `true` turns it on)" if odd else ""))
+        elif key == "unverified_closes":
+            lines += [
+                f"- #{number} in [milestone {milestone}]({repo_url}/milestone/{milestone}): `{reason}`. {REMEDIES[reason]}"
+                for number, milestone, reason in items
+            ]
         elif key in ("ready_to_publish", "closed_with_open_work", "target_passed", "off_quarter_dates", "missing_description_lines"):
             lines += [f"- [milestone {number}]({repo_url}/milestone/{number})" for number in items]
         else:
@@ -420,17 +453,23 @@ def choose_health_issue(candidates: list[dict]) -> dict | None:
     return matches[0] if matches else None
 
 
-def _snapshot(gh: GitHub, today: date, failed: list[str]) -> dict:
+def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
     snapshot = {"milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": []}
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
-    # Closers come from the same GraphQL ClosedEvent.actor the build uses, through the same
-    # fetch code, so the health issue and roadmap.json never classify an issue differently.
-    # It is also one query per milestone rather than one request per closed issue.
-    fetched = fetch_roadmap.fetch(gh.call_list, model.REPO, 240, time.sleep, time.monotonic)
+    # Close facts come from the same fetch and git checks the build uses, so the health
+    # issue and roadmap.json never classify an issue differently. It is also one query per
+    # milestone rather than one request per closed issue.
+    fetched = fetch_roadmap.fetch(
+        gh.call_list, model.REPO, 240, time.sleep, time.monotonic, closing_choice.declared_closes
+    )
     if fetched["status"] != "ok":
         raise SyncError(f"closer fetch failed: {fetched['class']}")
+    try:
+        fetched = fetch_roadmap.attach_facts(fetched, git, model.REPO)
+    except fetch_roadmap.FetchFailure as failure:
+        raise SyncError(f"close verification failed: {failure.cls}") from None
     for milestone in fetched["milestones"]:
         for item in milestone["issues"]:
             snapshot["facts"][int(item["number"])] = item
@@ -492,7 +531,8 @@ def _sweep(apply: bool) -> int:
         trusted = model.trusted_logins(repo_root)
         roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
         leads = model.project_lead_logins(roster)
-        snapshot = _snapshot(gh, now.date(), failed)
+        git = fetch_roadmap._git_runner(fetch_roadmap.GIT, str(repo_root))
+        snapshot = _snapshot(gh, git, now.date(), failed)
         report = build_report(snapshot, trusted, leads, set(roster.workstreams), now.date(), _switches())
     except SyncError as exc:
         print(f"::warning::{exc}")
