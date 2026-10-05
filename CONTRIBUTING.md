@@ -63,6 +63,10 @@ accepted issue. An editorial correction does not, wherever it lands: a typo, a g
 fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
 issue.
 
+In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` before an issue
+the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
+advances, because the roadmap counts a closed issue as delivered.
+
 If you open a pull request against an issue that is not accepted yet, it will not be
 reviewed and nothing about it is rejected. It waits, and a comment will say so. A pull
 request that sits untriaged for a long time may be closed with an invitation to reopen

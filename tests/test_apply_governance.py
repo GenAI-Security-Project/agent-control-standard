@@ -223,7 +223,11 @@ def test_desired_rulesets_are_protect_integration_and_protect_release():
         assert ruleset.require_last_push_approval is True
         assert ruleset.required_review_thread_resolution is True
         assert ruleset.required_status_checks == ("test", "build")
-        assert ruleset.allowed_merge_methods == ("squash", "rebase")
+        assert ruleset.check_integration_id == 15368
+    # Rollout package E: a rebase merge lands every branch commit message, and any of them
+    # can close an issue, so integration takes squash merges only.
+    assert rulesets["protect-integration"].allowed_merge_methods == ("squash",)
+    assert rulesets["protect-release"].allowed_merge_methods == ("squash", "rebase")
 
 
 def test_every_ruleset_carries_admin_bypass():
@@ -556,7 +560,13 @@ def _live_matching(desired) -> dict:
             {"title": issue.title, "body": issue.body, "labels": list(issue.labels)}
             for issue in desired.issues
         ],
-        "rulesets": [asdict(ruleset) for ruleset in desired.rulesets],
+        "rulesets": [
+            dict(
+                asdict(ruleset),
+                check_integration_ids=(ruleset.check_integration_id,) * len(ruleset.required_status_checks),
+            )
+            for ruleset in desired.rulesets
+        ],
     }
 
 
@@ -614,14 +624,18 @@ def test_default_branch_action_only_fires_when_not_already_integration():
 
 def test_required_check_action_only_fires_when_the_check_is_missing():
     without_check = {
-        "protect_main": {"id": 1, "required_status_checks": ("test", "build")}
+        "protect_main": {"id": 1, "required_status_checks": ("test", "build"), "raw": LIVE_PROTECT_MAIN}
     }
     with_check = {
-        "protect_main": {"id": 1, "required_status_checks": ("test", "build", "base-branch-guard")}
+        "protect_main": {
+            "id": 1, "required_status_checks": ("test", "build", "base-branch-guard"), "raw": LIVE_PROTECT_MAIN,
+        }
     }
     assert plan_required_check_actions(without_check) != []
     assert plan_required_check_actions(with_check) == []
     assert plan_required_check_actions({}) == []
+    # Without the live JSON there is nothing safe to write.
+    assert plan_required_check_actions({"protect_main": {"id": 1, "required_status_checks": ()}}) == []
 
 
 # --- SAFETY: the tool cannot merge, close, retarget a PR, or delete a label -----
@@ -757,3 +771,157 @@ def test_a_fetch_that_returns_its_own_limit_is_refused():
     with pytest.raises(SystemExit) as caught:
         _reject_truncated(list(range(FETCH_LIMIT)), "project item-list")
     assert "truncated" in str(caught.value)
+
+
+
+# --- Rollout package E: payloads from the live JSON, pinned checks, preconditions --------
+
+# protect-integration as GET /rulesets/22703996 returned it on 2026-10-04.
+# require_extra_approval_for_unattributed_changes, required_reviewers, and
+# dismissal_restriction are the fields this module does not model.
+LIVE_PROTECT_INTEGRATION = {
+    "id": 22703996, "name": "protect-integration", "target": "branch", "source_type": "Repository",
+    "source": "GenAI-Security-Project/agent-control-standard", "enforcement": "active",
+    "conditions": {"ref_name": {"exclude": [], "include": ["refs/heads/integration"]}},
+    "rules": [
+        {"type": "deletion"},
+        {"type": "non_fast_forward"},
+        {"type": "pull_request", "parameters": {
+            "required_approving_review_count": 1, "dismiss_stale_reviews_on_push": True,
+            "required_reviewers": [], "require_code_owner_review": True,
+            "dismissal_restriction": {"enabled": False, "allowed_actors": []},
+            "require_last_push_approval": True, "required_review_thread_resolution": True,
+            "require_extra_approval_for_unattributed_changes": True,
+            "allowed_merge_methods": ["squash", "rebase"],
+        }},
+        {"type": "required_status_checks", "parameters": {
+            "strict_required_status_checks_policy": False, "do_not_enforce_on_create": False,
+            "required_status_checks": [{"context": "test"}, {"context": "build"}],
+        }},
+    ],
+    "node_id": "RRS_x", "created_at": "2026-09-09T18:19:07.356-06:00", "updated_at": "2026-09-09T18:19:07.398-06:00",
+    "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
+    "current_user_can_bypass": "always",
+}
+LIVE_PROTECT_MAIN = dict(
+    LIVE_PROTECT_INTEGRATION, id=20720988, name="protect-main",
+    conditions={"ref_name": {"exclude": [], "include": ["refs/heads/main"]}},
+)
+
+
+def _normalized(detail: dict) -> dict:
+    from apply_governance import _normalize_ruleset
+    return _normalize_ruleset(detail)
+
+
+def test_live_integration_ruleset_is_out_of_date_until_squash_and_app_ids_land():
+    from apply_governance import plan_ruleset_actions
+    integration = next(r for r in desired_rulesets() if r.name == "protect-integration")
+    actions = plan_ruleset_actions([_normalized(LIVE_PROTECT_INTEGRATION)], (integration,))
+    assert len(actions) == 1 and actions[0].argv[4] == "repos/GenAI-Security-Project/agent-control-standard/rulesets/22703996"
+
+
+def test_update_payload_keeps_every_live_field_it_does_not_model():
+    from apply_governance import plan_ruleset_actions
+    integration = next(r for r in desired_rulesets() if r.name == "protect-integration")
+    payload = plan_ruleset_actions([_normalized(LIVE_PROTECT_INTEGRATION)], (integration,))[0].payload
+    pull_request = next(r for r in payload["rules"] if r["type"] == "pull_request")["parameters"]
+    assert pull_request["require_extra_approval_for_unattributed_changes"] is True
+    assert pull_request["dismissal_restriction"] == {"enabled": False, "allowed_actors": []}
+    assert pull_request["required_reviewers"] == []
+    assert pull_request["allowed_merge_methods"] == ["squash"]
+    checks = next(r for r in payload["rules"] if r["type"] == "required_status_checks")["parameters"]
+    assert checks["required_status_checks"] == [
+        {"context": "test", "integration_id": 15368}, {"context": "build", "integration_id": 15368},
+    ]
+    assert [r["type"] for r in payload["rules"]] == ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]
+    for key in ("id", "node_id", "source", "source_type", "created_at", "updated_at", "current_user_can_bypass"):
+        assert key not in payload
+
+
+def test_a_ruleset_matching_live_state_with_app_ids_is_left_alone():
+    from apply_governance import plan_ruleset_actions
+    integration = next(r for r in desired_rulesets() if r.name == "protect-integration")
+    fixed = json.loads(json.dumps(LIVE_PROTECT_INTEGRATION))
+    fixed["rules"][2]["parameters"]["allowed_merge_methods"] = ["squash"]
+    fixed["rules"][3]["parameters"]["required_status_checks"] = [
+        {"context": "test", "integration_id": 15368}, {"context": "build", "integration_id": 15368},
+    ]
+    assert plan_ruleset_actions([_normalized(fixed)], (integration,)) == []
+    fixed["rules"][3]["parameters"]["required_status_checks"][1]["integration_id"] = 999
+    assert len(plan_ruleset_actions([_normalized(fixed)], (integration,))) == 1
+
+
+def test_protect_main_payload_changes_only_the_check_list():
+    live = json.loads(json.dumps(LIVE_PROTECT_MAIN))
+    live["rules"][3]["parameters"]["required_status_checks"] = [{"context": "test"}, {"context": "build"}]
+    live["rules"][2]["parameters"]["allowed_merge_methods"] = ["merge"]
+    state = {"protect_main": _normalized(live)}
+    payload = plan_required_check_actions(state)[0].payload
+    assert payload["rules"][:3] == live["rules"][:3]
+    assert payload["rules"][3]["parameters"]["required_status_checks"] == [
+        {"context": c, "integration_id": 15368} for c in ("test", "build", "base-branch-guard")
+    ]
+    assert payload["bypass_actors"] == live["bypass_actors"] and "id" not in payload
+
+
+def test_ruleset_refusal():
+    from apply_governance import ruleset_refusal
+    tip = "a" * 40
+    assert ruleset_refusal("", tip, tip) is None
+    assert "uncommitted" in ruleset_refusal(" M tools/apply_governance.py\n", tip, tip)
+    assert "integration" in ruleset_refusal("", "b" * 40, tip)
+    assert "integration" in ruleset_refusal("", "", tip)
+
+
+def test_main_refuses_ruleset_planning_from_a_stale_checkout(monkeypatch, capsys):
+    import apply_governance
+
+    def no_network():
+        raise AssertionError("fetch_live_state must not run")
+
+    monkeypatch.setattr(apply_governance, "_checkout_state", lambda: ("", "b" * 40, "a" * 40))
+    monkeypatch.setattr(apply_governance, "fetch_live_state", no_network)
+    for argv in ([], ["--only", "rulesets"], ["--only", "required-check"], ["--apply"]):
+        assert main(argv) == 2
+    assert "integration" in capsys.readouterr().err
+
+
+def test_main_skips_the_checkout_check_for_steps_that_write_no_ruleset(monkeypatch):
+    import apply_governance
+
+    def no_checkout():
+        raise AssertionError("_checkout_state must not run")
+
+    monkeypatch.setattr(apply_governance, "_checkout_state", no_checkout)
+    monkeypatch.setattr(apply_governance, "fetch_live_state", lambda: {})
+    assert main(["--only", "labels"]) == 0
+
+
+def test_removed_required_checks_lists_live_checks_the_declaration_drops():
+    from apply_governance import Ruleset, removed_required_checks
+    live = [{"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice")}]
+    desired = (Ruleset(name="protect-integration", target_ref="refs/heads/integration"),)
+    assert removed_required_checks(live, desired) == [("protect-integration", "closing-choice")]
+    assert removed_required_checks([{"name": "protect-integration", "required_status_checks": ("test", "build")}], desired) == []
+    assert removed_required_checks([], desired) == []
+
+
+def test_main_refuses_to_drop_a_live_required_check_without_the_flag(monkeypatch, capsys):
+    import apply_governance
+
+    tip = "a" * 40
+    monkeypatch.setattr(apply_governance, "_checkout_state", lambda: ("", tip, tip))
+    monkeypatch.setattr(apply_governance, "fetch_live_state", lambda: {"rulesets": [
+        {"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice")},
+    ]})
+    monkeypatch.setattr(apply_governance, "collect_actions", lambda live, only=None: [apply_governance.Action("rulesets", "Update ruleset", ("true",))])
+    assert main(["--only", "rulesets", "--apply"]) == 2
+    err = capsys.readouterr().err
+    assert "closing-choice" in err and "--allow-ruleset-reduction" in err
+
+    ran = []
+    monkeypatch.setattr(apply_governance, "run_action", lambda action: ran.append(action))
+    monkeypatch.setattr(apply_governance, "render_dry_run", lambda action: "")
+    assert main(["--only", "rulesets", "--apply", "--allow-ruleset-reduction"]) == 0
+    assert ran
