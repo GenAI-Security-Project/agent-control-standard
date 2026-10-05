@@ -1,0 +1,55 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "substrate",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": null,
+    "verdict": "allow"
+  },
+  "family": "acs-f-1",
+  "id": "vf3679e6ac60fd250",
+  "kind": "accept",
+  "payload": {
+    "identity_chain_state": "VALID",
+    "intent": {
+      "parsed": [
+        "records.read"
+      ],
+      "parser_provenance": {
+        "origin": "user_input"
+      },
+      "scope_mode": "strict"
+    },
+    "request": {
+      "acs": "0.1",
+      "metadata": {
+        "session_id": "s-0001",
+        "turn_id": "t-0001"
+      },
+      "method": "hooks/toolCallRequest",
+      "params": {
+        "tool": {
+          "arguments": {
+            "id": "c-1"
+          },
+          "name": "records.read"
+        }
+      },
+      "request_id": "11111111-1111-4111-8111-111111111111",
+      "signature": {
+        "algorithm": "HMAC-SHA256",
+        "key_id": "k1",
+        "value": "AAAA"
+      },
+      "timestamp": "2026-09-09T12:00:00Z"
+    },
+    "signature_state": "VALID"
+  },
+  "requirements": [
+    "ACS-R-013"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}

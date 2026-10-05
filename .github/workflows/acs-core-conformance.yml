@@ -6,8 +6,8 @@
 # those land. The job fails only when it could not measure: the Guardian did not start, or it
 # answered no request.
 #
-# The vectors are a pinned, hash-checked dependency (reference-implementations/agt/conformance/
-# acs-core-vectors.txt). Moving to a newer corpus is a one-line change reviewed like any other.
+# The vectors are retained source under reference-implementations/agt/conformance/.
+# Updates change reviewed repository files, with source attribution and hashes retained.
 #
 # No workflow expression appears inside a `run:` block.
 name: ACS-Core conformance report
@@ -59,11 +59,12 @@ jobs:
       - name: Install dependencies from the lockfile
         run: bun install --frozen-lockfile
 
-      - name: Install the pinned conformance vectors
+      - name: Install the Python runtime
         run: |
           uv venv --python 3.13 "$RUNNER_TEMP/vectors-venv"
-          uv pip install --python "$RUNNER_TEMP/vectors-venv/bin/python" \
-            --require-hashes -r conformance/acs-core-vectors.txt
+
+      - name: Check the retained conformance source
+        run: '"$RUNNER_TEMP/vectors-venv/bin/python" scripts/check-acs-core-vendor.py'
 
       - name: Start the reference Guardian
         run: |
@@ -81,6 +82,7 @@ jobs:
       - name: Post the vectors and write the report
         run: |
           "$RUNNER_TEMP/vectors-venv/bin/python" scripts/run-acs-core-vectors.py \
+            --vectors conformance/vectors-acs-core \
             --guardian "http://127.0.0.1:$ACS_GUARDIAN_PORT/acs" \
             --out "$RUNNER_TEMP/acs-core-results.jsonl" \
             --summary "$GITHUB_STEP_SUMMARY"
