@@ -22,13 +22,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 import urllib.parse  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 
+import closing_choice  # noqa: E402
 import fetch_roadmap  # noqa: E402
 import roadmap_model as model  # noqa: E402
+
+
+GH_TIMEOUT_SECONDS = 30
 
 
 class SyncError(RuntimeError):
@@ -77,7 +82,12 @@ class GitHub:
         self.repo = repo
 
     def call(self, *args: str) -> tuple[int, str, str]:
-        done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=120)
+        # Thirty seconds per call keeps the sweep inside its fifteen-minute job limit. A
+        # timeout reads as a failed call, so the section that made it degrades.
+        try:
+            done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return 124, "", f"gh timed out after {GH_TIMEOUT_SECONDS} seconds"
         return done.returncode, done.stdout, done.stderr
 
     def call_list(self, args: list[str]) -> tuple[int, str, str]:
@@ -228,7 +238,10 @@ def cmd_migrate(args) -> int:
             author = (issue.get("user") or {}).get("login")
             # The URL, not the title. A title is author-editable text, and whoever reads this
             # output may be an agent about to run --apply.
-            print(f"#{number} {kind} by {author} {issue.get('state')} {labels} {issue.get('html_url')}")
+            # The current milestone makes a saved dry run the undo log for --apply.
+            current = (issue.get("milestone") or {}).get("number")
+            placed = f"milestone {int(current)}" if isinstance(current, int) else "milestone none"
+            print(f"#{number} {kind} by {author} {issue.get('state')} {labels} {placed} {issue.get('html_url')}")
             declined = sorted(_labels(issue) & model.DECLINE_LABELS)
             if declined:
                 print(f"DECLINED #{number} {', '.join(declined)}")
@@ -273,49 +286,180 @@ import os  # noqa: E402
 from datetime import date, datetime, timedelta, timezone  # noqa: E402
 
 SECTION_TITLES = (
-    ("ready_to_publish", "Ready to publish", "Work complete. Verify each milestone's work is on main by hand, then close it."),
+    ("ready_to_publish", "Ready to publish", "Every issue is done and its work is on main. A project lead closes the milestone."),
     ("closed_with_open_work", "Closed with open work", "Closed milestones that still hold remaining issues."),
     ("closed_nothing_done", "Closed with open work and nothing done", "Closed milestones with no done issues but remaining ones. They show as withdrawn. Reopen any closed by mistake."),
     ("target_passed", "Target passed", "Open milestones past their committed date or quarter."),
     ("untriaged_in_milestone", "Untriaged in a milestone", "Open issues in a milestone with no acceptance decision."),
     ("declined_by_triage_label", "Milestoned against a triage decision", "The event job declined these because of a standing triage label."),
-    ("awaiting_confirmation", "Awaiting maintainer confirmation", "Closed by someone outside the roster. A maintainer reopens and recloses to confirm."),
+    ("unverified_closes", "Unverified closes", "Closed as completed, but the data does not show delivery. Each line gives its milestone, its reason code, and the one remedy for that code."),
     ("in_focus_without_milestone", "In focus without a milestone", "Open in-focus issues not yet placed on the roadmap."),
     ("accepted_without_milestone", "Accepted without a milestone", "Open accepted issues not yet placed on the roadmap."),
     ("accepted_this_week", "Accepted by milestone this week", "Issues the bot accepted in the last eight days, with who set the milestone."),
     ("unknown_close_reasons", "Unknown close reasons", "Closed with a reason this version does not know."),
     ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
-    ("missing_description_lines", "Missing description lines", "Milestones without a valid Workstream or Type line."),
+    ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
+    ("promotion", "Promotion", "Work on integration that main lacks. A project lead opens and merges the promotion."),
+    ("bypasses", "Bypasses", "Merges into integration or main in the last seven days with no approving review, and direct pushes. Admins can bypass the rulesets, so this is where a bypass shows."),
     ("switches", "Switches", "Roadmap variables holding something other than true or false."),
 )
 
 
-def record_from_rest(issue: dict, closed_by: str | None) -> model.IssueRecord:
+# The title and body open-promotion.yml uses, so a promotion opened from the health issue
+# reads the same as one opened by dispatching that workflow.
+PROMOTION_TITLE = "Promote integration to main"
+PROMOTION_BODY = (
+    "{ahead} commit(s) ahead. Merging publishes the site and every schema $id URI. Merge with a "
+    "merge commit, not a squash: squashing flattens the specification history that makes a schema "
+    "change reviewable later."
+)
+INTEGRATION_REF = "refs/remotes/origin/integration"
+_DAY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _git(git, args: list[str], what: str, ok: tuple[int, ...] = (0,)) -> str:
+    try:
+        code, out = git(args)
+    except fetch_roadmap.FetchFailure as failure:
+        raise SyncError(f"{what}: {failure.cls}") from None
+    if code not in ok:
+        raise SyncError(f"{what} failed")
+    return out
+
+
+def promotion_pending(git) -> tuple[str, int] | None:
+    """The committer date of the oldest commit integration holds that main lacks, and how
+    many there are. None when main already has integration's content.
+
+    A squashed sync from main leaves integration holding commits main lacks while the trees
+    match, so the tree comparison, not the commit count, decides.
+    """
+    pending = _git(git, ["rev-list", "--reverse", f"{fetch_roadmap.MAIN_REF}..{INTEGRATION_REF}"], "git rev-list").split()
+    if not pending:
+        return None
+    # merge-tree exits 1 on a conflict and still prints the tree first, which differs from
+    # main's tree, so a conflicted promotion still reads as pending.
+    merged = _git(git, ["merge-tree", "--write-tree", fetch_roadmap.MAIN_REF, INTEGRATION_REF], "git merge-tree", (0, 1))
+    tree = _git(git, ["rev-parse", f"{fetch_roadmap.MAIN_REF}^{{tree}}"], "git rev-parse")
+    if merged.split("\n", 1)[0].strip() == tree.strip():
+        return None
+    day = _git(git, ["show", "-s", "--format=%cs", pending[0]], "git show").strip()
+    if not _DAY.fullmatch(day):
+        raise SyncError("git did not report a commit date")
+    return day, len(pending)
+
+
+# A merge that bypassed review and touched one of these gets its own line: the roster files
+# and the code that turns the roster into trust.
+WATCHED_PATHS = frozenset({
+    "GOVERNANCE.md", ".github/CODEOWNERS", "project.owasp.yaml",
+    "tools/roadmap_model.py", "tools/fetch_roadmap.py", "tools/closing_choice.py",
+})
+_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+_OID = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _merged_at(pull: dict) -> datetime | None:
+    value = pull.get("merged_at")
+    if not isinstance(value, str):
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def bypasses(gh, git, today: date) -> list[list]:
+    """Merges with no approving review and direct pushes, in the last seven days.
+
+    Every ruleset here requires one approval, so a merge without one is an admin bypass.
+    A first-parent commit that no pull request carries is a direct push. Only numbers,
+    branch names, and logins that match GitHub's login pattern are kept.
+    """
+    since = today - timedelta(days=7)
+    cutoff = datetime.combine(since, datetime.min.time(), timezone.utc)
+    base_path = f"repos/{model.REPO}"
+    unapproved = 0
+    lines: list[list] = []
+    for branch in ("integration", "main"):
+        pulls = gh.get(f"{base_path}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page=100")
+        for pull in pulls:
+            merged = _merged_at(pull)
+            if merged is None or merged < cutoff:
+                continue
+            number = int(pull["number"])
+            reviews = gh.paginate(f"{base_path}/pulls/{number}/reviews?per_page=100")
+            if any(review.get("state") == "APPROVED" for review in reviews):
+                continue
+            unapproved += 1
+            files = gh.paginate(f"{base_path}/pulls/{number}/files?per_page=100")
+            if any(entry.get("filename") in WATCHED_PATHS for entry in files):
+                lines.append(["pull", number, branch])
+    for branch in ("main", "integration"):
+        out = _git(git, ["rev-list", "--first-parent", f"--since={since.isoformat()}", f"refs/remotes/origin/{branch}"], "git rev-list")
+        for oid in out.split():
+            if not _OID.fullmatch(oid) or gh.get(f"{base_path}/commits/{oid}/pulls"):
+                continue
+            login = (gh.get(f"{base_path}/commits/{oid}").get("author") or {}).get("login")
+            lines.append(["push", branch, login if isinstance(login, str) and _LOGIN.fullmatch(login) else None])
+    if not unapproved and not lines:
+        return []
+    return [["count", unapproved], *lines]
+
+
+# One remedy per reason code. A close that is not on main, or was reverted, is fixed by
+# promoting or reopening. Closing it again would only restate the claim the data rejects.
+REMEDIES = {
+    "not_on_main": "Promote integration to main, or reopen the issue. Do not close it again.",
+    "reverted": "The change was reverted on main. Reopen the issue. Do not close it again.",
+    "no_close_declared": "The landed commit does not close this issue. Reopen it, or a project lead recloses it by hand to attest delivery.",
+    "contributing": "The landed commit only contributes to this issue. Reopen it until the closing change lands.",
+    "other_repository": "Another repository closed it. A project lead recloses it by hand once the work is on main.",
+    "not_a_lead": "A project lead recloses it to attest delivery.",
+    "untrusted_closer": "Someone outside the roster closed it. A project lead reopens it, and recloses it if the work is delivered.",
+    "unparsed": "The closing message could not be read. A project lead checks it and recloses it by hand.",
+    "unknown_closer": "Something other than a person, a pull request, or a commit closed it. A project lead reopens it and recloses it by hand.",
+}
+
+
+def record_from_rest(issue: dict, facts: dict | None) -> model.IssueRecord:
+    """A REST issue plus the close facts the fetch wrote for it.
+
+    Missing facts mean the fetch did not see the issue, so every close fact takes the
+    reading that verifies nothing and the issue can only count as unverified.
+    """
     reason = issue.get("state_reason")
+    facts = facts or {}
     return model.IssueRecord(
         number=int(issue["number"]),
         state=str(issue["state"]).upper(),
         state_reason=reason.upper() if reason else None,
         labels=frozenset(_labels(issue)),
         author=(issue.get("user") or {}).get("login"),
-        closed_by=closed_by,
+        closed_by=facts.get("closedBy"),
+        **model.closer_facts(facts),
     )
 
 
-def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[str], today: date, switches: dict[str, str]) -> dict:
-    """Spec "Health reporting", sections. Numbers and maintainer logins only."""
+def build_report(
+    snapshot: dict,
+    trusted: frozenset[str],
+    leads: frozenset[str],
+    workstream_names: set[str],
+    today: date,
+    switches: dict[str, str],
+) -> dict:
+    """Spec "Health reporting", sections. Numbers, reason codes, and maintainer logins only."""
     report: dict[str, list] = {key: [] for key, _title, _note in SECTION_TITLES}
     by_milestone: dict[int, list[model.IssueRecord]] = {}
     for raw in snapshot["milestoned"]:
-        record = record_from_rest(raw, snapshot["closed_by"].get(int(raw["number"])))
-        by_milestone.setdefault(int(raw["milestone"]["number"]), []).append(record)
-        cls = model.classify(record, trusted)
+        record = record_from_rest(raw, snapshot["facts"].get(int(raw["number"])))
+        milestone_number = int(raw["milestone"]["number"])
+        by_milestone.setdefault(milestone_number, []).append(record)
+        cls, reason = model.assess(record, trusted, leads)
         if record.state == "OPEN" and record.labels & model.DECLINE_LABELS - {model.DEFERRED}:
             report["declined_by_triage_label"].append(record.number)
         elif cls == "untriaged":
             report["untriaged_in_milestone"].append(record.number)
         if cls == "unverified":
-            report["awaiting_confirmation"].append(record.number)
+            report["unverified_closes"].append([record.number, milestone_number, reason])
         if model.unknown_reason(record):
             report["unknown_close_reasons"].append(record.number)
     for milestone in snapshot["milestones"]:
@@ -323,7 +467,7 @@ def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[
         records = by_milestone.get(number, [])
         counts = {name: 0 for name in model.CLASSES}
         for record in records:
-            counts[model.classify(record, trusted)] += 1
+            counts[model.classify(record, trusted, leads)] += 1
         due = model.due_date(milestone.get("due_on"))
         description = model.parse_description(milestone.get("description"), workstream_names)
         closed = milestone.get("state") == "closed"
@@ -332,13 +476,15 @@ def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[
             report["ready_to_publish"].append(number)
         if state == "closed_with_open_work":
             report["closed_with_open_work"].append(number)
-        if closed and counts["done"] == 0 and counts["unverified"] + counts["planned"] > 0:
+        if closed and counts["done"] == 0 and model.remaining(counts) > 0:
             report["closed_nothing_done"].append(number)
         if not closed and model.target_passed(due, description.committed, today) and state != "skipped":
             report["target_passed"].append(number)
         if due is not None and not model.is_quarter_end(due) and not closed:
             report["off_quarter_dates"].append(number)
-        if not closed and {"workstream", "type"} & set(description.errors):
+        # The OWASP report writes the same Workstream Name on every row, so only the
+        # Type line is an OWASP problem.
+        if not closed and "type" in description.errors:
             report["missing_description_lines"].append(number)
     for raw in snapshot["unmilestoned_open"]:
         names = _labels(raw)
@@ -347,11 +493,14 @@ def build_report(snapshot: dict, trusted: frozenset[str], workstream_names: set[
         if model.ACCEPTED in names:
             report["accepted_without_milestone"].append(int(raw["number"]))
     report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
+    report["promotion"] = list(snapshot.get("promotion") or [])
+    report["bypasses"] = [list(line) for line in snapshot.get("bypasses") or []]
     # Every switch is listed, so the weekly call sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
+    report["unverified_closes"].sort()
     for key in report:
-        if key not in ("accepted_this_week", "switches"):
+        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses"):
             report[key] = sorted(set(report[key]))
     return report
 
@@ -386,6 +535,35 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
             for name, value, odd in items:
                 shown = f"`{value}`" if value else "unset"
                 lines.append(f"- `{name}` is {shown}" + (" (only `true` turns it on)" if odd else ""))
+        elif key == "promotion":
+            day, ahead, number = items
+            lines.append(f"Promotion pending since {day}.")
+            if number:
+                lines.append(f"Promotion pull request #{number} is open. A project lead merges it with a merge commit.")
+            else:
+                body = PROMOTION_BODY.format(ahead=int(ahead))
+                lines += [
+                    "No promotion pull request is open. A project lead opens one:",
+                    "",
+                    "```",
+                    f"gh pr create --repo {model.REPO} --base main --head integration "
+                    f"--title '{PROMOTION_TITLE}' --body '{body}'",
+                    "```",
+                ]
+        elif key == "bypasses":
+            for line in items:
+                if line[0] == "count":
+                    lines.append(f"Merged without an approving review in the last seven days: {int(line[1])}.")
+                elif line[0] == "pull":
+                    lines.append(f"- #{int(line[1])} into `{line[2]}` changed a roster file or roadmap trust code without an approving review.")
+                else:
+                    who = f"`{line[2]}`" if line[2] else "an account this report does not name"
+                    lines.append(f"- Direct push to `{line[1]}` by {who}.")
+        elif key == "unverified_closes":
+            lines += [
+                f"- #{number} in [milestone {milestone}]({repo_url}/milestone/{milestone}): `{reason}`. {REMEDIES[reason]}"
+                for number, milestone, reason in items
+            ]
         elif key in ("ready_to_publish", "closed_with_open_work", "target_passed", "off_quarter_dates", "missing_description_lines"):
             lines += [f"- [milestone {number}]({repo_url}/milestone/{number})" for number in items]
         else:
@@ -406,27 +584,48 @@ def choose_health_issue(candidates: list[dict]) -> dict | None:
     return matches[0] if matches else None
 
 
-def _snapshot(gh: GitHub, today: date, failed: list[str]) -> dict:
+def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
-    snapshot = {"milestones": [], "milestoned": [], "unmilestoned_open": [], "closed_by": {}, "bot_accepted": []}
+    snapshot = {
+        "milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": [], "promotion": [],
+        "bypasses": [],
+    }
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
-    # Closers come from the same GraphQL ClosedEvent.actor the build uses, through the same
-    # fetch code, so the health issue and roadmap.json never classify an issue differently.
-    # It is also one query per milestone rather than one request per closed issue.
-    fetched = fetch_roadmap.fetch(gh.call_list, model.REPO, 240, time.sleep, time.monotonic)
+    # Close facts come from the same fetch and git checks the build uses, so the health
+    # issue and roadmap.json never classify an issue differently. It is also one query per
+    # milestone rather than one request per closed issue.
+    fetched = fetch_roadmap.fetch(
+        gh.call_list, model.REPO, 240, time.sleep, time.monotonic, closing_choice.declared_closes
+    )
     if fetched["status"] != "ok":
         raise SyncError(f"closer fetch failed: {fetched['class']}")
+    try:
+        fetched = fetch_roadmap.attach_facts(fetched, git, model.REPO)
+    except fetch_roadmap.FetchFailure as failure:
+        raise SyncError(f"close verification failed: {failure.cls}") from None
     for milestone in fetched["milestones"]:
         for item in milestone["issues"]:
-            if item["state"] == "CLOSED":
-                snapshot["closed_by"][int(item["number"])] = item["closedBy"]
+            snapshot["facts"][int(item["number"])] = item
     try:
         snapshot["unmilestoned_open"] = [
             i for i in gh.paginate(f"{base}/issues?milestone=none&state=open&per_page=100") if "pull_request" not in i
         ]
     except SyncError:
         failed += ["in_focus_without_milestone", "accepted_without_milestone"]
+    try:
+        pending = promotion_pending(git)
+        if pending is not None:
+            owner = model.REPO.split("/", 1)[0]
+            pulls = gh.get(f"{base}/pulls?state=open&base=main&head={owner}:integration&per_page=10")
+            numbers = sorted(int(pull["number"]) for pull in pulls if isinstance(pull, dict) and "number" in pull)
+            snapshot["promotion"] = [pending[0], pending[1], numbers[0] if numbers else None]
+    except (SyncError, ValueError, TypeError):
+        failed.append("promotion")
+    try:
+        snapshot["bypasses"] = bypasses(gh, git, today)
+    except (SyncError, KeyError, ValueError, TypeError, AttributeError):
+        failed.append("bypasses")
     cutoff = datetime.combine(today - timedelta(days=8), datetime.min.time(), timezone.utc)
     try:
         for raw in snapshot["milestoned"]:
@@ -469,15 +668,19 @@ def _switches() -> dict[str, str]:
 def _sweep(apply: bool) -> int:
     gh = GitHub()
     repo_root = Path(__file__).resolve().parents[1]
-    trusted = model.trusted_logins(repo_root)
-    roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
     now = datetime.now(timezone.utc)
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     run_id = os.environ.get("RUN_ID", "local")
     failed: list[str] = []
     try:
-        snapshot = _snapshot(gh, now.date(), failed)
-        report = build_report(snapshot, trusted, set(roster.workstreams), now.date(), _switches())
+        # Inside the try, so a GOVERNANCE.md that does not parse degrades the health issue
+        # rather than crashing the job before it writes anything.
+        trusted = model.trusted_logins(repo_root)
+        roster = model.parse_governance((repo_root / "GOVERNANCE.md").read_text(encoding="utf-8"))
+        leads = model.project_lead_logins(roster)
+        git = fetch_roadmap._git_runner(fetch_roadmap.GIT, str(repo_root))
+        snapshot = _snapshot(gh, git, now.date(), failed)
+        report = build_report(snapshot, trusted, leads, set(roster.workstreams), now.date(), _switches())
     except SyncError as exc:
         print(f"::warning::{exc}")
         failed, report = _degraded()

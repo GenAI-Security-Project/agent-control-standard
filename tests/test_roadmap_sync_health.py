@@ -26,6 +26,15 @@ from roadmap_sync import (  # noqa: E402
 )
 
 TRUSTED = frozenset({"rocklambros"})
+LEADS = frozenset({"rocklambros"})
+
+
+def landed(login: str) -> dict:
+    """Close facts for a merged pull request here that declares the close and reached main."""
+    return {
+        "closedBy": login, "closerKind": "pull_request", "closerInRepo": True, "declaresClose": True,
+        "declaresContribution": False, "unparsed": False, "closerLanding": "on_main", "referencesLanding": "on_main",
+    }
 
 
 def issue(number, labels=(), state="open", milestone=1, reason=None, title="SECRET TITLE", author="outsider"):
@@ -57,19 +66,23 @@ SNAPSHOT = {
         issue(70, ["status:accepted"], milestone=5),
     ],
     "unmilestoned_open": [issue(60, ["scope:in-focus"], milestone=None), issue(61, ["status:accepted"], milestone=None)],
-    "closed_by": {10: "rocklambros", 30: "outsider", 41: "rocklambros", 50: "outsider"},
+    "facts": {10: landed("rocklambros"), 30: landed("outsider"), 41: landed("rocklambros"), 50: {"closedBy": "outsider"}},
     "bot_accepted": [[20, "rocklambros"]],
 }
 SWITCHES = {"ROADMAP_RENDER_ENABLED": "true", "ROADMAP_REFRESH_ENABLED": "yes", "ROADMAP_SYNC_ENABLED": "true"}
 
 
 def report():
-    return build_report(SNAPSHOT, TRUSTED, {"Spec"}, date(2026, 11, 1), SWITCHES)
+    return build_report(SNAPSHOT, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)
 
 
 def test_record_from_rest_uppercases_reason():
-    record = record_from_rest(issue(10, state="closed", reason="not_planned"), "x")
+    record = record_from_rest(issue(10, state="closed", reason="not_planned"), {"closedBy": "x"})
     assert record.state == "CLOSED" and record.state_reason == "NOT_PLANNED" and record.closed_by == "x"
+    assert record.closer_kind == "unknown"
+    landed_record = record_from_rest(issue(10, state="closed", reason="completed"), landed("rocklambros"))
+    assert landed_record.closer_kind == "pull_request" and landed_record.closer_landing == "on_main"
+    assert record_from_rest(issue(11), None).closed_by is None
 
 
 def test_sections():
@@ -79,7 +92,7 @@ def test_sections():
     assert r["closed_with_open_work"] == [4]
     assert r["untriaged_in_milestone"] == [21]
     assert r["declined_by_triage_label"] == [22]
-    assert r["awaiting_confirmation"] == [30, 50]
+    assert r["unverified_closes"] == [[30, 3, "untrusted_closer"], [50, 2, "untrusted_closer"]]
     assert r["in_focus_without_milestone"] == [60]
     assert r["accepted_without_milestone"] == [61]
     assert r["accepted_this_week"] == [[20, "rocklambros"]]
@@ -198,3 +211,104 @@ def test_migrate_says_when_it_could_not_check(monkeypatch, tmp_path, capsys, gra
     table.write_text(_json.dumps({"assignments": {"M": [5]}}))
     roadmap_sync.cmd_migrate(argparse.Namespace(table=str(table), apply=False))
     assert "COULD NOT CHECK #5" in capsys.readouterr().out
+
+
+def test_sweep_degrades_on_a_roster_that_does_not_parse(monkeypatch, capsys):
+    import roadmap_sync
+
+    def unreadable(_repo_root):
+        raise roadmap_sync.model.RosterError("GOVERNANCE.md: cannot read every person")
+
+    monkeypatch.setattr(roadmap_sync.model, "trusted_logins", unreadable)
+    monkeypatch.setattr(roadmap_sync, "GitHub", TimeoutGitHub)
+    code = roadmap_sync._sweep(False)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "<!-- acs-sweep: degraded" in out
+    assert "::warning::sweep failed: RosterError" in out
+    assert "cannot read every person" not in out
+
+
+
+def test_every_reason_code_has_one_remedy():
+    from roadmap_model import REASON_CODES
+    from roadmap_sync import REMEDIES
+    assert set(REMEDIES) == set(REASON_CODES)
+    # Reclosing a close the data rejects only restates the claim.
+    for code in ("not_on_main", "reverted"):
+        assert "reclose" not in REMEDIES[code].lower() and "Do not close it again" in REMEDIES[code]
+    assert "project lead recloses" in REMEDIES["not_a_lead"]
+
+
+def test_unverified_close_lines_carry_numbers_codes_and_remedies_only():
+    snapshot = dict(SNAPSHOT, facts=dict(SNAPSHOT["facts"]))
+    snapshot["facts"][10] = dict(landed("rocklambros"), closerLanding="not_on_main")
+    body = render_health(build_report(snapshot, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES), "ok", "t", "1", [])
+    assert ("- #10 in [milestone 1](https://github.com/GenAI-Security-Project/agent-control-standard/milestone/1): "
+            "`not_on_main`. Promote integration to main, or reopen the issue. Do not close it again.") in body
+    assert "## Unverified closes" in body and "Awaiting maintainer confirmation" not in body
+
+
+def test_a_missing_workstream_line_alone_is_not_reported():
+    snapshot = dict(SNAPSHOT, milestones=[
+        {"number": 6, "title": "No workstream", "state": "open", "due_on": "2026-12-31T00:00:00Z", "description": "Type: Document"},
+        {"number": 7, "title": "No type", "state": "open", "due_on": "2026-12-31T00:00:00Z", "description": "Workstream: Spec"},
+    ])
+    assert build_report(snapshot, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)["missing_description_lines"] == [7]
+
+
+def test_gh_calls_time_out_after_thirty_seconds(monkeypatch):
+    import roadmap_sync
+    seen = {}
+
+    def slow(args, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(roadmap_sync.subprocess, "run", slow)
+    assert roadmap_sync.GitHub().call("api", "x") == (124, "", "gh timed out after 30 seconds")
+    assert seen["timeout"] == 30
+    with pytest.raises(SyncError):
+        roadmap_sync.GitHub().get("x")
+
+
+class FactsGitHub:
+    def paginate(self, path):
+        return []
+
+    def call_list(self, args):
+        import json as _json
+        empty = {"data": {"repository": {"milestones": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}}}
+        return 0, "HTTP/2.0 200 OK\r\n\r\n" + _json.dumps(empty), ""
+
+
+def test_snapshot_degrades_when_close_verification_fails():
+    import roadmap_sync
+
+    def shallow_git(args):
+        return 0, "true\n"
+
+    with pytest.raises(SyncError, match="verification"):
+        roadmap_sync._snapshot(FactsGitHub(), shallow_git, date(2026, 11, 1), [])
+
+
+
+class PlacedGitHub(MigrateGitHub):
+    def get(self, path):
+        number = int(path.rsplit("/", 1)[1])
+        milestone = {"number": 7, "state": "open"} if number == 5 else None
+        return {"number": number, "state": "open", "labels": [], "user": {"login": "x"}, "html_url": "u",
+                "milestone": milestone}
+
+
+def test_migrate_dry_run_prints_each_current_milestone(monkeypatch, tmp_path, capsys):
+    import argparse
+    import json as _json
+    import roadmap_sync
+    monkeypatch.setattr(roadmap_sync, "GitHub", lambda: PlacedGitHub((1, "", "boom")))
+    table = tmp_path / "t.json"
+    table.write_text(_json.dumps({"assignments": {"M": [5, 6]}}))
+    roadmap_sync.cmd_migrate(argparse.Namespace(table=str(table), apply=False))
+    out = capsys.readouterr().out
+    assert "#5 issue by x open [] milestone 7 u" in out
+    assert "#6 issue by x open [] milestone none u" in out
