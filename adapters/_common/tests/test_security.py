@@ -292,6 +292,26 @@ class Item13_DestructiveRmFlagVariants(unittest.TestCase):
         self._assert_caught("rm -rfv /tmp/this-is-a-fake-test-path-12345/")
         self._assert_caught("rm -rfv /tmp/foo/ ; echo done")
 
+    def test_split_recursive_and_force_flags_caught(self) -> None:
+        # Separate -r and -f tokens are the same command as -rf.
+        self._assert_caught("rm -r -f /")
+        self._assert_caught("rm -f -r /")
+        self._assert_caught("rm -R -f ~")
+        self._assert_caught("rm -r -f -v /home/x")
+        self._assert_caught("rm -r --force $HOME")
+        self._assert_allowed("rm -r -f ./build")
+
+    def test_find_on_root_or_home_caught(self) -> None:
+        # A word boundary after `/` or `~` never matches before a space, so the
+        # find patterns once missed the bare root and home directory.
+        self._assert_caught("find / -delete")
+        self._assert_caught("find ~ -delete")
+        self._assert_caught("find $HOME -delete")
+        self._assert_caught("find / -exec rm {} +")
+        self._assert_caught("find /home -delete")
+        self._assert_allowed("find . -delete")
+        self._assert_allowed("find / -name '*.log'")
+
     def test_benign_rm_not_flagged(self) -> None:
         # rm WITHOUT both r and f is allowed
         self._assert_allowed("rm -v /home/x")

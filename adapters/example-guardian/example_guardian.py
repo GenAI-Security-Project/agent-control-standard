@@ -151,13 +151,18 @@ DESTRUCTIVE_BASH_PATTERNS: tuple[re.Pattern, ...] = (
     # or `$HOME`; the trailing [a-zA-Z]* keeps `-rfv` matching.
     re.compile(r"\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\b.*?\s+(/|~|\$HOME)", re.IGNORECASE),
     re.compile(r"\brm\s+(-rf|-fr|--recursive\s+--force|--force\s+--recursive)\s+(/|~|\$HOME)(\s|$)", re.IGNORECASE),
+    # Recursive and force given as separate flag tokens in any order (`rm -r -f /`,
+    # `rm -f -R ~`). The lookaheads only scan the flag tokens before the path.
+    re.compile(r"\brm(?=(?:\s+-[a-zA-Z-]+)*\s+-(?:[a-zA-Z]*r|-recursive\b))(?=(?:\s+-[a-zA-Z-]+)*\s+-(?:[a-zA-Z]*f|-force\b))(?:\s+-[a-zA-Z-]+)+\s+(/|~|\$HOME)", re.IGNORECASE),
     re.compile(r"\brm\s+.*--no-preserve-root\b", re.IGNORECASE),
     re.compile(r"\bmkfs(\.\w+)?\s+", re.IGNORECASE),
     re.compile(r"\bdd\s+.*\bof=/dev/", re.IGNORECASE),
     re.compile(r":\(\)\s*\{"),
     re.compile(r">\s*/dev/(sd[a-z]|nvme|hd[a-z]|disk)", re.IGNORECASE),
-    re.compile(r"\bfind\s+(/|~|\$HOME)\b.*-delete\b", re.IGNORECASE),
-    re.compile(r"\bfind\s+(/|~|\$HOME)\b.*-exec\s+rm\b", re.IGNORECASE),
+    # The path ends at whitespace, not at a word boundary, because no boundary
+    # sits between `/` or `~` and the space after it.
+    re.compile(r"\bfind\s+(/|~|\$HOME)\S*\s.*-delete\b", re.IGNORECASE),
+    re.compile(r"\bfind\s+(/|~|\$HOME)\S*\s.*-exec\s+rm\b", re.IGNORECASE),
     re.compile(r"\bchmod\s+(-R\s+)?[0-7]*7{2,}[0-7]*\s+(/etc|/usr|/bin|/sbin)", re.IGNORECASE),
 )
 
