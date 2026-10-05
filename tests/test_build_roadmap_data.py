@@ -186,3 +186,11 @@ def test_unlisted_failure_class_becomes_unknown(tmp_path, capsys):
     assert run(ns, opener=opener_returning(None), now=NOW) == 0
     assert out(ns)["reason"] == "unknown"
     assert "injected" not in capsys.readouterr().out
+
+
+
+def test_a_verification_failure_publishes_unavailable(tmp_path):
+    # A shallow clone or a missing main cannot verify any close, so the page says so.
+    ns = args(tmp_path, data=json.dumps({"status": "failed", "class": "verification"}))
+    assert run(ns, opener=opener_returning(None), now=NOW) == 0
+    assert out(ns)["status"] == "unavailable" and out(ns)["reason"] == "verification"
