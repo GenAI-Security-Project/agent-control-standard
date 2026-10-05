@@ -1,9 +1,9 @@
 # Roadmap rollout: decisions, follow-up changes, and the milestone migration
 
-Version: 1.1
+Version: 1.2
 Owner: ACS project leads
 Date: 2026-10-04
-Status: design, premortem round 1 folded in
+Status: design, premortem rounds 1 and 2 folded in
 
 Phase 0 of the roadmap merged as #201 and reached `main` with promotion #203. It is inert
 until three repository variables are set. This document records the project leads' answers to
@@ -12,7 +12,8 @@ answers require, and orders the work that turns the roadmap on.
 
 Two constraints govern every choice below. ACS is a volunteer project, so dates slip and a
 target moves with one edit. Nothing here may depend on an OWASP org owner acting, so every
-control is one a project lead can set at the repository level.
+control is one a project lead can set at the repository level. A third rule follows from the
+roadmap's purpose: lateness is acceptable, but a false claim of delivery is not.
 
 ## Decisions
 
@@ -21,8 +22,8 @@ All eleven decisions from "Decisions for the project lead" were answered on Octo
 | # | Decision | Answer |
 | --- | --- | --- |
 | 1 | Phase 0 before the custom page | Phase 0, already merged |
-| 2 | "Closes #N" for accepted work | Adopted and enforced. A required check on `integration` makes every pull request that references an accepted issue choose between closing it and contributing to it |
-| 3 | Does setting a milestone accept an issue | Yes, for anyone holding the triage role or higher. GOVERNANCE.md and the README change to say so |
+| 2 | "Closes #N" for accepted work | Adopted and enforced. A required check on `integration` makes every pull request state, for each issue it names, whether it closes the issue or contributes to it |
+| 3 | Does setting a milestone accept an issue | Yes, for anyone holding the triage role or higher |
 | 4 | Whose closes count as delivered | CODEOWNERS, the GOVERNANCE.md lead tables, and a new Triage volunteers table |
 | 5 | OWASP sheet columns | Initiative is the Agentic Security Initiative, in the sheet's dropdown spelling. Workstream Name is Agent Control Standard. Workstream Lead is the three project leads. Initiative Co-Owners copies the value the sheet's other Agentic Security Initiative rows carry |
 | 6 | Day N milestones | Deleted after migration |
@@ -30,26 +31,26 @@ All eleven decisions from "Decisions for the project lead" were answered on Octo
 | 8 | Q4 2026 targets | All eight stay in Q4 2026. Targets move with one UI edit whenever capacity changes |
 | 9 | `pull-requests: read` on the sweep | Granted, with the on-`main` verification built |
 | 10 | Who closes a milestone | Any of the three project leads, once its work is on `main` |
-| 11 | Rulesets | `main` takes merge commits only. A project lead or an OWASP org owner must approve changes to the roster files |
+| 11 | Rulesets | `main` takes merge commits only. A project lead or an OWASP org owner must approve changes to the roster files and to the code that reads them |
 
 Decision 10 came with a leadership change: the project leads are now Rock Lambros, Ariel Fogel,
 and Bar Kaduri.
 
 Four further decisions came out of the first premortem round, on October 4, 2026.
 
-- **Admin bypass stays.** Admins keep `bypass_mode: always` on every ruleset, which is how
-  most merges land today. Decisions 2 and 11 therefore bind contributors. The nightly sweep
-  lists every pull request merged without an approving review, so a bypass is visible on the
-  weekly call.
+- **Admin bypass stays.** Admins keep `bypass_mode: always` on the rulesets that carry it today.
+  Decisions 2 and 11 therefore bind contributors. The nightly sweep reports bypassed merges, so
+  they are visible on the weekly call.
 - **Promotion is prompted, not automated.** The org policy that blocks Actions from opening
   pull requests stays as it is. The health issue says when `integration` is ahead of `main`
-  and gives the command, and a project lead opens and merges the promotion.
-- **Contribution spellings.** A pull request closes an accepted issue with `Closes`, `Fixes`,
-  or `Resolves`, or contributes to it with `Part of`, `Refs`, or `Contributes to`. The check
+  and gives the command, a project lead opens and merges the promotion, and the monitor alarms
+  when promotion is more than eight days overdue.
+- **Contribution spellings.** A pull request closes an issue with `Closes`, `Fixes`, or
+  `Resolves`, or contributes to it with `Part of`, `Refs`, or `Contributes to`. The check
   enforces the choice, and CONTRIBUTING.md and the pull request template teach it.
 - **No org-owner requests.** The earlier request to Scott Clinton is withdrawn. The roster
-  rule uses CODEOWNERS lines instead of a team, because creating a team that holds
-  non-members needs an org owner.
+  rule uses CODEOWNERS lines instead of a team, because creating a team that holds non-members
+  needs an org owner.
 
 ## Already done
 
@@ -65,189 +66,271 @@ Four further decisions came out of the first premortem round, on October 4, 2026
 
 ### A. Leadership and roster
 
-GOVERNANCE.md requires a leadership change to update its files together, so A lands as one
-change.
+A lands as its own pull request. Its body records the change as GOVERNANCE.md requires: the
+three project leads agreed it on October 4, 2026, and this document is the record.
 
-- GOVERNANCE.md, "## Project lead" becomes "## Project leads", with three rows in the existing
-  linked-handle format: Rock Lambros, Ariel Fogel, and Bar Kaduri.
-- GOVERNANCE.md gains a "## Triage volunteers" section after Triage authority, holding a table
-  with two columns, Volunteer and Assigned by. Victor Hernandez (@victorm-hernandez) is listed,
-  assigned by Rock Lambros. Akira Brand is added only after the invitation is accepted, in the
-  same pull request if that happens before it merges, otherwise in a follow-up.
+GOVERNANCE.md:
+
+- "## Project lead" becomes "## Project leads", with three rows in the existing linked-handle
+  format: Rock Lambros, Ariel Fogel, and Bar Kaduri.
+- A "## Triage volunteers" section follows Triage authority. It holds a table with two columns,
+  Volunteer and Assigned by. Victor Hernandez (@victorm-hernandez) is listed, assigned by Rock
+  Lambros. Akira Brand is added only after the invitation is accepted.
 - Every sentence that gives "the project lead" a duty becomes "a project lead" or "the project
-  leads", as the duty requires. Today those are the Triage authority paragraphs, the promotion
-  sentence, "Why this roster and project.owasp.yaml differ", and "How leadership changes".
-- Triage authority gains two sentences. Setting a milestone on an issue accepts it, unless a
+  leads", as the duty requires.
+- Triage authority gains three sentences. Setting a milestone on an issue accepts it, unless a
   standing triage label says otherwise. Any project lead closes a roadmap milestone once its
-  work is on `main`.
-- GOVERNANCE.md states that admins can bypass every ruleset, and that the health issue lists
-  each merge made without an approving review.
-- README.md: "Only a maintainer can move an issue to `status:accepted`" becomes a sentence
-  saying anyone with the triage role or higher accepts an issue, by applying the label or by
-  setting a milestone.
+  work is on `main`. Issues accepted by someone outside the roster and the Triage volunteers
+  table are reviewed by a project lead on the weekly call.
+- "Why this roster and project.owasp.yaml differ" and "How leadership changes" are rewritten.
+  `project.owasp.yaml` names the project leads first, then the creators, up to the schema's cap
+  of five. When the cap binds, a creator moves to the Origins credit in this file only.
+  Adding or removing a project lead needs the agreement of the other project leads, recorded in
+  the pull request that makes the change. The person being added or removed does not count
+  toward that agreement.
+- A sentence states that admins can bypass the rulesets on `main`, `integration`, and
+  `release/*`, that `protect-branch-existence` has no bypass by design (see #67), and that the
+  health issue reports bypassed merges as D describes.
+
+Other files:
+
+- README.md: "Only a maintainer can move an issue to `status:accepted`" becomes a sentence that
+  points to GOVERNANCE.md's Triage authority for who accepts work and how.
 - `project.owasp.yaml` lists five leaders: the three project leads and the two creators. Its
-  comment changes from "the project lead and the two creators" to match. Five is the schema's
-  cap, so a sixth leader can never be added here.
-- CODEOWNERS: the header names the project leads, and the pending-invitation comment states the
-  current state, which is that the three lapsed Identity and Outreach invitations are not being
-  re-sent. A new `/project.owasp.yaml` line carries the roster owners (see E).
-- `tools/roadmap_model.py`:
-  - `parse_governance` reads "Project leads" and also accepts the old "Project lead" heading,
-    so the parser works on either side of the merge.
-  - It parses the Triage volunteers table into the trusted set. The table may have no rows.
-    Each Volunteer cell must be one linked handle, with the same strict link checks the lead
-    tables get. Each Assigned by cell must name a project lead or workstream lead already in
-    the roster, by name or handle. Any other cell shape raises, and the trusted set falls back
-    to the safe failure the sweep already uses.
-  - `roadmap_sync._sweep` loads the roster inside its `try`, so a malformed GOVERNANCE.md
-    degrades the health issue instead of crashing the job.
-  - Tests cover both headings, a populated table, an empty table, a malformed Volunteer cell,
-    and an assigner who is not in the roster.
+  comment matches the new GOVERNANCE.md rule.
+- CODEOWNERS:
+  - The header names the project leads.
+  - The pending-invitation comment states the current state. @artmaro holds write access. The
+    three lapsed Identity and Outreach invitations are not being re-sent.
+  - The roster owners are the three project leads plus the three OWASP org owners
+    (@GangGreenTemperTatum, @mamicidal, @sclintonowasp), who stay by standing decision. They own
+    `/GOVERNANCE.md`, `/.github/`, a new `/project.owasp.yaml` line, and new lines for
+    `/tools/roadmap_model.py`, `/tools/roadmap_sync.py`, and `/tests/test_roadmap_model_*.py`,
+    the code that turns those files into the trusted set. The new code lines come after the
+    `/tools/` and `/tests/` lines, because the last matching pattern wins. Fred Wilmot keeps his
+    other entries.
+
+`tools/roadmap_model.py`:
+
+- `parse_governance` reads "Project leads" and also accepts the old "Project lead" heading, so
+  the parser works on either side of the merge.
+- HTML comments are stripped from GOVERNANCE.md before any table is parsed, so a hidden row
+  cannot grant trust.
+- The Triage volunteers table is parsed into the trusted set. `_table_rows` gains an
+  `allow_empty` parameter, used only for this table, so a header-only table is valid. Each
+  Volunteer cell must be one linked handle with the lead tables' strict link checks. A row
+  whose Assigned by cell names nobody in the lead tables is left out of the trusted set and
+  reported, by its row number, in the health issue. Any other malformed cell raises, as today.
+- `roadmap_sync._sweep` loads the roster inside its `try`, so a malformed GOVERNANCE.md degrades
+  the health issue instead of crashing the job.
+- Tests cover both headings, a populated table, an empty table, a commented-out row, a malformed
+  Volunteer cell, and an unknown assigner.
 
 `tools/render_landing.py` reads only the Workstream leads table. A test confirms the landing
 render still passes with the new sections.
 
 ### B. OWASP skill mapping
 
-The skill lives in `~/.claude/skills/owasp-acs-roadmap`, outside the repository. Its columns
-follow decision 5.
+The skill lives in `~/.claude/skills/owasp-acs-roadmap`, outside the repository.
 
 - The written Initiative value and the row filter are separate constants. `INITIATIVE` becomes
-  the dropdown value `Agentic Security Initaitive`, with a comment naming the misspelling so the
-  value changes in one place if OWASP fixes the list. The filter that finds this project's rows
-  matches `Workstream Name == "Agent Control Standard"`. Filtering on Initiative would match
-  other ASI teams' rows, report them as orphaned, and invite deleting them.
-- Workstream Name: `Agent Control Standard` on every row.
-- Workstream Lead: the project leads from `roadmap.json`.
-- Initiative Co-Owners: the stripped value of the Initiative Co-Owners cell on the sheet's
-  Agentic Security Initiative rows that are not ACS rows. When those rows carry more than one
-  distinct stripped value, or none, the skill refuses with a new code `E_COOWNERS` and writes no
-  rows. The value is written to the output file and never printed.
-- Type: `roadmap_model.DELIVERABLE_TYPES` becomes the sheet's dropdown list exactly:
-  `Application/Tool`, `Cheat Sheet`, `Code Sample`, `Document`, `OSS Project`, `Other`. The
-  milestone descriptions created in G use these values. A milestone whose `Type:` line is not in
-  the list is reported in the health issue, as today.
-- The `Workstream:` description line stays for the health issue and the page. The health issue
-  stops reporting its absence as an OWASP problem.
-- The first run after migration may move a row from In Progress, as hand-entered, to Planning,
-  because the skill derives status from closed work. The skill's value stands, and no one is
-  asked to reconcile it.
-- Tests cover a sheet with another team's ASI rows, a sheet with two co-owner spellings, and a
-  milestone type outside the list. The plugin zip is rebuilt and validated after the change.
+  the dropdown value `Agentic Security Initaitive`, with a comment naming the misspelling. The
+  filter that finds this project's rows requires `Workstream Name` to equal
+  `Agent Control Standard` and the Repository Link to start with this repository's milestone
+  URL. Filtering on Initiative alone would match other ASI teams' rows.
+- Workstream Name is `Agent Control Standard` on every row, and Workstream Lead is the project
+  leads from `roadmap.json`.
+- Initiative Co-Owners is a constant, `CO_OWNERS = "John"`, read from the sheet on October 4,
+  2026. The skill compares it with the stripped Co-Owners cell on the other ASI rows and prints
+  `COOWNERS_DRIFT` when they differ. It still writes rows, so another team's typo cannot block
+  the report.
+- Every cell written to the output passes through `sanitize()`.
+- Instructions that target an existing row carry the milestone number with the row number.
+  SKILL.md tells the user to find the row by its Repository Link before pasting, because other
+  teams insert and sort rows between the export and the paste.
+- The first run after migration may move a row from In Progress, as hand-entered, to Planning.
+  The skill's value stands.
+- Tests cover a sheet with other teams' ASI rows, a co-owner drift, a row whose Workstream Name
+  matches but whose link does not, and a milestone type outside the list. The plugin zip is
+  rebuilt and validated.
 
 ### C. Closing-choice check
 
 A new workflow, `.github/workflows/closing-choice.yml`, holds one job named `closing-choice`.
 It is separate from `pr-intake.yml` so its triggers can include `synchronize`, which a required
-check needs, or the check goes missing after every push.
+check needs.
 
-- Trigger: `pull_request_target` with `opened`, `edited`, `synchronize`, and `reopened`, on
-  every base branch. Permissions: `issues: read` and `pull-requests: read`. No checkout. The
-  body reaches the script through `env:`.
-- It reads only the template section, from the line `## Which issue does this implement` to
-  the next `## ` heading. A body without that heading fails, with a message naming the heading.
-- It extracts every issue reference in the section, in three shapes: `#N`, `owner/repo#N` for
-  this repository, and this repository's issue URL. References to other repositories are
-  ignored.
-- For each referenced issue carrying `status:accepted`, the section must reference it through
-  one of the six spellings: `Closes`, `Fixes`, `Resolves`, `Part of`, `Refs`, or
-  `Contributes to`, case-insensitive, with an optional colon. Any accepted issue referenced
-  without one fails the check.
-- It passes when the editorial checkbox is checked, when the author is `dependabot[bot]`, and
-  for the promotion pull request from `integration` to `main`.
-- An API failure fails the check, so a GitHub outage blocks merges on `integration` rather than
-  waving them through. Rerunning the job clears it.
-- The failure message names the issue numbers, the six spellings, and the heading. It prints
-  nothing from the body.
-- `pr-intake.yml`'s keyword-flag step stays, unchanged. It warns about closing keywords on any
-  roadmap issue, which the new check does not cover.
-- CONTRIBUTING.md and the pull request template explain the choice in one sentence each. The
-  template's `Closes #` line becomes `Closes #` with a comment listing the contributing
-  spellings.
-- Tests pin the workflow's triggers, permissions, and absence of a checkout, and exercise the
-  extraction and decision logic against a fake GitHub API: each spelling, each reference shape,
-  prose outside the section, a missing heading, a cross-repository reference, each exemption,
-  and an API failure.
+The rule reads only the pull request body, never issue state. It needs no API call, so it
+cannot go stale when an issue is accepted later, cannot fail on a GitHub outage, and cannot
+spend the shared token budget.
 
-Making the check required is sequenced. The workflow merges to `integration` first and must
-appear on at least one pull request. Open pull requests then get the check by a close and
-reopen, which runs the workflow without a push. G's migration runs before the check is made
-required, so `status:accepted` reflects the new milestones when it starts binding. Only then
-does `protect-integration` gain `closing-choice` as a required check.
+- Trigger: `pull_request_target` with `opened`, `edited`, `synchronize`, and `reopened`.
+  Permissions: `contents: read` only. The job checks out `main`, never the pull request's head,
+  with `persist-credentials: false`, and runs `tools/closing_choice.py` from it with
+  `python3 -I -S`. Until that file exists on `main`, the job passes with a notice. The body
+  reaches the script through `env:`. A concurrency group per pull request number cancels runs
+  in progress.
+- The section is the text from the line `## Which issue does this implement` to the next `## `
+  heading. A reference is `#N`, `GenAI-Security-Project/agent-control-standard#N`, or this
+  repository's issue or pull request URL, case-insensitive. References to other repositories
+  are ignored.
+- It fails when any of these holds:
+  - The section is missing.
+  - A reference in the section is not directly preceded by one of the six spellings, with an
+    optional colon. A comma-separated list after one spelling counts for each reference in it.
+  - The same issue is both closed and contributed to.
+  - A GitHub closing keyword (`close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`,
+    `resolves`, `resolved`) precedes a reference of this repository anywhere outside the
+    section.
+  - The section holds more than 50 references.
+- The editorial checkbox exempts a body only when it holds no closing keyword anywhere.
+- Further exemptions: pull requests opened by `dependabot[bot]`, the promotion pull request,
+  and the sync pull request. Promotion means head `integration` and base `main`, and sync means
+  head `main` and base `integration`. In both, the head repository must be this repository, so
+  a fork branch named `integration` is not exempt.
+- Repository variable `CLOSING_CHOICE_SINCE` holds an ISO date. While it is unset, the job
+  passes with a notice and states what it would have failed. A pull request created before that
+  date passes with a notice. Unsetting the variable is the kill switch.
+- The failure message names the rule that failed and the six spellings. It prints issue
+  numbers and nothing else from the body.
+- The template drops its prefilled `Closes #`. The section instead holds a comment that names
+  the six spellings and says to write one before each issue number. CONTRIBUTING.md explains
+  the choice in one sentence.
+- `pr-intake.yml`'s keyword-flag step stays unchanged.
+- The rule is a stdlib-only function in `tools/closing_choice.py`. The sweep's bypass report
+  reuses it. Tests cover each spelling,
+  each reference shape, lists, closing and contributing to the same issue, a keyword outside
+  the section, the reference cap, a missing section, each exemption including a fork head named
+  `integration`, the editorial exemption with and without a keyword, the date gate, and the
+  unmodified new template. A guard test pins the triggers, the permissions, the concurrency
+  group, and a checkout of `main` that never names the pull request's head.
 
-### D. Sweep additions
+Making the check required follows the Order. Pull requests older than `CLOSING_CHOICE_SINCE`
+get a run on their next push or edit. A lead can also close and reopen one at merge time,
+after confirming its head repository still exists.
 
-All three additions are integers and numbers in the health issue. No fetched title or body text
-reaches it.
+### D. Sweep and monitor additions
+
+Every addition prints integers, branch names, and logins that match GitHub's login pattern. No
+fetched title or body text reaches the health issue. Each addition is its own section with its
+own `try`, so one failed read marks that section "Could not be read on this run" and leaves the
+rest intact. The sweep stops its reads after ten minutes and writes what it has, before the
+job's fifteen-minute timeout.
+
+Git reads replace API calls where they can. The sweep job checks out with `fetch-depth: 0`,
+so ancestry and branch distance come from `git merge-base --is-ancestor` and
+`git rev-list --count`.
 
 On-`main` verification:
 
 - The sweep and dryrun jobs gain `pull-requests: read`, and their guard tests change to match.
-- For each milestone in the Ready to publish state, a separate sweep-only GraphQL query reads
-  each done issue's `ClosedEvent.closer`. When the closer is a merged pull request in this
-  repository with a merge commit, the sweep compares that commit with `main` through
-  `compare/{sha}...main`. Status `ahead` or `identical` means on `main`. Status `behind` or
-  `diverged` means not on `main`.
-- The milestone section splits into "on `main`, close now" and "awaiting promotion or
-  verification". Each awaiting issue carries one reason: closed by hand, not yet on `main`, no
-  merge commit, or closed from another repository.
-- A reverted commit still reads as on `main`. That is accepted, because a revert reopens the
-  issue in normal practice and the check is a prompt, not a gate.
+- For each milestone in the Ready to publish state, and each milestone closed in the last 90
+  days, the sweep reads each done issue's closer. A merged pull request in this repository
+  supplies its merge commit. When the closer is a person, the sweep collects the merged
+  pull requests that reference the issue, through the existing cross-reference query and
+  `delivered_by()`. Each merge commit is checked for ancestry against `origin/main`.
+- Ready milestones split into "on `main`, close now" and "awaiting promotion or verification".
+  Each awaiting issue carries one reason: not yet on `main`, no linked merged pull request, or
+  closed from another repository.
+- A closed milestone with any issue not on `main` is listed under "Published but not verified
+  on `main`", with the login that closed the milestone.
+- A reverted commit still reads as on `main`. That is accepted, because a revert normally
+  reopens the issue.
+
+Hand closes:
+
+- The health issue lists each issue closed as completed by a person other than a project lead
+  in the last seven days. Decision 4 still counts these as done. The list makes each one
+  visible for a lead to confirm or reopen.
 
 Promotion prompt:
 
-- The sweep reads `compare/main...integration`. When `ahead_by` is above zero and no open pull
-  request runs from `integration` to `main`, the health issue says "Promotion pending:
-  `integration` is N commits ahead of `main`" and gives the one-line `gh pr create` command with
-  the title and body `open-promotion.yml` uses today.
+- When `integration` is ahead of `main` and no open pull request runs from this repository's
+  `integration` to `main`, the health issue says "Promotion pending: `integration` is N commits
+  ahead of `main`". It gives the one-line `gh pr create` command, with the title and body
+  `open-promotion.yml` uses today. It also writes a machine line,
+  `<!-- acs-promotion: ahead N since YYYY-MM-DD -->`, where the date is the oldest commit on
+  `integration` that `main` lacks.
+- `monitor_roadmap.py` fails when that date is more than eight days old, so the existing alarm
+  carries an overdue promotion.
 - `open-promotion.yml` loses its `schedule` trigger and keeps `workflow_dispatch`, with a
-  comment saying the dispatch works only if the org policy changes. Its guard test changes to
-  match.
+  comment that dispatch works only if the org policy changes. Its guard test changes to match.
 
-Bypass log:
+Bypass report:
 
-- The sweep lists pull requests merged into `integration` or `main` in the last seven days whose
-  `reviewDecision` is not `APPROVED`. Each line gives the number, the base branch, and the
-  merger's login. A login that does not match GitHub's login pattern prints as `unknown`.
-- Direct pushes by an admin do not appear. That residual is accepted, since none has happened
-  and the rule-suites API that would show them needs an administration grant `GITHUB_TOKEN`
-  cannot have.
+- The health issue gives the count of pull requests merged into `integration` or `main` in the
+  last seven days whose `reviewDecision` is not `APPROVED`, with promotions counted
+  separately.
+- It lists individually only the merges that matter:
+  - a merge touching GOVERNANCE.md, `.github/`, `project.owasp.yaml`, or the roster code from A,
+    read from the pull request files API
+  - a merge from a fork whose review was not approved
+  - a merge whose body fails the closing-choice rule
+  - a merge where the merger is also the author
+- Direct pushes by an admin do not appear. The rule-suites API that would show them needs an
+  administration grant `GITHUB_TOKEN` cannot have, so that residual is accepted.
 
-Tests cover each closer case, each compare status, the promotion line on and off, and the bypass
-list with approved, unapproved, and old pull requests, using the fake GitHub.
+Starting the sweep:
 
-### E. Rulesets and the roster rule
+- `roadmap-sync.yml`'s `workflow_dispatch` gains a `mode` input, `dryrun` by default. `mode:
+  sweep` runs the sweep job, which still requires `ROADMAP_SYNC_ENABLED`. G uses it so the
+  health issue exists minutes after sync turns on.
+
+Deliverable types:
+
+- `roadmap_model.DELIVERABLE_TYPES` becomes the sheet's dropdown list exactly:
+  `Application/Tool`, `Cheat Sheet`, `Code Sample`, `Document`, `OSS Project`, `Other`.
+  `RULES_VERSION` is bumped, the fixture uses `OSS Project`, and a test asserts every fixture
+  milestone parses without description errors.
+- The health issue stops reporting a missing `Workstream:` line as an OWASP problem.
+
+Migration support:
+
+- `migrate`'s dry run prints each entry's current milestone number, or `none`, next to its
+  labels. Saved, that output is the undo log.
+
+Tests cover each closer case, ancestry true and false, a closed milestone with unverified
+work, the promotion line on and off and the monitor's eight-day rule, a fork head named
+`integration`, each bypass category, a failed read in one section, the dispatch mode, and the
+migrate line, using the fake GitHub and a temporary git repository.
+
+### E. Rulesets
 
 - `protect-main` allows only merge commits. The promotion pull request's body already asks for
   one.
 - `protect-integration` allows only squash merges. A rebase merge lets each commit message close
-  issues on the default branch, which `integration` is, so a closing keyword in a commit message
-  would bypass C. With squash only, the squash message is the pull request body that C reads.
-- `protect-integration` adds `closing-choice` as a required check, in the order C states.
-- The roster rule needs no team. The CODEOWNERS lines for `/GOVERNANCE.md`, `/.github/`, and
-  the new `/project.owasp.yaml` list the three project leads and the three OWASP org owners
-  (@GangGreenTemperTatum, @mamicidal, @sclintonowasp), who stay on those lines by standing
-  decision. Code-owner review is already required on `main` and `integration`, so one of those
-  six must approve a roster change. Fred Wilmot leaves these three lines and keeps his other
-  entries.
-- `tools/apply_governance.py`'s `desired_rulesets()` follows the live rulesets in two steps, so
-  a full run never reverts them. Step 1 of the order declares squash only on
-  `protect-integration`. Step 3 adds `closing-choice` to its required checks, in the same change
-  that makes the check required, so a full run before then cannot require a check that has never
-  run. `protect-release` keeps its current shape. `protect-main` stays outside the tool, as today.
-  The nightly board job runs `--only board` and never touches rulesets.
+  issues on `integration`, which is the default branch, outside anything C reads. With squash
+  only, the squash message is the pull request body, which C reads in full.
+- `protect-integration` gains `closing-choice` as a required check, in the Order's last step.
+- Every required check carries `integration_id: 15368`, the GitHub Actions app, so a commit
+  status or another app's check with the same name cannot satisfy it.
+- Live ruleset edits are made with a read, modify, and write of the full ruleset JSON, so no
+  live field is dropped.
+
+`tools/apply_governance.py`:
+
+- `desired_rulesets()` declares squash only on `protect-integration` from the first change. It
+  adds `closing-choice` in the Order's last step, in the same change that makes the check
+  required.
+- `Ruleset` gains `required_check_integration_id` and
+  `require_extra_approval_for_unattributed_changes`, both compared and rendered, so a full run
+  neither drops nor ignores them.
+- `_protect_main_payload` copies every live pull-request parameter and the bypass actors before
+  changing anything, so it cannot strip code-owner review from `main`. A test pins that.
+- Ruleset planning refuses to run unless the checkout's `HEAD` equals `origin/integration`, so a
+  stale clone cannot revert the live rulesets.
+- The nightly board job runs `--only board` and never touches rulesets.
 
 ### F. Access grants
 
 Done on October 4. The three lapsed lead invitations, for Eva Benn, Richard Bird, and Aruneesh
-Salhotra, are not re-sent. The Identity workstream may be retired, so its inert CODEOWNERS
-entries stay for now.
+Salhotra, are not re-sent. The Identity workstream may be retired, so its CODEOWNERS entries
+stay for now.
 
 ### G. Milestone migration
 
-This runs after A, B, C, D, and E's merge-method rules reach `main`, so the trusted set is
-current and the health issue reports the new sections from its first run. It follows the
-migration steps in the roadmap design, with these changes:
+This runs once the three pull requests in the Order reach `main`. It follows the migration
+steps in the roadmap design, with these changes:
 
 - The milestone table is the one agreed on October 4, without #178.
 - The eight in-focus issues missing from that table are placed as agreed on October 4:
@@ -259,38 +342,48 @@ migration steps in the roadmap design, with these changes:
   | #74 | Installable reference Guardian |
   | #43 | v0.2.0 |
   | #52 | None while it carries `status:blocked`. A project lead places it when it is unblocked. |
-  | #67 | None. The `protect-branch-existence` ruleset (id 22712052) now blocks deleting `integration`, so #67 is verified against that ruleset and closed with a note citing it. |
+  | #67 | None. The `protect-branch-existence` ruleset (id 22712052) blocks deleting `integration` and has no bypass actors. #67 is closed with a note citing the ruleset and saying its empty bypass list is what fixes the bug. |
 
-- #19 will be closed in favor of #33. It is closed as "not planned" with the comment
-  "Superseded by #33", so the roadmap counts it as dropped, not delivered, and the conformance
-  claim template milestone can publish without claiming #19's suite, registry, or steward.
-- The milestones on the TrustX path, the Responsible AI Institute's planned use of ACS as a
-  conformance target, are the ACS-Core conformant reference Guardian, Fail-open decision,
-  Reference adapters on main (which carries the ACS-Core floor, #132 and PR #21), Conformance
-  claim template, and Installable reference Guardian milestones. All are in Q4 2026.
+- #19 is not closed during the migration. When a project lead later closes it, it is closed as
+  "not planned", and the comment names where each part of its scope went: #33 for the
+  requirement ledger, #188 for the suite, and a new issue for the registry, steward, and
+  revocation path. The same change updates `docs/spec/conformance.md`, which names #19 as the
+  tracking issue.
+- Several Q4 2026 milestones carry the work an outside conformance lab needs to test against
+  ACS: the ACS-Core conformant reference Guardian, Fail-open decision, Reference adapters on
+  main (which carries the ACS-Core floor, #132 and PR #21), Conformance claim template, and
+  Installable reference Guardian. Together they deliver a self-attested claim template and a
+  suite that does not block merges. Independent verification and a steward are not on that
+  path.
 - Every milestone description carries `Type:` and `Workstream:` lines, with `Type:` from the
-  list in B, and the benchmark carries `Committed: 2026-12-09`.
-- Before the first `--apply`, the migrate dry run's plan is saved to the scratch directory as
-  the undo log: each issue's prior milestone and labels. Undoing is replaying that log with
-  `gh`.
+  list in D, and the benchmark carries `Committed: 2026-12-09`. Each description also says that
+  GitHub's percentage counts every closed issue, including ones closed as not planned, and
+  points to the health issue for verified progress.
+- Before the first `--apply`, the dry run's output is saved to the scratch directory as the undo
+  log.
 - The migration runs with `ROADMAP_SYNC_ENABLED` off, so the event job does not race the
-  migration's own label writes.
-- The Day N milestones are deleted, not closed, after #93 and #94 move.
-- Then `ROADMAP_SYNC_ENABLED` turns on, and the next sweep creates the health issue. A project
-  lead pins it and sets `ROADMAP_HEALTH_ISSUE`. Until that variable is set, the monitor's health
-  check reports "not configured" without failing. `ROADMAP_RENDER_ENABLED` and
+  migration's own writes.
+- Then a project lead sets `ROADMAP_SYNC_ENABLED`, dispatches `roadmap-sync.yml` with
+  `mode: sweep`, pins the health issue it creates, and sets `ROADMAP_HEALTH_ISSUE`. The window in
+  which the monitor sees sync on without a health issue is minutes. `ROADMAP_RENDER_ENABLED` and
   `ROADMAP_REFRESH_ENABLED` follow, and deploy-pages runs on `main`.
-- C's check becomes required now, as C orders.
+- The Day N milestones are deleted after #93 and #94 move and one sweep reports `ok`.
 - The skill produces per-milestone rows. Its first run reports the hand-entered ACS rows as
   orphaned, and Rock replaces them. Rows of other ASI teams are never touched.
 
 ## Order
 
-1. A, C, D, and E's merge-method rules, with the matching `desired_rulesets()` change, land as
-   one pull request to `integration`, followed by a promotion. B ships at the same time, outside the repository.
-2. G runs after step 1 reaches `main`.
-3. `closing-choice` becomes required on `integration`, with the matching `desired_rulesets()`
-   change, as the last step.
+1. Three pull requests to `integration`, in this order:
+   - A, the leadership and roster change.
+   - C and E's merge-method rules, with the matching `desired_rulesets()` and `Ruleset`
+     changes. `CLOSING_CHOICE_SINCE` stays unset, so the check reports without failing.
+   - D.
+
+   B ships alongside, outside the repository. One promotion carries all three to `main`.
+2. G runs after the promotion.
+3. A project lead sets `CLOSING_CHOICE_SINCE` to that day's date. A final small pull request
+   adds `closing-choice` to `desired_rulesets()`, and the same lead adds it to
+   `protect-integration` as a required check.
 
 ## Out of scope
 
@@ -298,3 +391,4 @@ migration steps in the roadmap design, with these changes:
 - The custom roadmap page, phase 1.
 - Changing the OWASP sheet's dropdown spelling, which is the sheet owner's.
 - Any change needing an OWASP org owner, including the Actions pull request setting and teams.
+- Repository role changes. Whether any admin should hold a lesser role is a separate decision.
