@@ -115,6 +115,11 @@ def observe(resp: dict) -> dict:
 
 def drive(member: dict, url: str, adapted: bool) -> dict:
     p = member["payload"]
+    if "audit_events" in p:
+        return {"status": "not-on-the-wire", "reason": (
+            "decision-failure fixture needs outage and deployment audit observations; "
+            "posting its request cannot prove that no decision was rendered or an audit event exists"
+        )}
     salt = "%s:%s" % (member["id"], "adapted" if adapted else "raw")
     steps = p.get("steps") or ([{"request": p["request"]}] if "request" in p else None)
     if steps is None:

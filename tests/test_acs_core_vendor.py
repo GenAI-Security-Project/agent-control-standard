@@ -1,11 +1,14 @@
 """Refuse altered imports and exercise the local report without a vectors package."""
 
 import importlib.util
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
+import uuid
 
 import pytest
 
@@ -65,3 +68,54 @@ def test_runner_default_and_override_work_without_package(tmp_path):
         assert all(row["adapted"]["status"] in {"transport-failure", "not-on-the-wire"} for row in rows)
         results.append({row["id"] for row in rows})
     assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("decision", ["allow", "deny"])
+def test_constant_guardian_cannot_claim_full_evidence(tmp_path, decision):
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps({"result": {"decision": decision}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    output = tmp_path / "results.jsonl"
+    try:
+        process = subprocess.run(
+            [sys.executable, "-I", "-S", str(AGT / "scripts/run-acs-core-vectors.py"),
+             "--guardian", f"http://127.0.0.1:{server.server_port}/acs", "--out", str(output)],
+            cwd=tmp_path, capture_output=True, text=True,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert process.returncode == 0
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert len(rows) == 43 and requests
+    selected = {row["id"]: row for row in rows}
+    namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    sessions = {request["params"]["metadata"]["session_id"] for request in requests}
+    for identity in ["va0ee5d0830b0490b", "vfdd68340c2094962"]:
+        for column in ["raw", "adapted"]:
+            assert selected[identity][column]["status"] == "not-on-the-wire"
+            assert "deployment audit observations" in selected[identity][column]["reason"]
+            assert selected[identity][column + "_score"] == "NOT RUN"
+            assert str(uuid.uuid5(namespace, identity + ":" + column + ":s-0001")) not in sessions
+    if decision == "allow":
+        assert any(row["expected"]["verdict"] == "allow" and row["adapted_score"] == "PASS" for row in rows)
+        assert any(row["expected"]["verdict"] == "deny" and row["adapted_score"] == "FAIL" for row in rows)
+    else:
+        assert any(row["expected"]["verdict"] == "allow" and row["adapted_score"] == "FAIL" for row in rows)
+        assert any(row["adapted_score"] == "FAIL-CODE" for row in rows)

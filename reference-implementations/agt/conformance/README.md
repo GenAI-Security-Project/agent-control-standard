@@ -37,3 +37,11 @@ unsupported subjects as `NOT RUN` and transport failures as unmeasured. Declared
 input counts are not observed results. A failing member does not fail this
 informational job; no answered request exits 2. The report does not certify full
 ACS-Core deployment conformance, independent operation or host adoption.
+
+Two inputs test decision-failure audit evidence, not an ordinary policy allow:
+`va0ee5d0830b0490b` retains an audit event and `vfdd68340c2094962` omits it.
+This request-only driver measures neither outage nor the deployment's audit sink.
+Both inputs report `NOT RUN`; an ordinary allow response cannot stand in for
+that evidence. The failed-hello startup witness raised in
+[#33](https://github.com/GenAI-Security-Project/agent-control-standard/issues/33#issuecomment-5992454631)
+has no member in this imported corpus.
