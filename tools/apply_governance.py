@@ -523,11 +523,15 @@ def desired_rulesets() -> list[Ruleset]:
     protect-integration allows squash merges only. A rebase merge lands every commit
     message of the branch, and any of them can close an issue past the closing-choice
     check, which reads the pull request description only.
+    protect-integration also requires `closing-choice`, from the Order's step 3, once a
+    project lead has set CLOSING_CHOICE_SINCE. Before that date the check passes every pull
+    request with a notice, so requiring it blocks nothing that was open.
     """
     return [
         Ruleset(
             name="protect-integration",
             target_ref="refs/heads/integration",
+            required_status_checks=("test", "build", "closing-choice"),
             allowed_merge_methods=("squash",),
         ),
         Ruleset(name="protect-release", target_ref="refs/heads/release/*"),

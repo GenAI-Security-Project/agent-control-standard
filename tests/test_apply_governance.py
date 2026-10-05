@@ -222,8 +222,10 @@ def test_desired_rulesets_are_protect_integration_and_protect_release():
         assert ruleset.dismiss_stale_reviews_on_push is True
         assert ruleset.require_last_push_approval is True
         assert ruleset.required_review_thread_resolution is True
-        assert ruleset.required_status_checks == ("test", "build")
         assert ruleset.check_integration_id == 15368
+    # Order step 3: closing-choice is required on integration only.
+    assert rulesets["protect-integration"].required_status_checks == ("test", "build", "closing-choice")
+    assert rulesets["protect-release"].required_status_checks == ("test", "build")
     # Rollout package E: a rebase merge lands every branch commit message, and any of them
     # can close an issue, so integration takes squash merges only.
     assert rulesets["protect-integration"].allowed_merge_methods == ("squash",)
@@ -832,7 +834,7 @@ def test_update_payload_keeps_every_live_field_it_does_not_model():
     assert pull_request["allowed_merge_methods"] == ["squash"]
     checks = next(r for r in payload["rules"] if r["type"] == "required_status_checks")["parameters"]
     assert checks["required_status_checks"] == [
-        {"context": "test", "integration_id": 15368}, {"context": "build", "integration_id": 15368},
+        {"context": check, "integration_id": 15368} for check in integration.required_status_checks
     ]
     assert [r["type"] for r in payload["rules"]] == ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]
     for key in ("id", "node_id", "source", "source_type", "created_at", "updated_at", "current_user_can_bypass"):
@@ -845,7 +847,7 @@ def test_a_ruleset_matching_live_state_with_app_ids_is_left_alone():
     fixed = json.loads(json.dumps(LIVE_PROTECT_INTEGRATION))
     fixed["rules"][2]["parameters"]["allowed_merge_methods"] = ["squash"]
     fixed["rules"][3]["parameters"]["required_status_checks"] = [
-        {"context": "test", "integration_id": 15368}, {"context": "build", "integration_id": 15368},
+        {"context": check, "integration_id": 15368} for check in integration.required_status_checks
     ]
     assert plan_ruleset_actions([_normalized(fixed)], (integration,)) == []
     fixed["rules"][3]["parameters"]["required_status_checks"][1]["integration_id"] = 999
@@ -900,9 +902,9 @@ def test_main_skips_the_checkout_check_for_steps_that_write_no_ruleset(monkeypat
 
 def test_removed_required_checks_lists_live_checks_the_declaration_drops():
     from apply_governance import Ruleset, removed_required_checks
-    live = [{"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice")}]
+    live = [{"name": "protect-integration", "required_status_checks": ("test", "build", "hand-added")}]
     desired = (Ruleset(name="protect-integration", target_ref="refs/heads/integration"),)
-    assert removed_required_checks(live, desired) == [("protect-integration", "closing-choice")]
+    assert removed_required_checks(live, desired) == [("protect-integration", "hand-added")]
     assert removed_required_checks([{"name": "protect-integration", "required_status_checks": ("test", "build")}], desired) == []
     assert removed_required_checks([], desired) == []
 
@@ -913,12 +915,12 @@ def test_main_refuses_to_drop_a_live_required_check_without_the_flag(monkeypatch
     tip = "a" * 40
     monkeypatch.setattr(apply_governance, "_checkout_state", lambda: ("", tip, tip))
     monkeypatch.setattr(apply_governance, "fetch_live_state", lambda: {"rulesets": [
-        {"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice")},
+        {"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice", "hand-added")},
     ]})
     monkeypatch.setattr(apply_governance, "collect_actions", lambda live, only=None: [apply_governance.Action("rulesets", "Update ruleset", ("true",))])
     assert main(["--only", "rulesets", "--apply"]) == 2
     err = capsys.readouterr().err
-    assert "closing-choice" in err and "--allow-ruleset-reduction" in err
+    assert "hand-added" in err and "--allow-ruleset-reduction" in err
 
     ran = []
     monkeypatch.setattr(apply_governance, "run_action", lambda action: ran.append(action))
