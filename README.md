@@ -289,10 +289,9 @@ harness measures the wire, not the language behind it.
 
 ### Harden it for production
 
-Two gaps are named and open, not vague. The Guardian writes its envelope and audit logs
-as synchronous file appends on the decision path, with no batching, so trace spans need
-a batched writer before a Trace-pillar claim would hold up under load. No OpenTelemetry
-collector or exporter exists yet. The conformance harness only measures which
+The Guardian batches its envelope and session-context logs for asynchronous append,
+with bounded queues and a drain on graceful shutdown. No OpenTelemetry collector or
+exporter exists yet. The conformance harness only measures which
 attributes a consumer *could* emit from the envelopes, not that anything ships them.
 Start in [`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
 

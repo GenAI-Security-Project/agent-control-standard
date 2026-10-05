@@ -370,7 +370,7 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 These are known limits of the tree as it stands. None is fixed.
 
 - **Memory and disk grow without bound.** The Guardian's session store never evicts a session. The envelope log, the audit log and the session-context log have no rotation and no size cap. A long-lived Guardian grows until something else stops it.
-- **Log writes sit on the decision path.** The Guardian writes two synchronous file appends per request in a single-threaded server. A slow disk blocks every in-flight decision.
+- **Logs are buffered.** The Guardian batches envelope and session-context records for asynchronous append. Graceful shutdown drains them; abrupt termination or a disabled sink can lose queued records. See the [Guardian's logging contract](packages/guardian/README.md#log-batching-and-shutdown).
 - **The wire is unauthenticated.** See [What this project is, and is not](#what-this-project-is-and-is-not). Loopback by default is the only protection.
 - **The egress gate has three measured soft spots.** A shell command whose destination the extractor cannot parse falls through to `allow`, not `deny`. With the shipped allowlist, any command whose text contains an off-list URL is denied, whether or not it reaches that URL. A `WebFetch` URL reaches AGT's gate with no parsing, so four userinfo-style URL shapes pass on the fetch route and fail on the shell route. Closing the last one means editing a `.rego` file, which this project does not do.
 - **An `ask` never carries `ask_details`.** The Guardian's decision type has no such field. Every `ask` fails the response schema. A `defer` would fail the same way if any AGT verdict mapped to it.

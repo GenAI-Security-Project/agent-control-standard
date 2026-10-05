@@ -352,6 +352,7 @@ describe("startGuardian POST /acs -- denyOnInvalidEnvelope's boundary: what stay
       const response = await postAcs(guardian.url, bad);
       expect(response.result?.decision).toBe("deny");
 
+      await guardian.close();
       const lines = readFileSync(logPath, "utf8").trim().split("\n");
       const entries = lines.map((line) => JSON.parse(line) as { direction: string; rpc_id: unknown });
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);
@@ -554,7 +555,7 @@ const SCHEMALESS_SCRATCH_DIR = join(GUARDIAN_PKG, "tmp-schemaless-scratch");
  * Deletions here are explicit per file (repo constraint: nothing recursive).
  */
 async function withSchemalessGuardian(
-  body: (guardian: { url: string; logPath: string }) => Promise<void>,
+  body: (guardian: { url: string; logPath: string; close(): Promise<void> }) => Promise<void>,
 ): Promise<void> {
   const root = SCHEMALESS_SCRATCH_DIR;
   const srcDir = join(root, "src");
@@ -581,7 +582,7 @@ async function withSchemalessGuardian(
     });
     guardian = started;
 
-    await body({ url: started.url, logPath });
+    await body({ url: started.url, logPath, close: () => started.close() });
   } finally {
     await guardian?.close();
     for (const path of [logPath, ...copied.map((file) => join(srcDir, file))]) {
@@ -876,9 +877,10 @@ describe("startGuardian POST /acs -- the outer net around dispatch", () => {
   });
 
   it("records both the request and the response, so the envelope log has no unrecorded exit", async () => {
-    await withSchemalessGuardian(async ({ url, logPath }) => {
+    await withSchemalessGuardian(async ({ url, logPath, close }) => {
       await postAcs(url, toolCallEnvelope("ls -la", { id: 11 }));
 
+      await close();
       const lines = readFileSync(logPath, "utf8").trim().split("\n");
       const entries = lines.map((line) => JSON.parse(line) as { direction: string; rpc_id: unknown });
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);
@@ -1372,6 +1374,7 @@ describe("session state end to end", () => {
       // ever appended would still pass a single-post version of this test.
       await postStep(guardian, toolCallRequest({ session_id: sessionId, request_id: requestId1 }));
       await postStep(guardian, toolCallRequest({ session_id: sessionId, request_id: requestId2 }));
+      await guardian.close();
       const lines = readFileSync(path, "utf8").trim().split("\n");
       expect(lines).toHaveLength(2);
       expect(JSON.parse(lines[0]!)).toMatchObject({ session_id: sessionId, seq: 1, request_id: requestId1 });
