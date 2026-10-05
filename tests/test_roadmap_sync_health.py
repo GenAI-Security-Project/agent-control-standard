@@ -290,3 +290,25 @@ def test_snapshot_degrades_when_close_verification_fails():
 
     with pytest.raises(SyncError, match="verification"):
         roadmap_sync._snapshot(FactsGitHub(), shallow_git, date(2026, 11, 1), [])
+
+
+
+class PlacedGitHub(MigrateGitHub):
+    def get(self, path):
+        number = int(path.rsplit("/", 1)[1])
+        milestone = {"number": 7, "state": "open"} if number == 5 else None
+        return {"number": number, "state": "open", "labels": [], "user": {"login": "x"}, "html_url": "u",
+                "milestone": milestone}
+
+
+def test_migrate_dry_run_prints_each_current_milestone(monkeypatch, tmp_path, capsys):
+    import argparse
+    import json as _json
+    import roadmap_sync
+    monkeypatch.setattr(roadmap_sync, "GitHub", lambda: PlacedGitHub((1, "", "boom")))
+    table = tmp_path / "t.json"
+    table.write_text(_json.dumps({"assignments": {"M": [5, 6]}}))
+    roadmap_sync.cmd_migrate(argparse.Namespace(table=str(table), apply=False))
+    out = capsys.readouterr().out
+    assert "#5 issue by x open [] milestone 7 u" in out
+    assert "#6 issue by x open [] milestone none u" in out

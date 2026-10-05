@@ -238,7 +238,10 @@ def cmd_migrate(args) -> int:
             author = (issue.get("user") or {}).get("login")
             # The URL, not the title. A title is author-editable text, and whoever reads this
             # output may be an agent about to run --apply.
-            print(f"#{number} {kind} by {author} {issue.get('state')} {labels} {issue.get('html_url')}")
+            # The current milestone makes a saved dry run the undo log for --apply.
+            current = (issue.get("milestone") or {}).get("number")
+            placed = f"milestone {int(current)}" if isinstance(current, int) else "milestone none"
+            print(f"#{number} {kind} by {author} {issue.get('state')} {labels} {placed} {issue.get('html_url')}")
             declined = sorted(_labels(issue) & model.DECLINE_LABELS)
             if declined:
                 print(f"DECLINED #{number} {', '.join(declined)}")

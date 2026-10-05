@@ -1,11 +1,15 @@
 # Keeps roadmap milestones true with no manual upkeep beyond triage.
 #
 # event:  when an issue is milestoned, applies the acceptance rule in tools/roadmap_sync.py.
-# sweep:  nightly, rewrites the pinned "Roadmap health" issue. It changes no other issue.
-# dryrun: on demand, read-only, prints both plans so rollout can check them under this token.
+# sweep:  nightly, or on dispatch with mode sweep, rewrites the pinned "Roadmap health"
+#         issue. It changes no other issue.
+# dryrun: on dispatch with mode dryrun, read-only, prints both plans so rollout can check
+#         them under this token.
 #
 # Each job checks out main, because the published roadmap is built from main and the two
-# must classify milestones by the same rules. Neither write job runs on an event a fork
+# must classify milestones by the same rules. The sweep and dryrun clone in full, because
+# they ask git whether each closing commit is on main, and they read pull requests to
+# verify closes and report bypasses (decision 9). Neither write job runs on an event a fork
 # author can trigger, and no job installs packages, so no third-party code runs beside the
 # write token. tests/test_roadmap_sync_workflow.py pins every key of this file.
 name: Roadmap sync
@@ -18,6 +22,11 @@ on:
     - cron: "10 4 * * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "dryrun prints both plans and writes nothing. sweep rewrites the health issue now, and runs only while ROADMAP_SYNC_ENABLED is true."
+        type: choice
+        options: [dryrun, sweep]
+        default: dryrun
       issue:
         description: "Issue number for the event planner's dry run. Leave empty to plan the sweep only."
         type: string
@@ -51,12 +60,13 @@ jobs:
         run: python3 -I -S tools/roadmap_sync.py event --issue "$ISSUE_NUMBER" --apply
 
   sweep:
-    if: github.event_name == 'schedule' && vars.ROADMAP_SYNC_ENABLED == 'true'
+    if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'sweep')) && vars.ROADMAP_SYNC_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       issues: write
+      pull-requests: read
     concurrency:
       group: roadmap-sweep
       cancel-in-progress: false
@@ -65,6 +75,7 @@ jobs:
         with:
           persist-credentials: false
           ref: main
+          fetch-depth: 0
       - name: Rewrite the health issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,17 +87,19 @@ jobs:
         run: python3 -I -S tools/roadmap_sync.py sweep --apply
 
   dryrun:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode != 'sweep'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: main
+          fetch-depth: 0
       - name: Print both plans
         env:
           GH_TOKEN: ${{ github.token }}
