@@ -41,8 +41,28 @@ struct Inner {
     recent: VecDeque<String>,
 }
 
+const MAX_SESSIONS: usize = 1024;
+
 #[derive(Default)]
 pub(crate) struct SessionStore(Mutex<Inner>);
+
+fn ensure_session<'a>(inner: &'a mut Inner, session_id: &str) -> &'a mut Session {
+    inner.recent.retain(|id| id != session_id);
+    inner.recent.push_back(session_id.to_owned());
+
+    while inner.recent.len() > MAX_SESSIONS {
+        let Some(evicted) = inner.recent.pop_front() else {
+            break;
+        };
+        inner.sessions.remove(&evicted);
+        eprintln!(
+            "evicted session {evicted} from the session-context store: the retained-session cap was reached. \
+A further step on this session starts a new chain at seq 1, which the Inspector renders as a chain break."
+        );
+    }
+
+    inner.sessions.entry(session_id.to_owned()).or_default()
+}
 
 impl SessionStore {
     pub(crate) fn append(
@@ -53,15 +73,7 @@ impl SessionStore {
         tool_name: &str,
     ) -> Result<(ChainEntry, Vec<String>), String> {
         let mut inner = self.0.lock().map_err(|error| error.to_string())?;
-        inner.recent.retain(|id| id != session_id);
-        inner.recent.push_back(session_id.to_owned());
-        if inner.recent.len() > 1024 {
-            if let Some(evicted) = inner.recent.pop_front() {
-                inner.sessions.remove(&evicted);
-                eprintln!("evicted session {evicted}: retained-session cap reached");
-            }
-        }
-        let state = inner.sessions.entry(session_id.to_owned()).or_default();
+        let state = ensure_session(&mut inner, session_id);
         let seq = state.seq + 1;
         let recorded_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let canonical = serde_json::to_vec(&(
@@ -91,9 +103,7 @@ impl SessionStore {
 
     pub(crate) fn replace_labels(&self, session_id: &str, labels: &[String]) -> Result<(), String> {
         let mut inner = self.0.lock().map_err(|error| error.to_string())?;
-        if let Some(state) = inner.sessions.get_mut(session_id) {
-            state.labels = labels.to_vec();
-        }
+        ensure_session(&mut inner, session_id).labels = labels.to_vec();
         Ok(())
     }
 }
@@ -103,6 +113,59 @@ mod tests {
     use super::SessionStore;
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
+
+    #[test]
+    fn replace_labels_recreates_an_evicted_session_and_keeps_it_bounded() {
+        let store = SessionStore::default();
+        store
+            .append(
+                "evicted",
+                "steps/toolCallRequest",
+                "initial",
+                "Bash",
+            )
+            .expect("initial append");
+
+        for index in 0..1024 {
+            store
+                .append(
+                    &format!("other-{index}"),
+                    "steps/toolCallRequest",
+                    &index.to_string(),
+                    "Bash",
+                )
+                .expect("fill session store");
+        }
+
+        {
+            let inner = store.0.lock().expect("session store lock");
+            assert!(!inner.sessions.contains_key("evicted"));
+            assert_eq!(inner.sessions.len(), MAX_SESSIONS);
+            assert_eq!(inner.recent.len(), MAX_SESSIONS);
+        }
+
+        let propagated = vec!["confidential".to_owned()];
+        store
+            .replace_labels("evicted", &propagated)
+            .expect("replace labels");
+
+        let (entry, labels) = store
+            .append(
+                "evicted",
+                "steps/toolCallResult",
+                "after-eviction",
+                "Bash",
+            )
+            .expect("append recreated session");
+
+        assert_eq!(entry.seq, 1);
+        assert_eq!(labels, propagated);
+
+        let inner = store.0.lock().expect("session store lock");
+        assert_eq!(inner.sessions.len(), MAX_SESSIONS);
+        assert_eq!(inner.recent.len(), MAX_SESSIONS);
+        assert!(inner.sessions.contains_key("evicted"));
+    }
 
     #[test]
     fn appends_a_valid_chain_when_one_session_is_used_concurrently() {
