@@ -8,13 +8,14 @@
 # leadership roster in GOVERNANCE.md. The project leads are @rocklambros,
 # @afogel, and @bar-capsule.
 #
-# @artmaro holds write access. The write invitations to @evabenn,
-# @RbBuiltWrong, and @aruneeshsalhotra lapsed and are not being re-sent, so
-# their entries stay inert. The other owners on their lines still apply, so
-# review coverage holds.
+# @artmaro holds write access. @Lrd0036 was invited to write access on
+# 2026-10-05, and his entries stay inert until he accepts. The write
+# invitations to @evabenn, @RbBuiltWrong, and @aruneeshsalhotra
+# lapsed and are not being re-sent, so their entries stay inert. The other
+# owners on their lines still apply, so review coverage holds.
 
 # Default owners for anything not matched below.
-*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
+*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro @Lrd0036
 
 /CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -24,8 +25,8 @@
 
 # The specification is the highest-blast-radius surface in the repository.
 # A schema change propagates to every downstream implementer.
-/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
-/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro
+/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro @Lrd0036
+/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro @Lrd0036
 
 # These generate and publish the public site, or feed the build that does. A change
 # here alters what the front door says, which is the same class of privilege the
