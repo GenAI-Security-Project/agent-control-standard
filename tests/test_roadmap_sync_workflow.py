@@ -25,7 +25,10 @@ def test_triggers_are_exact():
     assert set(on) == {"issues", "schedule", "workflow_dispatch"}
     assert on["issues"] == {"types": ["milestoned"]}
     assert on["schedule"] == [{"cron": "10 4 * * *"}]
-    assert set(on["workflow_dispatch"]["inputs"]) == {"issue"}
+    inputs = on["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"mode", "issue"}
+    assert inputs["mode"]["type"] == "choice"
+    assert inputs["mode"]["options"] == ["dryrun", "sweep"] and inputs["mode"]["default"] == "dryrun"
 
 
 def test_top_level_keys():
@@ -41,11 +44,15 @@ def test_jobs_are_exact():
         assert set(job) <= allowed
         assert job["runs-on"] == "ubuntu-latest"
     assert jobs["event"]["if"] == "github.event_name == 'issues' && vars.ROADMAP_SYNC_ENABLED == 'true'"
-    assert jobs["sweep"]["if"] == "github.event_name == 'schedule' && vars.ROADMAP_SYNC_ENABLED == 'true'"
-    assert jobs["dryrun"]["if"] == "github.event_name == 'workflow_dispatch'"
+    # A dispatched sweep still needs the switch, so the switch stays the one way to stop writes.
+    assert jobs["sweep"]["if"] == (
+        "(github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'sweep')) "
+        "&& vars.ROADMAP_SYNC_ENABLED == 'true'"
+    )
+    assert jobs["dryrun"]["if"] == "github.event_name == 'workflow_dispatch' && inputs.mode != 'sweep'"
     assert jobs["event"]["permissions"] == {"contents": "read", "issues": "write"}
-    assert jobs["sweep"]["permissions"] == {"contents": "read", "issues": "write"}
-    assert jobs["dryrun"]["permissions"] == {"contents": "read", "issues": "read"}
+    assert jobs["sweep"]["permissions"] == {"contents": "read", "issues": "write", "pull-requests": "read"}
+    assert jobs["dryrun"]["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
     # Keyed per issue. A newer pending run replacing an older one for the same issue loses
     # nothing, because each run re-reads the issue's live state. No `queue: max`: actionlint
     # 1.7.12 rejects it, zizmor does not validate it, and a stalled-dispatch report exists.
@@ -70,7 +77,11 @@ def test_steps_are_exact():
     for name, job in jobs.items():
         checkout, tool = job["steps"]
         assert checkout["uses"] == CHECKOUT
-        assert checkout["with"] == {"persist-credentials": False, "ref": "main"}
+        expected_with = {"persist-credentials": False, "ref": "main"}
+        if name != "event":
+            # The sweep and dryrun ask git about ancestry, which a shallow clone cannot answer.
+            expected_with["fetch-depth"] = 0
+        assert checkout["with"] == expected_with
         assert set(tool) == {"name", "env", "run"}
         assert tool["run"] == expected_runs[name]
         assert tool["env"] == expected_env[name]

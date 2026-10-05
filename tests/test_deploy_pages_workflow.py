@@ -20,7 +20,9 @@ def load() -> dict:
 def test_job_permissions_are_exact():
     jobs = load()["jobs"]
     assert jobs["test"]["permissions"] == {"contents": "read"}
-    assert jobs["build"]["permissions"] == {"contents": "read", "pages": "read", "issues": "read"}
+    assert jobs["build"]["permissions"] == {
+        "contents": "read", "pages": "read", "issues": "read", "pull-requests": "read",
+    }
     assert jobs["deploy"]["permissions"] == {"contents": "read", "pages": "write", "id-token": "write"}
 
 
@@ -73,3 +75,10 @@ def test_fetch_step_condition_is_exact():
     steps = load()["jobs"]["build"]["steps"]
     fetch = next(step for step in steps if step.get("name") == "Fetch roadmap data")
     assert fetch["if"] == "github.event_name != 'pull_request' && (vars.ROADMAP_RENDER_ENABLED == 'true' || inputs.preview)"
+
+
+
+def test_build_checkout_is_a_full_clone():
+    steps = load()["jobs"]["build"]["steps"]
+    checkout = next(step for step in steps if step.get("name") == "Check out the repository")
+    assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}

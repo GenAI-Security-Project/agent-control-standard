@@ -27,7 +27,7 @@ import roadmap_model as model
 # reaches a workflow annotation or roadmap.json.
 FAILURE_CLASSES = frozenset({
     "transport", "server", "rate_limit", "permission", "mismatch", "data",
-    "code_defect", "timeout", "missing", "write_error",
+    "code_defect", "timeout", "missing", "write_error", "verification",
 })
 
 

@@ -63,6 +63,9 @@ jobs:
       pages: read
       # The roadmap fetch reads milestones and issues. Public data, read-only.
       issues: read
+      # The fetch reads which pull request closed each issue, so roadmap.json can verify
+      # that the close landed on main (decision 13). Read-only.
+      pull-requests: read
     steps:
       - name: Decide whether this run deploys
         id: gate
@@ -85,6 +88,9 @@ jobs:
           # Nothing here pushes with git, so the checkout's token has no reason to
           # stay behind in .git/config.
           persist-credentials: false
+          # The roadmap fetch asks git whether each closing commit is on main. A shallow
+          # clone cannot answer, and the fetch then reports the data unavailable.
+          fetch-depth: 0
 
       - name: Fetch roadmap data
         # The first tool step, before setup-uv installs anything, so no third-party code has
