@@ -472,3 +472,33 @@ def test_import_failure_still_writes_a_record(tmp_path, monkeypatch):
     out = tmp_path / "out.json"
     assert fetch_roadmap.main(["--out", str(out)]) == 0
     assert json.loads(out.read_text())["class"] == "code_defect"
+
+
+def test_reverting_a_promotion_reverts_every_commit_it_brought_in(tmp_path):
+    """A promotion lands as a merge commit, so its revert names the merge, not the squash
+    commits that closed issues. Each of those must still read as reverted."""
+    for how in ("commit", "pull"):
+        root = tmp_path / how
+        root.mkdir()
+        git(root, "init", "-q", "-b", "main")
+
+        def commit(message: str) -> str:
+            git(root, "commit", "-q", "--allow-empty", "-m", message)
+            return git(root, "rev-parse", "HEAD")
+
+        commit("Base")
+        git(root, "checkout", "-q", "-b", "integration")
+        first = commit("Add the adapter (#12)\n\nCloses #9")
+        second = commit("Add the guardian (#13)\n\nCloses #10")
+        git(root, "checkout", "-q", "main")
+        git(root, "merge", "-q", "--no-ff", "-m", "Promote integration to main (#20)", "integration")
+        merge = git(root, "rev-parse", "HEAD")
+        if how == "commit":
+            commit(f'Revert "Promote integration to main (#20)"\n\nThis reverts commit {merge}, reversing\nchanges made to {first}.')
+        else:
+            commit('Revert "Promote integration to main" (#21)\n\nReverts o/n#20')
+        git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+        run = git_runner(root)
+        reverted = fetch_roadmap.revert_index(run, "o/n")
+        assert fetch_roadmap.landing(run, first, 12, reverted) == "reverted", how
+        assert fetch_roadmap.landing(run, second, 13, reverted) == "reverted", how

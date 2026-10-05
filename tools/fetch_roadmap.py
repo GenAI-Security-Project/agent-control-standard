@@ -327,9 +327,26 @@ def revert_index(git, repo: str) -> tuple[frozenset[str], frozenset[int]]:
     code, out = git(["log", MAIN_REF, "--format=%B"])
     if code != 0:
         raise FetchFailure("verification", "git log of main failed")
-    commits = frozenset(re.findall(r"This reverts commit ([0-9a-f]{40})", out))
+    named = set(re.findall(r"This reverts commit ([0-9a-f]{40})", out))
     pulls = frozenset(int(n) for n in re.findall(rf"Reverts {re.escape(repo)}#([0-9]{{1,9}})", out, re.IGNORECASE))
-    return commits, pulls
+    # A promotion lands as a merge commit, so reverting it names the merge or the
+    # promotion's pull request, never the squash commits that closed issues. Map each
+    # reverted pull request to its first-parent commit on main, then widen every reverted
+    # merge to the commits it brought in.
+    code, subjects = git(["log", MAIN_REF, "--first-parent", "--format=%H %s"])
+    if code != 0:
+        raise FetchFailure("verification", "git log of main failed")
+    for line in subjects.splitlines():
+        oid, _, subject = line.partition(" ")
+        match = re.search(r"\(#([0-9]{1,9})\)$", subject) or re.match(r"Merge pull request #([0-9]{1,9}) ", subject)
+        if match and int(match.group(1)) in pulls:
+            named.add(oid)
+    commits = set(named)
+    for oid in named:
+        code, brought = git(["rev-list", f"{oid}^1..{oid}"])
+        if code == 0:
+            commits.update(brought.split())
+    return frozenset(commits), pulls
 
 
 def landing(git, oid: object, pull: object, reverted: tuple[frozenset[str], frozenset[int]]) -> str:
