@@ -403,6 +403,10 @@ These findings are open on this tree. They are recorded here so a reader does no
 
 ## Verify
 
+The [OpenCode dogfooding report](docs/opencode-dogfooding-2026-09-13.md) checks live
+ALLOW/DENY decisions and established-session Guardian loss through the real host.
+It includes an opt-in reproduction fixture and captured evidence for those cases.
+
 ```bash
 bun test              # the whole suite; exactly one test skips, the byte-identity
                       # check, which needs UPSTREAM_BUNDLE

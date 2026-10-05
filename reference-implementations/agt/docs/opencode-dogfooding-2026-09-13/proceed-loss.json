@@ -1,0 +1,126 @@
+{
+  "scenario": "proceed-loss",
+  "result": "pass",
+  "platform": "Darwin arm64",
+  "acs_commit": "7d2dd3c69f82ec7565eef49b1609906deba1ef6b",
+  "bun": "1.4.2",
+  "opencode": "1.18.30",
+  "agt_pin": {
+    "agt_repo": "https://github.com/microsoft/agent-governance-toolkit",
+    "agt_ref": "81955d48025c6b11deb3fc9dabf89f74f4145775",
+    "bundle_path": "policy-engine/policy/lib",
+    "sdk_package": "agent-control-specification",
+    "sdk_version": "0.3.1-beta.0"
+  },
+  "negotiated_posture": "proceed",
+  "guardian_stopped_after_first_tool": true,
+  "wire_responses": [
+    {
+      "seq": 2,
+      "recorded_at": "2026-09-13T11:49:22.578Z",
+      "direction": "response",
+      "method": "handshake/hello",
+      "rpc_id": "7114aa91-686d-48f2-a071-32afc0328cce",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "7114aa91-686d-48f2-a071-32afc0328cce",
+        "result": {
+          "negotiated_version": "0.1.0",
+          "methods_evaluated": [
+            "steps/toolCallRequest",
+            "steps/toolCallResult"
+          ],
+          "selected_transport": "http",
+          "timeout_config": {
+            "default_ms": 5000
+          },
+          "on_decision_failure": "proceed"
+        }
+      }
+    },
+    {
+      "seq": 4,
+      "recorded_at": "2026-09-13T11:49:22.691Z",
+      "direction": "response",
+      "method": "steps/toolCallRequest",
+      "rpc_id": "24231dda-a14e-4939-b80b-1d3b30ec12ae",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "24231dda-a14e-4939-b80b-1d3b30ec12ae",
+        "result": {
+          "type": "final",
+          "acs_version": "0.1.0",
+          "request_id": "24231dda-a14e-4939-b80b-1d3b30ec12ae",
+          "decision": "allow"
+        }
+      }
+    },
+    {
+      "seq": 6,
+      "recorded_at": "2026-09-13T11:49:22.753Z",
+      "direction": "response",
+      "method": "steps/toolCallResult",
+      "rpc_id": "b23840e9-bfc8-4787-8ffc-22acfa150d42",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "b23840e9-bfc8-4787-8ffc-22acfa150d42",
+        "result": {
+          "type": "final",
+          "acs_version": "0.1.0",
+          "request_id": "b23840e9-bfc8-4787-8ffc-22acfa150d42",
+          "decision": "allow"
+        }
+      }
+    }
+  ],
+  "tool_outcomes": [
+    {
+      "call_id": "call_fixture_0",
+      "command": "printf '%s\\n' 'ACS_ALLOWED' > allowed.txt",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "call_id": "call_fixture_1",
+      "command": "printf '%s\\n' 'ACS_OUTAGE' > outage.txt",
+      "status": "completed",
+      "error": null
+    }
+  ],
+  "failure_audit": [
+    {
+      "seq": 1,
+      "recorded_at": "2026-09-13T11:49:22.786Z",
+      "session_id": "ses_f65664446ffeMp4bhL3dFA9ajj",
+      "method": "steps/toolCallRequest",
+      "rpc_id": "e2cc5e64-8e8a-44ca-bcbb-f7bf6fd4df03",
+      "posture": "proceed",
+      "posture_source": "negotiated",
+      "outcome": "proceeded",
+      "failure": {
+        "kind": "transport",
+        "message": "Unable to connect. Is the computer able to access the url?"
+      }
+    },
+    {
+      "seq": 2,
+      "recorded_at": "2026-09-13T11:49:22.793Z",
+      "session_id": "ses_f65664446ffeMp4bhL3dFA9ajj",
+      "method": "steps/toolCallResult",
+      "rpc_id": "c26ed455-e339-4a92-9a12-cc6957b639a5",
+      "posture": "proceed",
+      "posture_source": "negotiated",
+      "outcome": "proceeded",
+      "failure": {
+        "kind": "transport",
+        "message": "Unable to connect. Is the computer able to access the url?"
+      }
+    }
+  ],
+  "markers": {
+    "allowed.txt": "ACS_ALLOWED\n",
+    "denied.txt": null,
+    "outage.txt": "ACS_OUTAGE\n",
+    "control/denied.txt": null
+  }
+}
