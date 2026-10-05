@@ -1,4 +1,0 @@
-# The ACS-Core conformance vectors, pinned by version and wheel hash.
-# Read by .github/workflows/acs-core-conformance.yml; bump both lines together.
-agent-evidence-vectors==0.15.0 \
-    --hash=sha256:2dba8400c4e4096b61814283584648a1483f630a70639e08dc6e001586d26ca2

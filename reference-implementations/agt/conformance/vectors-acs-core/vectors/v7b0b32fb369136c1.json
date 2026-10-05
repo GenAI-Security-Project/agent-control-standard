@@ -1,0 +1,32 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": "CHAIN_MISMATCH",
+    "codeValue": -32007,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-8",
+  "id": "v7b0b32fb369136c1",
+  "kind": "reject",
+  "payload": {
+    "context_entry": {
+      "chain_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "step_type": "hooks/toolCallRequest"
+    },
+    "guardian_response": {
+      "chain_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "decision": "allow"
+    },
+    "signature_covers": [
+      "decision"
+    ]
+  },
+  "requirements": [
+    "ACS-R-006"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "PEER"
+}

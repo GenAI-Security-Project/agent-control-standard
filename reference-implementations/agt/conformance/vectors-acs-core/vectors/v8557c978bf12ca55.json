@@ -1,0 +1,26 @@
+{
+  "coverage": "configured",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": "CHAIN_MISMATCH",
+    "codeValue": -32007,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-6",
+  "id": "v8557c978bf12ca55",
+  "kind": "reject",
+  "payload": {
+    "context_entry": {
+      "chain_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "step_type": "hooks/toolCallRequest"
+    },
+    "profile": "ACS-Audit"
+  },
+  "requirements": [
+    "ACS-R-016"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "PEER"
+}

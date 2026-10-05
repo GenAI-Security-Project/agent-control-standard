@@ -26,6 +26,13 @@ fetching code from a third party.
 
 See LICENSING.md for the full scope map.
 
+The ACS-Core vectors under reference-implementations/agt/conformance/vectors-acs-core/
+come from Probity Vectors, authored by Sankalp Gilda and its contributors, under
+the Apache License, Version 2.0 (https://github.com/probityai/agent-evidence-vectors).
+The retained source at 58bf482e9f07668e2a8f99e7e9a88609f58112fd declares version
+0.17.0. Original license and source metadata remain under conformance/acs-core-source/;
+conformance/acs-core-source.json records every imported file and its digest.
+
 Prior history: releases up to and including v0.1.0 were published under the MIT
 License, Copyright (c) 2025-2026 Agent Control Standard. That grant is not
 revoked. Anyone who obtained those releases under the MIT License keeps their

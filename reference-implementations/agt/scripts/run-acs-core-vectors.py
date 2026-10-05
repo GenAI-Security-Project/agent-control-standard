@@ -4,8 +4,8 @@
     python3 scripts/run-acs-core-vectors.py --guardian http://127.0.0.1:8787/acs \
         --out acs-core-results.jsonl --summary acs-core-summary.md
 
-The vectors come from the `agent-evidence-vectors` package, pinned by version and hash in
-`conformance/acs-core-vectors.txt`. Each vector quotes the MUST it tests and names the error
+The vectors live in `conformance/vectors-acs-core`, with their source and hashes in
+`conformance/acs-core-source.json`. Each vector quotes the MUST it tests and names the error
 code a conformant Guardian returns, so a score here is a statement about one sentence of the
 specification rather than about the harness.
 
@@ -18,7 +18,7 @@ column; the `raw` column is kept because it is what the vector literally sends.
 This is a report, not a gate. A FAIL row exits 0. The script exits 2 only when it could not
 measure: the corpus is missing, or the Guardian answered no request at all.
 
-Standard library only, so the job needs nothing beyond the pinned package.
+Standard library only. The runner does not load an installed vectors package.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import os
 import sys
 import urllib.request
 import uuid
-from importlib import resources
+from pathlib import Path
 
 METHODS = {
     "hooks/toolCallRequest": "steps/toolCallRequest",
@@ -41,10 +41,10 @@ CORPUS = "vectors-acs-core"
 
 
 def corpus_dir(override: str | None) -> str:
-    """The vectors directory: an explicit path, or the one the installed package ships."""
+    """Use an explicit directory or the repository's retained source copy."""
     if override:
         return override
-    root = resources.files("agent_evidence_vectors").joinpath("corpora", CORPUS)
+    root = Path(__file__).resolve().parents[1] / "conformance" / CORPUS
     return str(root)
 
 
@@ -156,7 +156,7 @@ def score(expected: dict, run: dict) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--guardian", required=True, help="the Guardian's JSON-RPC URL")
-    ap.add_argument("--vectors", help="a vectors-acs-core directory; default: the installed package")
+    ap.add_argument("--vectors", help="a vectors-acs-core directory; default: this repository's copy")
     ap.add_argument("--out", required=True, help="JSONL, one line per member")
     ap.add_argument("--summary", help="Markdown summary, appended to (e.g. $GITHUB_STEP_SUMMARY)")
     a = ap.parse_args()
