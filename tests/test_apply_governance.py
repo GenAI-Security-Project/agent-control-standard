@@ -896,3 +896,32 @@ def test_main_skips_the_checkout_check_for_steps_that_write_no_ruleset(monkeypat
     monkeypatch.setattr(apply_governance, "_checkout_state", no_checkout)
     monkeypatch.setattr(apply_governance, "fetch_live_state", lambda: {})
     assert main(["--only", "labels"]) == 0
+
+
+def test_removed_required_checks_lists_live_checks_the_declaration_drops():
+    from apply_governance import Ruleset, removed_required_checks
+    live = [{"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice")}]
+    desired = (Ruleset(name="protect-integration", target_ref="refs/heads/integration"),)
+    assert removed_required_checks(live, desired) == [("protect-integration", "closing-choice")]
+    assert removed_required_checks([{"name": "protect-integration", "required_status_checks": ("test", "build")}], desired) == []
+    assert removed_required_checks([], desired) == []
+
+
+def test_main_refuses_to_drop_a_live_required_check_without_the_flag(monkeypatch, capsys):
+    import apply_governance
+
+    tip = "a" * 40
+    monkeypatch.setattr(apply_governance, "_checkout_state", lambda: ("", tip, tip))
+    monkeypatch.setattr(apply_governance, "fetch_live_state", lambda: {"rulesets": [
+        {"name": "protect-integration", "required_status_checks": ("test", "build", "closing-choice")},
+    ]})
+    monkeypatch.setattr(apply_governance, "collect_actions", lambda live, only=None: [apply_governance.Action("rulesets", "Update ruleset", ("true",))])
+    assert main(["--only", "rulesets", "--apply"]) == 2
+    err = capsys.readouterr().err
+    assert "closing-choice" in err and "--allow-ruleset-reduction" in err
+
+    ran = []
+    monkeypatch.setattr(apply_governance, "run_action", lambda action: ran.append(action))
+    monkeypatch.setattr(apply_governance, "render_dry_run", lambda action: "")
+    assert main(["--only", "rulesets", "--apply", "--allow-ruleset-reduction"]) == 0
+    assert ran

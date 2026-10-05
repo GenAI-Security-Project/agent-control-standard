@@ -726,6 +726,24 @@ def plan_ruleset_actions(live_rulesets: list[dict], desired: tuple[Ruleset, ...]
     return actions
 
 
+def removed_required_checks(live_rulesets: list[dict], desired: tuple[Ruleset, ...]) -> list[tuple[str, str]]:
+    """Live required checks a write would drop, as (ruleset name, check) pairs.
+
+    A lead may add a required check by hand before its declaration lands here. A full
+    run would then silently strip it, so main refuses unless the operator says so.
+    """
+    by_name = {entry["name"]: entry for entry in live_rulesets}
+    dropped: list[tuple[str, str]] = []
+    for ruleset in desired:
+        current = by_name.get(ruleset.name)
+        if current is None:
+            continue
+        for check in current.get("required_status_checks", ()):
+            if check not in ruleset.required_status_checks:
+                dropped.append((ruleset.name, check))
+    return dropped
+
+
 def plan_actions(live_state: dict, desired_state: DesiredState) -> list[Action]:
     """Diff desired against live for labels, milestones, issues, and rulesets.
 
@@ -1298,6 +1316,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="STEP",
         help=f"Run a single step. One of: {', '.join(AUTOMATABLE_STEPS)}.",
     )
+    parser.add_argument(
+        "--allow-ruleset-reduction",
+        action="store_true",
+        help="Allow a ruleset write to drop a live required check this tool does not declare.",
+    )
     return parser
 
 
@@ -1330,6 +1353,16 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     live_state = fetch_live_state()
+    if args.only in RULESET_STEPS:
+        dropped = removed_required_checks(live_state.get("rulesets", []), desired_rulesets())
+        if dropped and not args.allow_ruleset_reduction:
+            names = ", ".join(f"{check} on {ruleset}" for ruleset, check in dropped)
+            print(
+                f"Refusing: this run would drop live required checks ({names}). Declare them "
+                "in desired_rulesets(), or pass --allow-ruleset-reduction to drop them.",
+                file=sys.stderr,
+            )
+            return 2
     actions = collect_actions(live_state, only=args.only)
 
     if not actions:
