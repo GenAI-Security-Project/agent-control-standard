@@ -18,7 +18,7 @@ mechanism is left out.
 ## Decisions
 
 The eleven decisions from "Decisions for the project lead" were answered on October 4, 2026.
-Decisions 12 to 16 followed the premortem the same day.
+Decisions 12 to 17 followed the premortem the same day.
 
 | # | Decision | Answer |
 | --- | --- | --- |
@@ -38,6 +38,7 @@ Decisions 12 to 16 followed the premortem the same day.
 | 14 | Admin bypass | Stays. Decisions 2 and 11 bind contributors, and the health issue reports bypasses |
 | 15 | Promotion | Prompted in the health issue, opened and merged by a project lead. The org policy that blocks Actions from opening pull requests stays |
 | 16 | Contribution spellings | Close with `Closes`, `Fixes`, or `Resolves`. Contribute with `Part of`, `Refs`, or `Contributes to` |
+| 17 | Who hears an alarm | Every project lead, by @mention on the health issue when the monitor starts failing. `issues: write` is granted on the monitor job for this |
 
 Decision 10 came with a leadership change: the project leads are now Rock Lambros, Ariel Fogel,
 and Bar Kaduri. The earlier request to Scott Clinton is withdrawn, and Fred Wilmot's admin role
@@ -239,6 +240,27 @@ GitHub's login pattern. No fetched title, body, or message reaches it.
   roster file or the code lines from A, and for any first-parent commit with no pull request,
   which is a direct push.
 - `open-promotion.yml` loses its `schedule` trigger and keeps `workflow_dispatch`.
+
+#### Alerting the project leads
+
+A failed monitor run emails only whoever last edited its cron line. Decision 17 extends the
+alarm to every project lead.
+
+- `monitor-roadmap.yml` gains `issues: write` on its one job (decision 17), and its guard test
+  changes to match.
+- When the monitor's result changes from passing to failing, it comments on the issue named by
+  `ROADMAP_HEALTH_ISSUE`, @mentioning each project lead read from GOVERNANCE.md. When the result
+  returns to passing, it comments once more without mentions. A run whose result matches the
+  last comment posts nothing, so a failure that lasts days produces one comment.
+- The last state is read from a marker in the bot's most recent such comment,
+  `<!-- acs-roadmap-alarm: failing -->` or `<!-- acs-roadmap-alarm: passing -->`, counting only
+  comments by `github-actions[bot]`.
+- The comment holds fixed text and the fixed names of the failed checks. Nothing fetched reaches
+  it.
+- If `ROADMAP_HEALTH_ISSUE` is unset or the comment fails, the run still fails, and the cron
+  editor's email is the fallback.
+- Tests cover the transition to failing, a repeated failure, recovery, a missing variable, a
+  failed comment, and a comment by another login carrying the marker.
 
 #### Sweep and model housekeeping
 
