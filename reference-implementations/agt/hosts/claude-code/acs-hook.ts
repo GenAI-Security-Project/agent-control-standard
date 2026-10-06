@@ -533,7 +533,10 @@ async function main(): Promise<void> {
   const audit = createAuditSink({ path: process.env.ACS_AUDIT_LOG ?? ".acs/audit.jsonl" });
 
   const guardianUrl = process.env.ACS_GUARDIAN_URL ?? DEFAULT_GUARDIAN_URL;
-  const guardian = createGuardianClient(guardianUrl);
+  const hmacSecret = process.env.ACS_HMAC_SECRET
+    ? Buffer.from(process.env.ACS_HMAC_SECRET, "base64")
+    : undefined;
+  const guardian = createGuardianClient(guardianUrl, { hmacSecret });
 
   // Step 4: this session's negotiated config, and whatever went wrong getting
   // it -- one call, and this shim is told both rather than running the
@@ -560,6 +563,7 @@ async function main(): Promise<void> {
       agentId: hookmap.host,
       sessionId: toSessionUuid(sessionId),
       timeoutMs: DEFAULT_TIMEOUT_MS,
+      hmacSecret,
     },
     store,
   );
@@ -574,7 +578,7 @@ async function main(): Promise<void> {
   // rules produce for it, is stated once inside `governStep`, host-agnostically,
   // so a second host inherits it by calling the function rather than
   // reimplementing it.
-  const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit });
+  const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit, hmacSecret });
 
   process.stdout.write(JSON.stringify(asClaudeCodeOutput(governed.output, hookEventName)));
 }

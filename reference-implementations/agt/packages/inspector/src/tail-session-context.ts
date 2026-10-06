@@ -49,7 +49,7 @@ import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 export type SessionContextLogEntry = {
   session_id: string;
   seq: number;
-  prev_hash: string;
+  prev_hash: string | null;
   hash: string;
   recorded_at: string;
   method: string;
@@ -92,7 +92,7 @@ function isSessionContextLogEntryShape(value: unknown): value is SessionContextL
   return (
     typeof candidate.session_id === "string" &&
     typeof candidate.seq === "number" &&
-    typeof candidate.prev_hash === "string" &&
+    (candidate.prev_hash === null || typeof candidate.prev_hash === "string") &&
     typeof candidate.hash === "string" &&
     typeof candidate.recorded_at === "string" &&
     typeof candidate.method === "string" &&

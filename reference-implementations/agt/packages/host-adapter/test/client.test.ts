@@ -11,8 +11,10 @@ import {
   createGuardianClient,
   GuardianResponseMismatchError,
   GuardianResultCorrelationError,
+  GuardianSignatureError,
   GuardianTimeoutError,
 } from "../src/guardian-client.ts";
+import { signEnvelope } from "../src/sign-envelope.ts";
 import {
   negotiateSessionConfig,
   resolveSessionConfig,
@@ -205,6 +207,132 @@ describe("GuardianClient.post", () => {
     expect(response.error).toBeUndefined();
     expect(response.result?.decision).toBe("allow");
   });
+
+  it("verifies a signed Guardian response before returning its decision", async () => {
+    const secret = Buffer.alloc(32, 0x44);
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: secret.toString("base64"),
+    });
+    try {
+      const envelope = signEnvelope(buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap), secret);
+      const response = await createGuardianClient(secured.url, { hmacSecret: secret }).post(envelope);
+      expect(response.result?.decision).toBe("allow");
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("rejects a Guardian result that cannot be verified with this session's key", async () => {
+    const secret = Buffer.alloc(32, 0x55);
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: secret.toString("base64"),
+    });
+    try {
+      const envelope = signEnvelope(buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap), secret);
+      await expect(
+        createGuardianClient(secured.url, { hmacSecret: Buffer.alloc(32, 0x66) }).post(envelope),
+      ).rejects.toThrow(GuardianSignatureError);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("verifies a signed Guardian error before exposing its refusal code", async () => {
+    const secret = Buffer.alloc(32, 0x57);
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: secret.toString("base64"),
+    });
+    try {
+      const ordinary = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      const envelope = signEnvelope({ ...ordinary, method: "steps/unknownHook" }, secret);
+      const response = await createGuardianClient(secured.url, { hmacSecret: secret }).post(envelope);
+      expect(response.error?.code).toBe(-32011);
+      expect(response.error?.signature?.algorithm).toBe("HMAC-SHA256");
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("rejects an unsigned same-id error when response authentication is configured", async () => {
+    const secret = Buffer.alloc(32, 0x58);
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as { id: string | number };
+        return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32020, message: "forged refusal" } });
+      },
+    });
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      await expect(
+        createGuardianClient(`http://localhost:${mock.port}/acs`, { hmacSecret: secret }).post(envelope),
+      ).rejects.toThrow(GuardianSignatureError);
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a colliding ping allow substituted for a signed tool decision", async () => {
+    const secret = Buffer.alloc(32, 0x59);
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: secret.toString("base64"),
+    });
+    let mock: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const tool = signEnvelope(buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap), secret);
+      const { signature: _signature, ...unsignedParams } = tool.params;
+      const ping = {
+        ...tool,
+        method: "system/ping",
+        params: { ...unsignedParams, payload: { echo: "collision" } },
+      };
+      const pingResponse = await fetch(secured.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(ping),
+      }).then((response) => response.json());
+
+      mock = Bun.serve({
+        port: 0,
+        fetch: () => Response.json(pingResponse),
+      });
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`, {
+        hmacSecret: secret,
+      }).requestDecision(tool);
+      expect(outcome.decisionArrived).toBe(false);
+      expect(!outcome.decisionArrived && outcome.failure).toBeInstanceOf(GuardianSignatureError);
+    } finally {
+      mock?.stop(true);
+      await secured.close();
+    }
+  });
+
+  it("accepts the intentionally unsigned no-echo ping only for an actual ping request", async () => {
+    const secret = Buffer.alloc(32, 0x5a);
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: secret.toString("base64"),
+    });
+    try {
+      const ordinary = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      const ping = { ...ordinary, method: "system/ping", params: { ...ordinary.params, payload: {} } };
+      const response = await createGuardianClient(secured.url, { hmacSecret: secret }).post(ping);
+      expect(response.result?.decision).toBe("allow");
+      expect(response.result?.signature).toBeUndefined();
+      expect(response.result?.payload).not.toHaveProperty("echo");
+    } finally {
+      await secured.close();
+    }
+  });
 });
 
 // requestDecision owns every branch a shim would otherwise have to work out
@@ -223,7 +351,7 @@ describe("GuardianClient.requestDecision", () => {
   it("answers 'no decision' with the Guardian's own JSON-RPC error as the failure, rather than throwing", async () => {
     // A method this Guardian dispatches no handler for.
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
-    const unknownMethod = { ...envelope, method: "steps/sessionStart" };
+    const unknownMethod = { ...envelope, method: "steps/unknownHook" };
 
     const outcome = await createGuardianClient(guardian.url).requestDecision(unknownMethod);
 
@@ -241,7 +369,7 @@ describe("GuardianClient.requestDecision", () => {
   // between this deployment's hookmap and its Guardian -- not a permission.
   it("hands the error through so a refusal is classified as one, not as a delivery failure", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
-    const unknownMethod = { ...envelope, method: "steps/sessionStart" };
+    const unknownMethod = { ...envelope, method: "steps/unknownHook" };
 
     const outcome = await createGuardianClient(guardian.url).requestDecision(unknownMethod);
 
@@ -257,7 +385,7 @@ describe("GuardianClient.requestDecision", () => {
   // against the unfixed code, which is why the posture here is `proceed`.
   it("denies a refused step under a proceed posture, with the guardian up", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
-    const unknownMethod = { ...envelope, method: "steps/sessionStart" };
+    const unknownMethod = { ...envelope, method: "steps/unknownHook" };
 
     const outcome = await createGuardianClient(guardian.url).requestDecision(unknownMethod);
     expect(outcome.decisionArrived).toBe(false);
@@ -490,6 +618,33 @@ describe("negotiateSessionConfig", () => {
     expect(stored).toBeDefined();
     expect(stored?.timeout_config).toEqual(sessionConfig.timeout_config);
     expect(stored?.on_decision_failure).toBe("proceed");
+  });
+
+  it("signs ClientHello and verifies ServerHello in an ACS-Core session", async () => {
+    const secret = Buffer.alloc(32, 0x6a);
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: secret.toString("base64"),
+    });
+    try {
+      const store = createMemorySessionConfigStore();
+      const sessionConfig = await negotiateSessionConfig(
+        {
+          guardian: createGuardianClient(secured.url, { hmacSecret: secret }),
+          agentId: "claude-code",
+          sessionId: crypto.randomUUID(),
+          hmacSecret: secret,
+        },
+        store,
+      );
+
+      expect(sessionConfig.profiles_accepted).toEqual(["acs-core"]);
+      expect(sessionConfig.signature_algorithms_supported).toEqual(["HMAC-SHA256"]);
+      expect((sessionConfig.signature as { algorithm?: string }).algorithm).toBe("HMAC-SHA256");
+    } finally {
+      await secured.close();
+    }
   });
 
   // The ServerHello becomes a SessionConfig by being checked, not by

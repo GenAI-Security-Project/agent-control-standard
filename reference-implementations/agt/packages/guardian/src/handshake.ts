@@ -3,21 +3,12 @@
  * handshake.json's ServerHello $def
  * (specification/v0.1.0/handshake.json at the repository root).
  *
- * `build`, not `negotiate`: this function never reads the incoming
- * ClientHello. The client (host-adapter's `negotiateSessionConfig`) genuinely
- * sends one, but every field below is a constant, returned unconditionally.
- * So `negotiated_version` and `selected_transport` are declared by this
- * Guardian rather than agreed against what the client proposed. Real
- * negotiation -- reading the ClientHello, picking a mutually supported
- * version and transport, rejecting what isn't -- is future work; see the
- * matching note in the v1 runbook of the standalone repository
- * (github.com/afogel/ACS_reference_implementation, docs/demos/v1-runbook.md).
+ * The server owns version/method/profile intersection because it has the
+ * ClientHello. This builder owns the deployment capabilities that are stable
+ * across sessions; dispatch supplies the negotiated profile set.
  *
- * `methods_evaluated` is exactly the set this Guardian actually dispatches,
- * pinned against the dispatch by
- * test/handshake-declares-what-it-evaluates.test.ts rather than by this
- * sentence. See METHODS_EVALUATED below for why it is checked and not
- * derived.
+ * `methods_evaluated` is exactly the set this Guardian policy-evaluates.
+ * Dispatched allow-by-default lifecycle hooks are deliberately absent.
  *
  * `on_decision_failure` ships the spec default, "proceed" (fail-open). This
  * responder's posture is deployment-configurable, so one binary can
@@ -32,20 +23,21 @@ export type ServerHello = {
   negotiated_version: string;
   methods_evaluated: string[];
   selected_transport: "http" | "https" | "stdio";
+  signature_algorithms_supported: string[];
   timeout_config: { default_ms: number; per_method_ms?: Record<string, number> };
   on_decision_failure: "proceed" | "deny";
+  skew_window_ms: number;
+  profiles_accepted: string[];
 };
 
 /** The ACS spec version every schema and mapping in this repo is pinned to. */
 const NEGOTIATED_VERSION = "0.1.0";
 
 /**
- * The methods this Guardian actually dispatches -- exactly the two gated
- * branches in server.ts (`isToolCallRequest` -> `assemblePreToolCallSnapshot`,
- * `isToolCallResult` -> `assemblePostToolCallSnapshot`). Anything else falls
- * to `method_not_dispatched`.
+ * The methods this Guardian policy-evaluates: the two native tool gates and
+ * the wrapped MCP tool-call gate.
  *
- * This list has to agree exactly with what server.ts dispatches, in both
+ * This list has to agree exactly with what server.ts evaluates, in both
  * directions, and handshake.json's text for this field is not advisory:
  * "Methods listed by the client but absent here are NOT evaluated; the
  * Guardian's enforcement does not cover them. Clients MAY still emit them
@@ -57,12 +49,10 @@ const NEGOTIATED_VERSION = "0.1.0";
  * default, while the Guardian is actually enforcing them.
  *
  * So the relationship is checked rather than trusted --
- * test/handshake-declares-what-it-evaluates.test.ts drives a candidate
- * envelope for every method mapping.yaml maps through a live Guardian and
- * asserts that the set it does not answer `method_not_dispatched` for is
- * exactly this list.
+ * test/handshake-declares-what-it-evaluates.test.ts pins the evaluated set and
+ * separately proves allow-by-default lifecycle hooks remain dispatchable.
  *
- * It stays a literal on purpose. The dispatch it must agree with is two
+ * It stays a literal on purpose. The dispatch it must agree with uses
  * predicate-gated branches, deliberately not a table (server.ts says why: a
  * point-driven dispatch would hand one method's envelope to another method's
  * assembler and return a well-formed verdict for the wrong policy). Nothing
@@ -71,7 +61,11 @@ const NEGOTIATED_VERSION = "0.1.0";
  * predicate exists, not that dispatch actually reaches it. The test verifies
  * what the code cannot.
  */
-const METHODS_EVALUATED = ["steps/toolCallRequest", "steps/toolCallResult"];
+const METHODS_EVALUATED = [
+  "steps/toolCallRequest",
+  "steps/toolCallResult",
+  "protocols/MCP/tools/call",
+];
 
 /**
  * Deployment-chosen default; handshake.json's timeout_config.default_ms
@@ -117,13 +111,28 @@ function readPosture(env: Record<string, string | undefined>): Posture {
   );
 }
 
-export function buildServerHello(env?: { ACS_ON_DECISION_FAILURE?: string }): ServerHello {
+/** §10.3: the window this Guardian enforces, declared in the ServerHello so
+ * the client knows the bound. Matches SKEW_WINDOW_MS in server.ts. */
+const SKEW_WINDOW_MS = 300_000;
+
+export type ServerHelloCapabilities = {
+  hmacEnabled?: boolean;
+  profilesAccepted?: string[];
+};
+
+export function buildServerHello(
+  env?: { ACS_ON_DECISION_FAILURE?: string },
+  capabilities: ServerHelloCapabilities = {},
+): ServerHello {
   const actualEnv = env ?? process.env;
   return {
     negotiated_version: NEGOTIATED_VERSION,
     methods_evaluated: METHODS_EVALUATED,
     selected_transport: "http",
+    signature_algorithms_supported: capabilities.hmacEnabled ? ["HMAC-SHA256"] : [],
     timeout_config: { default_ms: DEFAULT_TIMEOUT_MS },
     on_decision_failure: readPosture(actualEnv),
+    skew_window_ms: SKEW_WINDOW_MS,
+    profiles_accepted: capabilities.profilesAccepted ?? [],
   };
 }

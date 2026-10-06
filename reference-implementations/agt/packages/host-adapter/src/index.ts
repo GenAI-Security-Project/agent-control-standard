@@ -20,6 +20,7 @@ export {
   createGuardianClient,
   GuardianResponseMismatchError,
   GuardianResultCorrelationError,
+  GuardianSignatureError,
   GuardianTimeoutError,
   type DecisionOrFailure,
   type GuardianClient,
@@ -28,6 +29,7 @@ export {
   type JsonRpcSuccessResponse,
   type JsonRpcErrorResponse,
   type PostOptions,
+  type GuardianClientOptions,
 } from "./guardian-client.ts";
 export { renderDecision, type HostOutput } from "./render-decision.ts";
 // The ACS decision message every seam below speaks, and the one refinement of
@@ -135,3 +137,9 @@ export { validateDecision, type ValidateDecisionContext } from "./validate-decis
 // underlying Set -- see reserved-segments.ts's own header for why the Set
 // itself stays module-private.
 export { isReservedSegment, findReservedKey } from "./reserved-segments.ts";
+export {
+  signEnvelope,
+  verifyResponseSignature,
+  type SignedAcsRequestEnvelope,
+  type ResponseSignatureVerificationResult,
+} from "./sign-envelope.ts";

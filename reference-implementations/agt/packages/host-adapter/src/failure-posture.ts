@@ -157,7 +157,23 @@ const TRANSPORT_ERROR_CODES = new Set([
  * preferred to guessing, because widening this to every error object would
  * also fail closed on an intermediary's error the Guardian never sent.
  */
-const REFUSAL_RPC_CODES = new Set([-32700, -32010, -32011, -32020]);
+const REFUSAL_RPC_CODES = new Set([
+  -32700,
+  // ACS §17.1's complete mandated-refusal registry. None of these is a
+  // transport accident or permission to apply the availability posture.
+  -32000,
+  -32001,
+  -32002,
+  -32003,
+  -32004,
+  -32005,
+  -32006,
+  -32007,
+  // Reference-implementation refusal codes.
+  -32010,
+  -32011,
+  -32020,
+]);
 
 /**
  * Names what came back INSTEAD of a decision, for the audit entry. Total: an

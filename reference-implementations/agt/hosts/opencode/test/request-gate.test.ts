@@ -638,7 +638,7 @@ describe("a request-gate modify the hookmap gives no way to land -- the measured
     // claims would silently become false.
     //
     // The reason code is the half that says why it is over-blocking and not
-    // governance: `runtime_error:tool_unknown`, from `agt_stock`. The name on
+    // governance: ACS-Core's `tool_unregistered` classification. The name on
     // the wire is the command, so this deny is the tool registry refusing a
     // tool it does not know -- this deployment's own `rm -rf /` rule was
     // never consulted, because the envelope never said `bash`. A plain
@@ -648,7 +648,7 @@ describe("a request-gate modify the hookmap gives no way to land -- the measured
     expect({
       decision: governed.decision?.decision,
       reasonCodes: (governed.decision as { reason_codes?: string[] } | null)?.reason_codes,
-    }).toEqual({ decision: "deny", reasonCodes: ["runtime_error:tool_unknown"] });
+    }).toEqual({ decision: "deny", reasonCodes: ["tool_unregistered"] });
   });
 
   // A declared decision name the tables do not know is silently unchecked,

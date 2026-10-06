@@ -4,7 +4,7 @@
 
 ## Get started
 
-1. Start the Guardian from `reference-implementations/agt`. The [tree README](../../README.md#start-the-guardian) shows the command.
+1. Start the Guardian from `reference-implementations/agt`. The [tree README](../../README.md#start-the-guardian) shows the command. Export the same `ACS_HMAC_SECRET` value in the terminal that starts Claude Code.
 
 2. Register the hook in the project you run Claude Code in.
 
@@ -42,6 +42,7 @@ The first hook of a session sends `handshake/hello` and stores the Guardian's an
 | `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `claude-code.hookmap.yaml`, beside the shim | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
+| `ACS_HMAC_SECRET` | required with the standalone Guardian | The same base64-encoded secret supplied to the Guardian; signs ClientHello and step requests and verifies non-ping responses. Omission is compatibility mode for an explicitly unsecured in-process Guardian, not ACS-Core |
 
 ## Exit codes
 
