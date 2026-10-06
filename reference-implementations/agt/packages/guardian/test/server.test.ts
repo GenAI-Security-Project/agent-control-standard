@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { createHmac } from "node:crypto";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { AgtVerdict, PolicyBridge } from "agt-bridge";
@@ -11,8 +12,11 @@ import {
   createMemorySessionContextStore,
   loadSessionContext,
   supplySourceLabels,
+  deriveSessionKey,
+  signingInput,
+  responseSigningInput,
 } from "../src/index.ts";
-import { toRepoRelativeMessage } from "../src/server.ts";
+import { createReplayProtectionStore, toRepoRelativeMessage } from "../src/server.ts";
 import { dispatchGuardianAnnotator } from "../src/deployment-bridge.ts";
 import type { AcsFinalResult } from "../src/acs-result.ts";
 
@@ -56,6 +60,32 @@ function makeEnvelope(
   };
 }
 
+function clientHello(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    acs_versions_supported: ["0.1.0"],
+    methods_implemented: ["steps/toolCallRequest", "steps/toolCallResult"],
+    transports_supported: ["http"],
+    provenance_producer: "none",
+    profiles_supported: ["acs-core"],
+    ...overrides,
+  };
+}
+
+function signRequest(envelope: Record<string, unknown>, masterSecret: Buffer): Record<string, unknown> {
+  const params = envelope.params as Record<string, unknown>;
+  const metadata = params.metadata as Record<string, unknown>;
+  const sessionId = metadata.session_id as string;
+  const key = deriveSessionKey(masterSecret, sessionId);
+  const value = createHmac("sha256", key).update(signingInput(envelope)).digest("base64");
+  return {
+    ...envelope,
+    params: {
+      ...params,
+      signature: { algorithm: "HMAC-SHA256", value, key_id: sessionId },
+    },
+  };
+}
+
 function toolCallEnvelope(command: string, overrides: { id?: number; requestId?: string; sessionId?: string } = {}) {
   return makeEnvelope(
     "steps/toolCallRequest",
@@ -92,7 +122,7 @@ type JsonRpcResponse = {
   jsonrpc: "2.0";
   id: string | number | null;
   result?: Record<string, unknown>;
-  error?: { code: number; message: string; data?: unknown };
+  error?: { code: number; message: string; data?: unknown; signature?: { algorithm: string; value: string; key_id: string } };
 };
 
 async function postAcs(url: string, body: unknown): Promise<JsonRpcResponse> {
@@ -184,7 +214,7 @@ afterAll(async () => {
 
 describe("startGuardian POST /acs", () => {
   it("handshake/hello returns a schema-valid ServerHello with timeout_config.default_ms and on_decision_failure: proceed", async () => {
-    const response = await postAcs(url, makeEnvelope("handshake/hello", {}, { id: 42 }));
+    const response = await postAcs(url, makeEnvelope("handshake/hello", clientHello(), { id: 42 }));
 
     expect(response.error).toBeUndefined();
     expect(response.id).toBe(42);
@@ -194,6 +224,7 @@ describe("startGuardian POST /acs", () => {
     validateServerHello(serverHello);
     expect((serverHello.timeout_config as { default_ms: number }).default_ms).toBeGreaterThan(0);
     expect(serverHello.on_decision_failure).toBe("proceed");
+    expect(serverHello.profiles_accepted).toEqual([]);
   });
 
   it("steps/toolCallRequest carrying rm -rf / denies, with non-empty reasoning and reason_codes, echoing request_id", async () => {
@@ -219,16 +250,26 @@ describe("startGuardian POST /acs", () => {
   });
 
   it("an unknown method returns a JSON-RPC error in the ACS-reserved -32000..-32099 range, not a decision", async () => {
-    // Well-formed envelope (matches the method-prefix pattern, real ACS hook
-    // name) but not one this Guardian dispatches -- distinct from a
-    // malformed envelope, which fails schema validation instead.
-    const response = await postAcs(url, makeEnvelope("steps/sessionStart", {}, { id: 7 }));
+    // Well-formed envelope (matches the method-prefix pattern) but not one
+    // this Guardian dispatches -- distinct from a malformed envelope, which
+    // fails schema validation instead.
+    const response = await postAcs(url, makeEnvelope("steps/unknownHook", {}, { id: 7 }));
 
     expect(response.result).toBeUndefined();
     expect(response.id).toBe(7);
     expect(response.error).toBeDefined();
     expect(response.error?.code).toBeGreaterThanOrEqual(-32099);
     expect(response.error?.code).toBeLessThanOrEqual(-32000);
+  });
+
+  it("steps/sessionStart returns an allow decision with a chain_hash (D7)", async () => {
+    const requestId = crypto.randomUUID();
+    const response = await postAcs(url, makeEnvelope("steps/sessionStart", {}, { requestId }));
+
+    expect(response.error).toBeUndefined();
+    expect(response.result?.decision).toBe("allow");
+    expect(response.result?.request_id).toBe(requestId);
+    expect(typeof response.result?.chain_hash).toBe("string");
   });
 
   // A steps/* envelope that fails schema validation is a governance outcome,
@@ -325,7 +366,7 @@ describe("startGuardian POST /acs -- denyOnInvalidEnvelope's boundary: what stay
   });
 
   it("keeps an undispatched method a JSON-RPC error", async () => {
-    const response = await postAcs(url, makeEnvelope("steps/sessionStart", {}, { id: 7 }));
+    const response = await postAcs(url, makeEnvelope("steps/unknownHook", {}, { id: 7 }));
 
     expect(response.result).toBeUndefined();
     expect(response.id).toBe(7);
@@ -631,10 +672,16 @@ const THROWING_MESSAGE_ACCESSOR_SCRATCH_DIR = join(GUARDIAN_PKG, "tmp-throwing-m
 const UNDEFINED_MESSAGE_VALIDATE_ENVELOPE_SOURCE = `
 export class EnvelopeValidationError extends Error {}
 
-export function validateEnvelope(_input) {
+export function validateEnvelopeShape(_input) {
   const error = new Error("this message is about to be erased");
   error.message = undefined;
   throw error;
+}
+
+export function validateMethodPayload(_envelope) {}
+
+export function validateEnvelope(input) {
+  return validateEnvelopeShape(input);
 }
 
 // Must track validate-envelope.ts's real export surface, not just the three
@@ -696,7 +743,7 @@ export function isToolCallResult(envelope) {
 const THROWING_MESSAGE_ACCESSOR_VALIDATE_ENVELOPE_SOURCE = `
 export class EnvelopeValidationError extends Error {}
 
-export function validateEnvelope(_input) {
+export function validateEnvelopeShape(_input) {
   const error = new Error("real message, about to be hidden behind a throwing getter");
   Object.defineProperty(error, "message", {
     get() {
@@ -704,6 +751,12 @@ export function validateEnvelope(_input) {
     },
   });
   throw error;
+}
+
+export function validateMethodPayload(_envelope) {}
+
+export function validateEnvelope(input) {
+  return validateEnvelopeShape(input);
 }
 
 // Must track validate-envelope.ts's real export surface, not just the three
@@ -1095,9 +1148,9 @@ describe("startGuardian POST /acs -- the intervention point comes from mapping.y
 });
 
 // PR #10 review, Critical: Bun.serve with no `hostname` binds `*` -- every
-// interface, dual-stack -- and this endpoint has no auth, no origin check and
-// no request signing, so every host that could route to the port was a policy
-// oracle and a policy sink. The observable that separates the two binds is
+// interface, dual-stack -- and at the time this endpoint had no auth, origin
+// check, or request signing, so every host that could route to the port was a
+// policy oracle and a policy sink. The observable that separates the two binds is
 // reachability, so that is what is asserted, rather than the label Bun prints
 // for the socket (`server.hostname` reads "localhost" for a wildcard bind,
 // which is exactly the reading that hid this).
@@ -1253,17 +1306,26 @@ describe("startGuardian POST /acs -- the result gate (steps/toolCallResult)", ()
     expect(response.result?.reason_codes).toEqual(["destructive_shell_command_blocked"]);
   });
 
-  // The fall-through, unchanged: a method this Guardian cannot assemble a
-  // snapshot for must not be answered with a snapshot it can. This is the
-  // assertion that fails if the two predicates are ever replaced by a method
-  // switch or by a branch keyed on the resolved point.
-  it("still answers steps/sessionStart with method-not-dispatched, from neither branch", async () => {
-    const response = await postAcs(url, makeEnvelope("steps/sessionStart", {}, { id: 7 }));
+  // The fall-through: a method this Guardian cannot assemble a snapshot for
+  // and is not in the allow-by-default set must not be answered with a
+  // snapshot it can.
+  it("still answers an unknown method with method-not-dispatched, from neither branch", async () => {
+    const response = await postAcs(url, makeEnvelope("steps/unknownHook", {}, { id: 7 }));
 
     expect(response.result).toBeUndefined();
     expect(response.id).toBe(7);
     expect(response.error?.code).toBe(-32011);
-    expect(response.error?.data).toEqual({ method: "steps/sessionStart" });
+    expect(response.error?.data).toEqual({ method: "steps/unknownHook" });
+  });
+
+  // D7: steps/sessionStart is now dispatched as allow-by-default rather than
+  // method-not-dispatched, per the ACS-Core minimum hook taxonomy.
+  it("answers steps/sessionStart with an allow decision, not method-not-dispatched", async () => {
+    const response = await postAcs(url, makeEnvelope("steps/sessionStart", {}, { id: 7 }));
+
+    expect(response.error).toBeUndefined();
+    expect(response.id).toBe(7);
+    expect(response.result?.decision).toBe("allow");
   });
 });
 
@@ -1603,5 +1665,237 @@ describe("the drift demo's manifest, on a tool that sends no command", () => {
     } finally {
       await guardian.close();
     }
+  });
+});
+
+describe("ACS-Core wire security and negotiation", () => {
+  const masterSecret = Buffer.alloc(32, 0x5a);
+  const encodedSecret = masterSecret.toString("base64");
+
+  it("rejects unsigned and incorrectly signed requests when HMAC is configured", async () => {
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    try {
+      const unsigned = toolCallEnvelope("ls -la");
+      expect((await postAcs(secured.url, unsigned)).error?.code).toBe(-32004);
+
+      const wronglySigned = signRequest(toolCallEnvelope("ls -la"), Buffer.alloc(32, 0x33));
+      expect((await postAcs(secured.url, wronglySigned)).error?.code).toBe(-32004);
+
+      const unsignedHello = makeEnvelope("handshake/hello", clientHello());
+      expect((await postAcs(secured.url, unsignedHello)).error?.code).toBe(-32004);
+
+      const wrongKeyId = signRequest(toolCallEnvelope("ls -la"), masterSecret);
+      const wrongKeyParams = wrongKeyId.params as Record<string, unknown>;
+      wrongKeyParams.signature = {
+        ...(wrongKeyParams.signature as Record<string, unknown>),
+        key_id: crypto.randomUUID(),
+      };
+      expect((await postAcs(secured.url, wrongKeyId)).error?.code).toBe(-32004);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("checks authentication before method-specific payload validation", async () => {
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    try {
+      const malformedUnsigned = makeEnvelope("steps/toolCallRequest", {});
+      expect((await postAcs(secured.url, malformedUnsigned)).error?.code).toBe(-32004);
+
+      const malformedSigned = signRequest(makeEnvelope("steps/toolCallRequest", {}), masterSecret);
+      expect((await postAcs(secured.url, malformedSigned)).result?.decision).toBe("deny");
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("rejects stale non-ping requests but leaves system/ping signature-exempt and out of the chain", async () => {
+    const store = createMemorySessionContextStore();
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      hmacSecret: encodedSecret,
+      sessionContextStore: store,
+    });
+    try {
+      const sessionId = crypto.randomUUID();
+      const stale = makeEnvelope("steps/toolCallRequest", {
+        tool: { name: "Bash" },
+        arguments: { command: { value: "ls" } },
+      }, { sessionId });
+      (stale.params as Record<string, unknown>).timestamp = "2000-01-01T00:00:00.000Z";
+      expect((await postAcs(secured.url, signRequest(stale, masterSecret))).error?.code).toBe(-32006);
+
+      const future = makeEnvelope("steps/toolCallRequest", {
+        tool: { name: "Bash" },
+        arguments: { command: { value: "ls" } },
+      }, { sessionId });
+      (future.params as Record<string, unknown>).timestamp = new Date(Date.now() + 3_600_000).toISOString();
+      expect((await postAcs(secured.url, signRequest(future, masterSecret))).error?.code).toBe(-32006);
+
+      const ping = makeEnvelope("system/ping", { echo: "probe" }, { sessionId });
+      (ping.params as Record<string, unknown>).timestamp = "2000-01-01T00:00:00.000Z";
+      const response = await postAcs(secured.url, ping);
+      expect(response.result?.decision).toBe("allow");
+      expect((response.result?.payload as { echo?: string }).echo).toBe("probe");
+      expect(response.result?.chain_hash).toBeUndefined();
+      expect(response.result?.signature).toBeUndefined();
+      expect(loadSessionContext(store, sessionId).entries).toEqual([]);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("refuses key material too short to support the documented HMAC baseline", async () => {
+    await expect(
+      startGuardian({
+        port: 0,
+        manifestPath: "policy/manifest.yaml",
+        hmacSecret: Buffer.alloc(16).toString("base64"),
+      }),
+    ).rejects.toThrow(/at least 32 bytes/);
+  });
+
+  it("accepts a valid signature and signs the exact response it sends", async () => {
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    try {
+      const request = signRequest(toolCallEnvelope("ls -la"), masterSecret);
+      const response = await postAcs(secured.url, request);
+      expect(response.result?.decision).toBe("allow");
+
+      const signature = response.result?.signature as { algorithm: string; value: string; key_id: string };
+      const sessionId = ((request.params as Record<string, unknown>).metadata as Record<string, unknown>).session_id as string;
+      expect(signature.algorithm).toBe("HMAC-SHA256");
+      expect(signature.key_id).toBe(sessionId);
+      const key = deriveSessionKey(masterSecret, sessionId);
+      const expected = createHmac("sha256", key)
+        .update(responseSigningInput(response as unknown as Record<string, unknown>))
+        .digest("base64");
+      expect(signature.value).toBe(expected);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("signs addressable JSON-RPC errors", async () => {
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    try {
+      const request = signRequest(makeEnvelope("steps/unknownHook", {}), masterSecret);
+      const response = await postAcs(secured.url, request);
+      expect(response.error?.code).toBe(-32011);
+      const signature = response.error?.signature;
+      expect(signature?.algorithm).toBe("HMAC-SHA256");
+      const sessionId = ((request.params as Record<string, unknown>).metadata as Record<string, unknown>).session_id as string;
+      const expected = createHmac("sha256", deriveSessionKey(masterSecret, sessionId))
+        .update(responseSigningInput(response as unknown as Record<string, unknown>))
+        .digest("base64");
+      expect(signature?.value).toBe(expected);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("remembers request ids independently of dispatch and audit-chain eviction", async () => {
+    const store = createMemorySessionContextStore({ maxSessions: 1, onEvict: () => {} });
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      sessionContextStore: store,
+    });
+    try {
+      const sessionA = crypto.randomUUID();
+      const replayedId = crypto.randomUUID();
+      const unknown = makeEnvelope("steps/unknownHook", {}, { sessionId: sessionA, requestId: replayedId });
+      expect((await postAcs(secured.url, unknown)).error?.code).toBe(-32011);
+      expect((await postAcs(secured.url, unknown)).error?.code).toBe(-32005);
+
+      await postAcs(secured.url, toolCallEnvelope("ls -la", { sessionId: crypto.randomUUID() }));
+      const recorded = toolCallEnvelope("ls -la", { sessionId: sessionA, requestId: crypto.randomUUID() });
+      await postAcs(secured.url, recorded);
+      await postAcs(secured.url, toolCallEnvelope("ls -la", { sessionId: crypto.randomUUID() }));
+      expect((await postAcs(secured.url, recorded)).error?.code).toBe(-32005);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("negotiates profiles, advertised signature support, and validates ClientHello", async () => {
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    try {
+      const response = await postAcs(
+        secured.url,
+        signRequest(
+          makeEnvelope("handshake/hello", clientHello({ profiles_supported: ["acs-core", "acs-trace"] })),
+          masterSecret,
+        ),
+      );
+      expect(response.result?.profiles_accepted).toEqual(["acs-core"]);
+      expect(response.result?.signature_algorithms_supported).toEqual(["HMAC-SHA256"]);
+
+      const unsupportedEnvelope = makeEnvelope(
+        "handshake/hello",
+        clientHello({ acs_versions_supported: ["9.9.9"] }),
+      );
+      (unsupportedEnvelope.params as Record<string, unknown>).acs_version = "9.9.9";
+      const unsupported = await postAcs(secured.url, signRequest(unsupportedEnvelope, masterSecret));
+      expect(unsupported.error?.code).toBe(-32001);
+
+      const invalid = await postAcs(
+        secured.url,
+        signRequest(makeEnvelope("handshake/hello", { acs_versions_supported: ["0.1.0"] }), masterSecret),
+      );
+      expect(invalid.error?.code).toBe(-32010);
+      expect((invalid.error?.data as { pointer?: string }).pointer).toContain("/params/payload/");
+
+      const noHttp = await postAcs(
+        secured.url,
+        signRequest(makeEnvelope("handshake/hello", clientHello({ transports_supported: ["stdio"] })), masterSecret),
+      );
+      expect(noHttp.error?.code).toBe(-32003);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  it("returns tool_unregistered and governs wrapped MCP tools/call", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const unknown = await postAcs(
+        guardian.url,
+        makeEnvelope("steps/toolCallRequest", {
+          tool: { name: "records.lookup" },
+          arguments: { command: { value: "lookup" } },
+        }),
+      );
+      expect(unknown.result?.decision).toBe("deny");
+      expect(unknown.result?.reason_codes).toEqual(["tool_unregistered"]);
+
+      const wrapped = await postAcs(
+        guardian.url,
+        makeEnvelope("protocols/MCP/tools/call", {
+          params: { name: "Bash", arguments: { command: "ls -la" } },
+        }),
+      );
+      expect(wrapped.result?.decision).toBe("allow");
+      expect(typeof wrapped.result?.chain_hash).toBe("string");
+    } finally {
+      await guardian.close();
+    }
+  });
+});
+
+describe("replay protection expiry", () => {
+  it("retains future-dated request ids until their timestamp window closes", () => {
+    const replay = createReplayProtectionStore();
+    expect(replay.seenOrRemember("session", "request", 0, 600_000)).toBe("fresh");
+    expect(replay.seenOrRemember("session", "request", 300_001, 600_000)).toBe("replay");
+    expect(replay.seenOrRemember("session", "request", 600_001, 900_001)).toBe("fresh");
+  });
+
+  it("fails closed at capacity rather than evicting a still-valid replay record", () => {
+    const replay = createReplayProtectionStore(1, 2);
+    expect(replay.seenOrRemember("session-a", "request-1", 0, 600_000)).toBe("fresh");
+    expect(replay.seenOrRemember("session-b", "request-2", 1, 600_001)).toBe("capacity");
+    expect(replay.seenOrRemember("session-a", "request-1", 2, 600_000)).toBe("replay");
   });
 });

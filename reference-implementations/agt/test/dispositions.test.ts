@@ -57,7 +57,16 @@ describe("all five AGT verdicts arrive as ACS decisions, from the pinned bundle"
 
   it("escalate arrives as ask", async () => {
     const { result } = await decide({ ...PATTERNS, approval: { required: true, approvers: ["security-team"] } }, "ls -la");
-    expect(result).toMatchObject({ decision: "ask", reason_codes: ["approval_required"] });
+    expect(result).toMatchObject({
+      decision: "ask",
+      reason_codes: ["approval_required"],
+      ask_details: {
+        approver: { type: "human", id: "deployment-default" },
+        timeout_seconds: 300,
+        timeout_disposition: "deny",
+      },
+    });
+    expect((result?.ask_details as { question?: unknown }).question).toEqual(expect.any(String));
   });
 
   it("transform arrives as modify, carrying the rewritten argument", async () => {

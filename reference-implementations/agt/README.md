@@ -69,24 +69,24 @@ Each part has its own README that says how to start it.
 
 | ACS-Core requirement | Status in this tree |
 |---|---|
-| Handshake, `handshake/hello` | Served. The ServerHello is a set of constants. The Guardian does not read the ClientHello. |
+| Handshake, `handshake/hello` | Served. The Guardian validates ClientHello, rejects unsupported versions (`-32001`), narrows `methods_evaluated` to the intersection with the client's `methods_implemented`, and negotiates `profiles_accepted`. |
 | Request and response envelopes, JSON-RPC 2.0 | Implemented. Inbound envelopes are validated against the schemas. Outbound responses are checked and the check is logged, never thrown. |
-| Hook taxonomy, minimum of six hooks | Two of nineteen `steps/*` methods are evaluated: `steps/toolCallRequest` and `steps/toolCallResult`. The other four minimum hooks are not evaluated. |
-| Five dispositions | `allow`, `deny` and `modify` are complete. `ask` is sent without `ask_details`, so it fails the response schema. `defer` is never produced. |
-| SessionContext with published `chain_hash` | The Guardian keeps a hash chain per session and writes it to a log. It does not put `chain_hash` on any response. |
-| Replay protection | Not implemented. No timestamp window check. No duplicate `request_id` check. |
-| Baseline HMAC-SHA256 signature | Not implemented. Nothing signs or verifies an envelope. |
+| Hook taxonomy, minimum of six hooks | All six ACS-Core hooks are dispatched: `steps/toolCallRequest` and `steps/toolCallResult` are policy-evaluated; `steps/sessionStart`, `steps/sessionEnd`, `steps/userMessage` and `steps/agentResponse` are accepted with allow-by-default and recorded in the session chain. |
+| Five dispositions | `allow`, `deny`, `modify`, and `ask` are emitted as schema-valid decisions. Both hosts validate and safely render `defer`, but no pinned AGT verdict maps to it. |
+| SessionContext with published `chain_hash` | The Guardian keeps a per-session chain using ACS v0.1's JCS-content-plus-raw-predecessor algorithm, writes it to a log, and publishes `chain_hash` on every response for a chain-recorded step, including denial responses when evaluation throws. |
+| Replay protection | Implemented. Duplicate `request_id` values within a session are rejected (`-32005`) from a replay store independent of the bounded audit chain. Timestamps outside the negotiated `skew_window_ms` (default 5 minutes) are rejected (`-32006`). Only the liveness ping is exempt. |
+| Baseline HMAC-SHA256 signature | Implemented. The runnable Guardian requires `ACS_HMAC_SECRET`, derives per-session HMAC keys via HKDF (§10), verifies requests using JCS canonicalization, rejects unsigned requests with `-32004`, and signs every addressable non-ping result or error. Both shipped hosts sign requests—including ClientHello—and verify non-ping response signatures. `system/ping` is signature-exempt in both directions. |
 | Decision honoring and `on_decision_failure` | Implemented on both hosts. Every fail-open proceed is written to the audit log. |
-| Liveness, `system/ping` | Not implemented. |
-| Wrapped MCP, `protocols/MCP/*` | Not implemented. |
+| Liveness, `system/ping` | Implemented. Always returns `allow` with an echo of the client's payload and a server timestamp. No chain entry, no signature required. |
+| Wrapped MCP, `protocols/MCP/tools/call` | Implemented. It extracts the tool name from the ACS or native MCP payload shape, records a chain entry, evaluates against the pre-tool-call policy, and fails closed on evaluation errors. Declared in `methods_evaluated`. Other `protocols/MCP/*` methods are not claimed. |
 
 The other six ACS profiles are not claimed.
 
-**The wire is not secured.** The Guardian binds to loopback by default. There is no authentication, no origin check and no request signing. Anything that can reach the port can read decisions and cause decisions.
+**The wire uses shared-secret integrity, not peer identity.** The Guardian binds to loopback by default and requires HMAC-SHA256 key material. There is no origin check or independently authenticated identity beyond possession of that shared secret.
 
 ## Install
 
-You need [`bun`](https://bun.sh). For the Claude Code walkthrough you also need the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI on your `PATH`. For the OpenCode walkthrough you need the `opencode` CLI. The scripts under `scripts/` also need `jq` and `trash`.
+You need [`bun`](https://bun.sh). For the Claude Code walkthrough you also need the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI on your `PATH`. For the OpenCode walkthrough you need the `opencode` CLI. The scripts under `scripts/` and five test files also need `jq` and `trash` (install via `npm install -g trash-cli` or `brew install trash-cli`).
 
 1. Clone the repository and move into this tree. Every command below runs from here.
 
@@ -101,13 +101,19 @@ cd agent-control-standard/reference-implementations/agt
 bun install
 ```
 
-This installs the AGT SDK at the pinned version and the OPA binary it bundles. No other binary is necessary.
+This installs the AGT SDK at the pinned version and the OPA binary it bundles. The `jq` and `trash` prerequisites listed above remain separate system tools.
 
 ## Run
 
 ### Start the Guardian
 
 Open a terminal at `reference-implementations/agt`. Start the Guardian.
+
+First provide at least 32 bytes of base64-encoded key material. Keep this value in the environment of the Guardian and either host:
+
+```bash
+export ACS_HMAC_SECRET="$(openssl rand -base64 32)"
+```
 
 ```bash
 bun run guardian
@@ -118,9 +124,16 @@ Guardian listening at http://localhost:8787/acs
 Envelope log: .acs/envelopes.jsonl
 Session context log: .acs/session-context.jsonl
 Failure posture: proceed   (override with ACS_ON_DECISION_FAILURE=deny)
+Signature verification: HMAC-SHA256 (required)
 ```
 
 Leave it running. The Guardian constructs the AGT runtime once against `policy/lib` and serves ACS on `POST /acs`. The [Guardian README](packages/guardian/README.md) lists what it reads and what it writes.
+
+Every host process must receive that same value. In each terminal where you start Claude Code or OpenCode, export the copied base64 value first:
+
+```bash
+export ACS_HMAC_SECRET='<same value used by the Guardian>'
+```
 
 ### Start the Inspector
 
@@ -150,7 +163,7 @@ cp hosts/claude-code/settings.json .claude/settings.json
 
 This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash` and `WebFetch` tools, before the tool runs. `PostToolUse` fires for the `Bash` tool, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The [Claude Code host README](hosts/claude-code/README.md) has the details.
 
-2. Start Claude Code.
+2. Confirm this terminal has the same `ACS_HMAC_SECRET` as the Guardian, then start Claude Code.
 
 ```bash
 claude
@@ -174,7 +187,7 @@ The same Guardian governs OpenCode at the same time. Do not restart anything.
 }
 ```
 
-2. Start `opencode` from that project directory.
+2. Confirm this terminal has the same `ACS_HMAC_SECRET` as the Guardian, then start `opencode` from that project directory.
 
 The plugin hooks `tool.execute.before` for the `bash` and `webfetch` tools and `tool.execute.after` for the `bash` tool. A deny before the tool runs is a thrown error that carries the Guardian's reason. A deny after the tool runs replaces the result object, because OpenCode discards a throwing hook's changes. The [OpenCode host README](hosts/opencode/README.md) shows how to drive OpenCode against a local stub model with no paid account.
 
@@ -205,10 +218,10 @@ The contract has four layers in this tree. Read them in this order.
 |---|---|
 | `pre_tool_call` | `steps/toolCallRequest` |
 | `post_tool_call` | `steps/toolCallResult` |
-| `agent_startup` | `steps/sessionStart` (mapped, not evaluated) |
-| `agent_shutdown` | `steps/sessionEnd` (mapped, not evaluated) |
-| `input` | `steps/userMessage` (mapped, not evaluated) |
-| `output` | `steps/agentResponse` (mapped, not evaluated) |
+| `agent_startup` | `steps/sessionStart` (allow-by-default, chain-recorded) |
+| `agent_shutdown` | `steps/sessionEnd` (allow-by-default, chain-recorded) |
+| `input` | `steps/userMessage` (allow-by-default, chain-recorded) |
+| `output` | `steps/agentResponse` (allow-by-default, chain-recorded) |
 | `pre_model_call` | none in ACS v0.1.0 |
 | `post_model_call` | none in ACS v0.1.0 |
 
@@ -222,15 +235,21 @@ The contract has four layers in this tree. Read them in this order.
 
 **3. The per-host hookmaps.** `hosts/claude-code/claude-code.hookmap.yaml` and `hosts/opencode/opencode.hookmap.yaml` declare which host hook fires which ACS method, where the tool name and arguments are in the host payload, and how each ACS decision renders in that host's own output format. `policy/manifest.yaml` is the AGT manifest. It names the policy bundle, the tools AGT knows, and the egress annotator.
 
-**4. The handshake.** The first hook in a session sends `handshake/hello`. The Guardian's answer names exactly the methods it evaluates. A method absent from that list is allow-by-default on the client, in the specification's own words. This is what the Guardian sends today:
+**4. The handshake.** The first hook in a session sends `handshake/hello`. The Guardian's answer names the intersection of methods the client implements and methods the Guardian evaluates. A method absent from that list is allow-by-default on the client, in the specification's own words. This is the Guardian's maximum capability response; the shipped Claude Code and OpenCode clients offer only the two native tool methods, so their actual reply omits wrapped MCP:
 
 ```json
 {
   "negotiated_version": "0.1.0",
-  "methods_evaluated": ["steps/toolCallRequest", "steps/toolCallResult"],
+  "methods_evaluated": [
+    "steps/toolCallRequest", "steps/toolCallResult",
+    "protocols/MCP/tools/call"
+  ],
   "selected_transport": "http",
   "timeout_config": { "default_ms": 5000 },
-  "on_decision_failure": "proceed"
+  "on_decision_failure": "proceed",
+  "skew_window_ms": 300000,
+  "signature_algorithms_supported": ["HMAC-SHA256"],
+  "profiles_accepted": ["acs-core"]
 }
 ```
 
@@ -369,12 +388,9 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 
 These are known limits of the tree as it stands. None is fixed.
 
-- **Memory and disk grow without bound.** The Guardian's session store never evicts a session. The envelope log, the audit log and the session-context log have no rotation and no size cap. A long-lived Guardian grows until something else stops it.
+- **Memory and disk grow without bound.** The Guardian's session store evicts sessions after 1,024 are retained; the envelope log, the audit log and the session-context log have no rotation and no size cap. A long-lived Guardian grows until something else stops it.
 - **Log writes sit on the decision path.** The Guardian writes two synchronous file appends per request in a single-threaded server. A slow disk blocks every in-flight decision.
-- **The wire is unauthenticated.** See [What this project is, and is not](#what-this-project-is-and-is-not). Loopback by default is the only protection.
 - **The egress gate has three measured soft spots.** A shell command whose destination the extractor cannot parse falls through to `allow`, not `deny`. With the shipped allowlist, any command whose text contains an off-list URL is denied, whether or not it reaches that URL. A `WebFetch` URL reaches AGT's gate with no parsing, so four userinfo-style URL shapes pass on the fetch route and fail on the shell route. Closing the last one means editing a `.rego` file, which this project does not do.
-- **An `ask` never carries `ask_details`.** The Guardian's decision type has no such field. Every `ask` fails the response schema. A `defer` would fail the same way if any AGT verdict mapped to it.
-- **The handshake is not negotiated.** The Guardian returns constants and never reads the ClientHello. Neither side declares ACS profiles.
 - **The result gate assumes one output shape per hook.** A `WebFetch` result has no `stdout`, so the result gate is not widened to it. Under the default posture, widening it would proceed on every fetch result with an audit entry. This is recorded and unassigned.
 - **`modified_content` has no builder.** The Guardian never emits it and both hosts refuse it.
 - **The audit sequence number can collide.** Two Claude Code hooks that run at the same time read the same log length and write the same `seq`.
@@ -395,7 +411,6 @@ These findings are open on this tree. They are recorded here so a reader does no
 
 **Older findings that are still open:**
 
-- The Guardian's decision type has no `ask_details`, so every `ask` fails the response schema. It is listed under operational debt above.
 - A `steps/skillLoad` hook that drives AGT's `content_hash` gate is planned, not built. No code for it exists in the tree, and the ServerHello does not name it.
 - Two AGT intervention points, `pre_model_call` and `post_model_call`, have no ACS v0.1.0 method. Whether this project proposes `steps/modelCall` for ACS v0.2 is open.
 - Whether to report a fail-open to AGT upstream is open: a `./`-prefixed `bundle:` path silently disables all policy and returns `allow`. This tree throws on that path as a backstop.
@@ -404,12 +419,13 @@ These findings are open on this tree. They are recorded here so a reader does no
 ## Verify
 
 ```bash
-bun test              # the whole suite; exactly one test skips, the byte-identity
-                      # check, which needs UPSTREAM_BUNDLE
-bun run typecheck     # strict TypeScript across the workspace, zero errors
-bun run verify:pin    # re-clones AGT at the pinned ref and byte-diffs policy/lib; needs network
-bun run conformance   # prints the mapping table, the coverage matrix and the trace rows; needs network
-bun run watch:upstream # diffs AGT's eight contract surfaces against upstream main; needs network
+bun test --timeout 30000  # the whole suite; --timeout avoids flakes on slow CI.
+                          # Exactly one test skips, the byte-identity check, which
+                          # needs UPSTREAM_BUNDLE
+bun run typecheck         # strict TypeScript across the workspace, zero errors
+bun run verify:pin        # re-clones AGT at the pinned ref and byte-diffs policy/lib; needs network
+bun run conformance       # prints the mapping table, the coverage matrix and the trace rows; needs network
+bun run watch:upstream    # diffs AGT's eight contract surfaces against upstream main; needs network
 ```
 
 The suite reads this repository's own schemas. It expects `specification/v0.1.0/response-envelope.json` to accept a ServerHello as a result, which the envelope does from specification v0.1.2. On a tree whose envelope predates that change, exactly one test fails, in `packages/guardian/test/check-response.test.ts`, and every other test passes.
@@ -420,7 +436,7 @@ The scripts and five test files delete their scratch directories with `trash`, n
 
 ## Configuration
 
-Everything above runs with no configuration. These are the variables each process reads.
+The quickstart requires one shared secret in the Guardian and host environments; all remaining variables have usable defaults. These are the variables each process reads.
 
 **The Claude Code shim** (`hosts/claude-code/acs-hook.ts`):
 
@@ -430,8 +446,9 @@ Everything above runs with no configuration. These are the variables each proces
 | `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
+| `ACS_HMAC_SECRET` | required with the standalone Guardian | The same base64-encoded secret supplied to the Guardian; signs requests and verifies results and errors. Omission is compatibility mode for an explicitly unsecured in-process Guardian, not ACS-Core |
 
-**The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG` and `ACS_HOOKMAP_PATH` with the same meanings. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.
+**The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG`, `ACS_HOOKMAP_PATH`, and the shared `ACS_HMAC_SECRET` with the same meanings. The secret is required with the standalone Guardian; omission exists only for compatibility with an explicitly unsecured in-process Guardian and does not negotiate ACS-Core. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.
 
 **The Guardian** (`bun run guardian`):
 
@@ -439,10 +456,11 @@ Everything above runs with no configuration. These are the variables each proces
 |---|---|---|
 | `ACS_ON_DECISION_FAILURE` | `proceed` | The posture the ServerHello declares. `deny` fails closed. Any other value stops the Guardian at startup |
 | `ACS_GUARDIAN_PORT` | `8787` | The port for `POST /acs` |
-| `ACS_GUARDIAN_HOST` | `127.0.0.1` | The interface to bind. Set `0.0.0.0` only when you accept an unauthenticated routable endpoint |
+| `ACS_GUARDIAN_HOST` | `127.0.0.1` | The interface to bind. Set `0.0.0.0` only after protecting the transport and provisioning `ACS_HMAC_SECRET` to every intended peer |
 | `ACS_MANIFEST_PATH` | `policy/manifest.yaml` | The AGT manifest. `policy/manifest.drift.yaml` is the second manifest, used to reach the `warn` verdict |
 | `ACS_ENVELOPE_LOG` | `.acs/envelopes.jsonl` | Where every envelope is recorded |
 | `ACS_SESSION_CONTEXT_LOG` | `.acs/session-context.jsonl` | Where each session's hash chain is written |
+| `ACS_HMAC_SECRET` | required | Base64-encoded input keying material of at least 32 bytes. The Guardian derives a per-session key via HKDF, verifies requests, and signs addressable non-ping results and errors. The hosts use the same value to sign requests—including ClientHello—and verify responses. `system/ping` is signature-exempt in both directions |
 
 **The Inspector** (`bun run inspector`) reads `ACS_ENVELOPE_LOG`, `ACS_AUDIT_LOG` and `ACS_SESSION_CONTEXT_LOG` with the same defaults. The flags `--envelope-log`, `--audit-log` and `--session-context-log` override them. It honours `NO_COLOR` and prints no colour when stdout is not a terminal.
 

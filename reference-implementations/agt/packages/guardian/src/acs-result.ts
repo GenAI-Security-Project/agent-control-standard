@@ -24,6 +24,10 @@ export type AcsFinalResult = {
   type: "final";
   acs_version: string;
   request_id: string;
+  /** §8.6: the chain head after this step was recorded. */
+  chain_hash?: string;
+  /** §10: HMAC signature over the response, present when key is configured. */
+  signature?: { algorithm: string; value: string; key_id: string };
 } & AcsDecision;
 
 /**
@@ -37,11 +41,16 @@ export type AcsFinalResult = {
 export function finalResult(
   params: { acs_version: string; request_id: string },
   decision: AcsDecision,
+  chainHash?: string,
 ): AcsFinalResult {
-  return {
+  const result: AcsFinalResult = {
     type: "final",
     acs_version: params.acs_version,
     request_id: params.request_id,
     ...decision,
   };
+  if (chainHash !== undefined) {
+    result.chain_hash = chainHash;
+  }
+  return result;
 }

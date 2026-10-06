@@ -45,8 +45,14 @@ describe("mapVerdict", () => {
   });
 
   it("maps escalate to ask and transform to modify", () => {
-    expect(mapVerdict({ decision: "escalate", reason: "approval_required" }, m, "pre_tool_call", "command").decision)
-      .toBe("ask");
+    const ask = mapVerdict({ decision: "escalate", reason: "approval_required" }, m, "pre_tool_call", "command");
+    expect(ask.decision).toBe("ask");
+    expect(ask.ask_details).toMatchObject({
+      approver: { type: "human", id: "deployment-default" },
+      timeout_seconds: 300,
+      timeout_disposition: "deny",
+    });
+    expect(ask.ask_details?.question).toContain("human approval");
     expect(
       mapVerdict(
         { decision: "transform", reason: "redacted", transform: { path: "$policy_target", value: "x" } },

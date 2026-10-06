@@ -13,8 +13,8 @@
  * hardcoding the other's value.
  *
  * `ACS_GUARDIAN_HOST` is left unset by default, which leaves startGuardian's
- * loopback bind in place -- see server.ts's header for why an unauthenticated
- * endpoint defaults to the narrowest bind. This is where a deployment that
+ * loopback bind in place -- see server.ts's header for why even an
+ * authenticated endpoint defaults to the narrowest bind. This is where a deployment that
  * needs a routable one says so, since env is this process's configuration
  * surface and server.ts reads none itself.
  */
@@ -44,8 +44,19 @@ const sessionContextLog = process.env.ACS_SESSION_CONTEXT_LOG ?? DEFAULT_SESSION
 // healthy start immediately followed by one.
 const posture = buildServerHello().on_decision_failure;
 
-const guardian = await startGuardian({ port, hostname, manifestPath, envelopeLogPath, sessionContextLog });
+const hmacSecret = process.env.ACS_HMAC_SECRET;
+if (hmacSecret === undefined) {
+  throw new Error(
+    "ACS_HMAC_SECRET is required: set it to at least 32 bytes of base64-encoded key material before starting the ACS-Core Guardian",
+  );
+}
+const decodedHmacSecret = Buffer.from(hmacSecret, "base64");
+if (decodedHmacSecret.length < 32) {
+  throw new Error("ACS_HMAC_SECRET must decode to at least 32 bytes");
+}
+const guardian = await startGuardian({ port, hostname, manifestPath, envelopeLogPath, sessionContextLog, hmacSecret });
 console.log(`Guardian listening at ${guardian.url}`);
 console.log(`Envelope log: ${envelopeLogPath}`);
 console.log(`Session context log: ${sessionContextLog}`);
 console.log(`Failure posture: ${posture}   (override with ACS_ON_DECISION_FAILURE=deny)`);
+console.log("Signature verification: HMAC-SHA256 (required)");

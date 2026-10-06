@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   GENESIS_HASH,
   appendContextEntry,
@@ -36,12 +37,30 @@ describe("SessionContext — the hash chain", () => {
     expect(loadSessionContext(store, "sess-a").entries).toHaveLength(1);
   });
 
-  it("gives two entries at the same position different hashes when only tool_name differs", () => {
+  it("does not put implementation-only tool_name into the portable ACS commitment", () => {
     const store = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
     const honest = appendContextEntry(store, "sess-a", step(1));
     const other = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
     const forged = appendContextEntry(other, "sess-a", { ...step(1), tool_name: "Write" });
-    expect(forged.hash).not.toBe(honest.hash);
+    expect(forged.hash).toBe(honest.hash);
+  });
+
+  it("uses the normative JCS(content) plus raw previous-hash bytes algorithm", () => {
+    const store = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
+    const first = appendContextEntry(store, "sess-a", step(1));
+    const firstContent =
+      '{"entry_id":"sess-a:1","step_id":"req-1","step_type":"steps/toolCallRequest","timestamp":"2026-08-14T00:00:00.000Z"}';
+    expect(first.prev_hash).toBeNull();
+    expect(first.hash).toBe(createHash("sha256").update(firstContent, "utf8").digest("hex"));
+
+    const second = appendContextEntry(store, "sess-a", step(2));
+    const secondContent =
+      '{"entry_id":"sess-a:2","step_id":"req-2","step_type":"steps/toolCallRequest","timestamp":"2026-08-14T00:00:00.000Z"}';
+    const expected = createHash("sha256")
+      .update(secondContent, "utf8")
+      .update(Buffer.from(first.hash, "hex"))
+      .digest("hex");
+    expect(second.hash).toBe(expected);
   });
 
   it("loads an unknown session as an empty chain rather than throwing", () => {
@@ -109,7 +128,7 @@ describe("the JSONL appender the Inspector tails", () => {
     appendContextEntry(store, "sess-a", step(1));
     appendContextEntry(store, "sess-a", step(2));
     expect(lines).toHaveLength(2);
-    const parsed = lines.map((l) => JSON.parse(l) as { seq: number; prev_hash: string; hash: string });
+    const parsed = lines.map((l) => JSON.parse(l) as { seq: number; prev_hash: string | null; hash: string });
     expect(parsed.map((p) => p.seq)).toEqual([1, 2]);
     expect(parsed[1]!.prev_hash).toBe(parsed[0]!.hash);
   });
