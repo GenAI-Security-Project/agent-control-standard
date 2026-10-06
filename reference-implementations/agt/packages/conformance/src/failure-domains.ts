@@ -52,32 +52,16 @@
  * check posts an envelope naming a method `mapping.yaml` gives no row
  * to at all, and records that it comes back `method_not_dispatched` rather
  * than being swallowed into domain (1)'s deny-on-failure path -- proving the
- * two stay apart, not resolving any cell about it. What this check does not
- * do: `mapping.yaml` gives an `acs_method` to six intervention points, and
- * this Guardian dispatches two (`handshake.ts`'s `METHODS_EVALUATED`); the
- * other four answer `method_not_dispatched` too, live, but that is a
- * different fact -- a mapped-but-undispatched method, not an unmapped one --
- * and this check does not resolve a cell for it or draw a matrix-level
- * conclusion from it; the coverage-matrix merge and the published
- * declaration carry that fact forward instead.
- * `assertHookPayloadFailureIsUndispatchedElsewhere` below measures the same
- * boundary from validation's own side rather than dispatch's: the
- * hook-payload schemas `validateEnvelope` checks a payload against are gated
- * on the identical two method literals `METHODS_EVALUATED` names, in a
- * different file, so an empty payload is invalid only where this Guardian
- * also dispatches -- one seam, seen from validation and from dispatch.
+ * two stay apart, not resolving any cell about it. The four non-tool
+ * ACS-Core hooks are a different fact: they are mapped and dispatched as
+ * allow-by-default audit events, while only the two native tool gates are
+ * policy-evaluated. `assertAllowByDefaultMappedHook` measures that boundary.
  *
  * ONE LIVE PROBE PER MAPPED POINT, never one probe generalised to all of
  * them, because a single hook-payload probe cannot stand in for the other
- * five points: `checkHookPayload` applies a
- * hook-payload schema only for `steps/toolCallRequest` /
- * `steps/toolCallResult`, so an empty payload never fails validation at all
- * for the other four mapped methods -- they have no hook-payload schema to
- * fail, the envelope passes, and dispatch answers `method_not_dispatched`,
- * not a deny. Measured live: `steps/toolCallRequest` and
- * `steps/toolCallResult` return `decision=deny` for an empty payload;
- * `steps/sessionStart`, `steps/sessionEnd`, `steps/userMessage`,
- * `steps/agentResponse` each return a JSON-RPC error, code -32011.
+ * five points: each method has its own payload contract and dispatch
+ * semantics. The native tool gates policy-evaluate; the four lifecycle hooks
+ * are deliberately allow-by-default after their own payload validation.
  * `measureDenyColumn` below is what actually resolves the deny column: one
  * live probe per mapped point, using a generic `request-envelope.json`
  * failure (a missing `params.metadata`) rather than the method-gated
@@ -92,20 +76,17 @@ import { AGT_POINTS, type CoverageCell } from "./cells.ts";
 
 /** A method no row of mapping.yaml's `intervention_points` table ever
  * assigns to any point (see this module's header: this is the "unmapped
- * method" boundary, distinct from the four mapped-but-undispatched
- * methods). Namespaced under `steps/` so it reaches the same `isStepMethod`
+ * method" boundary, distinct from mapped allow-by-default hooks).
+ * Namespaced under `steps/` so it reaches the same `isStepMethod`
  * branch a real step would, which is the only way this probe can show that
  * an undispatched method does NOT fall into domain (1)'s deny-on-failure
  * path merely for being unrecognised. */
 const UNMAPPED_METHOD = "steps/doesNotExist";
 
-/** A method mapping.yaml DOES map (to `agent_startup`) that this Guardian
- * does not dispatch (`handshake.ts`'s `METHODS_EVALUATED` names only
- * `steps/toolCallRequest` / `steps/toolCallResult`). Used only by
- * `assertHookPayloadFailureIsUndispatchedElsewhere` to measure the
- * hook-payload/dispatch coincidence this module's header names -- distinct
- * from `UNMAPPED_METHOD`, which mapping.yaml gives no row to at all. */
-const UNDISPATCHED_MAPPED_METHOD = "steps/sessionStart";
+/** A method mapping.yaml maps to `agent_startup` and the Guardian dispatches
+ * as an allow-by-default audit event. Distinct from `UNMAPPED_METHOD`, which
+ * mapping.yaml gives no row to at all. */
+const ALLOW_BY_DEFAULT_MAPPED_METHOD = "steps/sessionStart";
 
 type DenyProbeResponse = { result?: { decision?: string; reason_codes?: string[] }; error?: unknown };
 type DispatchProbeResponse = { result?: unknown; error?: { code?: number; message?: string } };
@@ -178,14 +159,13 @@ function envelopeMissingMetadata(method: string): Record<string, unknown> {
  * the failure this probe measures is the hook-payload check specifically,
  * not some other field validate-envelope.ts would also have rejected.
  *
- * Does not, by itself, license any cell. The hook-payload check this probe
- * trips is method-gated (`checkHookPayload` applies it to only
- * `steps/toolCallRequest` / `steps/toolCallResult` get one), so a deny here
- * says nothing about a mapped point with no hook-payload schema at all.
+ * Does not, by itself, license any cell. The hook-payload check is
+ * method-gated, so a deny here says nothing about another mapped point with
+ * a different payload schema and allow-by-default dispatch semantics.
  * `measureDenyColumn` below is what actually resolves the deny column, from
  * six independent probes using a different, genuinely method-independent
  * failure mode. This function stays because it is the base case
- * `assertHookPayloadFailureIsUndispatchedElsewhere` contrasts against.
+ * `assertAllowByDefaultMappedHook` contrasts against.
  *
  * A throw here, not a resolved `unexpressed` cell: a Guardian that answers
  * this probe with anything but an honoured deny has the fail-closed
@@ -211,43 +191,28 @@ async function assertEvaluationFailsClosed(guardianUrl: string): Promise<void> {
 }
 
 /**
- * The hook-payload finding. Posts the same shape as
- * `assertEvaluationFailsClosed` -- an empty payload -- at
- * `UNDISPATCHED_MAPPED_METHOD`, a method mapping.yaml maps to a point
- * (`agent_startup`) but this Guardian does not dispatch, and asserts the
- * answer is `method_not_dispatched`, not a deny.
- *
- * `hooks/session-start.json` (or any schema for a non-tool-call method) is
- * never checked by `validateEnvelope` at all -- `checkHookPayload` is called
- * only for `steps/toolCallRequest` / `steps/toolCallResult`
- * (`checkHookPayload`) -- so an empty payload here is not invalid;
- * the envelope passes validation whole, and dispatch's own predicates answer
- * `method_not_dispatched`. Contrasted directly with
- * `assertEvaluationFailsClosed`'s identical-shaped probe at
- * `steps/toolCallRequest`, this is the hook-payload/dispatch coincidence
- * this module's header names: the two method lists that gate hook-payload
- * checking and dispatch are declared independently, in different files, and
- * today they happen to name the same two methods.
- *
- * A THROW when the answer is anything else -- not because that would be
- * domain (1) or (2) failing, but because it would mean an empty payload has
- * started failing validation for a method with no hook-payload schema this
- * check knows of, which is exactly the kind of drift this probe exists to
- * catch rather than let the module header's claim go unmeasured.
+ * The hook-payload finding. Posts an empty payload at a mapped non-tool
+ * method. With ACS-Core conformance (D7), the Guardian dispatches all six
+ * mapped methods — the four non-tool hooks return allow-by-default with a
+ * chain entry rather than method_not_dispatched. This probe now asserts that
+ * the allow-by-default path answers correctly, contrasting with
+ * assertEvaluationFailsClosed's identical-shaped probe at
+ * steps/toolCallRequest (which fails closed into a deny).
  */
-async function assertHookPayloadFailureIsUndispatchedElsewhere(guardianUrl: string): Promise<void> {
+async function assertAllowByDefaultMappedHook(guardianUrl: string): Promise<void> {
   const response = await fetch(guardianUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(wellFormedEnvelope(UNDISPATCHED_MAPPED_METHOD, {})),
+    body: JSON.stringify(wellFormedEnvelope(ALLOW_BY_DEFAULT_MAPPED_METHOD, {})),
   });
   const body = (await response.json()) as DispatchProbeResponse;
 
-  if (body.error?.code !== METHOD_NOT_DISPATCHED_CODE) {
+  const result = body.result as Record<string, unknown> | undefined;
+  if (result?.decision !== "allow") {
     throw new Error(
-      `${JSON.stringify(UNDISPATCHED_MAPPED_METHOD)} with an empty payload -- invalid only at the two ` +
-        `hook-payload-checked methods -- answered ${JSON.stringify(body)} instead of method_not_dispatched. The ` +
-        `hook-payload/dispatch coincidence this probe measures does not hold against this Guardian.`,
+      `${JSON.stringify(ALLOW_BY_DEFAULT_MAPPED_METHOD)} with an empty payload -- an allow-by-default method -- ` +
+        `answered ${JSON.stringify(body)} instead of allow. ` +
+        `ACS-Core conformance requires the four non-tool hooks to return allow with a chain entry.`,
     );
   }
 }
@@ -331,8 +296,8 @@ async function measureDenyColumn(guardianUrl: string, mapping: Mapping): Promise
  * generalised. The other three probe kinds assert invariants this check
  * depends on and resolve no cell of their own: `assertEvaluationFailsClosed`
  * is its own literal hook-payload probe,
- * `assertHookPayloadFailureIsUndispatchedElsewhere` measures the
- * hook-payload/dispatch coincidence, and `assertUnmappedMethodIsUndispatched`
+ * `assertAllowByDefaultMappedHook` measures the mapped audit-only path, and
+ * `assertUnmappedMethodIsUndispatched`
  * measures the third boundary against a method mapping.yaml does not map at
  * all.
  *
@@ -352,7 +317,7 @@ export async function checkDenyFailsClosed(
   mapping: Mapping,
 ): Promise<CoverageCell[]> {
   await assertEvaluationFailsClosed(guardian.url);
-  await assertHookPayloadFailureIsUndispatchedElsewhere(guardian.url);
+  await assertAllowByDefaultMappedHook(guardian.url);
   await assertUnmappedMethodIsUndispatched(guardian.url);
 
   return measureDenyColumn(guardian.url, mapping);

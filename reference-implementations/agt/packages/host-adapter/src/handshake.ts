@@ -61,6 +61,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { GuardianClient, JsonRpcRequest } from "./guardian-client.ts";
+import { signEnvelope } from "./sign-envelope.ts";
 import { isSessionConfig, type SessionConfig, type SessionConfigStore } from "./session-config.ts";
 
 const HANDSHAKE_METHOD = "handshake/hello";
@@ -76,6 +77,10 @@ export type HandshakeOptions = {
   agentId: string;
   /** This session's identity on the wire (ACS metadata.session_id, a uuid). */
   sessionId: string;
+  /** Shared HMAC input keying material. ACS-Core signs the ClientHello too:
+   * the handshake negotiates capabilities, not the already-provisioned
+   * deployment secret. */
+  hmacSecret?: Buffer;
   /** Bounds this handshake round trip (§6.4). There is no negotiated
    * `timeout_config` yet -- negotiating it is what this call is for -- so a
    * caller with nothing better should pass the ACS default
@@ -200,8 +205,9 @@ export async function negotiateSessionConfig(
   store: SessionConfigStore,
 ): Promise<SessionConfig> {
   const requestId = randomUUID();
+  const profilesSupported = options.hmacSecret ? ["acs-core"] : [];
 
-  const envelope: JsonRpcRequest = {
+  const unsignedEnvelope = {
     jsonrpc: "2.0",
     method: HANDSHAKE_METHOD,
     id: requestId,
@@ -210,14 +216,13 @@ export async function negotiateSessionConfig(
       request_id: requestId,
       timestamp: new Date().toISOString(),
       metadata: { agent_id: options.agentId, session_id: options.sessionId },
-      // ClientHello shape (handshake.json's $defs.ClientHello). Not
-      // schema-enforced on this method by the Guardian's own validateEnvelope
-      // today, but supplied honestly rather than left empty.
+      // ClientHello shape (handshake.json's $defs.ClientHello), validated by
+      // the Guardian before it negotiates the session.
       //
-      // "Honestly" is the whole point of the field: this adapter builds both
-      // step envelopes -- `buildEnvelope` has a request-shaped and a
-      // result-shaped hookmap entry, and the shipped Claude Code hookmap maps
-      // a hook to each -- so this list has to name both methods.
+      // "Honestly" is the whole point of the field: the shipped host
+      // integrations currently emit the two tool-call step envelopes. The
+      // Guardian can accept more methods, but this client must not claim it
+      // emits lifecycle or wrapped-MCP traffic until an integration does.
       // Under-declaring here is the direction that breaks the exchange rather
       // than merely misdescribing it: handshake.json defines the Guardian's
       // `methods_evaluated` as a "Subset of the client's methods_implemented",
@@ -237,9 +242,13 @@ export async function negotiateSessionConfig(
         methods_implemented: ["steps/toolCallRequest", "steps/toolCallResult"],
         transports_supported: ["http"],
         provenance_producer: "none",
+        profiles_supported: profilesSupported,
       },
     },
-  };
+  } satisfies JsonRpcRequest;
+  const envelope = options.hmacSecret
+    ? signEnvelope(unsignedEnvelope, options.hmacSecret)
+    : unsignedEnvelope;
 
   // `post`, not `requestDecision`: this method's result is a ServerHello, not
   // a decision, and a handshake failure is a different incident from a step
@@ -269,6 +278,21 @@ export async function negotiateSessionConfig(
         `on_decision_failure "proceed" or "deny" and a numeric timeout_config.default_ms, got ` +
         `${JSON.stringify(serverHello)}`,
     );
+  }
+
+  if (options.hmacSecret) {
+    const coreProfiles = serverHello.profiles_accepted;
+    const signatureAlgorithms = serverHello.signature_algorithms_supported;
+    if (!Array.isArray(coreProfiles) || !coreProfiles.includes("acs-core")) {
+      throw new ServerHelloInvalidError(
+        "handshake: the Guardian did not accept the acs-core profile required by this signed client",
+      );
+    }
+    if (!Array.isArray(signatureAlgorithms) || !signatureAlgorithms.includes("HMAC-SHA256")) {
+      throw new ServerHelloInvalidError(
+        "handshake: the Guardian did not advertise HMAC-SHA256 request verification for this acs-core session",
+      );
+    }
   }
 
   const sessionConfig: SessionConfig = serverHello;

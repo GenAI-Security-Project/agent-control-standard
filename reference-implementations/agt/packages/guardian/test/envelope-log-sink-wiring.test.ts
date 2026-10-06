@@ -33,6 +33,14 @@ function toolCallEnvelope(command: string, overrides: { id?: number } = {}) {
   );
 }
 
+const CLIENT_HELLO = {
+  acs_versions_supported: ["0.1.0"],
+  methods_implemented: ["steps/toolCallRequest", "steps/toolCallResult"],
+  transports_supported: ["http"],
+  provenance_producer: "none",
+  profiles_supported: ["acs-core"],
+};
+
 function readEntries(path: string): EnvelopeLogEntry[] {
   if (!existsSync(path)) {
     return [];
@@ -94,7 +102,7 @@ describe("Guardian envelope log wiring", () => {
 
   it("records handshake/hello in both directions", async () => {
     await withGuardian(logIn, async (url, logPath) => {
-      await postRaw(url, JSON.stringify(makeEnvelope("handshake/hello", {}, { id: 42 })));
+      await postRaw(url, JSON.stringify(makeEnvelope("handshake/hello", CLIENT_HELLO, { id: 42 })));
 
       const entries = readEntries(logPath);
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);

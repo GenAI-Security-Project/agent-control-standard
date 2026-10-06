@@ -77,6 +77,7 @@
  * different wire shape (see render-decision.ts).
  */
 import { buildEnvelope, modificationDocumentOf, outputsFor, type AcsRequestEnvelope, type Hookmap } from "./build-envelope.ts";
+import { signEnvelope } from "./sign-envelope.ts";
 import type { AuditSink } from "./audit-sink.ts";
 import {
   applyFailurePosture,
@@ -167,6 +168,9 @@ export type GovernStepInput = {
    * into a silent skip any more.
    */
   scopedTool?: string;
+  /** Base64-encoded IKM for HMAC-SHA256 request signing (§10). When set,
+   *  every envelope is signed with an HKDF-derived per-session key. */
+  hmacSecret?: Buffer;
 };
 
 /**
@@ -440,6 +444,7 @@ export async function governStep({
   sessionId,
   audit,
   scopedTool,
+  hmacSecret,
 }: GovernStepInput): Promise<GovernedStep> {
   // Every render below -- the arriving decision's and the posture's -- goes
   // through the hook's own decisions block, so a hook this hookmap does not map
@@ -666,6 +671,9 @@ export async function governStep({
   let envelope: AcsRequestEnvelope;
   try {
     envelope = buildEnvelope(hookEventName, payload, hookmap);
+    if (hmacSecret) {
+      envelope = signEnvelope(envelope, hmacSecret);
+    }
   } catch (failure) {
     return resolveByPosture(failure, "request", undefined);
   }
@@ -750,7 +758,8 @@ export async function governStep({
     ) {
       const remainingMs = timeoutMs - (performance.now() - startedAt);
       if (remainingMs > 0) {
-        envelope = buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false });
+        const retry = buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false });
+        envelope = hmacSecret ? signEnvelope(retry, hmacSecret) : retry;
         answer = await guardian.requestDecision(envelope, { timeoutMs: remainingMs });
       }
     }

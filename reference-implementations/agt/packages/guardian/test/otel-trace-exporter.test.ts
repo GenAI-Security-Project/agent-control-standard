@@ -767,7 +767,16 @@ describe("Guardian trace export wiring", () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
     try {
-      await postRaw(guardian.url, makeEnvelope("handshake/hello", {}, { id: 42 }));
+      // A schema-valid ClientHello: an invalid one is a rejected request, and
+      // is recorded apart like any other.
+      const clientHello = {
+        acs_versions_supported: ["0.1.0"],
+        methods_implemented: ["steps/sessionStart"],
+        transports_supported: ["http"],
+        provenance_producer: "none",
+        profiles_supported: [],
+      };
+      await postRaw(guardian.url, makeEnvelope("handshake/hello", clientHello, { id: 42 }));
       await postRaw(guardian.url, makeEnvelope("steps/sessionStart", {}, { id: 43 }));
       await exporter.flush();
 
