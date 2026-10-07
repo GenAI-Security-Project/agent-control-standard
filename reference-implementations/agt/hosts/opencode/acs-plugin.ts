@@ -129,6 +129,7 @@ import {
   // and would still audit.
   governsTool,
   loadHookmap,
+  negotiateSessionConfig,
   resolveSessionConfig,
   toSessionUuid,
   // `AuditSink`/`GuardianClient`/`SessionConfigStore` -- the three
@@ -1318,16 +1319,15 @@ async function runExchange(
   // mixed.
   const { payload, live } = assemble(input.tool, input.sessionID);
 
-  const session = await resolveSessionConfig(
-    {
-      guardian: deployment.guardian,
-      agentId: deployment.hookmap.host,
-      sessionId: toSessionUuid(input.sessionID),
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-      hmacSecret: deployment.hmacSecret,
-    },
-    deployment.store,
-  );
+  const handshake = {
+    guardian: deployment.guardian,
+    agentId: deployment.hookmap.host,
+    sessionId: toSessionUuid(input.sessionID),
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    hmacSecret: deployment.hmacSecret,
+  };
+  const session = await resolveSessionConfig(handshake, deployment.store);
+  const renegotiate = () => negotiateSessionConfig(handshake, deployment.store);
 
   const governed = await governStep({
     hookEventName,
@@ -1352,6 +1352,7 @@ async function runExchange(
     // here, so this one line is both of its call sites.
     scopedTool: input.tool,
     hmacSecret: deployment.hmacSecret,
+    renegotiate,
   });
 
   applyOpenCodeOutput(governed.output, live);

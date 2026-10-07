@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startGuardian } from "../src/index.ts";
 import type { EnvelopeLogEntry } from "../src/envelope-log-sink.ts";
+import { fetchWithHandshake } from "../../../test/helpers/handshake.ts";
 
 function makeEnvelope(
   method: string,
@@ -48,7 +49,9 @@ function readEntries(path: string): EnvelopeLogEntry[] {
   return readFileSync(path, "utf8")
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as EnvelopeLogEntry);
+    .map((line) => JSON.parse(line) as EnvelopeLogEntry)
+    // fetchWithHandshake's own pair; these tests are about the step's.
+    .filter((entry) => entry.rpc_id !== "handshake");
 }
 
 /** Non-recursive cleanup, as in envelope-log-sink.test.ts. */
@@ -77,7 +80,7 @@ async function withGuardian(
 }
 
 async function postRaw(url: string, body: string): Promise<unknown> {
-  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
+  const res = await fetchWithHandshake(url, { method: "POST", headers: { "content-type": "application/json" }, body });
   return await res.json();
 }
 

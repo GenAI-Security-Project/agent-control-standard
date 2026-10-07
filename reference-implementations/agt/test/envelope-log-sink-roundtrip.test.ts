@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { startGuardian } from "../packages/guardian/src/index.ts";
 import { tailEnvelopeLog, type EnvelopeLogEntry } from "../packages/inspector/src/tail-envelope-log.ts";
 import { outcomeMessageOf, renderOutcome, type OutcomeMessage } from "../packages/inspector/src/render.ts";
+import { fetchWithHandshake } from "./helpers/handshake.ts";
 
 /**
  * The contract test for the envelope log. The Guardian writes it; the
@@ -61,19 +62,20 @@ describe("envelope log round trip: Guardian sink -> Inspector tail -> decision b
     const controller = new AbortController();
 
     try {
-      await fetch(guardian.url, {
+      await fetchWithHandshake(guardian.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(toolCallEnvelope("rm -rf /", 77)),
       });
 
       const tail = tailEnvelopeLog({ path: logPath, fromStart: true, pollMs: 10, signal: controller.signal });
-      const [request, response] = await take(tail, 2, controller);
+      // The first pair is fetchWithHandshake's handshake/hello.
+      const [, , request, response] = await take(tail, 4, controller);
 
       // Every field the Inspector's EnvelopeLogEntry declares must actually
       // be present and correctly typed on what the Guardian wrote.
-      expect(request?.seq).toBe(1);
-      expect(response?.seq).toBe(2);
+      expect(request?.seq).toBe(3);
+      expect(response?.seq).toBe(4);
       expect(typeof request?.recorded_at).toBe("string");
       expect(typeof response?.recorded_at).toBe("string");
       expect(request?.direction).toBe("request");

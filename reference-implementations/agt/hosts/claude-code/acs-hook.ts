@@ -89,6 +89,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   governStep,
   loadHookmap,
+  negotiateSessionConfig,
   resolveSessionConfig,
   toSessionUuid,
   withholdsAtResultGate,
@@ -557,16 +558,15 @@ async function main(): Promise<void> {
   // without a bound, a Guardian that accepts the connection and never answers
   // would hang this hook until Claude Code's own hook timeout kills the
   // process.
-  const session = await resolveSessionConfig(
-    {
-      guardian,
-      agentId: hookmap.host,
-      sessionId: toSessionUuid(sessionId),
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-      hmacSecret,
-    },
-    store,
-  );
+  const handshake = {
+    guardian,
+    agentId: hookmap.host,
+    sessionId: toSessionUuid(sessionId),
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    hmacSecret,
+  };
+  const session = await resolveSessionConfig(handshake, store);
+  const renegotiate = () => negotiateSessionConfig(handshake, store);
 
   // Step 5: resolve the attempt. One call, one answer, and this shim branches
   // on nothing: `governStep` builds the ACS request, asks the Guardian for a
@@ -578,7 +578,7 @@ async function main(): Promise<void> {
   // rules produce for it, is stated once inside `governStep`, host-agnostically,
   // so a second host inherits it by calling the function rather than
   // reimplementing it.
-  const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit, hmacSecret });
+  const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit, hmacSecret, renegotiate });
 
   process.stdout.write(JSON.stringify(asClaudeCodeOutput(governed.output, hookEventName)));
 }
