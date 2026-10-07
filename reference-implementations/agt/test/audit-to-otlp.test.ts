@@ -14,6 +14,7 @@ import {
 } from "../packages/guardian/src/audit-to-otlp.ts";
 import { createDeploymentBridge } from "../packages/guardian/src/deployment-bridge.ts";
 import { startGuardian } from "../packages/guardian/src/index.ts";
+import { handshakeFor } from "./helpers/handshake.ts";
 import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
@@ -658,7 +659,14 @@ describe("audit-to-otlp: the converter's span joins the Guardian's span for the 
             hookEventName: "OnStep",
             payload: step,
             hookmap: pairedHookmap,
-            guardian: createGuardianClient(guardian.url),
+            // §4: this Guardian answers a step only after handshake/hello for its session.
+            guardian: (() => {
+              const client = createGuardianClient(guardian.url);
+              return { ...client, requestDecision: async (envelope, options) => {
+                await handshakeFor(guardian.url, envelope);
+                return client.requestDecision(envelope, options);
+              } };
+            })(),
             session: { config: { timeout_config: { default_ms: 500 }, on_decision_failure: "proceed" }, failure: undefined },
             sessionId: step.session_id,
             audit: createAuditSink({ path: auditPath }),

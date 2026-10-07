@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { loadMapping, startGuardian, type Mapping, type StartedGuardian } from "guardian";
 import { checkDenyFailsClosed } from "../src/failure-domains.ts";
+import { fetchWithHandshake } from "../../../test/helpers/handshake.ts";
 
 const mapping: Mapping = loadMapping("mapping.yaml");
 
@@ -39,7 +40,7 @@ describe("the two failure domains stay apart", () => {
   });
 
   it("gets a decision rather than a JSON-RPC error when the envelope cannot be validated", async () => {
-    const response = await fetch(guardian.url, {
+    const response = await fetchWithHandshake(guardian.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

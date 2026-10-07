@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startGuardian } from "../src/index.ts";
+import { handshakeFor } from "../../../test/helpers/handshake.ts";
 import type { EnvelopeLogEntry } from "../src/envelope-log-sink.ts";
 
 // hooks.md, toolCallResult: a Guardian SHOULD resolve request_id_ref against
@@ -46,6 +47,7 @@ function toolResult(sessionId: string, requestIdRef?: string) {
 }
 
 async function post(url: string, body: unknown): Promise<Record<string, unknown>> {
+  await handshakeFor(url, body);
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return (await res.json()) as Record<string, unknown>;
 }

@@ -153,6 +153,26 @@ function envelopeMissingMetadata(method: string): Record<string, unknown> {
 }
 
 /**
+ * Posts `envelope` the way a conformant host does: after a `handshake/hello`
+ * that declares its method for its session (§4). Without one, a Guardian
+ * answers every probe with -32003 and none of them measures what it means to.
+ */
+async function postAfterHandshake(guardianUrl: string, envelope: Record<string, unknown>): Promise<Response> {
+  const params = envelope.params as { metadata: { session_id: string } };
+  const hello = wellFormedEnvelope("handshake/hello", {
+    acs_versions_supported: ["0.1.0"],
+    methods_implemented: [envelope.method],
+    transports_supported: ["http"],
+    provenance_producer: "none",
+  });
+  (hello.params as { metadata: { session_id: string } }).metadata.session_id = params.metadata.session_id;
+  const post = (body: unknown) =>
+    fetch(guardianUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  await post(hello);
+  return post(envelope);
+}
+
+/**
  * The domain (1) probe: a `steps/toolCallRequest` whose payload is empty,
  * which fails `hooks/tool-call-request.json` (it requires `tool` and
  * `arguments`) while the envelope around it is otherwise schema-valid -- so
@@ -174,11 +194,7 @@ function envelopeMissingMetadata(method: string): Record<string, unknown> {
  * would be worse than a failed check.
  */
 async function assertEvaluationFailsClosed(guardianUrl: string): Promise<void> {
-  const response = await fetch(guardianUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(wellFormedEnvelope("steps/toolCallRequest", {})),
-  });
+  const response = await postAfterHandshake(guardianUrl, wellFormedEnvelope("steps/toolCallRequest", {}));
   const body = (await response.json()) as DenyProbeResponse;
 
   if (body.error !== undefined || body.result?.decision !== "deny") {
@@ -200,11 +216,7 @@ async function assertEvaluationFailsClosed(guardianUrl: string): Promise<void> {
  * steps/toolCallRequest (which fails closed into a deny).
  */
 async function assertAllowByDefaultMappedHook(guardianUrl: string): Promise<void> {
-  const response = await fetch(guardianUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(wellFormedEnvelope(ALLOW_BY_DEFAULT_MAPPED_METHOD, {})),
-  });
+  const response = await postAfterHandshake(guardianUrl, wellFormedEnvelope(ALLOW_BY_DEFAULT_MAPPED_METHOD, {}));
   const body = (await response.json()) as DispatchProbeResponse;
 
   const result = body.result as Record<string, unknown> | undefined;
@@ -226,11 +238,7 @@ async function assertAllowByDefaultMappedHook(guardianUrl: string): Promise<void
  * record and every reason to refuse to publish silently.
  */
 async function assertUnmappedMethodIsUndispatched(guardianUrl: string): Promise<void> {
-  const response = await fetch(guardianUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(wellFormedEnvelope(UNMAPPED_METHOD, {})),
-  });
+  const response = await postAfterHandshake(guardianUrl, wellFormedEnvelope(UNMAPPED_METHOD, {}));
   const body = (await response.json()) as DispatchProbeResponse;
 
   if (body.error?.code !== METHOD_NOT_DISPATCHED_CODE) {
