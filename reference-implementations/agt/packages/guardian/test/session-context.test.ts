@@ -8,7 +8,7 @@ import {
 } from "../src/session-context-store.ts";
 
 const at = (iso: string) => () => new Date(iso);
-const step = (n: number) => ({ method: "steps/toolCallRequest", request_id: `req-${n}`, tool_name: "Bash" });
+const step = (n: number) => ({ method: "steps/toolCallRequest", request_id: `req-${n}`, tool_name: "Bash", request_hash: "a".repeat(64) });
 
 describe("SessionContext — the hash chain", () => {
   it("starts a session at the genesis hash and seq 1", () => {
@@ -45,17 +45,25 @@ describe("SessionContext — the hash chain", () => {
     expect(forged.hash).toBe(honest.hash);
   });
 
+  it("commits to the request content through request_hash", () => {
+    const store = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
+    const honest = appendContextEntry(store, "sess-a", step(1));
+    const other = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
+    const rewritten = appendContextEntry(other, "sess-a", { ...step(1), request_hash: "b".repeat(64) });
+    expect(rewritten.hash).not.toBe(honest.hash);
+  });
+
   it("uses the normative JCS(content) plus raw previous-hash bytes algorithm", () => {
     const store = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
     const first = appendContextEntry(store, "sess-a", step(1));
     const firstContent =
-      '{"entry_id":"sess-a:1","step_id":"req-1","step_type":"steps/toolCallRequest","timestamp":"2026-08-14T00:00:00.000Z"}';
+      `{"entry_id":"sess-a:1","request_hash":"${"a".repeat(64)}","step_id":"req-1","step_type":"steps/toolCallRequest","timestamp":"2026-08-14T00:00:00.000Z"}`;
     expect(first.prev_hash).toBeNull();
     expect(first.hash).toBe(createHash("sha256").update(firstContent, "utf8").digest("hex"));
 
     const second = appendContextEntry(store, "sess-a", step(2));
     const secondContent =
-      '{"entry_id":"sess-a:2","step_id":"req-2","step_type":"steps/toolCallRequest","timestamp":"2026-08-14T00:00:00.000Z"}';
+      `{"entry_id":"sess-a:2","request_hash":"${"a".repeat(64)}","step_id":"req-2","step_type":"steps/toolCallRequest","timestamp":"2026-08-14T00:00:00.000Z"}`;
     const expected = createHash("sha256")
       .update(secondContent, "utf8")
       .update(Buffer.from(first.hash, "hex"))

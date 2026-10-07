@@ -55,6 +55,7 @@ export type SessionContextLogEntry = {
   method: string;
   request_id: string;
   tool_name: string;
+  request_hash: string;
 };
 
 export type TailSessionContextLogOptions = {
@@ -97,7 +98,8 @@ function isSessionContextLogEntryShape(value: unknown): value is SessionContextL
     typeof candidate.recorded_at === "string" &&
     typeof candidate.method === "string" &&
     typeof candidate.request_id === "string" &&
-    typeof candidate.tool_name === "string"
+    typeof candidate.tool_name === "string" &&
+    typeof candidate.request_hash === "string"
   );
 }
 

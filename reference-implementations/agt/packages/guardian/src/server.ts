@@ -98,6 +98,7 @@ import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExport
 import {
   appendContextEntry,
   createMemorySessionContextStore,
+  requestHash,
   type IfcLabels,
   type SessionContextStore,
 } from "./session-context-store.ts";
@@ -947,7 +948,8 @@ async function dispatch(
   const nowMs = Date.now();
   const requestTimestampMs = Date.parse(envelope.params.timestamp);
   const drift = Math.abs(nowMs - requestTimestampMs);
-  if (drift > SKEW_WINDOW_MS) {
+  // Date.parse returns NaN for leap seconds (23:59:60), which date-time accepts.
+  if (!Number.isFinite(drift) || drift > SKEW_WINDOW_MS) {
     return errorResponse(rpcId, -32006, "TIMESTAMP_OUT_OF_WINDOW", { skew_window_ms: SKEW_WINDOW_MS });
   }
 
@@ -1043,6 +1045,7 @@ async function dispatch(
     const entry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
       method: envelope.method,
       request_id: envelope.params.request_id,
+      request_hash: requestHash(envelope.params),
       tool_name: "",
     });
     return successResponse(envelope.id, finalResult(envelope.params, { decision: "allow" }, entry.hash));
@@ -1061,6 +1064,7 @@ async function dispatch(
     const entry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
       method: envelope.method,
       request_id: envelope.params.request_id,
+      request_hash: requestHash(envelope.params),
       tool_name: toolName,
     });
 
@@ -1229,6 +1233,7 @@ async function evaluateStep<E extends SteppedEnvelope>(
     const chainEntry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
       method: envelope.method,
       request_id: envelope.params.request_id,
+      request_hash: requestHash(envelope.params),
       tool_name: envelope.params.payload.tool.name,
     });
     chainHash = chainEntry.hash;
