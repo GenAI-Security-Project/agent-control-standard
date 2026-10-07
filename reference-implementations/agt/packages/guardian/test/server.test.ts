@@ -1733,6 +1733,14 @@ describe("ACS-Core wire security and negotiation", () => {
       (future.params as Record<string, unknown>).timestamp = new Date(Date.now() + 3_600_000).toISOString();
       expect((await postAcs(secured.url, signRequest(future, masterSecret))).error?.code).toBe(-32006);
 
+      // date-time accepts a leap second, but Date.parse returns NaN for it.
+      const leap = makeEnvelope("steps/toolCallRequest", {
+        tool: { name: "Bash" },
+        arguments: { command: { value: "ls" } },
+      }, { sessionId });
+      (leap.params as Record<string, unknown>).timestamp = "2020-12-31T23:59:60Z";
+      expect((await postAcs(secured.url, signRequest(leap, masterSecret))).error?.code).toBe(-32006);
+
       const ping = makeEnvelope("system/ping", { echo: "probe" }, { sessionId });
       (ping.params as Record<string, unknown>).timestamp = "2000-01-01T00:00:00.000Z";
       const response = await postAcs(secured.url, ping);

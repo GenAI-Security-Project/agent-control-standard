@@ -90,7 +90,12 @@ export type SessionProvenance = {
 export type Intent = { readonly text: string; readonly recorded_at: string };
 
 /** What a step contributes to the chain. Deliberately not the whole envelope. */
-export type SessionStep = { method: string; request_id: string; tool_name: string };
+export type SessionStep = { method: string; request_id: string; tool_name: string; request_hash: string };
+
+/** context-entry.json `request_hash`: lowercase-hex SHA-256 of the JCS-canonicalized request params. */
+export function requestHash(params: unknown): string {
+  return createHash("sha256").update(jcsCanonicalise(params), "utf8").digest("hex");
+}
 
 export type SessionContextEntry = {
   session_id: string;
@@ -101,6 +106,7 @@ export type SessionContextEntry = {
   method: string;
   request_id: string;
   tool_name: string;
+  request_hash: string;
 };
 
 /** One session's hash chain, and nothing else the session happens to own. */
@@ -143,6 +149,7 @@ export function hashEntry(input: Omit<SessionContextEntry, "hash">): string {
     step_id: input.request_id,
     step_type: input.method,
     timestamp: input.recorded_at,
+    request_hash: input.request_hash,
   };
   const previousBytes = input.prev_hash === null ? Buffer.alloc(0) : Buffer.from(input.prev_hash, "hex");
   return createHash("sha256").update(jcsCanonicalise(content), "utf8").update(previousBytes).digest("hex");

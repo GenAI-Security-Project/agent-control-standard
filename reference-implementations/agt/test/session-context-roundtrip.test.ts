@@ -166,6 +166,7 @@ describe("a write through the store and a read through the Inspector: every fiel
       method: "steps/toolCallRequest",
       request_id: "req-1",
       tool_name: "run_shell",
+      request_hash: "a".repeat(64),
     });
 
     // toEqual, not toMatchObject: an extra field on either side is drift,
@@ -183,6 +184,7 @@ describe("an evicted session that comes back reads as a broken chain, not as a f
       method: "steps/toolCallRequest",
       request_id: `req-${n}`,
       tool_name: "run_shell",
+      request_hash: "a".repeat(64),
     });
     const store = createMemorySessionContextStore({
       now: () => new Date("2026-08-10T12:00:00.000Z"),

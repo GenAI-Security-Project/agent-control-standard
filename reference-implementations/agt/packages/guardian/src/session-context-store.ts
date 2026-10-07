@@ -88,6 +88,7 @@ import {
 
 export {
   GENESIS_HASH,
+  requestHash,
   type IfcLabels,
   type Intent,
   type SessionContext,
@@ -237,6 +238,7 @@ export function createMemorySessionContextStore(
         method: step.method,
         request_id: step.request_id,
         tool_name: step.tool_name,
+        request_hash: step.request_hash,
       };
       const entry: SessionContextEntry = { ...withoutHash, hash: hashEntry(withoutHash) };
       // Pushed onto the array this session already owns, rather than rebuilt
