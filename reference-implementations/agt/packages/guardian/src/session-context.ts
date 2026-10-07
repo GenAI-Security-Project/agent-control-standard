@@ -102,7 +102,12 @@ export type StepFindings = {
   request_id_ref?: string;
 };
 
-export type SessionStep = { method: string; request_id: string; tool_name: string } & Partial<StepFindings>;
+export type SessionStep = { method: string; request_id: string; tool_name: string; request_hash: string } & Partial<StepFindings>;
+
+/** context-entry.json `request_hash`: lowercase-hex SHA-256 of the JCS-canonicalized request params. */
+export function requestHash(params: unknown): string {
+  return createHash("sha256").update(jcsCanonicalise(params), "utf8").digest("hex");
+}
 
 export type SessionContextEntry = {
   session_id: string;
@@ -113,6 +118,7 @@ export type SessionContextEntry = {
   method: string;
   request_id: string;
   tool_name: string;
+  request_hash: string;
 } & Partial<StepFindings>;
 
 /** One session's hash chain, and nothing else the session happens to own. */
@@ -168,6 +174,7 @@ export function hashEntry(input: Omit<SessionContextEntry, "hash">): string {
     step_id: input.request_id,
     step_type: input.method,
     timestamp: input.recorded_at,
+    request_hash: input.request_hash,
     ...(input.findings === undefined
       ? {}
       : { findings: input.findings, ...(input.request_id_ref === undefined ? {} : { request_id_ref: input.request_id_ref }) }),
