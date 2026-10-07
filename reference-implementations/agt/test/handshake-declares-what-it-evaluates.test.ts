@@ -7,6 +7,7 @@ import {
   loadHookmap,
   negotiateSessionConfig,
 } from "host-adapter";
+import { fetchWithHandshake } from "./helpers/handshake.ts";
 
 /**
  * The handshake has to describe the Guardian that sent it.
@@ -98,7 +99,7 @@ type RpcAnswer = {
  * answered for it at all. */
 async function dispatches(method: string): Promise<boolean> {
   const id = crypto.randomUUID();
-  const res = await fetch(guardian.url, {
+  const res = await fetchWithHandshake(guardian.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

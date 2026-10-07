@@ -15,6 +15,7 @@ import {
   GuardianTimeoutError,
 } from "../src/guardian-client.ts";
 import { signEnvelope } from "../src/sign-envelope.ts";
+import { handshakeFor } from "../../../test/helpers/handshake.ts";
 import {
   negotiateSessionConfig,
   resolveSessionConfig,
@@ -84,6 +85,7 @@ describe("GuardianClient.post", () => {
   it("correlates the response to the request by JSON-RPC id -- buildEnvelope's id equals params.request_id, and that round-trips fine", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
 
+    await handshakeFor(guardian.url, envelope);
     const response = await createGuardianClient(guardian.url).post(envelope);
 
     expect(response.id).toBe(envelope.id);
@@ -202,6 +204,7 @@ describe("GuardianClient.post", () => {
   it("against a real Guardian: steps/toolCallRequest for ls -la allows, echoing the request id", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
 
+    await handshakeFor(guardian.url, envelope);
     const response = await createGuardianClient(guardian.url).post(envelope);
 
     expect(response.error).toBeUndefined();
@@ -217,6 +220,7 @@ describe("GuardianClient.post", () => {
     });
     try {
       const envelope = signEnvelope(buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap), secret);
+      await handshakeFor(secured.url, envelope, hello => signEnvelope(hello as never, secret));
       const response = await createGuardianClient(secured.url, { hmacSecret: secret }).post(envelope);
       expect(response.result?.decision).toBe("allow");
     } finally {
@@ -251,6 +255,7 @@ describe("GuardianClient.post", () => {
     try {
       const ordinary = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
       const envelope = signEnvelope({ ...ordinary, method: "steps/unknownHook" }, secret);
+      await handshakeFor(secured.url, envelope, hello => signEnvelope(hello as never, secret));
       const response = await createGuardianClient(secured.url, { hmacSecret: secret }).post(envelope);
       expect(response.error?.code).toBe(-32011);
       expect(response.error?.signature?.algorithm).toBe("HMAC-SHA256");
@@ -342,6 +347,7 @@ describe("GuardianClient.requestDecision", () => {
   it("answers with the decision when one arrives", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
 
+    await handshakeFor(guardian.url, envelope);
     const outcome = await createGuardianClient(guardian.url).requestDecision(envelope);
 
     expect(outcome.decisionArrived).toBe(true);
@@ -370,6 +376,7 @@ describe("GuardianClient.requestDecision", () => {
   it("hands the error through so a refusal is classified as one, not as a delivery failure", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
     const unknownMethod = { ...envelope, method: "steps/unknownHook" };
+    await handshakeFor(guardian.url, unknownMethod);
 
     const outcome = await createGuardianClient(guardian.url).requestDecision(unknownMethod);
 
@@ -934,6 +941,7 @@ describe("host -> wire -> policy -> host, end to end", () => {
   it("a real rm -rf / tool call denies through the real Guardian, and renders with the reasoning in permissionDecisionReason", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
 
+    await handshakeFor(guardian.url, envelope);
     const response = await createGuardianClient(guardian.url).post(envelope);
     expect(response.error).toBeUndefined();
 
@@ -951,6 +959,7 @@ describe("host -> wire -> policy -> host, end to end", () => {
   it("a real ls -la tool call allows through the real Guardian, and renders as a plain allow", async () => {
     const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
 
+    await handshakeFor(guardian.url, envelope);
     const response = await createGuardianClient(guardian.url).post(envelope);
     expect(response.error).toBeUndefined();
 

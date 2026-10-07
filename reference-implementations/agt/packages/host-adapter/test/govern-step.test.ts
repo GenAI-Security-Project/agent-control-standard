@@ -3,7 +3,7 @@ import type { AuditEvent, AuditSink } from "../src/audit-sink.ts";
 import type { Hookmap, HookmapRequestHookEntry, HookmapResultHookEntry } from "../src/build-envelope.ts";
 import { governStep, governsTool, type GovernedStep } from "../src/govern-step.ts";
 import { GuardianTimeoutError, type DecisionOrFailure, type GuardianClient } from "../src/guardian-client.ts";
-import type { ResolvedSessionConfig } from "../src/handshake.ts";
+import { SessionConfigStoreFailedError, type ResolvedSessionConfig } from "../src/handshake.ts";
 import type { SessionConfig } from "../src/session-config.ts";
 
 /**
@@ -1186,5 +1186,176 @@ describe("governsTool — the rule both hosts and governStep share", () => {
    */
   it("answers true for a prototype-named hook rather than reading Object.prototype", () => {
     expect(governsTool(scopedHookmap, "toString", "bash")).toBe(true);
+  });
+});
+
+describe("governStep — re-handshakes once when the Guardian has no handshake on record (-32003)", () => {
+  /** Refuses with -32003 until `renegotiate` runs, then allows. Records each request_id it was asked about. */
+  function forgetfulGuardian(): { guardian: GuardianClient; renegotiate: () => Promise<SessionConfig>; requestIds: string[] } {
+    let negotiated = false;
+    const requestIds: string[] = [];
+    return {
+      guardian: {
+        requestDecision: (envelope) => {
+          requestIds.push(envelope.params.request_id);
+          return Promise.resolve(
+            negotiated
+              ? ({ decisionArrived: true, decision: { decision: "allow" } } satisfies DecisionOrFailure)
+              : ({ decisionArrived: false, failure: { code: -32003, message: "CAPABILITY_NOT_NEGOTIATED" } } satisfies DecisionOrFailure),
+          );
+        },
+        post: () => Promise.reject(new Error("governStep must not use the wire primitive")),
+      },
+      renegotiate: () => {
+        negotiated = true;
+        return Promise.resolve(NEGOTIATED("proceed"));
+      },
+      requestIds,
+    };
+  }
+
+  const governWith = (
+    guardian: GuardianClient,
+    audit: AuditSink,
+    renegotiate?: () => Promise<SessionConfig>,
+    withHookmap: Hookmap = hookmap,
+  ) =>
+    governStep({
+      hookEventName: "OnStep",
+      payload,
+      hookmap: withHookmap,
+      guardian,
+      session: { config: NEGOTIATED("proceed"), failure: undefined },
+      sessionId: "sess-1",
+      audit,
+      renegotiate,
+    });
+
+  it("retries the step with a fresh request after re-handshaking, and honours the decision", async () => {
+    const { sink } = recordingSink();
+    const { guardian, renegotiate, requestIds } = forgetfulGuardian();
+
+    const governed = await governWith(guardian, sink, renegotiate);
+
+    expect(governed.stage).toBe("honoured");
+    expect(governed.decision?.decision).toBe("allow");
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[1]).not.toBe(requestIds[0]);
+  });
+
+  it("keeps the refusal when the re-handshake fails, so a proceed posture cannot fail open", async () => {
+    const { sink, events } = recordingSink();
+    const { guardian, requestIds } = forgetfulGuardian();
+
+    const governed = await governWith(guardian, sink, () => Promise.reject(new Error("guardian unreachable")));
+
+    expect(governed.stage).not.toBe("honoured");
+    expect(requestIds).toHaveLength(1);
+    expect(postureEventAt(events, 0).outcome).toBe("blocked");
+  });
+
+  it("keeps the refusal when the retry gets no decision, so a proceed posture cannot fail open", async () => {
+    const { sink, events } = recordingSink();
+    let asks = 0;
+    const guardian: GuardianClient = {
+      requestDecision: () => {
+        asks += 1;
+        return Promise.resolve(
+          asks === 1
+            ? ({ decisionArrived: false, failure: { code: -32003, message: "CAPABILITY_NOT_NEGOTIATED" } } satisfies DecisionOrFailure)
+            : ({ decisionArrived: false, failure: new TypeError("fetch failed") } satisfies DecisionOrFailure),
+        );
+      },
+      post: () => Promise.reject(new Error("governStep must not use the wire primitive")),
+    };
+
+    await governWith(guardian, sink, () => Promise.resolve(NEGOTIATED("proceed")));
+
+    expect(asks).toBe(2);
+    expect(postureEventAt(events, 0).outcome).toBe("blocked");
+  });
+
+  it("sends the retry under the timeout the re-handshake negotiated", async () => {
+    const { sink } = recordingSink();
+    const timeouts: (number | undefined)[] = [];
+    const guardian: GuardianClient = {
+      requestDecision: (_envelope, options) => {
+        timeouts.push(options?.timeoutMs);
+        return Promise.resolve(
+          timeouts.length === 1
+            ? ({ decisionArrived: false, failure: { code: -32003, message: "CAPABILITY_NOT_NEGOTIATED" } } satisfies DecisionOrFailure)
+            : ({ decisionArrived: true, decision: { decision: "allow" } } satisfies DecisionOrFailure),
+        );
+      },
+      post: () => Promise.reject(new Error("governStep must not use the wire primitive")),
+    };
+
+    await governWith(guardian, sink, () =>
+      Promise.resolve({ timeout_config: { default_ms: 1234 }, on_decision_failure: "deny" } satisfies SessionConfig),
+    );
+
+    expect(timeouts).toEqual([5000, 1234]);
+  });
+
+  it("measures an ask's expiry from the retry, not from the refused request", async () => {
+    const { sink } = recordingSink();
+    const { guardian: refusing } = forgetfulGuardian();
+    let asks = 0;
+    const guardian: GuardianClient = {
+      ...refusing,
+      requestDecision: (envelope, options) =>
+        ++asks === 1
+          ? refusing.requestDecision(envelope, options)
+          : Promise.resolve({
+              decisionArrived: true,
+              decision: {
+                decision: "ask",
+                reasoning: "approval required",
+                ask_details: { approver: { type: "user" }, question: "ok?", timeout_seconds: 1, timeout_disposition: "allow" },
+              },
+            } satisfies DecisionOrFailure),
+    };
+
+    const askingHookmap: Hookmap = {
+      host: "test-host",
+      hooks: { OnStep: { ...ON_STEP, decisions: { ...ON_STEP.decisions, ask: { output: { outcome: { value: "ask" } } } } } },
+    };
+
+    // A re-handshake slower than the ask's whole one-second window.
+    const governed = await governWith(
+      guardian,
+      sink,
+      async () => {
+        await Bun.sleep(1_100);
+        return NEGOTIATED("proceed");
+      },
+      askingHookmap,
+    );
+
+    expect(governed.decision?.decision).toBe("ask");
+  });
+
+  it("retries under a config the re-handshake negotiated but could not store", async () => {
+    const { sink } = recordingSink();
+    const { guardian, renegotiate, requestIds } = forgetfulGuardian();
+
+    const governed = await governWith(guardian, sink, async () => {
+      await renegotiate();
+      throw new SessionConfigStoreFailedError("disk full", { config: NEGOTIATED("proceed") });
+    });
+
+    expect(governed.stage).toBe("honoured");
+    expect(governed.decision?.decision).toBe("allow");
+    expect(requestIds).toHaveLength(2);
+  });
+
+  it("treats -32003 as a refusal when the caller gave no way to re-handshake", async () => {
+    const { sink, events } = recordingSink();
+    const { guardian, requestIds } = forgetfulGuardian();
+
+    await governWith(guardian, sink);
+
+    expect(requestIds).toHaveLength(1);
+    expect(postureEventAt(events, 0).outcome).toBe("blocked");
   });
 });

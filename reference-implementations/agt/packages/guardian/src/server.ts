@@ -125,6 +125,22 @@ const ACS_PATH = "/acs";
  * spec's own example and matches the skew_window_ms the ServerHello declares. */
 const SKEW_WINDOW_MS = 300_000;
 
+/**
+ * §4: each session's ClientHello `methods_implemented`, recorded at
+ * `handshake/hello`. A step from a session with no entry, or for a method the
+ * session did not declare, is refused with -32003. Bounded and least recently
+ * used first: an evicted session is refused the same way and its host
+ * re-handshakes, which is the -32003 recovery action in §17.1.
+ */
+export type NegotiatedSessions = Map<string, ReadonlySet<string>>;
+const MAX_NEGOTIATED_SESSIONS = 4096;
+
+function rememberNegotiated(sessions: NegotiatedSessions, sessionId: string, methods: ReadonlySet<string>): void {
+  sessions.delete(sessionId);
+  sessions.set(sessionId, methods);
+  if (sessions.size > MAX_NEGOTIATED_SESSIONS) sessions.delete(sessions.keys().next().value!);
+}
+
 type ReplayProtectionStore = {
   seenOrRemember(
     sessionId: string,
@@ -495,6 +511,7 @@ export async function startGuardian({
   const mapping = loadMapping(mappingPath ?? MAPPING_PATH);
   const registeredTools = loadRegisteredTools(manifestPath);
   const replayProtectionStore = createReplayProtectionStore();
+  const negotiatedSessions: NegotiatedSessions = new Map();
   const envelopeLog = envelopeLogPath ? createEnvelopeLogSink({ path: envelopeLogPath }) : NULL_ENVELOPE_LOG_SINK;
   // The session-context store is always the in-memory one, or the caller's
   // own override -- sessionContextLog never becomes an alternative backing
@@ -526,6 +543,7 @@ export async function startGuardian({
         onDecisionFailure,
         sessionContextStore,
         replayProtectionStore,
+        negotiatedSessions,
         registeredTools,
         hmacSecret,
       );
@@ -581,6 +599,7 @@ async function handleAcsRequest(
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
   replayProtectionStore: ReplayProtectionStore,
+  negotiatedSessions: NegotiatedSessions,
   registeredTools: ReadonlySet<string>,
   hmacSecret: string | undefined,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
@@ -630,6 +649,7 @@ async function handleAcsRequest(
       onDecisionFailure,
       sessionContextStore,
       replayProtectionStore,
+      negotiatedSessions,
       registeredTools,
       hmacSecret,
     );
@@ -802,6 +822,7 @@ async function dispatch(
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
   replayProtectionStore: ReplayProtectionStore,
+  negotiatedSessions: NegotiatedSessions,
   registeredTools: ReadonlySet<string>,
   hmacSecret: string | undefined,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
@@ -898,10 +919,26 @@ async function dispatch(
     return errorResponse(rpcId, -32006, "TIMESTAMP_OUT_OF_WINDOW", { skew_window_ms: SKEW_WINDOW_MS });
   }
 
+  // §4 and §17.1: hook traffic only after a handshake, and only for methods
+  // the handshake declared. Checked before the replay store remembers the
+  // request_id, so a host that re-handshakes can retry without a false replay.
+  const sessionId = envelope.params.metadata.session_id;
+  if (envelope.method !== HANDSHAKE_METHOD) {
+    const negotiated = negotiatedSessions.get(sessionId);
+    if (!negotiated?.has(envelope.method)) {
+      return errorResponse(rpcId, -32003, "CAPABILITY_NOT_NEGOTIATED", {
+        method: envelope.method,
+        reason: negotiated ? "method not in this session's methods_implemented" : "no handshake/hello for this session",
+      });
+    }
+    // Map.get does not touch insertion order, so refresh it here: eviction
+    // follows a session's last step, not its handshake.
+    rememberNegotiated(negotiatedSessions, sessionId, negotiated);
+  }
+
   // §10.3: reject duplicate request_id values within the session. This store
   // is separate from SessionContext so audit-chain eviction cannot erase the
   // replay memory and undispatched requests are remembered too.
-  const sessionId = envelope.params.metadata.session_id;
   const replayStatus = replayProtectionStore.seenOrRemember(
     sessionId,
     envelope.params.request_id,
@@ -970,6 +1007,7 @@ async function dispatch(
     if (clientMethods !== undefined) {
       hello.methods_evaluated = hello.methods_evaluated.filter(m => clientMethods.has(m));
     }
+    rememberNegotiated(negotiatedSessions, sessionId, clientMethods ?? new Set());
 
     return successResponse(envelope.id, hello);
   }

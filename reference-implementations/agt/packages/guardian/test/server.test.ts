@@ -19,6 +19,7 @@ import {
 import { createReplayProtectionStore, toRepoRelativeMessage } from "../src/server.ts";
 import { dispatchGuardianAnnotator } from "../src/deployment-bridge.ts";
 import type { AcsFinalResult } from "../src/acs-result.ts";
+import { handshakeFor } from "../../../test/helpers/handshake.ts";
 
 // The repository's own handshake schema, five directories up from this
 // file: this tree sits at reference-implementations/agt.
@@ -71,10 +72,14 @@ function clientHello(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
+/** The key each signed test session used, so postAcs signs its handshake with the same one. */
+const SIGNING_SECRETS = new Map<string, Buffer>();
+
 function signRequest(envelope: Record<string, unknown>, masterSecret: Buffer): Record<string, unknown> {
   const params = envelope.params as Record<string, unknown>;
   const metadata = params.metadata as Record<string, unknown>;
   const sessionId = metadata.session_id as string;
+  SIGNING_SECRETS.set(sessionId, masterSecret);
   const key = deriveSessionKey(masterSecret, sessionId);
   const value = createHmac("sha256", key).update(signingInput(envelope)).digest("base64");
   return {
@@ -126,6 +131,9 @@ type JsonRpcResponse = {
 };
 
 async function postAcs(url: string, body: unknown): Promise<JsonRpcResponse> {
+  const sessionId = (body as { params?: { metadata?: { session_id?: string } } } | null)?.params?.metadata?.session_id;
+  const secret = sessionId === undefined ? undefined : SIGNING_SECRETS.get(sessionId);
+  await handshakeFor(url, body, secret === undefined ? undefined : hello => signRequest(hello, secret));
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -394,7 +402,10 @@ describe("startGuardian POST /acs -- denyOnInvalidEnvelope's boundary: what stay
       expect(response.result?.decision).toBe("deny");
 
       const lines = readFileSync(logPath, "utf8").trim().split("\n");
-      const entries = lines.map((line) => JSON.parse(line) as { direction: string; rpc_id: unknown });
+      // postAcs handshakes first; this test is about the step's own pair.
+      const entries = lines
+        .map((line) => JSON.parse(line) as { direction: string; rpc_id: unknown })
+        .filter((e) => e.rpc_id !== "handshake");
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);
       expect(entries.map((e) => e.rpc_id)).toEqual([21, 21]);
     } finally {
@@ -933,7 +944,10 @@ describe("startGuardian POST /acs -- the outer net around dispatch", () => {
       await postAcs(url, toolCallEnvelope("ls -la", { id: 11 }));
 
       const lines = readFileSync(logPath, "utf8").trim().split("\n");
-      const entries = lines.map((line) => JSON.parse(line) as { direction: string; rpc_id: unknown });
+      // postAcs handshakes first; this test is about the step's own pair.
+      const entries = lines
+        .map((line) => JSON.parse(line) as { direction: string; rpc_id: unknown })
+        .filter((e) => e.rpc_id !== "handshake");
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);
       // Paired by JSON-RPC id, which is what lets the Inspector show the
       // failure beside the request that caused it.
@@ -1662,6 +1676,57 @@ describe("the drift demo's manifest, on a tool that sends no command", () => {
       // -- path_missing, tool_unknown, annotation_failed -- arrives as a deny,
       // so a decision of "allow" is what says the call was actually evaluated.
       expect(decision.decision).toBe("allow");
+    } finally {
+      await guardian.close();
+    }
+  });
+});
+
+describe("hook traffic needs a handshake that declared the method (§4, §17.1)", () => {
+  // Raw fetch, not postAcs: postAcs handshakes first, and these tests are about what happens without one.
+  async function postRaw(url: string, body: unknown): Promise<JsonRpcResponse> {
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    return (await res.json()) as JsonRpcResponse;
+  }
+
+  it("refuses a step from a session that never sent handshake/hello", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const response = await postRaw(guardian.url, toolCallEnvelope("ls -la"));
+      expect(response.error?.code).toBe(-32003);
+      expect(response.error?.data).toMatchObject({ method: "steps/toolCallRequest" });
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("refuses a method the handshake did not declare, and answers one it did", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const sessionId = crypto.randomUUID();
+      const hello = await postRaw(
+        guardian.url,
+        makeEnvelope("handshake/hello", clientHello({ methods_implemented: ["steps/toolCallResult"] }), { sessionId }),
+      );
+      expect(hello.error).toBeUndefined();
+
+      const step = toolCallEnvelope("ls -la", { sessionId });
+      expect((await postRaw(guardian.url, step)).error?.code).toBe(-32003);
+
+      // Refused before the replay store remembers its request_id, so the same
+      // request is answered once the session re-handshakes.
+      await postRaw(guardian.url, makeEnvelope("handshake/hello", clientHello(), { sessionId }));
+      expect((await postRaw(guardian.url, step)).result?.decision).toBe("allow");
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("answers system/ping without a handshake", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const response = await postRaw(guardian.url, makeEnvelope("system/ping", { echo: "probe" }));
+      expect(response.result?.decision).toBe("allow");
     } finally {
       await guardian.close();
     }

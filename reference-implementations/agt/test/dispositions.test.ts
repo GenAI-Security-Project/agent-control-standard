@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { startGuardian } from "guardian";
 import { buildConfigBundle, buildManifest } from "./helpers/config-bundle.ts";
+import { fetchWithHandshake } from "./helpers/handshake.ts";
 
 const DESTRUCTIVE = ["(?i)rm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+/(?:\\s|$)"];
 const cleanups: (() => void)[] = [];
@@ -15,7 +16,7 @@ async function decide(config: unknown, command: string, annotator?: () => unknow
   const guardian = await startGuardian({ port: 0, manifestPath, annotator });
   try {
     const requestId = crypto.randomUUID();
-    const res = await fetch(guardian.url, {
+    const res = await fetchWithHandshake(guardian.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
