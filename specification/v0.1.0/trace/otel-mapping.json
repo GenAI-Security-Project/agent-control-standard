@@ -91,11 +91,11 @@
         },
         "steps/skillRegister": {
           "span_name": "acs.skill.register",
-          "required_attributes": ["acs.skill.id", "acs.skill.digest", "acs.skill.declared_capabilities"]
+          "required_attributes": ["acs.skill.id", "acs.skill.digest.algorithm", "acs.skill.digest.value", "acs.skill.declared_capabilities"]
         },
         "steps/skillLoad": {
           "span_name": "acs.skill.load",
-          "required_attributes": ["acs.skill.id", "acs.skill.digest", "acs.skill.load_trigger", "acs.skill.load_path"],
+          "required_attributes": ["acs.skill.id", "acs.skill.digest.algorithm", "acs.skill.digest.value", "acs.skill.load_trigger", "acs.skill.load_path"],
           "optional_attributes": ["acs.skill.digest_verified", "acs.skill.registration_ref"]
         },
         "steps/skillUnload": {
