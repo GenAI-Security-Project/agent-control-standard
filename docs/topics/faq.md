@@ -53,7 +53,7 @@ Four moves, in order:
 
 1. **Session starts.** The framework and Guardian shake hands and declare what each supports. The framework sends an Agent Bill of Materials (AgBOM) listing what the agent is composed of: models, tools, MCP servers, skills.
 2. **The agent runs.** Every consequential action fires a hook before it executes. The Guardian decides. The framework honors the decision.
-3. **Everything is recorded.** Every decision lands in a hash-chained audit log. Every step emits OpenTelemetry and OCSF events into the SIEM the security team already uses. If the agent picks up a new tool or loads a skill mid-session, the AgBOM updates and the Guardian sees it.
+3. **Everything is recorded.** Every decision lands in a hash-chained audit log. Every step emits OpenTelemetry or OCSF events into the SIEM the security team already uses. If the agent picks up a new tool or loads a skill mid-session, the AgBOM updates and the Guardian sees it.
 4. **Session ends.** The audit chain is sealed and signed. The whole session is reconstructible from the record.
 
 That is the three pillars at work: **Instrument** (the hooks and decisions), **Trace** (the events flowing into the SIEM), **Inspect** (the AgBOM tracking what is there). One spec, one Guardian, one audit chain across whatever frameworks the deployment runs.
@@ -78,7 +78,7 @@ Existing efforts solve one slice each. Vendor governance tools come with each ve
 
 ACS is an OWASP project. It is a vendor-neutral community effort: workstream leads come from multiple organizations, no single company owns or steers the standard, and every pull request goes through community review.
 
-Work is split across five workstreams, each owning a slice of the standard and running its own review. **[GOVERNANCE.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md) is the authoritative roster**, naming the project lead, the leads for each workstream, and the founding credit. It is kept in sync with repository write access and `CODEOWNERS`, which a table copied into this page would not be. Read it there rather than here.
+Work is split across workstreams, each owning a slice of the standard and running its own review. **[GOVERNANCE.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md) is the authoritative roster**, naming the project leads and the leads for each workstream. It is kept in sync with repository write access and `CODEOWNERS`, which a table copied into this page would not be. Read it there rather than here.
 
 Contribution guidance is in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md).
 
@@ -110,7 +110,7 @@ No, and no runtime mechanism can. Current research finds essentially every produ
 
 One caveat belongs here rather than buried further down. The default failure posture is fail-open with a mandatory audit record, so an attacker who can stall or break the Guardian channel converts enforcement into audit. Deployments that will not accept that trade set `on_decision_failure: deny`. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
 
-The mechanism is **deviation detection**. ACS requires the agent to declare what it is doing this session (its intent) and to send each proposed action through a Guardian before executing it. The Guardian compares the action against three things: the declared intent, the policy library, and the trust basis of the data driving the action. An injected agent generally deviates on at least one of those three, and the Guardian denies, modifies, or escalates the action before it runs.
+The mechanism is **deviation detection**. ACS lets the agent declare what it is doing this session (its intent) and requires it to send each proposed action through a Guardian before executing it. The Guardian compares the action against the declared intent when the deployment uses one, the policy library, and the trust basis of the data driving the action. An injected agent generally deviates on at least one of those, and the Guardian denies, modifies, or escalates the action before it runs.
 
 Injection still happens. The LLM's reasoning still gets corrupted by attacker-controlled input. But the action it would have taken becomes visible, gated, and auditable, which is a strictly stronger property than asking the model to ignore attacker instructions in the first place.
 
@@ -173,7 +173,7 @@ The conformance line is between *not having the surface* and *suppressing the ho
 
 No, same principle for all three: ACS specifies the category (you need a transport, you need signed envelopes, you need an identity scheme) and catalogs the options the spec defines; the deployment picks which.
 
-- **Transport.** v0.1 defines HTTP(S) (for SaaS, on-prem, multi-tenant Guardians) and stdio (for IDE-embedded Guardians); gRPC and unix sockets are deferred to v0.2. The handshake declares which is in use, and the envelope and method semantics are transport-agnostic.
+- **Transport.** v0.1 defines HTTP(S) (for SaaS, on-prem, multi-tenant Guardians) and stdio (for IDE-embedded Guardians); gRPC and unix sockets come in a later version ([Specification §16](../spec/instrument/specification.md#16-roadmap)). The handshake declares which is in use, and the envelope and method semantics are transport-agnostic.
 - **Cryptography.** ACS-Core's baseline is HMAC-SHA256, which any deployment can satisfy without infrastructure investment. ACS-Crypto adds asymmetric and post-quantum algorithms (ML-DSA-65 primary, SLH-DSA-128s backup, hybrid composites for transitional deployments) for deployments that need non-repudiation or PQC readiness.
 - **Identity.** SPIFFE, OIDC, mTLS, and organizational PKI are all deployment choices; ACS reserves `policy_references[].policy_version` as a stable pointer so audit replay works regardless of the scheme.
 
@@ -198,7 +198,7 @@ Four steps:
 
 ### Does ACS work in IDE, SaaS, and on-prem deployments?
 
-Yes. The IDE case (coding assistants and IDE copilots) uses stdio transport with implicit process-spawn authentication. The SaaS case uses HTTP(S) with mTLS or bearer tokens. The on-prem case can use either, depending on whether the Guardian is in the same process tree or accessed over the network. The handshake negotiates which transport, which auth, and which profiles apply.
+Yes. The IDE case (coding assistants and IDE copilots) uses stdio transport. The SaaS case uses HTTP(S). The on-prem case can use either, depending on whether the Guardian is in the same process tree or accessed over the network. The handshake negotiates the transport and the profiles. How the transport is authenticated, for example mTLS or bearer tokens over HTTP(S), is the deployment's choice in v0.1, and transport authentication is planned work for v0.2.
 
 ### What is the operational overhead?
 
@@ -336,8 +336,10 @@ ACS-Core (mandatory), and six optional profiles: ACS-Trace, ACS-Inspect, ACS-Ins
 
 ### What is coming in v0.2?
 
-A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1), the sensitivity / timeout model with method/capability mapping rules, multi-tenant isolation rules, batching and streaming hook semantics, and a Policy Attestation profile that binds policy references to verifiable author signatures. A conformance certification suite and a public registry are also v0.2 work.
+[Specification §16](../spec/instrument/specification.md#16-roadmap) and the [v0.2.0 milestone](https://github.com/GenAI-Security-Project/agent-control-standard/milestone/15) are the live list. The highlights: streaming and batching semantics, A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1), multi-tenant isolation, the sensitivity-tier timeout model, recursive ASK and quorum, a policy-author attestation profile, and a Cedar binding.
+
+Conformance work is already underway in the open milestones: bringing the reference Guardian to ACS-Core conformance, a one-page conformance claim template, and the AGT interoperability benchmark.
 
 ### How do I follow or contribute?
 
-The repo is [GenAI-Security-Project/agent-control-standard](https://github.com/GenAI-Security-Project/agent-control-standard). Working-group calls and contribution guidance are in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md). Issues are open across all three pillars.
+The repo is [GenAI-Security-Project/agent-control-standard](https://github.com/GenAI-Security-Project/agent-control-standard). Questions and design conversation happen in [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions) and on Slack (`#team-genai-asi-acs-general` on owasp.slack.com). Contribution guidance is in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md). Issues are open across all three pillars.
