@@ -15,8 +15,12 @@ for p in jcs schema chain envelope method handshake disposition; do
   packages="$packages,$module/internal/$p"
 done
 profile="$(mktemp)"
-trap 'rm -f "$profile"' EXIT
-go test ./... -coverpkg="$packages" -coverprofile="$profile" >/dev/null
+output="$(mktemp)"
+trap 'rm -f "$profile" "$output"' EXIT
+if ! go test ./... -coverpkg="$packages" -coverprofile="$profile" >"$output" 2>&1; then
+  grep -Ev '^(ok |\? |coverage: )' "$output" >&2
+  exit 1
+fi
 total="$(go tool cover -func="$profile" | awk '/^total:/ {sub("%", "", $3); print $3}')"
 echo "protocol package coverage: ${total}% (floor ${floor}%)"
 awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t + 0 >= f + 0) }'

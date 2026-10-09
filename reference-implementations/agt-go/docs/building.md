@@ -71,9 +71,8 @@ Mount writable storage at `/data` to retain audit files after the container stop
 ## Verification limits
 
 CI runs the complete gate on Linux amd64, Linux arm64, Intel Mac, and Apple Silicon.
-CI has no Windows runner. A Windows cross-build and its tests under Wine are run by hand.
-A workflow definition does not establish a successful run. Verify the platform job results before publishing.
-Cross-builds establish compilation only. Wine does not replace a real Windows runner.
+CI has no Windows runner, and the Windows build is not tested on Windows.
+Cross-builds establish compilation only.
 `make check` checks Go's cgo flag rules for all five targets without executing their build commands.
 This validation does not link native libraries or run target binaries.
 `go list` shows selected flags but does not validate the flags.
