@@ -6,7 +6,7 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 
 | Role | Name |
 | --- | --- |
-| Project Lead | Rock Lambros ([@rocklambros](https://github.com/rocklambros)) |
+| Project Lead | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)) |
 | Project Lead | Ariel Fogel ([@afogel](https://github.com/afogel)) |
 | Project Lead | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)) |
 
@@ -24,7 +24,7 @@ against the conformance requirements it touches.
 | Workstream | Leads |
 | --- | --- |
 | Coding Agents | Almog Langleben ([@almogbhl](https://github.com/almogbhl)), Stefano Amorelli ([@stefanoamorelli](https://github.com/stefanoamorelli)) |
-| Development (SDK) | Rock Lambros ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
+| Development (SDK) | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
 | Documentation | Lance Dye ([@Lrd0036](https://github.com/Lrd0036)) |
 | Identity | Eva Benn ([@evabenn](https://github.com/evabenn)), Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
@@ -75,7 +75,7 @@ they step back.
 
 | Volunteer | Assigned by |
 | --- | --- |
-| Victor Hernandez ([@victorm-hernandez](https://github.com/victorm-hernandez)) | Rock Lambros |
+| Victor Hernandez ([@victorm-hernandez](https://github.com/victorm-hernandez)) | Kyriakos Lambros (Rock) |
 
 ## Origins
 
