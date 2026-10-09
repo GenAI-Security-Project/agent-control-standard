@@ -34,6 +34,9 @@
         "steps/postCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99 },
         "steps/subagentStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1, "_note": "Subagent spawn opens a new session — modeled as Authentication/Logon for OCSF symmetry with sessionStart." },
         "steps/subagentStop": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
+        "steps/skillRegister": { "class_uid": 5001, "class_name": "Device Inventory Info", "_note": "Registration admits a skill to the component set and persists its definition ref and digest to the AgBOM — modeled as Inventory Info, the class agbom/* already uses." },
+        "steps/skillLoad": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 1, "_note": "OCSF defines Module Activity as a process loading or unloading a module, and its required module object is the skill itself — not Process Activity, which needs a launched or terminated process that a skill load does not have; keeping loads off 1007 lets a reader tell a skill loading from the tool calls its actions raise." },
+        "steps/skillUnload": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 2 },
         "agbom/snapshot": { "class_uid": 5001, "class_name": "Inventory Info" },
         "agbom/changed": { "class_uid": 5001, "class_name": "Inventory Info" }
       }
