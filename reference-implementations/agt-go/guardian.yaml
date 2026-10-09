@@ -13,6 +13,9 @@ policy:
   deployment_dir: ../agt
   manifest: policy/manifest.yaml
   mapping: mapping.yaml
+  evaluator: agt
+  opa_path: .acs/agt/bin
+  opa_timeout: 5s
   ask_substitution: deny
   tool_aliases:
     shell: bash

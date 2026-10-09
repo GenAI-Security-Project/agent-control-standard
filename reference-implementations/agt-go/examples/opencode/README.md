@@ -5,8 +5,8 @@ the Go Guardian as signed `steps/toolCallRequest` and `steps/toolCallResult`
 messages. The checked-in [plugin](../../.opencode/plugins/acs.ts) is local to this
 module and does not change the user's OpenCode configuration.
 
-Prerequisites are Go 1.27.1 or newer, Make, OpenSSL, curl and an installed
-`opencode` command with an available model. The model may come from a connected
+Prerequisites are the Guardian's, listed in the [module README](../../README.md#quick-start),
+and an installed `opencode` command with an available model. The model may come from a connected
 provider or from the free models in OpenCode's catalog. This example was tested
 with OpenCode 2.0.11.
 

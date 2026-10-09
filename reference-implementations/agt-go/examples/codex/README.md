@@ -10,8 +10,8 @@ The checked-in [`.codex`](../../.codex) configuration belongs to this Go module.
 loads it when it starts from the module root. It does not change the user's Codex
 configuration or the configuration at the repository root.
 
-Prerequisites are Go 1.27.1 or newer, Make, OpenSSL, curl and an installed,
-authenticated `codex` command. This example was tested with Codex CLI 0.154.0.
+Prerequisites are the Guardian's, listed in the [module README](../../README.md#quick-start),
+and an installed, authenticated `codex` command. This example was tested with Codex CLI 0.154.0.
 
 Run from `reference-implementations/agt-go`:
 

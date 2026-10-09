@@ -6,7 +6,7 @@ same observable behavior here. The external data is not copied into this tree.
 
 ## Open reference-implementation findings
 
-Checked against the open issues on 2026-09-21. All six remain open and have no linked implementation.
+Checked against the open issues on 2026-10-09. All six remain open.
 
 | Finding | Required behavior | Go tests |
 | --- | --- | --- |

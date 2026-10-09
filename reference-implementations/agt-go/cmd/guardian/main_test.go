@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -24,11 +24,21 @@ import (
 
 const secret = "0123456789abcdef0123456789abcdef"
 
-// build compiles the command once per test binary.
+// build compiles the command with the build tags of the test binary.
 func build(t *testing.T) string {
 	t.Helper()
+	if bin := os.Getenv("ACS_TEST_GUARDIAN_BINARY"); bin != "" {
+		info, err := os.Stat(bin)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("ACS_TEST_GUARDIAN_BINARY is not a file: %q (%v)", bin, err)
+		}
+		return bin
+	}
 	bin := filepath.Join(t.TempDir(), "guardian")
-	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	out, err := exec.Command("go", append(append([]string{"build"}, buildFlags...), "-o", bin, ".")...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -61,6 +71,7 @@ func start(t *testing.T, bin, dir string, env ...string) *process {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, "--config", referenceConfig(t))
+	prepareProcess(cmd)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"ACS__SERVER__PORT=0",
@@ -68,6 +79,7 @@ func start(t *testing.T, bin, dir string, env ...string) *process {
 		"ACS__AUDIT__ENVELOPE_LOG="+filepath.Join(logs, "envelopes.jsonl"),
 		"ACS__AUDIT__EVENT_LOG="+filepath.Join(logs, "events.jsonl"),
 	)
+	cmd.Env = append(cmd.Env, evaluatorEnv...)
 	cmd.Env = append(cmd.Env, env...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -230,7 +242,7 @@ func TestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := stopProcess(p.cmd); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -281,7 +293,7 @@ func TestShutdownClosesAStalledRequest(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 	signalled := time.Now()
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := stopProcess(p.cmd); err != nil {
 		t.Fatal(err)
 	}
 	select {

@@ -1,4 +1,4 @@
-package agtbridge
+package goeval
 
 import (
 	"bytes"
@@ -9,13 +9,8 @@ import (
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"go.yaml.in/yaml/v3"
-)
 
-// The two intervention points whose snapshot this bridge assembles, the
-// ones the TypeScript reference assembles.
-const (
-	pointPreToolCall  = "pre_tool_call"
-	pointPostToolCall = "post_tool_call"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
 )
 
 // supportedManifestVersions is AGT's manifest_version::SUPPORTED at the
@@ -23,10 +18,10 @@ const (
 var supportedManifestVersions = []string{"0.3.1-beta", "0.3.1-beta-agt", "0.3.0-alpha", "0.3.0-alpha-agt"}
 
 // knownPoints are AGT's eight intervention points.
-var knownPoints = []string{"agent_startup", "input", "pre_model_call", "post_model_call", pointPreToolCall, pointPostToolCall, "output", "agent_shutdown"}
+var knownPoints = []string{"agent_startup", "input", "pre_model_call", "post_model_call", agtbridge.PointPreToolCall, agtbridge.PointPostToolCall, "output", "agent_shutdown"}
 
 // manifest is the part of AGT's manifest grammar
-// (policy-engine/core/src/manifest.rs) this bridge reproduces. Every other
+// (policy-engine/core/src/manifest.rs) the Go evaluator reproduces. Every other
 // feature is refused when the manifest loads.
 type manifest struct {
 	Version            string                    `yaml:"agent_control_specification_version"`
@@ -92,13 +87,13 @@ func parseManifest(src []byte) (*manifest, error) {
 }
 
 // compile validates the manifest as AGT's validate_point_config does, and
-// refuses every feature outside what this bridge reproduces.
+// refuses every feature outside what the Go evaluator reproduces.
 func (m *manifest) compile() (map[string]*compiledPoint, error) {
 	invalid := func(format string, args ...any) error {
 		return fmt.Errorf("%w: "+format, append([]any{errManifestInvalid}, args...)...)
 	}
 	unsupported := func(what string) error {
-		return fmt.Errorf("the manifest uses %s, which agtbridge does not implement", what)
+		return fmt.Errorf("the manifest uses %s, which the Go evaluator does not implement", what)
 	}
 	if !slices.Contains(supportedManifestVersions, m.Version) {
 		return nil, invalid("agent_control_specification_version %q is not supported", m.Version)
@@ -125,7 +120,7 @@ func (m *manifest) compile() (map[string]*compiledPoint, error) {
 		if a["type"] != "classifier" {
 			return nil, unsupported(fmt.Sprintf("annotator %q of type %v", name, a["type"]))
 		}
-		if name != egressAnnotator {
+		if name != agtbridge.EgressAnnotator {
 			return nil, unsupported(fmt.Sprintf("annotator %q, for which this Guardian has no dispatcher", name))
 		}
 	}
@@ -134,8 +129,8 @@ func (m *manifest) compile() (map[string]*compiledPoint, error) {
 		if !slices.Contains(knownPoints, name) {
 			return nil, invalid("unknown intervention point %q", name)
 		}
-		if name != pointPreToolCall && name != pointPostToolCall {
-			return nil, unsupported(fmt.Sprintf("intervention point %q, whose snapshot this bridge does not assemble", name))
+		if name != agtbridge.PointPreToolCall && name != agtbridge.PointPostToolCall {
+			return nil, unsupported(fmt.Sprintf("intervention point %q, whose snapshot agtbridge does not assemble", name))
 		}
 		cp, err := m.compilePoint(name, cfg)
 		if err != nil {
@@ -201,7 +196,7 @@ func (m *manifest) compilePoint(name string, cfg pointConfig) (*compiledPoint, e
 	case strings.TrimSpace(cfg.Policy.ID) == "" || !ok:
 		return nil, invalid("references unknown policy %q", cfg.Policy.ID)
 	case len(cfg.Policy.Other) > 0:
-		return nil, fmt.Errorf("intervention point %s binds adapter fields, which agtbridge does not implement", name)
+		return nil, fmt.Errorf("intervention point %s binds adapter fields, which the Go evaluator does not implement", name)
 	}
 	cp.query = cfg.Policy.Query
 	if cp.query == "" {

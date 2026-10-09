@@ -1,4 +1,4 @@
-package agtbridge
+package goeval
 
 import (
 	"encoding/json"

@@ -1,4 +1,4 @@
-package agtbridge
+package goeval
 
 import (
 	"context"
@@ -10,17 +10,9 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/open-policy-agent/opa/v1/bundle"
 	"github.com/open-policy-agent/opa/v1/rego"
-)
 
-// runtime reproduces the evaluation path of AGT's policy-engine core at the
-// agt.lock commit (policy-engine/core/src/runtime.rs), for the manifest
-// features compile accepts. It evaluates the Rego bundle with OPA's Go
-// library in process, where AGT runs the opa CLI.
-type runtime struct {
-	manifest *manifest
-	points   map[string]*compiledPoint
-	queries  map[string]rego.PreparedEvalQuery // by intervention point
-}
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
+)
 
 // AGT's resource limits (policy-engine/core/src/limits.rs, Limits::default).
 const (
@@ -62,57 +54,39 @@ func fail(reason, format string, args ...any) *failure {
 	return &failure{reason: reason, detail: fmt.Sprintf(format, args...)}
 }
 
-// verdict is AGT's normalized verdict.
-type verdict struct {
-	Decision            string
-	Reason              *string
-	Message             *string
-	Transform           *transform
-	ResultLabels        []string
-	ResultLabelsPresent bool
-}
-
-type transform struct {
-	Path  string
-	Value any
-}
-
-func (f *failure) verdict() verdict {
+func (f *failure) verdict() agtbridge.Verdict {
 	message := runtimeErrorMessage
 	if f.reason == reasonAnnotationFailed && f.detail != "" {
 		message += " " + f.detail
 	}
 	reason := f.reason
-	return verdict{Decision: "deny", Reason: &reason, Message: &message}
+	return agtbridge.Verdict{Decision: "deny", Reason: &reason, Message: &message}
 }
 
-// newRuntime compiles the manifest and prepares one OPA query per
-// intervention point over the bundle each binds. manifestDir is the
-// manifest's directory within fsys; AGT resolves a bundle relative to it.
-func newRuntime(ctx context.Context, fsys fs.FS, manifestDir string, m *manifest) (*runtime, error) {
-	points, err := m.compile()
-	if err != nil {
-		return nil, err
-	}
-	r := &runtime{manifest: m, points: points, queries: map[string]rego.PreparedEvalQuery{}}
+// prepare prepares one OPA query per intervention point over the bundle
+// each binds. manifestDir is the manifest's directory within fsys; AGT
+// resolves a bundle relative to it.
+func (r *Evaluator) prepare(ctx context.Context, fsys fs.FS, manifestDir string) error {
+	m := r.manifest
 	bundles := map[string]*bundle.Bundle{}
-	for name, p := range points {
+	for name, p := range r.points {
 		dir := joinFS(manifestDir, m.Policies[p.policyID].Bundle)
 		b, ok := bundles[dir]
 		if !ok {
+			var err error
 			b, err = readBundle(fsys, dir)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			bundles[dir] = b
 		}
 		q, err := rego.New(rego.Query(p.query), rego.ParsedBundle(dir, b)).PrepareForEval(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("prepare %s at %s: %w", p.query, name, err)
+			return fmt.Errorf("prepare %s at %s: %w", p.query, name, err)
 		}
 		r.queries[name] = q
 	}
-	return r, nil
+	return nil
 }
 
 // joinFS joins a manifest-relative bundle path the way AGT's
@@ -144,14 +118,13 @@ func readBundle(fsys fs.FS, dir string) (*bundle.Bundle, error) {
 	return &b, nil
 }
 
-// evaluate is AGT's evaluate_intervention_point in enforce mode: every
-// failure is a fail-closed verdict, never an error. An error is returned only
-// for a cancelled or expired context, which the Guardian answers as an
-// engine failure.
-func (r *runtime) evaluate(ctx context.Context, point string, snapshot map[string]any) (verdict, error) {
-	v, f := r.evaluateInner(ctx, point, snapshot)
+// Evaluate implements agtbridge.Evaluator: every failure is a fail-closed
+// verdict, never an error. An error is returned only for a cancelled or
+// expired context.
+func (r *Evaluator) Evaluate(ctx context.Context, point string, snapshot map[string]any) (agtbridge.Verdict, error) {
+	v, f := r.evaluate(ctx, point, snapshot)
 	if ctx.Err() != nil {
-		return verdict{}, ctx.Err()
+		return agtbridge.Verdict{}, ctx.Err()
 	}
 	if f != nil {
 		return f.verdict(), nil
@@ -159,50 +132,50 @@ func (r *runtime) evaluate(ctx context.Context, point string, snapshot map[strin
 	return v, nil
 }
 
-func (r *runtime) evaluateInner(ctx context.Context, point string, snapshot map[string]any) (verdict, *failure) {
+func (r *Evaluator) evaluate(ctx context.Context, point string, snapshot map[string]any) (agtbridge.Verdict, *failure) {
 	p, ok := r.points[point]
 	if !ok {
-		return verdict{}, fail(reasonInterventionPointUnknown, "%s", point)
+		return agtbridge.Verdict{}, fail(reasonInterventionPointUnknown, "%s", point)
 	}
 	if f := checkSize(snapshot, maxSnapshotBytes, reasonResourceLimitExceeded, "snapshot"); f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	env := pathEnv{snap: snapshot}
 	target, err := p.target.resolve(env)
 	if err != nil {
-		return verdict{}, pathFailure(err)
+		return agtbridge.Verdict{}, pathFailure(err)
 	}
 	tool, f := r.projectTool(p, env)
 	if f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	pi := policyInput(p, target, snapshot, map[string]any{}, tool)
 	if f := checkDepth(pi, reasonResourceLimitExceeded, "policy input"); f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	annotations, f := r.annotate(p, pi, snapshot)
 	if f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	pi = policyInput(p, target, snapshot, annotations, tool)
 	if f := checkDepth(pi, reasonResourceLimitExceeded, "policy input"); f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 
 	output, f := r.query(ctx, point, pi)
 	if f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	if f := checkSize(output, maxPolicyOutputBytes, reasonResourceLimitExceeded, "policy output"); f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	v, f := normalize(output)
 	if f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	if v.Transform != nil {
 		if f := applyTransform(p, snapshot, target, *v.Transform); f != nil {
-			return verdict{}, f
+			return agtbridge.Verdict{}, f
 		}
 	}
 	return v, nil
@@ -224,7 +197,7 @@ func policyInput(p *compiledPoint, target any, snapshot map[string]any, annotati
 	}
 }
 
-func (r *runtime) projectTool(p *compiledPoint, env pathEnv) (any, *failure) {
+func (r *Evaluator) projectTool(p *compiledPoint, env pathEnv) (any, *failure) {
 	if p.toolNameFrom == nil {
 		return nil, nil
 	}
@@ -250,7 +223,7 @@ func (r *runtime) projectTool(p *compiledPoint, env pathEnv) (any, *failure) {
 // annotate runs each annotator of the point in name order. Its from path is
 // a precondition that must resolve; the dispatcher receives the whole
 // preliminary policy input and its answer lands at annotations.<name>.
-func (r *runtime) annotate(p *compiledPoint, preliminary, snapshot map[string]any) (map[string]any, *failure) {
+func (r *Evaluator) annotate(p *compiledPoint, preliminary, snapshot map[string]any) (map[string]any, *failure) {
 	out := map[string]any{}
 	if len(p.annotations) > maxAnnotatorsPerPoint {
 		return nil, fail(reasonResourceLimitExceeded, "%d annotators exceed the limit %d", len(p.annotations), maxAnnotatorsPerPoint)
@@ -260,7 +233,7 @@ func (r *runtime) annotate(p *compiledPoint, preliminary, snapshot map[string]an
 			return nil, pathFailure(err)
 		}
 		// compile admits the egress annotator only.
-		value := any(annotateEgress(preliminary))
+		value := any(agtbridge.AnnotateEgress(preliminary))
 		if f := checkAnnotatorOutput(a.name, value); f != nil {
 			return nil, f
 		}
@@ -269,7 +242,7 @@ func (r *runtime) annotate(p *compiledPoint, preliminary, snapshot map[string]an
 	return out, nil
 }
 
-func (r *runtime) query(ctx context.Context, point string, pi map[string]any) (any, *failure) {
+func (r *Evaluator) query(ctx context.Context, point string, pi map[string]any) (any, *failure) {
 	input, err := asJSON(pi)
 	if err != nil {
 		return nil, fail(reasonPolicyInvocationFailed, "encode policy input: %v", err)
@@ -293,53 +266,53 @@ func (r *runtime) query(ctx context.Context, point string, pi map[string]any) (a
 }
 
 // normalize is AGT's normalize_policy_output
-// (policy-engine/core/src/verdict.rs).
-func normalize(output any) (verdict, *failure) {
+// (policy-engine/core/src/verdict.rs). An empty result_labels is left out,
+// as AGT's C ABI serializes it.
+func normalize(output any) (agtbridge.Verdict, *failure) {
 	invalid := func(message string) *failure { return fail(reasonPolicyOutputInvalid, "%s", message) }
 	obj, ok := output.(map[string]any)
 	if !ok {
-		return verdict{}, invalid("policy output decision is required")
+		return agtbridge.Verdict{}, invalid("policy output decision is required")
 	}
 	decision, ok := obj["decision"].(string)
 	if !ok {
-		return verdict{}, invalid("policy output decision is required")
+		return agtbridge.Verdict{}, invalid("policy output decision is required")
 	}
 	switch decision {
 	case "allow", "deny", "warn", "escalate", "transform":
 	default:
-		return verdict{}, invalid(fmt.Sprintf("unsupported decision '%s'", decision))
+		return agtbridge.Verdict{}, invalid(fmt.Sprintf("unsupported decision '%s'", decision))
 	}
-	v := verdict{Decision: decision}
+	v := agtbridge.Verdict{Decision: decision}
 	switch reason := obj["reason"].(type) {
 	case nil:
 	case string:
 		if strings.HasPrefix(reason, runtimeErrorPrefix) {
-			return verdict{}, invalid("policy reasons must not use reserved runtime_error:* prefix")
+			return agtbridge.Verdict{}, invalid("policy reasons must not use reserved runtime_error:* prefix")
 		}
 		v.Reason = &reason
 	default:
-		return verdict{}, invalid("policy output reason must be a string")
+		return agtbridge.Verdict{}, invalid("policy output reason must be a string")
 	}
 	switch message := obj["message"].(type) {
 	case nil:
 	case string:
 		v.Message = &message
 	default:
-		return verdict{}, invalid("policy output message must be a string")
+		return agtbridge.Verdict{}, invalid("policy output message must be a string")
 	}
 	if _, present := obj["effects"]; present {
-		return verdict{}, invalid("verdict 'effects' is no longer supported; remove the effects key and use the transform decision per SPECIFICATION.md §14. Migrate multi-step rewriting to an annotator")
+		return agtbridge.Verdict{}, invalid("verdict 'effects' is no longer supported; remove the effects key and use the transform decision per SPECIFICATION.md §14. Migrate multi-step rewriting to an annotator")
 	}
 	if labels, present := obj["result_labels"]; present {
 		values, ok := labels.([]any)
 		if !ok {
-			return verdict{}, invalid("policy output result_labels must be an array")
+			return agtbridge.Verdict{}, invalid("policy output result_labels must be an array")
 		}
-		v.ResultLabelsPresent = true
 		for _, l := range values {
 			s, ok := l.(string)
 			if !ok {
-				return verdict{}, invalid("policy output result_labels must be an array of strings")
+				return agtbridge.Verdict{}, invalid("policy output result_labels must be an array of strings")
 			}
 			v.ResultLabels = append(v.ResultLabels, s)
 		}
@@ -347,33 +320,33 @@ func normalize(output any) (verdict, *failure) {
 	t := obj["transform"]
 	switch {
 	case decision == "transform" && t == nil:
-		return verdict{}, invalid("transform decision requires a transform object")
+		return agtbridge.Verdict{}, invalid("transform decision requires a transform object")
 	case decision != "transform" && t != nil:
-		return verdict{}, invalid("transform is only permitted on the transform decision")
+		return agtbridge.Verdict{}, invalid("transform is only permitted on the transform decision")
 	case decision == "transform":
 		tm, ok := t.(map[string]any)
 		if !ok {
-			return verdict{}, invalid("transform must be an object")
+			return agtbridge.Verdict{}, invalid("transform must be an object")
 		}
 		pathText, ok := tm["path"].(string)
 		if !ok {
-			return verdict{}, invalid("transform.path must be a string")
+			return agtbridge.Verdict{}, invalid("transform.path must be a string")
 		}
 		p, err := parsePath(pathText)
 		if err != nil {
-			return verdict{}, invalid(err.Error())
+			return agtbridge.Verdict{}, invalid(err.Error())
 		}
 		if p.root != rootPolicyTarget {
-			return verdict{}, fail(reasonTransformTargetForbidden, "%s", pathText)
+			return agtbridge.Verdict{}, fail(reasonTransformTargetForbidden, "%s", pathText)
 		}
 		value, ok := tm["value"]
 		if !ok {
-			return verdict{}, invalid("transform.value is required when decision is transform")
+			return agtbridge.Verdict{}, invalid("transform.value is required when decision is transform")
 		}
-		v.Transform = &transform{Path: pathText, Value: value}
+		v.Transform = &agtbridge.Transform{Path: pathText, Value: value}
 	}
 	if f := checkEvidence(obj["evidence"]); f != nil {
-		return verdict{}, f
+		return agtbridge.Verdict{}, f
 	}
 	return v, nil
 }
@@ -414,7 +387,7 @@ func checkEvidence(e any) *failure {
 // applyTransform checks that a transform lands inside the policy target, and
 // that the snapshot rebuilt with it stays within the snapshot limits, as
 // AGT does in enforce mode before it surfaces the rewrite.
-func applyTransform(p *compiledPoint, snapshot map[string]any, target any, t transform) *failure {
+func applyTransform(p *compiledPoint, snapshot map[string]any, target any, t agtbridge.Transform) *failure {
 	tp, err := parsePath(t.Path)
 	if err != nil || tp.root != rootPolicyTarget {
 		return fail(reasonTransformTargetForbidden, "%s", t.Path)

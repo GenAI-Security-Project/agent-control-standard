@@ -9,10 +9,11 @@ import (
 	"golang.org/x/net/idna"
 )
 
-// egressAnnotator is the one annotator the checked-in manifest declares, and the
-// only one this bridge dispatches, as the TypeScript reference's Guardian
-// does (packages/guardian/src/annotate-egress.ts).
-const egressAnnotator = "egress"
+// EgressAnnotator is the one annotator the checked-in manifest declares, and
+// the only one this bridge dispatches, as the TypeScript reference's Guardian
+// does (packages/guardian/src/annotate-egress.ts). Both evaluators hand it
+// to AGT as the host's annotator dispatcher.
+const EgressAnnotator = "egress"
 
 // argumentsAGTAlreadyReads are the tool arguments egress.rego reads a
 // destination from itself; when one holds a string, the annotator stands
@@ -33,11 +34,11 @@ var (
 // denies.
 const ambiguousDestination = "https://unresolved.invalid"
 
-// annotateEgress returns the destination a shell command reaches, as
+// AnnotateEgress returns the destination a shell command reaches, as
 // {destination: origin}, or {} when the command names none or AGT reads
 // the destination from an argument itself. It reads the command out of the
 // preliminary policy input, as AGT hands a dispatcher the whole document.
-func annotateEgress(preliminary map[string]any) map[string]any {
+func AnnotateEgress(preliminary map[string]any) map[string]any {
 	snapshot, _ := preliminary["snapshot"].(map[string]any)
 	toolCall, _ := snapshot["tool_call"].(map[string]any)
 	if toolCall == nil {

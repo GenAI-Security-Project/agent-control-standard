@@ -88,7 +88,8 @@ who may write them.
   - An expiring claim must be renewed while the Guardian holds it, and every mutation must
     check that the claim is still owned and unexpired.
   - Cancel `lockCtx` with `guardian.ErrSessionLockLost` when ownership is lost.
-    Cancellation is cooperative, so a policy engine must stop promptly when `lockCtx` ends.
+    The Guardian stops waiting for the policy engine when `lockCtx` ends, so a lost claim
+    never waits on an engine that cannot stop.
   - Do not hold a database connection for the full engine call.
 - **`Load`** returns a copy. Nothing the caller changes reaches the store.
 - **`Append`** wholly succeeds or changes nothing:

@@ -17,7 +17,7 @@ guardian_log="$scratch/guardian.log"
 ACS__SERVER__PORT="$port" \
 ACS__AUDIT__ENVELOPE_LOG="$scratch/envelopes.jsonl" \
 ACS__AUDIT__EVENT_LOG="$scratch/events.jsonl" \
-  .acs/bin/acs-guardian --config guardian.yaml >"$guardian_log" 2>&1 &
+  "${ACS_GUARDIAN_BIN:?set ACS_GUARDIAN_BIN through make}" --config guardian.yaml >"$guardian_log" 2>&1 &
 guardian_pid=$!
 
 cleanup() {

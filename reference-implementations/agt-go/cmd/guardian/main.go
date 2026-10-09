@@ -1,5 +1,7 @@
 // Command guardian serves the ACS Guardian with AGT as its policy engine,
-// over HTTP: POST /acs, GET /healthz and GET /readyz.
+// over HTTP: POST /acs, GET /healthz and GET /readyz. policy.evaluator
+// selects the AGT evaluator, which calls AGT's runtime library and needs
+// the agteval build tag, or the Go evaluator.
 package main
 
 import (
@@ -42,6 +44,9 @@ type fileConfig struct {
 		DeploymentDir   string            `koanf:"deployment_dir"`
 		Manifest        string            `koanf:"manifest"`
 		Mapping         string            `koanf:"mapping"`
+		Evaluator       string            `koanf:"evaluator"`
+		OPAPath         string            `koanf:"opa_path"`
+		OPATimeout      time.Duration     `koanf:"opa_timeout"`
 		AskSubstitution string            `koanf:"ask_substitution"`
 		ToolAliases     map[string]string `koanf:"tool_aliases"`
 	} `koanf:"policy"`
@@ -82,6 +87,9 @@ type config struct {
 	policyDir         string
 	manifest          string
 	mapping           string
+	evaluator         string
+	opaPath           string
+	opaTimeout        time.Duration
 	askSubstitution   guardian.AskSubstitution
 	toolAliases       map[string]string
 	maxSessions       int
@@ -170,6 +178,12 @@ func loadConfig(args, environ []string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	var opaPath string
+	if raw.Policy.OPAPath != "" {
+		if opaPath, err = resolvePath(base, raw.Policy.OPAPath); err != nil {
+			return config{}, fmt.Errorf("policy.opa_path: %w", err)
+		}
+	}
 	secretPath, err := resolvePath(base, raw.Security.HMACSecretFile)
 	if err != nil {
 		return config{}, fmt.Errorf("security.hmac_secret_file: %w", err)
@@ -193,6 +207,7 @@ func loadConfig(args, environ []string) (config, error) {
 		envelopeLog: envelopeLog, eventLog: eventLog,
 		keyID: raw.Security.HMACKeyID, secret: secret,
 		policyDir: policyDir, manifest: manifest, mapping: mapping,
+		evaluator: raw.Policy.Evaluator, opaPath: opaPath, opaTimeout: raw.Policy.OPATimeout,
 		askSubstitution: guardian.AskSubstitution(raw.Policy.AskSubstitution),
 		toolAliases:     raw.Policy.ToolAliases,
 		maxSessions:     raw.Limits.MaxSessions, maxEntries: raw.Limits.MaxEntries, maxReservations: raw.Limits.MaxReservations,
@@ -246,6 +261,18 @@ func (c config) validate() error {
 	}
 	if c.posture != acs.FailureProceed && c.posture != acs.FailureDeny {
 		errs = append(errs, fmt.Errorf("protocol.on_decision_failure must be %q or %q", acs.FailureProceed, acs.FailureDeny))
+	}
+	switch c.evaluator {
+	case evaluatorGo:
+	case evaluatorAGT:
+		if c.opaPath == "" {
+			errs = append(errs, errors.New("policy.opa_path must name the opa executable the agt evaluator runs"))
+		}
+		if c.opaTimeout <= 0 {
+			errs = append(errs, errors.New("policy.opa_timeout must be positive for the agt evaluator"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("policy.evaluator must be %q or %q", evaluatorAGT, evaluatorGo))
 	}
 	if c.askSubstitution != guardian.AskSubstitutionNone && c.askSubstitution != guardian.AskSubstitutionDeny && c.askSubstitution != guardian.AskSubstitutionDefer {
 		errs = append(errs, errors.New("policy.ask_substitution must be none, deny or defer"))
@@ -319,7 +346,11 @@ func run(args, environ []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	engine, err := agtbridge.New(ctx, os.DirFS(c.policyDir), c.manifest, c.mapping, agtbridge.Options{ToolAliases: c.toolAliases})
+	evaluator, err := newEvaluator(ctx, c)
+	if err != nil {
+		return err
+	}
+	engine, err := agtbridge.New(os.DirFS(c.policyDir), c.mapping, evaluator, agtbridge.Options{ToolAliases: c.toolAliases})
 	if err != nil {
 		return err
 	}
@@ -351,6 +382,7 @@ func run(args, environ []string) error {
 	fmt.Printf("Guardian listening at http://%s/acs\n", listener.Addr())
 	fmt.Printf("Configuration: %s\n", c.path)
 	fmt.Printf("Policy deployment: %s\n", c.policyDir)
+	fmt.Printf("Policy evaluator: %s, AGT %s\n", c.evaluator, evaluator.AGTVersion())
 	fmt.Printf("Envelope log: %s\n", c.envelopeLog)
 	fmt.Printf("Event log: %s\n", c.eventLog)
 	fmt.Printf("Failure posture: %s\n", c.posture)

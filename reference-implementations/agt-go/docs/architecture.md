@@ -27,7 +27,7 @@ Solid arrows are calls. The dashed arrow is the signed decision coming back.
 
 | Interface | Declared in | What ACS leaves open | Implementation in this module |
 | --- | --- | --- | --- |
-| `PolicyEngine` | [`guardian/policy_engine.go`](../guardian/policy_engine.go) | The policy decision (§12.1). | `agtbridge.Engine`, running AGT's Rego policies |
+| `PolicyEngine` | [`guardian/policy_engine.go`](../guardian/policy_engine.go) | The policy decision (§12.1). | `agtbridge.Engine`, deciding with AGT's runtime library |
 | `Signer` | [`guardian/signer.go`](../guardian/signer.go) | Keys and signatures (§10). | `guardian.HMACSigner`, HMAC-SHA256 |
 | `SessionContextStore` | [`guardian/session_context_store.go`](../guardian/session_context_store.go) | Where session state and its hash chain live (§8). | `guardian.MemorySessionContextStore`, bounded and in memory |
 | `AuditLog` | [`guardian/audit_log.go`](../guardian/audit_log.go) | Where the audit records go. | `guardian.JSONLAuditLog`, JSONL files |
@@ -38,18 +38,44 @@ plugs in. [Extend the Guardian](extending.md) lists what your own implementation
 
 ### How AGT is used
 
-AGT ships its policy runtime for Node, Python, .NET and Rust, but not for Go;
-its separate general-purpose Go SDK does not expose this runtime.
-The TypeScript reference reaches it through AGT's Node package, whose Rust
-runtime calls the OPA command-line program. The Go Guardian runs the same
-checked-in AGT Rego policies, unchanged, with OPA's Go library in process.
+The default Go Guardian build decides with AGT's runtime itself. AGT ships that
+runtime as a Rust library with a C ABI and no Go binding, so the AGT evaluator
+loads the library into the Guardian process and calls it through cgo. The
+TypeScript reference reaches the same crate version through AGT's Node package.
 
-`agtbridge` implements the part of AGT's runtime that the checked-in manifest
-uses. It loads the manifest, builds the policy input, runs the `egress`
-annotation, converts verdicts and keeps policy state. On the recorded sessions
-it decides as AGT does. A manifest that needs a feature outside
-that part, such as Cedar policies or `extends`, stops startup with a message
-that names it. [Differences](differences.md#agt) lists the boundary.
+`agtbridge.Engine` holds one projection and one evaluator. The projection is
+what a host does around AGT: it keeps the session's labels, assembles the
+snapshot, supplies the `egress` annotator and turns each verdict into an ACS
+decision through `mapping.yaml`. The evaluator runs AGT's policy for that
+snapshot. `policy.evaluator` selects it:
+
+| Evaluator | Package | What decides | Build |
+| --- | --- | --- | --- |
+| `agt` | [`agtbridge/agteval`](../agtbridge/agteval/) | AGT's runtime library at the commit [`agt-native.lock`](../agt-native.lock) pins. At that commit AGT runs each Rego decision in the `opa` program. | cgo and the `agteval` build tag. `make agt-native` builds the library and fetches OPA. Platform toolchains are listed in [Build and package](building.md). |
+| `go` | [`agtbridge/goeval`](../agtbridge/goeval/) | A Go reproduction of the part of AGT's runtime the checked-in manifest uses, running the same Rego policies with OPA's Go library. A manifest feature outside that part stops startup. | Pure Go, any platform. |
+
+```mermaid
+flowchart LR
+    G[guardian.Guardian] --> E[agtbridge.Engine]
+    E --> A[agteval.Evaluator]
+    E --> R[goeval.Evaluator]
+    A -->|C ABI| L[AGT runtime library]
+    L --> O[opa]
+    L -->|annotator callback| X[agtbridge.AnnotateEgress]
+    R --> X
+    R --> Q[OPA Go library]
+```
+
+`agtbridge.TestEvaluatorsAgree` runs every recorded case through both
+evaluators. A step they decide differently fails the test unless it is listed,
+with its reason, for that pair of AGT versions. [Differences](differences.md#agt)
+lists the boundary.
+
+A call into the library cannot be interrupted. When the decision timeout ends
+first, the Guardian answers DENY and keeps the call's place among
+`limits.max_engine_calls` until it returns. The one runtime handle serves every
+call and is never freed. A program that imports `guardian` or `agtbridge` links
+no native library unless it imports `agtbridge/agteval`.
 
 ## How a request moves through the Guardian
 
@@ -280,7 +306,9 @@ session gets at most `MaxDeferrals` DEFER answers, 3 by default; the next one is
    [`internal/disposition/`](../internal/disposition/) checks each decision and
    [`internal/mcp/`](../internal/mcp/) reads wrapped MCP messages.
    [`cmd/guardian/`](../cmd/guardian/) is the standalone program around the core.
-4. **The AGT engine.** [`agtbridge/`](../agtbridge/), described in
+4. **The AGT engine.** [`agtbridge/`](../agtbridge/) with its two evaluators,
+   [`agtbridge/agteval/`](../agtbridge/agteval/) and
+   [`agtbridge/goeval/`](../agtbridge/goeval/), described in
    [how AGT is used](#how-agt-is-used).
 5. **The Observed Agent side.** [`internal/observedagent/`](../internal/observedagent/) is the
    bundled Observed Agent client: it signs requests and checks answers, and the

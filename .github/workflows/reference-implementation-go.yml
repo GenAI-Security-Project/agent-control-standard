@@ -7,6 +7,8 @@
 # them from reference-implementations/agt/. The shared conformance package is
 # included because make check runs it against the Go Guardian.
 #
+# Native platforms run the complete gate. The pure job also checks cgo is absent.
+#
 # No workflow expression appears inside a `run:` block.
 name: Reference implementation (Go)
 
@@ -50,12 +52,27 @@ concurrency:
 
 jobs:
   agt-go:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            shell: bash
+          - os: ubuntu-24.04-arm
+            shell: bash
+          - os: macos-15-intel
+            shell: bash
+          - os: macos-15
+            shell: bash
+          - os: windows-2022
+            shell: msys2 {0}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     defaults:
       run:
         working-directory: reference-implementations/agt-go
+        shell: ${{ matrix.shell }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,6 +89,14 @@ jobs:
           go-version-file: reference-implementations/agt-go/go.mod
           cache-dependency-path: reference-implementations/agt-go/go.sum
 
+      - name: Install Windows build tools
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: mingw-w64-x86_64-gcc make git curl jq openssl
+
       - name: Install Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
@@ -82,3 +107,36 @@ jobs:
 
       - name: Run the Go Guardian quality gate
         run: make check
+
+      - name: Check the Linux container
+        if: runner.os == 'Linux'
+        run: make image PLATFORMS=linux/$(go env GOHOSTARCH) IMAGE_OUTPUT=type=docker && make image-check
+
+  agt-go-pure:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt-go
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # TestRecordingIsCurrent compares the recorded AGT cases with Git history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: reference-implementations/agt-go/go.mod
+          cache-dependency-path: reference-implementations/agt-go/go.sum
+
+      - name: Build without cgo
+        run: go build ./...
+
+      - name: Test without cgo
+        run: go test ./...

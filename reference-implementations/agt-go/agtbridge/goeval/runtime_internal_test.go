@@ -1,9 +1,12 @@
-package agtbridge
+package goeval
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
 )
 
 func TestParsePath(t *testing.T) {
@@ -132,14 +135,22 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
-func TestNormalizeResultLabelsPresence(t *testing.T) {
-	absent, f := normalize(map[string]any{"decision": "allow"})
-	if f != nil || absent.ResultLabelsPresent {
-		t.Fatalf("absent result_labels: verdict=%+v failure=%v", absent, f)
-	}
-	empty, f := normalize(map[string]any{"decision": "allow", "result_labels": []any{}})
-	if f != nil || !empty.ResultLabelsPresent || len(empty.ResultLabels) != 0 {
-		t.Fatalf("empty result_labels: verdict=%+v failure=%v", empty, f)
+// An empty result_labels is left out, as AGT's C ABI serializes it.
+func TestNormalizeResultLabels(t *testing.T) {
+	for name, tt := range map[string]struct {
+		output map[string]any
+		want   []string
+	}{
+		"absent":    {map[string]any{"decision": "allow"}, nil},
+		"empty":     {map[string]any{"decision": "allow", "result_labels": []any{}}, nil},
+		"non_empty": {map[string]any{"decision": "allow", "result_labels": []any{"public"}}, []string{"public"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v, f := normalize(tt.output)
+			if f != nil || !slices.Equal(v.ResultLabels, tt.want) || (tt.want == nil) != (v.ResultLabels == nil) {
+				t.Fatalf("verdict=%+v failure=%v, want labels %v", v, f, tt.want)
+			}
+		})
 	}
 }
 
@@ -148,16 +159,16 @@ func TestApplyTransform(t *testing.T) {
 	p.target, _ = parseSnapshotPath("$.a")
 	snapshot := map[string]any{"a": map[string]any{"b": "x"}}
 	target := snapshot["a"]
-	if f := applyTransform(p, snapshot, target, transform{Path: "$policy_target.b", Value: "y"}); f != nil {
+	if f := applyTransform(p, snapshot, target, agtbridge.Transform{Path: "$policy_target.b", Value: "y"}); f != nil {
 		t.Fatalf("a transform inside the target failed: %v", f)
 	}
-	if f := applyTransform(p, snapshot, target, transform{Path: "$policy_target.missing", Value: "y"}); f == nil || f.reason != reasonTransformInvalid {
+	if f := applyTransform(p, snapshot, target, agtbridge.Transform{Path: "$policy_target.missing", Value: "y"}); f == nil || f.reason != reasonTransformInvalid {
 		t.Fatalf("a transform of a missing field: %v", f)
 	}
-	if f := applyTransform(p, snapshot, target, transform{Path: "$snap.a", Value: "y"}); f == nil || f.reason != reasonTransformTargetForbidden {
+	if f := applyTransform(p, snapshot, target, agtbridge.Transform{Path: "$snap.a", Value: "y"}); f == nil || f.reason != reasonTransformTargetForbidden {
 		t.Fatalf("a transform outside the target: %v", f)
 	}
-	if f := applyTransform(p, snapshot, target, transform{Path: "$policy_target", Value: strings.Repeat("x", maxSnapshotBytes)}); f == nil || f.reason != reasonResourceLimitExceeded {
+	if f := applyTransform(p, snapshot, target, agtbridge.Transform{Path: "$policy_target", Value: strings.Repeat("x", maxSnapshotBytes)}); f == nil || f.reason != reasonResourceLimitExceeded {
 		t.Fatalf("a transform past the snapshot limit: %v", f)
 	}
 	if snapshot["a"].(map[string]any)["b"] != "x" {
@@ -195,30 +206,5 @@ func TestFailureVerdict(t *testing.T) {
 	}
 	if fail(reasonToolUnknown, "Write").Error() != "runtime_error:tool_unknown: Write" {
 		t.Fatal("failure text")
-	}
-}
-
-func TestWhatwgOrigin(t *testing.T) {
-	tests := map[string]string{
-		"https://docs.example.com/x":     "https://docs.example.com",
-		"http://DOCS.example.com:80/":    "http://docs.example.com",
-		"https://docs.example.com:443":   "https://docs.example.com",
-		"https://docs.example.com:0443/": "https://docs.example.com",
-		"https://docs.example.com:8443/": "https://docs.example.com:8443",
-		"http://0x7f.1/":                 "http://127.0.0.1",
-		"http://0177.0.0.1/":             "http://127.0.0.1",
-		"http://2130706433/":             "http://127.0.0.1",
-		"http://1.2.3/":                  "http://1.2.0.3",
-		"https://docs.example.com./":     "https://docs.example.com.",
-	}
-	for in, want := range tests {
-		if got, ok := whatwgOrigin(in); !ok || got != want {
-			t.Errorf("%s: got %q, %v; want %q", in, got, ok, want)
-		}
-	}
-	for _, in := range []string{"https://docs.example.com:70000/", "http://256.1.1.1.1/", "http://1.2.3.4.5/", "https://xn--zz.example.net/", "http://999.1.1.1/"} {
-		if got, ok := whatwgOrigin(in); ok {
-			t.Errorf("%s: parsed as %q, want a failure", in, got)
-		}
 	}
 }

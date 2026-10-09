@@ -10,7 +10,7 @@ set -euo pipefail
 floor="${1:-80}"
 cd "$(dirname "$0")/.."
 module="$(go list -m)"
-packages="$module/acs,$module/guardian,$module/agtbridge,$module/internal/mcp"
+packages="$module/acs,$module/guardian,$module/agtbridge,$module/agtbridge/goeval,$module/internal/mcp"
 for p in jcs schema chain envelope method handshake disposition; do
   packages="$packages,$module/internal/$p"
 done

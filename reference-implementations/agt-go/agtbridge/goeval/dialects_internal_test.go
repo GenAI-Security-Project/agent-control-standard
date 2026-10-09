@@ -1,10 +1,14 @@
-package agtbridge
+package goeval
 
 import (
 	"os"
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
+
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
 )
 
 // TestPathDialectsAgree checks the two places the reference's manifest and
@@ -13,7 +17,7 @@ import (
 // and its redaction pointer address the same field. Every tool mapping.yaml
 // names an argument for is one the manifest registers.
 func TestPathDialectsAgree(t *testing.T) {
-	src, err := os.ReadFile("../../agt/policy/manifest.yaml")
+	src, err := os.ReadFile("../../../agt/policy/manifest.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,15 +29,25 @@ func TestPathDialectsAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err = os.ReadFile("../../agt/mapping.yaml")
+	src, err = os.ReadFile("../../../agt/mapping.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mp, err := parseMapping(src)
-	if err != nil {
+	var mp struct {
+		InterventionPoints map[string]struct {
+			PolicyTargetArgument *struct {
+				ByTool map[string]string `yaml:"by_tool"`
+			} `yaml:"policy_target_argument"`
+			Modifications *struct {
+				Into     string `yaml:"into"`
+				IntoPath string `yaml:"into_path"`
+			} `yaml:"modifications"`
+		} `yaml:"intervention_points"`
+	}
+	if err := yaml.Unmarshal(src, &mp); err != nil {
 		t.Fatal(err)
 	}
-	if got := points[pointPreToolCall].targetRaw; got != "$.tool_call.args."+policyTargetLeaf {
+	if got := points[agtbridge.PointPreToolCall].targetRaw; got != "$.tool_call.args."+agtbridge.PolicyTargetLeaf {
 		t.Errorf("pre_tool_call targets %s, not the leaf the snapshot writes", got)
 	}
 	for name, row := range mp.InterventionPoints {

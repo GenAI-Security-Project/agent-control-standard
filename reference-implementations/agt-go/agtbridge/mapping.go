@@ -157,7 +157,7 @@ func (m *mapping) policyTargetArgument(point, tool string) (string, error) {
 }
 
 // decision translates a verdict at a point, as mapVerdict does.
-func (m *mapping) decision(v verdict, point, argument string) (acs.Decision, error) {
+func (m *mapping) decision(v Verdict, point, argument string) (acs.Decision, error) {
 	rule, ok := m.Verdicts[v.Decision]
 	if !ok {
 		return acs.Decision{}, fmt.Errorf("mapping.yaml has no verdict rule for AGT decision %q", v.Decision)
@@ -188,7 +188,7 @@ func (m *mapping) decision(v verdict, point, argument string) (acs.Decision, err
 }
 
 // field reads a string verdict field a mapping source names.
-func (v verdict) field(source string) *string {
+func (v Verdict) field(source string) *string {
 	switch source {
 	case "verdict.reason":
 		return v.Reason
@@ -247,7 +247,7 @@ func (m *mapping) summary(ruleID, point string) string {
 var errModificationUnexpressible = errors.New("the rewrite cannot be expressed as an ACS modification")
 
 // modifications is synthesizeModifications.
-func (m *mapping) modifications(v verdict, point, argument string) (*acs.Modifications, error) {
+func (m *mapping) modifications(v Verdict, point, argument string) (*acs.Modifications, error) {
 	rule := m.InterventionPoints[point].Modifications
 	if rule == nil {
 		return nil, fmt.Errorf("%w: mapping.yaml maps AGT decision %q to ACS modify, but its intervention_points row for %q declares no modifications rule", errModificationUnexpressible, v.Decision, point)

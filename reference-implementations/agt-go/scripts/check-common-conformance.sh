@@ -29,7 +29,7 @@ ACS__SECURITY__HMAC_KEY_ID=conformance \
 ACS__SECURITY__HMAC_SECRET_FILE="$secret" \
 ACS__AUDIT__ENVELOPE_LOG="$scratch/envelopes.jsonl" \
 ACS__AUDIT__EVENT_LOG="$scratch/events.jsonl" \
-  .acs/bin/acs-guardian --config guardian.yaml >"$scratch/guardian.log" 2>&1 &
+  "${ACS_GUARDIAN_BIN:?set ACS_GUARDIAN_BIN through make conformance}" --config guardian.yaml >"$scratch/guardian.log" 2>&1 &
 guardian_pid=$!
 
 for attempt in $(seq 1 30); do
@@ -50,18 +50,7 @@ done
 
 cd "$typescript"
 bun test packages/conformance/test/external-guardian.test.ts
-report="$(
-  ACS_CONFORMANCE_GUARDIAN_URL="$guardian_url" \
-  ACS_CONFORMANCE_HMAC_SECRET_FILE="$secret" \
-  ACS_CONFORMANCE_HMAC_KEY_ID=conformance \
-    bun run conformance:guardian
-)"
-printf '%s\n' "$report"
-
-# The run reports DID NOT RUN and still exits 0 when the external Guardian is
-# not reachable, so this is the only tier that drives the Go Guardian from a
-# TypeScript client and it must be seen to have run.
-if ! printf '%s\n' "$report" | grep -q '^external Guardian wire checks: RAN'; then
-  printf '%s\n' 'the external Guardian leg did not run; the Go Guardian was never probed' >&2
-  exit 1
-fi
+ACS_CONFORMANCE_GUARDIAN_URL="$guardian_url" \
+ACS_CONFORMANCE_HMAC_SECRET_FILE="$secret" \
+ACS_CONFORMANCE_HMAC_KEY_ID=conformance \
+  "$module/scripts/check-conformance-report.sh"

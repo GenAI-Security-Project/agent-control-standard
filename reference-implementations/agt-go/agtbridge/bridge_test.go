@@ -3,6 +3,7 @@ package agtbridge_test
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge/goeval"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 )
 
@@ -23,12 +25,50 @@ const agtTree = "../../agt"
 
 func newEngine(t *testing.T, opts agtbridge.Options) *agtbridge.Engine {
 	t.Helper()
-	e, err := agtbridge.New(context.Background(), os.DirFS(agtTree), "policy/manifest.yaml", "mapping.yaml", opts)
+	e, err := goEngine(os.DirFS(agtTree), "policy/manifest.yaml", "mapping.yaml", opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return e
 }
+
+func goEvaluator(t testing.TB) *goeval.Evaluator {
+	t.Helper()
+	e, err := goeval.New(context.Background(), os.DirFS(agtTree), "policy/manifest.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func engineOver(t testing.TB, evaluator agtbridge.Evaluator) *agtbridge.Engine {
+	t.Helper()
+	e, err := agtbridge.New(os.DirFS(agtTree), "mapping.yaml", evaluator, agtbridge.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// goEngine builds the engine over the Go evaluator.
+func goEngine(fsys fs.FS, manifestPath, mappingPath string, opts agtbridge.Options) (*agtbridge.Engine, error) {
+	evaluator, err := goeval.New(context.Background(), fsys, manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	return agtbridge.New(fsys, mappingPath, evaluator, opts)
+}
+
+// pointsEvaluator governs the given points and must never be asked.
+type pointsEvaluator []string
+
+func (p pointsEvaluator) Governs(point string) bool { return slices.Contains(p, point) }
+
+func (pointsEvaluator) Evaluate(context.Context, string, map[string]any) (agtbridge.Verdict, error) {
+	panic("pointsEvaluator evaluates nothing")
+}
+
+func (pointsEvaluator) AGTVersion() string { return "" }
 
 func input(t *testing.T, method string, payload any) guardian.PolicyInput {
 	t.Helper()
@@ -156,7 +196,7 @@ func TestNewRefusesAnUnsupportedManifest(t *testing.T) {
 	if err := os.WriteFile(dir+"/mapping.yaml", mapping, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := agtbridge.New(context.Background(), os.DirFS(dir), "manifest.yaml", "mapping.yaml", agtbridge.Options{}); err == nil {
+	if _, err := goEngine(os.DirFS(dir), "manifest.yaml", "mapping.yaml", agtbridge.Options{}); err == nil {
 		t.Fatal("accepted a manifest with extends")
 	}
 }
@@ -194,7 +234,7 @@ tools:
 		{"approver", &acs.Approver{Type: acs.ApproverService, ID: "security-service", Endpoint: &endpoint, Auth: &acs.ApproverAuth{Method: &authMethod}}, acs.Ask},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			e, err := agtbridge.New(context.Background(), os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{Approver: tt.approver})
+			e, err := goEngine(os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{Approver: tt.approver})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -230,10 +270,24 @@ tools:
 }
 
 func TestAskTimeoutUsesWholeSeconds(t *testing.T) {
-	for _, timeout := range []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond} {
-		if _, err := agtbridge.New(context.Background(), os.DirFS("."), "missing", "missing", agtbridge.Options{AskTimeout: timeout}); err == nil {
-			t.Errorf("accepted AskTimeout %s", timeout)
+	for timeout, accepted := range map[time.Duration]bool{500 * time.Millisecond: false, 1500 * time.Millisecond: false, 2 * time.Second: true} {
+		_, err := agtbridge.New(os.DirFS(agtTree), "mapping.yaml", pointsEvaluator{agtbridge.PointPreToolCall}, agtbridge.Options{AskTimeout: timeout})
+		if (err == nil) != accepted {
+			t.Errorf("AskTimeout %s: error %v, want accepted=%v", timeout, err, accepted)
 		}
+	}
+}
+
+// TestNewRefusesAPointWithoutASnapshot: a manifest may configure an
+// intervention point mapping.yaml sends an ACS method to, and that this
+// bridge assembles no snapshot for; the engine refuses it at start rather
+// than evaluating an empty snapshot.
+func TestNewRefusesAPointWithoutASnapshot(t *testing.T) {
+	if _, err := agtbridge.New(os.DirFS(agtTree), "mapping.yaml", pointsEvaluator{agtbridge.PointPreToolCall, "input"}, agtbridge.Options{}); err == nil || !strings.Contains(err.Error(), `"input"`) {
+		t.Fatalf("error %v, want a refusal of input", err)
+	}
+	if _, err := agtbridge.New(os.DirFS(agtTree), "mapping.yaml", pointsEvaluator{agtbridge.PointPreToolCall, agtbridge.PointPostToolCall, "pre_model_call"}, agtbridge.Options{}); err != nil {
+		t.Fatalf("a governed point no ACS method reaches was refused: %v", err)
 	}
 }
 
@@ -266,7 +320,7 @@ verdict := {"decision": "warn", "reason": sprintf("labels_%d", [count(source)]),
 		t.Fatal(err)
 	}
 	mustWrite(t, dir, "mapping.yaml", string(mapping))
-	e, err := agtbridge.New(context.Background(), os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	e, err := goEngine(os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +344,9 @@ verdict := {"decision": "warn", "reason": sprintf("labels_%d", [count(source)]),
 	}
 }
 
-func TestEmptyLabelsClearSessionState(t *testing.T) {
+// TestEmptyLabelsLeaveSessionState: AGT omits an empty result_labels, so it
+// reaches the engine as no labels and the session keeps its own.
+func TestEmptyLabelsLeaveSessionState(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, dir, "policy/manifest.yaml", `agent_control_specification_version: "0.3.1-beta"
 policies:
@@ -314,16 +370,18 @@ verdict := {"decision": "allow", "result_labels": []}
 		t.Fatal(err)
 	}
 	mustWrite(t, dir, "mapping.yaml", string(mapping))
-	e, err := agtbridge.New(context.Background(), os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	e, err := goEngine(os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := e.Decide(context.Background(), input(t, acs.StepToolCallRequest, shell("ls")))
+	in := input(t, acs.StepToolCallRequest, shell("ls"))
+	in.Session.PolicyState = json.RawMessage(`{"ifc_labels":["secret"]}`)
+	d, err := e.Decide(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(d.State) != `{"ifc_labels":[]}` {
-		t.Fatalf("state %s, want cleared labels", d.State)
+	if d.State != nil {
+		t.Fatalf("state %s, want the session's labels unchanged", d.State)
 	}
 }
 

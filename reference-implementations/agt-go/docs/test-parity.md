@@ -18,14 +18,14 @@ Go tests are named `<package directory>.<test>`, run from this directory with
 | `packages/guardian/test/check-response.test.ts` | `guardian.TestHandshake` (the ServerHello against `response-envelope.json`), `guardian.TestEngineFailuresAreDenials` (an unfit decision is never sent) |
 | `packages/guardian/test/handshake.test.ts` | `guardian.TestHandshake`, `guardian.TestHandshakeRefusals`, `guardian.TestNewRefusesIncompleteConfig` (an unknown posture stops the Guardian) |
 | `packages/guardian/test/session-context.test.ts` | `internal/chain.TestVector`, `internal/chain.TestEntryHashCommitsToEveryMember`, `guardian.TestChainPublication`; the digest differs by design (differences.md) |
-| `packages/guardian/test/ifc-labels.test.ts` | `agtbridge.TestLabelsRoundTrip`, `agtbridge.TestEmptyLabelsClearSessionState`, `agtbridge.TestNormalizeResultLabelsPresence`, `guardian.TestPolicyStateFollowsTheSession` |
+| `packages/guardian/test/ifc-labels.test.ts` | `agtbridge.TestLabelsRoundTrip`, `agtbridge.TestEmptyLabelsLeaveSessionState`, `agtbridge/goeval.TestNormalizeResultLabels`, `guardian.TestPolicyStateFollowsTheSession` |
 | `packages/guardian/test/map-verdict.test.ts` | `agtbridge.TestDecisions` (reasoning, reason codes, references), `agtbridge.TestResultRedaction`, `agtbridge.TestEscalate`, `agtbridge.TestRecordedCases` |
 | `packages/guardian/test/assemble-snapshot.test.ts` | `agtbridge.TestRecordedCases` (`policy_target_argument_missing`, `argument_named_like_the_leaf`, `raw_command_absent`, the result cases) |
 | `packages/guardian/test/annotate-egress.test.ts` | `agtbridge.TestWhatwgOrigin`, `agtbridge.TestRecordedCases` (every `egress_*` and `fetch_*` case) |
 | `packages/guardian/test/envelope-log-sink.test.ts` | `guardian.TestJSONLAuditLog`, `guardian.TestJSONLAuditLogRefusesAnUnwritablePath` |
 | `packages/guardian/test/envelope-log-sink-wiring.test.ts` | `guardian.TestAuditLogReceivesEveryEnvelope` |
-| `packages/agt-bridge/test/bridge.test.ts` | `agtbridge.TestDecisions`, `agtbridge.TestNewRefusesAnUnsupportedManifest` |
-| `packages/agt-bridge/test/opa-path.test.ts` | Does not apply: OPA runs in process, with no binary to find. |
+| `packages/agt-bridge/test/bridge.test.ts` | `agtbridge.TestDecisions`, `agtbridge.TestNewRefusesAnUnsupportedManifest`, `agtbridge/agteval.TestFailuresAreVerdicts`, `agtbridge/agteval.TestEgressAnnotatorRunsInTheCallback` |
+| `packages/agt-bridge/test/opa-path.test.ts` | `agtbridge/agteval.TestOPATimeoutReachesAGT`, `agtbridge/agteval.TestNewRefuses` (`missing_opa`). The Go evaluator runs OPA in process. |
 
 ## Whole-tree tests
 
@@ -36,7 +36,7 @@ Go tests are named `<package directory>.<test>`, run from this directory with
 | `test/ifc-round-trip.test.ts` | `agtbridge.TestLabelsRoundTrip`, `agtbridge.TestRecordedCases` (`labels_across_steps`) |
 | `test/handshake-declares-what-it-evaluates.test.ts` | `guardian.TestHandshake` (the declared hooks exactly), `guardian.TestCoreFloor` (every hook evaluated), `internal/handshake.TestEvaluatedMethods` |
 | `test/invariants.test.ts` | `agtbridge.TestAGTConfinedToAgtbridge`; the host-side gates do not apply |
-| `test/path-dialects.test.ts` | `agtbridge.TestPathDialectsAgree` |
+| `test/path-dialects.test.ts` | `agtbridge/goeval.TestPathDialectsAgree` |
 | `test/session-context-roundtrip.test.ts` | `guardian.TestReserveAndAppendAtomicity`, `guardian.TestMemoryStoreRefusesWhenFull` |
 | `test/envelope-log-sink-roundtrip.test.ts` | `guardian.TestJSONLAuditLog` (the Inspector's line shape) |
 | `test/readme-captures.test.ts` | Does not apply. The Go command's runnable configuration and commands are documented directly in `README.md`. |

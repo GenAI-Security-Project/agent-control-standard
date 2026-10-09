@@ -40,20 +40,25 @@ API.
 ## AGT
 
 [How AGT is used](architecture.md#how-agt-is-used) describes the approach. This table
-lists each point where the Go Guardian's AGT engine and AGT's own runtime differ.
+lists each point where the Go Guardian's AGT engine and the TypeScript reference differ.
 
 | Behavior | TypeScript reference | Go Guardian | Why |
 | --- | --- | --- | --- |
-| AGT runtime | AGT's Rust core at the `agt.lock` commit. | `agtbridge` implements manifest loading, policy input, the tool registry, the `egress` annotator, verdict normalization and every `runtime_error:*` denial used by the checked-in manifest. | No official Go binding exists for this runtime. Startup fails if the manifest uses an unsupported feature: `extends`, `approval`, Cedar, another annotator type, a remote bundle or an intervention point other than the two tool gates. |
-| OPA | The `opa` binary the npm package bundles, with a 5-second timeout. | OPA's Go library, in process, under the Guardian's decision timeout. | One command with the Go toolchain; nothing to install. |
+| AGT runtime | AGT's Rust core, version 0.3.1-beta.0, through `agent-control-specification` on npm. | `agt` calls the same crate through its C ABI. `agt-native.lock` pins the source. `go` reproduces the runtime for the checked-in manifest. | No Go binding is published for this runtime. The library is built from pinned source. The Go evaluator permits builds without cgo. |
+| OPA | The `opa` 0.70.0 binary the npm package bundles, with a 5-second timeout. | With `agt`, `opa` 0.70.0 as `agt-native.lock` pins, at `policy.opa_path` with `policy.opa_timeout`. With `go`, OPA's Go library at the version `go.mod` requires, in process, under the Guardian's decision timeout. | AGT reads the `opa` path and timeout only from `ACS_OPA_PATH` and `ACS_OPA_TIMEOUT_MS`. The AGT evaluator sets them while it builds the runtime and restores them afterwards. |
+| Decision time | Not measured in this tree. | Median 51.1 ms with `agt` and 0.23 ms with `go`, from `go test -tags agteval -run '^$' -bench BenchmarkEvaluators -benchtime=200x ./agtbridge` over the recorded tool-call steps, on an Intel Core i5-13500 on 9 Oct 2026. | The two evaluators run the same policy on the same input, so the gap is the `opa` process AGT starts for each decision. |
+| Differences between the two evaluators | Not applicable. | None on the recorded cases. `agtbridge.TestEvaluatorsAgree` rejects any unlisted difference between the evaluators. | Both evaluators implement AGT `81955d4`. An OPA version difference can also change a decision. The exception list names the AGT versions. |
 | An escalate verdict | Sent as `ask` without `ask_details`, which fails `response-envelope.json`. | An ASK with `ask_details` when an approver is configured (`agtbridge.Options.Approver`); otherwise DENY with `approver_unavailable`. | An ASK must name its approver (§9); AGT's manifest names none for ACS. |
 | Methods AGT has no configured point for | Not dispatched. | Allowed, with the step in the chain. | AGT does not govern them, and the Guardian still records them. |
-| Information-flow labels | Kept in the session store. | Kept in the session store as the engine's `PolicyState`. An absent `result_labels` leaves the labels unchanged; an explicit empty array clears them. | The protocol packages know nothing of AGT, and the labels must live and die with the session. |
+| Information-flow labels | Kept in the session store. | Kept in the session store as the engine's `PolicyState`. Labels a verdict returns replace the session's; none leave them unchanged. | The protocol packages know nothing of AGT, and the labels must live and die with the session. AGT serializes a verdict without an empty `result_labels` (`policy-engine/core/src/verdict.rs`, `skip_serializing_if = "Vec::is_empty"`), so an empty array cannot clear the labels in either Guardian. |
 | `mapping.yaml` | Read without validation. | Validated at start: every source, wrap, decision and modification rule the translation reads. | A broken table stops the Guardian at start rather than denying at the first step that reaches it. |
 | Host tool names | Each host-facing mapping names the tools that host exposes. | `policy.tool_aliases` maps a host tool name to a manifest tool name for policy evaluation; the signed ACS request and audit chain retain the original name. | A deployment can reuse one policy manifest across hosts without misrepresenting the tool identity on the ACS wire. |
-| Finding the AGT tree | Anchored to the source file's own path. | `cmd/guardian` reads `policy.deployment_dir`, `policy.manifest` and `policy.mapping` from its required YAML configuration. Paths follow the configuration file, never the process working directory. | A compiled binary must be runnable outside its source checkout. |
+| Finding the AGT tree | Anchored to the source file's own path. | `cmd/guardian` reads `policy.deployment_dir`, `policy.manifest` and `policy.mapping` from its required YAML configuration. Paths follow the configuration file, never the process working directory. | A compiled binary must be runnable outside its source checkout. A build with the AGT evaluator also needs AGT's runtime library beside it, as [configuration](configuration.md#policy) describes. |
 | `ACS_MANIFEST_PATH` | Selects a manifest, for the drift demo. | `policy.manifest`, optionally overridden by `ACS__POLICY__MANIFEST`, selects a manifest inside the declared deployment directory. | The command reads its configuration from one place; it rejects a manifest path outside its deployment directory. |
-| `ACS_OPA_PATH`, `ACS_OPA_TIMEOUT_MS` | Select and bound the `opa` binary. | Not applicable. | No binary. |
+| `ACS_OPA_PATH`, `ACS_OPA_TIMEOUT_MS` | Select and bound the `opa` binary. | `policy.opa_path` and `policy.opa_timeout`. | The command reads its configuration from one place. |
+
+The Go evaluator refuses manifest features outside its implemented subset at startup.
+Unsupported features include `extends`, `approval`, Cedar, other annotators, remote bundles and intervention points outside the two tool gates.
 
 ## Operation
 

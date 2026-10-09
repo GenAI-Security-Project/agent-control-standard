@@ -2,17 +2,18 @@
 // Governance Toolkit (AGT), the engine of the TypeScript reference
 // implementation beside this module.
 //
-// AGT's ACS policy-engine runtime is a Rust core with no official Go binding.
-// This package evaluates AGT's policy bundle, unchanged, with OPA's Go library in process,
-// and reproduces in Go the part of AGT's runtime (policy-engine/core at the
-// commit agt.lock pins) that the reference's manifest uses: assembling the
-// policy input from a snapshot at the pre_tool_call and post_tool_call
-// intervention points, the egress annotator, and normalising the Rego
-// result into a verdict, including AGT's fail-closed runtime_error denials.
-// A manifest feature outside that part is refused when the engine is built.
-// The reference's mapping.yaml turns each verdict into an ACS decision.
+// The package holds one projection and evaluates through one of two
+// evaluators. The projection is what the TypeScript Guardian does around
+// AGT: it keeps the session's policy state, assembles AGT's snapshot at the
+// pre_tool_call and post_tool_call intervention points, dispatches the
+// egress annotator the reference's manifest declares, turns each verdict
+// into an ACS decision through the reference's mapping.yaml, and handles
+// Ask, tool aliases and wrapped MCP calls. The evaluator executes AGT's
+// policy for a snapshot: the AGT evaluator (package agteval) calls AGT's own
+// runtime library, and the Go evaluator (package goeval) reproduces that
+// runtime in Go for a build without cgo.
 //
-// This is the only package that knows AGT exists.
+// agtbridge and its evaluators are the only packages that know AGT exists.
 package agtbridge
 
 import (
@@ -20,7 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -54,17 +55,17 @@ type Options struct {
 
 // Engine is AGT behind guardian.PolicyEngine.
 type Engine struct {
-	runtime *runtime
-	mapping *mapping
-	opts    Options
+	evaluator Evaluator
+	mapping   *mapping
+	opts      Options
 }
 
 var _ guardian.PolicyEngine = (*Engine)(nil)
 
-// New builds the engine from the manifest and mapping at the given paths in
-// fsys, compiling the manifest's Rego bundle once. The bundle is found
-// relative to the manifest's directory, as AGT resolves it.
-func New(ctx context.Context, fsys fs.FS, manifestPath, mappingPath string, opts Options) (*Engine, error) {
+// New builds the engine over an evaluator and the mapping at mappingPath in
+// fsys. It refuses a mapping that sends an ACS method to an intervention
+// point the evaluator governs and this bridge assembles no snapshot for.
+func New(fsys fs.FS, mappingPath string, evaluator Evaluator, opts Options) (*Engine, error) {
 	switch {
 	case opts.AskTimeout != 0 && opts.AskTimeout < time.Second:
 		return nil, errors.New("agtbridge: AskTimeout is at least one second, the smallest timeout_seconds ask-details.json admits")
@@ -98,15 +99,7 @@ func New(ctx context.Context, fsys fs.FS, manifestPath, mappingPath string, opts
 		opts.Approver = &approver
 	}
 	opts.ToolAliases = cloneMap(opts.ToolAliases)
-	src, err := fs.ReadFile(fsys, manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("agtbridge: %w", err)
-	}
-	m, err := parseManifest(src)
-	if err != nil {
-		return nil, fmt.Errorf("agtbridge: %s: %w", manifestPath, err)
-	}
-	src, err = fs.ReadFile(fsys, mappingPath)
+	src, err := fs.ReadFile(fsys, mappingPath)
 	if err != nil {
 		return nil, fmt.Errorf("agtbridge: %w", err)
 	}
@@ -114,11 +107,13 @@ func New(ctx context.Context, fsys fs.FS, manifestPath, mappingPath string, opts
 	if err != nil {
 		return nil, fmt.Errorf("agtbridge: %w", err)
 	}
-	rt, err := newRuntime(ctx, fsys, path.Dir(manifestPath), m)
-	if err != nil {
-		return nil, fmt.Errorf("agtbridge: %s: %w", manifestPath, err)
+	for _, point := range slices.Sorted(maps.Keys(mp.InterventionPoints)) {
+		row := mp.InterventionPoints[point]
+		if row.ACSMethod != nil && evaluator.Governs(point) && point != PointPreToolCall && point != PointPostToolCall {
+			return nil, fmt.Errorf("agtbridge: mapping.yaml sends %s to intervention point %q, which the manifest configures and whose snapshot this bridge does not assemble", *row.ACSMethod, point)
+		}
 	}
-	return &Engine{runtime: rt, mapping: mp, opts: opts}, nil
+	return &Engine{evaluator: evaluator, mapping: mp, opts: opts}, nil
 }
 
 // Policy implements guardian.PolicyEngine.
@@ -152,7 +147,7 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	}
 	req := p.req
 	point, ok := e.mapping.point(req.Method)
-	if _, configured := e.runtime.points[point]; !ok || !configured {
+	if !ok || !e.evaluator.Governs(point) {
 		pd := guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}}
 		p.settle(&state, acs.Allow)
 		if len(state.MCPCalls) != before || p.outputs != nil {
@@ -176,15 +171,15 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	}
 	var snapshot map[string]any
 	switch point {
-	case pointPreToolCall:
+	case PointPreToolCall:
 		snapshot, err = preToolCallSnapshot(req, state.IFCLabels, argument, policyToolName)
-	case pointPostToolCall:
+	case PointPostToolCall:
 		snapshot, err = postToolCallSnapshot(req, state.IFCLabels, policyToolName)
 	}
 	if err != nil {
 		return guardian.PolicyDecision{}, err
 	}
-	v, err := e.runtime.evaluate(ctx, point, snapshot)
+	v, err := e.evaluator.Evaluate(ctx, point, snapshot)
 	if err != nil {
 		return guardian.PolicyDecision{}, err
 	}
@@ -196,13 +191,15 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 		return guardian.PolicyDecision{}, err
 	}
 	pd := guardian.PolicyDecision{Decision: d}
-	// An absent result_labels leaves the session unchanged. An explicit empty
-	// array clears it, as the TypeScript Guardian's persistIfcLabels does.
-	if v.ResultLabelsPresent {
+	// AGT omits an empty result_labels, so labels arrive only to replace the
+	// session's; absent, they leave it unchanged, as the TypeScript
+	// Guardian's persistIfcLabels does.
+	labelled := len(v.ResultLabels) > 0
+	if labelled {
 		state.IFCLabels = v.ResultLabels
 	}
 	p.settle(&state, d.Disposition)
-	if v.ResultLabelsPresent || len(state.MCPCalls) != before || p.outputs != nil {
+	if labelled || len(state.MCPCalls) != before || p.outputs != nil {
 		if pd.State, err = jsonv2.Marshal(state); err != nil {
 			return guardian.PolicyDecision{}, err
 		}

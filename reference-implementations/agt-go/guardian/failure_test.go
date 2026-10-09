@@ -524,16 +524,25 @@ func TestTamperedDecisionFallsToThePosture(t *testing.T) {
 	}
 }
 
-// Engine calls that never return keep their places: once every place is
-// taken, a step is denied without another call.
+// TestEngineCallsAreBounded: a call that outlives its decision timeout is
+// answered DENY and keeps its engine slot until it returns, so an engine
+// that cannot be interrupted, such as a call into a native library, holds
+// it; with every slot held a step is DENY engine_saturated, and once the
+// call returns the next step is decided.
 func TestEngineCallsAreBounded(t *testing.T) {
 	h := newHarness(t, func(c *guardian.Config) { c.MaxEngineCalls = 1; c.DecisionTimeout = 20 * time.Millisecond })
 	c := h.session()
-	never := make(chan struct{})
-	t.Cleanup(func() { close(never) })
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
-		<-never
-		return guardian.PolicyDecision{}, nil
+		<-release
+		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}}, nil
 	})
 	if r := h.decision(c, acs.StepToolCallRequest, toolCall("ls")); r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonEvaluationFailed) {
 		t.Fatalf("the first step got %+v", r)
@@ -544,6 +553,16 @@ func TestEngineCallsAreBounded(t *testing.T) {
 	}
 	if h.engine.callCount() != calls {
 		t.Fatal("the engine was called with no place free")
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+		if r.Disposition == acs.Allow {
+			break
+		}
+		if !slices.Contains(r.ReasonCodes, disposition.ReasonEngineSaturated) || time.Now().After(deadline) {
+			t.Fatalf("a step after the abandoned call returned got %+v", r)
+		}
 	}
 }
 

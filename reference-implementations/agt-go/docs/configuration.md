@@ -30,6 +30,9 @@ enabled only after the policy engine and Guardian are ready.
 | `policy.deployment_dir` | Root directory of one AGT policy deployment. | Existing absolute path, or relative to the configuration file. |
 | `policy.manifest` | AGT manifest within `policy.deployment_dir`. | Non-empty relative path that cannot escape the deployment directory. |
 | `policy.mapping` | ACS verdict mapping within `policy.deployment_dir`. | Same path rule as `policy.manifest`. |
+| `policy.evaluator` | `agt` uses AGT's runtime library. `go` uses the Go reproduction. | Required: `agt` or `go`. The reference YAML selects `agt`. `make build` includes AGT; `make build EVALUATOR=go` refuses `agt` at startup. |
+| `policy.opa_path` | The OPA executable or its directory. | Required for `agt`: absolute or relative to the configuration file. Directory paths select `opa` on Unix and `opa.exe` on Windows. `make agt-native` copies the host executable to `.acs/agt/bin/`. Not read by `go`. |
+| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `5s`, positive and a whole number of milliseconds. Not read by `go`. |
 | `policy.ask_substitution` | Endpoint behavior when ASK cannot be completed. | `none`, `deny` or `defer`. |
 | `policy.tool_aliases` | Optional map from an Observed Agent's tool name to the manifest's tool name. | Both names must be non-empty. |
 
@@ -41,6 +44,19 @@ not provide an ACS approval channel.
 
 A tool alias changes only the policy input. The signed ACS request, the
 SessionContext chain and audit records keep the original tool name.
+
+Build selection and evaluator selection are separate. The `agteval` build tag
+includes AGT; `policy.evaluator` selects which evaluator runs.
+`ACS__POLICY__EVALUATOR=go` selects the Go evaluator in either build.
+An AGT build still links the library when the Go evaluator is selected.
+`make run EVALUATOR=go` builds without that dependency and selects the Go evaluator.
+
+The AGT build includes the library and `agt-native.json` beside the binary.
+Linux and macOS builds also embed the platform library directory under `.acs/agt/` for tests.
+To deploy elsewhere, keep the library and `agt-native.json` in one directory.
+Set `LD_LIBRARY_PATH` on Linux or `DYLD_LIBRARY_PATH` on macOS to that directory.
+On Windows, keep the DLL beside the executable or add its directory to `PATH`.
+The Guardian refuses startup if the build record is missing or its checksum differs from the library.
 
 ## Security and audit
 

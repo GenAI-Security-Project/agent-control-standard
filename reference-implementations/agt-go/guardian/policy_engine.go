@@ -14,9 +14,12 @@ import (
 //
 // Decide is called after the step's ContextEntry is appended and before the
 // response is signed, under the negotiated decision timeout and the session
-// store's lock context. An implementation must be safe for concurrent calls,
-// must not mutate its input and must stop promptly when ctx ends. The Guardian
-// may stop waiting after cancellation. An error, a timeout or a decision
+// store's lock context. An implementation must be safe for concurrent calls
+// and must not mutate its input. It should stop when ctx ends; one that
+// cannot be interrupted may run on. Either way the Guardian stops waiting at
+// the decision timeout and keeps the call's place among Config.MaxEngineCalls
+// until Decide returns, so calls that run on cannot pile up without bound.
+// An error, a timeout or a decision
 // without the fields its disposition requires is answered DENY: the step is
 // already in the chain, and a transport error would let an Observed Agent on
 // the default posture proceed.
