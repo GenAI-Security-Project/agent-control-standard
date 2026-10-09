@@ -97,8 +97,8 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     const requestId = crypto.randomUUID();
     const request = toolCallEnvelope("rm -rf /", { id: 7, requestId, sessionId });
 
-    exporter.write("request", request, "steps/toolCallRequest");
-    exporter.write("response", decisionResponse(7, DENY), "steps/toolCallRequest");
+    const step = exporter.start(request, "steps/toolCallRequest");
+    exporter.end(step, decisionResponse(7, DENY));
     await exporter.flush();
 
     const [span] = spans();
@@ -115,8 +115,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   it("records the decision as the mapping's event on that span, with acs.decision and acs.evaluator", async () => {
     const { exporter, spans } = memoryExporter();
-    exporter.write("request", toolCallEnvelope("rm -rf /", { id: 7 }), "steps/toolCallRequest");
-    exporter.write("response", decisionResponse(7, DENY), "steps/toolCallRequest");
+    exporter.end(exporter.start(toolCallEnvelope("rm -rf /", { id: 7 }), "steps/toolCallRequest"), decisionResponse(7, DENY));
     await exporter.flush();
 
     const [event] = spans()[0]?.events ?? [];
@@ -133,8 +132,10 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   it("takes acs.evaluator from the response when it carries one", async () => {
     const { exporter, spans } = memoryExporter();
-    exporter.write("request", toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest");
-    exporter.write("response", decisionResponse(7, { decision: "allow", metadata: { evaluator: "agent", model_id: "m-1" } }), "steps/toolCallRequest");
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest"),
+      decisionResponse(7, { decision: "allow", metadata: { evaluator: "agent", model_id: "m-1" } }),
+    );
     await exporter.flush();
 
     const attributes = spans()[0]?.events[0]?.attributes;
@@ -144,9 +145,8 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   it("lines up policy columns in wire order, and drops a column any reference lacks", async () => {
     const { exporter, spans } = memoryExporter();
-    exporter.write("request", toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest");
-    exporter.write(
-      "response",
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest"),
       decisionResponse(7, {
         decision: "deny",
         reasoning: "x",
@@ -155,7 +155,6 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
           { policy_id: "p2", rule_id: "r2" },
         ],
       }),
-      "steps/toolCallRequest",
     );
     await exporter.flush();
 
@@ -167,10 +166,8 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   it("carries acs.chain_hash only when the response does", async () => {
     const { exporter, spans } = memoryExporter();
-    exporter.write("request", toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest");
-    exporter.write("response", decisionResponse(1, { decision: "allow", chain_hash: "a".repeat(64) }), "steps/toolCallRequest");
-    exporter.write("request", toolCallEnvelope("ls", { id: 2 }), "steps/toolCallRequest");
-    exporter.write("response", decisionResponse(2, { decision: "allow" }), "steps/toolCallRequest");
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow", chain_hash: "a".repeat(64) }));
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 2 }), "steps/toolCallRequest"), decisionResponse(2, { decision: "allow" }));
     await exporter.flush();
 
     const [withHash, withoutHash] = spans();
@@ -182,10 +179,12 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     const { exporter, spans } = memoryExporter();
     // handshake/hello has no step_to_span entry. steps/sessionStart has one,
     // and is not in the ServerHello's methods_evaluated.
-    exporter.write("request", makeEnvelope("handshake/hello", {}, { id: 1 }), "handshake/hello");
-    exporter.write("response", { jsonrpc: "2.0", id: 1, result: { negotiated_version: "0.1.0" } }, "handshake/hello");
-    exporter.write("request", makeEnvelope("steps/sessionStart", {}, { id: 2 }), "steps/sessionStart");
-    exporter.write("response", { jsonrpc: "2.0", id: 2, error: { code: -32011, message: "not dispatched" } }, "steps/sessionStart");
+    const hello = exporter.start(makeEnvelope("handshake/hello", {}, { id: 1 }), "handshake/hello");
+    const sessionStart = exporter.start(makeEnvelope("steps/sessionStart", {}, { id: 2 }), "steps/sessionStart");
+    expect(hello).toBeNull();
+    expect(sessionStart).toBeNull();
+    exporter.end(hello, { jsonrpc: "2.0", id: 1, result: { negotiated_version: "0.1.0" } });
+    exporter.end(sessionStart, { jsonrpc: "2.0", id: 2, error: { code: -32011, message: "not dispatched" } });
     await exporter.flush();
 
     expect(spans()).toHaveLength(0);
@@ -193,8 +192,10 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   it("ends a span answered with a JSON-RPC error in error status, with no decision event", async () => {
     const { exporter, spans } = memoryExporter();
-    exporter.write("request", toolCallEnvelope("ls", { id: 9 }), "steps/toolCallRequest");
-    exporter.write("response", { jsonrpc: "2.0", id: 9, error: { code: -32020, message: "evaluation failed" } }, "steps/toolCallRequest");
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 9 }), "steps/toolCallRequest"),
+      { jsonrpc: "2.0", id: 9, error: { code: -32020, message: "evaluation failed" } },
+    );
     await exporter.flush();
 
     const [span] = spans();
@@ -203,13 +204,17 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(span?.events).toHaveLength(0);
   });
 
-  it("pairs request and response by JSON-RPC id, and emits nothing for a request that has none", async () => {
+  // The pairing is the handle, not the id: an envelope with no JSON-RPC id
+  // at all still gets its span, closed by its own response.
+  it("pairs request and response by handle, so a request with no JSON-RPC id still gets its span", async () => {
     const { exporter, spans } = memoryExporter();
-    exporter.write("request", toolCallEnvelope("ls", { id: null }), "steps/toolCallRequest");
-    exporter.write("response", { jsonrpc: "2.0", id: null, error: { code: -32010, message: "invalid" } }, "steps/toolCallRequest");
+    const step = exporter.start(toolCallEnvelope("ls", { id: null }), "steps/toolCallRequest");
+    expect(step).not.toBeNull();
+    exporter.end(step, { jsonrpc: "2.0", id: null, error: { code: -32010, message: "invalid" } });
     await exporter.flush();
 
-    expect(spans()).toHaveLength(0);
+    expect(spans()).toHaveLength(1);
+    expect(spans()[0]?.status.code).toBe(SpanStatusCode.ERROR);
   });
 
   // The whole reason the exporter is total: a broken output must cost
@@ -222,10 +227,10 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
       onError: (error) => errors.push(error),
     });
 
-    expect(() => exporter.write("request", toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest")).not.toThrow();
-    expect(() => exporter.write("response", decisionResponse(1, DENY), "steps/toolCallRequest")).not.toThrow();
+    const step = exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest");
+    expect(() => exporter.end(step, decisionResponse(1, DENY))).not.toThrow();
     await exporter.flush();
-    expect(() => exporter.write("request", toolCallEnvelope("ls", { id: 2 }), "steps/toolCallRequest")).not.toThrow();
+    expect(() => exporter.start(toolCallEnvelope("ls", { id: 2 }), "steps/toolCallRequest")).not.toThrow();
     await exporter.flush();
     await exporter.shutdown();
 
@@ -245,7 +250,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
         methodsEvaluated: METHODS_EVALUATED,
         onError: (error) => errors.push(error),
       });
-      expect(() => exporter.write("request", toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest")).not.toThrow();
+      expect(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest")).toBeNull();
       await exporter.shutdown();
       expect(errors).toHaveLength(1);
     } finally {
@@ -255,7 +260,8 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
   });
 
   it("NULL_OTEL_TRACE_EXPORTER writes nothing and never throws", async () => {
-    expect(() => NULL_OTEL_TRACE_EXPORTER.write("request", toolCallEnvelope("ls"), "steps/toolCallRequest")).not.toThrow();
+    expect(NULL_OTEL_TRACE_EXPORTER.start(toolCallEnvelope("ls"), "steps/toolCallRequest")).toBeNull();
+    expect(() => NULL_OTEL_TRACE_EXPORTER.end(null, decisionResponse(1, DENY))).not.toThrow();
     await NULL_OTEL_TRACE_EXPORTER.flush();
     await NULL_OTEL_TRACE_EXPORTER.shutdown();
   });
@@ -284,6 +290,37 @@ describe("Guardian trace export wiring", () => {
       expect(typeof event?.attributes?.["acs.reasoning"]).toBe("string");
       expect(Array.isArray(event?.attributes?.["acs.reason_codes"])).toBe(true);
       expect(Array.isArray(event?.attributes?.["acs.policy.ids"])).toBe(true);
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  // Hosts run hooks in parallel and number their requests independently, so
+  // two sessions can be in flight with the same JSON-RPC id. Each must end
+  // its own span with its own decision: the deny for the destructive call,
+  // the allow for the benign one.
+  it("keeps two concurrent sessions apart when they reuse one JSON-RPC id", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    const denied = { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
+    const allowed = { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
+    try {
+      await Promise.all([
+        postRaw(guardian.url, toolCallEnvelope("rm -rf /", { id: 1, ...denied })),
+        postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1, ...allowed })),
+      ]);
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(2);
+      const bySession = new Map(spans().map((span) => [span.attributes["acs.session.id"], span]));
+      const deniedSpan = bySession.get(denied.sessionId);
+      const allowedSpan = bySession.get(allowed.sessionId);
+      expect(deniedSpan?.attributes["acs.request_id"]).toBe(denied.requestId);
+      expect(allowedSpan?.attributes["acs.request_id"]).toBe(allowed.requestId);
+      expect(deniedSpan?.events).toHaveLength(1);
+      expect(allowedSpan?.events).toHaveLength(1);
+      expect(deniedSpan?.events[0]?.attributes?.["acs.decision"]).toBe("deny");
+      expect(allowedSpan?.events[0]?.attributes?.["acs.decision"]).toBe("allow");
     } finally {
       await guardian.close();
     }

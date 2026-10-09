@@ -494,8 +494,9 @@ export async function startGuardian({
  *
  * The sink itself is total (see envelope-log-sink.ts): these two calls cannot
  * throw, so they cannot turn a governed tool call into an ungoverned one. The
- * trace exporter's two writes sit beside them, paired the same way, and are
- * total for the same reason (otel-trace-exporter.ts).
+ * trace exporter's `start` and `end` sit beside them: the handle `start`
+ * returns is what `end` closes, so a span can only ever close on its own
+ * response, and both are total for the same reason (otel-trace-exporter.ts).
  */
 async function handleAcsRequest(
   req: Request,
@@ -545,7 +546,7 @@ async function handleAcsRequest(
   // visible to the Inspector rather than invisible.
   const method = extractMethod(raw);
   envelopeLog.write("request", raw, method);
-  traceExporter.write("request", raw, method);
+  const stepSpan = traceExporter.start(raw, method);
 
   let response: JsonRpcSuccess | JsonRpcFailure;
   try {
@@ -591,7 +592,7 @@ async function handleAcsRequest(
   }
 
   envelopeLog.write("response", response, method);
-  traceExporter.write("response", response, method);
+  traceExporter.end(stepSpan, response);
   return response;
 }
 

@@ -13,12 +13,15 @@
  * slot the wire did not carry -- a required attribute the envelope lacks is
  * simply absent, which is itself a fact worth seeing.
  *
- * Span lifetime follows the envelope log. A span starts when the request is
- * recorded and ends when the response is, at the same two call sites in
- * server.ts, paired by the JSON-RPC id the same way the Inspector pairs log
- * lines. Only a method that has a `step_to_span` entry AND that this Guardian
- * dispatches becomes a span; `handshake/hello`, a method the Guardian does
- * not dispatch, and an unparseable body produce none.
+ * Span lifetime follows the envelope log. `start` is called where the
+ * request is recorded and hands back the span; `end` is called with that
+ * same handle where the response is recorded, at the same two call sites in
+ * server.ts. The handle is what pairs them, never a lookup: a JSON-RPC id is
+ * the client's, two sessions can reuse one at the same moment, and nothing
+ * keyed on the id could tell their responses apart. Only a method that has a
+ * `step_to_span` entry AND that this Guardian dispatches becomes a span;
+ * `handshake/hello`, a method the Guardian does not dispatch, and an
+ * unparseable body produce none, and `start` answers null for them.
  *
  * Off by default. With no file and no endpoint configured, startGuardian is
  * handed NULL_OTEL_TRACE_EXPORTER and behaves exactly as before.
@@ -38,7 +41,6 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BasicTracerProvider, BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
-import { extractRpcId, type EnvelopeLogDirection } from "./envelope-log-sink.ts";
 
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
@@ -239,10 +241,20 @@ function collect<Parts>(into: Attributes, names: Iterable<string>, sources: Reco
   }
 }
 
-/** Where ended spans go: the Guardian-side writer role, shaped like
- * `EnvelopeLogSink` so server.ts calls it at the same two points. */
+/**
+ * The span this module started for one step, handed to the caller so the
+ * response can close the same span and no other. Opaque: a caller holds it
+ * between the two calls and reads nothing off it.
+ */
+export type StepSpan = { readonly span: Span };
+
+/** The Guardian-side writer role, called at the envelope log's own two
+ * points: `start` where the request is recorded, `end` where the response
+ * is, with the handle `start` returned. */
 export type OtelTraceExporter = {
-  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null): void;
+  /** Null when this request produces no span -- `end` then does nothing. */
+  start(envelope: unknown, method: string | null): StepSpan | null;
+  end(stepSpan: StepSpan | null, response: unknown): void;
   /** Pushes every ended span through to the exporters now rather than on
    * the batch timer. Tests call it; shutdown does too. */
   flush(): Promise<void>;
@@ -254,7 +266,10 @@ export type OtelTraceExporter = {
  * composition root disabling trace export gets a value of the same type,
  * not a special case. */
 export const NULL_OTEL_TRACE_EXPORTER: OtelTraceExporter = {
-  write(): void {},
+  start(): null {
+    return null;
+  },
+  end(): void {},
   async flush(): Promise<void> {},
   async shutdown(): Promise<void> {},
 };
@@ -331,14 +346,6 @@ function reportingFailures(exporter: SpanExporter, fail: (error: unknown) => voi
   };
 }
 
-/** The JSON-RPC id as a map key, or null for an envelope that has none. A
- * request with no id cannot be paired with its response -- the Inspector
- * cannot pair it either -- so it produces no span. */
-function pairingKey(envelope: unknown): string | null {
-  const id = extractRpcId(envelope);
-  return id === null ? null : `${typeof id}:${String(id)}`;
-}
-
 export function createOtelTraceExporter({
   filePath,
   endpoint,
@@ -400,46 +407,23 @@ export function createOtelTraceExporter({
   }
 
   const handled = new Set(methodsEvaluated);
-  // Spans started and not yet ended, keyed by JSON-RPC id. A queue per key,
-  // because two in-flight requests may legitimately reuse an id and the
-  // pairing is then first-in, first-out, as it is in the envelope log.
-  const open = new Map<string, Span[]>();
 
-  function begin(envelope: unknown, method: string | null, tracer: Tracer, mapping: OtelMapping): void {
+  function begin(envelope: unknown, method: string | null, tracer: Tracer, mapping: OtelMapping): StepSpan | null {
     if (method === null || !handled.has(method)) {
-      return;
+      return null;
     }
     const entry = mapping.stepToSpan[method];
-    const key = pairingKey(envelope);
-    if (entry === undefined || key === null) {
-      return;
+    if (entry === undefined) {
+      return null;
     }
     const parts = requestParts(envelope);
     const attributes: Attributes = {};
     collect(attributes, Object.keys(CORRELATION_ATTRIBUTE_SOURCES), CORRELATION_ATTRIBUTE_SOURCES, parts);
     collect(attributes, [...entry.required_attributes, ...(entry.optional_attributes ?? [])], STEP_ATTRIBUTE_SOURCES, parts);
-    const span = tracer.startSpan(entry.span_name, { attributes, root: true });
-    const queue = open.get(key);
-    if (queue === undefined) {
-      open.set(key, [span]);
-    } else {
-      queue.push(span);
-    }
+    return { span: tracer.startSpan(entry.span_name, { attributes, root: true }) };
   }
 
-  function end(envelope: unknown, mapping: OtelMapping): void {
-    const key = pairingKey(envelope);
-    if (key === null) {
-      return;
-    }
-    const queue = open.get(key);
-    const span = queue?.shift();
-    if (queue !== undefined && queue.length === 0) {
-      open.delete(key);
-    }
-    if (span === undefined) {
-      return;
-    }
+  function finish({ span }: StepSpan, envelope: unknown, mapping: OtelMapping): void {
     const decision = resultParts(envelope);
     if (decision === undefined) {
       // A JSON-RPC error: the step was answered but not decided. The error
@@ -460,16 +444,23 @@ export function createOtelTraceExporter({
   let stopped = false;
 
   return {
-    write(direction, envelope, method): void {
+    start(envelope, method): StepSpan | null {
       if (disabled || stopped || tracer === undefined || mapping === undefined) {
+        return null;
+      }
+      try {
+        return begin(envelope, method, tracer, mapping);
+      } catch (error) {
+        fail(error);
+        return null;
+      }
+    },
+    end(stepSpan, response): void {
+      if (stepSpan === null || disabled || stopped || mapping === undefined) {
         return;
       }
       try {
-        if (direction === "request") {
-          begin(envelope, method, tracer, mapping);
-        } else {
-          end(envelope, mapping);
-        }
+        finish(stepSpan, response, mapping);
       } catch (error) {
         fail(error);
       }
