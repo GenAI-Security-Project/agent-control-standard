@@ -1,0 +1,405 @@
+{
+  "sourceRepository": "https://github.com/probityai/agent-evidence-vectors",
+  "sourceCommit": "58bf482e9f07668e2a8f99e7e9a88609f58112fd",
+  "sourceTree": "6b8f79e7710d15ced5bf06da6a9450ecb4e2d9c7",
+  "sourceVersion": "0.17.0",
+  "sourceVersionScope": "Version declared by the selected source metadata; no registry release inference.",
+  "license": "Apache-2.0",
+  "corpus": "vectors-acs-core",
+  "memberCount": 43,
+  "counts": {
+    "accept": 15,
+    "reject": 26,
+    "indeterminate": 2
+  },
+  "corpusDigest": "990cc18c1825ecd27cb33b6a68ebf5b5da2493d19e83791ef929b12b5bcad1cb",
+  "specCommit": "9d4a9daa996fa2557b9959baeecad106f581fd62",
+  "scope": "Byte-preserving source import. ACS Spec workstream owns release and conformance decisions. No schema, member ID, expectation, manifest or observedRuns changes.",
+  "files": [
+    {
+      "upstreamPath": "CITATION.cff",
+      "path": "conformance/acs-core-source/CITATION.cff",
+      "gitBlob": "0aa2316da2430386c47127c062ecafef3f6f3009",
+      "bytes": 2433,
+      "sha256": "9591e295ef580ff6b36c62414e8ea1417e5b8aee01f8afc3f9cbaf417a0ac3d0"
+    },
+    {
+      "upstreamPath": "LICENSE",
+      "path": "conformance/acs-core-source/LICENSE",
+      "gitBlob": "9ab74de02c30f8c28d3890849711b4d556dc439c",
+      "bytes": 11343,
+      "sha256": "8b506a9d145be0a6fbef3f0519996faf84c770f8ab8d32d120c8682f2ad6181f"
+    },
+    {
+      "upstreamPath": "README.md",
+      "path": "conformance/acs-core-source/README.md",
+      "gitBlob": "7b6099f0e7755ff127d3fa84b84b0e60a06e9990",
+      "bytes": 4421,
+      "sha256": "bbb4063cfd4f3004c854fc5a8bc963353b934a3bdf28da037225c12e27150589"
+    },
+    {
+      "upstreamPath": "pyproject.toml",
+      "path": "conformance/acs-core-source/pyproject.toml",
+      "gitBlob": "c304102bc4bd6b56f961ebbf849351d1b3eda4ef",
+      "bytes": 13961,
+      "sha256": "5eaae92a373e3bdb7366f6ea0bfd41cba41ee311d3350de3a14e2572619c6a25"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/INDEX.md",
+      "path": "conformance/vectors-acs-core/INDEX.md",
+      "gitBlob": "6222ea06930641713f1fdc4bd10ee6a2c19e420b",
+      "bytes": 13443,
+      "sha256": "49f1b3d194073461d659e8b8dcf408e496c897a029cbd00dfeaa7864682040f1"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/MANIFEST.json",
+      "path": "conformance/vectors-acs-core/MANIFEST.json",
+      "gitBlob": "236c1018a2177759ada48a2782c0b3c26036d81f",
+      "bytes": 46202,
+      "sha256": "8ad60137d28552d732771fef3969cb58f9353d15cbf7bfe7c09b57a23b0513d7"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/README.md",
+      "path": "conformance/vectors-acs-core/README.md",
+      "gitBlob": "6070381f5d0a828decf6438ee782a34114a8df16",
+      "bytes": 9636,
+      "sha256": "ffe1e32420c9945e0e7ab9eda24c04aee2154c909016cb15d75359e6c24862c7"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/gen_vectors.py",
+      "path": "conformance/vectors-acs-core/gen_vectors.py",
+      "gitBlob": "c11c5bafd5579446f17d10058840f3f670973cfe",
+      "bytes": 68535,
+      "sha256": "7bcc2c343d1458c210a19666f7169cfe3d11774c41733981f0ccf7fb2a099c27"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/spec-vendored/conformance-9d4a9da.md",
+      "path": "conformance/vectors-acs-core/spec-vendored/conformance-9d4a9da.md",
+      "gitBlob": "4ee4d901bcc86311b639c9975eb2bd77ae8843c2",
+      "bytes": 11397,
+      "sha256": "7c9d699efaba9d3fbcf9cc16288b653b1f9ae4cd7e33a874c19ba29d6495176c"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/spec-vendored/hooks-9d4a9da.md",
+      "path": "conformance/vectors-acs-core/spec-vendored/hooks-9d4a9da.md",
+      "gitBlob": "9436fae2b949655198e4169b2826289d397df227",
+      "bytes": 23533,
+      "sha256": "1441751389f0267a96a91e023b2483575368d51ac20c392a2a3c6a956c02576b"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/spec-vendored/specification-9d4a9da.md",
+      "path": "conformance/vectors-acs-core/spec-vendored/specification-9d4a9da.md",
+      "gitBlob": "120b9f3a4c0ea59a9d49a076578ebffc786e6653",
+      "bytes": 46590,
+      "sha256": "53fd6658653ea358415c115b6dceff1961ac69e3dd4435556b3a17922942dea3"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/spec-vendored/trace-events-9d4a9da.md",
+      "path": "conformance/vectors-acs-core/spec-vendored/trace-events-9d4a9da.md",
+      "gitBlob": "9d3e29defb5c848a31c843c0268e671c8e877206",
+      "bytes": 6078,
+      "sha256": "f9d5fbcb8d85af74f117b27b560e5dd53b67d84b6b57dbdf633f372ccc4a2bae"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v0577dc8ccd4d7e47.json",
+      "path": "conformance/vectors-acs-core/vectors/v0577dc8ccd4d7e47.json",
+      "gitBlob": "c9e750fe5cc83ca2b2d156b38071a09251fcc9b6",
+      "bytes": 982,
+      "sha256": "e9827b6775fc428de31d310c1accdbd84f1fce89dcf3bcdeddb58fc6eb08a62a"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v07180a3ca8f10123.json",
+      "path": "conformance/vectors-acs-core/vectors/v07180a3ca8f10123.json",
+      "gitBlob": "f052b68772844b16cb88c85f2602bce41d6ac151",
+      "bytes": 1441,
+      "sha256": "b82f6f91eec1100263ed2dc59fe39ea47eb7f066e77e096e2037b548bc4f6280"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v0c6dcb9ff13af3c9.json",
+      "path": "conformance/vectors-acs-core/vectors/v0c6dcb9ff13af3c9.json",
+      "gitBlob": "7d1627f99f3b028f051f9a7c0544d6863ac8e86e",
+      "bytes": 587,
+      "sha256": "70e27e8b09d5a3ed39cac835e48ee6be642beff5b8abd6150b85e2dd37f7fd51"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v100f74962fbb8b94.json",
+      "path": "conformance/vectors-acs-core/vectors/v100f74962fbb8b94.json",
+      "gitBlob": "73f8e29a5759515ca7b9586e27a961cbb1e23a26",
+      "bytes": 1220,
+      "sha256": "0c10ecb2c02d94029dd1fc844a8968944e0fd0ff2eb675a35d135e7e04273736"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v10351021bf6e46b1.json",
+      "path": "conformance/vectors-acs-core/vectors/v10351021bf6e46b1.json",
+      "gitBlob": "68fff64116067db86cbab8249bee7e9e3eafe3f9",
+      "bytes": 3264,
+      "sha256": "305680ea109e76557fcca88fd330559266e25a3a57d4e1969be8c67a121ad71f"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v221edeb22c4e8634.json",
+      "path": "conformance/vectors-acs-core/vectors/v221edeb22c4e8634.json",
+      "gitBlob": "6fc6d73e5853543e82a69256906d17ed16d3a420",
+      "bytes": 1230,
+      "sha256": "31fc0f9a901b211a9c7620fd50df4e1af762d5617a50c15fbf1bda95046bf7c0"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v25f01d8fe1e91bf5.json",
+      "path": "conformance/vectors-acs-core/vectors/v25f01d8fe1e91bf5.json",
+      "gitBlob": "35834d3499534609ca1b8bd6bf89e7635e02ef22",
+      "bytes": 786,
+      "sha256": "d940a72298928ed6047403e87058172f01486c157a44aee8efbff13734dbd8cc"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v3232493ab40ae031.json",
+      "path": "conformance/vectors-acs-core/vectors/v3232493ab40ae031.json",
+      "gitBlob": "a7b1e6bc87b1389d17f5f7602f119cbb42cefb6f",
+      "bytes": 1266,
+      "sha256": "6140bceb57701c3b1b9abfa23fe22c72b552eddd006e367daaaf56bdfedb50ab"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v3c03d4e4ce213e9c.json",
+      "path": "conformance/vectors-acs-core/vectors/v3c03d4e4ce213e9c.json",
+      "gitBlob": "8d26ab78bbaa1d1f3e4fa6053e62667b6ea1f86a",
+      "bytes": 687,
+      "sha256": "1e28faf6123a72d4e7d79dfa1c1366b017ea5265657d15c4fd2d13b02b1a626c"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v3e946bcfde26bbe2.json",
+      "path": "conformance/vectors-acs-core/vectors/v3e946bcfde26bbe2.json",
+      "gitBlob": "892c87879714eadbd6e97f8cb00f619be278a2ff",
+      "bytes": 1729,
+      "sha256": "2658f7165f7cba970d64b6c87daf00bcb75554a93f9a00bcd01de42e7bd5a1a0"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v412653087b92cb07.json",
+      "path": "conformance/vectors-acs-core/vectors/v412653087b92cb07.json",
+      "gitBlob": "ea13aa3a0f3cc7e5ed4611e221f30ecd28cdc3de",
+      "bytes": 1172,
+      "sha256": "4b34913d1de1d5d41226fb249ccb0fd1723a2fbaecf59c050276bd2e127b773d"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v448a61c91554a125.json",
+      "path": "conformance/vectors-acs-core/vectors/v448a61c91554a125.json",
+      "gitBlob": "feca7171d30167f22c25ccce95e38ae8e71548b5",
+      "bytes": 3168,
+      "sha256": "57edcb9ec8ecbbb6f37ec835abd1d76d956111955bbea87874e8f39b4f294999"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v4f75a079844635af.json",
+      "path": "conformance/vectors-acs-core/vectors/v4f75a079844635af.json",
+      "gitBlob": "323fa080f957be33d0c1abeac52d00ccbe43fae6",
+      "bytes": 1217,
+      "sha256": "e49de9b2eb8be3d3f125b47bf442605362ac225e5a748e28be468e92ca42b5c0"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v53ef0aaa91303587.json",
+      "path": "conformance/vectors-acs-core/vectors/v53ef0aaa91303587.json",
+      "gitBlob": "5aefca4e8d7e9b4fa2387da41e89cd5c066c7ca3",
+      "bytes": 1132,
+      "sha256": "14e20b7fc60eedf7312c73a0b1e6b09a976aaf7a607c216a97ac342e5e6f88b3"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v661266c5c87cb206.json",
+      "path": "conformance/vectors-acs-core/vectors/v661266c5c87cb206.json",
+      "gitBlob": "3ac0944540e6a9671e3e20a30796e655b1101190",
+      "bytes": 1214,
+      "sha256": "c5c6ba1b969f5b952a30f8ec8967991e37075194fc6c9f3524aeb4c6b6718cb9"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v699f3f41215849ca.json",
+      "path": "conformance/vectors-acs-core/vectors/v699f3f41215849ca.json",
+      "gitBlob": "4a8aaedbb61c4503f869a4dc1e110086dd9062cf",
+      "bytes": 2494,
+      "sha256": "01c143ea3a2adb5d59a22abe391c71496ce62c11e17bc70785db0f29067d7292"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v6daaec0f6f0c8a14.json",
+      "path": "conformance/vectors-acs-core/vectors/v6daaec0f6f0c8a14.json",
+      "gitBlob": "ba803d455547abc002986c2f5038cb292a4a951f",
+      "bytes": 1213,
+      "sha256": "eebba1f4eca46705015884d5f4caece71c2bcd7e1c98d3eeaec96aeee7b57158"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v78927805373a6c06.json",
+      "path": "conformance/vectors-acs-core/vectors/v78927805373a6c06.json",
+      "gitBlob": "189a959d18334afd850507b8ce7e82738dac3513",
+      "bytes": 1154,
+      "sha256": "8f088391e70e9386db55fc8584d6fb4a0bd17aeb6e8e1b6dc3e97f701266fef3"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v7b0b32fb369136c1.json",
+      "path": "conformance/vectors-acs-core/vectors/v7b0b32fb369136c1.json",
+      "gitBlob": "82aa78e696e06bf5f6cd9aa4f41839ba85a26502",
+      "bytes": 779,
+      "sha256": "849e0eaf6d34d70881cf12c7cbe49f1b6be8e94f6ca2aa8d4eb5dac2def83ecd"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v82b6d110b4d68e7c.json",
+      "path": "conformance/vectors-acs-core/vectors/v82b6d110b4d68e7c.json",
+      "gitBlob": "b0ed9eadaf6798916acbb367cba120a3223c0d48",
+      "bytes": 1406,
+      "sha256": "9b0fdd251df4b966bb7690959a69d2a2f50dd1247ba9ed1cac360319aaaa3e20"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v8557c978bf12ca55.json",
+      "path": "conformance/vectors-acs-core/vectors/v8557c978bf12ca55.json",
+      "gitBlob": "531aba5f5e19124b9c2c98a1c6fd44ee7cb4fe65",
+      "bytes": 610,
+      "sha256": "fda24c37c3d8bc357321d816d1dd03edccc519c7c6e771b4e1e6ecb953c05c9f"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v855c3b68b325eec1.json",
+      "path": "conformance/vectors-acs-core/vectors/v855c3b68b325eec1.json",
+      "gitBlob": "d0394874ca813d3c941a7c1a84a3dc3efe7c9e21",
+      "bytes": 1252,
+      "sha256": "119a6e6b842f24ce0eee9370c3366fbd29edc1a27d8fc32b1a258e35bc111466"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v986429a577e03404.json",
+      "path": "conformance/vectors-acs-core/vectors/v986429a577e03404.json",
+      "gitBlob": "7f2c205443a8ded9c135da8c18c0c2057b37a6ab",
+      "bytes": 1226,
+      "sha256": "d77f555225bda6126e0eef929936c363bc671c81d049147ed2604f14421b8c1c"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/v9f011986566cb7bc.json",
+      "path": "conformance/vectors-acs-core/vectors/v9f011986566cb7bc.json",
+      "gitBlob": "49ab9293747688a11c4109a0aed1d5f017e73d95",
+      "bytes": 1794,
+      "sha256": "09333eb7cd985ae51785b750a5872928a94bfaa01a4e1a7f1514b11409da19c5"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/va00ef569d09bf7d5.json",
+      "path": "conformance/vectors-acs-core/vectors/va00ef569d09bf7d5.json",
+      "gitBlob": "512736c55b71a8979ad5c7f7a01fd554afb18e0c",
+      "bytes": 1052,
+      "sha256": "a28722f1f237b984fae28dadcba9cafa87e75dbe8429e6f75064ab413160d20c"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/va0ee5d0830b0490b.json",
+      "path": "conformance/vectors-acs-core/vectors/va0ee5d0830b0490b.json",
+      "gitBlob": "4aa7069872608998d613fab224590cc93c1fda7a",
+      "bytes": 1198,
+      "sha256": "5af3ac2ac93301fde6aaad538320889b941846786e550786016711312dd9c782"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/va200b64093301e14.json",
+      "path": "conformance/vectors-acs-core/vectors/va200b64093301e14.json",
+      "gitBlob": "eaa77a85f0b32ff05dec4b9149db1be42f435cff",
+      "bytes": 1096,
+      "sha256": "5fff6985b922fe19aac94eced1f7588e98de8d469b18552584bc2b8e3437ecb1"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/va2fea96983583972.json",
+      "path": "conformance/vectors-acs-core/vectors/va2fea96983583972.json",
+      "gitBlob": "c8552f3e722b407ae8ebe3c3d72d070f4dc4c568",
+      "bytes": 593,
+      "sha256": "bf06b8ce556a461d1020b22f1accfb98f6283528e561768c090284ca1ae867f3"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/va6d6e952d417c5a1.json",
+      "path": "conformance/vectors-acs-core/vectors/va6d6e952d417c5a1.json",
+      "gitBlob": "f6a075122a2afa60547c777223a9b23bbc24a61e",
+      "bytes": 1026,
+      "sha256": "73bcd12f6b9fd1cb485387b38648a0dd8012125a5cfff4755aff1fb7e53341b8"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/va8eebd3334b97257.json",
+      "path": "conformance/vectors-acs-core/vectors/va8eebd3334b97257.json",
+      "gitBlob": "ac27afa6ff335144691743f8262140fd9c56c4d9",
+      "bytes": 1075,
+      "sha256": "095e1993f79feca244d3bf1edee818d33d9eca4da8cae64c421dd41c7e70d8b6"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vae2037ee96435463.json",
+      "path": "conformance/vectors-acs-core/vectors/vae2037ee96435463.json",
+      "gitBlob": "0428241561200d5969ff6d9e7239af75ccc075ef",
+      "bytes": 1952,
+      "sha256": "869803df6181fec861832847313035eb01c9a3668c0d0f6c5f72f144e2747c9f"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vb10df32610db1173.json",
+      "path": "conformance/vectors-acs-core/vectors/vb10df32610db1173.json",
+      "gitBlob": "bc5caec47e7aae750034c6428a7ad9c4832e6def",
+      "bytes": 1048,
+      "sha256": "1b11377984ac2db06d22cc071e52cc67de3a6779c1b07e96d72fb0a22ccbf7d8"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vb87b86b4930665ca.json",
+      "path": "conformance/vectors-acs-core/vectors/vb87b86b4930665ca.json",
+      "gitBlob": "0c864be893ec653d35b211126338811b29c7b2cf",
+      "bytes": 1000,
+      "sha256": "c7eb92b9b438804167a434bad80b5c53d8d663731a8873432ab28fb0d1ae83bc"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vc333473269d1b3a9.json",
+      "path": "conformance/vectors-acs-core/vectors/vc333473269d1b3a9.json",
+      "gitBlob": "1d8b1879c819178a14ed8ae85742df48b1736d83",
+      "bytes": 1378,
+      "sha256": "095bbc638731eedeee3679e268a0c227423cf483dcdd6e2bbdc0f0fa000164d9"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vd57793caa251dec6.json",
+      "path": "conformance/vectors-acs-core/vectors/vd57793caa251dec6.json",
+      "gitBlob": "c9a05ee586137e8d6d384cee8ca191ae081a485a",
+      "bytes": 692,
+      "sha256": "f209aef28c7bf545ddbac3f2a1cce844f34a301ac27aede136ae31597a2b5a0c"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vd67cd207a4eb6798.json",
+      "path": "conformance/vectors-acs-core/vectors/vd67cd207a4eb6798.json",
+      "gitBlob": "70de3c04b947956fa864cb547a144dd1133173e5",
+      "bytes": 1072,
+      "sha256": "5281caecb904250bed8275d02220d99e26dcf1c16ce1e2e0f3a2c7ea082a88df"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vd8ac84523a5a038c.json",
+      "path": "conformance/vectors-acs-core/vectors/vd8ac84523a5a038c.json",
+      "gitBlob": "ec2758e1e5c1c256a41daca9851f7e186b504031",
+      "bytes": 1151,
+      "sha256": "c1a74718513f31cadbbc04ee6a641910a374840fed142b2b55af61c92e63d175"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vef655ce2a45f618b.json",
+      "path": "conformance/vectors-acs-core/vectors/vef655ce2a45f618b.json",
+      "gitBlob": "8b974d1f972ed899012fc4f0f144eb727cfab188",
+      "bytes": 1743,
+      "sha256": "de32be74cac5cdf592258e35225e6c3aa3ff60cdf81727a068176d04fc5d36f8"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vf3679e6ac60fd250.json",
+      "path": "conformance/vectors-acs-core/vectors/vf3679e6ac60fd250.json",
+      "gitBlob": "6ea0cc9b350345936cce4fe3cc6abd527a509dc1",
+      "bytes": 1188,
+      "sha256": "21b3d7b4da9f68eec645f39228eac231aaedf627e3b12945d24e39da39bd3cde"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vf80a81054d3f0862.json",
+      "path": "conformance/vectors-acs-core/vectors/vf80a81054d3f0862.json",
+      "gitBlob": "aa80e3d50ef5db0499750bd73b7724cd1c2ec7fe",
+      "bytes": 885,
+      "sha256": "7152cc4915cd1f9e2a438c483a6caf781b67c846d9bbff548d554c5729d23dab"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vfcab242ddb38d018.json",
+      "path": "conformance/vectors-acs-core/vectors/vfcab242ddb38d018.json",
+      "gitBlob": "890c073fbb0da591900b6ce27fca25cdd074717f",
+      "bytes": 1031,
+      "sha256": "026faf76d7450412ef44b41680089d8d558d8582d935352213b98be66d1e6a6e"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vfdd68340c2094962.json",
+      "path": "conformance/vectors-acs-core/vectors/vfdd68340c2094962.json",
+      "gitBlob": "e51a9f5457116d7276a9bc1717f45efd516cc0ae",
+      "bytes": 1041,
+      "sha256": "b9652a6246edf1af18eab7efe1851f8a6b1d3d9a5ba25749e0a412bb831e5de0"
+    },
+    {
+      "upstreamPath": "vectors-acs-core/vectors/vff6b4d46f470f2ad.json",
+      "path": "conformance/vectors-acs-core/vectors/vff6b4d46f470f2ad.json",
+      "gitBlob": "0aaca03607c6a2e32badc067bf95cd9253fe7604",
+      "bytes": 1196,
+      "sha256": "4996f4f5e134b331c79889e8203f05d21a26590f10677bc8a1538a1a426c6849"
+    }
+  ]
+}
