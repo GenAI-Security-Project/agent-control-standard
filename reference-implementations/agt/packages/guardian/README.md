@@ -29,6 +29,8 @@ It constructs the AGT runtime once, at startup, against `policy/manifest.yaml`, 
 | `ACS_MANIFEST_PATH` | `policy/manifest.yaml` | The AGT manifest. `policy/manifest.drift.yaml` is the second manifest, used to reach the `warn` verdict |
 | `ACS_ENVELOPE_LOG` | `.acs/envelopes.jsonl` | Where every envelope is recorded |
 | `ACS_SESSION_CONTEXT_LOG` | `.acs/session-context.jsonl` | Where each session's hash chain is written |
+| `ACS_OTEL_FILE` | unset | Writes one OpenTelemetry span per decided step as OTLP/JSON, one export request per line. Unset means no trace export |
+| `ACS_OTEL_ENDPOINT` | unset | Sends the same spans to an OTLP/HTTP collector, for example `http://127.0.0.1:4318/v1/traces` |
 
 To see a decision without an agent client, pipe a hook payload into the Claude Code shim while the Guardian runs. The [tree README](../../README.md#drive-one-hook-by-hand) shows the command and its output.
 
@@ -46,6 +48,22 @@ To see a decision without an agent client, pipe a hook payload into the Claude C
 
 Every throw on the request path is caught. Nothing escapes the fetch handler, because an unhandled rejection would produce an HTML error page, the host's client would fail to parse it, and Claude Code would read the failed hook as "never fired" and proceed ungoverned.
 
+## Export traces
+
+Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter exists and the Guardian runs exactly as before.
+
+```bash
+ACS_OTEL_FILE=.acs/otel-traces.jsonl bun run guardian
+```
+
+Each decided step becomes one span, named by [`trace/otel-mapping.json`](../../../../specification/v0.1.0/trace/otel-mapping.json): `gen_ai.tool.call` for `steps/toolCallRequest` and `gen_ai.tool.result` for `steps/toolCallResult`. The span opens when the request is recorded and closes when the response is. It carries the attributes the mapping lists for it, read from the envelope, plus `acs.session.id` and `acs.request_id` on every span so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span also carries `acs.provenance.origin` and `acs.provenance.source_id` as arrays, one element per Provenance object in wire order. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
+
+The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision` and `acs.evaluator`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.chain_hash` appears only after a ContextEntry was written for the step. An envelope that fails validation is denied before that point and has none. `handshake/hello`, methods this Guardian does not dispatch, and unparseable bodies produce no span.
+
+The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian`. Spans are batched and flushed when the Guardian closes, so stop it with Ctrl-C rather than killing it. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
+
+Export never touches a decision. An exporter failure disables export for the rest of the process, prints one line on stderr, and the response goes out unchanged. Use synthetic sessions for lab runs: the envelope log holds raw envelopes before any redaction, and a span's `acs.reasoning` repeats the Guardian's explanation of them ([#71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
+
 ## Use it in-process
 
 The tests and the conformance harness start a Guardian in the same process.
@@ -58,7 +76,7 @@ const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.y
 await guardian.close();
 ```
 
-`StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog` and `onDecisionFailure`, which mirror the environment variables above, and four options for tests: `mappingPath`, `annotator`, `bridge` and `sessionContextStore`. Each is documented where it is declared, in `src/server.ts`.
+`StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog`, `otelTraceFile`, `otelTraceEndpoint` and `onDecisionFailure`, which mirror the environment variables above, and five options for tests: `mappingPath`, `annotator`, `bridge`, `sessionContextStore` and `traceExporter`. Each is documented where it is declared, in `src/server.ts`.
 
 The package has two entry points. `guardian` exports the governance verbs listed in `src/index.ts`. `guardian/deployment` exports `createDeploymentBridge`, the one function that builds the deployment's bridge with the egress annotator wired in. The conformance harness imports the second so it measures the bridge the Guardian ships, not a replica.
 
@@ -78,6 +96,7 @@ The package has two entry points. `guardian` exports the governance verbs listed
 | `src/deny-on-invalid-envelope.ts` | Turns a schema failure on a `steps/*` method into an honoured `deny` |
 | `src/session-context-store.ts`, `src/session-context.ts`, `src/ifc-labels.ts` | The per-session hash chain, provenance, and information-flow labels |
 | `src/envelope-log-sink.ts` | The envelope log writer |
+| `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter and its OTLP/JSON file writer |
 | `src/acs-result.ts` | The decision result type |
 
 ## The wire is not secured
@@ -90,4 +109,4 @@ The endpoint has no authentication, no origin check and no request signing. It b
 bun test packages/guardian
 ```
 
-Twelve files. Most start a real Guardian on port 0 and drive real envelopes through the pinned policy bundle. One test copies `src/` one directory deeper into a fixed scratch directory, so the relative schema path resolves to nothing. It proves that a missing schema directory becomes a recorded JSON-RPC error and never an HTML page. The scratch directories are gitignored and removed in a `finally`.
+Thirteen files. Most start a real Guardian on port 0 and drive real envelopes through the pinned policy bundle. One test copies `src/` one directory deeper into a fixed scratch directory, so the relative schema path resolves to nothing. It proves that a missing schema directory becomes a recorded JSON-RPC error and never an HTML page. The scratch directories are gitignored and removed in a `finally`.
