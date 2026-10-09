@@ -55,24 +55,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            shell: bash
-          - os: ubuntu-24.04-arm
-            shell: bash
-          - os: macos-15-intel
-            shell: bash
-          - os: macos-15
-            shell: bash
-          - os: windows-2022
-            shell: msys2 {0}
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     defaults:
       run:
         working-directory: reference-implementations/agt-go
-        shell: ${{ matrix.shell }}
+        shell: bash
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,14 +78,6 @@ jobs:
         with:
           go-version-file: reference-implementations/agt-go/go.mod
           cache-dependency-path: reference-implementations/agt-go/go.sum
-
-      - name: Install Windows build tools
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
-        with:
-          msystem: MINGW64
-          path-type: inherit
-          install: mingw-w64-x86_64-gcc make git curl jq openssl
 
       - name: Install Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
