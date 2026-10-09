@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import type { AgtVerdict } from "agt-bridge";
 
+export class ToolUnregisteredError extends Error {
+  override name = "ToolUnregisteredError" as const;
+}
+
 export type AcsModifications = {
   modified_content?: string;
   redactions?: { path: string; replacement?: string }[];
@@ -13,6 +17,19 @@ export type AcsDecision = {
   reason_codes?: string[];
   policy_references?: { policy_id: string; policy_version?: string; rule_id: string }[];
   modifications?: AcsModifications;
+  ask_details?: {
+    approver: { type: "human" | "agent" | "service"; id: string };
+    question: string;
+    timeout_seconds: number;
+    timeout_disposition?: "allow" | "deny";
+  };
+  defer_details?: {
+    reason: "insufficient_context" | "conflicting_policies" | "low_confidence" | "pending_dependency";
+    resolution_method: "additional_context" | "human_approval" | "timeout";
+    resolution_timeout_ms: number;
+    timeout_decision?: "deny" | "ask";
+    required_context?: string[];
+  };
 };
 
 type VerdictRule = {
@@ -216,7 +233,7 @@ export function resolvePolicyTargetArgument(
   }
 
   if (typeof table.default !== "string") {
-    throw new Error(
+    throw new ToolUnregisteredError(
       `mapping.yaml's intervention_points.${point}.policy_target_argument names no argument for tool ` +
         `${JSON.stringify(toolName)} and declares no usable "default"`,
     );
@@ -487,6 +504,15 @@ export function mapVerdict(
 
   if (rule.decision === "modify") {
     out.modifications = synthesizeModifications(verdict, mapping, point, policyTargetArgument);
+  }
+
+  if (rule.decision === "ask") {
+    out.ask_details = {
+      approver: { type: "human", id: "deployment-default" },
+      question: out.reasoning ?? "Approve this step?",
+      timeout_seconds: 300,
+      timeout_disposition: "deny",
+    };
   }
 
   return out;

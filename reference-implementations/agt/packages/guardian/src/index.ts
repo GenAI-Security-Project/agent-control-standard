@@ -74,3 +74,12 @@ export {
   type SessionProvenance,
 } from "./session-context-store.ts";
 export { persistIfcLabels, supplySourceLabels } from "./ifc-labels.ts";
+export {
+  jcsCanonicalise,
+  verifyHmacSha256,
+  signingInput,
+  deriveSessionKey,
+  signResponseHmacSha256,
+  responseSigningInput,
+} from "./verify-signature.ts";
+export { ToolUnregisteredError } from "./map-verdict.ts";

@@ -30,8 +30,8 @@
  * a Guardian that echoes back the wrong id, not a lookup table for concurrent
  * requests. The ACS layer is a separate claim: `result.request_id` names the
  * step the decision is ABOUT, and matching transport ids say nothing about
- * it -- a Guardian, or anything else that reaches an unauthenticated socket,
- * can answer with the right `id` and another step's decision. Both are
+ * it -- a buggy or compromised Guardian can answer with the right `id` and
+ * another step's decision. Both are
  * checked, and both are checked in `post`, so no caller can hold a response
  * that was never correlated.
  *
@@ -47,6 +47,7 @@
  */
 import type { AcsRequestEnvelope } from "./build-envelope.ts";
 import type { AcsDecision } from "./decision-message.ts";
+import { verifyResponseSignature } from "./sign-envelope.ts";
 
 /**
  * The minimal JSON-RPC 2.0 request shape this client sends -- the transport
@@ -74,7 +75,12 @@ export type JsonRpcErrorResponse = {
   jsonrpc: "2.0";
   id: string | number | null;
   result?: undefined;
-  error: { code: number; message: string; data?: unknown };
+  error: {
+    code: number;
+    message: string;
+    data?: unknown;
+    signature?: { algorithm: string; value: string; key_id: string };
+  };
 };
 
 export type JsonRpcResponse = JsonRpcSuccessResponse | JsonRpcErrorResponse;
@@ -102,6 +108,15 @@ export class GuardianResultCorrelationError extends Error {
       `GuardianClient.post: result.request_id ${JSON.stringify(resultRequestId)} does not correlate with the request's request_id ${JSON.stringify(requestId)}`,
     );
     this.name = "GuardianResultCorrelationError";
+  }
+}
+
+/** Thrown when a configured signed session receives a result whose Guardian
+ * signature is missing or invalid. */
+export class GuardianSignatureError extends Error {
+  constructor(reason: string) {
+    super(`GuardianClient.post: Guardian response signature is invalid: ${reason}`);
+    this.name = "GuardianSignatureError";
   }
 }
 
@@ -190,8 +205,12 @@ export type GuardianClient = {
   post(envelope: JsonRpcRequest, options?: PostOptions): Promise<JsonRpcResponse>;
 };
 
-/** Binds a Guardian's ACS endpoint and returns the client role for it. */
-export function createGuardianClient(url: string): GuardianClient {
+/** Binds a Guardian's ACS endpoint and returns the client role for it.
+ * Supplying `hmacSecret` makes every non-ping result or error require a valid
+ * per-session HMAC. The protocol's liveness ping is exempt in both directions. */
+export type GuardianClientOptions = { hmacSecret?: Buffer };
+
+export function createGuardianClient(url: string, clientOptions: GuardianClientOptions = {}): GuardianClient {
   async function post(envelope: JsonRpcRequest, options: PostOptions = {}): Promise<JsonRpcResponse> {
     const { timeoutMs } = options;
     let response: JsonRpcResponse;
@@ -219,6 +238,25 @@ export function createGuardianClient(url: string): GuardianClient {
         throw new GuardianTimeoutError(timeoutMs);
       }
       throw error;
+    }
+
+    // `system/ping` is the protocol's signature-exempt liveness channel.
+    // Exempt only a request whose own method is ping; deciding from the
+    // response shape would let a substituted ping bypass verification.
+    if (clientOptions.hmacSecret && envelope.method !== "system/ping") {
+      const metadata = envelope.params.metadata as Record<string, unknown> | undefined;
+      const sessionId = metadata?.session_id;
+      if (typeof sessionId !== "string") {
+        throw new GuardianSignatureError("request metadata carries no string session_id");
+      }
+      const verified = verifyResponseSignature(
+        response as unknown as Record<string, unknown>,
+        clientOptions.hmacSecret,
+        sessionId,
+      );
+      if (!verified.valid) {
+        throw new GuardianSignatureError(verified.reason);
+      }
     }
 
     // An error the Guardian could not address, let through to the caller

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startGuardian } from "../src/index.ts";
 import type { EnvelopeLogEntry } from "../src/envelope-log-sink.ts";
+import { fetchWithHandshake } from "../../../test/helpers/handshake.ts";
 
 function makeEnvelope(
   method: string,
@@ -33,6 +34,14 @@ function toolCallEnvelope(command: string, overrides: { id?: number } = {}) {
   );
 }
 
+const CLIENT_HELLO = {
+  acs_versions_supported: ["0.1.0"],
+  methods_implemented: ["steps/toolCallRequest", "steps/toolCallResult"],
+  transports_supported: ["http"],
+  provenance_producer: "none",
+  profiles_supported: ["acs-core"],
+};
+
 function readEntries(path: string): EnvelopeLogEntry[] {
   if (!existsSync(path)) {
     return [];
@@ -40,7 +49,9 @@ function readEntries(path: string): EnvelopeLogEntry[] {
   return readFileSync(path, "utf8")
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as EnvelopeLogEntry);
+    .map((line) => JSON.parse(line) as EnvelopeLogEntry)
+    // fetchWithHandshake's own pair; these tests are about the step's.
+    .filter((entry) => entry.rpc_id !== "handshake");
 }
 
 /** Non-recursive cleanup, as in envelope-log-sink.test.ts. */
@@ -69,7 +80,7 @@ async function withGuardian(
 }
 
 async function postRaw(url: string, body: string): Promise<unknown> {
-  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
+  const res = await fetchWithHandshake(url, { method: "POST", headers: { "content-type": "application/json" }, body });
   return await res.json();
 }
 
@@ -94,7 +105,7 @@ describe("Guardian envelope log wiring", () => {
 
   it("records handshake/hello in both directions", async () => {
     await withGuardian(logIn, async (url, logPath) => {
-      await postRaw(url, JSON.stringify(makeEnvelope("handshake/hello", {}, { id: 42 })));
+      await postRaw(url, JSON.stringify(makeEnvelope("handshake/hello", CLIENT_HELLO, { id: 42 })));
 
       const entries = readEntries(logPath);
       expect(entries.map((e) => e.direction)).toEqual(["request", "response"]);

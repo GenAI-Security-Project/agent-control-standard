@@ -78,9 +78,25 @@ describe("buildServerHello — negotiated posture", () => {
   it("still declares every ServerHello field handshake.json requires", () => {
     const hello = buildServerHello({});
     expect(Object.keys(hello).sort()).toEqual(
-      ["methods_evaluated", "negotiated_version", "on_decision_failure", "selected_transport", "timeout_config"],
+      [
+        "methods_evaluated",
+        "negotiated_version",
+        "on_decision_failure",
+        "profiles_accepted",
+        "selected_transport",
+        "signature_algorithms_supported",
+        "skew_window_ms",
+        "timeout_config",
+      ],
     );
     expect(hello.timeout_config.default_ms).toBe(5000);
+    expect(hello.skew_window_ms).toBe(300_000);
+    expect(hello.profiles_accepted).toEqual([]);
+    expect(hello.signature_algorithms_supported).toEqual([]);
+  });
+
+  it("advertises HMAC only when the deployment has key material", () => {
+    expect(buildServerHello({}, { hmacEnabled: true }).signature_algorithms_supported).toEqual(["HMAC-SHA256"]);
   });
 });
 
