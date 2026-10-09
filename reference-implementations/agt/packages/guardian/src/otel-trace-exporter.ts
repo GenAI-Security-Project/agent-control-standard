@@ -8,7 +8,7 @@
  *
  * What the mapping does not say is which envelope field feeds which
  * attribute. That is the one piece of knowledge this module adds, in the
- * three source tables below, written once by hand. An attribute the mapping
+ * four source tables below, written once by hand. An attribute the mapping
  * names and no table knows is not emitted, and nothing is invented to fill a
  * slot the wire did not carry -- a required attribute the envelope lacks is
  * simply absent, which is itself a fact worth seeing.
@@ -74,6 +74,12 @@ type OtelMappingSchema = {
         conditional_attributes: { default: string[] };
       };
     };
+    provenance_attributes: {
+      properties: {
+        required: { default: string[] };
+        optional: { default: string[] };
+      };
+    };
   };
 };
 
@@ -84,15 +90,20 @@ export type OtelMapping = {
    * are read the same way -- emitted when a value is present -- so one list
    * serves. */
   decisionAttributes: string[];
+  /** Required first, then optional -- carried on a step span whose payload
+   * has a Provenance object attached, as the mapping's own text says. */
+  provenanceAttributes: string[];
 };
 
 export function loadOtelMapping(path: string = OTEL_MAPPING_PATH): OtelMapping {
   const schema = JSON.parse(readFileSync(path, "utf8")) as OtelMappingSchema;
   const decision = schema.properties.decision_event.properties;
+  const provenance = schema.properties.provenance_attributes.properties;
   return {
     stepToSpan: schema.properties.step_to_span.default,
     decisionEventName: decision.event_name.const,
     decisionAttributes: [...decision.required_attributes.default, ...decision.conditional_attributes.default],
+    provenanceAttributes: [...provenance.required.default, ...provenance.optional.default],
   };
 }
 
@@ -231,6 +242,66 @@ const DECISION_DETAIL_SOURCES: Record<string, Source<ResultParts>> = {
   "acs.cited_provenance_ids": (d) => asStrings(d.result.cited_provenance_ids),
   "acs.chain_hash": (d) => asString(d.result.chain_hash),
 };
+
+/**
+ * Attribute name -> which field of a Provenance object (`provenance.json`)
+ * it reads. Unlike the tables above, each of these becomes a COLUMN: one
+ * array per attribute, one element per Provenance object the payload
+ * carries, in wire order. A span has one value per attribute key, and a
+ * payload can carry several Provenance objects -- one per argument -- so an
+ * array is the only shape that keeps every object visible; the i-th element
+ * of each column describes the i-th object, and `acs.provenance.origin` is
+ * always complete because provenance.json requires `origin`.
+ *
+ * `acs.provenance.lineage_depth` is in the mapping's optional list and has
+ * no entry here. provenance.json defines no lineage_depth field, so there is
+ * nothing on the wire to read it from, and deriving one (from the length of
+ * `derived_from`, say) would be a value nobody sent.
+ */
+const PROVENANCE_ATTRIBUTE_SOURCES: Record<string, (provenance: JsonObject) => string | undefined> = {
+  "acs.provenance.origin": (p) => asString(p.origin),
+  "acs.provenance.source_id": (p) => asString(p.source_id),
+};
+
+/** The Provenance objects a payload carries, in wire order: one per
+ * argument that has one, in the order the parsed object holds them, then one
+ * per output that has one, in array order. "Parsed" order rather than the
+ * bytes' order because `JSON.parse` has already hoisted integer-like
+ * argument names ahead of the rest (envelope-log-sink.ts notes `{"0": ...}`
+ * is a real shape), so this is the order every reader of the envelope log
+ * sees too. The two never meet on one payload -- the request gate carries
+ * `arguments`, the result gate `outputs` -- and an argument or output
+ * without one contributes nothing. */
+function provenanceObjects(payload: JsonObject): JsonObject[] {
+  const carriers: unknown[] = [
+    ...Object.values(asObject(payload.arguments) ?? {}),
+    ...(Array.isArray(payload.outputs) ? payload.outputs : []),
+  ];
+  const found: JsonObject[] = [];
+  for (const carrier of carriers) {
+    const provenance = asObject(asObject(carrier)?.provenance);
+    if (provenance !== undefined) {
+      found.push(provenance);
+    }
+  }
+  return found;
+}
+
+/** One column over every Provenance object, only when every object carries
+ * the field -- the rule policyColumn applies, for the same reason: a column
+ * with a gap cannot be read by position against `acs.provenance.origin`, and
+ * a placeholder would be a value nobody sent. */
+function provenanceColumn(objects: JsonObject[], read: (provenance: JsonObject) => string | undefined): string[] | undefined {
+  const column: string[] = [];
+  for (const object of objects) {
+    const value = read(object);
+    if (value === undefined) {
+      return undefined;
+    }
+    column.push(value);
+  }
+  return column;
+}
 
 function collect<Parts>(into: Attributes, names: Iterable<string>, sources: Record<string, Source<Parts>>, parts: Parts): void {
   for (const name of names) {
@@ -420,6 +491,16 @@ export function createOtelTraceExporter({
     const attributes: Attributes = {};
     collect(attributes, Object.keys(CORRELATION_ATTRIBUTE_SOURCES), CORRELATION_ATTRIBUTE_SOURCES, parts);
     collect(attributes, [...entry.required_attributes, ...(entry.optional_attributes ?? [])], STEP_ATTRIBUTE_SOURCES, parts);
+    const provenance = provenanceObjects(parts.payload);
+    if (provenance.length > 0) {
+      for (const name of mapping.provenanceAttributes) {
+        const read = PROVENANCE_ATTRIBUTE_SOURCES[name];
+        const column = read === undefined ? undefined : provenanceColumn(provenance, read);
+        if (column !== undefined) {
+          attributes[name] = column;
+        }
+      }
+    }
     return { span: tracer.startSpan(entry.span_name, { attributes, root: true }) };
   }
 

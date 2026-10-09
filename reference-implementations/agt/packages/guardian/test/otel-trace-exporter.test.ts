@@ -52,6 +52,12 @@ function toolCallEnvelope(command: string, overrides: { id?: number | null; requ
   );
 }
 
+/** A Provenance object as provenance.json defines it: `provenance_id` and
+ * `origin` required, everything else optional. */
+function provenance(origin: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { provenance_id: crypto.randomUUID(), origin, ...extra };
+}
+
 function decisionResponse(id: number, result: Record<string, unknown>): Record<string, unknown> {
   return { jsonrpc: "2.0", id, result: { type: "final", acs_version: "0.1.0", request_id: "r-1", ...result } };
 }
@@ -259,6 +265,80 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     }
   });
 
+  it("carries provenance facts as one column per attribute, one element per Provenance object, in argument order", async () => {
+    const { exporter, spans } = memoryExporter();
+    const request = makeEnvelope(
+      "steps/toolCallRequest",
+      {
+        tool: { name: "run_shell" },
+        capability: "process.exec",
+        arguments: {
+          command: { value: "ls", provenance: provenance("user_input", { source_id: "user-1" }) },
+          cwd: { value: "/tmp", provenance: provenance("tool_output", { source_id: "run_shell" }) },
+          // No provenance: contributes no element to any column.
+          flags: { value: "-la" },
+        },
+      },
+      { id: 1 },
+    );
+    exporter.end(exporter.start(request, "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+    await exporter.flush();
+
+    const attributes = spans()[0]?.attributes;
+    expect(attributes?.["acs.provenance.origin"]).toEqual(["user_input", "tool_output"]);
+    expect(attributes?.["acs.provenance.source_id"]).toEqual(["user-1", "run_shell"]);
+  });
+
+  it("keeps acs.provenance.origin and drops an optional column any Provenance object lacks", async () => {
+    const { exporter, spans } = memoryExporter();
+    const request = makeEnvelope(
+      "steps/toolCallRequest",
+      {
+        tool: { name: "run_shell" },
+        arguments: {
+          command: { value: "ls", provenance: provenance("user_input", { source_id: "user-1" }) },
+          cwd: { value: "/tmp", provenance: provenance("system") },
+        },
+      },
+      { id: 1 },
+    );
+    exporter.end(exporter.start(request, "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+    await exporter.flush();
+
+    const attributes = spans()[0]?.attributes;
+    expect(attributes?.["acs.provenance.origin"]).toEqual(["user_input", "system"]);
+    expect(attributes?.["acs.provenance.source_id"]).toBeUndefined();
+  });
+
+  it("carries no provenance attribute when nothing in the payload has one", async () => {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+    await exporter.flush();
+
+    const attributes = spans()[0]?.attributes ?? {};
+    expect(Object.keys(attributes).filter((key) => key.startsWith("acs.provenance."))).toEqual([]);
+  });
+
+  it("reads output provenance on the result gate the same way, in array order", async () => {
+    const { exporter, spans } = memoryExporter();
+    const request = makeEnvelope(
+      "steps/toolCallResult",
+      {
+        tool: { name: "Bash" },
+        exit_status: "success",
+        outputs: [{ value: "a", provenance: provenance("tool_output", { source_id: "Bash" }) }, { value: "b" }],
+      },
+      { id: 1 },
+    );
+    exporter.end(exporter.start(request, "steps/toolCallResult"), decisionResponse(1, { decision: "allow" }));
+    await exporter.flush();
+
+    const [span] = spans();
+    expect(span?.name).toBe(MAPPING.stepToSpan["steps/toolCallResult"]!.span_name);
+    expect(span?.attributes["acs.provenance.origin"]).toEqual(["tool_output"]);
+    expect(span?.attributes["acs.provenance.source_id"]).toEqual(["Bash"]);
+  });
+
   it("NULL_OTEL_TRACE_EXPORTER writes nothing and never throws", async () => {
     expect(NULL_OTEL_TRACE_EXPORTER.start(toolCallEnvelope("ls"), "steps/toolCallRequest")).toBeNull();
     expect(() => NULL_OTEL_TRACE_EXPORTER.end(null, decisionResponse(1, DENY))).not.toThrow();
@@ -358,6 +438,30 @@ describe("Guardian trace export wiring", () => {
       expect(attributes?.["acs.decision"]).toBe("deny");
       expect(attributes?.["acs.reason_codes"]).toEqual(["envelope_invalid"]);
       expect(attributes?.["acs.chain_hash"]).toBeUndefined();
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("carries the provenance a real envelope's argument attaches", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    try {
+      const envelope = makeEnvelope(
+        "steps/toolCallRequest",
+        {
+          tool: { name: "run_shell" },
+          arguments: { command: { value: "ls -la", provenance: provenance("user_input", { source_id: "user-12345" }) } },
+        },
+        { id: 31 },
+      );
+      const response = await postRaw(guardian.url, envelope);
+      await exporter.flush();
+
+      expect((response.result as { decision?: string }).decision).toBe("allow");
+      const [span] = spans();
+      expect(span?.attributes["acs.provenance.origin"]).toEqual(["user_input"]);
+      expect(span?.attributes["acs.provenance.source_id"]).toEqual(["user-12345"]);
     } finally {
       await guardian.close();
     }
