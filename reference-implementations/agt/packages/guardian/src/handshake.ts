@@ -71,7 +71,7 @@ const NEGOTIATED_VERSION = "0.1.0";
  * predicate exists, not that dispatch actually reaches it. The test verifies
  * what the code cannot.
  */
-const METHODS_EVALUATED = ["steps/toolCallRequest", "steps/toolCallResult"];
+export const METHODS_EVALUATED = ["steps/toolCallRequest", "steps/toolCallResult"];
 
 /**
  * Deployment-chosen default; handshake.json's timeout_config.default_ms
