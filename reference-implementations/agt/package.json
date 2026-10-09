@@ -9,6 +9,7 @@
     "verify:pin": "bash scripts/verify-pin.sh",
     "verify:zero-diff": "bash scripts/verify-zero-diff.sh",
     "conformance": "bash scripts/run-conformance.sh",
+    "conformance:guardian": "bun run packages/conformance/src/main.ts",
     "watch:upstream": "bash scripts/run-upstream-watch.sh",
     "guardian": "bun run packages/guardian/src/main.ts",
     "inspector": "bun run packages/inspector/src/main.ts"

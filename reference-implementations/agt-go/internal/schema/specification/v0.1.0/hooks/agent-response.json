@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agent-response.json",
+  "title": "steps/agentResponse payload",
+  "description": "Payload for the agentResponse hook. Fires when the agent's response is ready, before reaching the user.",
+  "type": "object",
+  "required": ["content"],
+  "properties": {
+    "content": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["type", "value"],
+        "properties": {
+          "type": { "type": "string", "enum": ["text", "image", "audio", "file"] },
+          "value": {},
+          "provenance": {
+            "$ref": "../provenance.json",
+            "description": "OPTIONAL in the base schema; REQUIRED on every content item under provenance_producer: deterministic (ACS-Provenance). Validate against agent-response.acs-provenance.json when the profile is claimed. See Specification section 7."
+          }
+        }
+      }
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "Optional natural-language rationale produced by the agent"
+    }
+  }
+}

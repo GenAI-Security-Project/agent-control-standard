@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/provenance.json",
+  "title": "ACS Provenance",
+  "description": "Factual lineage label attached to data-bearing fields. Populated by deterministic framework code at channel boundaries, never by the LLM. Provenance attachment is OPTIONAL at the field level; when a Provenance object is emitted, all required fields below MUST be populated. v0.1 carries factual provenance (origin, source_id, derived_from) on the wire; trust classification is performed by the Guardian against local policy keyed on origin and source_id, and is not a v0.1 schema field. The spec (§7.1) reserves an OPTIONAL `trust` enum for vendor implementations that elect to carry classification on the wire; such implementations extend this schema rather than rely on v0.1 to validate the field.",
+  "type": "object",
+  "required": ["provenance_id", "origin"],
+  "properties": {
+    "provenance_id": {
+      "type": "string",
+      "description": "Unique identifier for this provenance node within the session"
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "user_input",
+        "system",
+        "tool_output",
+        "retrieved",
+        "agent_generated",
+        "a2a_inbound",
+        "external"
+      ],
+      "description": "Where this data entered the system"
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Identifier within the origin (tool name, URL, file path, retrieval source). Combined with origin, this is what Guardians key trust classification on in v0.1."
+    },
+    "derived_from": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Lineage edges. Array of provenance_ids this data was derived from."
+    }
+  }
+}

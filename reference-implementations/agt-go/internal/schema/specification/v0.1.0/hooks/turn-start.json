@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-start.json",
+  "title": "steps/turnStart payload",
+  "description": "Fires at the beginning of an agent turn. Lightweight — most policies will return 'allow' and use the hook for state transitions in policy. Decision-eligible (a Guardian MAY deny to block the turn from starting, e.g., to enforce a per-turn rate limit or to refuse auto-continuation under certain conditions). The framework MUST set metadata.turn_id on the envelope and propagate that turn_id onto every subsequent per-step ContextEntry until the matching turnEnd. Without an explicit turn boundary, AARM-style 'no consequential action in N turns after taint' has to infer turn breaks from userMessage/agentResponse pairing — an inference that breaks under auto-continuation, planning loops, and multi-step ReAct cycles.",
+  "type": "object",
+  "required": ["turn_id", "triggered_by"],
+  "properties": {
+    "turn_id": {
+      "type": "string",
+      "description": "Identifier for this turn. SHOULD equal the request_id of this turnStart envelope. Carried forward on metadata.turn_id of every step until turnEnd."
+    },
+    "triggered_by": {
+      "type": "string",
+      "enum": ["user_message", "auto_continuation", "agent_loop", "subagent_return", "scheduled", "external_event"],
+      "description": "What opened this turn. 'user_message' = a userMessage was just received and the agent will respond. 'auto_continuation' = a Stop hook elsewhere returned a continuation directive. 'agent_loop' = the agent decided on its own to start another turn (planning loop, ReAct, etc.). 'subagent_return' = a subagent returned and the parent is resuming. 'scheduled' / 'external_event' = a non-user trigger fired."
+    },
+    "parent_turn_id": {
+      "type": "string",
+      "description": "Optional. Identifier of the enclosing turn when turns nest. Typical case: a parent agent is in the middle of a turn that spawns a subagent (which has its own session and its own turn) and is awaiting the subagent's return; the subagent's first turn carries parent_turn_id pointing at the parent's open turn."
+    },
+    "expected_inputs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional. Hint about what the framework expects to happen during this turn (e.g., ['userMessage','toolCallRequest','agentResponse']). Lets policies prepare expectations and detect unexpected sequences."
+    }
+  }
+}

@@ -312,7 +312,8 @@ The audit log and the envelope log cannot be joined on `session_id`. The audit l
 
 ## The scenarios the tests check
 
-The suite has 68 test files. Most of them drive a real Guardian, the real host shim and the pinned policy bundle. The scenarios below are grouped by what they prove. The file names are the place to read the exact assertions.
+The suite has 69 test files. Most tests use a real Guardian, the host shim, and the pinned policy bundle.
+The scenarios below are grouped by the behavior under test. Read each test file for the exact assertions.
 
 **Policy decisions over the wire**
 

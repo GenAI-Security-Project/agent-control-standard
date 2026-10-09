@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/ask-details.json",
+  "title": "ACS ASK Details",
+  "description": "Approver descriptor and prompt details. Required when decision is 'ask'.",
+  "type": "object",
+  "required": ["approver", "question", "timeout_seconds"],
+  "properties": {
+    "approver": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["human", "agent", "service"]
+        },
+        "id": { "type": "string" },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI for agent or service approvers"
+        },
+        "auth": {
+          "type": "object",
+          "description": "Authentication descriptor for non-human approvers",
+          "properties": {
+            "method": { "type": "string", "enum": ["bearer", "mtls"] }
+          }
+        }
+      }
+    },
+    "question": { "type": "string" },
+    "context": { "type": "string" },
+    "options": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "timeout_seconds": { "type": "integer", "minimum": 1 },
+    "timeout_disposition": {
+      "type": "string",
+      "enum": ["allow", "deny"],
+      "default": "deny"
+    },
+    "intent_extension": {
+      "type": "object",
+      "description": "Optional. Present when the ASK is being raised because the requested action is outside the current Intent.parsed and the approver's grant should extend the Intent. The approver's response (in approval-request semantics) carries the same shape; on grant, the Guardian appends these capabilities to Intent.parsed and writes a ContextEntry with step_type='intent_extension'. Required for IBAC dynamic operation: without it, ASK can only approve a single decision and Intent cannot grow within a session, breaking the IBAC escalation flow.",
+      "required": ["capabilities", "scope"],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "tool": { "type": "string" },
+              "operation": { "type": "string" },
+              "resource": { "type": "string" }
+            },
+            "description": "Capability tuples to add to Intent.parsed. Same shape as Intent.parsed entries in agent-trigger.json."
+          }
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["this_request", "session"],
+          "description": "'this_request' = capabilities apply only to the in-flight request, not added to Intent.parsed. 'session' = capabilities are added to Intent.parsed for the remainder of the session."
+        },
+        "provenance": {
+          "$ref": "provenance.json",
+          "description": "Provenance attached to the extension. origin SHOULD identify the approver (typically 'user_input' for human approvers, 'agent_generated' for agent approvers, 'external' for service approvers). source_id SHOULD identify the specific approver. Lets auditors distinguish parser-derived capabilities from approver-extended ones."
+        }
+      }
+    }
+  }
+}

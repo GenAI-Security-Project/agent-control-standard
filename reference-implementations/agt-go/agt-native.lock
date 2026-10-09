@@ -1,0 +1,17 @@
+{
+  "agt_repo": "https://github.com/microsoft/agent-governance-toolkit",
+  "agt_ref": "81955d48025c6b11deb3fc9dabf89f74f4145775",
+  "workspace_path": "policy-engine",
+  "crate": "agent_control_specification_core",
+  "crate_version": "0.3.1-beta.0",
+  "cargo_features": ["default-dispatchers"],
+  "rust_toolchain": "1.99.0",
+  "opa_version": "0.70.0",
+  "opa_sha256": {
+    "linux-amd64": "00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084",
+    "linux-arm64": "48061407a2d7b0b59440fc3a257e7bb251e9ec62f6ce7b1e45c142263ae24413",
+    "darwin-amd64": "7827172827c6c7763fd36dd72052c318a6beb18f7b907c5e67d847bb557af1a1",
+    "darwin-arm64": "267608fe41dba91fb23e2a69a439cb2a39710b3a069a828c744bd99bb3f94508",
+    "windows-amd64": "19d00eea60477a8f983c20af690fedcc8da52aef81922e570b27538ca88305a4"
+  }
+}

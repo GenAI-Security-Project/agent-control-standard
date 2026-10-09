@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/post-compact.json",
+  "title": "steps/postCompact payload",
+  "description": "Fires after compaction has occurred. The hook is audit + provenance-binding: the Guardian records the new summary's content and lineage, and MAY return 'modify' to rewrite or further redact the summary, but MUST NOT return 'deny' — compaction has already happened and the audit chain MUST record the post-compact state. Provenance on the summary is normative on origin and derived_from: origin MUST be 'agent_generated', and derived_from MUST equal the union of provenance_ids of every entry in entries_compacted. The framework — not the LLM — populates derived_from. The Guardian projects this lineage onto its own trust classification in policy (v0.1 does not carry a trust field on the wire — see §7.1); the integrity property the Guardian MUST enforce is the standard monotonicity rule, namely that the summary's effective trust cannot exceed the minimum effective trust of its derived_from entries. No amount of LLM processing launders untrusted-classified data into trusted-classified data.",
+  "type": "object",
+  "required": ["summary", "entries_compacted", "pre_compact_chain_hash", "post_compact_chain_hash"],
+  "properties": {
+    "summary": {
+      "type": "object",
+      "required": ["value", "provenance"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "description": "The post-compaction summary text."
+        },
+        "provenance": {
+          "$ref": "../provenance.json",
+          "description": "MUST have origin='agent_generated' and derived_from = union of provenance_ids of every entry in entries_compacted. Conformant frameworks MUST compute this deterministically; the LLM MUST NOT be given the opportunity to forge or relabel it. Trust classification is computed by the Guardian against local policy and is not carried in this v0.1 wire object (see §7.1); the Guardian MUST enforce the monotonicity property that the summary's effective trust does not exceed the minimum effective trust of its derived_from lineage."
+        }
+      }
+    },
+    "entries_compacted": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "The step_ids that were summarized. SHOULD equal the entries_to_compact from the matching steps/preCompact (modulo a Guardian-modified set if the preCompact returned 'modify' to scope the compaction)."
+    },
+    "pre_compact_chain_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The chain_hash at the moment compaction began (i.e., the chain_hash of the most recent ContextEntry written before this hook). Required for chain-replay verification: a verifier can check that the entries between this hash and post_compact_chain_hash correspond to the entries_compacted list."
+    },
+    "post_compact_chain_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The chain_hash after this postCompact ContextEntry is written. The next per-step ContextEntry will have previous_hash equal to this value."
+    },
+    "lineage_depth_after": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. The summary's max lineage depth, computed as max(depth) + 1 over the depths of entries in derived_from. Lets policies bound 'how many compactions deep is this summary' without recomputing the chain."
+    }
+  }
+}

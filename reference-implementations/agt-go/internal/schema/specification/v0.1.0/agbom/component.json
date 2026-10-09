@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/component.json",
+  "title": "ACS AgBOM Component",
+  "description": "Single component in an Agent Bill of Materials. Discriminated by 'type'. Every component carries provenance of its registration so AgBOM mutations are traceable in the same lineage system as data flow.",
+  "type": "object",
+  "required": ["id", "type"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier for this component within the AgBOM. SHOULD remain stable across version upgrades of the same logical component, so 'changed' diffs reference an unchanging id."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["model", "mcp_server", "a2a_peer", "tool", "knowledge_source", "memory_store", "agent_capability", "skill"],
+      "description": "Component type. Drives which type-specific fields are required."
+    },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "provider": { "type": "string" },
+    "endpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "URI per Section 3.11 (file:///, posix:///, https://, etc.)."
+    },
+    "registration_provenance": {
+      "$ref": "../provenance.json",
+      "description": "Provenance of how this component entered the AgBOM. origin SHOULD be 'system' for framework/configuration registrations and 'user_input' / 'tool_output' for runtime-discovered or user-installed components."
+    },
+    "model_fields": {
+      "type": "object",
+      "description": "Required when type='model'.",
+      "required": ["context_window"],
+      "properties": {
+        "context_window": { "type": "integer", "minimum": 0 },
+        "args": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Snapshot of model configuration (temperature, top_p, system prompt hash, etc.) at registration time."
+        }
+      }
+    },
+    "mcp_server_fields": {
+      "type": "object",
+      "description": "Required when type='mcp_server'.",
+      "required": ["tools"],
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Component ids of tool components exposed by this MCP server."
+        }
+      }
+    },
+    "a2a_peer_fields": {
+      "type": "object",
+      "description": "Required when type='a2a_peer'.",
+      "required": ["protocol_version"],
+      "properties": {
+        "protocol_version": { "type": "string" },
+        "agent_card_ref": { "type": "string", "format": "uri" }
+      }
+    },
+    "tool_fields": {
+      "type": "object",
+      "description": "Required when type='tool'.",
+      "required": ["capability"],
+      "properties": {
+        "capability": {
+          "type": "string",
+          "description": "Abstract capability per Section 3.11 (e.g., filesystem.delete, network.egress, process.execute)."
+        }
+      }
+    },
+    "knowledge_source_fields": {
+      "type": "object",
+      "description": "Required when type='knowledge_source'.",
+      "required": ["source_type"],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": ["vector_db", "search_index", "knowledge_base", "web_search", "other"]
+        },
+        "schema_ref": { "type": "string", "format": "uri" }
+      }
+    },
+    "memory_store_fields": {
+      "type": "object",
+      "description": "Required when type='memory_store'.",
+      "required": ["scope", "store_type"],
+      "properties": {
+        "scope": { "type": "string", "enum": ["session", "user", "tenant", "global"] },
+        "store_type": { "type": "string" },
+        "path": { "type": "string", "format": "uri" },
+        "window_size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "agent_capability_fields": {
+      "type": "object",
+      "description": "Required when type='agent_capability'. References to other components in the same AgBOM by id.",
+      "required": ["description"],
+      "properties": {
+        "description": { "type": "string" },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "mcp_servers": { "type": "array", "items": { "type": "string" } },
+        "a2a_peers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "skill_fields": {
+      "type": "object",
+      "description": "Required when type='skill'. A skill is loadable executable content that composes lower-level components into a higher-level ability. Composition references reuse the agent_capability shape; definition and declared_capabilities are what a skill adds. A skill differs from an agent_capability in carrying a definition artifact, the surface attackers poison. The spec persists only its reference and integrity digest, never its body (see steps/skillRegister for where the body is inspected).",
+      "required": ["description", "definition"],
+      "properties": {
+        "description": { "type": "string" },
+        "definition": {
+          "type": "object",
+          "description": "Reference and integrity digest for the skill's COMPLETE loadable artifact, including any bundled or fetched model files, adapters, or other binary assets, not only text. The body itself MUST NOT be required on the wire. Only the reference and digest persist in the AgBOM; the full body is available for inspection in the transient steps/skillRegister payload. A model-bearing skill, whose backdoor can live in opaque weights rather than readable instructions, is governed here through the digest and registration_provenance rather than source inspection.",
+          "required": ["ref", "digest"],
+          "properties": {
+            "ref": { "type": "string", "format": "uri", "description": "URI of the complete loadable skill artifact per Section 3.11 (file:///, https://, etc.), including any bundled model files or adapters." },
+            "digest": {
+              "type": "object",
+              "description": "Integrity digest over the complete loadable artifact, not only its text. Lets a Guardian detect tampering between registration and load, and bind a steps/skillLoad to the exact artifact vetted at steps/skillRegister via the (skill_id, digest) pair.",
+              "required": ["algorithm", "value"],
+              "properties": {
+                "algorithm": { "type": "string", "enum": ["sha-256", "sha-512"] },
+                "value": { "type": "string" }
+              }
+            }
+          }
+        },
+        "declared_capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Abstract capabilities the skill declares it needs (e.g., filesystem.write, network.egress): the skill's least-privilege manifest. A Guardian SHOULD compare this against the union of capabilities exposed by the composed tools and MAY deny a skill that declares more than it composes."
+        },
+        "tools": { "type": "array", "items": { "type": "string" }, "description": "Component ids of tools this skill composes." },
+        "mcp_servers": { "type": "array", "items": { "type": "string" }, "description": "Component ids of MCP servers this skill composes." },
+        "a2a_peers": { "type": "array", "items": { "type": "string" }, "description": "Component ids of A2A peers this skill composes." },
+        "models": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Component ids of model components this skill bundles. A model-bearing skill, one shipping learned weights where a backdoor can live in opaque parameters rather than any readable instruction, references its bundled model here so the AgBOM inventories it as a first-class 'model' component carrying its own registration_provenance. The whole-artifact definition.digest already binds those weights; listing the model here makes it visible to inventory and load-time policy instead of hidden inside the opaque definition body, which is the provenance-sensitive handling a model-bearing skill needs. A bundled artifact that does not fit the 'model' component's contract (no served endpoint, no language-model context window) is still covered by definition.digest and registration_provenance over the whole skill."
+        },
+        "composed_skills": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Component ids of other skills this skill is permitted to load. A skill that loads a skill outside this declared set at runtime SHOULD be denied at steps/skillLoad. This is the containment boundary for inter-skill cascades (A loads B loads C)."
+        }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "model" } }, "required": ["type"] }, "then": { "required": ["name", "version", "provider", "endpoint", "model_fields"] } },
+    { "if": { "properties": { "type": { "const": "mcp_server" } }, "required": ["type"] }, "then": { "required": ["name", "version", "endpoint", "mcp_server_fields"] } },
+    { "if": { "properties": { "type": { "const": "a2a_peer" } }, "required": ["type"] }, "then": { "required": ["endpoint", "a2a_peer_fields"] } },
+    { "if": { "properties": { "type": { "const": "tool" } }, "required": ["type"] }, "then": { "required": ["name", "version", "provider", "tool_fields"] } },
+    { "if": { "properties": { "type": { "const": "knowledge_source" } }, "required": ["type"] }, "then": { "required": ["name", "knowledge_source_fields"] } },
+    { "if": { "properties": { "type": { "const": "memory_store" } }, "required": ["type"] }, "then": { "required": ["name", "memory_store_fields"] } },
+    { "if": { "properties": { "type": { "const": "agent_capability" } }, "required": ["type"] }, "then": { "required": ["name", "agent_capability_fields"] } },
+    { "if": { "properties": { "type": { "const": "skill" } }, "required": ["type"] }, "then": { "required": ["name", "skill_fields"] } }
+  ]
+}

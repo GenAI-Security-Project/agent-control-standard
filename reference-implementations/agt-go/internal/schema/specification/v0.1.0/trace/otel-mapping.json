@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json",
+  "title": "ACS Trace → OpenTelemetry semconv mapping",
+  "description": "Normative mapping from ACS hooks and decisions to OpenTelemetry spans and span events. v0.1.0 conformance requires that a deployment emitting OTel for the Trace pillar uses these span names and required attributes verbatim. Decisions are recorded as span events on the parent step span, not as separate spans, so that the enforcement verdict and the action it gates share a parent and an OTel context.",
+  "type": "object",
+  "properties": {
+    "step_to_span": {
+      "type": "object",
+      "description": "Map ACS step methods to OTel span names + required attributes.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["span_name", "required_attributes"],
+        "properties": {
+          "span_name": { "type": "string" },
+          "required_attributes": { "type": "array", "items": { "type": "string" } },
+          "optional_attributes": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "default": {
+        "steps/sessionStart": {
+          "span_name": "acs.session",
+          "required_attributes": ["acs.session.id"],
+          "optional_attributes": ["acs.tenant_id", "acs.user.id", "acs.policy_mode"]
+        },
+        "steps/agentTrigger": {
+          "span_name": "acs.agent.trigger",
+          "required_attributes": ["acs.agent.id", "acs.trigger.type"]
+        },
+        "steps/userMessage": {
+          "span_name": "acs.message.user",
+          "required_attributes": ["acs.session.id", "acs.content.types"]
+        },
+        "steps/agentResponse": {
+          "span_name": "acs.message.agent",
+          "required_attributes": ["acs.session.id", "acs.agent.id"]
+        },
+        "steps/toolCallRequest": {
+          "span_name": "gen_ai.tool.call",
+          "required_attributes": ["gen_ai.tool.name", "acs.capability"],
+          "optional_attributes": ["acs.tool.provider", "acs.tool.version", "acs.operation"]
+        },
+        "steps/toolCallResult": {
+          "span_name": "gen_ai.tool.result",
+          "required_attributes": ["gen_ai.tool.name", "acs.exit_status"],
+          "optional_attributes": ["acs.duration_ms", "acs.request_id_ref"]
+        },
+        "steps/knowledgeRetrieval": {
+          "span_name": "acs.knowledge.retrieval",
+          "required_attributes": ["acs.source.type", "acs.results.count"]
+        },
+        "steps/memoryStore": {
+          "span_name": "acs.memory.store",
+          "required_attributes": ["acs.memory_store.name", "acs.operation"]
+        },
+        "steps/memoryContextRetrieval": {
+          "span_name": "acs.memory.retrieval",
+          "required_attributes": ["acs.memory_store.name", "acs.results.count"]
+        },
+        "steps/sessionEnd": {
+          "span_name": "acs.session.end",
+          "required_attributes": ["acs.session.reason"]
+        },
+        "steps/turnStart": {
+          "span_name": "acs.turn",
+          "required_attributes": ["acs.turn.id", "acs.turn.triggered_by"],
+          "optional_attributes": ["acs.turn.parent_id"]
+        },
+        "steps/turnEnd": {
+          "span_name": "acs.turn.end",
+          "required_attributes": ["acs.turn.id", "acs.turn.outcome"],
+          "optional_attributes": ["acs.turn.step_count"]
+        },
+        "steps/preCompact": {
+          "span_name": "acs.compact",
+          "required_attributes": ["acs.compact.entry_count", "acs.compact.triggered_by"],
+          "optional_attributes": ["acs.compact.estimated_input_tokens"]
+        },
+        "steps/postCompact": {
+          "span_name": "acs.compact.complete",
+          "required_attributes": ["acs.compact.entry_count"],
+          "optional_attributes": ["acs.compact.lineage_depth_after", "acs.provenance.origins_compacted"]
+        },
+        "steps/subagentStart": {
+          "span_name": "acs.subagent",
+          "required_attributes": ["acs.subagent.session_id", "acs.subagent.parent_session_id", "acs.subagent.intent_derivation"]
+        },
+        "steps/subagentStop": {
+          "span_name": "acs.subagent.end",
+          "required_attributes": ["acs.subagent.session_id", "acs.subagent.outcome", "acs.subagent.final_chain_hash"]
+        },
+        "agbom/snapshot": {
+          "span_name": "acs.agbom",
+          "required_attributes": ["acs.agbom.format", "acs.agbom.component_count"]
+        },
+        "agbom/changed": {
+          "span_name": "acs.agbom",
+          "required_attributes": ["acs.agbom.format", "acs.agbom.change_reason"]
+        }
+      }
+    },
+    "decision_event": {
+      "type": "object",
+      "description": "Decisions are recorded as a span event named 'acs.decision' on the parent step span. The event MUST carry the disposition and evaluator; reasoning and confidence are required when present in the decision envelope.",
+      "properties": {
+        "event_name": { "type": "string", "const": "acs.decision" },
+        "required_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.decision", "acs.evaluator"]
+        },
+        "conditional_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.reasoning", "acs.confidence", "acs.evaluator_version", "acs.model_id"]
+        }
+      }
+    },
+    "provenance_attributes": {
+      "type": "object",
+      "description": "When Provenance is attached to a hook payload, the resulting span MUST carry provenance facts as attributes. Lineage edges MAY be linked via OTel span links keyed by provenance_id. v0.1 emits the factual provenance fields (origin, source_id, lineage_depth) on the wire and on the span; trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see §7.1).",
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.provenance.origin"]
+        },
+        "optional": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.provenance.lineage_depth", "acs.provenance.source_id"]
+        }
+      }
+    }
+  }
+}

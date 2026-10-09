@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-start.json",
+  "title": "steps/subagentStart payload",
+  "description": "Fires when a parent agent spawns a subagent in-process — i.e., delegation that does NOT cross an A2A boundary. A2A-mediated delegation flows through steps/agentTrigger with trigger_type='a2a_inbound' on the subagent's side; subagentStart is for the same-runtime case. The audit chain must record whether the subagent inherits the parent's Intent.parsed, gets a derived intent, or starts fresh — and a Guardian MAY deny the spawn if intent_derivation would grant capabilities the parent's Intent.parsed does not authorize. Sessions are per-subagent: each subagent gets its own session_id and SessionContext; the parent–child relation is captured here.",
+  "type": "object",
+  "required": ["subagent_session_id", "parent_session_id", "parent_step_id", "intent_derivation"],
+  "properties": {
+    "subagent_session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Fresh session identifier for the spawned subagent. Distinct from the envelope's metadata.session_id, which is the parent's session. The subagent's own steps/* hooks will carry this id in their envelope metadata.session_id."
+    },
+    "parent_session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session id of the parent. Lets cross-session policies and audit replay reconstruct the spawn relationship."
+    },
+    "parent_step_id": {
+      "type": "string",
+      "description": "step_id of the parent's hook that triggered the spawn (typically a steps/toolCallRequest for a delegation tool, or a steps/agentResponse that the framework interpreted as a spawn directive)."
+    },
+    "intent_derivation": {
+      "type": "string",
+      "enum": ["inherit_full", "inherit_subset", "derived_from_parent", "fresh"],
+      "description": "How the subagent's Intent.parsed relates to the parent's. 'inherit_full' = identical capability set (subagent can do anything the parent can). 'inherit_subset' = strict subset (subagent_intent.parsed MUST be a subset of parent's parsed; the Guardian SHOULD verify). 'derived_from_parent' = the parent emitted a parsed delegation directive that the framework's intent parser turned into the subagent's intent (parser_provenance MUST cite the parent step_id). 'fresh' = the subagent has its own user-derived Intent (typically only valid when the spawn was triggered by user-routed input)."
+    },
+    "subagent_intent": {
+      "type": "object",
+      "description": "The Intent that will govern the subagent. Same shape as the Intent in agent-trigger.json. parser_provenance is REQUIRED — for 'derived_from_parent', parser_provenance.derived_from MUST include the parent_step_id. The Guardian MAY deny the spawn if subagent_intent grants capabilities outside the parent's Intent.parsed when intent_derivation='inherit_subset'.",
+      "properties": {
+        "raw": { "type": "string" },
+        "parsed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tool": { "type": "string" },
+              "operation": { "type": "string" },
+              "resource": { "type": "string" }
+            }
+          }
+        },
+        "parser_provenance": { "$ref": "../provenance.json" },
+        "scope_mode": {
+          "type": "string",
+          "enum": ["strict", "moderate", "permissive"]
+        }
+      },
+      "if": { "required": ["parsed"] },
+      "then": { "required": ["parser_provenance"] }
+    },
+    "subagent_descriptor": {
+      "type": "object",
+      "description": "Optional descriptor of the subagent itself — its agent_id, model, framework version, etc. SHOULD be populated when the subagent is a distinct named component the deployment can identify (e.g., a research subagent, a coding subagent).",
+      "properties": {
+        "agent_id": { "type": "string" },
+        "agent_name": { "type": "string" },
+        "model_id": { "type": "string" }
+      }
+    }
+  }
+}

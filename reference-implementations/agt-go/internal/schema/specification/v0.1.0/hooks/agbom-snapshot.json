@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-snapshot.json",
+  "title": "agbom/snapshot payload",
+  "description": "Full Agent Bill of Materials snapshot. Emitted by the Observed Agent once per session, after sessionStart and before any content-bearing hook fires; also re-emitted after any handshake renegotiation. Disposition is normally 'allow'; Guardians MAY return 'deny' to refuse a session whose component graph contains a banned model, tool, peer, or knowledge source. agbom/snapshot MUST be written into the SessionContext audit chain (the AgBOM is part of the session's security-relevant history).",
+  "type": "object",
+  "required": ["agbom"],
+  "properties": {
+    "agbom": {
+      "$ref": "../agbom/document.json",
+      "description": "The canonical AgBOM document. Serializations (CycloneDX, SPDX, SWID) are derivations the Guardian produces for downstream consumers."
+    },
+    "trigger": {
+      "type": "string",
+      "enum": ["session_start", "renegotiation", "policy_request"],
+      "description": "Why this snapshot is being emitted. 'session_start' is the normal first-snapshot case; 'renegotiation' follows handshake renegotiation; 'policy_request' is a Guardian-initiated re-snapshot if the spec ever adds Guardian-to-Observed query (v0.2)."
+    }
+  }
+}

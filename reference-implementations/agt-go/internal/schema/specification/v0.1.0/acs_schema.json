@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/acs_schema.json",
+  "title": "ACS Schema (v0.1.0 aggregator)",
+  "description": "Aggregator manifest for the modular ACS v0.1.0 JSON Schema package. Each subschema lives as its own file under specification/v0.1.0/ and carries an $id under https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/...; this file lists the package contents and cross-references them via relative $ref so a single document can be loaded as the entry point. Validators that need a self-contained bundle should resolve $ref by loading the referenced files; validators that follow $id can ignore this aggregator and load the modular files directly.",
+  "version": "0.1.0",
+
+  "$defs": {
+    "RequestEnvelope":      { "$ref": "../v0.1.0/request-envelope.json" },
+    "ResponseEnvelope":     { "$ref": "../v0.1.0/response-envelope.json" },
+    "Handshake":            { "$ref": "../v0.1.0/handshake.json" },
+    "Provenance":           { "$ref": "../v0.1.0/provenance.json" },
+    "ProvenanceSummary":    { "$ref": "../v0.1.0/provenance-summary.json" },
+    "ContextEntry":         { "$ref": "../v0.1.0/context-entry.json" },
+    "AskDetails":           { "$ref": "../v0.1.0/ask-details.json" },
+    "DeferDetails":         { "$ref": "../v0.1.0/defer-details.json" },
+    "Modifications":        { "$ref": "../v0.1.0/modifications.json" },
+
+    "Hook_SessionStart":           { "$ref": "../v0.1.0/hooks/session-start.json" },
+    "Hook_SessionEnd":             { "$ref": "../v0.1.0/hooks/session-end.json" },
+    "Hook_AgentTrigger":           { "$ref": "../v0.1.0/hooks/agent-trigger.json" },
+    "Hook_TurnStart":              { "$ref": "../v0.1.0/hooks/turn-start.json" },
+    "Hook_TurnEnd":                { "$ref": "../v0.1.0/hooks/turn-end.json" },
+    "Hook_UserMessage":            { "$ref": "../v0.1.0/hooks/user-message.json" },
+    "Hook_AgentResponse":          { "$ref": "../v0.1.0/hooks/agent-response.json" },
+    "Hook_KnowledgeRetrieval":     { "$ref": "../v0.1.0/hooks/knowledge-retrieval.json" },
+    "Hook_MemoryContextRetrieval": { "$ref": "../v0.1.0/hooks/memory-context-retrieval.json" },
+    "Hook_MemoryStore":            { "$ref": "../v0.1.0/hooks/memory-store.json" },
+    "Hook_ToolCallRequest":        { "$ref": "../v0.1.0/hooks/tool-call-request.json" },
+    "Hook_ToolCallResult":         { "$ref": "../v0.1.0/hooks/tool-call-result.json" },
+    "Hook_PreCompact":             { "$ref": "../v0.1.0/hooks/pre-compact.json" },
+    "Hook_PostCompact":            { "$ref": "../v0.1.0/hooks/post-compact.json" },
+    "Hook_SubagentStart":          { "$ref": "../v0.1.0/hooks/subagent-start.json" },
+    "Hook_SubagentStop":           { "$ref": "../v0.1.0/hooks/subagent-stop.json" },
+    "Hook_SkillRegister":          { "$ref": "../v0.1.0/hooks/skill-register.json" },
+    "Hook_SkillLoad":              { "$ref": "../v0.1.0/hooks/skill-load.json" },
+    "Hook_SkillUnload":            { "$ref": "../v0.1.0/hooks/skill-unload.json" },
+    "Hook_SystemPing":             { "$ref": "../v0.1.0/hooks/system-ping.json" },
+    "Hook_AgbomSnapshot":          { "$ref": "../v0.1.0/hooks/agbom-snapshot.json" },
+    "Hook_AgbomChanged":           { "$ref": "../v0.1.0/hooks/agbom-changed.json" },
+
+    "AgBOMComponent":   { "$ref": "../v0.1.0/agbom/component.json" },
+    "AgBOMDocument":    { "$ref": "../v0.1.0/agbom/document.json" },
+
+    "InspectFormatMapping": { "$ref": "../v0.1.0/inspect/format-mapping.json" },
+    "TraceOtelMapping":     { "$ref": "../v0.1.0/trace/otel-mapping.json" },
+    "TraceOcsfMapping":     { "$ref": "../v0.1.0/trace/ocsf-mapping.json" }
+  },
+
+  "oneOf": [
+    { "$ref": "#/$defs/RequestEnvelope" },
+    { "$ref": "#/$defs/ResponseEnvelope" }
+  ]
+}
