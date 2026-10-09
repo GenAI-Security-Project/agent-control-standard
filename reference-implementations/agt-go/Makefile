@@ -45,7 +45,10 @@ AGT_CGO := CGO_ENABLED=1 CGO_LDFLAGS='-L$(AGT_DIR)/lib $(RPATH)' GOFLAGS='$(AGT_
 BUILD_ENV := $(if $(filter agt,$(EVALUATOR)),$(AGT_CGO),CGO_ENABLED=0)
 BUILD_TAGS := $(if $(filter agt,$(EVALUATOR)),-tags agteval,)
 
-.PHONY: all help setup agt-native build dev-secret run test test-race host-target image image-check example-runtime codex-example opencode-example require-bun require-conformance-deps example-check conformance fmt fmt-check vet lint vulncheck tidy-check coverage docs-check check
+check-start = $(if $(ACS_CHECK_PROGRESS),@printf '[check] RUN: %s\n' '$(1)')
+check-pass = $(if $(ACS_CHECK_PROGRESS),@printf '[check] PASS: %s\n' '$(1)')
+
+.PHONY: all help setup agt-native build dev-secret run test test-race host-target image image-check example-runtime codex-example opencode-example require-bun require-conformance-deps example-check conformance fmt fmt-check vet lint vulncheck tidy-check coverage docs-check native-flags-check native-flags check check-all
 
 all: build
 
@@ -73,15 +76,19 @@ setup: host-target require-bun agt-native
 	cd ../agt && bun install --frozen-lockfile
 
 agt-native:
+	$(call check-start,AGT runtime)
 	scripts/build-agt-native.sh
+	$(call check-pass,AGT runtime)
 
 build: $(if $(filter agt,$(EVALUATOR)),agt-native,)
+	$(call check-start,Build ($(EVALUATOR)))
 	mkdir -p $(OUTPUT_DIR)
 	$(BUILD_ENV) $(GO) build $(BUILD_TAGS) ./...
 	$(BUILD_ENV) $(GO) build $(BUILD_TAGS) -o $(ACS_GUARDIAN_BIN) ./cmd/guardian
 ifeq ($(EVALUATOR),agt)
 	cp $(AGT_DIR)/lib/* $(OUTPUT_DIR)/
 endif
+	$(call check-pass,Build ($(EVALUATOR)))
 
 dev-secret:
 	mkdir -p .acs
@@ -92,13 +99,19 @@ run: example-runtime
 	ACS__POLICY__EVALUATOR=$(EVALUATOR) ACS__POLICY__OPA_PATH=$(AGT_DIR)/bin exec $(ACS_GUARDIAN_BIN) --config guardian.yaml
 
 test: host-target $(if $(filter agt,$(EVALUATOR)),agt-native,)
+	$(call check-start,Tests ($(EVALUATOR)))
 	$(BUILD_ENV) $(GO) test -count=1 $(if $(filter agt,$(EVALUATOR)),-race,) $(BUILD_TAGS) ./...
+	$(call check-pass,Tests ($(EVALUATOR)))
 
 test-race: host-target
+	$(call check-start,Go race tests)
 	CGO_ENABLED=1 $(GO) test -count=1 -race ./...
+	$(call check-pass,Go race tests)
 
 host-target:
+	$(call check-start,Host target)
 	@test '$(TARGET)' = "$$($(GO) env GOHOSTOS)-$$($(GO) env GOHOSTARCH)" || { printf '%s\n' 'run and test require the host GOOS and GOARCH'; exit 1; }
+	$(call check-pass,Host target)
 
 image:
 	mkdir -p .acs
@@ -126,44 +139,80 @@ opencode-example: example-runtime
 	scripts/run-host-example.sh opencode
 
 example-check: example-runtime require-bun
-	cd examples/custom-engine && $(GO) vet ./... && $(GO) test ./...
+	$(call check-start,Examples)
+	cd examples/custom-engine && $(GO) test ./...
 	$(GO) test ./examples/codex/cmd/acs-codex-hook
 	$(GO) test ./examples/opencode/cmd/acs-opencode-hook
 	$(GO) build -o .acs/bin/acs-opencode-hook ./examples/opencode/cmd/acs-opencode-hook
 	ACS_HOST_EXAMPLE_PORT=0 scripts/run-host-example.sh bun test examples/opencode/plugin.test.mjs
 	bash -n scripts/run-host-example.sh
+	$(call check-pass,Examples)
 
 conformance: example-runtime require-bun require-conformance-deps
+	$(call check-start,ACS conformance)
 	ACS_OPA_PATH='$(AGT_DIR)/bin/opa$(EXE)' scripts/check-common-conformance.sh
+	$(call check-pass,ACS conformance)
 
 fmt:
 	$(GO) fmt ./...
 
 fmt-check:
+	$(call check-start,Formatting)
 	@unformatted="$$(gofmt -l $$(find . -type f -name '*.go' -not -path './vendor/*' -not -path './.acs/*'))"; \
 	test -z "$$unformatted" || { printf '%s\n' "$$unformatted"; exit 1; }
+	$(call check-pass,Formatting)
 
 vet:
+	$(call check-start,Go vet)
 	$(GO) vet ./...
 	$(AGT_CGO) $(GO) vet -tags agteval ./...
+	cd examples/custom-engine && $(GO) vet ./...
+	$(call check-pass,Go vet)
 
 lint:
-	$(GO) run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
-	$(AGT_CGO) $(GO) run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -tags agteval ./...
+	$(call check-start,Linter)
+	$(GO) tool staticcheck ./...
+	$(AGT_CGO) $(GO) tool staticcheck -tags agteval ./...
+	checker="$$($(GO) tool -n staticcheck)" && cd examples/custom-engine && "$$checker" ./...
+	$(call check-pass,Linter)
 
 vulncheck:
+	$(call check-start,Vulnerability scan)
 	$(GO) tool govulncheck ./...
+	$(AGT_CGO) $(GO) tool govulncheck -tags agteval ./...
+	scanner="$$($(GO) tool -n govulncheck)" && cd examples/custom-engine && "$$scanner" ./...
+	$(call check-pass,Vulnerability scan)
 
 tidy-check:
+	$(call check-start,Module dependencies)
 	$(GO) mod tidy -diff
+	cd examples/custom-engine && $(GO) mod tidy -diff
+	$(call check-pass,Module dependencies)
 
 coverage:
+	$(call check-start,Coverage)
 	scripts/check-coverage.sh
+	$(call check-pass,Coverage)
 
 docs-check:
+	$(call check-start,Documentation)
 	$(GO) run ./cmd/docs-check
+	$(call check-pass,Documentation)
 
-check: host-target fmt-check tidy-check vet lint vulncheck build test-race test example-check conformance coverage docs-check
+native-flags-check:
+	$(call check-start,Native flags (five platforms))
+	@set -e; platforms="$$(jq -er '.opa_sha256 | keys[]' agt-native.lock)"; for platform in $$platforms; do \
+		$(MAKE) native-flags GOOS=$${platform%-*} GOARCH=$${platform##*-}; \
+	done
+	$(call check-pass,Native flags (five platforms))
+
+native-flags:
+	$(AGT_CGO) $(GO) build -n -tags agteval -o .acs/native-flags-guardian$(EXE) ./cmd/guardian
+
+check:
+	@bash scripts/check.sh '$(MAKE)'
+
+check-all: host-target fmt-check tidy-check native-flags-check vet lint vulncheck build test-race test example-check conformance coverage docs-check
 	$(MAKE) build EVALUATOR=go
 	$(MAKE) test EVALUATOR=go
 ifneq ($(EVALUATOR),agt)

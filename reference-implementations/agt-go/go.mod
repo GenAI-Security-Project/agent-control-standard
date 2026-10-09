@@ -1,6 +1,6 @@
 module github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
@@ -12,7 +12,7 @@ require (
 	github.com/open-policy-agent/opa v1.20.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.yaml.in/yaml/v3 v3.0.5
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 )

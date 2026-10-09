@@ -5,12 +5,11 @@ Agent Governance Toolkit (AGT) runtime in the Guardian process.
 Both reference implementations use the same checked-in [AGT policies](../agt/README.md).
 An optional build uses a Go reproduction of the runtime without cgo.
 
-Forty-nine sessions recorded from the TypeScript reference produce the same
-dispositions, reason codes, policy references, reasoning and modifications here, through
-each evaluator (`agtbridge.TestRecordedCases`). `agtbridge.TestEvaluatorsAgree` also
-compares the two evaluators step by step. That is parity on the behavior those sessions
-cover. [Conformance](docs/conformance.md) maps each
-ACS-Core item to the tests that cover it.
+Both evaluators match 49 sessions recorded from the TypeScript reference (`agtbridge.TestRecordedCases`).
+The comparison covers dispositions, reason codes, policy references, reasoning, and modifications.
+`agtbridge.TestEvaluatorsAgree` also compares the evaluators at each step.
+These tests establish parity for the recorded behavior.
+[Conformance](docs/conformance.md) maps each ACS-Core item to its tests.
 
 ## Start here
 
@@ -41,8 +40,8 @@ ACS-Core item to the tests that cover it.
 ## Quick start
 
 The AGT build supports Linux amd64 and arm64, both Mac architectures, and Windows amd64.
-The build requires Go 1.27.1 or newer
-and a C compiler. Install Make, OpenSSL, Git, curl, jq and [rustup](https://rustup.rs).
+The build requires Go 1.27.2 or newer and a C compiler.
+Install Make, OpenSSL, Git, curl, jq, and [rustup](https://rustup.rs).
 The quality gate also requires Bun 1.3.11 or newer.
 
 The AGT evaluator is the default. The first build compiles AGT's runtime library
@@ -135,8 +134,8 @@ http.Handle("/acs", g)
   `guardian.MemorySessionContextStore`, and a nil `AuditLog` records nothing.
 - Mount the Guardian as an `http.Handler` at your own route, or call
   `Guardian.Handle(ctx, body)` from any transport.
-- Put what you resolve from the request, a tenant or an endpoint, in `ctx`. The Guardian
-  passes `ctx` to all four interfaces and never reads it.
+- Put request, tenant, or endpoint context in `ctx`.
+  The Guardian passes `ctx` to all four interfaces without reading its values.
 - To plug in your own engine, store, signer or audit log, see
   [extend the Guardian](docs/extending.md).
 - [`examples/custom-engine`](examples/custom-engine/) is its own Go module. Until it
@@ -160,11 +159,18 @@ Then run:
 make check
 ```
 
+The command prints each check's name at the start and adds `PASS` when the check completes.
+CI and redirected output use separate start and result lines.
+The final result includes the path to a dated `.log` file in `.acs/checks/`.
+If a check fails, the command prints the last 80 log lines and returns a nonzero exit code.
+The ACS report in the log also describes standard limitations. Its cross symbols do not indicate failed tests.
+
 `make check` is the complete quality gate:
 
-- Check formatting and module tidiness.
+- Check formatting and both modules' dependency files.
+- Check Go's cgo flag rules for all five native targets.
 - Run `go vet` and Staticcheck with and without the `agteval` tag.
-- Run `govulncheck`.
+- Run `govulncheck` with and without the `agteval` tag.
 - Build every package with AGT and without cgo.
 - Run every Go test without cgo.
 - Run every Go test with the race detector, with and without AGT.
@@ -172,6 +178,9 @@ make check
 - Check the custom-engine module and OpenCode plugin callbacks.
 - Run the shared ACS conformance checks against a live Guardian using AGT.
 - Enforce the coverage floor and check documentation.
+
+Staticcheck and govulncheck use the dependencies pinned in `go.mod`.
+The custom-engine module uses the same tool binaries for its checks.
 
 `make docs-check` checks local file links and qualified Go test names in every
 Markdown file in this module. It also requires a test for each conformance row
@@ -199,12 +208,13 @@ the TypeScript recordings and requires Bun.
   [differences](docs/differences.md#measured-policy-limits).
 - Every request except `system/ping` must be signed. The signature row in
   [conformance](docs/conformance.md) says which answers are signed.
-- The module ships no container, no Inspector and no Claude Code example.
+- The module includes no Inspector or Claude Code example.
 
 ## License
 
 Apache License 2.0; see [`../../LICENSING.md`](../../LICENSING.md). The AGT
-policy files remain under their MIT license. AGT's runtime library is built from
-AGT's MIT-licensed source on your machine and is not part of this repository. The RFC 8785 vectors under
-`internal/jcs/testdata/` come from the RFC author's reference implementation
-under Apache License 2.0.
+policy files retain their MIT license.
+The build compiles AGT's runtime library from MIT-licensed source.
+This repository does not include a compiled AGT library.
+The RFC 8785 vectors in `internal/jcs/testdata/` use Apache License 2.0.
+The vectors come from the RFC author's reference implementation.

@@ -1,6 +1,6 @@
 module github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/examples/custom-engine
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go v0.0.0

@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS go
+FROM --platform=$BUILDPLATFORM golang:1.27.2-bookworm AS go
 FROM --platform=$BUILDPLATFORM rust:1.99.0-bookworm AS build
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"

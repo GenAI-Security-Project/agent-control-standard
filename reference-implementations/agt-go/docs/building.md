@@ -73,5 +73,8 @@ Mount writable storage at `/data` to retain audit files after the container stop
 CI defines a complete gate on Linux amd64, Linux arm64, Windows amd64, Intel Mac, and Apple Silicon.
 A workflow definition does not establish a successful run. Verify the platform job results before publishing.
 Cross-builds establish compilation only. Wine checks Windows execution without replacing a real Windows runner.
+`make check` checks Go's cgo flag rules for all five targets without executing their build commands.
+This validation does not link native libraries or run target binaries.
+`go list` shows selected flags but does not validate the flags.
 The CLI tests accept `ACS_TEST_GUARDIAN_BINARY` to exercise a previously compiled binary on its target.
 The variable changes the test artifact only. It does not skip startup, decisions, or shutdown checks.
