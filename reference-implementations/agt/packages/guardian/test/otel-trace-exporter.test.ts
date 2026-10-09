@@ -96,6 +96,29 @@ async function postRaw(url: string, body: unknown): Promise<Record<string, unkno
 
 const baseOptions = { port: 0, manifestPath: "policy/manifest.yaml" } as const;
 
+/** The OTLP/JSON `ExportTraceServiceRequest` shape, as far as these tests
+ * read it: resource attributes, and span names and events. */
+type OtlpAttribute = { key: string; value: { stringValue?: string } };
+type OtlpSpan = { name: string; events?: { name: string }[] };
+type OtlpRequest = {
+  resourceSpans: {
+    resource: { attributes: OtlpAttribute[] };
+    scopeSpans: { spans: OtlpSpan[] }[];
+  }[];
+};
+
+function otlpSpans(requests: OtlpRequest[]): OtlpSpan[] {
+  return requests.flatMap((r) => r.resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans)));
+}
+
+/** Every line of an OTLP/JSON file, parsed. */
+function otlpFile(path: string): OtlpRequest[] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as OtlpRequest);
+}
+
 describe("createOtelTraceExporter -- what one exchange becomes", () => {
   it("names the span from the live mapping and carries every required attribute the wire supplied", async () => {
     const { exporter, spans } = memoryExporter();
@@ -262,6 +285,63 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     } finally {
       unlinkSync(blocker);
       rmdirSync(dir);
+    }
+  });
+
+  // The lab reads the file. A collector that is down, restarting or
+  // answering 4xx must cost the endpoint and nothing else: every span still
+  // reaches the file, and the endpoint is reported once.
+  it("keeps writing the file when the HTTP collector rejects every export, and reports that output once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-isolated-"));
+    const path = join(dir, "traces.jsonl");
+    const collector = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("bad request", { status: 400 }) });
+    const errors: unknown[] = [];
+    const exporter = createOtelTraceExporter({
+      filePath: path,
+      endpoint: `http://127.0.0.1:${collector.port}/v1/traces`,
+      methodsEvaluated: METHODS_EVALUATED,
+      onError: (error) => errors.push(error),
+    });
+    try {
+      for (const id of [1, 2, 3]) {
+        exporter.end(exporter.start(toolCallEnvelope("ls", { id }), "steps/toolCallRequest"), decisionResponse(id, { decision: "allow" }));
+        await exporter.flush();
+      }
+      await exporter.shutdown();
+
+      expect(otlpSpans(otlpFile(path)).map((span) => span.name)).toEqual([
+        TOOL_CALL_SPAN.span_name,
+        TOOL_CALL_SPAN.span_name,
+        TOOL_CALL_SPAN.span_name,
+      ]);
+      expect(errors).toHaveLength(1);
+    } finally {
+      collector.stop(true);
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  });
+
+  it("sends one OTLP/JSON request over HTTP whose span is named by the mapping", async () => {
+    const bodies: OtlpRequest[] = [];
+    const collector = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        bodies.push((await req.json()) as OtlpRequest);
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    const exporter = createOtelTraceExporter({ endpoint: `http://127.0.0.1:${collector.port}/v1/traces`, methodsEvaluated: METHODS_EVALUATED });
+    try {
+      exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+      await exporter.flush();
+      await exporter.shutdown();
+
+      expect(bodies).toHaveLength(1);
+      expect(otlpSpans(bodies).map((span) => span.name)).toEqual([TOOL_CALL_SPAN.span_name]);
+    } finally {
+      collector.stop(true);
     }
   });
 
@@ -519,18 +599,9 @@ describe("Guardian trace export wiring", () => {
     }
     try {
       expect(existsSync(path)).toBe(true);
-      const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.trim() !== "");
-      expect(lines.length).toBeGreaterThan(0);
-
-      type OtlpAttribute = { key: string; value: { stringValue?: string } };
-      type OtlpRequest = {
-        resourceSpans: {
-          resource: { attributes: OtlpAttribute[] };
-          scopeSpans: { spans: { name: string; events?: { name: string }[] }[] }[];
-        }[];
-      };
-      const requests = lines.map((line) => JSON.parse(line) as OtlpRequest);
-      const spans = requests.flatMap((r) => r.resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans)));
+      const requests = otlpFile(path);
+      expect(requests.length).toBeGreaterThan(0);
+      const spans = otlpSpans(requests);
       expect(spans.map((s) => s.name)).toEqual([TOOL_CALL_SPAN.span_name, TOOL_CALL_SPAN.span_name]);
       expect(spans.every((s) => s.events?.some((e) => e.name === MAPPING.decisionEventName))).toBe(true);
       const serviceName = requests[0]?.resourceSpans[0]?.resource.attributes.find((a) => a.key === "service.name");

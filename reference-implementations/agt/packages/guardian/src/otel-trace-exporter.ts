@@ -27,12 +27,19 @@
  * handed NULL_OTEL_TRACE_EXPORTER and behaves exactly as before.
  *
  * Total by construction, as envelope-log-sink.ts is. Every entry point is
- * wrapped: a failure disables export for the process lifetime and reports
- * once, and nothing propagates into or delays the decision path. Ended spans
- * go to a BatchSpanProcessor, so serialisation and I/O happen off the
- * request's own turn. Observability degrades; governance does not.
+ * wrapped, and nothing propagates into or delays the decision path. Each
+ * output fails on its own: the first failed or throwing export disables
+ * that output alone, reports once under its label, and reaches the
+ * processor as a success, so a collector that is down, restarting or
+ * answering 4xx cannot reject a flush and take the file down with it -- the
+ * lab reads the file. A broken mapping or a bug inside start/end still
+ * disables everything, once. Ended spans go to one BatchSpanProcessor per
+ * output and the file is appended asynchronously, so serialisation and I/O
+ * happen off the request's own turn. Observability degrades; governance
+ * does not.
  */
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SpanStatusCode, type Attributes, type AttributeValue, type Span, type Tracer } from "@opentelemetry/api";
@@ -358,61 +365,129 @@ export type CreateOtelTraceExporterOptions = {
   methodsEvaluated: readonly string[];
   /** Overrides the mapping file. Defaults to the repository's own. */
   mappingPath?: string;
-  /** Called at most once, on the first failure. Defaults to one stderr line. */
+  /** Called at most once per output, on that output's first failure, and
+   * at most once more for a failure of the exporter as a whole (a mapping
+   * that will not load, a bug inside start or end). Defaults to one stderr
+   * line each. */
   onError?: (error: unknown) => void;
 };
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 /**
  * Writes OTLP/JSON, one `ExportTraceServiceRequest` per line -- the shape
  * the OpenTelemetry Collector's file exporter writes -- serialised by the
- * official JsonTraceSerializer rather than by hand. Reports a failed write
- * through the result callback; the processor above routes it to `fail`.
+ * official JsonTraceSerializer rather than by hand.
+ *
+ * The append is asynchronous: this exporter runs on the same event loop the
+ * Guardian answers requests on, and a synchronous write would hold every
+ * in-flight decision for the duration of the disk I/O. Writes are chained on
+ * one promise so lines land in export order even when two batches are in
+ * flight, and `forceFlush` and `shutdown` await the chain so a close never
+ * leaves a batch unwritten. The chain itself never rejects: one failed write
+ * is reported through its own batch's callback and cannot poison every write
+ * after it.
  */
 export function createFileSpanExporter(path: string): SpanExporter {
   mkdirSync(dirname(path), { recursive: true });
+  let chain: Promise<void> = Promise.resolve();
   return {
     export(spans, resultCallback): void {
+      let line: string;
       try {
         const bytes = JsonTraceSerializer.serializeRequest(spans);
         if (bytes === undefined) {
           throw new Error("JsonTraceSerializer produced no request");
         }
-        appendFileSync(path, `${new TextDecoder().decode(bytes)}\n`);
-        resultCallback({ code: ExportResultCode.SUCCESS });
+        line = `${new TextDecoder().decode(bytes)}\n`;
       } catch (error) {
-        resultCallback({ code: ExportResultCode.FAILED, error: error instanceof Error ? error : new Error(String(error)) });
+        resultCallback({ code: ExportResultCode.FAILED, error: asError(error) });
+        return;
       }
+      const write = chain.then(() => appendFile(path, line));
+      chain = write.then(
+        () => undefined,
+        () => undefined,
+      );
+      write.then(
+        () => resultCallback({ code: ExportResultCode.SUCCESS }),
+        (error: unknown) => resultCallback({ code: ExportResultCode.FAILED, error: asError(error) }),
+      );
     },
-    async shutdown(): Promise<void> {},
-    async forceFlush(): Promise<void> {},
+    async shutdown(): Promise<void> {
+      await chain;
+    },
+    async forceFlush(): Promise<void> {
+      await chain;
+    },
   };
 }
 
+/** One place spans go, with the name its failure is reported under: the
+ * file's path, the endpoint's URL, or "span exporter" for an injected one. */
+type Output = { label: string; exporter: SpanExporter };
+
 /**
- * Wraps a SpanExporter so a failed export reaches `fail`. The SDK's own route
- * for a failed result is its global error handler, which is silent unless a
- * diag logger is installed; this module's contract is one stderr line and
- * then quiet, and an exporter that throws out of `export` must not throw into
- * the processor either.
+ * Wraps one output so it can fail without taking any other output with it.
+ *
+ * The first failed result, thrown export, or rejected flush marks this output
+ * dead and reports it once, under its label; every later batch for it is
+ * dropped. The processor is answered with SUCCESS either way, deliberately:
+ * a FAILED result makes the processor's forceFlush reject, the provider's
+ * forceFlush and shutdown reject with it, and a collector that is merely down
+ * would then end export to the file as well. The failure is this module's
+ * finding, reported here, not the processor's. The SDK's own route for a
+ * failed result is its global error handler, silent unless a diag logger is
+ * installed, which is why the report happens here at all.
  */
-function reportingFailures(exporter: SpanExporter, fail: (error: unknown) => void): SpanExporter {
+function isolated({ label, exporter }: Output, report: (label: string, error: unknown) => void): SpanExporter {
+  let dead = false;
+  const die = (error: unknown): void => {
+    if (dead) {
+      return;
+    }
+    dead = true;
+    report(label, error);
+  };
   return {
     export(spans, resultCallback): void {
+      if (dead) {
+        resultCallback({ code: ExportResultCode.SUCCESS });
+        return;
+      }
       try {
         exporter.export(spans, (result) => {
           if (result.code === ExportResultCode.FAILED) {
-            fail(result.error ?? new Error("span export failed"));
+            die(result.error ?? new Error("span export failed"));
           }
-          resultCallback(result);
+          resultCallback({ code: ExportResultCode.SUCCESS });
         });
       } catch (error) {
-        fail(error);
-        resultCallback({ code: ExportResultCode.FAILED, error: error instanceof Error ? error : new Error(String(error)) });
+        die(error);
+        resultCallback({ code: ExportResultCode.SUCCESS });
       }
     },
-    shutdown: () => exporter.shutdown(),
+    async shutdown(): Promise<void> {
+      if (dead) {
+        return;
+      }
+      try {
+        await exporter.shutdown();
+      } catch (error) {
+        die(error);
+      }
+    },
     async forceFlush(): Promise<void> {
-      await exporter.forceFlush?.();
+      if (dead) {
+        return;
+      }
+      try {
+        await exporter.forceFlush?.();
+      } catch (error) {
+        die(error);
+      }
     },
   };
 }
@@ -425,41 +500,57 @@ export function createOtelTraceExporter({
   mappingPath,
   onError,
 }: CreateOtelTraceExporterOptions): OtelTraceExporter {
-  let disabled = false;
-
-  const fail = (error: unknown): void => {
-    if (disabled) {
-      return;
-    }
-    disabled = true;
+  /** One report, to the caller's hook or to stderr, never thrown: the
+   * reporter is the one component here that exists only to report, and a
+   * throw out of it would be the failure it is meant to describe. */
+  const report = (what: string, error: unknown): void => {
     try {
       if (onError) {
         onError(error);
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`otel trace exporter disabled after failure: ${message}`);
+      console.error(`${what} disabled after failure: ${message}`);
     } catch {
       // Silently swallow any error from the callback or console.error
       // to maintain the total-by-construction guarantee
     }
   };
 
-  const exporters: SpanExporter[] = [];
-  try {
-    if (filePath !== undefined) {
-      exporters.push(createFileSpanExporter(filePath));
+  // The exporter as a whole: a mapping that will not load, a provider that
+  // will not build, a bug inside start or end. Once, then quiet.
+  let disabled = false;
+  const fail = (error: unknown): void => {
+    if (disabled) {
+      return;
     }
-    if (endpoint !== undefined) {
-      exporters.push(new OTLPTraceExporter({ url: endpoint }));
+    disabled = true;
+    report("otel trace exporter", error);
+  };
+
+  // One output: its own first failure, under its own label, and only it.
+  const reportOutput = (label: string, error: unknown): void => report(`otel trace export to ${label}`, error);
+
+  // Each output is constructed on its own, so an unwritable file path costs
+  // the file and not the endpoint, and the other way round.
+  const outputs: Output[] = [];
+  const construct = (label: string, build: () => SpanExporter): void => {
+    try {
+      outputs.push({ label, exporter: build() });
+    } catch (error) {
+      reportOutput(label, error);
     }
-    if (spanExporter !== undefined) {
-      exporters.push(spanExporter);
-    }
-  } catch (error) {
-    fail(error);
+  };
+  if (filePath !== undefined) {
+    construct(filePath, () => createFileSpanExporter(filePath));
   }
-  if (exporters.length === 0 && !disabled) {
+  if (endpoint !== undefined) {
+    construct(endpoint, () => new OTLPTraceExporter({ url: endpoint }));
+  }
+  if (spanExporter !== undefined) {
+    construct("span exporter", () => spanExporter);
+  }
+  if (outputs.length === 0) {
     return NULL_OTEL_TRACE_EXPORTER;
   }
 
@@ -470,7 +561,7 @@ export function createOtelTraceExporter({
     mapping = loadOtelMapping(mappingPath);
     provider = new BasicTracerProvider({
       resource: resourceFromAttributes({ "service.name": OTEL_SERVICE_NAME }),
-      spanProcessors: exporters.map((exporter) => new BatchSpanProcessor(reportingFailures(exporter, fail))),
+      spanProcessors: outputs.map((output) => new BatchSpanProcessor(isolated(output, reportOutput))),
     });
     tracer = provider.getTracer(OTEL_SERVICE_NAME);
   } catch (error) {

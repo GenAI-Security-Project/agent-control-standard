@@ -62,7 +62,7 @@ The decision rides on the span as an `acs.decision` event. The event always carr
 
 The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian`. Spans are batched and flushed when the Guardian closes, so stop it with Ctrl-C rather than killing it. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
 
-Export never touches a decision. An exporter failure disables export for the rest of the process, prints one line on stderr, and the response goes out unchanged. Use synthetic sessions for lab runs: the envelope log holds raw envelopes before any redaction, and a span's `acs.reasoning` repeats the Guardian's explanation of them ([#71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
+Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged. Use synthetic sessions for lab runs: the envelope log holds raw envelopes before any redaction, and a span's `acs.reasoning` repeats the Guardian's explanation of them ([#71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
 
 ## Use it in-process
 
