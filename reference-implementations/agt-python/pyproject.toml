@@ -1,0 +1,33 @@
+[project]
+name = "acs-guardian"
+version = "0.1.0"
+description = "Python reference Guardian implementation for the OWASP Agent Control Standard (ACS) v0.1.0"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema>=4.25.0",
+  # Used directly to build the $id-resolving schema registry; it is also a
+  # jsonschema dependency, but an undeclared direct import breaks when that
+  # dependency graph changes.
+  "referencing>=0.35.0",
+  "rfc8785>=0.1.4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+acs-guardian = "acs_guardian.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs_guardian"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
