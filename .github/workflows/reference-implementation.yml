@@ -76,3 +76,91 @@ jobs:
       # schemas in this repository rather than a copy of them.
       - name: Run the tests
         run: bun test
+
+  agt-rust:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt-rust
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust tooling
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.98.1
+
+      - name: Install AGT's pinned OPA binary
+        run: |
+          npm install --prefix "$RUNNER_TEMP/agt-opa" --no-save agent-control-specification-opa-linux-x64@0.3.1-beta.0
+          echo "ACS_OPA_PATH=$RUNNER_TEMP/agt-opa/node_modules/agent-control-specification-opa-linux-x64/bin/opa" >> "$GITHUB_ENV"
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust workspace
+        run: cargo check --workspace --locked
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test Rust Guardian with AGT policy
+        env:
+          ACS_OPA_TIMEOUT_MS: "30000"
+        run: cargo test --workspace --all-features --locked
+
+      - name: Install Bun for live parity test
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install TypeScript Guardian dependencies
+        working-directory: reference-implementations/agt
+        run: bun install --frozen-lockfile
+
+      - name: Compare live Rust and TypeScript Guardians
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo run --locked > "$RUNNER_TEMP/rust-guardian.log" 2>&1 &
+          rust_pid=$!
+
+          (
+            cd ../agt
+            ACS_GUARDIAN_PORT=8788 bun run guardian
+          ) > "$RUNNER_TEMP/ts-guardian.log" 2>&1 &
+          ts_pid=$!
+
+          cleanup() {
+            kill "$rust_pid" "$ts_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          wait_for_guardian() {
+            local url="$1"
+            local log="$2"
+            for _ in {1..60}; do
+              if curl --silent --show-error --fail \
+                --request POST \
+                --header "content-type: application/json" \
+                --data '{}' \
+                "$url" >/dev/null; then
+                return 0
+              fi
+              sleep 1
+            done
+            echo "Guardian did not become ready at $url"
+            cat "$log"
+            return 1
+          }
+
+          wait_for_guardian "http://127.0.0.1:8787/acs" "$RUNNER_TEMP/rust-guardian.log"
+          wait_for_guardian "http://127.0.0.1:8788/acs" "$RUNNER_TEMP/ts-guardian.log"
+
+          bun tests/compare-guardians.mjs
