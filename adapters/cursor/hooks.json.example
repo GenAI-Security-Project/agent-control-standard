@@ -1,0 +1,66 @@
+{
+  "_comment": "Drop into <project>/.cursor/hooks.json (or merge with your existing config). Replace ACS_GUARDIAN_URL with your deployment's endpoint and the python3 path with the absolute path to acs_adapter.py. Generate the shared HMAC secret (REQUIRED for ACS-Core baseline integrity \u00a710; without it any local process that binds the Guardian port becomes the Guardian): mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key — give the SAME file to the Guardian. ACS_AUDIT_FILE is the durable audit sink for \u00a76.4 events.",
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py sessionStart"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py beforeSubmitPrompt",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py preToolUse",
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py postToolUse"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py beforeShellExecution",
+        "failClosed": true
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py afterShellExecution"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py beforeMCPExecution",
+        "failClosed": true
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py afterMCPExecution"
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py subagentStart",
+        "failClosed": true
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py afterAgentResponse"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py sessionEnd"
+      }
+    ]
+  }
+}

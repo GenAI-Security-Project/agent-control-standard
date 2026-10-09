@@ -8,6 +8,8 @@ references/
 # Python build artifacts from `uv pip install -e .`
 *.egg-info/
 __pycache__/
+**/__pycache__/
+*.pyc
 
 # Subagent-driven development scratch. Never committed.
 .superpowers/
@@ -15,3 +17,14 @@ _site/
 
 # Browser session logs. Never committed.
 .playwright-mcp/
+
+# Adapter manual-test scratch dirs (project-level hook configs with
+# machine-specific paths from local probing — must never land in commits)
+adapters/*/.cursor/
+adapters/*/.claude/
+adapters/*/.acs-handshake-cache/
+
+# Python venvs (NAT manual test environment lives here; the path is
+# tied to the machine that built it and must not ship)
+adapters/*/.venv/
+adapters/*/.nat-venv/
