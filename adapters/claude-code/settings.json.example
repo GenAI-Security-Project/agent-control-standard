@@ -1,0 +1,111 @@
+{
+  "_comment": [
+    "Drop into ~/.claude/settings.json (or merge with your existing config).",
+    "Prefer generating this with wire.py, which validates hook coverage and",
+    "warns when a subset of the ACS-Core minimum is wired \u2014 this file IS",
+    "wire.py's output for the placeholder arguments below (asserted by",
+    "tests/test_example_config.py; PR #22 review: the previous example",
+    "passed every setting through a per-hook `env` object that Claude Code",
+    "does not implement, so a copied config ran unsigned, fail-open, with",
+    "no audit sink \u2014 all env vars now ride inline in the command string,",
+    "the only channel Claude Code passes through).",
+    "",
+    "Replace ACS_GUARDIAN_URL with your deployment's endpoint and the",
+    "/path/to/ placeholders with real absolute paths.",
+    "",
+    "ACS_HMAC_SECRET_FILE: REQUIRED for ACS-Core baseline integrity (\u00a710).",
+    "Without a secret both ends run unsigned and any local process that",
+    "binds the Guardian port first becomes the Guardian. Generate one:",
+    "  mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key",
+    "and give the SAME file to the Guardian.",
+    "",
+    "ACS_AUDIT_FILE: where \u00a76.4 audit events land durably. Hook-process",
+    "stderr is collected by nothing; this file is the audit half of the",
+    "fail-open trade.",
+    "",
+    "ACS_DEFAULT_DENY=1 is set on the GATE hooks (PreToolUse,",
+    "UserPromptSubmit \u2014 the ones whose verdict blocks an action, per",
+    "wire.py GATE_HOOKS). Observational hooks fail open per the \u00a76.4",
+    "default. Incident kill switch: set ACS_DISABLED=1 to bypass all",
+    "hooks immediately."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+          }
+        ]
+      }
+    ]
+  }
+}

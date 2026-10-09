@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/absolute/path/to/guardian.key ACS_DEFAULT_DENY=1 /absolute/path/to/venv/bin/python /absolute/path/to/agent-control-standard/adapters/codex/acs_adapter.py",
+            "timeout": 30,
+            "statusMessage": "Checking command with ACS Guardian"
+          }
+        ]
+      }
+    ]
+  }
+}

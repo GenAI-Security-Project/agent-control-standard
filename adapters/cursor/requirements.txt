@@ -1,0 +1,6 @@
+# Production runtime dependency of the adapter. Everything else is
+# stdlib. §10 permits no alternative canonicalization, so rfc8785 is a
+# hard requirement — without it the adapter cannot sign or verify and
+# takes the degraded bootstrap path (audit + deployment posture) instead
+# of running (PR #22 review).
+rfc8785==0.1.4
