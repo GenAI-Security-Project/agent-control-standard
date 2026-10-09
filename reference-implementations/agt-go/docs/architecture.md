@@ -74,9 +74,11 @@ Every session starts with `handshake/hello`. The PolicyEngine is not asked.
 sequenceDiagram
     participant OA as observedagent.Client
     participant G as guardian.Guardian
+    participant AL as AuditLog
     participant S as Signer
     participant SC as SessionContextStore
     OA->>G: handshake/hello with a ClientHello
+    G->>AL: Envelope(inbound)
     G->>S: Verify
     G->>SC: Lock
     G->>SC: Load
@@ -88,6 +90,7 @@ sequenceDiagram
     end
     G->>SC: release
     G->>S: Sign
+    G->>AL: Envelope(outbound)
     G-->>OA: ServerHello
 ```
 

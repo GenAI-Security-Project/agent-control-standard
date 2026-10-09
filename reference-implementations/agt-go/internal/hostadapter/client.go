@@ -22,6 +22,7 @@ import (
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/method"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/observedagent"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/schema"
 )
@@ -60,6 +61,8 @@ type Client struct {
 type sessionState struct {
 	Hello acs.ServerHello `json:"hello"`
 }
+
+var methods = method.NewTable()
 
 var (
 	serverHelloSchemas     *schema.Registry
@@ -114,7 +117,7 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 		if err != nil {
 			var refusal handshakeRefusal
 			if errors.As(err, &refusal) {
-				return Evaluation{Decision: acs.Decision{Disposition: acs.Deny, Reasoning: "the Guardian did not accept this ACS session"}}, nil
+				return Evaluation{Decision: c.substitute(step, "session_refused", acs.Decision{Reasoning: "the Guardian did not accept this ACS session"})}, nil
 			}
 			return Evaluation{}, err
 		}
@@ -139,19 +142,23 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 		} else {
 			var refusal handshakeRefusal
 			if errors.As(handshakeErr, &refusal) {
-				return Evaluation{Decision: acs.Decision{Disposition: acs.Deny, Reasoning: "the Guardian did not accept this ACS session"}}, nil
+				return Evaluation{Decision: c.substitute(step, "session_refused", acs.Decision{Reasoning: "the Guardian did not accept this ACS session"})}, nil
 			}
 			err = handshakeErr
 		}
 	}
-	decision, failedOpen := observedagent.Honour(result, err, state.Hello.OnDecisionFailure)
+	posture := state.Hello.OnDecisionFailure
+	if refusalAt(step.Method) != acs.Deny {
+		posture = acs.FailureProceed
+	}
+	decision, failedOpen := observedagent.Honour(result, err, posture)
 	if failedOpen {
 		if auditErr := recordAuditEvent(c.config.AuditLog, step, "decision_failure", decision); auditErr != nil {
-			return Evaluation{Decision: acs.Decision{Disposition: acs.Deny, Reasoning: "the Guardian decision failed and the local audit record could not be written"}}, nil
+			return Evaluation{Decision: acs.Decision{Disposition: refusalAt(step.Method), Reasoning: "the Guardian decision failed and the local audit record could not be written"}}, nil
 		}
 	}
 	if result.InvalidModification {
-		return Evaluation{Decision: c.recordDenial(step, "modify_invalid", decision)}, nil
+		return Evaluation{Decision: c.substitute(step, "modify_invalid", decision)}, nil
 	}
 	evaluation := Evaluation{Decision: decision}
 	if err != nil || result.Result == nil || !result.Verified || decision.Disposition != acs.Modify {
@@ -169,19 +176,31 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 }
 
 // RefuseModification answers a MODIFY the host cannot apply as §6.5 requires:
-// DENY with modify_unsupported, recorded in the local audit log.
+// DENY with modify_unsupported, or ALLOW at postCompact, where the original
+// summary stands; either is recorded in the local audit log.
 func (c *Client) RefuseModification(step Step, reasoning string) acs.Decision {
-	decision := acs.Decision{Disposition: acs.Deny, Reasoning: reasoning, ReasonCodes: []string{disposition.ReasonModifyUnsupported}}
-	return c.recordDenial(step, "modify_unsupported", decision)
+	decision := acs.Decision{Reasoning: reasoning, ReasonCodes: []string{disposition.ReasonModifyUnsupported}}
+	return c.substitute(step, "modify_unsupported", decision)
 }
 
-// recordDenial records a DENY the host put in place of a Guardian decision.
-// The step stays denied when the record cannot be written; the reasoning says so.
-func (c *Client) recordDenial(step Step, event string, decision acs.Decision) acs.Decision {
+// substitute records the refusal the host puts in place of a Guardian
+// decision. The refusal stands when the record cannot be written; the
+// reasoning says so.
+func (c *Client) substitute(step Step, event string, decision acs.Decision) acs.Decision {
+	decision.Disposition = refusalAt(step.Method)
 	if err := recordAuditEvent(c.config.AuditLog, step, event, decision); err != nil {
 		decision.Reasoning += "; the local audit record could not be written"
 	}
 	return decision
+}
+
+// refusalAt is how the host refuses a step: DENY, or ALLOW at a hook that
+// permits no DENY (hooks.md) because its action has already happened.
+func refusalAt(stepMethod string) acs.Disposition {
+	if methods.HookRule(stepMethod).Permits(acs.Deny) {
+		return acs.Deny
+	}
+	return acs.Allow
 }
 
 func ToolCallRequest(toolName string, rawInput json.RawMessage) (acs.ToolCallRequestPayload, error) {

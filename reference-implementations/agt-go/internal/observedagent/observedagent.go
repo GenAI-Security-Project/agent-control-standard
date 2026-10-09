@@ -359,9 +359,9 @@ func Honour(o Outcome, err error, posture acs.FailurePosture) (d acs.Decision, f
 		return o.Result.Decision, false
 	}
 	if posture == acs.FailureDeny {
-		return acs.Decision{Disposition: acs.Deny, Reasoning: "no verified decision arrived, and the negotiated posture is deny"}, false
+		return acs.Decision{Disposition: acs.Deny, Reasoning: "no verified decision arrived, and the failure posture is deny"}, false
 	}
-	return acs.Decision{Disposition: acs.Allow, Reasoning: "no verified decision arrived, and the negotiated posture is proceed"}, true
+	return acs.Decision{Disposition: acs.Allow, Reasoning: "no verified decision arrived, and the failure posture is proceed"}, true
 }
 
 // Apply honours a decision for a payload (§6.4): ALLOW proceeds unchanged,
