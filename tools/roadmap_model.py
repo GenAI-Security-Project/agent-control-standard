@@ -34,7 +34,9 @@ class RosterError(ValueError):
 
 _OWNER_TOKEN = re.compile(r"^@[A-Za-z0-9-]+$")
 _LINK = re.compile(r"\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)")
-_PERSON = re.compile(r"([^,()|]+?)\s*\(\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)\)")
+# A name may carry one parenthesized part, such as a nickname in "Kyriakos Lambros (Rock)".
+# The group refuses a parenthesis that opens the handle link, so the name ends there.
+_PERSON = re.compile(r"((?:[^,()|]|\((?!\[@)[^()|]*\))+?)\s*\(\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)\)")
 _SPLIT_CELLS = re.compile(r"(?<!\\)\|")
 
 

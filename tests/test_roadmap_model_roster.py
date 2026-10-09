@@ -227,3 +227,21 @@ def test_real_governance_names_the_three_project_leads_and_the_volunteers():
     assert project_lead_logins(roster) == frozenset({"rocklambros", "afogel", "bar-capsule"})
     assert ("Victor Hernandez", "victorm-hernandez") in roster.triage_volunteers
     assert "victorm-hernandez" in trusted_logins(REPO_ROOT)
+
+
+def test_a_name_may_carry_a_parenthesized_nickname():
+    text = (
+        "## Project leads\n\n| Role | Name |\n| --- | --- |\n"
+        "| Project Lead | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)) |\n"
+        "| Project Lead | Ariel Fogel ([@afogel](https://github.com/afogel)) |\n\n"
+        "## Workstream leads\n\n| Workstream | Leads |\n| --- | --- |\n"
+        "| Development (SDK) | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)), "
+        "Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |\n\n"
+        "## Triage volunteers\n\n| Volunteer | Assigned by |\n| --- | --- |\n"
+        "| Victor Hernandez ([@victorm-hernandez](https://github.com/victorm-hernandez)) | Kyriakos Lambros (Rock) |\n\n"
+        "## Origins\n\nMichael Bargury ([@mbrg](https://github.com/mbrg)) created ACS.\n"
+    )
+    roster = parse_governance(text)
+    assert roster.project_leads == (("Kyriakos Lambros (Rock)", "rocklambros"), ("Ariel Fogel", "afogel"))
+    assert ("Kyriakos Lambros (Rock)", "rocklambros") in roster.workstreams["Development (SDK)"]
+    assert ("Victor Hernandez", "victorm-hernandez") in roster.triage_volunteers
