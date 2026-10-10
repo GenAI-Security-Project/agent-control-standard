@@ -401,5 +401,33 @@
       "bytes": 1196,
       "sha256": "4996f4f5e134b331c79889e8203f05d21a26590f10677bc8a1538a1a426c6849"
     }
-  ]
+  ],
+  "runner": {
+    "sourceRepository": "https://github.com/probityai/agent-evidence-vectors",
+    "sourceTag": "v0.17.7",
+    "sourceCommit": "c17368578a107169174137d37830a4e7ed4133c0",
+    "sourceVersion": "0.17.7",
+    "wheel": "agent_evidence_vectors-0.17.7-py3-none-any.whl",
+    "wheelSha256": "76fd06c83b6638160c57d12c9a20b457ee32df57c93702f5c663265883b6898a",
+    "license": "Apache-2.0",
+    "corpusDigest": "990cc18c1825ecd27cb33b6a68ebf5b5da2493d19e83791ef929b12b5bcad1cb",
+    "scope": "Byte-preserving copy of the held-out runner and its ACS-Core suite descriptor. Each file is identical to the same path in the 0.17.7 wheel and at the v0.17.7 tag. The runner reads the retained corpus under conformance/vectors-acs-core; its generator digest is the SHA-256 of heldout.py.",
+    "files": [
+      {
+        "upstreamPath": "packaging/agent_evidence_vectors/heldout.py",
+        "path": "conformance/heldout-runner/agent_evidence_vectors/heldout.py",
+        "gitBlob": "d59074c721a98ff84337e2441bccbb7a394fcb66",
+        "bytes": 28084,
+        "sha256": "90dcb5506a06189f1eac54b99c05718929132061ce860fdb9c9ec46086181210"
+      },
+      {
+        "upstreamPath": "packaging/agent_evidence_vectors/suites/acs-core.json",
+        "path": "conformance/heldout-runner/agent_evidence_vectors/suites/acs-core.json",
+        "gitBlob": "cea74cde619094ce912e68a959543834e1f0ad0d",
+        "bytes": 773,
+        "sha256": "43999841b071dcd64bc7401d9e3f50ea94e7ca418201b0107a0a3c275d645c6b"
+      }
+    ],
+    "corpusDigestScope": "The runner recomputes this from the retained member files on every run and writes it into the run record; it equals the corpusDigest MANIFEST.json declares."
+  }
 }
