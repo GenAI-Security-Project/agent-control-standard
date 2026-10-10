@@ -64,6 +64,7 @@
  * `hostname` option (main.ts reads ACS_GUARDIAN_HOST for it).
  */
 import { appendFileSync, mkdirSync } from "node:fs";
+import { sessionIdentityDigest, SessionIdentityError } from "./session-identity.ts";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotator, PolicyBridge } from "agt-bridge";
@@ -691,6 +692,24 @@ async function dispatch(
       return errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { pointer: error.pointer });
     }
     throw error;
+  }
+
+  // Bind before the first handshake or supported step, before reading labels,
+  // appending to the chain, or awaiting policy evaluation. Repeated handshakes
+  // check the binding; they cannot replace it. Unknown methods create no state.
+  if (envelope.method === HANDSHAKE_METHOD || isToolCallRequest(envelope) || isToolCallResult(envelope)) {
+    try {
+      sessionContextStore.bindIdentity(envelope.params.metadata.session_id, sessionIdentityDigest(envelope.params));
+    } catch (error) {
+      if (!(error instanceof SessionIdentityError)) throw error;
+      if (isStepMethod(raw)) {
+        const denial = asDecisionResponse(rpcId, denyOnInvalidEnvelope(raw, {
+          reasonCode: error.reasonCode, message: error.message,
+        }));
+        if (denial) return denial;
+      }
+      return errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { reason_code: error.reasonCode });
+    }
   }
 
   if (envelope.method === HANDSHAKE_METHOD) {
