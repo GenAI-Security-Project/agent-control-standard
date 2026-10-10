@@ -301,7 +301,7 @@ SECTION_TITLES = (
     ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
     ("promotion", "Promotion", "Work on integration that main lacks. A project lead opens and merges the promotion."),
     ("bypasses", "Bypasses", "Merges into integration or main in the last seven days with no approving review, and direct pushes. Admins can bypass the rulesets, so this is where a bypass shows."),
-    ("switches", "Switches", "Roadmap variables holding something other than true or false."),
+    ("switches", "Switches", "The current value of each roadmap variable, flagged when it is neither true nor false."),
 )
 
 

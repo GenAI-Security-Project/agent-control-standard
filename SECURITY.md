@@ -17,6 +17,10 @@ Include what you have:
 
 Partial reports are welcome. We would rather triage something incomplete than never hear about it.
 
+## Security contact
+
+Rock Lambros ([rock.lambros@owasp.org](mailto:rock.lambros@owasp.org)) is the project's named security contact. Send reports through private vulnerability reporting above, so every maintainer sees them and the report stays tracked. Write to this address to reach a person about a report you already filed, or if private vulnerability reporting is unavailable to you.
+
 ## What is in scope
 
 | In scope | Out of scope |
