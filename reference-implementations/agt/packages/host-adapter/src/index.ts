@@ -104,6 +104,7 @@ export {
   type FailureResolvedAcsDecision,
   type FailureStage,
   type HostFailureKind,
+  type InvalidResponseFailureKind,
   type SessionFailureKind,
   type StepFailureKind,
 } from "./failure-posture.ts";
@@ -127,6 +128,13 @@ export {
   type HostOutputLocation,
 } from "./result-output.ts";
 export { validateDecision, type ValidateDecisionContext } from "./validate-decision.ts";
+export {
+  GuardianDecisionResponseError,
+  GuardianResponseValidationError,
+  GuardianResponseValidatorError,
+  validateGuardianDecisionResult,
+  validateGuardianResponse,
+} from "./validate-response.ts";
 // The one shared surface for JavaScript's prototype-machinery names, and
 // the value-tree walker that checks a rendered value against them at any
 // depth -- exported so a host applier (hosts/opencode/apply-opencode-output.ts

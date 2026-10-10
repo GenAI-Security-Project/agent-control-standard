@@ -279,7 +279,7 @@ describe("acs-hook — the negotiated posture, end to end", () => {
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ posture: "deny", outcome: "blocked" });
   });
-  it("honours a deny that arrives alongside an error, rather than answering with the posture", async () => {
+  it("fails closed when a response carries both a result and an error", async () => {
     const dir = scratch();
     const stub = Bun.serve({
       port: 0,
@@ -316,29 +316,51 @@ describe("acs-hook — the negotiated posture, end to end", () => {
       });
       const hook = expectQuietDecision(out);
       expect(hook.permissionDecision).toBe("deny");
-      expect(hook.permissionDecisionReason).toBe("blocked by policy");
-      // A decision arrived, so nothing was a delivery failure and nothing is
-      // audited as one.
-      expect(existsSync(join(dir, "audit.jsonl"))).toBe(false);
+      expect(hook.permissionDecisionReason).toContain("guardian returned an invalid response");
+      const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({
+        posture: "proceed",
+        outcome: "blocked",
+        failure: { kind: "invalid_response" },
+      });
     } finally {
       stub.stop(true);
     }
   });
 
-  it("still exits 0 with a decision when the Guardian returns a decision this hookmap cannot render", async () => {
+  it("still applies the posture when a schema-valid decision cannot be rendered by the hookmap", async () => {
     const dir = scratch();
-    // A stub, not a real Guardian: answers handshake/hello honestly (so
-    // this hook negotiates a real "proceed" posture), then answers
-    // steps/toolCallRequest with a decision no hookmap entry names.
-    // validateDecision passes an unrecognised decision through unchanged,
-    // so an unguarded renderDecision would throw after the shim's last
-    // try/catch, main().catch would exit 1 with empty stdout, and Claude
-    // Code would proceed -- ungoverned and unaudited. Same shape as every
-    // other fail-open this project has found.
+    const hookmapPath = join(dir, "request-without-defer.yaml");
+    writeFileSync(
+      hookmapPath,
+      "host: claude-code\n" +
+        "hooks:\n" +
+        "  PreToolUse:\n" +
+        "    acs_method: steps/toolCallRequest\n" +
+        "    tool_name: $.tool_name\n" +
+        "    arguments: $.tool_input\n" +
+        "    decisions:\n" +
+        "      allow:\n" +
+        "        output:\n" +
+        "          hookSpecificOutput.permissionDecision: { value: allow }\n" +
+        "          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }\n" +
+        "      deny:\n" +
+        "        output:\n" +
+        "          hookSpecificOutput.permissionDecision: { value: deny }\n" +
+        "          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }\n",
+    );
+    // The response is canonical and the decision is known to ACS. This
+    // deployment's deliberately limited hookmap has no `defer` entry, so the
+    // failure remains a host rendering fault after response validation lands.
     const stub = Bun.serve({
       port: 0,
       async fetch(req) {
-        const body = (await req.json()) as { id: string | number; method: string };
+        const body = (await req.json()) as {
+          id: string | number;
+          method: string;
+          params: { request_id: string };
+        };
         if (body.method === "handshake/hello") {
           return Response.json({
             jsonrpc: "2.0",
@@ -352,7 +374,22 @@ describe("acs-hook — the negotiated posture, end to end", () => {
             },
           });
         }
-        return Response.json({ jsonrpc: "2.0", id: body.id, result: { decision: "quarantine" } });
+        return Response.json({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            type: "final",
+            acs_version: "0.1.0",
+            request_id: body.params.request_id,
+            decision: "defer",
+            reasoning: "waiting on a dependency",
+            defer_details: {
+              reason: "pending_dependency",
+              resolution_method: "human_approval",
+              resolution_timeout_ms: 300_000,
+            },
+          },
+        });
       },
     });
     try {
@@ -360,27 +397,20 @@ describe("acs-hook — the negotiated posture, end to end", () => {
         ACS_GUARDIAN_URL: `http://localhost:${stub.port}/acs`,
         ACS_SESSION_DIR: join(dir, "sessions"),
         ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+        ACS_HOOKMAP_PATH: hookmapPath,
       });
       expect(out.stdout.length).toBeGreaterThan(0);
       const hook = expectQuietDecision(out);
-      // The negotiated posture was "proceed", so the undeliverable decision
-      // resolves to a plain allow, and it is audited like any other
-      // fail-open proceed (§6.4's MUST).
       expect(hook.permissionDecision).toBe("allow");
       const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
       expect(audit).toHaveLength(1);
       expect(audit[0]).toMatchObject({ posture: "proceed", outcome: "proceeded" });
-      // A decision did arrive here and was honoured in principle -- only this
-      // host's rendering of it failed. Auditing that as a delivery failure
-      // ("no decision arrived from the guardian", kind "unknown") would send
-      // an incident reviewer to look at a Guardian that answered correctly --
-      // the same misattribution `host_configuration` guards against one step
-      // earlier in the exchange.
       expect(audit[0].failure.kind).toBe("decision_unrenderable");
       expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecisionReason)
         .toMatch(/a decision arrived from the guardian .* and was honoured/i);
     } finally {
       stub.stop(true);
+      unlinkSync(hookmapPath);
     }
   });
 
