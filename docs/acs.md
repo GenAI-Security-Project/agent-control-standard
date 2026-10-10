@@ -448,63 +448,85 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
     === "OCSF"
 
-        ```python
-        from acs.trace import OCSFLogger
-        
-        # Configure OCSF security event logging
-        security_logger = OCSFLogger(
-            endpoint="https://siem.example.com/ocsf",
-            api_key="your-api-key"
-        )
-        
-        # Attach to agent for security events
-        acs_agent.attach_logger(security_logger)
-        
-        # Execute agent - security events logged automatically
-        result = await acs_agent.run("Access customer database")
-        ```
-        
+        This OCSF 1.9.0 example follows the [Trace class mapping](./spec/trace/events.md#ocsf-event-classes). A `run_command` tool launches `/usr/bin/printf hello`, and the host runtime observes its subprocess exit with code `0` at `2026-10-09T12:00:00Z`.
+
+        The `steps/toolCallResult` trace uses Process Activity (`1007`). This is a reflexive [Terminate activity](https://schema.ocsf.io/classes/process_activity): `printf` exits on its own, so both `actor.process` and `process` identify `printf`. Each records the Python runtime as `parent_process`. The identifiers below are sample values for this scenario.
+
         ```json
         {
-          "activity_id": 1,
-          "activity_name": "Agent Execution",
-          "category_uid": 3,
-          "category_name": "Application Activity",
-          "class_uid": 3001,
-          "class_name": "AI Agent Activity",
+          "activity_id": 2,
+          "activity_name": "Terminate",
+          "category_uid": 1,
+          "category_name": "System Activity",
+          "class_uid": 1007,
+          "class_name": "Process Activity",
+          "type_uid": 100702,
           "severity_id": 1,
-          "time": 1705318200,
+          "time": 1791547200000,
+          "status_id": 1,
+          "status": "Success",
           "metadata": {
-            "version": "1.0.0",
+            "version": "1.9.0",
             "product": {
-              "name": "ACS Agent",
+              "name": "ACS trace example",
               "vendor_name": "Example Corp"
             }
           },
           "actor": {
-            "session": {
-              "uid": "sess_123",
-              "created_time": 1705318200
-            },
-            "idp": {
-              "name": "research-assistant",
-              "uid": "agent_456"
+            "process": {
+              "pid": 4243,
+              "name": "printf",
+              "cmd_line": "/usr/bin/printf hello",
+              "terminated_time": 1791547200000,
+              "parent_process": {
+                "pid": 4242,
+                "name": "python",
+                "cmd_line": "python agent.py"
+              }
             }
           },
-          "acs_extensions": {
-            "reasoning_chain": [
-              {
-                "step": 1,
-                "thought": "User wants database access",
-                "action": "evaluate_permissions"
-              }
-            ],
-            "tools_invoked": ["database_query"],
-            "data_accessed": ["customers.personal_info"],
-            "risk_score": 8.5
+          "device": {
+            "uid": "host_001",
+            "hostname": "agent-host.example",
+            "type_id": 1,
+            "type": "Server"
+          },
+          "process": {
+            "pid": 4243,
+            "name": "printf",
+            "cmd_line": "/usr/bin/printf hello",
+            "terminated_time": 1791547200000,
+            "parent_process": {
+              "pid": 4242,
+              "name": "python",
+              "cmd_line": "python agent.py"
+            }
+          },
+          "exit_code": 0,
+          "unmapped": {
+            "acs": {
+              "method": "steps/toolCallResult",
+              "request_id": "1287ce09-fcda-4588-a5e9-3fa83bfe5291",
+              "agent_id": "agent_456",
+              "session_id": "7673ad6b-b5b3-4eec-8f46-66c83eef0b52",
+              "tool": {
+                "name": "run_command"
+              },
+              "exit_status": "success",
+              "request_id_ref": "e1572c78-689e-4bdb-91d4-6e019b416849",
+              "outputs": [
+                { "value": "hello" }
+              ]
+            }
           }
         }
         ```
+
+        The host runtime supplies `actor.process`, `device`, `process`, the OS `exit_code`, and the occurrence time in milliseconds. These facts supplement the ACS payload; a generic tool call may not have subprocess details.
+
+        `unmapped.acs` copies the request's `method` and `request_id`, the envelope metadata's `agent_id` and `session_id`, and fields from the [tool-call result payload](./spec/instrument/hooks.md#toolcallresult). `request_id_ref` links the result to its earlier `toolCallRequest`. The request and session identifiers are UUIDs.
+
+        This example shows one step event with no attached provenance. Its Guardian decision is recorded as a separate trace event.
 
     === "Real-time Streaming"
 
