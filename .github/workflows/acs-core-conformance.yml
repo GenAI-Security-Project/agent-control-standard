@@ -86,3 +86,41 @@ jobs:
             --guardian "http://127.0.0.1:$ACS_GUARDIAN_PORT/acs" \
             --out "$RUNNER_TEMP/acs-core-results.jsonl" \
             --summary "$GITHUB_STEP_SUMMARY"
+
+      # The held-out runner is retained in this repository (conformance/heldout-runner/) and
+      # checked byte for byte above, so these steps run nothing from outside it.
+      - name: Check the held-out runner's own controls
+        run: '"$RUNNER_TEMP/vectors-venv/bin/python" conformance/heldout-runner/agent_evidence_vectors/heldout.py self-test'
+
+      # The seed is the Spec workstream's repository secret. It is empty on a pull request
+      # from a fork, and the run then covers the published members only.
+      - name: Seal the held-out slice from the steward's seed
+        env:
+          ACS_HELDOUT_SEED: ${{ secrets.ACS_HELDOUT_SEED }}
+        run: |
+          if [ -z "$ACS_HELDOUT_SEED" ]; then
+            echo "No steward seed in this context; the run covers the published members only."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$ACS_HELDOUT_SEED" > "$RUNNER_TEMP/heldout-seed"
+          "$RUNNER_TEMP/vectors-venv/bin/python" conformance/heldout-runner/agent_evidence_vectors/heldout.py seal \
+            --seed-file "$RUNNER_TEMP/heldout-seed" --out "$RUNNER_TEMP/held"
+          rm -f "$RUNNER_TEMP/heldout-seed"
+
+      # Informational like the report above: rows the Guardian fails exit 1 and are kept.
+      # Exit 2 means the runner refused to score anything, and that fails the job, as does
+      # a record that does not verify against its transcript.
+      - name: Run the suite through the attested adapter
+        run: |
+          py="$RUNNER_TEMP/vectors-venv/bin/python"
+          runner=conformance/heldout-runner/agent_evidence_vectors/heldout.py
+          set -- --record "$RUNNER_TEMP/heldout-run.json" --transcript "$RUNNER_TEMP/heldout-run.transcript"
+          if [ -f "$RUNNER_TEMP/held/SEALED.json" ]; then set -- "$@" --sealed "$RUNNER_TEMP/held/SEALED.json"; fi
+          rc=0
+          "$py" "$runner" run "$@" -- "$py" scripts/acs-core-heldout-adapter.py \
+            --guardian "http://127.0.0.1:$ACS_GUARDIAN_PORT/acs" > "$RUNNER_TEMP/heldout-run.out" || rc=$?
+          cat "$RUNNER_TEMP/heldout-run.out"
+          { echo "### Held-out run"; echo; cat "$RUNNER_TEMP/heldout-run.out"; } >> "$GITHUB_STEP_SUMMARY"
+          "$py" "$runner" verify "$RUNNER_TEMP/heldout-run.json" --transcript "$RUNNER_TEMP/heldout-run.transcript"
+          [ "$rc" -le 1 ]

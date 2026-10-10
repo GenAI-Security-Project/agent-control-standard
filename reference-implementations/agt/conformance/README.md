@@ -45,3 +45,18 @@ Both inputs report `NOT RUN`; an ordinary allow response cannot stand in for
 that evidence. The failed-hello startup witness raised in
 [#33](https://github.com/GenAI-Security-Project/agent-control-standard/issues/33#issuecomment-5992454631)
 has no member in this imported corpus.
+
+## Held-out slice
+
+`heldout-runner/` retains the held-out runner and its ACS-Core suite descriptor from
+agent-evidence-vectors 0.17.7, byte for byte; `acs-core-source.json` records both files,
+the tag, the commit and the wheel digest under `runner`, and
+`scripts/check-acs-core-vendor.py` refuses a changed or extra file. The runner reads the
+copy of `vectors-acs-core` above and installs nothing. [HELD-OUT.md](HELD-OUT.md)
+describes the slice the Spec workstream seals from its own seed and the steward steps.
+
+```sh
+python3 conformance/heldout-runner/agent_evidence_vectors/heldout.py self-test
+python3 conformance/heldout-runner/agent_evidence_vectors/heldout.py run -- \
+  python3 scripts/acs-core-heldout-adapter.py --guardian http://127.0.0.1:8787/acs
+```
