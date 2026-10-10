@@ -365,6 +365,30 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 - The policy input the Guardian sends validates against AGT's own schema at the pinned commit and at upstream `main`. (`packages/conformance/test/policy-input-schema.test.ts`, `bun run watch:upstream`)
 - Each of AGT's eight declared contract surfaces is diffed against upstream `main`, field by field. (`packages/conformance/test/diff-surfaces.test.ts`)
 
+## Session identity consistency
+
+The first validated handshake or supported tool step binds its session ID to
+the declared agent ID, tenant ID, user ID, authentication method, and role set.
+Later requests must carry the same identity fields. Role ordering does not
+matter. Adding or removing an identity field requires a new session ID.
+An identity mismatch returns an explicit deny for a tool step, before policy
+evaluation, label access, or an append to the session chain. A mismatched
+handshake returns an error and cannot replace the binding.
+
+This is a consistency check, not authentication: a caller who can impersonate
+the first declaration can still claim that identity. Deployments must bind
+these declarations to authenticated peers. Issue #166 remains broader than
+this check; session-start dispatch and authenticated-principal resolution are
+not implemented here.
+
+Bindings belong to the session store and survive its audit-chain eviction.
+The memory store retains at most 65,536 identity bindings, configurable through
+`maxIdentityBindings`. At capacity it refuses new sessions while retaining old
+bindings. Bindings do not survive process restart. There is no automatic expiry
+or rotation; durable storage and safe session retirement require lifecycle
+work. Custom `SessionContextStore` implementations must provide a synchronous,
+atomic `bindIdentity` method and preserve bindings for retained session state.
+
 ## Operational debt
 
 These are known limits of the tree as it stands. None is fixed.

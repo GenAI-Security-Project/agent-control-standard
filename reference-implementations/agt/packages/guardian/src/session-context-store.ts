@@ -73,6 +73,7 @@
  * keeps instead of rebuilding the history around each new entry, so a
  * session's hundredth step costs what its first one did.
  */
+import { SessionIdentityError } from "./session-identity.ts";
 import {
   GENESIS_HASH,
   emptySessionState,
@@ -98,6 +99,8 @@ export {
 
 /** What the Guardian's request path is told and asks on every step. */
 export interface SessionContextStore {
+  /** Synchronous check-and-bind before any session read, append or evaluation. */
+  bindIdentity(sessionId: string, identityDigest: string): void;
   context(sessionId: string): SessionContext;
   append(sessionId: string, step: SessionStep): SessionContextEntry;
   replaceIfcLabels(sessionId: string, labels: IfcLabels): void;
@@ -136,6 +139,9 @@ export interface SessionProvenanceReader {
 const DEFAULT_MAX_SESSIONS = 1024;
 
 export type CreateMemorySessionContextStoreOptions = {
+  /** Identity bindings outlive chain eviction. At capacity, new sessions fail
+   * closed instead of evicting an identity and permitting session rebinding. */
+  maxIdentityBindings?: number;
   now?: () => Date;
   /** Called once per appended entry with its JSON line, no trailing newline. */
   appendLine?: (line: string) => void;
@@ -162,6 +168,11 @@ export function createMemorySessionContextStore(
   const now = options.now ?? (() => new Date());
   const appendLine = options.appendLine;
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const maxIdentityBindings = options.maxIdentityBindings ?? 65_536;
+  if (!Number.isInteger(maxIdentityBindings) || maxIdentityBindings < 1) {
+    throw new Error("maxIdentityBindings must be a positive integer");
+  }
+  const identities = new Map<string, string>();
   const onEvict = options.onEvict ?? warnEvictedSession;
   if (!Number.isInteger(maxSessions) || maxSessions < 1) {
     // Thrown rather than clamped, for the reason `ACS_ON_DECISION_FAILURE`
@@ -219,6 +230,23 @@ export function createMemorySessionContextStore(
   };
 
   return {
+    bindIdentity(sessionId, identityDigest) {
+      const existing = identities.get(sessionId);
+      if (existing !== undefined) {
+        if (existing !== identityDigest) {
+          throw new SessionIdentityError("session_identity_mismatch", "session identity does not match its established binding");
+        }
+        return;
+      }
+      // Do not adopt an existing chain whose original identity is unknown.
+      if (sessions.has(sessionId)) {
+        throw new SessionIdentityError("session_identity_unbound", "existing session state has no identity binding");
+      }
+      if (identities.size >= maxIdentityBindings) {
+        throw new SessionIdentityError("session_identity_capacity", "session identity store is full; new sessions are refused");
+      }
+      identities.set(sessionId, identityDigest);
+    },
     context(sessionId) {
       // Copied on the way out, like the labels below, and for one reason
       // more: `append` pushes onto the stored array, so an uncopied
