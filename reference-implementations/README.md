@@ -1,20 +1,10 @@
 # ACS reference implementations
 
-This directory holds the reference implementations of the Agent Control Standard. A reference implementation is working code that shows the ACS wire contract in use. It is a demonstration and a measurement, not a product.
-
-## What is here
-
-| Path | What it is |
-| --- | --- |
-| [`agt/`](agt/README.md) | A Guardian in TypeScript that runs Microsoft's Agent Governance Toolkit (AGT) as its policy engine. The tree also carries host shims for Claude Code and OpenCode, a shared host adapter, an Inspector, and a conformance harness. |
-
-Guardians in Python, Go, and Rust are under review. Each one lands here as its own directory, with its own README that says how to run it and what it does not yet do.
+This directory holds the reference implementations of the Agent Control Standard. A reference implementation is working code that shows the ACS wire contract in use.
 
 ## Expectations for Guardian reference implementations
 
-Status: draft, under review in [#252](https://github.com/GenAI-Security-Project/agent-control-standard/issues/252).
-
-This section is a working aid for reviewing pull requests that add or change Guardian reference implementations, so that every implementation is reviewed against the same expectations. It is not part of the ACS specification and it is not normative. It describes where the set of implementations is heading, so the tree above does not meet every item yet.
+This section is a working tool for reviewing pull requests that add or change Guardian reference implementations, so that every implementation is reviewed against the same expectations.
 
 ### Project-level requirements
 
@@ -58,7 +48,7 @@ For the HMAC-SHA256 baseline, per-session keys are expected to be derived with H
 
 Each configured key has an identifier. The default identifier is `default`. A sender should set `key_id` to the identifier of the key it signed with. A verifier should select the key by `key_id` and treat an unknown `key_id` as an invalid signature. A signed response should carry the same `key_id` as the request it answers.
 
-Key material is expected to be a string of at least 32 characters, read from a file or an environment variable. Leading and trailing whitespace should be removed. The remaining bytes are the HKDF input keying material. No decoding is applied.
+Key material is expected to be a string of at least 32 bytes, read from a file or an environment variable. Leading and trailing whitespace should be removed. The remaining bytes are the HKDF input keying material. No decoding is applied.
 
 Key material should be supplied through deployment configuration. It should not be hard-coded and should not appear in ACS messages or logs.
 
