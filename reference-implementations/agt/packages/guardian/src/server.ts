@@ -142,7 +142,7 @@ function rememberNegotiated(sessions: NegotiatedSessions, sessionId: string, met
   if (sessions.size > MAX_NEGOTIATED_SESSIONS) sessions.delete(sessions.keys().next().value!);
 }
 
-type ReplayProtectionStore = {
+export type ReplayProtectionStore = {
   seenOrRemember(
     sessionId: string,
     requestId: string,
@@ -437,6 +437,8 @@ export type StartGuardianOptions = {
    * Exists so a test can read spans back in-process or stand in one that
    * fails. Not meant for production use. */
   traceExporter?: OtelTraceExporter;
+  /** The replay-protection store, for tests. Omitted means a fresh default one. */
+  replayProtectionStore?: ReplayProtectionStore;
   /** Base64-encoded shared HMAC input keying material. Omission is supported
    * only for in-process compatibility tests and advertises no `acs-core`
    * profile; the standalone deployment requires ACS_HMAC_SECRET. */
@@ -511,6 +513,7 @@ export async function startGuardian({
   otelTraceFile,
   otelTraceEndpoint,
   traceExporter: traceExporterOverride,
+  replayProtectionStore: replayProtectionStoreOverride,
   hmacSecret,
 }: StartGuardianOptions): Promise<StartedGuardian> {
   if (hmacSecret !== undefined && Buffer.from(hmacSecret, "base64").length < 32) {
@@ -525,7 +528,7 @@ export async function startGuardian({
   const bridge = bridgeOverride ?? createDeploymentBridge(manifestPath, annotator);
   const mapping = loadMapping(mappingPath ?? MAPPING_PATH);
   const registeredTools = loadRegisteredTools(manifestPath);
-  const replayProtectionStore = createReplayProtectionStore();
+  const replayProtectionStore = replayProtectionStoreOverride ?? createReplayProtectionStore();
   const negotiatedSessions: NegotiatedSessions = new Map();
   const envelopeLog = envelopeLogPath ? createEnvelopeLogSink({ path: envelopeLogPath }) : NULL_ENVELOPE_LOG_SINK;
   // The session-context store is always the in-memory one, or the caller's
@@ -1000,12 +1003,12 @@ async function dispatch(
     nowMs,
     requestTimestampMs + SKEW_WINDOW_MS,
   );
-  if (replayStatus !== "fresh") {
-    return errorResponse(
-      rpcId,
-      -32005,
-      replayStatus === "replay" ? "REPLAY_DETECTED" : "REPLAY_PROTECTION_CAPACITY",
-    );
+  if (replayStatus === "replay") return errorResponse(rpcId, -32005, "REPLAY_DETECTED");
+  // A full cache is not a replay: §17.1 recovers from -32005 by regenerating
+  // request_id, which cannot succeed here. -32000 is the registry code every
+  // client already treats as a refusal. §17.1 has no retryable code for this.
+  if (replayStatus === "capacity") {
+    return errorResponse(rpcId, -32000, "SESSION_REFUSED", { reason: "replay_protection_capacity" });
   }
 
   // Method-specific validation runs only after authentication and freshness
