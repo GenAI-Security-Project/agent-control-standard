@@ -60,6 +60,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   },
   "unmapped": {
     "acs": {
+      "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
       "step": { "id": "step-abc", "type": "toolCallRequest", "turn_id": "turn-456" },
       "tool": { "id": "database_query", "execution_id": "exec-123", "capability": "datastore.read" },
       "provenance": [
@@ -102,6 +103,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
       "reason_codes": ["ibac_capability_mismatch"],
       "cited_provenance_ids": ["p1"],
       "chain_hash": "9f2c4e7a1b3d5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+      "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
       "session_id": "session-789",
       "step_id": "step-abc"
     }

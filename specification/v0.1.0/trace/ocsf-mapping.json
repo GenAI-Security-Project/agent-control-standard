@@ -7,7 +7,7 @@
   "properties": {
     "step_to_class": {
       "type": "object",
-      "description": "Map ACS step methods to OCSF class UIDs.",
+      "description": "Map ACS step methods to OCSF class UIDs. Every step event carries the step's request_id at unmapped.acs.request_id, the same value as the OTel attribute acs.request_id.",
       "additionalProperties": {
         "type": "object",
         "required": ["class_uid", "class_name"],
@@ -60,7 +60,7 @@
         },
         "disposition_mapping": {
           "type": "object",
-          "description": "OCSF disposition_id for decision events, keyed by ACS disposition. disposition_id records a control's outcome, which is what a Guardian decision is. 99 (Other) means OCSF has no matching value, and the event's disposition attribute then carries the ACS disposition name.",
+          "description": "OCSF disposition_id for decision events, keyed by ACS disposition. It records the Guardian's verdict, not the enforced outcome, which only the Observed Agent sees (Specification §6.4). A Guardian MUST NOT emit an OCSF decision event for a decision it finished after the negotiated timeout, because v0.1.0 has no OCSF form for the decision failure that would sit beside it. 99 (Other) means OCSF has no matching value. The disposition attribute carries the OCSF caption for 1, 2 and 14, and the ACS disposition name for 99. The allow entry applies when the deployment records allows as Detection Findings.",
           "additionalProperties": { "type": "integer" },
           "default": {
             "allow": 1,
@@ -73,8 +73,8 @@
         "acs_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Decision facts with no OCSF attribute of their own. Each is carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same replay facts as the OTel acs.decision event. policy_references keeps its object form, so it needs no padding rule.",
-          "default": ["reason_codes", "policy_references", "cited_provenance_ids", "chain_hash"]
+          "description": "Decision facts with no OCSF attribute of their own. Each is carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same facts as the OTel acs.decision event. request_id joins the decision to the step event it gated. policy_references keeps its object form, so it needs no padding rule. OCSF does not validate unmapped, so each field takes the type and pattern of its definition in response-envelope.json.",
+          "default": ["request_id", "decision", "reason_codes", "policy_references", "cited_provenance_ids", "chain_hash", "metadata"]
         }
       }
     },

@@ -93,9 +93,11 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
   it("the six replay attributes #228 added are present-but-optional on AcsResult -- none is absent, so none throws or reads 'no wire source'", () => {
     const sites: Record<string, string> = {
       "acs.reason_codes": "AcsResult.reason_codes",
-      "acs.policy.ids": "AcsResult.policy_references[].policy_id",
-      "acs.policy.versions": "AcsResult.policy_references[].policy_version",
-      "acs.policy.rule_ids": "AcsResult.policy_references[].rule_id",
+      // All three follow the array's presence (padding rule), so each
+      // resolves to policy_references itself.
+      "acs.policy.ids": "AcsResult.policy_references",
+      "acs.policy.versions": "AcsResult.policy_references",
+      "acs.policy.rule_ids": "AcsResult.policy_references",
       "acs.cited_provenance_ids": "AcsResult.cited_provenance_ids",
       "acs.chain_hash": "AcsResult.chain_hash",
     };
@@ -120,12 +122,33 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     // Module header, "NOT MEASURED". Both halves are pinned so that adding
     // the event to the checker, or dropping it from the mapping, is a
     // deliberate change rather than drift.
-    type FailureEvent = { properties: { event_name: { const: string }; required_attributes: { default: string[] } } };
+    type FailureEvent = {
+      properties: {
+        event_name: { const: string };
+        required_attributes: { default: string[] };
+        conditional_attributes: { default: string[] };
+        attribute_values: { default: Record<string, string[]> };
+      };
+    };
     const mappingPath = fileURLToPath(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url));
     const failure = (JSON.parse(readFileSync(mappingPath, "utf8")) as { properties: { decision_failure_event: FailureEvent } })
       .properties.decision_failure_event;
     expect(failure.properties.event_name.const).toBe("acs.decision.failure");
     expect(failure.properties.required_attributes.default).toEqual(["acs.failure.class", "acs.failure.posture", "acs.failure.reported_by"]);
+    // The names and values Bar fixed on #37. An emitter hardcoding them
+    // (#244) breaks silently if these change, so a change must be deliberate.
+    expect(failure.properties.conditional_attributes.default).toEqual([
+      "acs.failure.detail",
+      "acs.failure.error_code",
+      "acs.failure.timeout_ms",
+      "acs.failure.elapsed_ms",
+      "acs.failure.payload_bytes",
+    ]);
+    expect(failure.properties.attribute_values.default).toEqual({
+      "acs.failure.class": ["timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error", "other"],
+      "acs.failure.posture": ["fail_open", "fail_closed"],
+      "acs.failure.reported_by": ["observed_agent", "guardian"],
+    });
     expect(rows.some((r) => r.span === "acs.decision.failure" || r.attribute.startsWith("acs.failure."))).toBe(false);
   });
 
