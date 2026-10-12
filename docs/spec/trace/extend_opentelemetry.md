@@ -24,7 +24,7 @@ v0.1 emits factual provenance attributes only. Trust classification is computed 
 
 ## Sensitive data
 
-Attributes can carry user prompts, tool arguments, and retrieved knowledge. `acs.reasoning`, `acs.failure.detail`, `acs.provenance.source_id`, and `acs.reason_codes` can also carry text an attacker influenced. Consumers MUST treat them as untrusted data, never as instructions or markup. Implementations SHOULD apply the deployment's redaction or hashing policy at attribute-emit time rather than relying on backend-side scrubbing. The Guardian's `modifications.redactions` payload is the natural input to the policy: the same list that drives content rewriting drives attribute redaction.
+Attributes can carry user prompts, tool arguments, and retrieved knowledge. Any of it can carry text an attacker influenced. [Trace Events](./events.md) says how consumers treat it. Implementations SHOULD apply the deployment's redaction or hashing policy at attribute-emit time rather than relying on backend-side scrubbing. The Guardian's `modifications.redactions` payload is the natural input to the policy: the same list that drives content rewriting drives attribute redaction.
 
 ## Transport
 

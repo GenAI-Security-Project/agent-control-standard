@@ -101,3 +101,19 @@ def test_every_conditional_attribute_stays_conditional_and_its_source_stays_opti
         assert field not in payload.get("required", []), (
             f"{hook} now requires {field}, so {attribute} on {method} belongs in required_attributes"
         )
+
+
+def test_ocsf_decision_tables_match_the_wire():
+    """The disposition and severity tables key exactly the five dispositions,
+    acs_fields names only real response fields, and every enumerated failure
+    attribute is one the failure event lists. A typo in any of them used to
+    pass every check."""
+    acs_result = json.loads((TRACE.parent / "response-envelope.json").read_text(encoding="utf-8"))["$defs"]["AcsResult"]["properties"]
+    ocsf = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]
+    dispositions = set(acs_result["decision"]["enum"])
+    assert set(ocsf["decision_class"]["properties"]["disposition_mapping"]["default"]) == dispositions
+    assert set(ocsf["severity_mapping"]["default"]) == dispositions
+    assert set(ocsf["decision_class"]["properties"]["acs_fields"]["default"]) <= set(acs_result)
+    failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
+    listed = set(failure["required_attributes"]["default"]) | set(failure["conditional_attributes"]["default"])
+    assert set(failure["attribute_values"]["default"]) <= listed
