@@ -63,3 +63,32 @@ def test_no_attribute_sits_in_two_lists_of_one_step_span():
                     overlaps.setdefault(method, []).append(f"{attribute} in {seen[attribute]} and {name}")
                 seen[attribute] = name
     assert not overlaps, f"attributes listed twice: {overlaps}"
+
+
+# Every conditional attribute and the wire field it comes from. The
+# conformance checker's "every required row is emittable" test covers only the
+# six methods the reference Guardian evaluates, so this one holds the other
+# fifteen: moving an attribute back to required, or a schema making its
+# source required, fails here.
+CONDITIONAL_SOURCES = {
+    ("steps/toolCallRequest", "acs.capability"): ("tool-call-request.json", "capability"),
+    ("steps/toolCallResult", "acs.request_id_ref"): ("tool-call-result.json", "request_id_ref"),
+    ("steps/knowledgeRetrieval", "acs.source.type"): ("knowledge-retrieval.json", "source"),
+    ("steps/memoryStore", "acs.memory_store.name"): ("memory-store.json", "memory_store"),
+    ("steps/memoryStore", "acs.operation"): ("memory-store.json", "operation"),
+    ("steps/memoryContextRetrieval", "acs.memory_store.name"): ("memory-context-retrieval.json", "memory_store"),
+    ("steps/subagentStop", "acs.subagent.final_chain_hash"): ("subagent-stop.json", "final_chain_hash"),
+    ("agbom/changed", "acs.agbom.change_reason"): ("agbom-changed.json", "reason"),
+}
+
+
+def test_every_conditional_attribute_stays_conditional_and_its_source_stays_optional():
+    table = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["step_to_span"]["default"]
+    listed = {(method, attribute) for method, entry in table.items() for attribute in entry.get("conditional_attributes", [])}
+    assert listed == set(CONDITIONAL_SOURCES), f"conditional lists drifted: {sorted(listed ^ set(CONDITIONAL_SOURCES))}"
+    for (method, attribute), (hook, field) in CONDITIONAL_SOURCES.items():
+        payload = json.loads((TRACE.parent / "hooks" / hook).read_text(encoding="utf-8"))
+        assert field in payload["properties"], f"{hook} has no {field}, so {attribute} on {method} has no source"
+        assert field not in payload.get("required", []), (
+            f"{hook} now requires {field}, so {attribute} on {method} belongs in required_attributes"
+        )
