@@ -1892,6 +1892,22 @@ describe("ACS-Core wire security and negotiation", () => {
     }
   });
 
+  it("refuses a fresh request with -32000, not -32005, when the replay cache is full", async () => {
+    // One slot: postAcs's handshake/hello takes it, so the step finds the cache full.
+    const secured = await startGuardian({
+      port: 0,
+      manifestPath: "policy/manifest.yaml",
+      replayProtectionStore: createReplayProtectionStore(1, 1),
+    });
+    try {
+      const error = (await postAcs(secured.url, toolCallEnvelope("ls -la"))).error;
+      expect(error?.code).toBe(-32000);
+      expect(error?.data).toEqual({ reason: "replay_protection_capacity" });
+    } finally {
+      await secured.close();
+    }
+  });
+
   it("negotiates profiles, advertised signature support, and validates ClientHello", async () => {
     const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
     try {
