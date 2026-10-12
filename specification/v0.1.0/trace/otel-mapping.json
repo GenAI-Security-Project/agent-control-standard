@@ -25,8 +25,7 @@
             "description": "Attributes an exporter MAY emit when its source field is present."
           },
           "_note": { "type": "string", "description": "Explanation for readers. The normative rules are in the lists and descriptions." }
-        },
-        "additionalProperties": false
+        }
       },
       "default": {
         "steps/sessionStart": {
