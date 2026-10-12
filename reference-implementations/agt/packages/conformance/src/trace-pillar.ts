@@ -256,9 +256,8 @@ function deref(fileRoot: SchemaNode, node: SchemaNode | undefined): SchemaNode |
  * indirection. `"[]"` descends into an array's `items` and additionally
  * demands `minItems >= 1`: a field only every ITEM of an array is required
  * to carry is not reliably present on the wire unless the array itself is
- * guaranteed non-empty. `hooks/user-message.json`'s `content` declares
- * `minItems: 1`. `AcsResult.policy_references`, walked by the three
- * `acs.policy.*` rows, declares none.
+ * guaranteed non-empty (`hooks/user-message.json`'s `content`, the one site
+ * that takes this branch, declares `minItems: 1`).
  *
  * `present` and `required` are computed independently at every call -- this
  * is the one function every row below is resolved through, so a wrong
@@ -447,7 +446,7 @@ export function checkTracePillar(): TraceRow[] {
     // step request has AcsParams, so this is the one row whose source no
     // hook payload can omit.
     rows.push(
-      buildRow(attribute, EVERY_STEP_SPAN, {
+      buildRow(attribute, EVERY_STEP_SPAN, "required", {
         file: "request-envelope.json",
         fileRoot: requestEnvelope,
         startNode: acsParams,
@@ -474,8 +473,10 @@ export function checkTracePillar(): TraceRow[] {
    * none of its own fields is required either). `acs.decision` and
    * `acs.reasoning` remain direct `AcsResult` siblings, as are the replay
    * fields #228 added: `reason_codes`, `cited_provenance_ids`, `chain_hash`,
-   * and `policy_references`, whose three `acs.policy.*` columns each walk
-   * one field of every entry (`policy_references[].<field>`). A `decision_event`
+   * and `policy_references`. The three `acs.policy.*` columns resolve to
+   * `policy_references` itself, not to one field of its entries: the
+   * padding rule emits all three whenever the array is non-empty, filling
+   * `""` for a missing field, so presence follows the array. A `decision_event`
    * attribute this table does not name throws, rather than silently
    * degrading to "no wire source" the way the mechanical derivation did. */
   function decisionAttributeSite(attribute: string): FieldSite {
@@ -519,28 +520,14 @@ export function checkTracePillar(): TraceRow[] {
       case "acs.reason_codes":
         return { file: "response-envelope.json", fileRoot: responseEnvelope, startNode: acsResult, path: ["reason_codes"], label: "AcsResult.reason_codes" };
       case "acs.policy.ids":
-        return {
-          file: "response-envelope.json",
-          fileRoot: responseEnvelope,
-          startNode: acsResult,
-          path: ["policy_references", "[]", "policy_id"],
-          label: "AcsResult.policy_references[].policy_id",
-        };
       case "acs.policy.versions":
-        return {
-          file: "response-envelope.json",
-          fileRoot: responseEnvelope,
-          startNode: acsResult,
-          path: ["policy_references", "[]", "policy_version"],
-          label: "AcsResult.policy_references[].policy_version",
-        };
       case "acs.policy.rule_ids":
         return {
           file: "response-envelope.json",
           fileRoot: responseEnvelope,
           startNode: acsResult,
-          path: ["policy_references", "[]", "rule_id"],
-          label: "AcsResult.policy_references[].rule_id",
+          path: ["policy_references"],
+          label: "AcsResult.policy_references",
         };
       case "acs.cited_provenance_ids":
         return {
