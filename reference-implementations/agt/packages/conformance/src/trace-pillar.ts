@@ -1,7 +1,7 @@
 /**
  * Whether a downstream consumer of the ACS v0.1.0 wire -- reading nothing
- * this Guardian keeps process-local -- could emit each required Trace-pillar
- * attribute `trace/otel-mapping.json` names. This is a check, not an
+ * this Guardian keeps process-local -- could emit each required or
+ * conditional Trace-pillar attribute `trace/otel-mapping.json` names. This is a check, not an
  * exporter: nothing here is named `exportTrace`, `traceExporter` or
  * `emitSpan`. Its render half, `renderTraceRows`, lives in `render.ts` --
  * that file's own module header is why: `render.ts`'s only imports are
@@ -11,7 +11,8 @@
  * `otel-mapping.json` is a JSON **Schema**, not a data file -- its data
  * lives inside `default` keys, three places:
  *   - `properties.step_to_span.default` -- an object keyed by ACS method,
- *     18 entries, each `{span_name, required_attributes, optional_attributes?}`.
+ *     21 entries, each `{span_name, required_attributes,
+ *     conditional_attributes?, optional_attributes?}`.
  *   - `properties.decision_event.properties.{required_attributes,
  *     conditional_attributes}.default` -- two string arrays.
  *   - `properties.provenance_attributes.properties.required.default` -- one
@@ -26,11 +27,12 @@
  * `steps/sessionStart`, `steps/sessionEnd`, `steps/userMessage`,
  * `steps/agentResponse`). This implementation can only claim or decline the
  * Trace pillar for the methods it evaluates. `otel-mapping.json` declares
- * eighteen; the other twelve (`steps/agentTrigger`,
+ * twenty-one; the other fifteen (`steps/agentTrigger`,
  * `steps/knowledgeRetrieval`, `steps/memoryStore`,
  * `steps/memoryContextRetrieval`, `steps/turnStart`, `steps/turnEnd`,
  * `steps/preCompact`, `steps/postCompact`, `steps/subagentStart`,
- * `steps/subagentStop`, `agbom/snapshot`, `agbom/changed`) are out of scope
+ * `steps/subagentStop`, `steps/skillRegister`, `steps/skillLoad`,
+ * `steps/skillUnload`, `agbom/snapshot`, `agbom/changed`) are out of scope
  * for the same reason `mapping.yaml` never reaches them. The six are frozen
  * here rather than re-read from `mapping.yaml`: this module's interface
  * consumes nothing else, so the scope is a stated design fact (which methods
@@ -49,9 +51,21 @@
  * `otel-mapping.json` names `acs.capability`, not
  * `hooks/tool-call-request.json`'s `capability` field.
  *
- * Decision facts (`acs.decision`, `acs.evaluator`, and the four conditional
- * attributes) are recorded as a span EVENT named `acs.decision` on the
- * parent step span -- not a span of their own -- so every row built from
+ * A step span's attributes come from two lists, read together:
+ * `required_attributes` (source field required on the wire) and
+ * `conditional_attributes` (#227: source field optional, so an exporter
+ * emits the attribute exactly when the payload carries it). Both are rows
+ * here, because both are attributes the mapping obliges an exporter to emit
+ * from the wire. A conditional row is expected to read "exists but is
+ * optional" -- that is the definition of the list -- so for it the red
+ * verdict is the mapping and the wire agreeing. A REQUIRED row that reads
+ * red is the finding: the mapping demands what the wire need not carry,
+ * which is how `acs.capability` read before #227 moved it.
+ * `optional_attributes` names no obligation and is not read.
+ *
+ * Decision facts (`acs.decision` and the five conditional attributes) are
+ * recorded as a span EVENT named `acs.decision` on the parent step span --
+ * not a span of their own -- so every row built from
  * `decision_event` carries that literal string as its `span`, matching
  * `otel-mapping.json`'s own `event_name` const. Provenance attributes are
  * plainer still: `provenance_attributes`'s own description says they land
@@ -163,7 +177,12 @@ type SchemaNode = {
   $defs?: Record<string, SchemaNode>;
 };
 
-type StepSpanEntry = { span_name: string; required_attributes: string[]; optional_attributes?: string[] };
+type StepSpanEntry = {
+  span_name: string;
+  required_attributes: string[];
+  conditional_attributes?: string[];
+  optional_attributes?: string[];
+};
 
 type OtelMappingSchema = {
   properties: {
@@ -321,7 +340,8 @@ export function checkTracePillar(): TraceRow[] {
   const acsResult = responseEnvelope.$defs?.AcsResult;
 
   /** Resolves the wire site for each of the ten (span, attribute) pairs the
-   * six in-scope spans' `required_attributes` name. Domain knowledge --
+   * six in-scope spans' `required_attributes` and `conditional_attributes`
+   * name. Domain knowledge --
    * which file and field an OTel attribute NAME resolves to -- not
    * something any schema states directly, so it is written here once, by
    * hand, and checked by `resolveField` above rather than trusted. */
@@ -378,7 +398,7 @@ export function checkTracePillar(): TraceRow[] {
     if (entry === undefined) {
       throw new Error(`checkTracePillar: trace/otel-mapping.json's step_to_span.default has no entry for "${method}"`);
     }
-    for (const attribute of entry.required_attributes) {
+    for (const attribute of [...entry.required_attributes, ...(entry.conditional_attributes ?? [])]) {
       rows.push(buildRow(attribute, entry.span_name, stepAttributeSite(entry.span_name, attribute)));
     }
   }

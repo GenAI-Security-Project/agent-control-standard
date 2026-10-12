@@ -278,8 +278,8 @@ export function renderCoverageMatrix(cells: CoverageMatrix, options: RenderOptio
 }
 
 /**
- * Renders `checkTracePillar`'s `TraceRow[]` -- one line per required OTel
- * attribute, against its v0.1.0 wire source and whether a downstream
+ * Renders `checkTracePillar`'s `TraceRow[]` -- one line per required or
+ * conditional OTel attribute, against its v0.1.0 wire source and whether a downstream
  * consumer of the ACS wire (not this Guardian) could emit it from that
  * source alone. A
  * trace row pairs an attribute with a wire source; a coverage cell pairs an
@@ -331,7 +331,7 @@ export function renderTraceRows(rows: TraceRow[], options: RenderOptions = {}): 
   });
 
   return [
-    "Trace pillar (trace/otel-mapping.json): each required OTel attribute against its v0.1.0 wire source, and " +
+    "Trace pillar (trace/otel-mapping.json): each required or conditional OTel attribute against its v0.1.0 wire source, and " +
       "whether a downstream consumer of the ACS wire -- not this Guardian -- could emit it from that source " +
       "alone. This implementation does NOT claim the Trace pillar; this table is what that declaration is " +
       "measured against.",

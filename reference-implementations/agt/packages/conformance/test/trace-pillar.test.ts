@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadMapping } from "guardian";
 import { renderTraceRows } from "../src/render.ts";
 import { checkTracePillar, METHODS_IN_SCOPE, type TraceRow } from "../src/trace-pillar.ts";
@@ -129,10 +131,37 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "acs.session.end": 1, // steps/sessionEnd: acs.session.reason
       "acs.message.user": 2, // steps/userMessage: acs.session.id, acs.content.types
       "acs.message.agent": 2, // steps/agentResponse: acs.session.id, acs.agent.id
-      "acs.decision": 6, // decision_event: 2 required + 4 conditional
+      "acs.decision": 6, // decision_event: 1 required + 5 conditional
       "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
     });
     expect(rows).toHaveLength(17);
+  });
+
+  it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {
+    // Read straight from the mapping, so moving an attribute between lists
+    // (as #227 moved acs.capability) cannot silently drop its row.
+    type Entry = { span_name: string; required_attributes: string[]; conditional_attributes?: string[]; optional_attributes?: string[] };
+    const mappingPath = fileURLToPath(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url));
+    const stepToSpan = (JSON.parse(readFileSync(mappingPath, "utf8")) as { properties: { step_to_span: { default: Record<string, Entry> } } })
+      .properties.step_to_span.default;
+
+    const expected = METHODS_IN_SCOPE.flatMap((method) => {
+      const entry = stepToSpan[method]!;
+      return [...entry.required_attributes, ...(entry.conditional_attributes ?? [])].map((attribute) => `${entry.span_name}::${attribute}`);
+    }).sort();
+    const stepSpans = new Set(METHODS_IN_SCOPE.map((method) => stepToSpan[method]!.span_name));
+    const actual = rows.filter((r) => stepSpans.has(r.span)).map((r) => `${r.span}::${r.attribute}`).sort();
+    expect(actual).toEqual(expected);
+
+    // acs.capability is the case #227 is about: it now sits in the
+    // conditional list, and still produces its row.
+    expect(stepToSpan["steps/toolCallRequest"]!.conditional_attributes).toContain("acs.capability");
+    expect(stepToSpan["steps/toolCallRequest"]!.required_attributes).not.toContain("acs.capability");
+    for (const method of METHODS_IN_SCOPE) {
+      for (const attribute of stepToSpan[method]!.optional_attributes ?? []) {
+        expect(rows.some((r) => r.attribute === attribute && r.span === stepToSpan[method]!.span_name)).toBe(false);
+      }
+    }
   });
 
   it("every row names a real span, never blank", () => {
