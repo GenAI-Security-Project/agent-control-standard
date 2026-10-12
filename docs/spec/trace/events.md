@@ -45,23 +45,23 @@ When Provenance is attached to a hook payload, the resulting span MUST carry `ac
 
 ## OCSF event classes
 
-Each ACS step is representable as an OCSF event in the class shown below (OCSF 1.5+). Required class-specific attributes are populated from the ACS payload.
+Each ACS step is representable as an OCSF event in the class shown below (OCSF 1.9.0). Required class-specific attributes are populated from the ACS payload.
 
 The full mapping lives in [`trace/ocsf-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json). See [Extending OCSF](./extend_ocsf.md) for the deeper integration guide.
 
 | ACS step | OCSF class | Class UID |
 |---|---|---|
 | `steps/sessionStart` | Authentication | 3002 |
-| `steps/agentTrigger`, `steps/userMessage`, `steps/agentResponse` | Application Activity | 6002 |
+| `steps/agentTrigger`, `steps/userMessage`, `steps/agentResponse` | Application Lifecycle | 6002 |
 | `steps/toolCallRequest`, `steps/toolCallResult` | Process Activity | 1007 |
 | `steps/skillLoad`, `steps/skillUnload` | Module Activity | 1005 (`activity_id` 1 load, 2 unload) |
 | `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval` | Datastore Activity | 6005 |
 | `steps/preCompact`, `steps/postCompact` | Datastore Activity | 6005 (compaction subtype) |
 | `steps/subagentStart`, `steps/subagentStop` | Authentication | 3002 (logon/logoff for the subagent's session) |
-| `steps/turnStart`, `steps/turnEnd` | Application Activity | 6002 |
+| `steps/turnStart`, `steps/turnEnd` | Application Lifecycle | 6002 |
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
-| `agbom/snapshot`, `agbom/changed` | Inventory Info | 5001 |
-| `steps/skillRegister` | Device Inventory Info | 5001 (skill enters the component set) |
+| `agbom/snapshot`, `agbom/changed` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
+| `steps/skillRegister` | Device Inventory Info | 5001 (`activity_id` 2, Collect: skill enters the component set) |
 | `steps/sessionEnd` | Authentication | 3002 (logoff) |
 
 OCSF `severity_id` for decision events is set from the disposition:
