@@ -255,6 +255,7 @@ describe("startGuardian POST /acs", () => {
     expect(response.error).toBeUndefined();
     expect(response.result?.decision).toBe("allow");
     expect(response.result?.request_id).toBe(requestId);
+    expect(response.result?.metadata).toEqual({ evaluator: "deterministic" });
   });
 
   it("an unknown method returns a JSON-RPC error in the ACS-reserved -32000..-32099 range, not a decision", async () => {
@@ -1736,6 +1737,30 @@ describe("hook traffic needs a handshake that declared the method (§4, §17.1)"
 describe("ACS-Core wire security and negotiation", () => {
   const masterSecret = Buffer.alloc(32, 0x5a);
   const encodedSecret = masterSecret.toString("base64");
+
+  it("answers JSON-RPC, never an HTML 500, when the signing boundary cannot process a request", async () => {
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const signedLooking = (envelope: Record<string, unknown>) => {
+      const params = envelope.params as Record<string, unknown>;
+      const sessionId = (params.metadata as Record<string, unknown>).session_id;
+      params.signature = { algorithm: "HMAC-SHA256", key_id: sessionId, value: "AAAA" };
+      return envelope;
+    };
+    // HKDF caps its info input at 1024 bytes, and the session id is that input.
+    const longSession = signedLooking(toolCallEnvelope("ls -la", { sessionId: "s".repeat(2048) }));
+    // Canonicalization recurses once per nesting level.
+    const deep = signedLooking(toolCallEnvelope("ls -la"));
+    const deepBody = JSON.stringify(deep).replace('"ls -la"', `${"[".repeat(200_000)}${"]".repeat(200_000)}`);
+    try {
+      for (const body of [JSON.stringify(longSession), deepBody]) {
+        const res = await fetch(secured.url, { method: "POST", headers: { "content-type": "application/json" }, body });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as JsonRpcResponse).jsonrpc).toBe("2.0");
+      }
+    } finally {
+      await secured.close();
+    }
+  });
 
   it("rejects unsigned and incorrectly signed requests when HMAC is configured", async () => {
     const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
