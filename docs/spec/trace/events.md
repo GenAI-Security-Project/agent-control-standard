@@ -39,13 +39,20 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | `steps/skillRegister` | `acs.skill.register` | `acs.skill.id`, `acs.skill.digest.algorithm`, `acs.skill.digest.value`, `acs.skill.declared_capabilities` |
 | `steps/skillLoad` | `acs.skill.load` | `acs.skill.id`, `acs.skill.digest.algorithm`, `acs.skill.digest.value`, `acs.skill.load_trigger`, `acs.skill.load_path` (skill ids, root first); `acs.skill.digest_verified`, `acs.skill.registration_ref` (optional) |
 | `steps/skillUnload` | `acs.skill.unload` | `acs.skill.id`, `acs.skill.reason`; `acs.skill.replaced_by` (optional) |
-| Decision (allow/deny/modify/ask/defer) | `acs.decision` (span event) | `acs.decision`; `acs.evaluator`, `acs.reasoning`, `acs.confidence` (conditional) |
+| Decision (allow/deny/modify/ask/defer) | `acs.decision` (span event) | `acs.decision`; `acs.evaluator`, `acs.evaluator_version`, `acs.model_id`, `acs.reasoning`, `acs.confidence`, `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids`, `acs.chain_hash` (conditional) |
+| Decision failure | `acs.decision.failure` (span event) | `acs.failure.class`, `acs.failure.posture`, `acs.failure.reported_by`; `acs.failure.detail` (required for class `other`), `acs.failure.error_code`, `acs.failure.timeout_ms`, `acs.failure.elapsed_ms`, `acs.failure.payload_bytes` (conditional) |
 | `agbom/snapshot` | `acs.agbom` | `acs.agbom.format`, `acs.agbom.component_count` |
 | `agbom/changed` | `acs.agbom` | `acs.agbom.format`; `acs.agbom.change_reason` (conditional) |
 
+Every step span also carries `acs.request_id`, the step's own `request_id`. A `steps/toolCallResult` span's `acs.request_id_ref` joins to it.
+
+The three `acs.policy.*` attributes are parallel arrays built from `policy_references`. Each has the same length and order as `policy_references`, with `""` where an entry lacks the field. A reader can then line up a policy, its version, and its rule by position.
+
+A decision failure gets its own event because it has no disposition and no evaluator. The Observed Agent MUST record every decision failure, fail-open or fail-closed, in the deployment's own audit log. It SHOULD emit `acs.decision.failure` when it claims ACS-Trace. A Guardian claiming ACS-Trace SHOULD emit the event for the failures it sees itself: an error it returned (`guardian_error`) and a decision it finished after the negotiated timeout (`timeout`). The mapping lists every class and posture value.
+
 No AgBOM payload carries a format field, because the Observed Agent always sends the canonical form. An exporter recording the payload sets `acs.agbom.format` to `canonical`. A Guardian recording a serialization it rendered sets the value it advertises in the handshake's `agbom_serializations_supported` (`cyclonedx-1.6`, `spdx-3.0`, or `swid`).
 
-When Provenance is attached to a hook payload, the resulting span MUST carry `acs.provenance.origin` as an attribute, and SHOULD carry `acs.provenance.source_id` when populated. v0.1 emits factual provenance attributes; trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see [Specification §7](../instrument/specification.md#7-provenance)). Provenance lineage edges MAY be linked via OTel span links keyed by `provenance_id`.
+When Provenance is attached to a hook payload, the resulting span MUST carry `acs.provenance.origin` as an attribute, and SHOULD carry `acs.provenance.source_id` when populated. When a span describes more than one Provenance object, `acs.provenance.source_id` has the same length and order as `acs.provenance.origin`, with `""` where an object has no `source_id`. v0.1 emits factual provenance attributes. Trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see [Specification §7](../instrument/specification.md#7-provenance)). Provenance lineage edges MAY be linked via OTel span links keyed by `provenance_id`.
 
 ## OCSF event classes
 
@@ -78,12 +85,24 @@ OCSF `severity_id` for decision events is set from the disposition:
 | `defer` | 3 (Medium) |
 | `deny` | 4 (High) |
 
+OCSF `disposition_id` for decision events is also set from the disposition. It comes from OCSF's Security Control profile, so a decision event lists `security_control` in `metadata.profiles`. OCSF has no value for `modify` or `ask`, so those take 99 (Other), and the event's `disposition` attribute carries the ACS name.
+
+| Disposition | `disposition_id` |
+|---|---|
+| `allow` | 1 (Allowed) |
+| `deny` | 2 (Blocked) |
+| `modify` | 99 (Other) |
+| `ask` | 99 (Other) |
+| `defer` | 14 (Delayed) |
+
+The decision's `reason_codes`, `policy_references`, `cited_provenance_ids`, and `chain_hash` have no OCSF attribute. They ride under `unmapped.acs` with the response's field names. v0.1.0 defines no OCSF form for a decision failure.
+
 ## ACS-Trace conformance bar
 
 A deployment claiming **ACS-Trace** MUST:
 
 1. Emit at least one of {OTel, OCSF} for every ACS step the deployment supports, with the required attributes populated and each conditional attribute populated whenever its source field is present.
 2. Record every decision as a Trace event carrying the disposition, plus the evaluator identity and reasoning when the response carries them.
-3. Carry provenance facts forward from the hook payload onto the Trace event so audit replay reconstructs the policy decision without consulting Guardian state separately.
+3. Carry provenance facts forward from the hook payload onto the Trace event. Carry the decision's reason codes, policy references, cited provenance ids, and chain hash onto the decision event when the response carries them. Arrays follow the padding rules above. Audit replay then reconstructs the policy decision without consulting Guardian state separately.
 
 Trace events MUST NOT block enforcement — failure of the Trace sink MUST NOT change the disposition returned to the Observed Agent. Deployments that do not claim ACS-Trace SHOULD still emit Trace events where feasible; the vocabulary is normative regardless of profile claim.

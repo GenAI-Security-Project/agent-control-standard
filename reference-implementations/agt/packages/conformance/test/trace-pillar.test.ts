@@ -90,6 +90,45 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     expect(only("acs.model_id").wireSource).toContain("AcsResult.metadata.model_id");
   });
 
+  it("the six replay attributes #228 added are present-but-optional on AcsResult -- none is absent, so none throws or reads 'no wire source'", () => {
+    const sites: Record<string, string> = {
+      "acs.reason_codes": "AcsResult.reason_codes",
+      "acs.policy.ids": "AcsResult.policy_references[].policy_id",
+      "acs.policy.versions": "AcsResult.policy_references[].policy_version",
+      "acs.policy.rule_ids": "AcsResult.policy_references[].rule_id",
+      "acs.cited_provenance_ids": "AcsResult.cited_provenance_ids",
+      "acs.chain_hash": "AcsResult.chain_hash",
+    };
+    for (const [attribute, site] of Object.entries(sites)) {
+      const row = only(attribute);
+      expect(row.span).toBe("acs.decision");
+      expect(row.emittableByWireConsumer).toBe(false);
+      expect(row.wireSource).toBe(`response-envelope.json#${site}`);
+      expect(row.reason).toMatch(/optional/i);
+    }
+  });
+
+  it("acs.request_id is emittable on every step span -- AcsParams.request_id is unconditionally required", () => {
+    const row = only("acs.request_id");
+    expect(row.span).toBe("(every step span)");
+    expect(row.emittableByWireConsumer).toBe(true);
+    expect(row.wireSource).toBe("request-envelope.json#AcsParams.request_id");
+    expect(row.reason).toBeUndefined();
+  });
+
+  it("acs.decision.failure is defined in the mapping and deliberately not measured -- no row names the event or its attributes", () => {
+    // Module header, "NOT MEASURED". Both halves are pinned so that adding
+    // the event to the checker, or dropping it from the mapping, is a
+    // deliberate change rather than drift.
+    type FailureEvent = { properties: { event_name: { const: string }; required_attributes: { default: string[] } } };
+    const mappingPath = fileURLToPath(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url));
+    const failure = (JSON.parse(readFileSync(mappingPath, "utf8")) as { properties: { decision_failure_event: FailureEvent } })
+      .properties.decision_failure_event;
+    expect(failure.properties.event_name.const).toBe("acs.decision.failure");
+    expect(failure.properties.required_attributes.default).toEqual(["acs.failure.class", "acs.failure.posture", "acs.failure.reported_by"]);
+    expect(rows.some((r) => r.span === "acs.decision.failure" || r.attribute.startsWith("acs.failure."))).toBe(false);
+  });
+
   it("acs.provenance.origin is emittable -- provenance.json's own `required` list includes `origin`", () => {
     const row = only("acs.provenance.origin");
     expect(row.emittableByWireConsumer).toBe(true);
@@ -131,10 +170,11 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "acs.session.end": 1, // steps/sessionEnd: acs.session.reason
       "acs.message.user": 2, // steps/userMessage: acs.session.id, acs.content.types
       "acs.message.agent": 2, // steps/agentResponse: acs.session.id, acs.agent.id
-      "acs.decision": 6, // decision_event: 1 required + 5 conditional
+      "acs.decision": 12, // decision_event: 1 required + 11 conditional
+      "(every step span)": 1, // step_span_attributes: acs.request_id
       "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
     });
-    expect(rows).toHaveLength(18);
+    expect(rows).toHaveLength(25);
   });
 
   it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {

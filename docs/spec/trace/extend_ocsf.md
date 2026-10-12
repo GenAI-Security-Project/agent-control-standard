@@ -84,7 +84,9 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "type_uid": 200401,
   "severity_id": 4,
   "status_id": 1,
-  "metadata": { "version": "1.9.0", "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
+  "disposition_id": 2,
+  "disposition": "Blocked",
+  "metadata": { "version": "1.9.0", "profiles": ["security_control"], "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
   "finding_info": {
     "uid": "decision-001",
     "title": "Tool call denied: outside committed Intent",
@@ -99,6 +101,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
       ],
       "reason_codes": ["ibac_capability_mismatch"],
       "cited_provenance_ids": ["p1"],
+      "chain_hash": "9f2c4e7a1b3d5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
       "session_id": "session-789",
       "step_id": "step-abc"
     }

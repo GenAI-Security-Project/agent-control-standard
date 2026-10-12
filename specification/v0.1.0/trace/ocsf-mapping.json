@@ -50,7 +50,31 @@
         "required_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["finding_info", "evidences", "verdict_id"]
+          "default": ["finding_info", "disposition_id"]
+        },
+        "profiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "OCSF profiles a decision event lists in metadata.profiles. The Security Control profile defines disposition_id, which Detection Finding does not define on its own.",
+          "default": ["security_control"]
+        },
+        "disposition_mapping": {
+          "type": "object",
+          "description": "OCSF disposition_id for decision events, keyed by ACS disposition. disposition_id records a control's outcome, which is what a Guardian decision is. 99 (Other) means OCSF has no matching value, and the event's disposition attribute then carries the ACS disposition name.",
+          "additionalProperties": { "type": "integer" },
+          "default": {
+            "allow": 1,
+            "deny": 2,
+            "modify": 99,
+            "ask": 99,
+            "defer": 14
+          }
+        },
+        "acs_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Decision facts with no OCSF attribute of their own. Each is carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same replay facts as the OTel acs.decision event. policy_references keeps its object form, so it needs no padding rule.",
+          "default": ["reason_codes", "policy_references", "cited_provenance_ids", "chain_hash"]
         }
       }
     },
