@@ -244,7 +244,7 @@ the one sending hook requests like the ones above. The **Guardian Agent** sits o
 other end of the wire and decides what happens next.
 
 A **hook** is a point in the Observed Agent's execution where it stops and asks before
-acting. `toolCallRequest` is one of ACS's sixteen native lifecycle hooks. Others fire at
+acting. `toolCallRequest` is one of ACS's nineteen native lifecycle hooks. Others fire at
 session start and end, before and after a turn, on knowledge retrieval, and around
 memory reads and writes.
 
