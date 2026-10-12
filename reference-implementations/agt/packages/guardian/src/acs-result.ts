@@ -26,6 +26,9 @@ export type AcsFinalResult = {
   request_id: string;
   /** §8.6: the chain head after this step was recorded. */
   chain_hash?: string;
+  /** Every decision this Guardian sends comes from its own policy engine or
+   * its own fail-closed code, so the evaluator is always deterministic. */
+  metadata: { evaluator: "deterministic" };
   /** §10: HMAC signature over the response, present when key is configured. */
   signature?: { algorithm: string; value: string; key_id: string };
 } & AcsDecision;
@@ -48,6 +51,7 @@ export function finalResult(
     acs_version: params.acs_version,
     request_id: params.request_id,
     ...decision,
+    metadata: { evaluator: "deterministic" },
   };
   if (chainHash !== undefined) {
     result.chain_hash = chainHash;

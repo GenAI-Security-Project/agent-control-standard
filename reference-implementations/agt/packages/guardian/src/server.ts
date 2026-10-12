@@ -730,21 +730,36 @@ async function handleAcsRequest(
   // Signing an unsigned ping would let a caller mint a valid `allow` with a
   // chosen session/id and substitute it for a governed step response whose
   // identifiers collide. Keep both halves of ping signature-exempt.
-  if (
-    hmacSecret &&
-    extractMethod(raw) !== "system/ping" &&
-    requestHasValidSignature(raw, Buffer.from(hmacSecret, "base64"))
-  ) {
-    const sessionId = extractSessionId(raw);
-    if (sessionId) {
-      const sessionKey = deriveSessionKey(Buffer.from(hmacSecret, "base64"), sessionId);
-      const sig = signResponseHmacSha256(response as Record<string, unknown>, sessionKey);
-      const carrier = "result" in response ? response.result : response.error;
-      (carrier as Record<string, unknown>).signature = {
-        algorithm: "HMAC-SHA256",
-        value: sig,
-        key_id: sessionId,
-      };
+  //
+  // Wrapped because the request half runs on unauthenticated input: HKDF
+  // throws on a session id over 1024 bytes, and canonicalization recurses
+  // once per nesting level. A throw here would escape as an HTML 500, which a
+  // host reads as a hook that never fired. A request that throws here cannot
+  // carry a valid signature, so its answer goes out unsigned, exactly like
+  // any other unauthenticated request's.
+  try {
+    if (
+      hmacSecret &&
+      extractMethod(raw) !== "system/ping" &&
+      requestHasValidSignature(raw, Buffer.from(hmacSecret, "base64"))
+    ) {
+      const sessionId = extractSessionId(raw);
+      if (sessionId) {
+        const sessionKey = deriveSessionKey(Buffer.from(hmacSecret, "base64"), sessionId);
+        const sig = signResponseHmacSha256(response as Record<string, unknown>, sessionKey);
+        const carrier = "result" in response ? response.result : response.error;
+        (carrier as Record<string, unknown>).signature = {
+          algorithm: "HMAC-SHA256",
+          value: sig,
+          key_id: sessionId,
+        };
+      }
+    }
+  } catch (error) {
+    try {
+      console.error(`guardian sent an unsigned response: signing failed (${toRepoRelativeMessage(error)})`);
+    } catch {
+      // Total means total, as for the checkResponse reporter below.
     }
   }
 
