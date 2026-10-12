@@ -7,8 +7,9 @@ name such as `conditonal_attributes` therefore passed every check, and both
 readers (the conformance checker and the trace exporter) skip keys they do not
 know, so the attribute it held stopped being emitted with nothing turning red.
 
-These tests validate every `default` against the schema it sits in, and hold
-each `step_to_span` entry to one list per attribute.
+These tests validate every `default` against the schema it sits in, reject
+keys an entry schema does not declare, and hold each `step_to_span` entry to
+one list per attribute.
 """
 import json
 from pathlib import Path
@@ -45,11 +46,19 @@ def test_every_default_validates_against_its_own_schema(path):
     assert checked >= 4, f"{path.name}: found only {checked} defaults to check"
 
 
-def test_a_misspelled_attribute_list_is_rejected():
+def test_every_step_span_entry_uses_only_known_keys():
+    # Checked here, not by closing the published schema with
+    # additionalProperties: false, which would change what a deployment may
+    # publish. A misspelled list name fails this instead.
     mapping = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))
     entry_schema = mapping["properties"]["step_to_span"]["additionalProperties"]
-    misspelled = {"span_name": "acs.x", "required_attributes": [], "conditonal_attributes": ["acs.y"]}
-    assert list(Draft202012Validator(entry_schema).iter_errors(misspelled))
+    known = set(entry_schema["properties"])
+    unknown = {
+        method: sorted(set(entry) - known)
+        for method, entry in mapping["properties"]["step_to_span"]["default"].items()
+        if set(entry) - known
+    }
+    assert not unknown, f"step_to_span entries with keys the entry schema does not declare: {unknown}"
 
 
 def test_no_attribute_sits_in_two_lists_of_one_step_span():
