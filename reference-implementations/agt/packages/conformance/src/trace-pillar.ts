@@ -77,11 +77,12 @@
  * as ordinary attributes "on the resulting span" whichever step that is, so
  * that row's `span` is a parenthesised description rather than a literal
  * OTel name -- there is no single step span to point at. `acs.request_id`
- * (`step_span_attributes`, #228) is the same shape: one row, on every step
- * span. This is why `TraceRow.span` (below) is typed as a bare `string`: a
- * caller reading it off a `TraceRow` this module returns cannot assume it
- * is always a literal OTel span or event name -- two rows' `span` values
- * (the provenance row and the request-id row) are not.
+ * and `acs.session.id` (`step_span_attributes`, #228) are the same shape:
+ * one row each, on every step span. This is why `TraceRow.span` (below) is
+ * typed as a bare `string`: a caller reading it off a `TraceRow` this module
+ * returns cannot assume it is always a literal OTel span or event name --
+ * three rows' `span` values (the provenance row and the two every-step-span
+ * rows) are not.
  *
  * NOT MEASURED: `decision_failure_event` (`acs.decision.failure`, #37 and
  * #228). That event records a decision that never arrived, or arrived
@@ -132,7 +133,7 @@ import { fileURLToPath } from "node:url";
 export type TraceRow = {
   attribute: string;
   /** The OTel span or span-event name this attribute is recorded on --
-   * EXCEPT for the provenance and request-id rows, whose `span` is a parenthesised
+   * EXCEPT for the provenance and every-step-span rows, whose `span` is a parenthesised
    * description rather than a literal OTel name (module header): nothing in
    * `otel-mapping.json` names a span or event for provenance facts the way
    * `decision_event`'s `event_name` const names one for decision facts. A
@@ -439,19 +440,23 @@ export function checkTracePillar(): TraceRow[] {
   // header) -- one row each, like the provenance row below.
   const EVERY_STEP_SPAN = "(every step span)";
   for (const attribute of otelMapping.properties.step_span_attributes.properties.required_attributes.default) {
-    if (attribute !== "acs.request_id") {
+    // Both sources are required on every step request, and every step
+    // request has AcsParams, so neither row can be omitted by a hook payload.
+    const site: Record<string, { path: string[]; label: string }> = {
+      "acs.request_id": { path: ["request_id"], label: "AcsParams.request_id" },
+      "acs.session.id": { path: ["metadata", "session_id"], label: "AcsParams.metadata.session_id" },
+    };
+    const known = site[attribute];
+    if (known === undefined) {
       throw new Error(`checkTracePillar: no known wire site for step_span_attributes attribute "${attribute}" -- add one here`);
     }
-    // AcsParams.request_id is required on every step request, and every
-    // step request has AcsParams, so this is the one row whose source no
-    // hook payload can omit.
     rows.push(
       buildRow(attribute, EVERY_STEP_SPAN, "required", {
         file: "request-envelope.json",
         fileRoot: requestEnvelope,
         startNode: acsParams,
-        path: ["request_id"],
-        label: "AcsParams.request_id",
+        path: known.path,
+        label: known.label,
       }),
     );
   }
@@ -462,7 +467,7 @@ export function checkTracePillar(): TraceRow[] {
 
   /** Where each `decision_event` attribute lives on `AcsResult`. Explicit,
    * not derived from the attribute name: a mechanical `"acs.".length` slice
-   * would be wrong for four of these six, because `acs.evaluator`,
+   * would be wrong for four of these twelve, because `acs.evaluator`,
    * `acs.confidence`, `acs.evaluator_version` and `acs.model_id` are not
    * siblings of `AcsResult.decision` -- they live one level deeper, at
    * `AcsResult.metadata.<name>` (verified by reading

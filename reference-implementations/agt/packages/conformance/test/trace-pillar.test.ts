@@ -118,6 +118,24 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     expect(row.reason).toBeUndefined();
   });
 
+  it("acs.session.id rides every step span too -- AcsParams.metadata.session_id is unconditionally required, so a join can be scoped to its session", () => {
+    const row = rows.find((r) => r.attribute === "acs.session.id" && r.span === "(every step span)");
+    expect(row?.emittableByWireConsumer).toBe(true);
+    expect(row?.wireSource).toBe("request-envelope.json#AcsParams.metadata.session_id");
+  });
+
+  it("each acs.policy.* column names a declared policy_references entry field -- the rows resolve to the array, so this guards the member fields the padding rule reads", () => {
+    type Item = { properties: Record<string, { type?: string }> };
+    const envelopePath = fileURLToPath(new URL("../../../../../specification/v0.1.0/response-envelope.json", import.meta.url));
+    const envelope = JSON.parse(readFileSync(envelopePath, "utf8")) as {
+      $defs: { AcsResult: { properties: { policy_references: { items: Item } } } };
+    };
+    const item = envelope.$defs.AcsResult.properties.policy_references.items.properties;
+    for (const field of ["policy_id", "policy_version", "rule_id"]) {
+      expect(item[field]?.type).toBe("string");
+    }
+  });
+
   it("acs.decision.failure is defined in the mapping and deliberately not measured -- no row names the event or its attributes", () => {
     // Module header, "NOT MEASURED". Both halves are pinned so that adding
     // the event to the checker, or dropping it from the mapping, is a
@@ -194,10 +212,10 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "acs.message.user": 2, // steps/userMessage: acs.session.id, acs.content.types
       "acs.message.agent": 2, // steps/agentResponse: acs.session.id, acs.agent.id
       "acs.decision": 12, // decision_event: 1 required + 11 conditional
-      "(every step span)": 1, // step_span_attributes: acs.request_id
+      "(every step span)": 2, // step_span_attributes: acs.request_id, acs.session.id
       "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
     });
-    expect(rows).toHaveLength(25);
+    expect(rows).toHaveLength(26);
   });
 
   it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {
