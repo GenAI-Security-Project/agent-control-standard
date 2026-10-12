@@ -97,11 +97,11 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
   });
 
   it("emittableByWireConsumer is false wherever wireSource is null -- an invariant of buildRow, currently unexercised by real data", () => {
-    // Every one of these 17 rows resolves against a declared
+    // Every one of these rows resolves against a declared
     // response-envelope.json or provenance.json property -- v0.1.0 declares
     // every field otel-mapping.json names in scope here, it just does not
     // make most of the decision-event ones required. So `wireSource === null`
-    // currently holds for zero of the 17 rows -- asserted explicitly (not
+    // currently holds for zero of the rows -- asserted explicitly (not
     // merely assumed) so this test cannot pass by accident, and the
     // invariant stays checked because buildRow's "no such property" branch
     // is still real, reachable code (the renderer has its own synthetic-row
@@ -126,7 +126,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     }
     expect(spanCounts).toEqual({
       "gen_ai.tool.call": 2, // steps/toolCallRequest: gen_ai.tool.name, acs.capability
-      "gen_ai.tool.result": 2, // steps/toolCallResult: gen_ai.tool.name, acs.exit_status
+      "gen_ai.tool.result": 3, // steps/toolCallResult: gen_ai.tool.name, acs.exit_status, acs.request_id_ref
       "acs.session": 1, // steps/sessionStart: acs.session.id
       "acs.session.end": 1, // steps/sessionEnd: acs.session.reason
       "acs.message.user": 2, // steps/userMessage: acs.session.id, acs.content.types
@@ -134,7 +134,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "acs.decision": 6, // decision_event: 1 required + 5 conditional
       "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
     });
-    expect(rows).toHaveLength(17);
+    expect(rows).toHaveLength(18);
   });
 
   it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {
@@ -162,6 +162,25 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
         expect(rows.some((r) => r.attribute === attribute && r.span === stepToSpan[method]!.span_name)).toBe(false);
       }
     }
+  });
+
+  it("every REQUIRED row is emittable -- a required attribute whose wire source is optional is the mapping defect #227 fixed, and must not come back", () => {
+    // Moving acs.evaluator or acs.capability back into a required list
+    // fails here, where before the obligation field it read the same as a
+    // correctly conditional row.
+    const broken = rows.filter((r) => r.obligation === "required" && !r.emittableByWireConsumer).map((r) => `${r.span}::${r.attribute}`);
+    expect(broken).toEqual([]);
+  });
+
+  it("every conditional row records its list, so the renderer can tell it from a required gap", () => {
+    expect(only("acs.capability").obligation).toBe("conditional");
+    expect(only("acs.evaluator").obligation).toBe("conditional");
+    expect(only("acs.request_id_ref").obligation).toBe("conditional");
+    expect(only("acs.decision").obligation).toBe("required");
+    const table = renderTraceRows(rows);
+    expect(table).toContain("○ acs.capability");
+    // The legend names ✖ too, so only the row lines are checked.
+    expect(table.split("\n").filter((line) => line.startsWith("  ✖"))).toEqual([]);
   });
 
   it("every row names a real span, never blank", () => {
@@ -194,7 +213,7 @@ describe("renderTraceRows", () => {
   });
 
   it("renders '(no wire source)' for a synthetic row whose wireSource is genuinely null", () => {
-    // None of today's real 17 rows has a null wireSource (see the check
+    // None of today's real rows has a null wireSource (see the check
     // suite's own test above), so this exercises render.ts's fallback
     // branch directly rather than leaving it untested by accident of
     // today's schema facts.
@@ -203,6 +222,7 @@ describe("renderTraceRows", () => {
       span: "acs.decision",
       wireSource: null,
       emittableByWireConsumer: false,
+      obligation: "required",
       reason: "no wire source for acs.made_up",
     };
     expect(renderTraceRows([synthetic])).toContain("(no wire source)");
@@ -215,14 +235,14 @@ describe("renderTraceRows", () => {
   });
 
   it("RenderOptions.color is opt-in, and stripping the ANSI codes back out recovers exactly the plain render", () => {
-    // A fixture, not `rows`: none of today's real 17 has wireSource ===
+    // A fixture, not `rows`: none of today's real rows has wireSource ===
     // null (the check suite's own test above), which is the only case this
     // renderer colours -- against the real data, `color: true` currently
     // produces byte-identical output to the plain render, and this test
     // would pass without exercising the colour path at all.
     const fixture: TraceRow[] = [
-      { attribute: "gen_ai.tool.name", span: "gen_ai.tool.call", wireSource: "hooks/tool-call-request.json#tool.name", emittableByWireConsumer: true },
-      { attribute: "acs.made_up", span: "acs.decision", wireSource: null, emittableByWireConsumer: false, reason: "no wire source for acs.made_up" },
+      { attribute: "gen_ai.tool.name", span: "gen_ai.tool.call", wireSource: "hooks/tool-call-request.json#tool.name", emittableByWireConsumer: true, obligation: "required" },
+      { attribute: "acs.made_up", span: "acs.decision", wireSource: null, emittableByWireConsumer: false, obligation: "required", reason: "no wire source for acs.made_up" },
     ];
 
     const plain = renderTraceRows(fixture);
@@ -235,7 +255,7 @@ describe("renderTraceRows", () => {
     expect(stripped).toBe(plain);
   });
 
-  it("is still a pure function of the rows it is handed when colour is on -- rendering the real 17 rows twice with color:true produces the same string", () => {
+  it("is still a pure function of the rows it is handed when colour is on -- rendering the real rows twice with color:true produces the same string", () => {
     // Separate from the fixture test above: even though `color: true`
     // happens to be a no-op against today's real data (nothing here is
     // painted), purity still holds and is worth asserting against the

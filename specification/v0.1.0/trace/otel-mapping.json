@@ -17,10 +17,16 @@
           "conditional_attributes": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Attributes populated whenever the hook payload carries the source field. An exporter MUST emit each one when its source field is present and MUST omit it when the source field is absent."
+            "description": "Attributes populated whenever the hook payload carries the source field. An exporter MUST emit each one when its source field is present and MUST omit it when the source field is absent. An empty source array counts as absent."
           },
-          "optional_attributes": { "type": "array", "items": { "type": "string" } }
-        }
+          "optional_attributes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Attributes an exporter MAY emit when its source field is present."
+          },
+          "_note": { "type": "string", "description": "Explanation for readers. The normative rules are in the lists and descriptions." }
+        },
+        "additionalProperties": false
       },
       "default": {
         "steps/sessionStart": {
@@ -49,7 +55,8 @@
         "steps/toolCallResult": {
           "span_name": "gen_ai.tool.result",
           "required_attributes": ["gen_ai.tool.name", "acs.exit_status"],
-          "optional_attributes": ["acs.duration_ms", "acs.request_id_ref"]
+          "conditional_attributes": ["acs.request_id_ref"],
+          "optional_attributes": ["acs.duration_ms"]
         },
         "steps/knowledgeRetrieval": {
           "span_name": "acs.knowledge.retrieval",
@@ -128,7 +135,7 @@
     },
     "decision_event": {
       "type": "object",
-      "description": "Decisions are recorded as a span event named 'acs.decision' on the parent step span. The event MUST carry the disposition. It MUST carry each conditional attribute whenever the response carries the source field, and MUST omit it when the source field is absent.",
+      "description": "Decisions are recorded as a span event named 'acs.decision' on the parent step span. The event MUST carry the disposition. It MUST carry each conditional attribute whenever the response carries the source field, and MUST omit it when the source field is absent. An empty source array counts as absent.",
       "properties": {
         "event_name": { "type": "string", "const": "acs.decision" },
         "required_attributes": {
