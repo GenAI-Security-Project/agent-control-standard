@@ -16,8 +16,7 @@
           "class_name": { "type": "string" },
           "activity_id": { "type": "integer", "description": "OCSF activity_id within the class (e.g., 1=Logon, 2=Logoff for Authentication)." },
           "_note": { "type": "string", "description": "Explanation for readers." }
-        },
-        "additionalProperties": false
+        }
       },
       "default": {
         "steps/sessionStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1 },
@@ -63,8 +62,6 @@
         "disposition_mapping": {
           "type": "object",
           "description": "OCSF disposition_id for decision events, keyed by ACS disposition. It records the Guardian's verdict. Only the Observed Agent sees the enforced outcome (Specification §6.4), so a disposition_id of 2 (Blocked) never proves the action was blocked. A Guardian MUST NOT emit an OCSF decision event when the time from receiving the request to sending the response exceeds the negotiated timeout, because v0.1.0 has no OCSF form for the decision failure that would sit beside it. That measure cannot see network time, which is one more reason to read the disposition as a verdict only. 99 (Other) means OCSF has no matching value. The disposition attribute carries the OCSF caption for 1, 2 and 14, and the ACS disposition name for 99. The allow entry applies when the deployment records allows as Detection Findings.",
-          "propertyNames": { "enum": ["allow", "deny", "modify", "ask", "defer"] },
-          "required": ["allow", "deny", "modify", "ask", "defer"],
           "additionalProperties": { "type": "integer" },
           "default": {
             "allow": 1,
@@ -74,10 +71,16 @@
             "defer": 14
           }
         },
+        "join_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Fields every decision event carries under unmapped.acs to join it to the step event it gated. request_id comes from the response, and session_id from the gated request's metadata.session_id.",
+          "default": ["request_id", "session_id"]
+        },
         "acs_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Decision facts with no OCSF attribute of their own. Each is carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same facts as the OTel acs.decision event. request_id, with the step's session_id at unmapped.acs.session_id, joins the decision to the step event it gated. finding_info.desc MAY repeat reasoning, and unmapped.acs.reasoning is the normative copy. policy_references keeps its object form, so it needs no padding rule. An empty source array counts as absent. OCSF does not validate unmapped, so each field takes the type and pattern of its definition in response-envelope.json.",
+          "description": "Decision facts with no OCSF attribute of their own. Each is carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same facts as the OTel acs.decision event. finding_info.desc MAY repeat reasoning, and unmapped.acs.reasoning is the normative copy. policy_references keeps its object form, so it needs no padding rule. An empty source array counts as absent. OCSF does not validate unmapped, so each field takes the type and pattern of its definition in response-envelope.json.",
           "default": ["request_id", "decision", "reasoning", "reason_codes", "policy_references", "cited_provenance_ids", "chain_hash", "metadata"]
         }
       }
@@ -85,8 +88,6 @@
     "severity_mapping": {
       "type": "object",
       "description": "OCSF severity_id values for decision events, keyed by ACS disposition.",
-      "propertyNames": { "enum": ["allow", "deny", "modify", "ask", "defer"] },
-      "required": ["allow", "deny", "modify", "ask", "defer"],
       "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 6 },
       "default": {
         "allow": 1,

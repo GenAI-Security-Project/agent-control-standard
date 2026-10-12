@@ -114,6 +114,17 @@ def test_ocsf_decision_tables_match_the_wire():
     assert set(ocsf["decision_class"]["properties"]["disposition_mapping"]["default"]) == dispositions
     assert set(ocsf["severity_mapping"]["default"]) == dispositions
     assert set(ocsf["decision_class"]["properties"]["acs_fields"]["default"]) <= set(acs_result)
+    assert ocsf["decision_class"]["properties"]["join_fields"]["default"] == ["request_id", "session_id"]
     failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
     listed = set(failure["required_attributes"]["default"]) | set(failure["conditional_attributes"]["default"])
     assert set(failure["attribute_values"]["default"]) <= listed
+
+
+def test_every_step_to_class_entry_uses_only_known_keys():
+    # The OCSF twin of the step_to_span key check: a typo such as activty_id
+    # would otherwise drop the activity and change type_uid with every check
+    # green. Checked here so the published schema stays open.
+    ocsf = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["step_to_class"]
+    known = set(ocsf["additionalProperties"]["properties"])
+    unknown = {method: sorted(set(entry) - known) for method, entry in ocsf["default"].items() if set(entry) - known}
+    assert not unknown, f"step_to_class entries with keys the entry schema does not declare: {unknown}"

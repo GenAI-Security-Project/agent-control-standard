@@ -51,7 +51,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
       "type_id": 99,
       "type": "AI Agent"
     },
-    "session": { "uid": "session-789" }
+    "session": { "uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36" }
   },
   "process": {
     "name": "database_query",
@@ -61,7 +61,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "unmapped": {
     "acs": {
       "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
-      "session_id": "session-789",
+      "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36",
       "step": { "id": "step-abc", "type": "toolCallRequest", "turn_id": "turn-456" },
       "tool": { "id": "database_query", "execution_id": "exec-123", "capability": "datastore.read" },
       "provenance": [
@@ -106,7 +106,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
       "cited_provenance_ids": ["p1"],
       "chain_hash": "9f2c4e7a1b3d5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
       "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
-      "session_id": "session-789"
+      "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"
     }
   }
 }
@@ -135,7 +135,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "unmapped": {
     "acs": {
       "request_id": "8d2b7f40-1c3e-4a59-b6d8-0e9f1a2b3c4d",
-      "session_id": "session-789",
+      "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36",
       "agbom": {
         "format": "canonical",
         "component_count": 7,
@@ -153,7 +153,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
 ## Implementation notes
 
 - **`actor.user.type_id: 99`** is the OCSF "Other" sentinel; pair with `actor.user.type: "AI Agent"` so SIEM filters can distinguish agent identities from human ones.
-- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. On a step event it carries `request_id`, `session_id`, and the request's `payload`. On a decision event it carries the response fields that `acs_fields` in `ocsf-mapping.json` lists. Backends that index `unmapped` keep this fully searchable.
+- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. On a step event it carries `request_id`, `session_id`, and the request's `payload`. On a decision event it carries the fields that `join_fields` and `acs_fields` in `ocsf-mapping.json` list. Backends that index `unmapped` keep this fully searchable.
 - **Provenance** flows onto OCSF events under `unmapped.acs.provenance`. Trust classification is omitted on the wire for v0.1; backends that compute trust apply it as an enrichment step.
 
 For more worked examples — including A2A and MCP wrapped events — see [Implementation examples](./OCSF/implementation_examples.md).
