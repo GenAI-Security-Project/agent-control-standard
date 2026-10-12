@@ -57,7 +57,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     // "present but optional" case, the same as acs.capability above, not
     // "no such property at all". `metadata` itself is absent from
     // `AcsResult.required`, and `metadata`'s own schema declares no
-    // `required` list either, which is what makes the row red: a
+    // `required` list either, which is what makes the row read not emittable: a
     // conformant envelope may omit `metadata` entirely, or include it
     // without `evaluator`.
     const row = only("acs.evaluator");

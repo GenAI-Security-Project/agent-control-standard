@@ -101,7 +101,7 @@
  * event) is this field present and unconditionally required", walking the
  * FULL path including whatever optional container sits in between --
  * `acs.evaluator`'s path walks through `AcsResult.metadata`, itself optional
- * on `AcsResult`, and that optionality is exactly what makes the row red.
+ * on `AcsResult`, and that optionality is exactly what makes the row read not emittable.
  * Provenance has no such always-present parent in scope: nothing in the six
  * in-scope spans' `required_attributes` names a `provenance` field, and
  * whether a `Provenance` object is attached at all is a per-argument,
@@ -431,7 +431,7 @@ export function checkTracePillar(): TraceRow[] {
    * `AcsResult.metadata.<name>` (verified by reading
    * `response-envelope.json`: `AcsResult.properties.metadata.properties`
    * lists all four; `AcsResult.required` and `metadata`'s own `required`
-   * are both silent on them, which is exactly what makes the row red under
+   * are both silent on them, which is exactly what makes the row read not emittable under
    * this module's rule -- metadata itself is optional on `AcsResult`, and
    * none of its own fields is required either). `acs.decision` and
    * `acs.reasoning` remain direct `AcsResult` siblings. A `decision_event`

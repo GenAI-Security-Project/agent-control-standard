@@ -326,7 +326,9 @@ export function renderTraceRows(rows: TraceRow[], options: RenderOptions = {}): 
     // A conditional row that is not emittable is the list working as
     // defined, so it gets its own symbol. ✖ stays reserved for a required
     // attribute the wire need not carry, which is a mapping defect.
-    const symbol = row.emittableByWireConsumer ? "✔" : row.obligation === "conditional" ? "○" : "✖";
+    // A conditional row with no wire source at all is a defect, not the
+    // list working as defined, so only a present-but-optional one gets ○.
+    const symbol = row.emittableByWireConsumer ? "✔" : row.obligation === "conditional" && row.wireSource !== null ? "○" : "✖";
     const painted = paint(symbol, row.wireSource === null ? YELLOW : null, color);
     const source = row.wireSource ?? "(no wire source)";
     const suffix = row.reason !== undefined ? ` ${row.reason}` : "";
