@@ -60,7 +60,10 @@
  * optional" -- that is the definition of the list -- so for it the red
  * verdict is the mapping and the wire agreeing. A REQUIRED row that reads
  * red is the finding: the mapping demands what the wire need not carry,
- * which is how `acs.capability` read before #227 moved it.
+ * which is how `acs.capability` read before #227 moved it. Each row
+ * carries the list it came from as `obligation`, so the renderer and the
+ * tests can tell the two cases apart rather than trusting this paragraph:
+ * every `required` row must read emittable, and the suite asserts it.
  * `optional_attributes` names no obligation and is not read.
  *
  * Decision facts (`acs.decision` and the five conditional attributes) are
@@ -127,8 +130,14 @@ export type TraceRow = {
   span: string;
   wireSource: string | null;
   emittableByWireConsumer: boolean;
+  /** Which mapping list named the attribute. A `required` row that is not
+   * emittable is a defect in the mapping. A `conditional` row that is not
+   * emittable is the list working as defined (module header). */
+  obligation: Obligation;
   reason?: string;
 };
+
+export type Obligation = "required" | "conditional";
 
 // The repository's own schemas, five directories up from this file; see
 // packages/guardian/src/validate-envelope.ts for the same relationship.
@@ -288,7 +297,7 @@ type FieldSite = {
   label: string;
 };
 
-function buildRow(attribute: string, span: string, site: FieldSite): TraceRow {
+function buildRow(attribute: string, span: string, obligation: Obligation, site: FieldSite): TraceRow {
   const { present, required } = resolveField(site.fileRoot, site.startNode, site.path);
 
   if (!present) {
@@ -297,6 +306,7 @@ function buildRow(attribute: string, span: string, site: FieldSite): TraceRow {
       span,
       wireSource: null,
       emittableByWireConsumer: false,
+      obligation,
       reason: `${site.file} has no "${site.label}" property -- no wire source for ${attribute}`,
     };
   }
@@ -308,13 +318,14 @@ function buildRow(attribute: string, span: string, site: FieldSite): TraceRow {
       span,
       wireSource,
       emittableByWireConsumer: false,
+      obligation,
       reason:
         `${site.file}'s "${site.label}" exists but is optional there, so a conformant envelope may omit it -- ` +
         `a wire consumer cannot rely on ${attribute} being emitted`,
     };
   }
 
-  return { attribute, span, wireSource, emittableByWireConsumer: true };
+  return { attribute, span, wireSource, emittableByWireConsumer: true, obligation };
 }
 
 export function checkTracePillar(): TraceRow[] {
@@ -353,6 +364,8 @@ export function checkTracePillar(): TraceRow[] {
         return { file: "hooks/tool-call-request.json", fileRoot: toolCallRequest, startNode: toolCallRequest, path: ["capability"], label: "capability" };
       case "gen_ai.tool.result::gen_ai.tool.name":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["tool", "name"], label: "tool.name" };
+      case "gen_ai.tool.result::acs.request_id_ref":
+        return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["request_id_ref"], label: "request_id_ref" };
       case "gen_ai.tool.result::acs.exit_status":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["exit_status"], label: "exit_status" };
       case "acs.session::acs.session.id":
@@ -398,8 +411,11 @@ export function checkTracePillar(): TraceRow[] {
     if (entry === undefined) {
       throw new Error(`checkTracePillar: trace/otel-mapping.json's step_to_span.default has no entry for "${method}"`);
     }
-    for (const attribute of [...entry.required_attributes, ...(entry.conditional_attributes ?? [])]) {
-      rows.push(buildRow(attribute, entry.span_name, stepAttributeSite(entry.span_name, attribute)));
+    for (const attribute of entry.required_attributes) {
+      rows.push(buildRow(attribute, entry.span_name, "required", stepAttributeSite(entry.span_name, attribute)));
+    }
+    for (const attribute of entry.conditional_attributes ?? []) {
+      rows.push(buildRow(attribute, entry.span_name, "conditional", stepAttributeSite(entry.span_name, attribute)));
     }
   }
 
@@ -467,9 +483,11 @@ export function checkTracePillar(): TraceRow[] {
   }
 
   const decisionEvent = otelMapping.properties.decision_event.properties;
-  const decisionAttributes = [...decisionEvent.required_attributes.default, ...decisionEvent.conditional_attributes.default];
-  for (const attribute of decisionAttributes) {
-    rows.push(buildRow(attribute, DECISION_SPAN, decisionAttributeSite(attribute)));
+  for (const attribute of decisionEvent.required_attributes.default) {
+    rows.push(buildRow(attribute, DECISION_SPAN, "required", decisionAttributeSite(attribute)));
+  }
+  for (const attribute of decisionEvent.conditional_attributes.default) {
+    rows.push(buildRow(attribute, DECISION_SPAN, "conditional", decisionAttributeSite(attribute)));
   }
 
   // Provenance attributes land as ordinary attributes on whichever step
@@ -482,7 +500,7 @@ export function checkTracePillar(): TraceRow[] {
   for (const attribute of otelMapping.properties.provenance_attributes.properties.required.default) {
     const field = attribute.slice("acs.provenance.".length);
     rows.push(
-      buildRow(attribute, PROVENANCE_SPAN, {
+      buildRow(attribute, PROVENANCE_SPAN, "required", {
         file: "provenance.json",
         fileRoot: provenance,
         startNode: provenance,

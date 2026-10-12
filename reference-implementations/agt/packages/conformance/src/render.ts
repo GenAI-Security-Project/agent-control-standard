@@ -303,10 +303,10 @@ export function renderCoverageMatrix(cells: CoverageMatrix, options: RenderOptio
  * row (`acs.capability`) is a smaller gap than an attribute with no wire
  * source at all, and the plain/coloured split is what keeps that
  * distinction visible at a glance rather than collapsing both into one
- * undifferentiated ✖. None of the checker's own 17 rows takes this branch
+ * undifferentiated ✖. None of the checker's own rows takes this branch
  * today (`trace-pillar.ts`'s own test suite asserts and explains why -- every
- * attribute currently in scope turned out to be a declared, merely optional
- * property, not an absent one), so this split is exercised by a synthetic
+ * attribute currently in scope is a declared property, required or
+ * optional, never an absent one), so this split is exercised by a synthetic
  * fixture rather than by `checkTracePillar()`'s real output; it stays
  * general-purpose code because `resolveField` can still resolve a future
  * attribute to genuinely absent, and this renderer should not stop telling
@@ -323,7 +323,10 @@ export function renderTraceRows(rows: TraceRow[], options: RenderOptions = {}): 
   const spanWidth = Math.max(0, ...rows.map((row) => row.span.length));
 
   const lines = rows.map((row) => {
-    const symbol = row.emittableByWireConsumer ? "✔" : "✖";
+    // A conditional row that is not emittable is the list working as
+    // defined, so it gets its own symbol. ✖ stays reserved for a required
+    // attribute the wire need not carry, which is a mapping defect.
+    const symbol = row.emittableByWireConsumer ? "✔" : row.obligation === "conditional" ? "○" : "✖";
     const painted = paint(symbol, row.wireSource === null ? YELLOW : null, color);
     const source = row.wireSource ?? "(no wire source)";
     const suffix = row.reason !== undefined ? ` ${row.reason}` : "";
@@ -338,6 +341,7 @@ export function renderTraceRows(rows: TraceRow[], options: RenderOptions = {}): 
     "",
     ...lines,
     "",
-    "Legend: ✔ emittable by a wire consumer alone   ✖ not emittable (reason inline)",
+    "Legend: ✔ emittable by a wire consumer alone   ○ conditional: emitted when the envelope carries it   " +
+      "✖ required but not emittable (reason inline)",
   ].join("\n");
 }

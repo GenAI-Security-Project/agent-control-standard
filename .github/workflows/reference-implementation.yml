@@ -10,18 +10,25 @@
 # concurrency group are an integer pull request number and a ref name GitHub validates,
 # and a concurrency group is not a shell context.
 #
-# Scoped by path. A documentation or schema change should not pay for a Bun install.
+# Scoped by path. A documentation change should not pay for a Bun install. A schema change
+# does, because this tree reads the schemas at runtime.
 name: Reference implementation
 
 on:
   pull_request:
     paths:
       - "reference-implementations/**"
+      # The conformance checker and the trace exporter read the schemas and
+      # the Trace mappings at runtime, so a spec-only change can break them.
+      - "specification/**"
       - ".github/workflows/reference-implementation.yml"
   push:
     branches: ["main", "integration"]
     paths:
       - "reference-implementations/**"
+      # The conformance checker and the trace exporter read the schemas and
+      # the Trace mappings at runtime, so a spec-only change can break them.
+      - "specification/**"
       - ".github/workflows/reference-implementation.yml"
   workflow_dispatch:
 

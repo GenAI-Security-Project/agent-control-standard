@@ -16,7 +16,7 @@ flowchart LR
 
 Each ACS step produces a span whose `name` and required attributes are fixed by the table below. Decisions are recorded as span events on the parent step span, not as separate spans, so the enforcement verdict and the action it gates share a parent.
 
-An attribute marked *conditional* comes from a field the hook payload or response may omit. An exporter MUST emit it whenever the source field is present and MUST omit it when the field is absent.
+An attribute marked *conditional* comes from a field the hook payload or response may omit. An exporter MUST emit it whenever the source field is present and MUST omit it when the field is absent. An empty source array counts as absent.
 
 The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json). See [Extending OpenTelemetry](./extend_opentelemetry.md) for a deeper integration guide.
 
@@ -27,7 +27,7 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | `steps/userMessage` | `acs.message.user` | `acs.session.id`, `acs.content.types[]` |
 | `steps/agentResponse` | `acs.message.agent` | `acs.session.id`, `acs.agent.id` |
 | `steps/toolCallRequest` | `gen_ai.tool.call` | `gen_ai.tool.name`; `acs.capability` (conditional); `acs.tool.provider` (optional) |
-| `steps/toolCallResult` | `gen_ai.tool.result` | `gen_ai.tool.name`, `acs.exit_status`; `acs.duration_ms` (optional) |
+| `steps/toolCallResult` | `gen_ai.tool.result` | `gen_ai.tool.name`, `acs.exit_status`; `acs.request_id_ref` (conditional); `acs.duration_ms` (optional) |
 | `steps/knowledgeRetrieval` | `acs.knowledge.retrieval` | `acs.results.count`; `acs.source.type` (conditional) |
 | `steps/memoryStore` | `acs.memory.store` | `acs.memory_store.name`, `acs.operation` (both conditional) |
 | `steps/memoryContextRetrieval` | `acs.memory.retrieval` | `acs.results.count`; `acs.memory_store.name` (conditional) |
