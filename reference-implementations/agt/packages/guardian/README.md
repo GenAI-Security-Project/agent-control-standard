@@ -95,6 +95,16 @@ Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked 
 
 It prints how many spans reached the file and exits non-zero when that is fewer than it built.
 
+### Sample trace
+
+[`samples/trace/acs-trace-sample.jsonl`](../../samples/trace/acs-trace-sample.jsonl) is what this export looks like, so you can read it without running the Guardian. It holds six steps: an allowed tool call and its result, linked by `acs.request_id_ref`, a denied call carrying reasoning, reason codes, policy references and provenance, a call the Guardian answered with an error, a decision that finished after the timeout, and a step the host could not deliver, converted from its audit log. The decisions come from the stock policy, and the one late decision is delayed on purpose. Every value in it is synthetic.
+
+```bash
+bun run sample:trace
+```
+
+That command regenerates it. `test/sample-trace.test.ts` checks the sample against `otel-mapping.json` and fails when the exporter's output no longer matches it, so a change to the exporter or the mapping comes with a regenerated sample. The converted span has no `gen_ai.tool.name`, because the audit log does not record the tool (issue #274). Like the exporter, the sample covers two hook methods and is not an ACS-Trace conformance claim.
+
 ## Use it in-process
 
 The tests and the conformance harness start a Guardian in the same process.
