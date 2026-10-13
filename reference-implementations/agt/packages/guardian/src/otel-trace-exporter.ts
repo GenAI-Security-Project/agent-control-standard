@@ -379,9 +379,14 @@ function asError(error: unknown): Error {
  * leaves a batch unwritten. The chain itself never rejects: one failed write
  * is reported through its own batch's callback and cannot poison every write
  * after it.
+ *
+ * 0o700 on the directory and 0o600 on the file: the file holds reasoning
+ * text and provenance source ids, so other local users should not read it
+ * (#71 is the same problem in the envelope log). The mode applies when the
+ * exporter creates the path; an existing file keeps whatever it had.
  */
 export function createFileSpanExporter(path: string): SpanExporter {
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   let chain: Promise<void> = Promise.resolve();
   return {
     export(spans, resultCallback): void {
@@ -396,7 +401,7 @@ export function createFileSpanExporter(path: string): SpanExporter {
         resultCallback({ code: ExportResultCode.FAILED, error: asError(error) });
         return;
       }
-      const write = chain.then(() => appendFile(path, line));
+      const write = chain.then(() => appendFile(path, line, { mode: 0o600 }));
       chain = write.then(
         () => undefined,
         () => undefined,

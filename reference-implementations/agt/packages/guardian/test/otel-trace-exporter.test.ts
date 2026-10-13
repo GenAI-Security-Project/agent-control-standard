@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
@@ -7,6 +7,7 @@ import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@ope
 import { startGuardian } from "../src/index.ts";
 import { METHODS_EVALUATED } from "../src/handshake.ts";
 import {
+  createFileSpanExporter,
   createOtelTraceExporter,
   loadOtelMapping,
   NULL_OTEL_TRACE_EXPORTER,
@@ -464,6 +465,58 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(span?.name).toBe(MAPPING.stepToSpan["steps/toolCallResult"]!.span_name);
     expect(span?.attributes["acs.provenance.origin"]).toEqual(["tool_output"]);
     expect(span?.attributes["acs.provenance.source_id"]).toEqual(["Bash"]);
+  });
+
+  // The file exporter on its own: two exports handed over back to back,
+  // without waiting between them, land as two lines in export order. The
+  // append is asynchronous, so order is a property the chain has to keep.
+  it("writes two exports as two lines, in export order", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-file-order-"));
+    const path = join(dir, "traces.jsonl");
+    const { exporter, spans } = memoryExporter();
+    const first = crypto.randomUUID();
+    const second = crypto.randomUUID();
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1, requestId: first }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 2, requestId: second }), "steps/toolCallRequest"), decisionResponse(2, { decision: "allow" }));
+    await exporter.flush();
+    const [spanA, spanB] = spans();
+    try {
+      const file = createFileSpanExporter(path);
+      const results = await Promise.all([
+        new Promise<number>((resolve) => file.export([spanA!], (result) => resolve(result.code))),
+        new Promise<number>((resolve) => file.export([spanB!], (result) => resolve(result.code))),
+      ]);
+      await file.shutdown();
+
+      expect(results).toEqual([0, 0]);
+      const lines = otlpFile(path).map((request) => otlpSpans([request]).map((span) => otlpAttribute(span, "acs.request_id")));
+      expect(lines).toEqual([[first], [second]]);
+    } finally {
+      await exporter.shutdown();
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  });
+
+  // The file holds reasoning text and provenance source ids (#71), so it is
+  // created readable by its owner only, and so is the directory the
+  // exporter makes for it.
+  it("creates the file 0600 and its directory 0700", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-file-mode-"));
+    const nested = join(dir, "nested");
+    const path = join(nested, "traces.jsonl");
+    const exporter = createOtelTraceExporter({ filePath: path, methodsEvaluated: METHODS_EVALUATED });
+    try {
+      exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+      await exporter.shutdown();
+
+      expect((statSync(nested).mode & 0o777).toString(8)).toBe("700");
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+    } finally {
+      unlinkSync(path);
+      rmdirSync(nested);
+      rmdirSync(dir);
+    }
   });
 
   it("NULL_OTEL_TRACE_EXPORTER writes nothing and never throws", async () => {
