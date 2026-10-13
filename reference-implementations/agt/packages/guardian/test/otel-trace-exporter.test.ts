@@ -730,6 +730,30 @@ describe("Guardian trace export wiring", () => {
     }
   });
 
+  // `capability` is optional on the wire (#227) and required on the span by
+  // the mapping. The exporter emits what the envelope supplies and invents
+  // nothing: no capability, no acs.capability, and the span is otherwise whole.
+  it("emits a span without acs.capability for a request that carries no capability, and nothing breaks", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    try {
+      const response = await postRaw(
+        guardian.url,
+        makeEnvelope("steps/toolCallRequest", { tool: { name: "run_shell" }, arguments: { command: { value: "ls -la" } } }, { id: 1 }),
+      );
+      await exporter.flush();
+
+      expect((response.result as { decision?: string }).decision).toBe("allow");
+      const [span] = spans();
+      expect(span?.name).toBe(TOOL_CALL_SPAN.span_name);
+      expect(span?.attributes["gen_ai.tool.name"]).toBe("run_shell");
+      expect(span?.attributes["acs.capability"]).toBeUndefined();
+      expect(span?.events[0]?.attributes?.["acs.decision"]).toBe("allow");
+    } finally {
+      await guardian.close();
+    }
+  });
+
   it("emits no span for handshake/hello or for a method this Guardian does not dispatch", async () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });

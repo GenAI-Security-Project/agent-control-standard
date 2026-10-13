@@ -290,11 +290,17 @@ harness measures the wire, not the language behind it.
 ### Harden it for production
 
 Two gaps are named and open, not vague. The Guardian writes its envelope and audit logs
-as synchronous file appends on the decision path, with no batching, so trace spans need
-a batched writer before a Trace-pillar claim would hold up under load. No OpenTelemetry
-collector or exporter exists yet. The conformance harness only measures which
-attributes a consumer *could* emit from the envelopes, not that anything ships them.
-Start in [`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
+as synchronous file appends on the decision path, with no batching. Trace export is
+partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
+for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
+[Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
+describes.
+
+That exporter does not make the reference ACS-Trace conformant, and this tree claims no
+Trace profile. It covers two methods, emits no OCSF, and leaves out a required attribute
+when the request omits it. The conformance harness still measures which attributes a
+consumer *could* emit from the wire, not what the exporter ships. Start in
+[`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
 
 ### Go deeper
 

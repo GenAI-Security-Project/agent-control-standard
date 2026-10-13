@@ -13,8 +13,11 @@ receivers:
 exporters:
   file:
     path: .acs/otel-collector-traces.jsonl
+  # basic, not detailed: detailed prints every attribute, reasoning text
+  # and provenance source ids included, to a stdout that often ends up in a
+  # log system nobody planned for.
   debug:
-    verbosity: detailed
+    verbosity: basic
 
 service:
   pipelines:

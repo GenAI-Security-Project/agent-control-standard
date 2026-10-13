@@ -50,19 +50,27 @@ Every throw on the request path is caught. Nothing escapes the fetch handler, be
 
 ## Export traces
 
-Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter exists and the Guardian runs exactly as before.
+Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter exists and the Guardian runs exactly as before. This is an exporter for the two live methods, not an ACS-Trace conformance claim.
 
 ```bash
 ACS_OTEL_FILE=.acs/otel-traces.jsonl bun run guardian
 ```
 
-Each decided step becomes one span, named by [`trace/otel-mapping.json`](../../../../specification/v0.1.0/trace/otel-mapping.json): `gen_ai.tool.call` for `steps/toolCallRequest` and `gen_ai.tool.result` for `steps/toolCallResult`. The span opens when the request is recorded and closes when the response is. It carries the attributes the mapping lists for it, read from the envelope, plus `acs.session.id` and `acs.request_id` on every span so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span also carries `acs.provenance.origin` and `acs.provenance.source_id` as arrays, one element per Provenance object in wire order. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
+Each decided step becomes one span, named by [`trace/otel-mapping.json`](../../../../specification/v0.1.0/trace/otel-mapping.json): `gen_ai.tool.call` for `steps/toolCallRequest` and `gen_ai.tool.result` for `steps/toolCallResult`. The span opens when the request is recorded and closes when the response is. It carries each attribute the mapping lists for it when the envelope supplies a value. A required attribute the envelope omits, such as `acs.capability` (#227), is absent from the span.
 
-The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian sends it once #229 is merged. `acs.chain_hash` appears only after a ContextEntry was written for the step. An envelope that fails validation is denied before that point and has none. `handshake/hello`, methods this Guardian does not dispatch, and unparseable bodies produce no span.
+Every span also carries `acs.session.id` and `acs.request_id`, so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span carries `acs.provenance.origin` and `acs.provenance.source_id` as arrays, one element per Provenance object in wire order, with `""` where an object has no `source_id`. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
 
-The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian`. Spans are batched and flushed when the Guardian closes, so stop it with Ctrl-C rather than killing it. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
+The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian sends it once #229 is merged.
 
-Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged. Use synthetic sessions for lab runs: the envelope log holds raw envelopes before any redaction, and a span's `acs.reasoning` repeats the Guardian's explanation of them ([#71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
+This Guardian does not send `chain_hash`, `cited_provenance_ids`, or `policy_version` on its responses yet, so those attributes are absent from its spans today. The three policy arrays always have the same length as `policy_references`, with `""` where a reference has no value. `handshake/hello`, methods this Guardian does not dispatch, and unparseable bodies produce no span.
+
+A step that got no decision is recorded as an `acs.decision.failure` event on the same span, with `acs.failure.class`, `acs.failure.posture` and `acs.failure.reported_by`, plus the error code, the timeout, the elapsed time and the request size when known. The Guardian emits it for an error it answered instead of a decision, for a decision it finished after the negotiated timeout, and for a step still open when it shut down. The converter below produces the same event, reported by the observed agent, from the host adapter's audit log.
+
+The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian`. Spans are batched and flushed when the Guardian closes on SIGINT or SIGTERM. A SIGKILL loses the last batch. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
+
+Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged.
+
+Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too ([#71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
 
 ### Convert the host audit log
 
