@@ -135,7 +135,24 @@ export function decisionFailureAttributes(failure: DecisionFailure): Attributes 
   return attributes;
 }
 
-type StepSpanEntry = { span_name: string; required_attributes: string[]; optional_attributes?: string[] };
+/** One `step_to_span` entry. `conditional_attributes` is the list #227
+ * adds, for attributes the wire carries only sometimes (`acs.capability`
+ * among them); read the same way as the other two. */
+type StepSpanEntry = {
+  span_name: string;
+  required_attributes: string[];
+  conditional_attributes?: string[];
+  optional_attributes?: string[];
+};
+
+/**
+ * Methods this Guardian evaluates that have no `step_to_span` entry in
+ * otel-mapping.json yet, and why. A method here gets no span. The test
+ * fails for an evaluated method that is neither mapped nor listed here, so
+ * a new method cannot quietly go untraced: it is either mapped or named
+ * with its reason.
+ */
+export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
 
 /** otel-mapping.json is a JSON Schema whose data lives inside `default`
  * keys -- the same three places `packages/conformance/src/trace-pillar.ts`
@@ -221,7 +238,7 @@ function policyColumn(references: unknown, field: string): string[] | undefined 
  * parsed JSON rather than the validated envelope, because the span starts
  * before validation runs and an envelope that fails the schema is still a
  * step this session took. */
-type RequestParts = { params: JsonObject; metadata: JsonObject; payload: JsonObject; tool: JsonObject };
+export type RequestParts = { params: JsonObject; metadata: JsonObject; payload: JsonObject; tool: JsonObject };
 
 function requestParts(envelope: unknown): RequestParts {
   const params = asObject(asObject(envelope)?.params) ?? {};
@@ -234,7 +251,7 @@ function requestParts(envelope: unknown): RequestParts {
 /** The decision half of a success response: the `result` and its optional
  * `metadata`. `undefined` for a JSON-RPC error response, which carries no
  * decision. */
-type ResultParts = { result: JsonObject; metadata: JsonObject };
+export type ResultParts = { result: JsonObject; metadata: JsonObject };
 
 function resultParts(response: unknown): ResultParts | undefined {
   const result = asObject(asObject(response)?.result);
@@ -242,7 +259,7 @@ function resultParts(response: unknown): ResultParts | undefined {
   return { result, metadata: asObject(result.metadata) ?? {} };
 }
 
-type Source<Parts> = (parts: Parts) => AttributeValue | undefined;
+export type Source<Parts> = (parts: Parts) => AttributeValue | undefined;
 
 /**
  * Attribute name -> where it is read from on the request envelope, for every
@@ -252,7 +269,7 @@ type Source<Parts> = (parts: Parts) => AttributeValue | undefined;
  * (`hooks/tool-call-request.json`, `hooks/tool-call-result.json`) and
  * `request-envelope.json`'s `AcsParams.metadata`.
  */
-const STEP_ATTRIBUTE_SOURCES: Record<string, Source<RequestParts>> = {
+export const STEP_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<RequestParts>>> = {
   "acs.session.id": (r) => asString(r.metadata.session_id),
   "acs.agent.id": (r) => asString(r.metadata.agent_id),
   "gen_ai.tool.name": (r) => asString(r.tool.name),
@@ -287,7 +304,7 @@ const CORRELATION_ATTRIBUTE_SOURCES: Record<string, Source<RequestParts>> = {
  * because the mapping requires it and the reference never sends
  * `metadata.evaluator` on the wire.
  */
-const DECISION_ATTRIBUTE_SOURCES: Record<string, Source<ResultParts>> = {
+export const DECISION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<ResultParts>>> = {
   "acs.decision": (d) => asString(d.result.decision),
   "acs.evaluator": (d) => asString(d.metadata.evaluator) ?? DEFAULT_EVALUATOR,
   "acs.reasoning": (d) => asString(d.result.reasoning),
@@ -688,7 +705,12 @@ export function createOtelTraceExporter({
     const parts = requestParts(envelope);
     const attributes: Attributes = {};
     collect(attributes, Object.keys(CORRELATION_ATTRIBUTE_SOURCES), CORRELATION_ATTRIBUTE_SOURCES, parts);
-    collect(attributes, [...entry.required_attributes, ...(entry.optional_attributes ?? [])], STEP_ATTRIBUTE_SOURCES, parts);
+    collect(
+      attributes,
+      [...entry.required_attributes, ...(entry.conditional_attributes ?? []), ...(entry.optional_attributes ?? [])],
+      STEP_ATTRIBUTE_SOURCES,
+      parts,
+    );
     const provenance = provenanceObjects(parts.payload);
     if (provenance.length > 0) {
       for (const name of mapping.provenanceAttributes) {

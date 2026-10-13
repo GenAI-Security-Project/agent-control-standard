@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
@@ -10,9 +10,12 @@ import { buildServerHello } from "../src/handshake.ts";
 import {
   createFileSpanExporter,
   createOtelTraceExporter,
+  DECISION_ATTRIBUTE_SOURCES,
   loadOtelMapping,
+  METHODS_WITHOUT_SPAN,
   NULL_OTEL_TRACE_EXPORTER,
   OTEL_SERVICE_NAME,
+  STEP_ATTRIBUTE_SOURCES,
   type CreateOtelTraceExporterOptions,
   type OtelTraceExporter,
 } from "../src/otel-trace-exporter.ts";
@@ -559,6 +562,80 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     await first;
   });
 
+  // #227 moves acs.capability into a per-span conditional_attributes list.
+  // A small mapping of this test's own proves the exporter reads that list;
+  // the real-mapping test below proves the sources cover whatever the real
+  // file lists.
+  it("emits an attribute a step_to_span entry lists under conditional_attributes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-conditional-"));
+    const mappingPath = join(dir, "otel-mapping.json");
+    writeFileSync(
+      mappingPath,
+      JSON.stringify({
+        properties: {
+          step_to_span: {
+            default: {
+              "steps/toolCallRequest": {
+                span_name: "test.tool.call",
+                required_attributes: ["gen_ai.tool.name"],
+                conditional_attributes: ["acs.capability"],
+              },
+            },
+          },
+          decision_event: {
+            properties: {
+              event_name: { const: "acs.decision" },
+              required_attributes: { default: ["acs.decision"] },
+              conditional_attributes: { default: [] },
+            },
+          },
+          provenance_attributes: { properties: { required: { default: [] }, optional: { default: [] } } },
+        },
+      }),
+    );
+    try {
+      const { exporter, spans } = memoryExporter({ mappingPath });
+      exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+      await exporter.flush();
+
+      const [span] = spans();
+      expect(span?.name).toBe("test.tool.call");
+      expect(span?.attributes["gen_ai.tool.name"]).toBe("run_shell");
+      expect(span?.attributes["acs.capability"]).toBe("process.exec");
+    } finally {
+      unlinkSync(mappingPath);
+      rmdirSync(dir);
+    }
+  });
+
+  // Against the real mapping, not a fixture: a name the mapping lists for
+  // an evaluated method, in any of its three lists, must have a source here,
+  // or that attribute quietly stops appearing when the mapping changes --
+  // which is what #227's conditional_attributes would have done.
+  it("has a source for every attribute the real mapping lists on an evaluated method, and for every decision attribute", () => {
+    for (const method of METHODS_EVALUATED) {
+      const entry = MAPPING.stepToSpan[method];
+      if (entry === undefined) {
+        continue;
+      }
+      const listed = [...entry.required_attributes, ...(entry.conditional_attributes ?? []), ...(entry.optional_attributes ?? [])];
+      for (const attribute of listed) {
+        expect({ method, attribute, known: attribute in STEP_ATTRIBUTE_SOURCES }).toEqual({ method, attribute, known: true });
+      }
+    }
+    for (const attribute of MAPPING.decisionAttributes) {
+      expect({ attribute, known: attribute in DECISION_ATTRIBUTE_SOURCES }).toEqual({ attribute, known: true });
+    }
+  });
+
+  it("maps every method the ServerHello evaluates, or names it in METHODS_WITHOUT_SPAN with a reason", () => {
+    for (const method of METHODS_EVALUATED) {
+      const mapped = MAPPING.stepToSpan[method] !== undefined;
+      const listed = typeof METHODS_WITHOUT_SPAN[method] === "string" && METHODS_WITHOUT_SPAN[method].length > 0;
+      expect({ method, mappedOrListed: mapped || listed }).toEqual({ method, mappedOrListed: true });
+    }
+  });
+
   it("NULL_OTEL_TRACE_EXPORTER writes nothing and never throws", async () => {
     expect(NULL_OTEL_TRACE_EXPORTER.start(toolCallEnvelope("ls"), "steps/toolCallRequest")).toBeNull();
     expect(() => NULL_OTEL_TRACE_EXPORTER.end(null, decisionResponse(1, DENY))).not.toThrow();
@@ -599,6 +676,29 @@ describe("Guardian trace export wiring", () => {
   // two sessions can be in flight with the same JSON-RPC id. Each must end
   // its own span with its own decision: the deny for the destructive call,
   // the allow for the benign one.
+  // Every span a real Guardian emits is named by the mapping: one of its
+  // step_to_span span_name values, never a name this module made up.
+  it("names every emitted span with a span_name from step_to_span", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    try {
+      await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1 }));
+      await postRaw(
+        guardian.url,
+        makeEnvelope("steps/toolCallResult", { tool: { name: "Bash" }, exit_status: "success", outputs: [{ value: "ok" }] }, { id: 2 }),
+      );
+      await exporter.flush();
+
+      const names = new Set(Object.values(MAPPING.stepToSpan).map((entry) => entry.span_name));
+      expect(spans()).toHaveLength(2);
+      for (const span of spans()) {
+        expect({ span: span.name, mapped: names.has(span.name) }).toEqual({ span: span.name, mapped: true });
+      }
+    } finally {
+      await guardian.close();
+    }
+  });
+
   it("keeps two concurrent sessions apart when they reuse one JSON-RPC id", async () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
