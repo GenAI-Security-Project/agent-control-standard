@@ -56,17 +56,19 @@ Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter
 ACS_OTEL_FILE=.acs/otel-traces.jsonl bun run guardian
 ```
 
-Each decided step becomes one span, named by [`trace/otel-mapping.json`](../../../../specification/v0.1.0/trace/otel-mapping.json): `gen_ai.tool.call` for `steps/toolCallRequest` and `gen_ai.tool.result` for `steps/toolCallResult`. The span opens when the request is recorded and closes when the response is. It carries each attribute the mapping lists for it when the envelope supplies a value. A required attribute the envelope omits, such as `acs.capability` (#227), is absent from the span.
+Each decided step becomes one span, named by [`trace/otel-mapping.json`](../../../../specification/v0.1.0/trace/otel-mapping.json): `gen_ai.tool.call` for `steps/toolCallRequest` and `gen_ai.tool.result` for `steps/toolCallResult`. The span opens when the request is recorded and closes when the response is. It carries each attribute the mapping lists for it when the envelope supplies a value. An attribute the envelope omits, such as `acs.capability`, is absent from the span.
 
-Every span also carries `acs.session.id` and `acs.request_id`, so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span carries `acs.provenance.origin` and `acs.provenance.source_id` as arrays, one element per Provenance object in wire order, with `""` where an object has no `source_id`. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
+Every span also carries `acs.session.id` and `acs.request_id`, so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span carries `acs.provenance.origin` as an array, one element per Provenance object in wire order. `acs.provenance.source_id` is the matching array, with `""` where an object has no `source_id`, and it is left out when no object has one. Both stop at 64 objects. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
+
+Every string attribute is cut at 4096 characters, a long `acs.reasoning` included, so one large request cannot grow the export queue without bound. The sampler and span limits are set in code, so an `OTEL_TRACES_SAMPLER` or `OTEL_SPAN_*` variable in the environment does not change what is exported.
 
 The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian sends it once #229 is merged.
 
 This Guardian does not send `chain_hash`, `cited_provenance_ids`, or `policy_version` on its responses yet, so those attributes are absent from its spans today. The three policy arrays always have the same length as `policy_references`, with `""` where a reference has no value. `handshake/hello`, methods this Guardian does not dispatch, and unparseable bodies produce no span.
 
-A step that got no decision is recorded as an `acs.decision.failure` event on the same span, with `acs.failure.class`, `acs.failure.posture` and `acs.failure.reported_by`, plus the error code, the timeout, the elapsed time and the request size when known. The Guardian emits it for an error it answered instead of a decision, for a decision it finished after the negotiated timeout, and for a step still open when it shut down. The converter below produces the same event, reported by the observed agent, from the host adapter's audit log.
+A step that got no decision is recorded as an `acs.decision.failure` event on the same span, with `acs.failure.class`, `acs.failure.posture` and `acs.failure.reported_by`, plus the error code, the timeout, the elapsed time and the request size when known. The Guardian emits it for an error it answered instead of a decision, for a decision it finished after the negotiated timeout, and for a step still open when it shut down. It carries the error code but never the error text, because that text can quote the request. A replay rejection (`-32005`) gets no event, because its pair belongs to the earlier request. The converter below produces the same event, reported by the observed agent, from the host adapter's audit log.
 
-The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian`. Spans are batched and flushed when the Guardian closes on SIGINT or SIGTERM. A SIGKILL loses the last batch. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
+The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian`. Spans are batched and flushed when the Guardian closes on SIGINT or SIGTERM. A SIGKILL loses the last batch, and so does an output that has not finished three seconds into shutdown: the Guardian reports it on stderr and exits instead of waiting. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
 
 Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged.
 
@@ -74,7 +76,7 @@ Use synthetic sessions for lab runs. The envelope log holds raw envelopes before
 
 ### Convert the host audit log
 
-The failures only the host sees, a Guardian it could not reach or one that answered too late, are in the host adapter's audit log, not in the Guardian's file. `audit-to-otlp.ts` turns that log into the same OTLP/JSON shape: one span per posture entry, with an `acs.decision.failure` event whose `acs.failure.reported_by` is `observed_agent`.
+The failures only the host sees, a Guardian it could not reach or one that answered too late, are in the host adapter's audit log, not in the Guardian's file. `audit-to-otlp.ts` turns that log into the same OTLP/JSON shape: one span per posture entry, with an `acs.decision.failure` event whose `acs.failure.reported_by` is `observed_agent`. Each span carries the same `acs.session.id` and `acs.request_id` as the Guardian's span for that request, so the two files join. It does not carry `gen_ai.tool.name`, because the audit log does not record the tool.
 
 ```bash
 bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.jsonl
@@ -82,7 +84,16 @@ bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.
 
 Run it after the Guardian has stopped. Two writers on one file can interleave lines, so give the converter a file of its own or wait. Running it twice over the same log writes every span twice.
 
-Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked about, which the failure classes do not cover. Entries whose method has no `step_to_span` entry are skipped and counted on stdout.
+`acs.failure.posture` is the deployment's posture, not what became of the step. A refused request shows `fail_open` under a `proceed` deployment even though the host blocked it. The detail sentence says so, and the error code is in `acs.failure.error_code`. The detail is always a sentence the converter writes, never the host's message, which quotes the Guardian's error text.
+
+Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked about, which the failure classes do not cover. Also skipped, and counted on stdout:
+
+- entries whose method has no `step_to_span` entry;
+- entries with no method, by failure kind, because the host never built a request for them;
+- replay rejections;
+- lines it cannot read.
+
+It prints how many spans reached the file and exits non-zero when that is fewer than it built.
 
 ## Use it in-process
 
