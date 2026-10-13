@@ -64,7 +64,15 @@ export function verifyHmacSha256(
   signatureValue: string,
   secret: Buffer,
 ): SignatureVerificationResult {
-  const input = signingInput(envelope);
+  // Canonicalization recurses once per nesting level, and this runs on
+  // unauthenticated input: a body nested past the stack is unverifiable, so
+  // it is a SIGNATURE_INVALID like any other, not a Guardian failure.
+  let input: string;
+  try {
+    input = signingInput(envelope);
+  } catch {
+    return { valid: false, reason: "signature input cannot be canonicalised" };
+  }
   const computed = createHmac("sha256", secret).update(input).digest();
 
   let expected: Buffer;
