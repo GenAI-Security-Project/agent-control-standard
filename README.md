@@ -294,7 +294,8 @@ as synchronous file appends on the decision path, with no batching. Trace export
 partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
 for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
 [Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
-describes.
+describes. A [sample trace](reference-implementations/agt/samples/trace/acs-trace-sample.jsonl)
+shows that output without running anything.
 
 That exporter does not make the reference ACS-Trace conformant, and this tree claims no
 Trace profile. It covers two methods, emits no OCSF, and leaves out a required attribute
