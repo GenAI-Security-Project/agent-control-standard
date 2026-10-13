@@ -7,14 +7,24 @@
   "properties": {
     "step_to_span": {
       "type": "object",
-      "description": "Map ACS step methods to OTel span names + required attributes.",
+      "description": "Map ACS step methods to OTel span names and attributes. A required attribute's source field is required on the wire. A conditional attribute's source field is optional on the wire.",
       "additionalProperties": {
         "type": "object",
         "required": ["span_name", "required_attributes"],
         "properties": {
           "span_name": { "type": "string" },
           "required_attributes": { "type": "array", "items": { "type": "string" } },
-          "optional_attributes": { "type": "array", "items": { "type": "string" } }
+          "conditional_attributes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Attributes populated whenever the hook payload carries the source field. An exporter MUST emit each one when its source field is present and MUST omit it when the source field is absent. An empty source array counts as absent."
+          },
+          "optional_attributes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Attributes an exporter MAY emit when its source field is present."
+          },
+          "_note": { "type": "string", "description": "Explanation for readers. The normative rules are in the lists and descriptions." }
         }
       },
       "default": {
@@ -37,25 +47,30 @@
         },
         "steps/toolCallRequest": {
           "span_name": "gen_ai.tool.call",
-          "required_attributes": ["gen_ai.tool.name", "acs.capability"],
+          "required_attributes": ["gen_ai.tool.name"],
+          "conditional_attributes": ["acs.capability"],
           "optional_attributes": ["acs.tool.provider", "acs.tool.version", "acs.operation"]
         },
         "steps/toolCallResult": {
           "span_name": "gen_ai.tool.result",
           "required_attributes": ["gen_ai.tool.name", "acs.exit_status"],
-          "optional_attributes": ["acs.duration_ms", "acs.request_id_ref"]
+          "conditional_attributes": ["acs.request_id_ref"],
+          "optional_attributes": ["acs.duration_ms"]
         },
         "steps/knowledgeRetrieval": {
           "span_name": "acs.knowledge.retrieval",
-          "required_attributes": ["acs.source.type", "acs.results.count"]
+          "required_attributes": ["acs.results.count"],
+          "conditional_attributes": ["acs.source.type"]
         },
         "steps/memoryStore": {
           "span_name": "acs.memory.store",
-          "required_attributes": ["acs.memory_store.name", "acs.operation"]
+          "required_attributes": [],
+          "conditional_attributes": ["acs.memory_store.name", "acs.operation"]
         },
         "steps/memoryContextRetrieval": {
           "span_name": "acs.memory.retrieval",
-          "required_attributes": ["acs.memory_store.name", "acs.results.count"]
+          "required_attributes": ["acs.results.count"],
+          "conditional_attributes": ["acs.memory_store.name"]
         },
         "steps/sessionEnd": {
           "span_name": "acs.session.end",
@@ -79,7 +94,7 @@
         "steps/postCompact": {
           "span_name": "acs.compact.complete",
           "required_attributes": ["acs.compact.entry_count"],
-          "optional_attributes": ["acs.compact.lineage_depth_after", "acs.provenance.origins_compacted"]
+          "optional_attributes": ["acs.compact.lineage_depth_after"]
         },
         "steps/subagentStart": {
           "span_name": "acs.subagent",
@@ -87,7 +102,8 @@
         },
         "steps/subagentStop": {
           "span_name": "acs.subagent.end",
-          "required_attributes": ["acs.subagent.session_id", "acs.subagent.outcome", "acs.subagent.final_chain_hash"]
+          "required_attributes": ["acs.subagent.session_id", "acs.subagent.outcome"],
+          "conditional_attributes": ["acs.subagent.final_chain_hash"]
         },
         "steps/skillRegister": {
           "span_name": "acs.skill.register",
@@ -105,34 +121,37 @@
         },
         "agbom/snapshot": {
           "span_name": "acs.agbom",
-          "required_attributes": ["acs.agbom.format", "acs.agbom.component_count"]
+          "required_attributes": ["acs.agbom.format", "acs.agbom.component_count"],
+          "_note": "acs.agbom.format names the AgBOM form the span records. No AgBOM payload carries a format field, because the wire form is always canonical. An exporter recording the payload sets canonical. A Guardian recording a serialization it rendered sets that serialization's agbom_serializations_supported value from the handshake."
         },
         "agbom/changed": {
           "span_name": "acs.agbom",
-          "required_attributes": ["acs.agbom.format", "acs.agbom.change_reason"]
+          "required_attributes": ["acs.agbom.format"],
+          "conditional_attributes": ["acs.agbom.change_reason"],
+          "_note": "acs.agbom.format is sourced as on agbom/snapshot."
         }
       }
     },
     "decision_event": {
       "type": "object",
-      "description": "Decisions are recorded as a span event named 'acs.decision' on the parent step span. The event MUST carry the disposition and evaluator; reasoning and confidence are required when present in the decision envelope.",
+      "description": "Decisions are recorded as a span event named 'acs.decision' on the parent step span. The event MUST carry the disposition. It MUST carry each conditional attribute whenever the response carries the source field, and MUST omit it when the source field is absent. An empty source array counts as absent.",
       "properties": {
         "event_name": { "type": "string", "const": "acs.decision" },
         "required_attributes": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs.decision", "acs.evaluator"]
+          "default": ["acs.decision"]
         },
         "conditional_attributes": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs.reasoning", "acs.confidence", "acs.evaluator_version", "acs.model_id"]
+          "default": ["acs.evaluator", "acs.reasoning", "acs.confidence", "acs.evaluator_version", "acs.model_id"]
         }
       }
     },
     "provenance_attributes": {
       "type": "object",
-      "description": "When Provenance is attached to a hook payload, the resulting span MUST carry provenance facts as attributes. Lineage edges MAY be linked via OTel span links keyed by provenance_id. v0.1 emits the factual provenance fields (origin, source_id, lineage_depth) on the wire and on the span; trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see §7.1).",
+      "description": "When Provenance is attached to a hook payload, the resulting span MUST carry provenance facts as attributes. Lineage edges MAY be linked via OTel span links keyed by provenance_id. v0.1 emits the factual provenance fields (origin, source_id) on the wire and on the span; trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see §7.1).",
       "properties": {
         "required": {
           "type": "array",
@@ -142,7 +161,7 @@
         "optional": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs.provenance.lineage_depth", "acs.provenance.source_id"]
+          "default": ["acs.provenance.source_id"]
         }
       }
     }

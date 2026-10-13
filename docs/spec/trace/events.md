@@ -16,6 +16,8 @@ flowchart LR
 
 Each ACS step produces a span whose `name` and required attributes are fixed by the table below. Decisions are recorded as span events on the parent step span, not as separate spans, so the enforcement verdict and the action it gates share a parent.
 
+An attribute marked *conditional* comes from a field the hook payload or response may omit. An exporter MUST emit it whenever the source field is present and MUST omit it when the field is absent. An empty source array counts as absent.
+
 The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json). See [Extending OpenTelemetry](./extend_opentelemetry.md) for a deeper integration guide.
 
 | ACS step | OTel span name | Required attributes |
@@ -24,24 +26,26 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | `steps/agentTrigger` | `acs.agent.trigger` | `acs.agent.id`, `acs.trigger.type` |
 | `steps/userMessage` | `acs.message.user` | `acs.session.id`, `acs.content.types[]` |
 | `steps/agentResponse` | `acs.message.agent` | `acs.session.id`, `acs.agent.id` |
-| `steps/toolCallRequest` | `gen_ai.tool.call` | `gen_ai.tool.name`, `acs.capability`; `acs.tool.provider` (optional) |
-| `steps/toolCallResult` | `gen_ai.tool.result` | `gen_ai.tool.name`, `acs.exit_status`; `acs.duration_ms` (optional) |
-| `steps/knowledgeRetrieval` | `acs.knowledge.retrieval` | `acs.source.type`, `acs.results.count` |
-| `steps/memoryStore` | `acs.memory.store` | `acs.memory_store.name`, `acs.operation` |
-| `steps/memoryContextRetrieval` | `acs.memory.retrieval` | `acs.memory_store.name`, `acs.results.count` |
+| `steps/toolCallRequest` | `gen_ai.tool.call` | `gen_ai.tool.name`; `acs.capability` (conditional); `acs.tool.provider` (optional) |
+| `steps/toolCallResult` | `gen_ai.tool.result` | `gen_ai.tool.name`, `acs.exit_status`; `acs.request_id_ref` (conditional); `acs.duration_ms` (optional) |
+| `steps/knowledgeRetrieval` | `acs.knowledge.retrieval` | `acs.results.count`; `acs.source.type` (conditional) |
+| `steps/memoryStore` | `acs.memory.store` | `acs.memory_store.name`, `acs.operation` (both conditional) |
+| `steps/memoryContextRetrieval` | `acs.memory.retrieval` | `acs.results.count`; `acs.memory_store.name` (conditional) |
 | `steps/sessionEnd` | `acs.session.end` | `acs.session.reason` |
 | `steps/turnStart`, `steps/turnEnd` | `acs.turn`, `acs.turn.end` | `acs.turn.id`, `acs.turn.triggered_by` / `acs.turn.outcome` |
 | `steps/preCompact` | `acs.compact` | `acs.compact.entry_count`, `acs.compact.triggered_by` |
 | `steps/postCompact` | `acs.compact.complete` | `acs.compact.entry_count`; `acs.compact.lineage_depth_after` (optional) |
-| `steps/subagentStart`, `steps/subagentStop` | `acs.subagent`, `acs.subagent.end` | `acs.subagent.session_id`, `acs.subagent.parent_session_id`, `acs.subagent.intent_derivation` / `acs.subagent.outcome`, `acs.subagent.final_chain_hash` |
+| `steps/subagentStart`, `steps/subagentStop` | `acs.subagent`, `acs.subagent.end` | `acs.subagent.session_id`, `acs.subagent.parent_session_id`, `acs.subagent.intent_derivation` / `acs.subagent.outcome`; `acs.subagent.final_chain_hash` (conditional) |
 | `steps/skillRegister` | `acs.skill.register` | `acs.skill.id`, `acs.skill.digest.algorithm`, `acs.skill.digest.value`, `acs.skill.declared_capabilities` |
 | `steps/skillLoad` | `acs.skill.load` | `acs.skill.id`, `acs.skill.digest.algorithm`, `acs.skill.digest.value`, `acs.skill.load_trigger`, `acs.skill.load_path` (skill ids, root first); `acs.skill.digest_verified`, `acs.skill.registration_ref` (optional) |
 | `steps/skillUnload` | `acs.skill.unload` | `acs.skill.id`, `acs.skill.reason`; `acs.skill.replaced_by` (optional) |
-| Decision (allow/deny/modify/ask/defer) | `acs.decision` (span event) | `acs.decision`, `acs.evaluator`, `acs.reasoning` (when present), `acs.confidence` (when present) |
-| `agbom/snapshot` | `acs.agbom` | `acs.agbom.format` (`canonical`/`cyclonedx`/`spdx`/`swid`), `acs.agbom.component_count` |
-| `agbom/changed` | `acs.agbom` | `acs.agbom.format` (`canonical`/`cyclonedx`/`spdx`/`swid`), `acs.agbom.change_reason` |
+| Decision (allow/deny/modify/ask/defer) | `acs.decision` (span event) | `acs.decision`; `acs.evaluator`, `acs.reasoning`, `acs.confidence` (conditional) |
+| `agbom/snapshot` | `acs.agbom` | `acs.agbom.format`, `acs.agbom.component_count` |
+| `agbom/changed` | `acs.agbom` | `acs.agbom.format`; `acs.agbom.change_reason` (conditional) |
 
-When Provenance is attached to a hook payload, the resulting span MUST carry `acs.provenance.origin` as an attribute, and SHOULD carry `acs.provenance.source_id` and `acs.provenance.lineage_depth` when populated. v0.1 emits factual provenance attributes; trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see [Specification §7](../instrument/specification.md#7-provenance)). Provenance lineage edges MAY be linked via OTel span links keyed by `provenance_id`.
+No AgBOM payload carries a format field, because the Observed Agent always sends the canonical form. An exporter recording the payload sets `acs.agbom.format` to `canonical`. A Guardian recording a serialization it rendered sets the value it advertises in the handshake's `agbom_serializations_supported` (`cyclonedx-1.6`, `spdx-3.0`, or `swid`).
+
+When Provenance is attached to a hook payload, the resulting span MUST carry `acs.provenance.origin` as an attribute, and SHOULD carry `acs.provenance.source_id` when populated. v0.1 emits factual provenance attributes; trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see [Specification §7](../instrument/specification.md#7-provenance)). Provenance lineage edges MAY be linked via OTel span links keyed by `provenance_id`.
 
 ## OCSF event classes
 
@@ -78,8 +82,8 @@ OCSF `severity_id` for decision events is set from the disposition:
 
 A deployment claiming **ACS-Trace** MUST:
 
-1. Emit at least one of {OTel, OCSF} for every ACS step the deployment supports, with the required attributes populated.
-2. Record every decision as a Trace event carrying the disposition, evaluator identity, and reasoning when present.
+1. Emit at least one of {OTel, OCSF} for every ACS step the deployment supports, with the required attributes populated and each conditional attribute populated whenever its source field is present.
+2. Record every decision as a Trace event carrying the disposition, plus the evaluator identity and reasoning when the response carries them.
 3. Carry provenance facts forward from the hook payload onto the Trace event so audit replay reconstructs the policy decision without consulting Guardian state separately.
 
 Trace events MUST NOT block enforcement — failure of the Trace sink MUST NOT change the disposition returned to the Observed Agent. Deployments that do not claim ACS-Trace SHOULD still emit Trace events where feasible; the vocabulary is normative regardless of profile claim.

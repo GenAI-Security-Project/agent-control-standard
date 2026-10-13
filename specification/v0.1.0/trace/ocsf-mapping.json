@@ -78,7 +78,7 @@
         "optional_enrichments": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs_provenance_source_id", "acs_provenance_lineage_depth"]
+          "default": ["acs_provenance_source_id"]
         }
       }
     }
