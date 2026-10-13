@@ -52,7 +52,7 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Fields every decision event carries. action and disposition are required beside their ids because ask and defer share 99 in both.",
-          "default": ["finding_info", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid"]
+          "default": ["finding_info", "finding_info.title", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid"]
         },
         "profiles": {
           "type": "array",
@@ -86,11 +86,14 @@
         },
         "alert_mapping": {
           "type": "object",
-          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. v0.1.0 does not yet fix the value for modify, ask or defer on an on-time decision.",
+          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. It is true exactly when severity_id is 3 or higher, so the two fields never disagree. ask and defer alert because an ASK can time out to allow and a DEFER can fall back to that ASK, and v0.1.0 has no Trace event for how either one ends, so this event is the only signal a SOC gets. modify does not alert, because the action ran in the form the policy required. A MODIFY the client cannot apply becomes a DENY (Specification §6.5), which alerts.",
           "additionalProperties": { "type": "boolean" },
           "default": {
             "allow": false,
-            "deny": true
+            "deny": true,
+            "modify": false,
+            "ask": true,
+            "defer": true
           }
         },
         "evidence_fields": {
