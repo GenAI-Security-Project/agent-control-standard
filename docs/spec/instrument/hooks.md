@@ -203,6 +203,8 @@ Fires after tool execution, before the result is ingested into the agent's reaso
 
 **Payload:** `execution_id` (correlated to the request), outputs, exit status, duration.
 
+`request_id_ref`, when present, is the `request_id` of the originating `toolCallRequest`. A Guardian SHOULD resolve it against the `toolCallRequest` records it holds for the session, and MUST record the reference in its audit record when it cannot resolve it. Whether an unresolvable reference is grounds to deny is the deployment's policy. The record is required because an unresolvable reference is evidence, so it has to survive even when the result is allowed.
+
 **Decision:** ALLOW / DENY / MODIFY.
 
 ---
