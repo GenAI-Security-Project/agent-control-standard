@@ -151,6 +151,15 @@ describe("buildEnvelope", () => {
     expect(envelope.params.metadata.session_id).toBe(realUuid);
   });
 
+  // The audit log records the envelope's JSON-RPC id as `rpc_id`, and the
+  // trace converter (guardian/src/audit-to-otlp.ts) carries it as
+  // acs.request_id to join the host's failure spans to the Guardian's. That
+  // join holds only while the two ids are the same value.
+  it("uses the request_id as the JSON-RPC id", () => {
+    const envelope = buildEnvelope("PreToolUse", preToolUsePayload, hookmap);
+    expect(envelope.id).toBe(envelope.params.request_id);
+  });
+
   it("toSessionUuid is deterministic and produces a valid uuid for a non-uuid input", () => {
     expect(toSessionUuid("abc123")).toMatch(UUID_RE);
     expect(toSessionUuid("abc123")).toBe(toSessionUuid("abc123"));

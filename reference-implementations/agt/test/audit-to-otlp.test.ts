@@ -2,8 +2,14 @@ import { describe, expect, it } from "bun:test";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, type Hookmap } from "host-adapter";
-import { convertAuditLog, FAILURE_CLASS_BY_KIND, failureClassOf } from "../packages/guardian/src/audit-to-otlp.ts";
+import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
+import {
+  convertAuditLog,
+  FAILURE_CLASS_BY_KIND,
+  FAILURE_DETAIL_BY_KIND,
+  failureClassOf,
+  sessionUuid as converterSessionUuid,
+} from "../packages/guardian/src/audit-to-otlp.ts";
 import { loadOtelMapping } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
@@ -105,20 +111,28 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
 
       const summary = await convertAuditLog(auditPath, otelPath);
 
-      expect(summary).toEqual({ spans: 1, skippedUnmapped: 0, skippedUngoverned: 0, skippedUnreadable: 0 });
+      expect(summary).toEqual({
+        converted: 1,
+        written: 1,
+        skippedUnmapped: 0,
+        skippedNoMethod: {},
+        skippedReplay: 0,
+        skippedUngoverned: 0,
+        skippedUnreadable: 0,
+      });
       const spans = spansIn(otelPath);
       expect(spans).toHaveLength(1);
       expect(spans[0]?.name).toBe(loadOtelMapping().stepToSpan["steps/toolCallRequest"]!.span_name);
-      expect(attribute(spans[0], "acs.session.id")).toBe(entry!.session_id);
+      expect(attribute(spans[0], "acs.session.id")).toBe(toSessionUuid(entry!.session_id));
       const failure = spans[0]?.events?.find((event) => event.name === "acs.decision.failure");
       expect(attribute(failure, "acs.failure.class")).toBe("unreachable");
       expect(attribute(failure, "acs.failure.reported_by")).toBe("observed_agent");
       expect(attribute(failure, "acs.failure.posture")).toBe("fail_open");
-      expect(attribute(failure, "acs.failure.detail")).toBe(entry!.failure!.message);
+      expect(attribute(failure, "acs.failure.detail")).toBe(FAILURE_DETAIL_BY_KIND.transport);
     });
   });
 
-  it("skips ungoverned entries, and skips and counts entries whose method the mapping does not name", async () => {
+  it("skips ungoverned entries, and counts unmapped methods apart from entries with no method", async () => {
     await withScratch(async (auditPath, otelPath) => {
       const audit = createAuditSink({ path: auditPath });
       // A step the scoped gate declined to ask about: not a decision failure,
@@ -139,7 +153,15 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
 
       const summary = await convertAuditLog(auditPath, otelPath);
 
-      expect(summary).toEqual({ spans: 0, skippedUnmapped: 2, skippedUngoverned: 1, skippedUnreadable: 0 });
+      expect(summary).toEqual({
+        converted: 0,
+        written: 0,
+        skippedUnmapped: 1,
+        skippedNoMethod: { host_configuration: 1 },
+        skippedReplay: 0,
+        skippedUngoverned: 1,
+        skippedUnreadable: 0,
+      });
       expect(spansIn(otelPath)).toHaveLength(0);
     });
   });
@@ -151,9 +173,161 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
       error_without_decision: "guardian_error",
       refused: "guardian_error",
       host_configuration: "observed_agent_error",
-      decision_unrenderable: "observed_agent_error",
     });
+    // A decision did arrive, so observed_agent_error does not fit (#244 review).
+    expect(failureClassOf("decision_unrenderable")).toBe("other");
     expect(failureClassOf("unknown")).toBe("other");
     expect(failureClassOf(undefined)).toBe("other");
+  });
+});
+
+// Review fixes on PR #244. Each test names the finding it pins.
+describe("audit-to-otlp: review fixes", () => {
+  const SENTINEL = "SENTINEL-ignore-previous-instructions";
+
+  function entryLine(fields: Record<string, unknown>): string {
+    return `${JSON.stringify({
+      seq: 1,
+      recorded_at: new Date().toISOString(),
+      session_id: "sess-1",
+      method: "steps/toolCallRequest",
+      rpc_id: "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+      outcome: "proceeded",
+      posture: "proceed",
+      posture_source: "negotiated",
+      failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+      ...fields,
+    })}\n`;
+  }
+
+  function numberAttribute(carrier: OtlpEvent | undefined, key: string): number | undefined {
+    const value = (carrier?.attributes?.find((a) => a.key === key)?.value as { intValue?: string | number } | undefined)?.intValue;
+    return value === undefined ? undefined : Number(value);
+  }
+
+  // #228: posture is the deployment's, and detail is text the emitter writes.
+  it("reports a refusal under a proceed posture as guardian_error and fail_open, keeps the code, and copies no message text", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(
+        auditPath,
+        entryLine({ outcome: "blocked", failure: { kind: "refused", message: `guardian refused the envelope with error -32003: ${SENTINEL}` } }),
+      );
+
+      await convertAuditLog(auditPath, otelPath);
+
+      const raw = readFileSync(otelPath, "utf8");
+      expect(raw).not.toContain("SENTINEL");
+      const failure = spansIn(otelPath)[0]?.events?.find((event) => event.name === "acs.decision.failure");
+      expect(attribute(failure, "acs.failure.class")).toBe("guardian_error");
+      expect(attribute(failure, "acs.failure.posture")).toBe("fail_open");
+      expect(numberAttribute(failure, "acs.failure.error_code")).toBe(-32003);
+      expect(attribute(failure, "acs.failure.detail")).toBe(FAILURE_DETAIL_BY_KIND.refused);
+    });
+  });
+
+  it("files decision_unrenderable under other, with a detail", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, entryLine({ failure: { kind: "decision_unrenderable", message: `no hookmap entry: ${SENTINEL}` } }));
+
+      await convertAuditLog(auditPath, otelPath);
+
+      const failure = spansIn(otelPath)[0]?.events?.find((event) => event.name === "acs.decision.failure");
+      expect(attribute(failure, "acs.failure.class")).toBe("other");
+      expect(attribute(failure, "acs.failure.detail")).toBe(FAILURE_DETAIL_BY_KIND.decision_unrenderable);
+    });
+  });
+
+  // The batch processor's queue used to overflow inside the synchronous
+  // loop: 5000 entries wrote 2560 spans while the summary claimed 5000.
+  it("writes every span for a large audit log, and the summary counts what was written", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      let lines = "";
+      for (let i = 0; i < 5000; i += 1) {
+        lines += entryLine({ seq: i + 1, rpc_id: crypto.randomUUID() });
+      }
+      appendFileSync(auditPath, lines);
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.converted).toBe(5000);
+      expect(summary.written).toBe(5000);
+      expect(spansIn(otelPath)).toHaveLength(5000);
+    });
+  });
+
+  // The Guardian's spans carry the derived UUID and the request id; a
+  // converter span has to carry the same pair, or #228's pair rules can't
+  // join the two files.
+  it("carries the same acs.session.id and acs.request_id the Guardian's spans carry", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const rpcId = crypto.randomUUID();
+      appendFileSync(auditPath, entryLine({ rpc_id: rpcId }));
+
+      await convertAuditLog(auditPath, otelPath);
+
+      const [span] = spansIn(otelPath);
+      expect(attribute(span, "acs.session.id")).toBe(toSessionUuid("sess-1"));
+      expect(attribute(span, "acs.request_id")).toBe(rpcId);
+    });
+  });
+
+  it("derives the session UUID exactly as the host adapter does", () => {
+    for (const raw of ["sess-1", "ses_opencode_abc", "6B1F2C9E-4D7A-4E3B-8A51-9C0D2E7F1A36", "セッション-é", ""]) {
+      expect({ raw, uuid: converterSessionUuid(raw) }).toEqual({ raw, uuid: toSessionUuid(raw) });
+    }
+  });
+
+  it("counts an entry with no method by its failure kind, apart from unmapped methods", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, entryLine({ method: null, rpc_id: null, outcome: "blocked", posture: "deny", failure: { kind: "host_configuration", message: "x" } }));
+      appendFileSync(auditPath, entryLine({ method: "protocols/MCP/tools/call" }));
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.skippedNoMethod).toEqual({ host_configuration: 1 });
+      expect(summary.skippedUnmapped).toBe(1);
+      expect(summary.written).toBe(0);
+    });
+  });
+
+  // The posture field has been on every posture entry since the first audit
+  // format, so a missing one is a hand-edited log. Inferring it from outcome
+  // is the bug this PR fixes, so the entry is skipped and counted instead.
+  it("skips and counts an entry with no posture rather than guessing one", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, entryLine({ posture: undefined }));
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.skippedUnreadable).toBe(1);
+      expect(summary.written).toBe(0);
+    });
+  });
+
+  // #228: no failure event for a replay, because the pair is the earlier request's.
+  it("skips and counts a REPLAY_DETECTED error", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, entryLine({ outcome: "blocked", failure: { kind: "refused", message: "guardian refused the envelope with error -32005: replay" } }));
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.skippedReplay).toBe(1);
+      expect(summary.written).toBe(0);
+    });
+  });
+
+  it("ignores sampler environment variables", async () => {
+    const saved = process.env.OTEL_TRACES_SAMPLER;
+    process.env.OTEL_TRACES_SAMPLER = "always_off";
+    try {
+      await withScratch(async (auditPath, otelPath) => {
+        appendFileSync(auditPath, entryLine({}));
+        const summary = await convertAuditLog(auditPath, otelPath);
+        expect(summary.written).toBe(1);
+      });
+    } finally {
+      if (saved === undefined) delete process.env.OTEL_TRACES_SAMPLER;
+      else process.env.OTEL_TRACES_SAMPLER = saved;
+    }
   });
 });
