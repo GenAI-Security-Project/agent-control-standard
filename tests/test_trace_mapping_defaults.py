@@ -127,9 +127,11 @@ def test_ocsf_decision_codes_match_the_answered_proposal():
     decision = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_class"]["properties"]
     assert decision["disposition_mapping"]["default"] == {"allow": 1, "deny": 2, "modify": 99, "ask": 99, "defer": 99}
     assert decision["action_mapping"]["default"] == {"allow": 1, "deny": 2, "modify": 4, "ask": 99, "defer": 99}
-    assert decision["alert_mapping"]["default"] == {"allow": False, "deny": True}
+    assert decision["alert_mapping"]["default"] == {"allow": False, "deny": True, "modify": False, "ask": True, "defer": True}
+    severity = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["severity_mapping"]["default"]
+    assert {d: severity[d] >= 3 for d in severity} == decision["alert_mapping"]["default"], "is_alert must be true exactly when severity_id is 3 or higher"
     assert decision["required_fields"]["default"] == [
-        "finding_info", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid",
+        "finding_info", "finding_info.title", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid",
     ]
     assert decision["late_decision"]["properties"]["finding_types"]["default"] == [
         "late_decision_fail_open", "late_decision_fail_closed",
