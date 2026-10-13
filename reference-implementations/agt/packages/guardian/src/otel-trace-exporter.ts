@@ -23,6 +23,14 @@
  * `handshake/hello`, a method the Guardian does not dispatch, and an
  * unparseable body produce none, and `start` answers null for them.
  *
+ * A step that got no decision is recorded too, as the `acs.decision.failure`
+ * event #37 defines, for the failures this Guardian can see itself: an
+ * error it answered instead of a decision, a decision it finished after the
+ * host's negotiated timeout (so the host had already applied its posture),
+ * and a step still open when the Guardian shut down. The host adapter's
+ * audit log holds the failures only the host sees; audit-to-otlp.ts turns
+ * those into the same event with `reported_by` set to the observed agent.
+ *
  * Off by default. With no file and no endpoint configured, startGuardian is
  * handed NULL_OTEL_TRACE_EXPORTER and behaves exactly as before.
  *
@@ -69,6 +77,63 @@ const OTEL_MAPPING_PATH = fileURLToPath(
  * through the pinned bundle. Used only when the response carries no
  * `metadata.evaluator` of its own. */
 const DEFAULT_EVALUATOR = "deterministic";
+
+/**
+ * `acs.decision.failure` is not in otel-mapping.json yet; #228 adds it next
+ * to `decision_event`. Until then its names live here, in one place, the way
+ * DECISION_DETAIL_SOURCES holds the decision extras: the event name, its
+ * attribute keys, and the values the decision on #37 fixed for the class,
+ * the posture and the reporter. When the mapping gains the event, read the
+ * name from it the way `decision_event` is read.
+ */
+export const DECISION_FAILURE_EVENT = "acs.decision.failure";
+
+/** The event's attribute keys: the three required ones first, then the
+ * ones carried when known. */
+export const FAILURE_ATTRIBUTES = {
+  class: "acs.failure.class",
+  posture: "acs.failure.posture",
+  reportedBy: "acs.failure.reported_by",
+  detail: "acs.failure.detail",
+  errorCode: "acs.failure.error_code",
+  timeoutMs: "acs.failure.timeout_ms",
+  elapsedMs: "acs.failure.elapsed_ms",
+  payloadBytes: "acs.failure.payload_bytes",
+} as const;
+
+export type FailureClass = "timeout" | "unreachable" | "malformed_response" | "guardian_error" | "observed_agent_error" | "other";
+export type FailurePosture = "fail_open" | "fail_closed";
+export type FailureReporter = "guardian" | "observed_agent";
+
+/** One decision failure, as the event records it. `detail` is required
+ * when the class is `other`; the rest travel when known. */
+export type DecisionFailure = {
+  class: FailureClass;
+  posture: FailurePosture;
+  reportedBy: FailureReporter;
+  detail?: string;
+  errorCode?: number;
+  timeoutMs?: number;
+  elapsedMs?: number;
+  payloadBytes?: number;
+};
+
+/** The event's attributes: the required three always, the others when
+ * present. One function for both reporters, so the exporter below and the
+ * audit-log converter (audit-to-otlp.ts) build the same event. */
+export function decisionFailureAttributes(failure: DecisionFailure): Attributes {
+  const attributes: Attributes = {
+    [FAILURE_ATTRIBUTES.class]: failure.class,
+    [FAILURE_ATTRIBUTES.posture]: failure.posture,
+    [FAILURE_ATTRIBUTES.reportedBy]: failure.reportedBy,
+  };
+  if (failure.detail !== undefined) attributes[FAILURE_ATTRIBUTES.detail] = failure.detail;
+  if (failure.errorCode !== undefined) attributes[FAILURE_ATTRIBUTES.errorCode] = failure.errorCode;
+  if (failure.timeoutMs !== undefined) attributes[FAILURE_ATTRIBUTES.timeoutMs] = failure.timeoutMs;
+  if (failure.elapsedMs !== undefined) attributes[FAILURE_ATTRIBUTES.elapsedMs] = failure.elapsedMs;
+  if (failure.payloadBytes !== undefined) attributes[FAILURE_ATTRIBUTES.payloadBytes] = failure.payloadBytes;
+  return attributes;
+}
 
 type StepSpanEntry = { span_name: string; required_attributes: string[]; optional_attributes?: string[] };
 
@@ -312,16 +377,25 @@ function collect<Parts>(into: Attributes, names: Iterable<string>, sources: Reco
 /**
  * The span this module started for one step, handed to the caller so the
  * response can close the same span and no other. Opaque: a caller holds it
- * between the two calls and reads nothing off it.
+ * between the two calls and reads nothing off it. Beside the span it keeps
+ * what a failure event needs at the end: the method, for its per-method
+ * timeout; when it started, for `acs.failure.elapsed_ms`; and the request
+ * body's size, when the caller measured one.
  */
-export type StepSpan = { readonly span: Span };
+export type StepSpan = {
+  readonly span: Span;
+  readonly method: string;
+  readonly startedAt: number;
+  readonly payloadBytes?: number;
+};
 
 /** The Guardian-side writer role, called at the envelope log's own two
  * points: `start` where the request is recorded, `end` where the response
  * is, with the handle `start` returned. */
 export type OtelTraceExporter = {
-  /** Null when this request produces no span -- `end` then does nothing. */
-  start(envelope: unknown, method: string | null): StepSpan | null;
+  /** Null when this request produces no span -- `end` then does nothing.
+   * `payloadBytes` is the request body's size, for the failure event. */
+  start(envelope: unknown, method: string | null, payloadBytes?: number): StepSpan | null;
   end(stepSpan: StepSpan | null, response: unknown): void;
   /** Pushes every ended span through to the exporters now rather than on
    * the batch timer. Tests call it; shutdown does too. */
@@ -582,7 +656,26 @@ export function createOtelTraceExporter({
 
   const handled = new Set(methodsEvaluated);
 
-  function begin(envelope: unknown, method: string | null, tracer: Tracer, mapping: OtelMapping): StepSpan | null {
+  // Started and not yet ended, so shutdown can close what no response ever
+  // reached: a bridge that never answers, or a signal during traffic. An
+  // open span is never exported, and without this the step left no trace.
+  const openSpans = new Set<StepSpan>();
+
+  /** The failure event's attributes for one step, as this Guardian reports
+   * them: its own posture, elapsed time since the span started, and the
+   * request's size when known. */
+  function failureAttributes(stepSpan: StepSpan, failureClass: FailureClass, known: Partial<DecisionFailure> = {}): Attributes {
+    return decisionFailureAttributes({
+      class: failureClass,
+      posture,
+      reportedBy: "guardian",
+      elapsedMs: Math.round(performance.now() - stepSpan.startedAt),
+      payloadBytes: stepSpan.payloadBytes,
+      ...known,
+    });
+  }
+
+  function begin(envelope: unknown, method: string | null, payloadBytes: number | undefined, tracer: Tracer, mapping: OtelMapping): StepSpan | null {
     if (method === null || !handled.has(method)) {
       return null;
     }
@@ -603,22 +696,43 @@ export function createOtelTraceExporter({
         }
       }
     }
-    return { span: tracer.startSpan(entry.span_name, { attributes, root: true }) };
+    const stepSpan: StepSpan = {
+      span: tracer.startSpan(entry.span_name, { attributes, root: true }),
+      method,
+      startedAt: performance.now(),
+      payloadBytes,
+    };
+    openSpans.add(stepSpan);
+    return stepSpan;
   }
 
-  function finish({ span }: StepSpan, envelope: unknown, mapping: OtelMapping): void {
+  function finish(stepSpan: StepSpan, envelope: unknown, mapping: OtelMapping): void {
+    const { span } = stepSpan;
     const decision = resultParts(envelope);
     if (decision === undefined) {
-      // A JSON-RPC error: the step was answered but not decided. The error
-      // text is the host's own message and may name the failure.
+      // A JSON-RPC error: the step was answered but not decided. The first
+      // of the two failures a Guardian can see itself (#37) -- the error
+      // text is this Guardian's own message and may name the failure.
       const error = asObject(asObject(envelope)?.error);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: asString(error?.message) });
+      const message = asString(error?.message);
+      span.setStatus({ code: SpanStatusCode.ERROR, message });
+      span.addEvent(
+        DECISION_FAILURE_EVENT,
+        failureAttributes(stepSpan, "guardian_error", { errorCode: asNumber(error?.code), detail: message }),
+      );
     } else {
       const attributes: Attributes = {};
       collect(attributes, mapping.decisionAttributes, DECISION_ATTRIBUTE_SOURCES, decision);
       collect(attributes, Object.keys(DECISION_DETAIL_SOURCES), DECISION_DETAIL_SOURCES, decision);
       if (attributes["acs.decision"] !== undefined) {
         span.addEvent(mapping.decisionEventName, attributes);
+      }
+      // The second: a decision that finished after the host stopped waiting.
+      // The host applied its posture at the timeout, so the decision above
+      // probably never took effect, and a reader has to be told.
+      const timeoutMs = timeoutConfig?.per_method_ms?.[stepSpan.method] ?? timeoutConfig?.default_ms;
+      if (timeoutMs !== undefined && performance.now() - stepSpan.startedAt > timeoutMs) {
+        span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "timeout", { timeoutMs }));
       }
     }
     span.end();
@@ -627,19 +741,25 @@ export function createOtelTraceExporter({
   let stopped = false;
 
   return {
-    start(envelope, method): StepSpan | null {
+    start(envelope, method, payloadBytes): StepSpan | null {
       if (disabled || stopped || tracer === undefined || mapping === undefined) {
         return null;
       }
       try {
-        return begin(envelope, method, tracer, mapping);
+        return begin(envelope, method, payloadBytes, tracer, mapping);
       } catch (error) {
         fail(error);
         return null;
       }
     },
     end(stepSpan, response): void {
-      if (stepSpan === null || disabled || stopped || mapping === undefined) {
+      if (stepSpan === null) {
+        return;
+      }
+      // Removed first, whatever happens next: a span the caller is ending
+      // is no longer one shutdown has to close.
+      openSpans.delete(stepSpan);
+      if (disabled || stopped || mapping === undefined) {
         return;
       }
       try {
@@ -663,6 +783,22 @@ export function createOtelTraceExporter({
         return;
       }
       stopped = true;
+      // Steps still open: a bridge that never answered, or a signal during
+      // traffic. Closed here, as the third failure this Guardian can see,
+      // so the step is exported at all.
+      for (const stepSpan of openSpans) {
+        try {
+          stepSpan.span.addEvent(
+            DECISION_FAILURE_EVENT,
+            failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
+          );
+          stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: "no response before shutdown" });
+          stepSpan.span.end();
+        } catch (error) {
+          fail(error);
+        }
+      }
+      openSpans.clear();
       try {
         // Flushes every processor, then releases them.
         await provider.shutdown();

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
-import { startGuardian } from "../src/index.ts";
+import type { PolicyBridge } from "agt-bridge";
+import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import {
   createFileSpanExporter,
@@ -102,8 +103,9 @@ const baseOptions = { port: 0, manifestPath: "policy/manifest.yaml" } as const;
 
 /** The OTLP/JSON `ExportTraceServiceRequest` shape, as far as these tests
  * read it: resource attributes, and span names and events. */
-type OtlpAttribute = { key: string; value: { stringValue?: string } };
-type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: { name: string }[] };
+type OtlpAttribute = { key: string; value: { stringValue?: string; intValue?: string | number } };
+type OtlpEvent = { name: string; attributes?: OtlpAttribute[] };
+type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[]; status?: { code?: number } };
 type OtlpRequest = {
   resourceSpans: {
     resource: { attributes: OtlpAttribute[] };
@@ -115,9 +117,9 @@ function otlpSpans(requests: OtlpRequest[]): OtlpSpan[] {
   return requests.flatMap((r) => r.resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans)));
 }
 
-/** One string attribute off an OTLP/JSON span, or undefined. */
-function otlpAttribute(span: OtlpSpan, key: string): string | undefined {
-  return span.attributes?.find((attribute) => attribute.key === key)?.value.stringValue;
+/** One string attribute off an OTLP/JSON span or event, or undefined. */
+function otlpAttribute(carrier: OtlpSpan | OtlpEvent | undefined, key: string): string | undefined {
+  return carrier?.attributes?.find((attribute) => attribute.key === key)?.value.stringValue;
 }
 
 /** Every line of an OTLP/JSON file, parsed. */
@@ -270,7 +272,10 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(spans()).toHaveLength(0);
   });
 
-  it("ends a span answered with a JSON-RPC error in error status, with no decision event", async () => {
+  // The first of the two failures a Guardian can see itself (#37): it
+  // answered an error instead of a decision. No acs.decision event, since
+  // there was no decision; one acs.decision.failure event, with the code.
+  it("ends a span answered with a JSON-RPC error in error status, with a guardian_error failure event and no decision event", async () => {
     const { exporter, spans } = memoryExporter();
     exporter.end(
       exporter.start(toolCallEnvelope("ls", { id: 9 }), "steps/toolCallRequest"),
@@ -281,7 +286,14 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     const [span] = spans();
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
     expect(span?.status.message).toBe("evaluation failed");
-    expect(span?.events).toHaveLength(0);
+    expect(span?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
+    const failure = span?.events[0]?.attributes;
+    expect(failure?.["acs.failure.class"]).toBe("guardian_error");
+    expect(failure?.["acs.failure.error_code"]).toBe(-32020);
+    expect(failure?.["acs.failure.detail"]).toBe("evaluation failed");
+    expect(failure?.["acs.failure.reported_by"]).toBe("guardian");
+    expect(failure?.["acs.failure.posture"]).toBe("fail_open");
+    expect(typeof failure?.["acs.failure.elapsed_ms"]).toBe("number");
   });
 
   // The pairing is the handle, not the id: an envelope with no JSON-RPC id
@@ -673,6 +685,138 @@ describe("Guardian trace export wiring", () => {
       errorSpy.mockRestore();
       await exporting.close();
       await silent.close();
+    }
+  });
+
+  it("adds no failure event to a decision that arrives in time", async () => {
+    const memory = new InMemorySpanExporter();
+    const exporter = createOtelTraceExporter({
+      spanExporter: memory,
+      methodsEvaluated: METHODS_EVALUATED,
+      timeoutConfig: { default_ms: 5000 },
+      posture: "fail_open",
+    });
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    try {
+      await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1 }));
+      await exporter.flush();
+
+      const [span] = memory.getFinishedSpans();
+      expect(span?.events.map((event) => event.name)).toEqual([MAPPING.decisionEventName]);
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  // The second failure a Guardian can see itself: a decision that finished
+  // after the host stopped waiting. The host applied its posture at the
+  // timeout, so the decision on the span probably never took effect, and a
+  // reader has to be told. A 50 ms timeout against a 200 ms bridge keeps
+  // the test fast and the ordering certain.
+  it("adds a timeout failure event when the decision finishes after the negotiated timeout", async () => {
+    const memory = new InMemorySpanExporter();
+    const exporter = createOtelTraceExporter({
+      spanExporter: memory,
+      methodsEvaluated: METHODS_EVALUATED,
+      timeoutConfig: { default_ms: 50 },
+      posture: "fail_open",
+    });
+    const slow: PolicyBridge<GuardianSnapshot> = {
+      async evaluate() {
+        await Bun.sleep(200);
+        return { decision: "allow" };
+      },
+    };
+    const guardian = await startGuardian({ ...baseOptions, bridge: slow, traceExporter: exporter });
+    try {
+      await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1 }));
+      await exporter.flush();
+
+      const [span] = memory.getFinishedSpans();
+      expect(span?.events.map((event) => event.name)).toEqual([MAPPING.decisionEventName, "acs.decision.failure"]);
+      const failure = span?.events[1]?.attributes;
+      expect(failure?.["acs.failure.class"]).toBe("timeout");
+      expect(failure?.["acs.failure.timeout_ms"]).toBe(50);
+      expect(failure?.["acs.failure.elapsed_ms"]).toBeGreaterThanOrEqual(200);
+      expect(failure?.["acs.failure.posture"]).toBe("fail_open");
+      expect(failure?.["acs.failure.reported_by"]).toBe("guardian");
+      expect(failure?.["acs.failure.payload_bytes"]).toBeGreaterThan(0);
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  // A bridge that never answers leaves the span open, and an open span is
+  // never exported: the step would leave no trace at all. Shutdown closes
+  // it with an `other` failure event that says why. close() drains for the
+  // negotiated timeout (5 s in the ServerHello) before it gives up on the
+  // handler, which is what bounds this test.
+  it("closes a step still open at shutdown with an other failure event and ERROR status", async () => {
+    // The file, not an in-memory exporter: close() shuts the provider down,
+    // and InMemorySpanExporter forgets its spans when it is shut down.
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-open-at-shutdown-"));
+    const path = join(dir, "traces.jsonl");
+    const exporter = createOtelTraceExporter({ filePath: path, methodsEvaluated: METHODS_EVALUATED, posture: "fail_open" });
+    let reached: () => void = () => {};
+    const reachedBridge = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const silent: PolicyBridge<GuardianSnapshot> = {
+      evaluate() {
+        reached();
+        return new Promise(() => {});
+      },
+    };
+    const guardian = await startGuardian({ ...baseOptions, bridge: silent, traceExporter: exporter });
+    const pending = postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1 })).catch(() => undefined);
+    try {
+      await reachedBridge;
+      const closeStarted = performance.now();
+      await guardian.close();
+      const closeMs = performance.now() - closeStarted;
+      // The request is answered by the server going away, never by a
+      // decision; bounded so a connection that lingers cannot hang the test.
+      await Promise.race([pending, Bun.sleep(2000)]);
+
+      const spans = otlpSpans(otlpFile(path));
+      expect(spans).toHaveLength(1);
+      expect(spans[0]?.status?.code).toBe(2);
+      expect(spans[0]?.events?.map((event) => event.name)).toEqual(["acs.decision.failure"]);
+      const failure = spans[0]?.events?.[0];
+      expect(otlpAttribute(failure, "acs.failure.class")).toBe("other");
+      expect(typeof otlpAttribute(failure, "acs.failure.detail")).toBe("string");
+      expect(otlpAttribute(failure, "acs.failure.reported_by")).toBe("guardian");
+      expect(closeMs).toBeLessThan(10000);
+    } finally {
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  }, 15_000);
+
+  // server.ts builds the exporter from the ServerHello, so the posture on a
+  // failure event is the one this Guardian declared to the host. An envelope
+  // with neither an id nor a request_id earns a deny that cannot be
+  // addressed to it, so the Guardian answers a bare JSON-RPC error: a
+  // guardian_error on the span, through the file path that production uses.
+  it("reports the ServerHello's posture on a failure event: a Guardian declaring deny says fail_closed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-posture-"));
+    const path = join(dir, "traces.jsonl");
+    const guardian = await startGuardian({ ...baseOptions, onDecisionFailure: "deny", otelTraceFile: path });
+    try {
+      const response = await postRaw(guardian.url, { jsonrpc: "2.0", method: "steps/toolCallRequest", params: {} });
+      expect(response.error).toBeDefined();
+    } finally {
+      await guardian.close();
+    }
+    try {
+      const [span] = otlpSpans(otlpFile(path));
+      const failure = span?.events?.find((event) => event.name === "acs.decision.failure");
+      expect(otlpAttribute(failure, "acs.failure.class")).toBe("guardian_error");
+      expect(otlpAttribute(failure, "acs.failure.posture")).toBe("fail_closed");
+      expect(otlpAttribute(failure, "acs.failure.reported_by")).toBe("guardian");
+    } finally {
+      unlinkSync(path);
+      rmdirSync(dir);
     }
   });
 

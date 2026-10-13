@@ -438,25 +438,21 @@ export async function startGuardian({
   // Off unless an output is named -- the same relationship envelopeLogPath
   // has to the envelope log. The override wins over both paths, as the other
   // test seams above do.
+  // The same ServerHello the handshake sends, read once here, so the trace
+  // agrees with what this Guardian told the host: which methods it
+  // evaluates, how long the host waits, and which posture it applies when
+  // no decision arrives. The timeout also bounds close() below.
+  const hello = buildServerHello(onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure });
   const traceExporter =
     traceExporterOverride ??
     (otelTraceFile !== undefined || otelTraceEndpoint !== undefined
-      ? (() => {
-          // The same ServerHello the handshake sends, so the trace agrees
-          // with what this Guardian told the host: which methods it
-          // evaluates, how long the host waits, and which posture it applies
-          // when no decision arrives.
-          const hello = buildServerHello(
-            onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure },
-          );
-          return createOtelTraceExporter({
-            filePath: otelTraceFile,
-            endpoint: otelTraceEndpoint,
-            methodsEvaluated: hello.methods_evaluated,
-            timeoutConfig: hello.timeout_config,
-            posture: hello.on_decision_failure === "deny" ? "fail_closed" : "fail_open",
-          });
-        })()
+      ? createOtelTraceExporter({
+          filePath: otelTraceFile,
+          endpoint: otelTraceEndpoint,
+          methodsEvaluated: hello.methods_evaluated,
+          timeoutConfig: hello.timeout_config,
+          posture: hello.on_decision_failure === "deny" ? "fail_closed" : "fail_open",
+        })
       : NULL_OTEL_TRACE_EXPORTER);
 
   const server = Bun.serve({
@@ -475,7 +471,13 @@ export async function startGuardian({
   return {
     url: `http://localhost:${server.port}${ACS_PATH}`,
     async close() {
-      await server.stop(true);
+      // Bun.serve's stop(true) closes every connection at once but resolves
+      // only when every in-flight handler has returned -- and a handler whose
+      // bridge never answers never returns. The drain is therefore bounded by
+      // the negotiated timeout: past it, no host is still waiting for the
+      // answer. The exporter shuts down after the drain, so a step still
+      // open then is closed as the failure it is rather than lost.
+      await Promise.race([server.stop(true), Bun.sleep(hello.timeout_config.default_ms)]);
       await traceExporter.shutdown();
     },
   };
@@ -561,7 +563,7 @@ async function handleAcsRequest(
   // visible to the Inspector rather than invisible.
   const method = extractMethod(raw);
   envelopeLog.write("request", raw, method);
-  const stepSpan = traceExporter.start(raw, method);
+  const stepSpan = traceExporter.start(raw, method, Buffer.byteLength(body.text));
 
   let response: JsonRpcSuccess | JsonRpcFailure;
   try {
