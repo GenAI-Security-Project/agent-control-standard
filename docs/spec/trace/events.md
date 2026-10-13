@@ -12,7 +12,7 @@ flowchart LR
     STEP --> OCSFEVENT["OCSF event class"]
 ```
 
-Every attribute value comes from the Observed Agent, the Guardian, or content they processed, and any of it can carry text an attacker influenced. A consumer that renders trace data or feeds it to a model SHOULD treat every value as untrusted data, never as instructions or markup.
+Every attribute value comes from the Observed Agent, the Guardian, or content they processed, and any of it can carry text an attacker influenced. A consumer that renders trace data or feeds it to a model SHOULD treat every trace value, in OTel attributes or OCSF fields, as untrusted data, never as instructions or markup.
 
 ## OpenTelemetry semantic conventions
 
@@ -48,9 +48,9 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 
 Every step span also carries `acs.request_id` and `acs.session.id`, the step's own `request_id` and `session_id`. A `steps/toolCallResult` span's `acs.request_id_ref` joins to its request. The Observed Agent chooses `request_id`, and it is unique only within a session ([Specification §10.3](../instrument/specification.md#103-replay-protection)), so a join keys on the two together. The Observed Agent and the Guardian may each emit a span for one request, and a reader joins the two. When the Observed Agent retries a step with a new `request_id`, each attempt is its own request. The Observed Agent emits a step span for each attempt that reached the Guardian, carrying that attempt's `request_id`. A Guardian event whose pair matches no Observed Agent step span is a discrepancy worth investigating.
 
-The three `acs.policy.*` attributes are parallel arrays built from `policy_references`. Their source field is `policy_references` itself: all three are emitted whenever the response carries a non-empty `policy_references`, and none otherwise. Each has the same length and order as `policy_references`, with `""` where an entry lacks the field. A reader can then line up a policy, its version, and its rule by position. A `""` on the wire cannot be told from an absent field, so a Guardian SHOULD NOT send one in a `policy_references` entry. `acs.reason_codes` is a set. Its order carries no meaning, and it does not line up with the policy arrays.
+The three `acs.policy.*` attributes are parallel arrays built from `policy_references`. Their source field is `policy_references` itself: all three are emitted whenever the response carries a non-empty `policy_references`, and none otherwise. Each has the same length and order as `policy_references`, with `""` where an entry lacks the field. A reader can then line up a policy, its version, and its rule by position. A `""` on the wire could not be told from an absent field, so the response envelope rejects one in a `policy_references` entry, and the Provenance schema rejects an empty `source_id`. `acs.reason_codes` is a set. Its order carries no meaning, and it does not line up with the policy arrays.
 
-An `acs.decision` event records the Guardian's verdict. Only the Observed Agent knows the applied outcome. When any `acs.decision.failure` event in either party's stream carries the same `acs.session.id` and `acs.request_id`, a reader MUST NOT count the `acs.decision` event as an enforced outcome. `acs.chain_hash` is a copy of the response field and proves nothing on its own. The trace carries neither the response signature nor the ContextEntries a verifier needs ([Specification §8.6](../instrument/specification.md#86-chain-head-publication-normative)).
+An `acs.decision` event records the Guardian's verdict. Only the Observed Agent knows the applied outcome. When any `acs.decision.failure` event in either party's stream carries the same `acs.session.id` and `acs.request_id`, a reader MUST NOT count the `acs.decision` event as an enforced outcome. The rule works in one direction only. A missing failure event does not prove the decision was enforced, because in v0.1 the Observed Agent can under-report, so no decision event proves enforcement on its own. `acs.chain_hash` is a copy of the response field and proves nothing on its own. The trace carries neither the response signature nor the ContextEntries a verifier needs ([Specification §8.6](../instrument/specification.md#86-chain-head-publication-normative)). One check does work from the trace alone: when the Guardian's and the Observed Agent's streams show different `acs.chain_hash` values for the same `acs.session.id` and `acs.request_id`, that is an integrity event under §8.6.
 
 A decision failure gets its own event because it has no disposition and no evaluator. The Observed Agent MUST record every decision failure, fail-open or fail-closed, in the deployment's own audit log. It SHOULD emit `acs.decision.failure` when it claims ACS-Trace. A Guardian claiming ACS-Trace SHOULD emit the event for the failures it sees itself: an error it returned (`guardian_error`) and a decision it finished after the negotiated timeout (`timeout`). The mapping lists every class and posture value.
 
@@ -93,17 +93,28 @@ OCSF `severity_id` for decision events is set from the disposition:
 | `defer` | 3 (Medium) |
 | `deny` | 4 (High) |
 
-OCSF `disposition_id` for decision events is also set from the disposition. It comes from OCSF's Security Control profile, so a decision event lists `security_control` in `metadata.profiles`. It records the Guardian's verdict, so a `disposition_id` of 2 (Blocked) never proves the action was blocked. A Guardian MUST NOT emit an OCSF decision event when the time from receiving the request to sending the response exceeds the negotiated timeout, because v0.1.0 has no OCSF form for the decision failure that would sit beside it. OCSF has no value for `modify` or `ask`, so those take 99 (Other). The event's `disposition` attribute carries the OCSF caption for 1, 2 and 14, and the ACS name for 99. The `allow` row applies when the deployment records allows as Detection Findings.
+OCSF `action_id` and `disposition_id` for decision events are also set from the disposition. They come from OCSF's Security Control profile, so a decision event lists `security_control` in `metadata.profiles`. Both record the Guardian's verdict, so an `action_id` of 2 (Denied) or a `disposition_id` of 2 (Blocked) never proves the action was blocked, and the enforcement rule above applies to OCSF decision events as well. OCSF has no `disposition_id` for `modify` or `ask`. `defer` takes 99 (Other) as well, not 14 (Delayed), because an ACS defer holds the step and denies by default when it times out. `action_id` gives `modify` its own code, 4 (Modified). `ask` and `defer` share 99 in both, so the `action` and `disposition` text fields are required too. They carry the OCSF caption for 1, 2 and 4, and the ACS name for 99. The `allow` row applies when the deployment records allows as Detection Findings.
 
-| Disposition | `disposition_id` |
-|---|---|
-| `allow` | 1 (Allowed) |
-| `deny` | 2 (Blocked) |
-| `modify` | 99 (Other) |
-| `ask` | 99 (Other) |
-| `defer` | 14 (Delayed) |
+| Disposition | `action_id` | `disposition_id` | `is_alert` |
+|---|---|---|---|
+| `allow` | 1 (Allowed) | 1 (Allowed) | false |
+| `deny` | 2 (Denied) | 2 (Blocked) | true |
+| `modify` | 4 (Modified) | 99 (Other) | not yet fixed |
+| `ask` | 99 (Other) | 99 (Other) | not yet fixed |
+| `defer` | 99 (Other) | 99 (Other) | not yet fixed |
 
-The decision's `request_id`, `decision`, `reasoning`, `reason_codes`, `policy_references`, `cited_provenance_ids`, `chain_hash`, and `metadata` ride under `unmapped.acs` with the response's field names. Every OCSF step event carries `unmapped.acs.request_id` and `unmapped.acs.session_id`. The decision event carries the gated step's pair (`join_fields` in the mapping), which joins the two. A `steps/toolCallResult` event also carries `unmapped.acs.request_id_ref` when the payload has it. OCSF does not validate `unmapped`, so each field takes the type of its definition in the response envelope. v0.1.0 defines no OCSF form for a decision failure.
+A Guardian SHOULD NOT set `verdict_id` or the finding's `status_id`, because both belong to whoever triages the finding.
+
+SIEM content reads native fields, not `unmapped`, so each decision event also carries these:
+
+- `metadata.correlation_uid` is the gated step's pair, formatted as `<session_id>:<request_id>`. Every OCSF step event sets it from its own pair too, so the join works on native fields alone.
+- `evidences` holds the agent and the action, because a Detection Finding has no other native place for them: `ai_agent.uid` from `metadata.agent_id`, `actor.session.uid` from `metadata.session_id`, and the action the decision gates (for `steps/toolCallRequest`, `api.operation` set to the tool name).
+- `authorizations` has one entry per `policy_references` entry, in the same order, whenever `policy_references` is non-empty. Each entry's `policy` carries `uid`, `version` and `name` from `policy_id`, `policy_version` and `policy_name`.
+- `finding_info.desc` SHOULD carry `reasoning`.
+
+The decision's `request_id`, `decision`, `reasoning`, `reason_codes`, `policy_references`, `cited_provenance_ids`, `chain_hash`, and `metadata` also ride under `unmapped.acs` with the response's field names, as the exact copy for replay. Every OCSF step event carries `unmapped.acs.request_id` and `unmapped.acs.session_id`. The decision event carries the gated step's pair (`join_fields` in the mapping). A `steps/toolCallResult` event also carries `unmapped.acs.request_id_ref` when the payload has it. OCSF does not validate `unmapped`, so each field takes the type of its definition in the response envelope.
+
+A Guardian that finishes a decision after the negotiated timeout still emits the decision event. A late deny under fail-open means the policy said no and the action ran, so suppressing it would leave OCSF silent exactly when someone slows the Guardian down. `action_id` and `disposition_id` stay the verdict. `finding_info.types` includes `late_decision_fail_open` or `late_decision_fail_closed`, from the `on_decision_failure` posture the Guardian sent in its ServerHello. `unmapped.acs.failure` carries `class`, `posture`, `timeout_ms`, `elapsed_ms` and `payload_bytes`, with the values of the matching `acs.failure.*` attributes. `is_alert` follows the table above, and is also true for any verdict other than `allow` under fail-open, because the action ran without what the policy required. The Guardian measures its own processing time, not network time, so a decision can still arrive late and look on time. This is the first piece of an OCSF form for decision failures. v0.1.0 defines none for the other failure classes.
 
 ## ACS-Trace conformance bar
 
