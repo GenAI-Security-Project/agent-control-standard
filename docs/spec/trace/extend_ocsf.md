@@ -42,6 +42,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "severity_id": 1,
   "metadata": {
     "version": "1.9.0",
+    "correlation_uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36:3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
     "product": { "name": "ACS Guardian", "vendor_name": "ACS" }
   },
   "actor": {
@@ -51,7 +52,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
       "type_id": 99,
       "type": "AI Agent"
     },
-    "session": { "uid": "session-789" }
+    "session": { "uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36" }
   },
   "process": {
     "name": "database_query",
@@ -60,6 +61,8 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   },
   "unmapped": {
     "acs": {
+      "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+      "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36",
       "step": { "id": "step-abc", "type": "toolCallRequest", "turn_id": "turn-456" },
       "tool": { "id": "database_query", "execution_id": "exec-123", "capability": "datastore.read" },
       "provenance": [
@@ -83,24 +86,45 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "time": 1706550000050,
   "type_uid": 200401,
   "severity_id": 4,
-  "status_id": 1,
-  "metadata": { "version": "1.9.0", "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
+  "action_id": 2,
+  "action": "Denied",
+  "disposition_id": 2,
+  "disposition": "Blocked",
+  "is_alert": true,
+  "metadata": {
+    "version": "1.9.0",
+    "profiles": ["security_control"],
+    "correlation_uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36:3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+    "product": { "name": "ACS Guardian", "vendor_name": "ACS" }
+  },
   "finding_info": {
     "uid": "decision-001",
     "title": "Tool call denied: outside committed Intent",
     "desc": "email.send to recipient outside Intent.parsed; IBAC P-I check failed."
   },
+  "evidences": [
+    {
+      "ai_agent": { "uid": "agent-123" },
+      "actor": { "session": { "uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36" } },
+      "api": { "operation": "email.send" }
+    }
+  ],
+  "authorizations": [
+    { "policy": { "uid": "acme-ibac", "version": "v1" } }
+  ],
   "unmapped": {
     "acs": {
       "decision": "deny",
-      "evaluator": "deterministic",
+      "reasoning": "email.send to recipient outside Intent.parsed; IBAC P-I check failed.",
+      "metadata": { "evaluator": "deterministic" },
       "policy_references": [
         { "policy_id": "acme-ibac", "policy_version": "v1", "rule_id": "email-send-recipient-not-in-intent" }
       ],
       "reason_codes": ["ibac_capability_mismatch"],
       "cited_provenance_ids": ["p1"],
-      "session_id": "session-789",
-      "step_id": "step-abc"
+      "chain_hash": "9f2c4e7a1b3d5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+      "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+      "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"
     }
   }
 }
@@ -128,6 +152,8 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   },
   "unmapped": {
     "acs": {
+      "request_id": "8d2b7f40-1c3e-4a59-b6d8-0e9f1a2b3c4d",
+      "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36",
       "agbom": {
         "format": "canonical",
         "component_count": 7,
@@ -145,7 +171,8 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
 ## Implementation notes
 
 - **`actor.user.type_id: 99`** is the OCSF "Other" sentinel; pair with `actor.user.type: "AI Agent"` so SIEM filters can distinguish agent identities from human ones.
-- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. The structure mirrors the request envelope's `payload` plus the decision envelope's `policy_data` / `reason_codes`. Backends that index `unmapped` keep this fully searchable.
+- **Native fields first.** SIEM content reads native fields, not `unmapped`. A decision event puts the join pair in `metadata.correlation_uid`, the agent and the gated action in `evidences`, and the policies in `authorizations`. The example above shows each, and the [Trace Events](./events.md#ocsf-event-classes) page has the rules, including what a late decision carries.
+- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. On a step event it carries `request_id`, `session_id`, and the request's `payload`. On a decision event it carries the fields that `join_fields` and `acs_fields` in `ocsf-mapping.json` list. Backends that index `unmapped` keep this fully searchable.
 - **Provenance** flows onto OCSF events under `unmapped.acs.provenance`. Trust classification is omitted on the wire for v0.1; backends that compute trust apply it as an enrichment step.
 
 For more worked examples — including A2A and MCP wrapped events — see [Implementation examples](./OCSF/implementation_examples.md).
