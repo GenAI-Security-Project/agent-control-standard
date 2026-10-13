@@ -137,7 +137,10 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
 
     const instant = readInstant(entry.recorded_at);
     const failure = readObject(entry.failure) ?? {};
-    const message = readString(failure.message);
+    const failureClass = failureClassOf(failure.kind);
+    // `other` requires a detail (#37). The adapter always writes a message,
+    // so this stands in only for a log edited by hand.
+    const message = readString(failure.message) ?? (failureClass === "other" ? "the audit entry carried no failure message" : undefined);
     const attributes: Attributes = {};
     const sessionId = readString(entry.session_id);
     if (sessionId !== undefined) {
@@ -151,7 +154,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     span.addEvent(
       DECISION_FAILURE_EVENT,
       decisionFailureAttributes({
-        class: failureClassOf(failure.kind),
+        class: failureClass,
         posture: outcome === "blocked" ? "fail_closed" : "fail_open",
         reportedBy: "observed_agent",
         detail: message,

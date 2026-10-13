@@ -471,13 +471,24 @@ export async function startGuardian({
   return {
     url: `http://localhost:${server.port}${ACS_PATH}`,
     async close() {
+      if (traceExporter === NULL_OTEL_TRACE_EXPORTER) {
+        // No exporter, nothing to close behind the drain: the close every
+        // Guardian had before trace export existed.
+        await server.stop(true);
+        return;
+      }
       // Bun.serve's stop(true) closes every connection at once but resolves
       // only when every in-flight handler has returned -- and a handler whose
       // bridge never answers never returns. The drain is therefore bounded by
       // the negotiated timeout: past it, no host is still waiting for the
-      // answer. The exporter shuts down after the drain, so a step still
-      // open then is closed as the failure it is rather than lost.
-      await Promise.race([server.stop(true), Bun.sleep(hello.timeout_config.default_ms)]);
+      // answer. The timer is unref'd so a prompt stop does not leave it
+      // holding the process open. The exporter shuts down after the drain,
+      // so a step still open then is closed as the failure it is rather
+      // than lost.
+      const deadline = new Promise<void>((resolve) => {
+        setTimeout(resolve, hello.timeout_config.default_ms).unref();
+      });
+      await Promise.race([server.stop(true), deadline]);
       await traceExporter.shutdown();
     },
   };

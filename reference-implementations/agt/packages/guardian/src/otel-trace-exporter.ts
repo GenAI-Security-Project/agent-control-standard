@@ -563,9 +563,8 @@ function isolated({ label, exporter }: Output, report: (label: string, error: un
       }
     },
     async shutdown(): Promise<void> {
-      if (dead) {
-        return;
-      }
+      // Shut the output down whether or not it died: a dead HTTP output
+      // still holds its keep-alive agent until its exporter releases it.
       try {
         await exporter.shutdown();
       } catch (error) {
