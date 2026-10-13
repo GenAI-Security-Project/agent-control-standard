@@ -1752,11 +1752,16 @@ describe("ACS-Core wire security and negotiation", () => {
     const deep = signedLooking(toolCallEnvelope("ls -la"));
     const deepBody = JSON.stringify(deep).replace('"ls -la"', `${"[".repeat(200_000)}${"]".repeat(200_000)}`);
     try {
+      const answers: JsonRpcResponse[] = [];
       for (const body of [JSON.stringify(longSession), deepBody]) {
         const res = await fetch(secured.url, { method: "POST", headers: { "content-type": "application/json" }, body });
         expect(res.status).toBe(200);
-        expect(((await res.json()) as JsonRpcResponse).jsonrpc).toBe("2.0");
+        answers.push((await res.json()) as JsonRpcResponse);
       }
+      expect(answers[0]?.result?.decision).toBe("deny");
+      // A code in the §17.1 registry rather than -32020, so a client that
+      // branches on registered codes cannot fail open on it.
+      expect(answers[1]?.error?.code).toBe(-32004);
     } finally {
       await secured.close();
     }
