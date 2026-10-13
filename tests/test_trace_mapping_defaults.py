@@ -120,6 +120,36 @@ def test_ocsf_decision_tables_match_the_wire():
     assert set(failure["attribute_values"]["default"]) <= listed
 
 
+def test_ocsf_decision_codes_match_the_answered_proposal():
+    # The Spec leads fixed these values on issue #228. Defer is 99, not 14
+    # (Delayed), because an ACS defer holds the step and denies on timeout;
+    # modify gets action_id 4 because disposition_id has no value for it.
+    decision = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_class"]["properties"]
+    assert decision["disposition_mapping"]["default"] == {"allow": 1, "deny": 2, "modify": 99, "ask": 99, "defer": 99}
+    assert decision["action_mapping"]["default"] == {"allow": 1, "deny": 2, "modify": 4, "ask": 99, "defer": 99}
+    assert decision["alert_mapping"]["default"] == {"allow": False, "deny": True}
+    assert decision["required_fields"]["default"] == [
+        "finding_info", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid",
+    ]
+    assert decision["late_decision"]["properties"]["finding_types"]["default"] == [
+        "late_decision_fail_open", "late_decision_fail_closed",
+    ]
+    failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
+    failure_fields = {name.removeprefix("acs.failure.") for name in failure["required_attributes"]["default"] + failure["conditional_attributes"]["default"]}
+    assert set(decision["late_decision"]["properties"]["failure_fields"]["default"]) <= failure_fields
+
+
+def test_padded_source_fields_reject_the_empty_string():
+    # Trace pads the policy and provenance arrays with "" where a value is
+    # absent, so "" must never be a legal wire value for these fields (#263).
+    spec = TRACE.parent
+    policy = json.loads((spec / "response-envelope.json").read_text(encoding="utf-8"))["$defs"]["AcsResult"]["properties"]["policy_references"]["items"]["properties"]
+    for field in ("policy_id", "policy_version", "policy_name", "rule_id"):
+        assert policy[field].get("minLength") == 1, f"policy_references.{field} accepts an empty string"
+    provenance = json.loads((spec / "provenance.json").read_text(encoding="utf-8"))["properties"]
+    assert provenance["source_id"].get("minLength") == 1, "provenance source_id accepts an empty string"
+
+
 def test_every_step_to_class_entry_uses_only_known_keys():
     # The OCSF twin of the step_to_span key check: a typo such as activty_id
     # would otherwise drop the activity and change type_uid with every check
