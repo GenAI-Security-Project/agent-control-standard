@@ -28,8 +28,13 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-/** Which side of the exchange one envelope-log line recorded. */
-export type EnvelopeLogDirection = "request" | "response";
+/**
+ * Which side of the exchange one envelope-log line recorded, or "finding" for
+ * a fact the Guardian established about a request that the spec requires it
+ * to record. A finding's `envelope` is the Guardian's own record, not a
+ * JSON-RPC object, and its `rpc_id` names the request it concerns.
+ */
+export type EnvelopeLogDirection = "request" | "response" | "finding";
 
 /**
  * One line of the envelope log, named for what was recorded rather than for
@@ -51,7 +56,7 @@ export type EnvelopeLogEntry = {
 
 /** Where envelope-log lines go: the Guardian-side writer role. */
 export type EnvelopeLogSink = {
-  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null): void;
+  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null, rpcId?: string | number | null): void;
   readonly path: string | null;
 };
 
@@ -114,7 +119,7 @@ export function createEnvelopeLogSink({
 
   return {
     path,
-    write(direction, envelope, method): void {
+    write(direction, envelope, method, rpcId): void {
       if (disabled) {
         return;
       }
@@ -124,7 +129,9 @@ export function createEnvelopeLogSink({
           recorded_at: now().toISOString(),
           direction,
           method,
-          rpc_id: extractRpcId(envelope),
+          // A finding carries no JSON-RPC id of its own, so the caller names
+          // the request it concerns.
+          rpc_id: rpcId === undefined ? extractRpcId(envelope) : rpcId,
           envelope,
         };
         const line = `${JSON.stringify(entry)}\n`;
