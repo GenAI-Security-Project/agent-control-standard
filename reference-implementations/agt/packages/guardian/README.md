@@ -64,6 +64,18 @@ The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Coll
 
 Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged. Use synthetic sessions for lab runs: the envelope log holds raw envelopes before any redaction, and a span's `acs.reasoning` repeats the Guardian's explanation of them ([#71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
 
+### Convert the host audit log
+
+The failures only the host sees, a Guardian it could not reach or one that answered too late, are in the host adapter's audit log, not in the Guardian's file. `audit-to-otlp.ts` turns that log into the same OTLP/JSON shape: one span per posture entry, with an `acs.decision.failure` event whose `acs.failure.reported_by` is `observed_agent`.
+
+```bash
+bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.jsonl
+```
+
+Run it after the Guardian has stopped. Two writers on one file can interleave lines, so give the converter a file of its own or wait. Running it twice over the same log writes every span twice.
+
+Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked about, which the failure classes do not cover. Entries whose method has no `step_to_span` entry are skipped and counted on stdout.
+
 ## Use it in-process
 
 The tests and the conformance harness start a Guardian in the same process.
@@ -97,6 +109,7 @@ The package has two entry points. `guardian` exports the governance verbs listed
 | `src/session-context-store.ts`, `src/session-context.ts`, `src/ifc-labels.ts` | The per-session hash chain, provenance, and information-flow labels |
 | `src/envelope-log-sink.ts` | The envelope log writer |
 | `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter and its OTLP/JSON file writer |
+| `src/audit-to-otlp.ts` | Converts the host adapter's audit log into the same OTLP/JSON file |
 | `src/acs-result.ts` | The decision result type |
 
 ## The wire is not secured
