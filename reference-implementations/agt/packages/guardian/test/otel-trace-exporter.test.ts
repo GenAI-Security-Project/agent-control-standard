@@ -156,7 +156,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(span?.resource.attributes["service.name"]).toBe(OTEL_SERVICE_NAME);
   });
 
-  it("records the decision as the mapping's event on that span, with acs.decision and acs.evaluator", async () => {
+  it("records the decision as the mapping's event on that span, with acs.decision and no evaluator the response did not send", async () => {
     const { exporter, spans } = memoryExporter();
     exporter.end(exporter.start(toolCallEnvelope("rm -rf /", { id: 7 }), "steps/toolCallRequest"), decisionResponse(7, DENY));
     await exporter.flush();
@@ -164,7 +164,9 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     const [event] = spans()[0]?.events ?? [];
     expect(event?.name).toBe(MAPPING.decisionEventName);
     expect(event?.attributes?.["acs.decision"]).toBe("deny");
-    expect(event?.attributes?.["acs.evaluator"]).toBe("deterministic");
+    // The response carried no metadata.evaluator, so the event carries no
+    // acs.evaluator: the trace never says what the wire did not.
+    expect(event?.attributes?.["acs.evaluator"]).toBeUndefined();
     expect(event?.attributes?.["acs.reasoning"]).toBe("blocked");
     expect(event?.attributes?.["acs.reason_codes"]).toEqual(["dangerous_command"]);
     expect(event?.attributes?.["acs.policy.ids"]).toEqual(["agt_stock"]);
@@ -663,7 +665,9 @@ describe("Guardian trace export wiring", () => {
       const [event] = span?.events ?? [];
       expect(event?.name).toBe(MAPPING.decisionEventName);
       expect(event?.attributes?.["acs.decision"]).toBe("deny");
-      expect(event?.attributes?.["acs.evaluator"]).toBe("deterministic");
+      // This Guardian sends metadata.evaluator once #229 lands; until then
+      // the event carries none, rather than one the exporter made up.
+      expect(event?.attributes?.["acs.evaluator"]).toBeUndefined();
       expect(typeof event?.attributes?.["acs.reasoning"]).toBe("string");
       expect(Array.isArray(event?.attributes?.["acs.reason_codes"])).toBe(true);
       expect(Array.isArray(event?.attributes?.["acs.policy.ids"])).toBe(true);

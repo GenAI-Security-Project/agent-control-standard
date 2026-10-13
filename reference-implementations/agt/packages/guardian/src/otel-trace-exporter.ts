@@ -71,13 +71,6 @@ const OTEL_MAPPING_PATH = fileURLToPath(
   new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url),
 );
 
-/** What this Guardian's evaluator is, for the one attribute the mapping
- * requires on every decision event and the reference never puts on the
- * wire: every decision here is deterministic, read from `policy/manifest.yaml`
- * through the pinned bundle. Used only when the response carries no
- * `metadata.evaluator` of its own. */
-const DEFAULT_EVALUATOR = "deterministic";
-
 /**
  * `acs.decision.failure` is not in otel-mapping.json yet; #228 adds it next
  * to `decision_event`. Until then its names live here, in one place, the way
@@ -300,13 +293,15 @@ const CORRELATION_ATTRIBUTE_SOURCES: Record<string, Source<RequestParts>> = {
  * The `acs.decision` event's attributes, for every name the mapping's
  * `decision_event` lists. Paths follow `response-envelope.json`'s
  * `AcsResult`: `decision` and `reasoning` are direct members; the other four
- * sit under `metadata`. `acs.evaluator` falls back to DEFAULT_EVALUATOR
- * because the mapping requires it and the reference never sends
- * `metadata.evaluator` on the wire.
+ * sit under `metadata`. `acs.evaluator` is read off the wire like the rest
+ * and never filled in here: the value this Guardian would send is
+ * `deterministic`, but it has to come from the Guardian's response (#229
+ * puts it there), or the trace says something the wire never said and a
+ * reader cannot tell the two apart.
  */
 export const DECISION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<ResultParts>>> = {
   "acs.decision": (d) => asString(d.result.decision),
-  "acs.evaluator": (d) => asString(d.metadata.evaluator) ?? DEFAULT_EVALUATOR,
+  "acs.evaluator": (d) => asString(d.metadata.evaluator),
   "acs.reasoning": (d) => asString(d.result.reasoning),
   "acs.confidence": (d) => asNumber(d.metadata.confidence),
   "acs.evaluator_version": (d) => asString(d.metadata.evaluator_version),
