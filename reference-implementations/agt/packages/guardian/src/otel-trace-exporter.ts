@@ -105,6 +105,11 @@ const OTEL_MAPPING_PATH = fileURLToPath(
  */
 export const DECISION_FAILURE_EVENT = "acs.decision.failure";
 
+/** The span status for a step answered with an error instead of a decision.
+ * One sentence for both writers, the Guardian here and the audit converter,
+ * so a query on status text finds both sides of the same failure. */
+export const GUARDIAN_ERROR_STATUS = "The Guardian returned an error instead of a decision.";
+
 /** The event's attribute keys: the three required ones first, then the
  * ones carried when known. */
 export const FAILURE_ATTRIBUTES = {
@@ -792,7 +797,7 @@ export function createOtelTraceExporter({
       // the trace, so the status message is a fixed sentence too.
       const error = asObject(asObject(envelope)?.error);
       const errorCode = asNumber(error?.code);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: "the Guardian returned an error instead of a decision" });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: GUARDIAN_ERROR_STATUS });
       if (errorCode !== REPLAY_DETECTED_CODE) {
         span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "guardian_error", { errorCode }));
       }

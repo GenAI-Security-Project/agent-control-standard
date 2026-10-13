@@ -6,6 +6,7 @@ import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
+import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import {
   createFileSpanExporter,
@@ -290,7 +291,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
     const [span] = spans();
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
-    expect(span?.status.message).toBe("the Guardian returned an error instead of a decision");
+    expect(span?.status.message).toBe(FAILURE_DETAIL_BY_KIND.error_without_decision);
     expect(span?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
     const failure = span?.events[0]?.attributes;
     expect(failure?.["acs.failure.class"]).toBe("guardian_error");

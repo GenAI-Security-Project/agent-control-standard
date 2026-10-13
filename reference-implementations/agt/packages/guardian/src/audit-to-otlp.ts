@@ -54,6 +54,7 @@ import {
   createFileSpanExporter,
   DECISION_FAILURE_EVENT,
   decisionFailureAttributes,
+  GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
   OTEL_SERVICE_NAME,
   type FailureClass,
@@ -96,7 +97,7 @@ export function failureClassOf(kind: unknown): FailureClass {
 export const FAILURE_DETAIL_BY_KIND: Readonly<Record<string, string>> = {
   timeout: "No decision arrived before the host's timeout.",
   transport: "The host could not reach the Guardian.",
-  error_without_decision: "The Guardian returned an error instead of a decision.",
+  error_without_decision: GUARDIAN_ERROR_STATUS,
   refused: "The Guardian refused the request, and this host blocked the step.",
   host_configuration: "The host could not build a request for this hook.",
   decision_unrenderable: "A decision arrived, and this host could not express it in its hook output.",
