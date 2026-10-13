@@ -1,0 +1,31 @@
+# An OpenTelemetry Collector that receives the Guardian's spans and writes
+# them as OTLP/JSON, one export request per line -- the same shape
+# ACS_OTEL_FILE writes directly. Run it with the contrib distribution, which
+# is where the `file` exporter lives:
+#   otelcol-contrib --config otel-collector.yaml
+# then start the Guardian with ACS_OTEL_ENDPOINT=http://127.0.0.1:4318/v1/traces
+# Tested with otelcol-contrib 0.162.0. In a container, run it as your own
+# user (--user "$(id -u):$(id -g)") so it can write into .acs/.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+exporters:
+  file:
+    path: .acs/otel-collector-traces.jsonl
+    # A fresh checkout has no .acs/ yet, and without this the exporter
+    # refuses to start.
+    create_directory: true
+  # basic, not detailed: detailed prints every attribute, reasoning text
+  # and provenance source ids included, to a stdout that often ends up in a
+  # log system nobody planned for.
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file, debug]
