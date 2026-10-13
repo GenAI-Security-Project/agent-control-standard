@@ -534,6 +534,31 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     }
   });
 
+  // SIGINT followed by SIGTERM is two calls to close(). The second must
+  // wait for the first's flush to finish, not return at once and let the
+  // process exit in the middle of it.
+  it("makes a second shutdown() call wait for the first", async () => {
+    let shutDown = false;
+    const slow: SpanExporter = {
+      export(_spans, resultCallback): void {
+        resultCallback({ code: 0 });
+      },
+      async shutdown(): Promise<void> {
+        await Bun.sleep(150);
+        shutDown = true;
+      },
+    };
+    const exporter = createOtelTraceExporter({ spanExporter: slow, methodsEvaluated: METHODS_EVALUATED });
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest"), decisionResponse(1, { decision: "allow" }));
+
+    const first = exporter.shutdown();
+    const second = exporter.shutdown();
+    await second;
+
+    expect(shutDown).toBe(true);
+    await first;
+  });
+
   it("NULL_OTEL_TRACE_EXPORTER writes nothing and never throws", async () => {
     expect(NULL_OTEL_TRACE_EXPORTER.start(toolCallEnvelope("ls"), "steps/toolCallRequest")).toBeNull();
     expect(() => NULL_OTEL_TRACE_EXPORTER.end(null, decisionResponse(1, DENY))).not.toThrow();

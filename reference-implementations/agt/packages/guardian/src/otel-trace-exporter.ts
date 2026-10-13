@@ -400,7 +400,9 @@ export type OtelTraceExporter = {
   /** Pushes every ended span through to the exporters now rather than on
    * the batch timer. Tests call it; shutdown does too. */
   flush(): Promise<void>;
-  /** Flushes, then releases the processors. Safe to call twice. */
+  /** Flushes, then releases the processors. A second call waits for the
+   * first rather than returning at once: SIGINT followed by SIGTERM is two
+   * calls, and the second must not let the process exit mid-flush. */
   shutdown(): Promise<void>;
 };
 
@@ -739,6 +741,9 @@ export function createOtelTraceExporter({
   }
 
   let stopped = false;
+  // The one shutdown, started by the first call and returned to every call
+  // after it, so a second signal waits for the flush the first began.
+  let shutdownPromise: Promise<void> | undefined;
 
   return {
     start(envelope, method, payloadBytes): StepSpan | null {
@@ -778,33 +783,36 @@ export function createOtelTraceExporter({
         fail(error);
       }
     },
-    async shutdown(): Promise<void> {
-      if (provider === undefined || stopped) {
-        return;
-      }
-      stopped = true;
-      // Steps still open: a bridge that never answered, or a signal during
-      // traffic. Closed here, as the third failure this Guardian can see,
-      // so the step is exported at all.
-      for (const stepSpan of openSpans) {
+    shutdown(): Promise<void> {
+      shutdownPromise ??= (async () => {
+        if (provider === undefined) {
+          return;
+        }
+        stopped = true;
+        // Steps still open: a bridge that never answered, or a signal during
+        // traffic. Closed here, as the third failure this Guardian can see,
+        // so the step is exported at all.
+        for (const stepSpan of openSpans) {
+          try {
+            stepSpan.span.addEvent(
+              DECISION_FAILURE_EVENT,
+              failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
+            );
+            stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: "no response before shutdown" });
+            stepSpan.span.end();
+          } catch (error) {
+            fail(error);
+          }
+        }
+        openSpans.clear();
         try {
-          stepSpan.span.addEvent(
-            DECISION_FAILURE_EVENT,
-            failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
-          );
-          stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: "no response before shutdown" });
-          stepSpan.span.end();
+          // Flushes every processor, then releases them.
+          await provider.shutdown();
         } catch (error) {
           fail(error);
         }
-      }
-      openSpans.clear();
-      try {
-        // Flushes every processor, then releases them.
-        await provider.shutdown();
-      } catch (error) {
-        fail(error);
-      }
+      })();
+      return shutdownPromise;
     },
   };
 }
