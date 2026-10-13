@@ -155,8 +155,9 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(event?.attributes?.["acs.reason_codes"]).toEqual(["dangerous_command"]);
     expect(event?.attributes?.["acs.policy.ids"]).toEqual(["agt_stock"]);
     expect(event?.attributes?.["acs.policy.rule_ids"]).toEqual(["deny-rm-rf"]);
-    // No reference carried a version, so no column is invented for it.
-    expect(event?.attributes?.["acs.policy.versions"]).toBeUndefined();
+    // The reference carried no version: the column is still there, one ""
+    // per reference, so the three columns always line up (#228).
+    expect(event?.attributes?.["acs.policy.versions"]).toEqual([""]);
   });
 
   it("takes acs.evaluator from the response when it carries one", async () => {
@@ -172,7 +173,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(attributes?.["acs.model_id"]).toBe("m-1");
   });
 
-  it("lines up policy columns in wire order, and drops a column any reference lacks", async () => {
+  it("lines up policy columns in wire order, with \"\" where a reference lacks the field", async () => {
     const { exporter, spans } = memoryExporter();
     exporter.end(
       exporter.start(toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest"),
@@ -190,7 +191,48 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     const attributes = spans()[0]?.events[0]?.attributes;
     expect(attributes?.["acs.policy.ids"]).toEqual(["p1", "p2"]);
     expect(attributes?.["acs.policy.rule_ids"]).toEqual(["r1", "r2"]);
-    expect(attributes?.["acs.policy.versions"]).toBeUndefined();
+    expect(attributes?.["acs.policy.versions"]).toEqual(["v1", ""]);
+  });
+
+  it("pads a missing rule_id with \"\" in its own position", async () => {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest"),
+      decisionResponse(7, {
+        decision: "deny",
+        reasoning: "x",
+        policy_references: [
+          { policy_id: "p1", rule_id: "r1" },
+          { policy_id: "p2" },
+          { policy_id: "p3", rule_id: "r3" },
+        ],
+      }),
+    );
+    await exporter.flush();
+
+    const attributes = spans()[0]?.events[0]?.attributes;
+    expect(attributes?.["acs.policy.rule_ids"]).toEqual(["r1", "", "r3"]);
+  });
+
+  // The #228 rule, as the maintainer's own case states it: every policy
+  // column is emitted whenever policy_references is non-empty, all the same
+  // length, "" where a reference has no value.
+  it("emits all three policy columns at the length of policy_references", async () => {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 7 }), "steps/toolCallRequest"),
+      decisionResponse(7, {
+        decision: "deny",
+        reasoning: "x",
+        policy_references: [{ policy_id: "a", rule_id: "r" }, { policy_id: "b" }],
+      }),
+    );
+    await exporter.flush();
+
+    const attributes = spans()[0]?.events[0]?.attributes;
+    expect(attributes?.["acs.policy.ids"]).toEqual(["a", "b"]);
+    expect(attributes?.["acs.policy.rule_ids"]).toEqual(["r", ""]);
+    expect(attributes?.["acs.policy.versions"]).toEqual(["", ""]);
   });
 
   it("carries acs.chain_hash only when the response does", async () => {
@@ -369,7 +411,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(attributes?.["acs.provenance.source_id"]).toEqual(["user-1", "run_shell"]);
   });
 
-  it("keeps acs.provenance.origin and drops an optional column any Provenance object lacks", async () => {
+  it("pads acs.provenance.source_id to the length of acs.provenance.origin with \"\"", async () => {
     const { exporter, spans } = memoryExporter();
     const request = makeEnvelope(
       "steps/toolCallRequest",
@@ -387,7 +429,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
     const attributes = spans()[0]?.attributes;
     expect(attributes?.["acs.provenance.origin"]).toEqual(["user_input", "system"]);
-    expect(attributes?.["acs.provenance.source_id"]).toBeUndefined();
+    expect(attributes?.["acs.provenance.source_id"]).toEqual(["user-1", ""]);
   });
 
   it("carries no provenance attribute when nothing in the payload has one", async () => {

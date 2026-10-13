@@ -137,22 +137,15 @@ function asStrings(value: unknown): string[] | undefined {
 }
 
 /**
- * One column of `policy_references`, in the wire's own order, and only when
- * every reference carries the field. A column with a gap cannot be lined up
- * against its siblings by position, and a placeholder would be a value nobody
- * sent -- so `acs.policy.versions` is absent whenever any reference omits
- * `policy_version`, while `acs.policy.ids` and `acs.policy.rule_ids` still
- * line up with each other.
+ * One column of `policy_references`, in the wire's own order: the same
+ * length as `policy_references`, with `""` where a reference lacks the
+ * field. That is the rule agreed on #228, so a reader lines the three
+ * columns up by position and never loses the values the other references
+ * did carry. Absent only when there are no references at all.
  */
 function policyColumn(references: unknown, field: string): string[] | undefined {
   if (!Array.isArray(references) || references.length === 0) return undefined;
-  const column: string[] = [];
-  for (const reference of references) {
-    const value = asString(asObject(reference)?.[field]);
-    if (value === undefined) return undefined;
-    column.push(value);
-  }
-  return column;
+  return references.map((reference) => asString(asObject(reference)?.[field]) ?? "");
 }
 
 /** The parts of a request envelope the source tables read. Read off the
@@ -294,20 +287,13 @@ function provenanceObjects(payload: JsonObject): JsonObject[] {
   return found;
 }
 
-/** One column over every Provenance object, only when every object carries
- * the field -- the rule policyColumn applies, for the same reason: a column
- * with a gap cannot be read by position against `acs.provenance.origin`, and
- * a placeholder would be a value nobody sent. */
-function provenanceColumn(objects: JsonObject[], read: (provenance: JsonObject) => string | undefined): string[] | undefined {
-  const column: string[] = [];
-  for (const object of objects) {
-    const value = read(object);
-    if (value === undefined) {
-      return undefined;
-    }
-    column.push(value);
-  }
-  return column;
+/** One column over every Provenance object, in order, padded with `""`
+ * where an object lacks the field -- the same rule policyColumn applies, for
+ * the same reason: every column is the length of `acs.provenance.origin`, so
+ * the i-th element of each describes the i-th object, and a `source_id` one
+ * argument carries is never hidden by another argument that has none. */
+function provenanceColumn(objects: JsonObject[], read: (provenance: JsonObject) => string | undefined): string[] {
+  return objects.map((object) => read(object) ?? "");
 }
 
 function collect<Parts>(into: Attributes, names: Iterable<string>, sources: Record<string, Source<Parts>>, parts: Parts): void {
@@ -586,9 +572,8 @@ export function createOtelTraceExporter({
     if (provenance.length > 0) {
       for (const name of mapping.provenanceAttributes) {
         const read = PROVENANCE_ATTRIBUTE_SOURCES[name];
-        const column = read === undefined ? undefined : provenanceColumn(provenance, read);
-        if (column !== undefined) {
-          attributes[name] = column;
+        if (read !== undefined) {
+          attributes[name] = provenanceColumn(provenance, read);
         }
       }
     }
