@@ -99,7 +99,7 @@ const baseOptions = { port: 0, manifestPath: "policy/manifest.yaml" } as const;
 /** The OTLP/JSON `ExportTraceServiceRequest` shape, as far as these tests
  * read it: resource attributes, and span names and events. */
 type OtlpAttribute = { key: string; value: { stringValue?: string } };
-type OtlpSpan = { name: string; events?: { name: string }[] };
+type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: { name: string }[] };
 type OtlpRequest = {
   resourceSpans: {
     resource: { attributes: OtlpAttribute[] };
@@ -109,6 +109,11 @@ type OtlpRequest = {
 
 function otlpSpans(requests: OtlpRequest[]): OtlpSpan[] {
   return requests.flatMap((r) => r.resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans)));
+}
+
+/** One string attribute off an OTLP/JSON span, or undefined. */
+function otlpAttribute(span: OtlpSpan, key: string): string | undefined {
+  return span.attributes?.find((attribute) => attribute.key === key)?.value.stringValue;
 }
 
 /** Every line of an OTLP/JSON file, parsed. */
@@ -614,6 +619,71 @@ describe("Guardian trace export wiring", () => {
       await silent.close();
     }
   });
+
+  // A collector that is down must cost the endpoint and nothing else. The
+  // real OTLPTraceExporter against a closed port, not the throwing stub: a
+  // real collector fails late, after the exporter's retry budget (a refused
+  // connection is retryable in this exporter), and the stub never walked
+  // that path. Port 1 is closed on any normal machine.
+  it("keeps the file running after the HTTP endpoint dies, answers as with export off, and closes in bounded time", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-dead-endpoint-"));
+    const path = join(dir, "traces.jsonl");
+    const errors: unknown[] = [];
+    const exporter = createOtelTraceExporter({
+      filePath: path,
+      endpoint: "http://127.0.0.1:1/v1/traces",
+      methodsEvaluated: METHODS_EVALUATED,
+      onError: (error) => errors.push(error),
+    });
+    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    const silent = await startGuardian(baseOptions);
+    let exportingClosed = false;
+    try {
+      // Decisions are the same as with export off, before the endpoint dies.
+      for (const envelope of [toolCallEnvelope("rm -rf /", { id: 1 }), toolCallEnvelope("ls -la", { id: 2 })]) {
+        expect(await postRaw(exporting.url, envelope)).toEqual(await postRaw(silent.url, envelope));
+      }
+      // flush() returns once every output has answered, and the dead
+      // endpoint answers only when it gives up -- so this is where its
+      // death is reported, and how long that took.
+      const flushStarted = performance.now();
+      await exporter.flush();
+      const flushMs = performance.now() - flushStarted;
+      expect(errors).toHaveLength(1);
+
+      // And the same again, after the endpoint died.
+      const after = [crypto.randomUUID(), crypto.randomUUID()];
+      for (const [index, requestId] of after.entries()) {
+        const envelope = toolCallEnvelope("ls -la", { id: 10 + index, requestId });
+        expect(await postRaw(exporting.url, envelope)).toEqual(await postRaw(silent.url, envelope));
+      }
+      const closeStarted = performance.now();
+      await exporting.close();
+      exportingClosed = true;
+      const closeMs = performance.now() - closeStarted;
+
+      // The file holds every span, the two sent after the endpoint failed
+      // included -- the assertion that fails when one dead output stops the
+      // others.
+      const requestIds = otlpSpans(otlpFile(path)).map((span) => otlpAttribute(span, "acs.request_id"));
+      expect(requestIds).toHaveLength(4);
+      for (const requestId of after) {
+        expect(requestIds).toContain(requestId);
+      }
+      expect(errors).toHaveLength(1);
+      // Bounded: the endpoint gives up within its own short timeout, not the
+      // exporter's 10 s default, and closing never waits that budget again.
+      expect(flushMs).toBeLessThan(5000);
+      expect(closeMs).toBeLessThan(5000);
+    } finally {
+      if (!exportingClosed) {
+        await exporting.close();
+      }
+      await silent.close();
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  }, 20_000);
 
   it("writes nothing when neither output is configured", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acs-otel-off-"));

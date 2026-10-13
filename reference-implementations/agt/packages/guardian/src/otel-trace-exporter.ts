@@ -49,6 +49,10 @@ import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BasicTracerProvider, BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 
+/** How long the OTLP/HTTP exporter keeps retrying one batch against an
+ * endpoint that does not answer before it reports the failure. */
+const ENDPOINT_TIMEOUT_MS = 2000;
+
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
 export const OTEL_SERVICE_NAME = "acs-reference-guardian";
@@ -531,7 +535,12 @@ export function createOtelTraceExporter({
     construct(filePath, () => createFileSpanExporter(filePath));
   }
   if (endpoint !== undefined) {
-    construct(endpoint, () => new OTLPTraceExporter({ url: endpoint }));
+    // A refused connection is retryable to this exporter, so a collector that
+    // is down costs its whole timeout before the failure is reported. Two
+    // seconds rather than the 10 s default: long enough for a collector that
+    // is restarting, short enough that a flush or a shutdown behind a dead
+    // one does not hold the process for ten.
+    construct(endpoint, () => new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS }));
   }
   if (spanExporter !== undefined) {
     construct("span exporter", () => spanExporter);
