@@ -89,6 +89,10 @@ asynchronously. The timer schedules a flush; it does not guarantee a disk-comple
 deadline. The Inspector can therefore see a decision after the HTTP response arrives.
 No file is opened until a record arrives.
 
+New log directories are created with mode `0700`, and new files with mode `0600`,
+subject to the process umask on POSIX systems. Existing directories and files keep
+their permissions. On Windows, access remains governed by filesystem ACLs.
+
 Each sink admits at most 4 MiB of serialized UTF-8 data and 4,096 records, counting
 writes already in flight. A write error or a record that would exceed either limit
 disables that sink and reports once on stderr. Queued records may be lost. Logging

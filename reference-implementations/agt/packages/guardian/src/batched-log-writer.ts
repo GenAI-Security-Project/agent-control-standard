@@ -99,7 +99,7 @@ export function createBatchedFileLog(path: string, onError: (error: unknown) => 
     }
   };
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   } catch (error) {
     fail(error);
   }
@@ -108,7 +108,7 @@ export function createBatchedFileLog(path: string, onError: (error: unknown) => 
       if (closed || disabled) return;
       try {
         // Keep the existing no-traffic behavior: no file until the first record.
-        writer ??= batchLogWrites(createWriteStream(path, { flags: "a" }), fail);
+        writer ??= batchLogWrites(createWriteStream(path, { flags: "a", mode: 0o600 }), fail);
         writer.write(line);
       } catch (error) {
         fail(error);
