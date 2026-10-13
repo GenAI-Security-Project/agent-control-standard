@@ -55,11 +55,35 @@ import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { BasicTracerProvider, BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
+import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 
 /** How long the OTLP/HTTP exporter keeps retrying one batch against an
  * endpoint that does not answer before it reports the failure. */
 const ENDPOINT_TIMEOUT_MS = 2000;
+
+/** How long one batch export, and the exporter's shutdown, may take before
+ * it is abandoned and reported. A stalled output (a hung network mount, a
+ * collector that never answers) must not hold the process open: the SDK's
+ * own default is 30 s, longer than many supervisors wait before a SIGKILL. */
+const EXPORT_TIMEOUT_MS = ENDPOINT_TIMEOUT_MS + 1000;
+
+/** The longest string attribute a span carries. Every attribute value can
+ * come from the request, and an uncapped value lets one large request grow
+ * the Guardian's memory in the export queue; a Guardian that runs out of
+ * memory fails open under the default posture. `acs.reasoning` longer than
+ * this is cut to it. */
+const ATTRIBUTE_VALUE_LENGTH_LIMIT = 4096;
+
+/** The most Provenance objects one step span describes. The length limit
+ * above bounds each string, not how many a column holds. Both columns are
+ * cut at the same index, so the i-th element of each still describes the
+ * same object. */
+const PROVENANCE_COLUMN_LIMIT = 64;
+
+/** JSON-RPC REPLAY_DETECTED. The pair on a replayed request belongs to the
+ * earlier request, so #228 forbids a failure event for it: one would mark
+ * that earlier, legitimate decision as not enforced. */
+const REPLAY_DETECTED_CODE = -32005;
 
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
@@ -306,16 +330,9 @@ export const DECISION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<ResultPa
   "acs.confidence": (d) => asNumber(d.metadata.confidence),
   "acs.evaluator_version": (d) => asString(d.metadata.evaluator_version),
   "acs.model_id": (d) => asString(d.metadata.model_id),
-};
-
-/**
- * Decision facts the mapping does not name but a reviewer reconstructing a
- * decision needs, on the same event. Each is emitted only when the response
- * carries it; `acs.chain_hash` in particular appears only once a Guardian
- * puts the chain head on the wire, which it does only after a ContextEntry
- * was written -- an envelope that failed validation never reaches that step.
- */
-const DECISION_DETAIL_SOURCES: Record<string, Source<ResultParts>> = {
+  // The decision facts #228 adds to the mapping. Each is emitted only when
+  // the response carries it; `acs.chain_hash` in particular appears only once
+  // a Guardian puts the chain head on the wire.
   "acs.reason_codes": (d) => asStrings(d.result.reason_codes),
   "acs.policy.ids": (d) => policyColumn(d.result.policy_references, "policy_id"),
   "acs.policy.versions": (d) => policyColumn(d.result.policy_references, "policy_version"),
@@ -323,6 +340,22 @@ const DECISION_DETAIL_SOURCES: Record<string, Source<ResultParts>> = {
   "acs.cited_provenance_ids": (d) => asStrings(d.result.cited_provenance_ids),
   "acs.chain_hash": (d) => asString(d.result.chain_hash),
 };
+
+/**
+ * The decision facts emitted whether or not the mapping lists them yet.
+ * Before #228 the mapping does not name them; after it, it does. Reading
+ * this list beside the mapping's own makes the exporter correct under both,
+ * so this PR and #228 can land in either order. Once #228 is in, the mapping
+ * alone covers them and this list can go.
+ */
+const DECISION_DETAIL_NAMES = [
+  "acs.reason_codes",
+  "acs.policy.ids",
+  "acs.policy.versions",
+  "acs.policy.rule_ids",
+  "acs.cited_provenance_ids",
+  "acs.chain_hash",
+] as const;
 
 /**
  * Attribute name -> which field of a Provenance object (`provenance.json`)
@@ -360,6 +393,9 @@ function provenanceObjects(payload: JsonObject): JsonObject[] {
   ];
   const found: JsonObject[] = [];
   for (const carrier of carriers) {
+    if (found.length === PROVENANCE_COLUMN_LIMIT) {
+      break;
+    }
     const provenance = asObject(asObject(carrier)?.provenance);
     if (provenance !== undefined) {
       found.push(provenance);
@@ -453,6 +489,9 @@ export type CreateOtelTraceExporterOptions = {
   posture?: "fail_open" | "fail_closed";
   /** Overrides the mapping file. Defaults to the repository's own. */
   mappingPath?: string;
+  /** How long one export, and shutdown, may take before it is abandoned and
+   * reported. Defaults to EXPORT_TIMEOUT_MS; tests pass a short one. */
+  exportTimeoutMs?: number;
   /** Called at most once per output, on that output's first failure, and
    * at most once more for a failure of the exporter as a whole (a mapping
    * that will not load, a bug inside start or end). Defaults to one stderr
@@ -592,6 +631,7 @@ export function createOtelTraceExporter({
   timeoutConfig,
   posture = "fail_open",
   mappingPath,
+  exportTimeoutMs = EXPORT_TIMEOUT_MS,
   onError,
 }: CreateOtelTraceExporterOptions): OtelTraceExporter {
   /** One report, to the caller's hook or to stderr, never thrown: the
@@ -660,7 +700,21 @@ export function createOtelTraceExporter({
     mapping = loadOtelMapping(mappingPath);
     provider = new BasicTracerProvider({
       resource: resourceFromAttributes({ "service.name": OTEL_SERVICE_NAME }),
-      spanProcessors: outputs.map((output) => new BatchSpanProcessor(isolated(output, reportOutput))),
+      // Set explicitly so no OTEL_* environment variable can sample spans
+      // away or drop decision events: the SDK reads OTEL_TRACES_SAMPLER and
+      // the span limits from the environment for anything left unset.
+      sampler: new AlwaysOnSampler(),
+      spanLimits: {
+        attributeValueLengthLimit: ATTRIBUTE_VALUE_LENGTH_LIMIT,
+        attributeCountLimit: 128,
+        eventCountLimit: 128,
+        attributePerEventCountLimit: 128,
+        linkCountLimit: 128,
+        attributePerLinkCountLimit: 128,
+      },
+      spanProcessors: outputs.map(
+        (output) => new BatchSpanProcessor(isolated(output, reportOutput), { exportTimeoutMillis: exportTimeoutMs }),
+      ),
     });
     tracer = provider.getTracer(OTEL_SERVICE_NAME);
   } catch (error) {
@@ -709,7 +763,10 @@ export function createOtelTraceExporter({
     if (provenance.length > 0) {
       for (const name of mapping.provenanceAttributes) {
         const read = PROVENANCE_ATTRIBUTE_SOURCES[name];
-        if (read !== undefined) {
+        // A column is emitted only when at least one object carries the
+        // field (#228). `origin` is required, so it always is; an
+        // all-padding `source_id` column would say something nobody sent.
+        if (read !== undefined && provenance.some((object) => read(object) !== undefined)) {
           attributes[name] = provenanceColumn(provenance, read);
         }
       }
@@ -729,19 +786,19 @@ export function createOtelTraceExporter({
     const decision = resultParts(envelope);
     if (decision === undefined) {
       // A JSON-RPC error: the step was answered but not decided. The first
-      // of the two failures a Guardian can see itself (#37) -- the error
-      // text is this Guardian's own message and may name the failure.
+      // of the two failures a Guardian can see itself (#37). Only the code is
+      // carried: the message can quote the request (a schema error names its
+      // argument keys), and #228 forbids copying response or error bytes into
+      // the trace, so the status message is a fixed sentence too.
       const error = asObject(asObject(envelope)?.error);
-      const message = asString(error?.message);
-      span.setStatus({ code: SpanStatusCode.ERROR, message });
-      span.addEvent(
-        DECISION_FAILURE_EVENT,
-        failureAttributes(stepSpan, "guardian_error", { errorCode: asNumber(error?.code), detail: message }),
-      );
+      const errorCode = asNumber(error?.code);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: "the Guardian returned an error instead of a decision" });
+      if (errorCode !== REPLAY_DETECTED_CODE) {
+        span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "guardian_error", { errorCode }));
+      }
     } else {
       const attributes: Attributes = {};
-      collect(attributes, mapping.decisionAttributes, DECISION_ATTRIBUTE_SOURCES, decision);
-      collect(attributes, Object.keys(DECISION_DETAIL_SOURCES), DECISION_DETAIL_SOURCES, decision);
+      collect(attributes, new Set([...mapping.decisionAttributes, ...DECISION_DETAIL_NAMES]), DECISION_ATTRIBUTE_SOURCES, decision);
       if (attributes["acs.decision"] !== undefined) {
         span.addEvent(mapping.decisionEventName, attributes);
       }
@@ -821,11 +878,24 @@ export function createOtelTraceExporter({
           }
         }
         openSpans.clear();
+        // Flushes every processor, then releases them -- bounded, because a
+        // stalled output would otherwise hold the process open. The SDK's own
+        // export timeout covers a batch in flight; this covers an exporter
+        // whose shutdown never returns.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), exportTimeoutMs);
+          timer.unref?.();
+        });
         try {
-          // Flushes every processor, then releases them.
-          await provider.shutdown();
+          const outcome = await Promise.race([provider.shutdown().then(() => "done" as const), deadline]);
+          if (outcome === "timeout") {
+            report("otel trace exporter shutdown", new Error(`did not finish within ${exportTimeoutMs} ms; unexported spans were dropped`));
+          }
         } catch (error) {
           fail(error);
+        } finally {
+          clearTimeout(timer);
         }
       })();
       return shutdownPromise;

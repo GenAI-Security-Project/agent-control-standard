@@ -290,12 +290,12 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
     const [span] = spans();
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
-    expect(span?.status.message).toBe("evaluation failed");
+    expect(span?.status.message).toBe("the Guardian returned an error instead of a decision");
     expect(span?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
     const failure = span?.events[0]?.attributes;
     expect(failure?.["acs.failure.class"]).toBe("guardian_error");
     expect(failure?.["acs.failure.error_code"]).toBe(-32020);
-    expect(failure?.["acs.failure.detail"]).toBe("evaluation failed");
+    expect(failure?.["acs.failure.detail"]).toBeUndefined();
     expect(failure?.["acs.failure.reported_by"]).toBe("guardian");
     expect(failure?.["acs.failure.posture"]).toBe("fail_open");
     expect(typeof failure?.["acs.failure.elapsed_ms"]).toBe("number");
@@ -1071,6 +1071,164 @@ describe("Guardian trace export wiring", () => {
       expect(spans.every((s) => s.events?.some((e) => e.name === MAPPING.decisionEventName))).toBe(true);
       const serviceName = requests[0]?.resourceSpans[0]?.resource.attributes.find((a) => a.key === "service.name");
       expect(serviceName?.value.stringValue).toBe(OTEL_SERVICE_NAME);
+    } finally {
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  });
+});
+
+// Review fixes on PR #244. Each test names the finding it pins.
+describe("createOtelTraceExporter -- review fixes", () => {
+  const SENTINEL = "SENTINEL-/Users/alice/.secrets/token";
+
+  // #228: acs.failure.detail MUST be text the emitter composes itself, and
+  // never bytes copied from a response or an error. The span status is held
+  // to the same rule, since it lands in the same backend.
+  it("copies no JSON-RPC error text into the failure event or the span status, and keeps the code", async () => {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 3 }), "steps/toolCallRequest"), {
+      jsonrpc: "2.0",
+      id: 3,
+      error: { code: -32020, message: `evaluation failed: ${SENTINEL}` },
+    });
+    await exporter.flush();
+
+    const [span] = spans();
+    expect(JSON.stringify(span?.events)).not.toContain("SENTINEL");
+    expect(span?.status.message ?? "").not.toContain("SENTINEL");
+    expect(span?.events[0]?.attributes?.["acs.failure.error_code"]).toBe(-32020);
+    expect(span?.events[0]?.attributes?.["acs.failure.detail"]).toBeUndefined();
+  });
+
+  // #228: a Guardian MUST NOT emit the failure event for a request it rejects
+  // as a replay, because that pair belongs to the earlier request.
+  it("emits no failure event for REPLAY_DETECTED (-32005)", async () => {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 4 }), "steps/toolCallRequest"), {
+      jsonrpc: "2.0",
+      id: 4,
+      error: { code: -32005, message: "replay" },
+    });
+    await exporter.flush();
+
+    expect(spans()[0]?.events.map((event) => event.name)).toEqual([]);
+  });
+
+  // #228: acs.provenance.source_id is emitted only when at least one attached
+  // Provenance object has a source_id.
+  it("omits acs.provenance.source_id when no Provenance object carries one", async () => {
+    const { exporter, spans } = memoryExporter();
+    const envelope = makeEnvelope("steps/toolCallRequest", {
+      tool: { name: "run_shell" },
+      arguments: { a: { value: "x", provenance: provenance("tool_output") }, b: { value: "y", provenance: provenance("user_input") } },
+    });
+    exporter.end(exporter.start(envelope, "steps/toolCallRequest"), decisionResponse(1, DENY));
+    await exporter.flush();
+
+    const attributes = spans()[0]?.attributes;
+    expect(attributes?.["acs.provenance.origin"]).toEqual(["tool_output", "user_input"]);
+    expect(attributes?.["acs.provenance.source_id"]).toBeUndefined();
+  });
+
+  // Unbounded attribute values let one large request grow the Guardian's
+  // memory without limit; a crash then fails open under the default posture.
+  // Driven through start() directly, because the server's body cap would
+  // refuse a request this large before any span existed.
+  it("caps attribute values at 4096 characters and provenance columns at 64 entries", async () => {
+    const { exporter, spans } = memoryExporter();
+    const args: Record<string, unknown> = {};
+    for (let i = 0; i < 200; i += 1) {
+      args[`a${i}`] = { value: i, provenance: provenance("tool_output", { source_id: `s${i}` }) };
+    }
+    const envelope = makeEnvelope(
+      "steps/toolCallRequest",
+      { tool: { name: "run_shell" }, arguments: args },
+      { sessionId: "x".repeat(10_000) },
+    );
+    exporter.end(exporter.start(envelope, "steps/toolCallRequest"), decisionResponse(1, DENY));
+    await exporter.flush();
+
+    expect(spans()).toHaveLength(1);
+    const attributes = spans()[0]?.attributes;
+    expect(String(attributes?.["acs.session.id"]).length).toBeLessThanOrEqual(4096);
+    expect((attributes?.["acs.provenance.origin"] as string[]).length).toBe(64);
+    expect((attributes?.["acs.provenance.source_id"] as string[]).length).toBe(64);
+  });
+
+  // A machine-wide OTEL_TRACES_SAMPLER or OTEL_SPAN_EVENT_COUNT_LIMIT must
+  // not silently drop the Guardian's spans or its decision events.
+  it("ignores sampler and event-limit environment variables", async () => {
+    const saved = { sampler: process.env.OTEL_TRACES_SAMPLER, events: process.env.OTEL_SPAN_EVENT_COUNT_LIMIT };
+    process.env.OTEL_TRACES_SAMPLER = "always_off";
+    process.env.OTEL_SPAN_EVENT_COUNT_LIMIT = "0";
+    try {
+      const { exporter, spans } = memoryExporter();
+      exporter.end(exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest"), decisionResponse(1, DENY));
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(1);
+      expect(spans()[0]?.events.map((event) => event.name)).toEqual([MAPPING.decisionEventName]);
+    } finally {
+      for (const [key, value] of [["OTEL_TRACES_SAMPLER", saved.sampler], ["OTEL_SPAN_EVENT_COUNT_LIMIT", saved.events]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  // A stalled output must not hold shutdown, and with it the process, open.
+  it("bounds shutdown when an output never finishes, and reports it", async () => {
+    const stuck: SpanExporter = {
+      export(): void {},
+      shutdown(): Promise<void> {
+        return new Promise(() => {});
+      },
+    };
+    const errors: unknown[] = [];
+    const exporter = createOtelTraceExporter({
+      spanExporter: stuck,
+      methodsEvaluated: METHODS_EVALUATED,
+      exportTimeoutMs: 100,
+      onError: (error) => errors.push(error),
+    });
+    exporter.end(exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest"), decisionResponse(1, DENY));
+
+    const started = performance.now();
+    await exporter.shutdown();
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  // #228 moves the six decision extras into decision_event's own list. The
+  // exporter has to emit them under both mappings, so #244 and #228 can land
+  // in either order.
+  it("emits the decision extras whether the mapping lists them or not", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-mapping-228-"));
+    const path = join(dir, "otel-mapping.json");
+    try {
+      const schema = JSON.parse(
+        readFileSync(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url), "utf8"),
+      ) as { properties: { decision_event: { properties: { conditional_attributes: { default: string[] } } } } };
+      const extras = ["acs.reason_codes", "acs.policy.ids", "acs.policy.versions", "acs.policy.rule_ids", "acs.cited_provenance_ids", "acs.chain_hash"];
+      const listed = schema.properties.decision_event.properties.conditional_attributes;
+      listed.default = [...listed.default.filter((name) => !extras.includes(name)), ...extras];
+      writeFileSync(path, JSON.stringify(schema));
+
+      for (const attribute of loadOtelMapping(path).decisionAttributes) {
+        expect({ attribute, known: attribute in DECISION_ATTRIBUTE_SOURCES }).toEqual({ attribute, known: true });
+      }
+      for (const mappingPath of [undefined, path]) {
+        const { exporter, spans } = memoryExporter({ mappingPath });
+        exporter.end(
+          exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest"),
+          decisionResponse(1, { ...DENY, reason_codes: ["blocked"], chain_hash: "a".repeat(64) }),
+        );
+        await exporter.flush();
+        const event = spans()[0]?.events.find((e) => e.name === MAPPING.decisionEventName);
+        expect(event?.attributes?.["acs.reason_codes"]).toEqual(["blocked"]);
+        expect(event?.attributes?.["acs.chain_hash"]).toBe("a".repeat(64));
+      }
     } finally {
       unlinkSync(path);
       rmdirSync(dir);
