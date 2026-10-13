@@ -50,7 +50,7 @@
         "required_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["finding_info", "evidences", "verdict_id"]
+          "default": ["finding_info", "finding_info.title", "evidences", "verdict_id"]
         }
       }
     },
