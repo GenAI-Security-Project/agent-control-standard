@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { startGuardian } from "../src/index.ts";
-import { METHODS_EVALUATED } from "../src/handshake.ts";
+import { buildServerHello } from "../src/handshake.ts";
 import {
   createFileSpanExporter,
   createOtelTraceExporter,
@@ -20,6 +20,9 @@ import {
  * expected name below comes from the file and not from a literal that could
  * drift from it. */
 const MAPPING = loadOtelMapping();
+/** The methods this Guardian evaluates, from the ServerHello it sends --
+ * the same source server.ts builds the exporter from. */
+const METHODS_EVALUATED = buildServerHello().methods_evaluated;
 const TOOL_CALL_SPAN = MAPPING.stepToSpan["steps/toolCallRequest"]!;
 
 function makeEnvelope(

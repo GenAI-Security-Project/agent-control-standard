@@ -91,7 +91,7 @@ import {
   type AcsRequestEnvelope,
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
-import { buildServerHello, METHODS_EVALUATED, type ServerHello } from "./handshake.ts";
+import { buildServerHello, type ServerHello } from "./handshake.ts";
 import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
 import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
 import {
@@ -441,7 +441,22 @@ export async function startGuardian({
   const traceExporter =
     traceExporterOverride ??
     (otelTraceFile !== undefined || otelTraceEndpoint !== undefined
-      ? createOtelTraceExporter({ filePath: otelTraceFile, endpoint: otelTraceEndpoint, methodsEvaluated: METHODS_EVALUATED })
+      ? (() => {
+          // The same ServerHello the handshake sends, so the trace agrees
+          // with what this Guardian told the host: which methods it
+          // evaluates, how long the host waits, and which posture it applies
+          // when no decision arrives.
+          const hello = buildServerHello(
+            onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure },
+          );
+          return createOtelTraceExporter({
+            filePath: otelTraceFile,
+            endpoint: otelTraceEndpoint,
+            methodsEvaluated: hello.methods_evaluated,
+            timeoutConfig: hello.timeout_config,
+            posture: hello.on_decision_failure === "deny" ? "fail_closed" : "fail_open",
+          });
+        })()
       : NULL_OTEL_TRACE_EXPORTER);
 
   const server = Bun.serve({

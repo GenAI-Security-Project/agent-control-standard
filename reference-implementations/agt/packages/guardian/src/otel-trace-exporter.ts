@@ -353,6 +353,16 @@ export type CreateOtelTraceExporterOptions = {
   /** The methods this Guardian dispatches -- the ServerHello's own list.
    * A method outside it produces no span even when the mapping names one. */
   methodsEvaluated: readonly string[];
+  /** The ServerHello's `timeout_config`: how long the host waits for a
+   * decision before it applies its posture. A decision that finishes after
+   * that is one the host never acted on. Omitted means no timeout is known
+   * and no step is reported as late. */
+  timeoutConfig?: { default_ms: number; per_method_ms?: Record<string, number> };
+  /** The posture the host applies when no decision arrives, in the trace
+   * vocabulary: `fail_open` for a ServerHello declaring `proceed`,
+   * `fail_closed` for `deny`. Defaults to `fail_open`, the spec's own default
+   * posture (handshake.json), for an exporter built without a ServerHello. */
+  posture?: "fail_open" | "fail_closed";
   /** Overrides the mapping file. Defaults to the repository's own. */
   mappingPath?: string;
   /** Called at most once per output, on that output's first failure, and
@@ -492,6 +502,8 @@ export function createOtelTraceExporter({
   endpoint,
   spanExporter,
   methodsEvaluated,
+  timeoutConfig,
+  posture = "fail_open",
   mappingPath,
   onError,
 }: CreateOtelTraceExporterOptions): OtelTraceExporter {
