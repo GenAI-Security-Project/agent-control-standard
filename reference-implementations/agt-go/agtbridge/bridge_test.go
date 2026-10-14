@@ -17,6 +17,8 @@ import (
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge/goeval"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/observedagent"
 )
 
 // agtTree is the TypeScript reference tree, whose manifest, bundle and
@@ -83,14 +85,77 @@ func input(t *testing.T, method string, payload any) guardian.PolicyInput {
 }
 
 func toolCall(tool, argument, value string, raw *string) map[string]any {
-	p := map[string]any{"tool": map[string]any{"name": tool}, "arguments": map[string]any{argument: map[string]any{"value": value}}}
+	p := toolCallValue(tool, argument, value)
 	if raw != nil {
 		p["raw_command"] = *raw
 	}
 	return p
 }
 
+// toolCallValue is a tool call whose one argument holds value, of any JSON type.
+func toolCallValue(tool, argument string, value any) map[string]any {
+	return map[string]any{"tool": map[string]any{"name": tool}, "arguments": map[string]any{argument: map[string]any{"value": value}}}
+}
+
 func shell(command string) map[string]any { return toolCall("Bash", "command", command, &command) }
+
+// A policy target that is not a string skips every stock rule guarded by
+// is_string, so the Guardian must refuse the call before AGT reads it.
+func TestNonStringPolicyTargetIsDenied(t *testing.T) {
+	targets := []struct {
+		name  string
+		value any
+		kind  string
+	}{
+		{"object", map[string]any{"cmd": "rm -rf /"}, "object"},
+		{"array", []any{"rm -rf /"}, "array"},
+	}
+	e := newEngine(t, agtbridge.Options{})
+	for _, tt := range targets {
+		want := `sent argument "command" as a JSON ` + tt.kind + ", but its policy target must be a string"
+		t.Run("engine_"+tt.name, func(t *testing.T) {
+			_, err := e.Decide(context.Background(), input(t, acs.StepToolCallRequest, toolCallValue("Bash", "command", tt.value)))
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("got error %v", err)
+			}
+		})
+		t.Run("mcp_"+tt.name, func(t *testing.T) {
+			call := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "Bash", "arguments": map[string]any{"command": tt.value}}}
+			_, err := e.Decide(context.Background(), input(t, "protocols/MCP/tools/call", call))
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("got error %v", err)
+			}
+		})
+	}
+
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, evaluator := range recordedEvaluators {
+		t.Run(name, func(t *testing.T) {
+			g, err := guardian.New(guardian.Config{Engine: engineOver(t, evaluator(t)), Signer: signer})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := openSession(t, g, signer)
+			for _, tt := range targets {
+				t.Run(tt.name, func(t *testing.T) {
+					o, err := client.Send(context.Background(), observedagent.Request{Method: acs.StepToolCallRequest, Payload: toolCallValue("Bash", "command", tt.value)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if o.Result == nil {
+						t.Fatalf("no decision: %s", o.Raw)
+					}
+					if d := o.Result.Decision; d.Disposition != acs.Deny || !slices.Equal(d.ReasonCodes, []string{disposition.ReasonEvaluationFailed}) {
+						t.Fatalf("got %+v", d)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestDecisions(t *testing.T) {
 	e := newEngine(t, agtbridge.Options{})
@@ -108,6 +173,7 @@ func TestDecisions(t *testing.T) {
 		{"benign_command", acs.StepToolCallRequest, shell("ls -la"), acs.Allow, "", ""},
 		{"egress_off_the_allowlist", acs.StepToolCallRequest, shell("git clone https://example.org/repo"), acs.Deny, "egress_destination_not_allowed", ""},
 		{"egress_on_the_allowlist", acs.StepToolCallRequest, shell("curl https://docs.example.com/x"), acs.Allow, "", ""},
+		{"egress_userinfo_with_feff_denied", acs.StepToolCallRequest, shell("curl https://docs.example.com\ufeff@evil.example.net/x"), acs.Deny, "egress_destination_not_allowed", ""},
 		{"fetch_on_the_allowlist", acs.StepToolCallRequest, toolCall("WebFetch", "url", "https://docs.example.com/en", nil), acs.Allow, "", ""},
 		{"fetch_off_the_allowlist", acs.StepToolCallRequest, toolCall("WebFetch", "url", "https://evil.example.net/", nil), acs.Deny, "egress_destination_not_allowed", ""},
 		{"unregistered_tool", acs.StepToolCallRequest, toolCall("Write", "command", "x", nil), acs.Deny, "runtime_error:tool_unknown", ""},

@@ -17,8 +17,9 @@ func (acceptingSigner) Sign(context.Context, string, string, []byte) (acs.Signat
 	return acs.Signature{Algorithm: acs.SignatureAlgorithmHMACSHA256, KeyID: "test", Value: "test"}, nil
 }
 
-// §6.4: a verified decision is applied as it is; anything else falls to the
-// failure posture, and only proceed fails open.
+// §6.4: a verified decision is applied as it is; a refusal or an answer that
+// cannot be trusted denies under any posture (#32); anything else falls to
+// the failure posture, and only proceed fails open.
 func TestHonour(t *testing.T) {
 	deny := &acs.Result{Decision: acs.Decision{Disposition: acs.Deny, Reasoning: "no"}}
 	tests := []struct {
@@ -28,20 +29,40 @@ func TestHonour(t *testing.T) {
 	}{
 		{"transport_failure", Outcome{}, errors.New("connection refused")},
 		{"timeout", Outcome{}, context.DeadlineExceeded},
-		{"error_answer", Outcome{Error: &acs.Error{Code: acs.InternalError}}, nil},
-		{"unverified_result", Outcome{Result: deny, Verified: false}, nil},
+		{"signed_internal_error", Outcome{Error: &acs.Error{Code: acs.InternalError}, Verified: true}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if d, open := Honour(tt.outcome, tt.err, acs.FailureProceed); d.Disposition != acs.Allow || !open {
-				t.Fatalf("proceed: %s, failed open %v", d.Disposition, open)
+			if d, verified := Honour(tt.outcome, tt.err, acs.FailureProceed); d.Disposition != acs.Allow || verified {
+				t.Fatalf("proceed: %s, verified %v", d.Disposition, verified)
 			}
-			if d, open := Honour(tt.outcome, tt.err, acs.FailureDeny); d.Disposition != acs.Deny || open {
-				t.Fatalf("deny: %s, failed open %v", d.Disposition, open)
+			if d, verified := Honour(tt.outcome, tt.err, acs.FailureDeny); d.Disposition != acs.Deny || verified {
+				t.Fatalf("deny: %s, verified %v", d.Disposition, verified)
 			}
 		})
 	}
-	if d, open := Honour(Outcome{Result: deny, Verified: true}, nil, acs.FailureProceed); d.Disposition != acs.Deny || open {
+	refused := []struct {
+		name    string
+		outcome Outcome
+		err     error
+	}{
+		{"unverified_result", Outcome{Result: &acs.Result{Decision: acs.Decision{Disposition: acs.Allow}}}, nil},
+		{"malformed_answer", Outcome{}, malformed(errors.New("not JSON"))},
+		{"unsigned_body_too_large", Outcome{Error: &acs.Error{Code: acs.InvalidRequest}}, nil},
+		{"signed_replay", Outcome{Error: &acs.Error{Code: acs.ReplayDetected}, Verified: true}, nil},
+		{"signed_invalid_params", Outcome{Error: &acs.Error{Code: acs.InvalidParams}, Verified: true}, nil},
+		{"signed_chain_mismatch", Outcome{Error: &acs.Error{Code: acs.ChainMismatch}, Verified: true}, nil},
+		{"signature_invalid", Outcome{Error: &acs.Error{Code: acs.SignatureInvalid}}, nil},
+		{"unsigned_internal_error", Outcome{Error: &acs.Error{Code: acs.InternalError}}, nil},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			if d, verified := Honour(tt.outcome, tt.err, acs.FailureProceed); d.Disposition != acs.Deny || verified {
+				t.Fatalf("proceed: %s, verified %v", d.Disposition, verified)
+			}
+		})
+	}
+	if d, verified := Honour(Outcome{Result: deny, Verified: true}, nil, acs.FailureProceed); d.Disposition != acs.Deny || !verified {
 		t.Fatalf("a verified decision became %s", d.Disposition)
 	}
 }
@@ -101,8 +122,8 @@ func TestSendIgnoresUnknownResultFields(t *testing.T) {
 	if err != nil || outcome.Result == nil || outcome.Result.Disposition != acs.Deny {
 		t.Fatalf("outcome = %+v, error = %v", outcome, err)
 	}
-	if decision, failedOpen := Honour(outcome, nil, acs.FailureProceed); decision.Disposition != acs.Deny || failedOpen {
-		t.Fatalf("honoured decision = %+v, failed open = %v", decision, failedOpen)
+	if decision, verified := Honour(outcome, nil, acs.FailureProceed); decision.Disposition != acs.Deny || !verified {
+		t.Fatalf("honoured decision = %+v, verified = %v", decision, verified)
 	}
 }
 
@@ -163,8 +184,8 @@ func TestSendFailsClosedForMixedModifyShapes(t *testing.T) {
 			if err != nil || outcome.Result == nil || outcome.Result.Disposition != acs.Deny || !outcome.Verified || !outcome.InvalidModification {
 				t.Fatalf("outcome = %+v, error = %v", outcome, err)
 			}
-			if decision, failedOpen := Honour(outcome, nil, acs.FailureProceed); decision.Disposition != acs.Deny || failedOpen {
-				t.Fatalf("honoured decision = %+v, failed open = %v", decision, failedOpen)
+			if decision, verified := Honour(outcome, nil, acs.FailureProceed); decision.Disposition != acs.Deny || !verified {
+				t.Fatalf("honoured decision = %+v, verified = %v", decision, verified)
 			}
 		})
 	}

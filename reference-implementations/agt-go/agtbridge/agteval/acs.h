@@ -1,5 +1,5 @@
 // The part of AGT's C ABI (policy-engine/core/src/ffi.rs at the commit
-// agt-native.lock pins, MIT licensed) the AGT evaluator calls. AGT ships no
+// agt-native.lock pins, MIT licensed; ffi_rs_sha256 there is that file's hash) the AGT evaluator calls. AGT ships no
 // C header, so these declarations are written from that file. Strings are NUL-terminated
 // UTF-8; a string AGT returns is released with acs_free_string, and a string
 // the host returns from a callback is released with the host's free callback.

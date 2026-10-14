@@ -36,7 +36,7 @@ func TestJSONLAuditLog(t *testing.T) {
 	dir := t.TempDir()
 	envelopes, events := filepath.Join(dir, "a", "envelopes.jsonl"), filepath.Join(dir, "b", "events.jsonl")
 	var failures []error
-	l, err := guardian.NewJSONLAuditLog(envelopes, events, func(err error) { failures = append(failures, err) })
+	l, err := guardian.NewJSONLAuditLog(envelopes, events, guardian.JSONLRotation{}, func(err error) { failures = append(failures, err) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestJSONLAuditLogRefusesAnUnwritablePath(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := guardian.NewJSONLAuditLog(filepath.Join(blocker, "x.jsonl"), filepath.Join(dir, "e.jsonl"), nil); err == nil {
+	if _, err := guardian.NewJSONLAuditLog(filepath.Join(blocker, "x.jsonl"), filepath.Join(dir, "e.jsonl"), guardian.JSONLRotation{}, nil); err == nil {
 		t.Fatal("opened a log under a regular file")
 	}
 }
@@ -93,7 +93,7 @@ func TestJSONLAuditLogCallbackMayReenter(t *testing.T) {
 	dir := t.TempDir()
 	var l *guardian.JSONLAuditLog
 	reentered := make(chan struct{})
-	l, err := guardian.NewJSONLAuditLog(filepath.Join(dir, "e.jsonl"), filepath.Join(dir, "v.jsonl"), func(error) {
+	l, err := guardian.NewJSONLAuditLog(filepath.Join(dir, "e.jsonl"), filepath.Join(dir, "v.jsonl"), guardian.JSONLRotation{}, func(error) {
 		l.Event(context.Background(), guardian.AuditEvent{Kind: guardian.EventFailure, Message: "reported"})
 		close(reentered)
 	})
@@ -121,7 +121,7 @@ func TestJSONLAuditLogCallbackMayReenter(t *testing.T) {
 func TestJSONLAuditLogCopiesTheBody(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "e.jsonl")
-	l, err := guardian.NewJSONLAuditLog(path, filepath.Join(dir, "v.jsonl"), nil)
+	l, err := guardian.NewJSONLAuditLog(path, filepath.Join(dir, "v.jsonl"), guardian.JSONLRotation{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

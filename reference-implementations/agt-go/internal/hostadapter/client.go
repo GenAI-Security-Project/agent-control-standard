@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,7 +31,10 @@ import (
 const sessionNamespace = "11c79ebd-8469-4b4e-8de0-72674add484c"
 
 type Config struct {
-	GuardianURL    string
+	GuardianURL string
+	// HMACKeyID is the key_id the deployment gave the secret; it has no
+	// default (§10).
+	HMACKeyID      string
 	HMACSecretFile string
 	StateDir       string
 	AuditLog       string
@@ -38,6 +42,9 @@ type Config struct {
 	Methods        []string
 	Timeout        time.Duration
 	MaxBodyBytes   int64
+	// Stderr receives an audit record as one JSON line when AuditLog cannot
+	// be written; nil means os.Stderr.
+	Stderr io.Writer
 }
 
 type Step struct {
@@ -74,9 +81,25 @@ type handshakeRefusal struct{ message string }
 
 func (e handshakeRefusal) Error() string { return e.message }
 
+// errHandshake marks a handshake that failed other than by a refusal.
+var errHandshake = errors.New("handshake failed")
+
+func handshakeFailure(err error) error { return fmt.Errorf("%w: %w", errHandshake, err) }
+
+// The failure classes a decision_failure record names (§6.5).
+const (
+	failureHandshake   = "handshake_failure"
+	failureTimeout     = "timeout"
+	failureUnreachable = "unreachable"
+	failureMalformed   = "malformed_response"
+	failureGuardian    = "guardian_error"
+	failureSignature   = "signature_invalid"
+	failureOther       = "other"
+)
+
 func New(config Config) (*Client, error) {
-	if config.GuardianURL == "" || config.HMACSecretFile == "" || config.StateDir == "" || config.AuditLog == "" || config.AgentID == "" {
-		return nil, errors.New("guardian URL, HMAC secret file, state directory, audit log and agent ID must not be empty")
+	if config.GuardianURL == "" || config.HMACKeyID == "" || config.HMACSecretFile == "" || config.StateDir == "" || config.AuditLog == "" || config.AgentID == "" {
+		return nil, errors.New("guardian URL, HMAC key ID, HMAC secret file, state directory, audit log and agent ID must not be empty")
 	}
 	if len(config.Methods) == 0 {
 		return nil, errors.New("at least one ACS method is required")
@@ -84,13 +107,16 @@ func New(config Config) (*Client, error) {
 	if config.Timeout <= 0 || config.MaxBodyBytes <= 0 {
 		return nil, errors.New("timeout and maximum body size must be positive")
 	}
-	secret, err := os.ReadFile(config.HMACSecretFile)
+	secret, err := guardian.ReadHMACSecretFile(config.HMACSecretFile)
 	if err != nil {
-		return nil, fmt.Errorf("read HMAC secret file: %w", err)
+		return nil, fmt.Errorf("HMAC secret file: %w", err)
 	}
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: secret})
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: config.HMACKeyID, Secret: secret})
 	if err != nil {
 		return nil, err
+	}
+	if config.Stderr == nil {
+		config.Stderr = os.Stderr
 	}
 	return &Client{config: config, signer: signer}, nil
 }
@@ -106,7 +132,7 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 	client := &observedagent.Client{
 		Transport: httpTransport(c.config.GuardianURL, c.config.MaxBodyBytes),
 		Signer:    c.signer,
-		KeyID:     "default",
+		KeyID:     c.config.HMACKeyID,
 		AgentID:   c.config.AgentID,
 		SessionID: sessionID,
 	}
@@ -119,6 +145,9 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 			if errors.As(err, &refusal) {
 				return Evaluation{Decision: c.substitute(step, "session_refused", acs.Decision{Reasoning: "the Guardian did not accept this ACS session"})}, nil
 			}
+			// The caller gets the handshake error. A record the audit log refused
+			// has already gone to stderr (recordAuditEvent).
+			_ = c.recordAuditEvent(step, "decision_failure", acs.Decision{Disposition: refusalAt(step.Method), Reasoning: err.Error()}, failureHandshake)
 			return Evaluation{}, err
 		}
 		_ = saveState(c.config.StateDir, c.config.AgentID, step.SessionKey, state)
@@ -151,10 +180,13 @@ func (c *Client) Evaluate(ctx context.Context, step Step) (Evaluation, error) {
 	if refusalAt(step.Method) != acs.Deny {
 		posture = acs.FailureProceed
 	}
-	decision, failedOpen := observedagent.Honour(result, err, posture)
-	if failedOpen {
-		if auditErr := recordAuditEvent(c.config.AuditLog, step, "decision_failure", decision); auditErr != nil {
-			return Evaluation{Decision: acs.Decision{Disposition: refusalAt(step.Method), Reasoning: "the Guardian decision failed and the local audit record could not be written"}}, nil
+	decision, verified := observedagent.Honour(result, err, posture)
+	if !verified && decision.Disposition == acs.Deny && refusalAt(step.Method) != acs.Deny {
+		decision = acs.Decision{Disposition: acs.Allow, Reasoning: "the Guardian refused the request, and this hook permits no DENY (§6.4)"}
+	}
+	if !verified {
+		if auditErr := c.recordAuditEvent(step, "decision_failure", decision, failureClass(result, err)); auditErr != nil {
+			return Evaluation{Decision: acs.Decision{Disposition: refusalAt(step.Method), Reasoning: "the Guardian decision failed and " + recordMissing(auditErr)}}, nil
 		}
 	}
 	if result.InvalidModification {
@@ -188,8 +220,8 @@ func (c *Client) RefuseModification(step Step, reasoning string) acs.Decision {
 // reasoning says so.
 func (c *Client) substitute(step Step, event string, decision acs.Decision) acs.Decision {
 	decision.Disposition = refusalAt(step.Method)
-	if err := recordAuditEvent(c.config.AuditLog, step, event, decision); err != nil {
-		decision.Reasoning += "; the local audit record could not be written"
+	if err := c.recordAuditEvent(step, event, decision, ""); err != nil {
+		decision.Reasoning += "; " + recordMissing(err)
 	}
 	return decision
 }
@@ -240,22 +272,22 @@ func RequestUUID(sessionID, method, callID string) string {
 
 func (c *Client) handshake(ctx context.Context, client *observedagent.Client, timeout time.Duration) (sessionState, error) {
 	if timeout <= 0 {
-		return sessionState{}, errors.New("the negotiated decision timeout expired")
+		return sessionState{}, handshakeFailure(errors.New("the negotiated decision timeout expired"))
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	result, err := client.Handshake(ctx, observedagent.DefaultHello(c.config.Methods...))
 	if err != nil {
-		return sessionState{}, fmt.Errorf("handshake: %w", err)
+		return sessionState{}, handshakeFailure(err)
 	}
 	if result.Error != nil && result.Verified && handshakeErrorIsRefusal(result.Error.Code) {
 		return sessionState{}, handshakeRefusal{message: "Guardian refused the handshake"}
 	}
 	if result.Error != nil {
-		return sessionState{}, fmt.Errorf("handshake returned error %d", result.Error.Code)
+		return sessionState{}, handshakeFailure(fmt.Errorf("the Guardian returned error %d", result.Error.Code))
 	}
 	if result.Hello == nil || !result.Verified {
-		return sessionState{}, errors.New("handshake did not return a verified ServerHello")
+		return sessionState{}, handshakeFailure(errors.New("the Guardian did not return a verified ServerHello"))
 	}
 	return sessionState{Hello: *result.Hello}, nil
 }
@@ -293,7 +325,85 @@ func httpTransport(url string, maxBytes int64) observedagent.Transport {
 	}
 }
 
-func recordAuditEvent(path string, step Step, event string, decision acs.Decision) error {
+// failureClass names why no verified decision arrived; err wins over the
+// answer, and an answer that is neither a result nor an error is malformed.
+func failureClass(result observedagent.Outcome, err error) string {
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	switch {
+	case errors.Is(err, errHandshake):
+		return failureHandshake
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return failureTimeout
+	case errors.Is(err, observedagent.ErrMalformedResponse):
+		return failureMalformed
+	case errors.As(err, &opErr), errors.As(err, &dnsErr):
+		return failureUnreachable
+	case err != nil:
+		return failureOther
+	case result.Error != nil && result.Verified:
+		return failureGuardian
+	case result.Error != nil || result.Result != nil:
+		return failureSignature
+	default:
+		return failureMalformed
+	}
+}
+
+type auditRecord struct {
+	Event      string    `json:"event"`
+	RecordedAt time.Time `json:"recorded_at"`
+	SessionKey string    `json:"session_key"`
+	TurnID     string    `json:"turn_id"`
+	CallID     string    `json:"call_id"`
+	Method     string    `json:"method"`
+	// Disposition is what the host does with the step.
+	Disposition acs.Disposition `json:"disposition"`
+	Reason      string          `json:"reason"`
+	ReasonCodes []string        `json:"reason_codes,omitempty"`
+	// FailureClass is set on a decision_failure record: why no verified
+	// decision arrived.
+	FailureClass string `json:"failure_class,omitempty"`
+	// AuditError is set only on the stderr copy of a record the audit log
+	// refused.
+	AuditError string `json:"audit_error,omitempty"`
+}
+
+// recordAuditEvent appends the record to the audit log. When the log refuses
+// it, the host refuses the step as refusalAt does, and the record of that
+// refusal goes to Config.Stderr instead; at a hook that permits no DENY the
+// step still proceeds, and stderr is then its only record (§6.4). The
+// error returned names every sink that failed.
+func (c *Client) recordAuditEvent(step Step, event string, decision acs.Decision, failureClass string) error {
+	record := auditRecord{
+		Event: event, RecordedAt: time.Now().UTC(), SessionKey: step.SessionKey,
+		TurnID: step.TurnID, CallID: step.CallID, Method: step.Method,
+		Disposition: decision.Disposition, Reason: decision.Reasoning, ReasonCodes: decision.ReasonCodes,
+		FailureClass: failureClass,
+	}
+	err := appendJSONLine(c.config.AuditLog, record)
+	if err != nil {
+		record.Disposition = refusalAt(step.Method)
+		record.AuditError = err.Error()
+		if stderrErr := json.NewEncoder(c.config.Stderr).Encode(record); stderrErr != nil {
+			err = errors.Join(err, fmt.Errorf("%w: %w", errStderrRefused, stderrErr))
+		}
+	}
+	return err
+}
+
+var errStderrRefused = errors.New("stderr")
+
+// recordMissing says where the record of a refusal went, for its reasoning.
+// It names no path: a host may show the reasoning to the agent.
+func recordMissing(err error) string {
+	if errors.Is(err, errStderrRefused) {
+		return "the local audit record could not be written, to the audit log or to stderr"
+	}
+	return "the audit log could not be written, and the record went to stderr"
+}
+
+func appendJSONLine(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -301,21 +411,11 @@ func recordAuditEvent(path string, step Step, event string, decision acs.Decisio
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	return json.NewEncoder(file).Encode(struct {
-		Event       string    `json:"event"`
-		RecordedAt  time.Time `json:"recorded_at"`
-		SessionKey  string    `json:"session_key"`
-		TurnID      string    `json:"turn_id"`
-		CallID      string    `json:"call_id"`
-		Method      string    `json:"method"`
-		Reason      string    `json:"reason"`
-		ReasonCodes []string  `json:"reason_codes,omitempty"`
-	}{
-		Event: event, RecordedAt: time.Now().UTC(), SessionKey: step.SessionKey,
-		TurnID: step.TurnID, CallID: step.CallID, Method: step.Method,
-		Reason: decision.Reasoning, ReasonCodes: decision.ReasonCodes,
-	})
+	if err := json.NewEncoder(file).Encode(v); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func decisionTimeout(hello acs.ServerHello, method string, fallback time.Duration) time.Duration {

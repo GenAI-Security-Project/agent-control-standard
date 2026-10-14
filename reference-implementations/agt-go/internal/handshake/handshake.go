@@ -63,7 +63,7 @@ func Negotiate(client acs.ClientHello, o Offer) (acs.ServerHello, *Refusal) {
 	if !ok {
 		return acs.ServerHello{}, &Refusal{Code: acs.UnsupportedVersion, Data: acs.ErrorData{
 			Reason:            "unsupported_version",
-			Message:           "none of the offered ACS versions shares this Guardian's major version",
+			Message:           "none of the offered ACS versions is compatible with this Guardian's version",
 			SupportedVersions: []string{o.Version},
 		}}
 	}
@@ -123,47 +123,56 @@ func declares(client acs.ClientHello, m string) bool {
 	})
 }
 
-// SameMajor reports whether version shares ours's major version, the
-// compatibility rule of §3.
-func SameMajor(version, ours string) bool {
-	a, okA := major(version)
-	b, okB := major(ours)
-	return okA && okB && a == b
+// Compatible reports whether two X.Y.Z versions may talk. Semantic
+// versioning treats 0.x as initial development, where a minor release may
+// break, so 0.x versions must share X.Y; from 1.0.0 on, sharing X is enough.
+func Compatible(version, ours string) bool {
+	a, okA := parse(version)
+	b, okB := parse(ours)
+	return okA && okB && compatible(a, b)
+}
+
+func compatible(a, b [3]int) bool {
+	return a[0] == b[0] && (a[0] >= 1 || a[1] == b[1])
 }
 
 // selectVersion picks the Guardian's own version when the client offers it,
-// and otherwise the highest offered version that shares its major version.
+// and otherwise the highest offered version compatible with it.
 func selectVersion(offered []string, ours string) (string, bool) {
 	if slices.Contains(offered, ours) {
 		return ours, true
 	}
+	oursN, ok := parse(ours)
+	if !ok {
+		return "", false
+	}
 	var best string
+	var bestN [3]int
 	for _, v := range offered {
-		if SameMajor(v, ours) && (best == "" || less(best, v)) {
-			best = v
+		n, ok := parse(v)
+		if !ok || !compatible(n, oursN) {
+			continue
+		}
+		if best == "" || slices.Compare(n[:], bestN[:]) > 0 {
+			best, bestN = v, n
 		}
 	}
 	return best, best != ""
 }
 
-func major(v string) (int, bool) {
+// parse reads an X.Y.Z version into its three numbers.
+func parse(v string) ([3]int, bool) {
+	var n [3]int
 	parts := strings.Split(v, ".")
 	if len(parts) != 3 {
-		return 0, false
+		return n, false
 	}
-	n, err := strconv.Atoi(parts[0])
-	return n, err == nil
-}
-
-// less compares two X.Y.Z versions numerically.
-func less(a, b string) bool {
-	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
-	for i := range 3 {
-		x, _ := strconv.Atoi(pa[i])
-		y, _ := strconv.Atoi(pb[i])
-		if x != y {
-			return x < y
+	for i, part := range parts {
+		x, err := strconv.Atoi(part)
+		if err != nil {
+			return n, false
 		}
+		n[i] = x
 	}
-	return false
+	return n, true
 }

@@ -36,6 +36,7 @@ These tests establish parity for the recorded behavior.
 | Compare with the TypeScript reference | [Differences](docs/differences.md), [TypeScript test parity](docs/test-parity.md) |
 | See which public findings are covered | [Regression matrix](docs/regression-matrix.md) |
 | Select a platform or build a container | [Build and package](docs/building.md) |
+| Size `limits.max_engine_calls` for a host | [Load](docs/load.md) |
 
 ## Quick start
 
@@ -47,7 +48,9 @@ The quality gate also requires Bun 1.3.11 or newer.
 
 The AGT evaluator is the default. The first build compiles AGT's runtime library
 and downloads `opa` into `.acs/agt/`. [`agt-native.lock`](agt-native.lock) pins
-the source commit, Rust toolchain and OPA executable.
+the source commit, Rust toolchain and OPA executable, and the hash of AGT's `ffi.rs`
+that `agtbridge/agteval/acs.h` is written from; a test requires the same AGT commit
+as [`../agt/agt.lock`](../agt/agt.lock), which pins the policy bundle.
 The build refuses tracked changes and untracked files in the AGT source checkout.
 Later builds reuse the compiled library. CI defines a complete check for each native platform.
 See [Build and package](docs/building.md) for toolchains and verification limits.
@@ -58,7 +61,7 @@ From this directory:
 make run
 ```
 
-The target creates `.acs/hmac-secret` for local development.
+The target creates `.acs/hmac-secret` for local development: 32 random bytes in base64, under the `key_id` `2026-10` that `guardian.yaml` names. A file left by an older checkout holds 64 hex characters, which also decode as base64 but to other bytes; delete it so the target writes a new one.
 The target starts the Guardian from [`guardian.yaml`](guardian.yaml), with `policy.evaluator: agt`.
 The Guardian listens on `127.0.0.1:8787` and loads the checked-in deployment from `../agt`.
 Sessions stay in memory. Raw ACS envelopes are written under `.acs/`.
@@ -105,6 +108,9 @@ At startup, `policy.evaluator` selects `agt` or `go`. The environment variable
 A build without AGT refuses `agt`; it never substitutes the Go evaluator.
 Selecting `go` in an AGT build still requires the linked AGT library.
 Use `make build EVALUATOR=go` to remove that dependency.
+`go` reproduces AGT's runtime in Go for builds without cgo. It is not the reference
+evaluator: the expectations for reference implementations ([#256](https://github.com/GenAI-Security-Project/agent-control-standard/pull/256)) ask for AGT's own
+runtime, which `agt` is.
 
 ## Use it as a Go library
 
@@ -112,12 +118,12 @@ Use `make build EVALUATOR=go` to remove that dependency.
 evaluator, err := agteval.New(agteval.Config{
     ManifestPath: "/opt/acs/policy/policy/manifest.yaml",
     OPAPath:      "/usr/local/bin/opa",
-    OPATimeout:   5 * time.Second,
+    OPATimeout:   4 * time.Second, // shorter than the 5s default decision timeout
 })
 engine, err := agtbridge.New(os.DirFS("/opt/acs/policy"), "mapping.yaml",
     evaluator, agtbridge.Options{})
 signer, err := guardian.NewHMACSigner(
-    guardian.HMACKey{ID: "default", Secret: secret},
+    guardian.HMACKey{ID: "2026-10", Secret: secret}, // guardian.ReadHMACSecretFile decodes a base64 file
 )
 g, err := guardian.New(guardian.Config{
     Engine: engine,
@@ -129,8 +135,14 @@ http.Handle("/acs", g)
 - `agtbridge/agteval` requires cgo and the `agteval` build tag.
   Build every evaluator before the Guardian serves.
   `agteval.New` temporarily sets OPA configuration in the process environment.
+  Keep `OPATimeout` shorter than the Guardian's `DecisionTimeout`, with room for the
+  `opa` process to start: the library does not compare the two, and an agent that
+  stops waiting first applies its failure posture before AGT's deny arrives.
   `goeval.New(ctx, os.DirFS("/opt/acs/policy"), "policy/manifest.yaml")` builds the Go evaluator.
   Importing `guardian` or `agtbridge` alone adds no native dependency.
+- Under `agteval` each decision runs one `opa` process. Set `guardian.Config.MaxEngineCalls`
+  for the host: the library default, 256, is sized for in-process engines;
+  `guardian.yaml` ships 32 ([Load](docs/load.md)).
 - `guardian.Config` requires `Engine` and `Signer`. A nil `Store` selects
   `guardian.MemorySessionContextStore`, and a nil `AuditLog` records nothing.
 - Mount the Guardian as an `http.Handler` at your own route, or call

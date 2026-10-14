@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,7 +19,7 @@ func loadReferenceConfig(t *testing.T, overrides ...string) (config, error) {
 		t.Fatal(err)
 	}
 	secretFile := filepath.Join(t.TempDir(), "hmac-secret")
-	if err := os.WriteFile(secretFile, []byte("01234567890123456789012345678901"), 0o600); err != nil {
+	if err := os.WriteFile(secretFile, []byte(base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return loadConfig([]string{"--config", configPath}, append([]string{
@@ -35,10 +36,12 @@ func TestEvaluatorSelection(t *testing.T) {
 		overrides []string
 		want      string
 	}{
-		"missing":          {[]string{"ACS__POLICY__EVALUATOR="}, `policy.evaluator must be "agt" or "go"`},
-		"unknown":          {[]string{"ACS__POLICY__EVALUATOR=rego"}, `policy.evaluator must be "agt" or "go"`},
-		"agt_without_opa":  {[]string{"ACS__POLICY__OPA_PATH="}, "policy.opa_path must name the opa executable"},
-		"agt_zero_timeout": {[]string{"ACS__POLICY__OPA_TIMEOUT=0s"}, "policy.opa_timeout must be positive"},
+		"missing":                          {[]string{"ACS__POLICY__EVALUATOR="}, `policy.evaluator must be "agt" or "go"`},
+		"unknown":                          {[]string{"ACS__POLICY__EVALUATOR=rego"}, `policy.evaluator must be "agt" or "go"`},
+		"agt_without_opa":                  {[]string{"ACS__POLICY__OPA_PATH="}, "policy.opa_path must name the opa executable"},
+		"agt_zero_timeout":                 {[]string{"ACS__POLICY__OPA_TIMEOUT=0s"}, "policy.opa_timeout must be positive"},
+		"agt_timeout_equal_to_decision":    {[]string{"ACS__POLICY__OPA_TIMEOUT=5s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
+		"agt_timeout_longer_than_decision": {[]string{"ACS__POLICY__OPA_TIMEOUT=6s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadReferenceConfig(t, tt.overrides...); err == nil || !strings.Contains(err.Error(), tt.want) {

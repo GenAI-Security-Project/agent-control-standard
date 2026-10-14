@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +19,10 @@ import (
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 )
 
-const testSecret = "0123456789abcdef0123456789abcdef"
+const (
+	testSecret = "0123456789abcdef0123456789abcdef"
+	testKeyID  = "2026-10"
+)
 
 type testEngine struct {
 	decisions []acs.Decision
@@ -177,7 +182,7 @@ func TestProjectPluginConfiguration(t *testing.T) {
 func runEvent(t *testing.T, args []string, event string) hookOutput {
 	t.Helper()
 	var output bytes.Buffer
-	if err := run(args, bytes.NewBufferString(event), &output); err != nil {
+	if err := run(args, bytes.NewBufferString(event), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var response hookOutput
@@ -189,7 +194,7 @@ func runEvent(t *testing.T, args []string, event string) hookOutput {
 
 func testGuardian(t *testing.T, engine guardian.PolicyEngine) (string, *atomic.Int64) {
 	t.Helper()
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: []byte(testSecret)})
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: testKeyID, Secret: []byte(testSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,12 +214,12 @@ func testGuardian(t *testing.T, engine guardian.PolicyEngine) (string, *atomic.I
 func writeSecret(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "hmac-secret")
-	if err := os.WriteFile(path, []byte(testSecret), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString([]byte(testSecret))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
 func optionsFor(url, secretFile, stateDir string) []string {
-	return []string{"--guardian-url", url, "--hmac-secret-file", secretFile, "--state-dir", stateDir, "--audit-log", filepath.Join(stateDir, "audit.jsonl")}
+	return []string{"--guardian-url", url, "--hmac-key-id", testKeyID, "--hmac-secret-file", secretFile, "--state-dir", stateDir, "--audit-log", filepath.Join(stateDir, "audit.jsonl")}
 }

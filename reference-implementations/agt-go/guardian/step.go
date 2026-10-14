@@ -184,8 +184,8 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	switch {
 	case !slices.Contains(sess.Handshake.Server.MethodsEvaluated, req.Method):
 		return g.reserveRejected(ctx, in, req, notNegotiated(in.ID, req.Method, req.Method+" was not negotiated for this session"))
-	case !handshake.SameMajor(req.Params.ACSVersion, sess.Handshake.Server.NegotiatedVersion):
-		r := errorReply(in.ID, acs.UnsupportedVersion, "unsupported_version", "acs_version "+req.Params.ACSVersion+" does not share the negotiated major version")
+	case !handshake.Compatible(req.Params.ACSVersion, sess.Handshake.Server.NegotiatedVersion):
+		r := errorReply(in.ID, acs.UnsupportedVersion, "unsupported_version", "acs_version "+req.Params.ACSVersion+" is not compatible with the negotiated version")
 		r.err.Data.SupportedVersions = []string{sess.Handshake.Server.NegotiatedVersion}
 		return g.reserveRejected(ctx, in, req, r)
 	}
@@ -219,6 +219,7 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	case err != nil:
 		return g.storeFailed(ctx, in, "store append", err)
 	}
+	g.recordUnresolvedReference(ctx, in, req, sess.Entries)
 	sess.Entries = append(slices.Clip(sess.Entries), entry)
 	sess.Head = entry.EntryHash
 	chainHash = sess.Head
@@ -429,6 +430,27 @@ func chainMismatch(req acs.Request, head string) bool {
 	return state != nil && state.ChainHash != nil && *state.ChainHash != head
 }
 
+// recordUnresolvedReference records a toolCallResult whose request_id_ref
+// names no toolCallRequest among entries, the session's entries before this
+// step (hooks.md). A store that archives entries holds fewer, and a
+// reference to an archived request is recorded too.
+func (g *Guardian) recordUnresolvedReference(ctx context.Context, in *call, req acs.Request, entries []acs.ContextEntry) {
+	if req.Method != acs.StepToolCallResult {
+		return
+	}
+	var p acs.ToolCallResultPayload
+	if jsonv2.Unmarshal(req.Params.Payload, &p) != nil || p.RequestIDRef == nil {
+		return
+	}
+	for _, e := range entries {
+		if e.StepType == acs.StepToolCallRequest && e.StepID == *p.RequestIDRef {
+			return
+		}
+	}
+	g.event(ctx, EventRequestIDRefUnresolved, req.Method, in.SessionID, in.RequestID,
+		fmt.Sprintf("request_id_ref %q names no toolCallRequest this Guardian holds for the session", *p.RequestIDRef))
+}
+
 // appendEntry seals the step's ContextEntry against the session's head and
 // appends it with the step's reservation and lineage, in one store
 // operation.
@@ -577,7 +599,9 @@ var errEngineSaturated = errors.New("every engine call place is taken")
 // Shutdown cancels, and turns a panic into an error. It stops waiting when
 // ctx ends even if the engine does not, so an engine that ignores
 // cancellation cannot hold the answer; the call keeps its place in
-// engineCalls until the engine returns.
+// engineCalls until the engine returns, and gives it back before its
+// outcome is delivered, so the step that answer lets a client send next
+// never finds that place still taken.
 func (g *Guardian) callEngine(ctx context.Context, timeout time.Duration, in PolicyInput) (PolicyDecision, error) {
 	select {
 	case g.engineCalls <- struct{}{}:
@@ -592,14 +616,17 @@ func (g *Guardian) callEngine(ctx context.Context, timeout time.Duration, in Pol
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		defer func() { <-g.engineCalls }()
-		defer func() {
-			if p := recover(); p != nil {
-				done <- outcome{err: fmt.Errorf("panic: %v", p)}
-			}
+		var o outcome
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					o = outcome{err: fmt.Errorf("panic: %v", p)}
+				}
+			}()
+			o.pd, o.err = g.cfg.Engine.Decide(ctx, in)
 		}()
-		pd, err := g.cfg.Engine.Decide(ctx, in)
-		done <- outcome{pd, err}
+		<-g.engineCalls
+		done <- o
 	}()
 	select {
 	case o := <-done:

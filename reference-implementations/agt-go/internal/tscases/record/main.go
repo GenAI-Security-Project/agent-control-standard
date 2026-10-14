@@ -1,6 +1,6 @@
 // Command record sends the parity corpus to a running TypeScript reference
 // Guardian and writes its answers. Run it through scripts/record-ts-cases.sh,
-// which starts that Guardian at a known commit.
+// which starts that Guardian from the tree named by -ts-tree.
 package main
 
 import (
@@ -21,17 +21,23 @@ import (
 func main() {
 	url := flag.String("url", "http://127.0.0.1:8787/acs", "the TypeScript Guardian's endpoint")
 	out := flag.String("out", "agtbridge/testdata/ts-cases.json", "where to write the recording")
-	commit := flag.String("ts-commit", "", "commit of the TypeScript tree being recorded")
-	version := flag.String("spec-version", "", "the repository's version.txt")
+	tree := flag.String("ts-tree", "../agt", "the TypeScript tree the running Guardian was started from")
 	flag.Parse()
-	if err := run(*url, *out, *commit, *version); err != nil {
+	if err := run(*url, *out, *tree); err != nil {
 		fmt.Fprintln(os.Stderr, "record:", err)
 		os.Exit(1)
 	}
 }
 
-func run(url, out, commit, version string) error {
-	rec := tscases.Recording{TSCommit: commit, SpecVersion: version, Cases: tscases.Corpus()}
+func run(url, out, tree string) error {
+	if err := tscases.Uncommitted(tree); err != nil {
+		return err
+	}
+	trees, err := tscases.DecidingTrees(tree)
+	if err != nil {
+		return err
+	}
+	rec := tscases.Recording{TSTrees: trees, Cases: tscases.Corpus()}
 	for ci := range rec.Cases {
 		session := observedagent.NewUUID()
 		for si := range rec.Cases[ci].Steps {

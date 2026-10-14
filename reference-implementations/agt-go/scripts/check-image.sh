@@ -10,7 +10,7 @@ cleanup() {
   rmdir "$scratch"
 }
 trap cleanup EXIT
-openssl rand 32 >"$scratch/hmac-secret"
+openssl rand -base64 32 >"$scratch/hmac-secret"
 chmod 600 "$scratch/hmac-secret"
 container="$(docker run --detach --platform "${IMAGE_PLATFORM:?set IMAGE_PLATFORM through make image-check}" --publish 127.0.0.1::8787 \
   --user "$(id -u):$(id -g)" \

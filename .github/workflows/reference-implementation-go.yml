@@ -21,6 +21,7 @@ on:
       - "reference-implementations/agt/agt.lock"
       - "reference-implementations/agt/packages/guardian/src/**"
       - "reference-implementations/agt/packages/agt-bridge/src/**"
+      - "reference-implementations/agt/packages/agt-bridge/package.json"
       - "reference-implementations/agt/packages/conformance/**"
       - "reference-implementations/agt/package.json"
       - "reference-implementations/agt/bun.lock"
@@ -36,12 +37,18 @@ on:
       - "reference-implementations/agt/agt.lock"
       - "reference-implementations/agt/packages/guardian/src/**"
       - "reference-implementations/agt/packages/agt-bridge/src/**"
+      - "reference-implementations/agt/packages/agt-bridge/package.json"
       - "reference-implementations/agt/packages/conformance/**"
       - "reference-implementations/agt/package.json"
       - "reference-implementations/agt/bun.lock"
       - "specification/**"
       - "docs/spec/**"
       - ".github/workflows/reference-implementation-go.yml"
+  schedule:
+    # Weekly even when no Go file changed, because govulncheck compares the pinned Go
+    # toolchain and modules against advisories published after the pin, and Dependabot
+    # does not move the toolchain.
+    - cron: "37 6 * * 1"
   workflow_dispatch:
 
 permissions: {}
@@ -67,8 +74,6 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # TestRecordingIsCurrent compares the recorded AGT cases with Git history.
-          fetch-depth: 0
           # Nothing here pushes with git, so the checkout's token has no reason to
           # stay behind in .git/config.
           persist-credentials: false
@@ -107,8 +112,6 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # TestRecordingIsCurrent compares the recorded AGT cases with Git history.
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Go

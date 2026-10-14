@@ -20,12 +20,13 @@ const EgressAnnotator = "egress"
 // down so it cannot contradict AGT's own reading.
 var argumentsAGTAlreadyReads = []string{"url", "endpoint", "host", "domain"}
 
-// jsWhitespace is ECMAScript's \s: RE2's \s is ASCII only and leaves out the
-// vertical tab and every Unicode space.
-const jsWhitespace = `\t\n\v\f\r \x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}`
+// asciiWhitespace is the only whitespace that ends a URL. A Unicode space
+// such as U+00A0 or U+FEFF stays inside the URL, so unambiguousAuthority
+// rejects it before the host ends (#268).
+const asciiWhitespace = `\t\n\v\f\r `
 
 var (
-	destinationInCommand = regexp.MustCompile(`\bhttps?://[^` + jsWhitespace + "'\"`;|&()<>]+")
+	destinationInCommand = regexp.MustCompile(`\bhttps?://[^` + asciiWhitespace + "'\"`;|&()<>]+")
 	unambiguousAuthority = regexp.MustCompile(`^https?://[A-Za-z0-9.\-]+(?::[0-9]+)?(?:[/?#]|$)`)
 )
 

@@ -6,6 +6,7 @@
   "crate_version": "0.3.1-beta.0",
   "cargo_features": ["default-dispatchers"],
   "rust_toolchain": "1.99.0",
+  "ffi_rs_sha256": "5aa7e1b0061d501805f6c54eeef1805f6a35ea4fb978edd4889d721937c8d8b2",
   "opa_version": "0.70.0",
   "opa_sha256": {
     "linux-amd64": "00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084",

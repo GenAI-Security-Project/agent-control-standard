@@ -16,6 +16,9 @@ func TestSelectVersion(t *testing.T) {
 		{[]string{"0.1.0"}, "0.1.0", true},
 		{[]string{"0.2.0", "0.1.0"}, "0.1.0", true},
 		{[]string{"0.1.3", "0.1.10", "0.1.2"}, "0.1.10", true},
+		{[]string{"0.1.7"}, "0.1.7", true},
+		{[]string{"0.9.0"}, "", false},
+		{[]string{"0.2.0"}, "", false},
 		{[]string{"1.0.0"}, "", false},
 		{[]string{"x.y.z", "0.1"}, "", false},
 	}
@@ -23,6 +26,24 @@ func TestSelectVersion(t *testing.T) {
 		got, ok := selectVersion(tt.offered, "0.1.0")
 		if got != tt.want || ok != tt.ok {
 			t.Errorf("%v: got %q, %v", tt.offered, got, ok)
+		}
+	}
+}
+
+func TestCompatible(t *testing.T) {
+	tests := map[[2]string]bool{
+		{"0.1.0", "0.1.0"}: true,
+		{"0.1.9", "0.1.0"}: true,
+		{"0.2.0", "0.1.0"}: false,
+		{"0.0.1", "0.1.0"}: false,
+		{"1.4.0", "1.0.0"}: true,
+		{"2.0.0", "1.0.0"}: false,
+		{"1.0.0", "0.1.0"}: false,
+		{"1.0", "1.0.0"}:   false,
+	}
+	for pair, want := range tests {
+		if got := Compatible(pair[0], pair[1]); got != want {
+			t.Errorf("Compatible(%s, %s) = %v, want %v", pair[0], pair[1], got, want)
 		}
 	}
 }

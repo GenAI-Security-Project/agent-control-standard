@@ -58,3 +58,30 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # Go modules of the Go reference Guardian, so module updates arrive without
+  # anyone touching the tree. The weekly run of reference-implementation-go.yml
+  # covers advisories for the Go toolchain, which Dependabot does not move.
+  - package-ecosystem: "gomod"
+    directories:
+      - "/reference-implementations/agt-go"
+      - "/reference-implementations/agt-go/examples/custom-engine"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "go"
+    groups:
+      # The two modules share dependencies, and make check fails while one
+      # go.mod is ahead of the other, so one pull request moves a dependency
+      # in both directories.
+      go-modules:
+        patterns:
+          - "*"
+        group-by: dependency-name

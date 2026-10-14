@@ -1,6 +1,12 @@
 {
-  "ts_commit": "375855b223e47ac265c22f828ae31c76fb96eda6",
-  "spec_version": "0.1.2",
+  "ts_trees": {
+    "agt.lock": "3367f3166c7b9662c9895bccf351ab11f389b1f8",
+    "mapping.yaml": "3dac231d12196657ed186e3bce2bd3ef81be290a",
+    "packages/agt-bridge/package.json": "89dd8140627b2d01abc67fc8f59e531cc0850c40",
+    "packages/agt-bridge/src": "4cb957b4632fd795c54a9db379399c861cef2e45",
+    "packages/guardian/src": "f021c666e5a844ca2262340866b2e471e6ba0b96",
+    "policy": "c6f34f789525f8a89a4c2fc1ba236fb1a0cd70d0"
+  },
   "cases": [
     {
       "name": "argument_named_like_the_leaf",

@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
-	"strings"
 	"testing"
 
 	jsonv2 "github.com/go-json-experiment/json"
@@ -30,13 +28,14 @@ var recordedEvaluators = map[string]func(testing.TB) agtbridge.Evaluator{
 // reference Guardian (scripts/record-ts-cases.sh) through the Go Guardian
 // over each evaluator, over the whole request path, and requires the same
 // disposition, reason codes, policy references, modifications and
-// reasoning. The one declared exception: when the engine fails, both
+// reasoning. Two declared exceptions: when the engine fails, both
 // Guardians deny with evaluation_failed, and the reasoning is each
-// Guardian's own sentence around the failure (docs/differences.md).
+// Guardian's own sentence around the failure (docs/differences.md); and
+// the cases in aheadOfTypeScript.
 func TestRecordedCases(t *testing.T) {
 	rec := readRecording(t)
-	if len(rec.Cases) != len(tscases.Corpus()) {
-		t.Fatalf("the recording holds %d cases and the corpus %d; run scripts/record-ts-cases.sh", len(rec.Cases), len(tscases.Corpus()))
+	if d := corpusDifference(rec.Cases, tscases.Corpus()); d != "" {
+		t.Fatalf("the recording was made from another corpus (%s); run scripts/record-ts-cases.sh", d)
 	}
 	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
 	if err != nil {
@@ -51,6 +50,10 @@ func TestRecordedCases(t *testing.T) {
 			for _, c := range rec.Cases {
 				t.Run(c.Name, func(t *testing.T) {
 					for i, got := range replay(t, g, signer, c) {
+						if reason, ahead := aheadOfTypeScript[c.Name]; ahead {
+							requireAhead(t, reason, *c.Steps[i].Result, got)
+							continue
+						}
 						if d := difference(*c.Steps[i].Result, got); d != "" {
 							t.Errorf("step %d: %s, against TypeScript", i, d)
 						}
@@ -59,6 +62,47 @@ func TestRecordedCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// aheadOfTypeScript names the recorded cases where the Go Guardian already
+// follows a fix the TypeScript reference has in an open pull request, so the
+// recording still holds the old answer. Each entry is deleted when a
+// re-record carries the fix; requireAhead fails once it does.
+var aheadOfTypeScript = map[string]string{
+	"command_not_a_string":   "a non-string policy target is denied (#229, 96731db)",
+	"fetch_url_not_a_string": "a non-string policy target is denied (#229, 96731db)",
+}
+
+func requireAhead(t *testing.T, reason string, recorded, got acs.Decision) {
+	t.Helper()
+	if recorded.Disposition != acs.Allow {
+		t.Fatalf("the recording now answers %s: TypeScript carries the fix (%s); delete the aheadOfTypeScript entry", recorded.Disposition, reason)
+	}
+	if got.Disposition != acs.Deny || !slices.Equal(got.ReasonCodes, []string{disposition.ReasonEvaluationFailed}) {
+		t.Fatalf("got %s %v, want DENY [evaluation_failed]: %s", got.Disposition, got.ReasonCodes, reason)
+	}
+}
+
+// corpusDifference reports the first case or step whose name, method or
+// payload the recording does not share with the corpus, so the answers are
+// never replayed against inputs they were not given.
+func corpusDifference(recorded, corpus []tscases.Case) string {
+	if len(recorded) != len(corpus) {
+		return fmt.Sprintf("%d cases recorded, %d in the corpus", len(recorded), len(corpus))
+	}
+	for i, c := range corpus {
+		r := recorded[i]
+		if r.Name != c.Name || len(r.Steps) != len(c.Steps) {
+			return fmt.Sprintf("case %d is %s with %d steps, the corpus has %s with %d", i, r.Name, len(r.Steps), c.Name, len(c.Steps))
+		}
+		for j, s := range c.Steps {
+			var got, want any
+			if r.Steps[j].Method != s.Method || jsonv2.Unmarshal(r.Steps[j].Payload, &got) != nil || jsonv2.Unmarshal(s.Payload, &want) != nil || !equalJSON(got, want) {
+				return fmt.Sprintf("%s step %d differs", c.Name, j)
+			}
+		}
+	}
+	return ""
 }
 
 func readRecording(t testing.TB) tscases.Recording {
@@ -79,13 +123,7 @@ func readRecording(t testing.TB) tscases.Recording {
 func replay(t *testing.T, g *guardian.Guardian, signer guardian.Signer, c tscases.Case) []acs.Decision {
 	t.Helper()
 	ctx := context.Background()
-	client := &observedagent.Client{
-		Transport: func(ctx context.Context, body []byte) ([]byte, error) { return g.Handle(ctx, body), nil },
-		Signer:    signer, AgentID: "parity", SessionID: observedagent.NewUUID(),
-	}
-	if o, err := client.Handshake(ctx, observedagent.DefaultHello(handshake.CoreMethods()...)); err != nil || o.Hello == nil {
-		t.Fatalf("handshake: %v", err)
-	}
+	client := openSession(t, g, signer)
 	decisions := make([]acs.Decision, len(c.Steps))
 	for i, step := range c.Steps {
 		if step.Result == nil {
@@ -101,6 +139,20 @@ func replay(t *testing.T, g *guardian.Guardian, signer guardian.Signer, c tscase
 		decisions[i] = o.Result.Decision
 	}
 	return decisions
+}
+
+// openSession handshakes a new session with g and returns the client that
+// signs its steps.
+func openSession(t *testing.T, g *guardian.Guardian, signer guardian.Signer) *observedagent.Client {
+	t.Helper()
+	client := &observedagent.Client{
+		Transport: func(ctx context.Context, body []byte) ([]byte, error) { return g.Handle(ctx, body), nil },
+		Signer:    signer, AgentID: "parity", SessionID: observedagent.NewUUID(),
+	}
+	if o, err := client.Handshake(context.Background(), observedagent.DefaultHello(handshake.CoreMethods()...)); err != nil || o.Hello == nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	return client
 }
 
 // difference names the first field in which got differs from want, or is
@@ -136,12 +188,16 @@ func equalJSON(a, b any) bool { return mustJSON(a) == mustJSON(b) }
 // scripts/record-ts-cases.sh.
 func TestRecordingIsCurrent(t *testing.T) {
 	rec := readRecording(t)
-	out, err := exec.Command("git", "-C", agtTree, "log", "-1", "--format=%H", "--",
-		"packages/guardian/src", "packages/agt-bridge/src", "mapping.yaml", "policy").Output()
+	trees, err := tscases.DecidingTrees(agtTree)
 	if err != nil {
-		t.Fatalf("git log: %v", err)
+		t.Fatal(err)
 	}
-	if head := strings.TrimSpace(string(out)); head != rec.TSCommit {
-		t.Fatalf("the recording is from %s, and the TypeScript tree's deciding code last changed in %s; run scripts/record-ts-cases.sh", rec.TSCommit, head)
+	if len(rec.TSTrees) != len(tscases.DecidingPaths) {
+		t.Fatalf("the recording names %d paths and tscases.DecidingPaths %d; run scripts/record-ts-cases.sh", len(rec.TSTrees), len(tscases.DecidingPaths))
+	}
+	for _, p := range tscases.DecidingPaths {
+		if trees[p] != rec.TSTrees[p] {
+			t.Fatalf("%s is %s in the TypeScript tree and %s in the recording; run scripts/record-ts-cases.sh", p, trees[p], rec.TSTrees[p])
+		}
 	}
 }

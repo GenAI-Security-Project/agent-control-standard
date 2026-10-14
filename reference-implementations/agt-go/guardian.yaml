@@ -15,18 +15,23 @@ policy:
   mapping: mapping.yaml
   evaluator: agt
   opa_path: .acs/agt/bin
-  opa_timeout: 5s
+  opa_timeout: 4s
   ask_substitution: deny
   tool_aliases:
     shell: bash
 
 security:
-  hmac_key_id: default
+  hmac_key_id: "2026-10"
   hmac_secret_file: .acs/hmac-secret
+
+storage:
+  provider: memory
 
 audit:
   envelope_log: .acs/envelopes.jsonl
   event_log: .acs/guardian-events.jsonl
+  max_file_bytes: 268435456 # 256 MiB; with max_files 3, at most 1 GiB per log
+  max_files: 3
 
 protocol:
   on_decision_failure: deny
@@ -38,7 +43,7 @@ limits:
   max_entries: 10000
   max_reservations: 20000
   max_skill_approvals: 4096
-  max_engine_calls: 256
+  max_engine_calls: 32
   max_policy_state_bytes: 65536
   max_body_bytes: 1048576
   max_deferrals: 3

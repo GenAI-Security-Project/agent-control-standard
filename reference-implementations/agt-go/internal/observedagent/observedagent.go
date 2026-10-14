@@ -82,6 +82,12 @@ var (
 	responseSchemasOnce sync.Once
 )
 
+// ErrMalformedResponse marks an answer that is not a well-formed response for
+// the request: it does not parse, fails its schema, or answers another id.
+var ErrMalformedResponse = errors.New("malformed response")
+
+func malformed(err error) error { return fmt.Errorf("%w: %w", ErrMalformedResponse, err) }
+
 // NewUUID returns a random version 4 UUID.
 func NewUUID() string {
 	var b [16]byte
@@ -156,16 +162,16 @@ func (c *Client) Send(ctx context.Context, r Request) (Outcome, error) {
 	}
 	if string(o.Response.ID) == "null" {
 		if o.Error == nil {
-			return Outcome{}, fmt.Errorf("successful response has null id for request_id %q", r.RequestID)
+			return Outcome{}, malformed(fmt.Errorf("successful response has null id for request_id %q", r.RequestID))
 		}
 	} else {
 		var responseID string
 		if err := json.Unmarshal(o.Response.ID, &responseID); err != nil || responseID != r.RequestID {
-			return Outcome{}, fmt.Errorf("response id does not match request_id %q", r.RequestID)
+			return Outcome{}, malformed(fmt.Errorf("response id does not match request_id %q", r.RequestID))
 		}
 	}
 	if o.Result != nil && o.Result.RequestID != r.RequestID {
-		return Outcome{}, fmt.Errorf("result request_id does not match request_id %q", r.RequestID)
+		return Outcome{}, malformed(fmt.Errorf("result request_id does not match request_id %q", r.RequestID))
 	}
 	return o, nil
 }
@@ -189,20 +195,20 @@ func (c *Client) Read(ctx context.Context, raw []byte) (Outcome, error) {
 func (c *Client) read(ctx context.Context, raw []byte, requestMethod string) (Outcome, error) {
 	o := Outcome{Raw: raw}
 	if err := jsonv2.Unmarshal(raw, &o.Response); err != nil {
-		return o, fmt.Errorf("answer is not a response envelope: %w", err)
+		return o, malformed(fmt.Errorf("answer is not a response envelope: %w", err))
 	}
 	if err := validateResponse(raw); err != nil {
 		if denial, ok := c.invalidModifyDenial(ctx, raw, o.Response); ok {
 			return denial, nil
 		}
-		return o, fmt.Errorf("answer fails response-envelope.json: %w", err)
+		return o, malformed(fmt.Errorf("answer fails response-envelope.json: %w", err))
 	}
 	o.Error = o.Response.Error
 	if o.Error != nil {
 		if o.Error.Signature != nil {
 			input, _, err := envelope.ResponseSigningInput(raw)
 			if err != nil {
-				return o, err
+				return o, malformed(err)
 			}
 			o.Verified = c.Signer.Verify(ctx, c.SessionID, input, *o.Error.Signature) == nil
 		}
@@ -216,7 +222,7 @@ func (c *Client) read(ctx context.Context, raw []byte, requestMethod string) (Ou
 	if requestMethod == "" {
 		var members map[string]json.RawMessage
 		if err := json.Unmarshal(o.Response.Result, &members); err != nil {
-			return o, err
+			return o, malformed(err)
 		}
 		_, hasType := members["type"]
 		_, hasNegotiatedVersion := members["negotiated_version"]
@@ -225,26 +231,26 @@ func (c *Client) read(ctx context.Context, raw []byte, requestMethod string) (Ou
 	if isHandshake {
 		o.Hello = &acs.ServerHello{}
 		if err := jsonv2.Unmarshal(o.Response.Result, o.Hello); err != nil {
-			return o, err
+			return o, malformed(err)
 		}
 		if err := validateServerHello(o.Response.Result); err != nil {
-			return o, fmt.Errorf("handshake result fails handshake.json: %w", err)
+			return o, malformed(fmt.Errorf("handshake result fails handshake.json: %w", err))
 		}
 		sig = o.Hello.Signature
 	} else {
 		o.Result = &acs.Result{}
 		if err := jsonv2.Unmarshal(o.Response.Result, o.Result); err != nil {
-			return o, err
+			return o, malformed(err)
 		}
 		if o.Result.Type != acs.ResultTypeFinal {
-			return o, fmt.Errorf("result type is %q, want %q", o.Result.Type, acs.ResultTypeFinal)
+			return o, malformed(fmt.Errorf("result type is %q, want %q", o.Result.Type, acs.ResultTypeFinal))
 		}
 		sig = o.Result.Signature
 	}
 	if sig != nil {
 		input, _, err := envelope.ResponseSigningInput(raw)
 		if err != nil {
-			return o, err
+			return o, malformed(err)
 		}
 		o.Verified = c.Signer.Verify(ctx, c.SessionID, input, *sig) == nil
 	}
@@ -350,18 +356,37 @@ var ErrBlocked = errors.New("the decision blocks the step")
 
 // Honour returns the decision the Observed Agent applies to a step it sent
 // (§6.4): the Guardian's, when a result arrived and its signature verified;
-// otherwise, on a transport failure, a timeout, an error answer or a result
-// that does not verify, the negotiated failure posture, proceed as ALLOW
-// and deny as DENY. failedOpen reports a posture that proceeded, which the
-// Observed Agent must record as an audit event.
-func Honour(o Outcome, err error, posture acs.FailurePosture) (d acs.Decision, failedOpen bool) {
+// DENY, whatever the posture, when the Guardian answered but the answer
+// refuses the request or cannot be trusted (Refused); otherwise, on a
+// transport failure, a timeout or another error answer, the negotiated
+// failure posture, proceed as ALLOW and deny as DENY. verified reports the
+// first case; a caller records every other one as a decision failure (§6.5).
+func Honour(o Outcome, err error, posture acs.FailurePosture) (d acs.Decision, verified bool) {
 	if err == nil && o.Result != nil && o.Verified {
-		return o.Result.Decision, false
+		return o.Result.Decision, true
+	}
+	if Refused(o, err) {
+		return acs.Decision{Disposition: acs.Deny, Reasoning: "the Guardian refused the request or its answer did not verify, which fails closed under any posture"}, false
 	}
 	if posture == acs.FailureDeny {
 		return acs.Decision{Disposition: acs.Deny, Reasoning: "no verified decision arrived, and the failure posture is deny"}, false
 	}
-	return acs.Decision{Disposition: acs.Allow, Reasoning: "no verified decision arrived, and the failure posture is proceed"}, true
+	return acs.Decision{Disposition: acs.Allow, Reasoning: "no verified decision arrived, and the failure posture is proceed"}, false
+}
+
+// Refused reports an answer that must not fall to a proceed posture: a
+// result or error whose signature does not verify, an answer that is not a
+// well-formed response, or a signed error other than -32603, which refuses
+// the request itself. The failure posture is kept for a Guardian that did
+// not decide: no answer, or a signed internal error (#32, open).
+func Refused(o Outcome, err error) bool {
+	if err != nil {
+		return errors.Is(err, ErrMalformedResponse)
+	}
+	if !o.Verified {
+		return o.Result != nil || o.Error != nil
+	}
+	return o.Error != nil && o.Error.Code != acs.InternalError
 }
 
 // Apply honours a decision for a payload (§6.4): ALLOW proceeds unchanged,

@@ -20,6 +20,7 @@ agt_ref="$(pinned .agt_ref)"
 workspace_path="$(pinned .workspace_path)"
 crate="$(pinned .crate)"
 crate_version="$(pinned .crate_version)"
+ffi_rs_sha256="$(pinned .ffi_rs_sha256)"
 features="$(pinned '.cargo_features | join(",")')"
 toolchain="$(pinned .rust_toolchain)"
 opa_version="$(pinned .opa_version)"
@@ -67,6 +68,18 @@ if [ "$(git -C "$src" rev-parse -q --verify HEAD || true)" != "$agt_ref" ]; then
 fi
 [ "$(git -C "$src" rev-parse HEAD)" = "$agt_ref" ] || die "$src is not at $agt_ref"
 [ -z "$(git -C "$src" status --porcelain --untracked-files=all)" ] || die "$src has local changes; the pin names the commit, so only unmodified source is built"
+
+# agteval/acs.h is written from AGT's ffi.rs, and opa_version and opa_sha256
+# from the opa AGT's SDK fetches; a commit that changes either fails here
+# until this side is checked against it.
+[ "$(sha256 "$src/$workspace_path/core/src/ffi.rs")" = "$ffi_rs_sha256" ] ||
+  die "AGT's ffi.rs at $agt_ref differs from the one agtbridge/agteval/acs.h was written from; update acs.h, then ffi_rs_sha256 in $lock"
+fetch_opa="$src/$workspace_path/sdk/node/scripts/fetch-opa.mjs"
+grep -q "OPA_VERSION ?? \"$opa_version\"" "$fetch_opa" ||
+  die "AGT's SDK at $agt_ref fetches another opa than $opa_version ($fetch_opa); update opa_version and opa_sha256 in $lock"
+for checksum in $(jq -r '.opa_sha256[]' "$lock"); do
+  grep -q "\"$checksum\"" "$fetch_opa" || die "AGT's SDK at $agt_ref does not name opa checksum $checksum ($fetch_opa)"
+done
 
 rustup toolchain list | grep -q "^$toolchain-" || rustup toolchain install "$toolchain" --profile minimal
 rustup target add "$target" --toolchain "$toolchain"

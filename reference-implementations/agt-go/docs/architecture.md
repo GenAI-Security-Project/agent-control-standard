@@ -51,7 +51,7 @@ snapshot. `policy.evaluator` selects it:
 
 | Evaluator | Package | What decides | Build |
 | --- | --- | --- | --- |
-| `agt` | [`agtbridge/agteval`](../agtbridge/agteval/) | AGT's runtime library at the commit [`agt-native.lock`](../agt-native.lock) pins. At that commit AGT runs each Rego decision in the `opa` program. | cgo and the `agteval` build tag. `make agt-native` builds the library and fetches OPA. Platform toolchains are listed in [Build and package](building.md). |
+| `agt` | [`agtbridge/agteval`](../agtbridge/agteval/) | AGT's runtime library at the commit [`agt-native.lock`](../agt-native.lock) pins, the same commit `../agt/agt.lock` pins for the policy bundle. At that commit AGT runs each Rego decision in the `opa` program. | cgo and the `agteval` build tag. `make agt-native` builds the library and fetches OPA. Platform toolchains are listed in [Build and package](building.md). |
 | `go` | [`agtbridge/goeval`](../agtbridge/goeval/) | A Go reproduction of the part of AGT's runtime the checked-in manifest uses, running the same Rego policies with OPA's Go library. A manifest feature outside that part stops startup. | Pure Go, any platform. |
 
 ```mermaid

@@ -3,6 +3,7 @@ package main_test
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -67,7 +68,7 @@ func start(t *testing.T, bin, dir string, env ...string) *process {
 	t.Helper()
 	logs := t.TempDir()
 	secretFile := filepath.Join(logs, "hmac-secret")
-	if err := os.WriteFile(secretFile, []byte(secret), 0o600); err != nil {
+	if err := os.WriteFile(secretFile, []byte(base64.StdEncoding.EncodeToString([]byte(secret))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, "--config", referenceConfig(t))
@@ -111,7 +112,7 @@ func start(t *testing.T, bin, dir string, env ...string) *process {
 
 func (p *process) client(t *testing.T) *observedagent.Client {
 	t.Helper()
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: []byte(secret)})
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "2026-10", Secret: []byte(secret)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,11 +192,16 @@ func TestRefusesToStart(t *testing.T) {
 		env                []string
 	}{
 		{"configuration_required", "", "--config is required", nil, nil},
-		{"short_secret", "short", "security.hmac_secret_file must hold at least 32 bytes", []string{"--config", referenceConfig(t)}, nil},
-		{"write_timeout_within_decision", secret, "server.write_timeout must exceed protocol.decision_timeout", []string{"--config", referenceConfig(t)}, []string{"ACS__SERVER__WRITE_TIMEOUT=5s"}},
-		{"non_positive_deferral_limit", secret, "limits.max_deferrals must be positive", []string{"--config", referenceConfig(t)}, []string{"ACS__LIMITS__MAX_DEFERRALS=0"}},
-		{"unknown_ask_substitution", secret, "policy.ask_substitution must be none, deny or defer", []string{"--config", referenceConfig(t)}, []string{"ACS__POLICY__ASK_SUBSTITUTION=ask"}},
-		{"unknown_override", secret, "invalid keys", []string{"--config", referenceConfig(t)}, []string{"ACS__NO__SUCH__SETTING=value"}},
+		{"short_secret", base64.StdEncoding.EncodeToString([]byte("short")), "decodes to 5 bytes, fewer than 32", []string{"--config", referenceConfig(t)}, nil},
+		{"secret_not_base64", "not base64!", "is not standard base64", []string{"--config", referenceConfig(t)}, nil},
+		{"write_timeout_within_decision", base64.StdEncoding.EncodeToString([]byte(secret)), "server.write_timeout must exceed protocol.decision_timeout", []string{"--config", referenceConfig(t)}, []string{"ACS__SERVER__WRITE_TIMEOUT=5s"}},
+		{"non_positive_deferral_limit", base64.StdEncoding.EncodeToString([]byte(secret)), "limits.max_deferrals must be positive", []string{"--config", referenceConfig(t)}, []string{"ACS__LIMITS__MAX_DEFERRALS=0"}},
+		{"unknown_ask_substitution", base64.StdEncoding.EncodeToString([]byte(secret)), "policy.ask_substitution must be none, deny or defer", []string{"--config", referenceConfig(t)}, []string{"ACS__POLICY__ASK_SUBSTITUTION=ask"}},
+		{"unknown_override", base64.StdEncoding.EncodeToString([]byte(secret)), "invalid keys", []string{"--config", referenceConfig(t)}, []string{"ACS__NO__SUCH__SETTING=value"}},
+		{"unknown_storage_provider", base64.StdEncoding.EncodeToString([]byte(secret)), `storage.provider must be "memory"`, []string{"--config", referenceConfig(t)}, []string{"ACS__STORAGE__PROVIDER=redis"}},
+		{"negative_audit_rotation", base64.StdEncoding.EncodeToString([]byte(secret)), "audit: max_file_bytes and max_files cannot be negative", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_FILES=-1"}},
+		{"audit_files_without_a_size", base64.StdEncoding.EncodeToString([]byte(secret)), "audit: max_files needs max_file_bytes", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_FILE_BYTES=0"}},
+		{"audit_size_without_files", base64.StdEncoding.EncodeToString([]byte(secret)), "audit: max_file_bytes needs max_files", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_FILES=0"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

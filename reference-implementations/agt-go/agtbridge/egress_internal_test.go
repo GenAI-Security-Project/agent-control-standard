@@ -26,3 +26,21 @@ func TestWhatwgOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestAnnotateEgressReadsOnlyASCIIWhitespaceAsURLEnd(t *testing.T) {
+	annotate := func(command string) string {
+		preliminary := map[string]any{"snapshot": map[string]any{"tool_call": map[string]any{"raw_command": command, "args": map[string]any{}}}}
+		return AnnotateEgress(preliminary)["destination"].(string)
+	}
+	tests := map[string]string{
+		"curl https://docs.example.com/x":                    "https://docs.example.com",
+		"curl https://docs.example.com\tx":                   "https://docs.example.com",
+		"curl https://docs.example.com\u00a0@evil.invalid/x": ambiguousDestination,
+		"curl https://docs.example.com\ufeff@evil.invalid/x": ambiguousDestination,
+	}
+	for command, want := range tests {
+		if got := annotate(command); got != want {
+			t.Errorf("%q: destination %q, want %q", command, got, want)
+		}
+	}
+}

@@ -49,7 +49,8 @@ appends a local event to `.acs/codex-audit.jsonl` when:
   decision;
 - it denies a modification it cannot apply.
 
-If that write fails, the tool call is denied and the reason says the record is missing.
+If that write fails, the tool call is denied, the event goes to the hook's stderr as one
+JSON line with `"disposition":"deny"`, and the reason says so.
 
 If the initial handshake produces no ServerHello, this example uses the ACS startup
 posture `refuse` and denies the tool call.

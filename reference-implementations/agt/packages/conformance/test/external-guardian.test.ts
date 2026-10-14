@@ -36,7 +36,7 @@ describe("the external Guardian wire checks", () => {
     const directory = mkdtempSync(join(tmpdir(), "acs-conformance-"));
     const secretFile = join(directory, "hmac-secret");
     const secret = Buffer.alloc(32, 7);
-    writeFileSync(secretFile, secret);
+    writeFileSync(secretFile, `${secret.toString("base64")}\n`);
     const keyID = "test-key";
     const seen = new Set<unknown>();
     let acceptedHandshakes = 0;

@@ -57,6 +57,11 @@ func preToolCallSnapshot(req acs.Request, labels []string, argument, policyToolN
 		sent := slices.Sorted(maps.Keys(args))
 		return nil, fmt.Errorf("mapping.yaml reads tool %q's policy target from argument %q, but this call sent no such argument (it sent: %v)", payload.Tool.Name, argument, sent)
 	}
+	// The stock rules guard their targets with is_string; a target of any
+	// other JSON type would pass every one of them.
+	if _, isString := value.(string); !isString {
+		return nil, fmt.Errorf("tool %q sent argument %q as a JSON %s, but its policy target must be a string", payload.Tool.Name, argument, jsonKind(value))
+	}
 	args[PolicyTargetLeaf] = value
 	raw := ""
 	if payload.RawCommand != nil {
@@ -88,4 +93,23 @@ func postToolCallSnapshot(req acs.Request, labels []string, policyToolName strin
 		"tool_result": map[string]any{"outputs": outputs},
 		"input":       ifcInput(labels),
 	}, nil
+}
+
+// jsonKind names the JSON type of a value that jsonv2 decoded into any.
+func jsonKind(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	}
+	return fmt.Sprintf("%T", v)
 }

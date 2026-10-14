@@ -34,6 +34,17 @@ export function canonicalJSON(value: unknown): string {
   return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJSON(object[key])}`).join(",")}}`;
 }
 
+// readHMACSecret decodes a secret file's standard base64, surrounding
+// whitespace ignored, to at least 32 bytes, as reference-implementations/README.md
+// expects of every Guardian.
+export function readHMACSecret(encoded: string): Buffer {
+  const text = encoded.trim();
+  const secret = Buffer.from(text, "base64");
+  if (secret.toString("base64") !== text) throw new Error("external Guardian HMAC secret is not standard base64");
+  if (secret.length < 32) throw new Error("external Guardian HMAC secret decodes to fewer than 32 bytes");
+  return secret;
+}
+
 export function deriveSessionKey(secret: Uint8Array, sessionID: string): Buffer {
   return Buffer.from(hkdfSync("sha256", secret, Buffer.alloc(0), Buffer.from(sessionID, "utf8"), 32));
 }
@@ -140,9 +151,9 @@ export async function checkExternalGuardian(environment: NodeJS.ProcessEnv = pro
   if (url === undefined || secretFile === undefined) {
     throw new Error(`${EXTERNAL_GUARDIAN_URL_ENV} and ${EXTERNAL_GUARDIAN_SECRET_ENV} must be set together`);
   }
-  const secret = readFileSync(secretFile);
-  if (secret.length < 32) throw new Error("external Guardian HMAC secret is shorter than 32 bytes");
-  const keyID = environment[EXTERNAL_GUARDIAN_KEY_ID_ENV] ?? "conformance";
+  const secret = readHMACSecret(readFileSync(secretFile, "utf8"));
+  const keyID = environment[EXTERNAL_GUARDIAN_KEY_ID_ENV];
+  if (!keyID) throw new Error(`${EXTERNAL_GUARDIAN_KEY_ID_ENV} must name the key_id the Guardian is configured with`);
   const agentID = "conformance-observed-agent";
   let probes = 0;
 

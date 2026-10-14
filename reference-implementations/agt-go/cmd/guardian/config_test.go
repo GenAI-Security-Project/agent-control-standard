@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,7 @@ func TestConfigEnvironmentOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	secretFile := filepath.Join(t.TempDir(), "hmac-secret")
-	if err := os.WriteFile(secretFile, []byte("01234567890123456789012345678901"), 0o600); err != nil {
+	if err := os.WriteFile(secretFile, []byte(base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := loadConfig(

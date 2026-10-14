@@ -2,6 +2,10 @@ package method
 
 import (
 	"encoding/json"
+	"maps"
+	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
@@ -71,4 +75,68 @@ func TestHookRules(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestDenyFollowsTheHooksDecisionLines: whether a hook permits DENY is what
+// a host's refusal at that hook rests on, so it is read from each hook's
+// Decision line in hooks.md. Each line must start with one of the forms in
+// decisionForms; a new form fails the test until it is classified.
+func TestDenyFollowsTheHooksDecisionLines(t *testing.T) {
+	raw, err := os.ReadFile("../../../../docs/spec/instrument/hooks.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]bool{}
+	hook := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if name, ok := strings.CutPrefix(line, "## "); ok {
+			hook = ""
+			if !strings.Contains(name, "/") && name != "Overview" && name != "Common envelope" {
+				hook = acs.StepsPrefix + name
+			}
+			continue
+		}
+		if decision, ok := strings.CutPrefix(line, "**Decision:** "); ok && hook != "" {
+			permits, known := permitsDeny(decision)
+			if !known {
+				t.Fatalf("%s: unclassified Decision line %q; add its form to decisionForms", hook, decision)
+			}
+			documented[hook] = permits
+		}
+	}
+	if !slices.Equal(slices.Sorted(maps.Keys(documented)), Hooks()) {
+		t.Fatalf("hooks.md documents %v, and the method table holds %v", slices.Sorted(maps.Keys(documented)), Hooks())
+	}
+	table := NewTable()
+	for hook, permitsDeny := range documented {
+		if table.HookRule(hook).Permits(acs.Deny) != permitsDeny {
+			t.Errorf("%s permits DENY: hooks.md says %v, the method table says %v", hook, permitsDeny, !permitsDeny)
+		}
+	}
+}
+
+// decisionForms are the openings of the Decision lines in hooks.md, and
+// whether each permits DENY.
+var decisionForms = []struct {
+	prefix, states string
+	deny           bool
+}{
+	{"ALLOW / DENY", "", true},
+	{"Decision-eligible", "MAY deny", true},
+	{"Decision-eligible", "MAY DENY", true},
+	{"Decision-eligible", "MAY return DENY", true},
+	{"Normally ALLOW. Guardian MAY DENY", "", true},
+	{"Not decision-eligible", "", false},
+	{"Audit only", "", false},
+}
+
+// permitsDeny classifies a Decision line by its opening and, where the
+// opening alone does not say, by the sentence that grants DENY.
+func permitsDeny(decision string) (permits, known bool) {
+	for _, f := range decisionForms {
+		if strings.HasPrefix(decision, f.prefix) && strings.Contains(decision, f.states) {
+			return f.deny, true
+		}
+	}
+	return false, false
 }

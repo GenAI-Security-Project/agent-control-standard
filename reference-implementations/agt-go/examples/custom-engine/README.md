@@ -12,7 +12,7 @@ From this directory, provide at least 32 bytes of shared keying material and
 run the example:
 
 ```bash
-ACS_HMAC_SECRET=0123456789abcdef0123456789abcdef go run .
+ACS_HMAC_KEY_ID=2026-10 ACS_HMAC_SECRET="$(openssl rand -base64 32)" go run .
 ```
 
 The default endpoint is `http://127.0.0.1:8788/acs`. Use `--listen` to select

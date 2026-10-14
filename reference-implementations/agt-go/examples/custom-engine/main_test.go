@@ -18,7 +18,10 @@ import (
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian/guardiantest"
 )
 
-const secret = "0123456789abcdef0123456789abcdef"
+const (
+	secret = "0123456789abcdef0123456789abcdef"
+	keyID  = "2026-10"
+)
 
 // send signs a request with the host's own Signer and posts it.
 func send(t *testing.T, url string, signer guardian.Signer, method, session string, payload any) acs.Response {
@@ -37,7 +40,7 @@ func send(t *testing.T, url string, signer guardian.Signer, method, session stri
 	if err := canonical.Canonicalize(); err != nil {
 		t.Fatal(err)
 	}
-	sig, err := signer.Sign(context.Background(), session, "default", canonical)
+	sig, err := signer.Sign(context.Background(), session, keyID, canonical)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +59,13 @@ func send(t *testing.T, url string, signer guardian.Signer, method, session stri
 }
 
 func TestServesAGovernedStep(t *testing.T) {
-	g, store, err := newGuardian([]byte(secret))
+	g, store, err := newGuardian(keyID, []byte(secret))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(g)
 	defer server.Close()
-	signer := vaultSigner{vault: map[string][]byte{"default": []byte(secret)}}
+	signer := vaultSigner{vault: map[string][]byte{keyID: []byte(secret)}, signing: keyID}
 	session := "5c3f1b8e-9a0d-4c2e-8f4b-2d6a7e9c1b30"
 	hello := acs.ClientHello{
 		ACSVersionsSupported: []string{acs.Version},

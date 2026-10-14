@@ -67,6 +67,10 @@ const (
 	// is not agent_generated (post-compact.json). The hook permits no DENY,
 	// so the step is answered ALLOW and the mismatch is recorded.
 	EventLineageMismatch AuditEventKind = "lineage_mismatch"
+	// EventRequestIDRefUnresolved: a toolCallResult's request_id_ref names no
+	// toolCallRequest among the session's entries this Guardian holds. hooks.md
+	// requires the record; whether to deny is the policy's.
+	EventRequestIDRefUnresolved AuditEventKind = "request_id_ref_unresolved"
 	// EventFailure: a store, signer or engine failed, or the Guardian did.
 	// The Message carries the detail the wire does not.
 	EventFailure AuditEventKind = "failure"

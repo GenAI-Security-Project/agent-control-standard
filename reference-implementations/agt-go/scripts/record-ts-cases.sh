@@ -26,5 +26,4 @@ cd "$module"
 go run ./internal/tscases/record \
   -url "http://127.0.0.1:$port/acs" \
   -out agtbridge/testdata/ts-cases.json \
-  -ts-commit "$(git -C "$tree" log -1 --format=%H -- packages/guardian/src packages/agt-bridge/src mapping.yaml policy)" \
-  -spec-version "$(cat "$module/../../version.txt")"
+  -ts-tree "$tree"

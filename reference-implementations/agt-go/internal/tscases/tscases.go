@@ -9,6 +9,8 @@ package tscases
 
 import (
 	"encoding/json"
+	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 
@@ -17,11 +19,46 @@ import (
 
 // Recording is the file the recorder writes and the replay reads.
 type Recording struct {
-	// TSCommit is the commit of the TypeScript tree the answers came from,
-	// and SpecVersion the repository's version.txt beside it.
-	TSCommit    string `json:"ts_commit"`
-	SpecVersion string `json:"spec_version"`
-	Cases       []Case `json:"cases"`
+	// TSTrees maps each of DecidingPaths to its git tree or blob ID in the
+	// TypeScript tree the answers came from.
+	TSTrees map[string]string `json:"ts_trees"`
+	Cases   []Case            `json:"cases"`
+}
+
+// DecidingPaths are the paths of the TypeScript tree whose content decides a
+// step's answer: the Guardian and bridge sources, the mapping, the policies,
+// the bridge's package.json, which pins the AGT SDK that runs them, and
+// agt.lock, which pins the AGT commit.
+var DecidingPaths = []string{"packages/guardian/src", "packages/agt-bridge/src", "packages/agt-bridge/package.json", "agt.lock", "mapping.yaml", "policy"}
+
+// DecidingTrees returns the object ID of each of DecidingPaths at the commit
+// checked out in tree. Object IDs are content-addressed, so they survive the
+// squash merge that gives the same content a new commit.
+func DecidingTrees(tree string) (map[string]string, error) {
+	ids := make(map[string]string, len(DecidingPaths))
+	for _, p := range DecidingPaths {
+		out, err := exec.Command("git", "-C", tree, "rev-parse", "HEAD:./"+p).Output()
+		if err != nil {
+			return nil, fmt.Errorf("git rev-parse HEAD:./%s in %s: %w", p, tree, err)
+		}
+		ids[p] = strings.TrimSpace(string(out))
+	}
+	return ids, nil
+}
+
+// Uncommitted returns an error when tree has changes to DecidingPaths that
+// HEAD does not hold, because DecidingTrees names HEAD and the running
+// Guardian serves the working tree.
+func Uncommitted(tree string) error {
+	args := append([]string{"-C", tree, "status", "--porcelain", "--"}, DecidingPaths...)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return fmt.Errorf("git status in %s: %w", tree, err)
+	}
+	if changed := strings.TrimSpace(string(out)); changed != "" {
+		return fmt.Errorf("commit or discard these changes before recording:\n%s", changed)
+	}
+	return nil
 }
 
 // Case is one session: its steps run in order.

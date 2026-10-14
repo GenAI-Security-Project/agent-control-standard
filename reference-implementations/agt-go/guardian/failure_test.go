@@ -501,9 +501,9 @@ func TestPolicyStateFollowsTheSession(t *testing.T) {
 }
 
 // End to end, a decision altered on the way fails verification, and the
-// Observed Agent falls to the posture its ServerHello declared.
-func TestTamperedDecisionFallsToThePosture(t *testing.T) {
-	h := newHarness(t, func(c *guardian.Config) { c.OnDecisionFailure = acs.FailureDeny })
+// Observed Agent denies it even under the proceed posture (#32).
+func TestTamperedDecisionIsDenied(t *testing.T) {
+	h := newHarness(t, func(c *guardian.Config) { c.OnDecisionFailure = acs.FailureProceed })
 	c := h.client(observedagent.NewUUID())
 	o, err := c.Handshake(context.Background(), observedagent.DefaultHello(method.Hooks()...))
 	if err != nil || o.Hello == nil {
@@ -516,7 +516,7 @@ func TestTamperedDecisionFallsToThePosture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d, open := observedagent.Honour(tampered, nil, posture); d.Disposition != acs.Deny || open {
+	if d, verified := observedagent.Honour(tampered, nil, posture); d.Disposition != acs.Deny || verified {
 		t.Fatalf("a tampered decision was applied as %s", d.Disposition)
 	}
 	if d, _ := observedagent.Honour(sent, nil, posture); d.Disposition != acs.Deny || d.Reasoning != "denied: rule" {

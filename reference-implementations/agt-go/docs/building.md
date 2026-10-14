@@ -46,7 +46,7 @@ OPA 0.70.0 names its Apple Silicon binary `opa_darwin_arm64_static` and its Inte
 ## Linux container images
 
 The image uses AGT by default. Docker Desktop runs the Linux image on Windows and macOS.
-The image listens on port 8787 and requires a HMAC secret file with at least 32 bytes.
+The image listens on port 8787 and requires a HMAC secret file: standard base64 that decodes to at least 32 bytes, such as `openssl rand -base64 32` writes. Set `ACS__SECURITY__HMAC_KEY_ID` to the `key_id` the deployment gives it.
 The image runs as user 65532. Audit files go to `/data`.
 
 ```bash

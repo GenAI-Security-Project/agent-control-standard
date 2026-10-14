@@ -25,6 +25,7 @@ const (
 
 type options struct {
 	guardianURL   string
+	keyID         string
 	secretFile    string
 	stateDir      string
 	auditLog      string
@@ -56,7 +57,7 @@ func main() {
 }
 
 func execute(args []string, input io.Reader, output, errOutput io.Writer) int {
-	if err := run(args, input, output); err == nil {
+	if err := run(args, input, output, errOutput); err == nil {
 		return 0
 	} else {
 		fmt.Fprintln(errOutput, "acs-codex-hook:", err)
@@ -68,7 +69,7 @@ func execute(args []string, input io.Reader, output, errOutput io.Writer) int {
 	return 0
 }
 
-func run(args []string, input io.Reader, output io.Writer) error {
+func run(args []string, input io.Reader, output, errOutput io.Writer) error {
 	opts, err := parseOptions(args)
 	if err != nil {
 		return err
@@ -82,9 +83,10 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		return err
 	}
 	client, err := hostadapter.New(hostadapter.Config{
-		GuardianURL: opts.guardianURL, HMACSecretFile: opts.secretFile,
+		GuardianURL: opts.guardianURL, HMACKeyID: opts.keyID, HMACSecretFile: opts.secretFile,
 		StateDir: opts.stateDir, AuditLog: opts.auditLog, AgentID: opts.agentID,
 		Methods: []string{acs.StepToolCallRequest}, Timeout: opts.timeout, MaxBodyBytes: opts.maxInputBytes,
+		Stderr: errOutput,
 	})
 	if err != nil {
 		return err
@@ -126,7 +128,8 @@ func parseOptions(args []string) (options, error) {
 		guardianURL = defaultGuardianURL
 	}
 	flags.StringVar(&options.guardianURL, "guardian-url", guardianURL, "ACS Guardian endpoint")
-	flags.StringVar(&options.secretFile, "hmac-secret-file", "", "file holding shared HMAC keying material")
+	flags.StringVar(&options.keyID, "hmac-key-id", "", "key_id the deployment gave the HMAC secret")
+	flags.StringVar(&options.secretFile, "hmac-secret-file", "", "file holding the shared HMAC secret, base64")
 	flags.StringVar(&options.stateDir, "state-dir", ".acs/codex", "directory for negotiated session state")
 	flags.StringVar(&options.auditLog, "audit-log", ".acs/codex-audit.jsonl", "file for local audit events: fail-open decisions and refused modifications")
 	flags.StringVar(&options.agentID, "agent-id", defaultAgentID, "ACS agent identity")
@@ -138,8 +141,8 @@ func parseOptions(args []string) (options, error) {
 	if flags.NArg() != 0 {
 		return options, fmt.Errorf("unexpected argument %q", flags.Arg(0))
 	}
-	if options.secretFile == "" {
-		return options, errors.New("--hmac-secret-file is required")
+	if options.keyID == "" || options.secretFile == "" {
+		return options, errors.New("--hmac-key-id and --hmac-secret-file are required")
 	}
 	if options.guardianURL == "" || options.stateDir == "" || options.auditLog == "" || options.agentID == "" {
 		return options, errors.New("--guardian-url, --state-dir, --audit-log and --agent-id must not be empty")

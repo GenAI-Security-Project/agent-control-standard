@@ -20,7 +20,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-openssl rand 32 >"$secret"
+openssl rand -base64 32 >"$secret"
 chmod 600 "$secret"
 
 cd "$module"

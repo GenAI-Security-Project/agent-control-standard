@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,7 +22,10 @@ import (
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/envelope"
 )
 
-const testSecret = "0123456789abcdef0123456789abcdef"
+const (
+	testSecret = "0123456789abcdef0123456789abcdef"
+	testKeyID  = "2026-10"
+)
 
 type testEngine struct {
 	decision acs.Decision
@@ -43,7 +47,7 @@ func TestRunSendsSignedDecisionAndReusesHandshake(t *testing.T) {
 	stateDir := t.TempDir()
 	for _, toolUseID := range []string{"tool-1", "tool-2"} {
 		var output bytes.Buffer
-		if err := run(optionsFor(url, secretFile, stateDir), bytes.NewBufferString(event(toolUseID)), &output); err != nil {
+		if err := run(optionsFor(url, secretFile, stateDir), bytes.NewBufferString(event(toolUseID)), &output, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 		assertOutput(t, output.Bytes(), "", "", "")
@@ -82,7 +86,7 @@ func TestRunTranslatesDecisions(t *testing.T) {
 			url, _ := testGuardian(t, engine)
 			stateDir := t.TempDir()
 			var output bytes.Buffer
-			if err := run(optionsFor(url, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+			if err := run(optionsFor(url, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output, io.Discard); err != nil {
 				t.Fatal(err)
 			}
 			assertOutput(t, output.Bytes(), tt.wantDecision, tt.wantReason, tt.wantCommand)
@@ -100,7 +104,7 @@ func TestRunDeniesAHandshakeRefusal(t *testing.T) {
 	engine := &testEngine{policy: guardian.PolicyDescription{RequiresProvenance: true}}
 	url, _ := testGuardian(t, engine)
 	var output bytes.Buffer
-	if err := run(optionsFor(url, writeSecret(t), t.TempDir()), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+	if err := run(optionsFor(url, writeSecret(t), t.TempDir()), bytes.NewBufferString(event("tool-1")), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	assertOutput(t, output.Bytes(), "deny", "the Guardian did not accept this ACS session", "")
@@ -108,7 +112,7 @@ func TestRunDeniesAHandshakeRefusal(t *testing.T) {
 
 func TestRunRecordsAProceedFailure(t *testing.T) {
 	engine := &testEngine{decision: acs.Decision{Disposition: acs.Allow}}
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: []byte(testSecret)})
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: testKeyID, Secret: []byte(testSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +131,7 @@ func TestRunRecordsAProceedFailure(t *testing.T) {
 	t.Cleanup(server.Close)
 	stateDir := t.TempDir()
 	var output bytes.Buffer
-	if err := run(optionsFor(server.URL, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+	if err := run(optionsFor(server.URL, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	assertOutput(t, output.Bytes(), "", "", "")
@@ -147,16 +151,16 @@ func TestRunDeniesWhenTheAuditRecordFails(t *testing.T) {
 	}
 	args := append(optionsFor(url, writeSecret(t), t.TempDir()), "--audit-log", filepath.Join(blocker, "audit.jsonl"))
 	var output bytes.Buffer
-	if err := run(args, bytes.NewBufferString(event("tool-1")), &output); err != nil {
+	if err := run(args, bytes.NewBufferString(event("tool-1")), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	assertOutput(t, output.Bytes(), "deny", "the Codex hook cannot apply the Guardian modification; the local audit record could not be written", "")
+	assertOutput(t, output.Bytes(), "deny", "the Codex hook cannot apply the Guardian modification; the audit log could not be written, and the record went to stderr", "")
 }
 
 // §6.3: a signed MODIFY combining a replacement with edits is DENY, and the
 // substitution is recorded.
 func TestRunRecordsAnInvalidModification(t *testing.T) {
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: []byte(testSecret)})
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: testKeyID, Secret: []byte(testSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +205,7 @@ func TestRunRecordsAnInvalidModification(t *testing.T) {
 	t.Cleanup(server.Close)
 	stateDir := t.TempDir()
 	var output bytes.Buffer
-	if err := run(optionsFor(server.URL, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output); err != nil {
+	if err := run(optionsFor(server.URL, writeSecret(t), stateDir), bytes.NewBufferString(event("tool-1")), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	assertOutput(t, output.Bytes(), "deny", "rewrite command", "")
@@ -260,7 +264,7 @@ func TestProjectHookConfiguration(t *testing.T) {
 
 func TestGuardianURLComesFromTheEnvironment(t *testing.T) {
 	t.Setenv("ACS_GUARDIAN_URL", "http://127.0.0.1:43210/acs")
-	got, err := parseOptions([]string{"--hmac-secret-file", "secret"})
+	got, err := parseOptions([]string{"--hmac-key-id", testKeyID, "--hmac-secret-file", "secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +275,7 @@ func TestGuardianURLComesFromTheEnvironment(t *testing.T) {
 
 func testGuardian(t *testing.T, engine guardian.PolicyEngine) (string, *atomic.Int64) {
 	t.Helper()
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "default", Secret: []byte(testSecret)})
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: testKeyID, Secret: []byte(testSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,14 +295,14 @@ func testGuardian(t *testing.T, engine guardian.PolicyEngine) (string, *atomic.I
 func writeSecret(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "hmac-secret")
-	if err := os.WriteFile(path, []byte(testSecret), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString([]byte(testSecret))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
 func optionsFor(url, secretFile, stateDir string) []string {
-	return []string{"--guardian-url", url, "--hmac-secret-file", secretFile, "--state-dir", stateDir, "--audit-log", filepath.Join(stateDir, "audit.jsonl")}
+	return []string{"--guardian-url", url, "--hmac-key-id", testKeyID, "--hmac-secret-file", secretFile, "--state-dir", stateDir, "--audit-log", filepath.Join(stateDir, "audit.jsonl")}
 }
 
 // readAudit returns the audit log optionsFor names, or "" when nothing was recorded.

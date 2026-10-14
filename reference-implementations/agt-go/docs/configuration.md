@@ -32,7 +32,7 @@ enabled only after the policy engine and Guardian are ready.
 | `policy.mapping` | ACS verdict mapping within `policy.deployment_dir`. | Same path rule as `policy.manifest`. |
 | `policy.evaluator` | `agt` uses AGT's runtime library. `go` uses the Go reproduction. | Required: `agt` or `go`. The reference YAML selects `agt`. `make build` includes AGT; `make build EVALUATOR=go` refuses `agt` at startup. |
 | `policy.opa_path` | The OPA executable or its directory. | Required for `agt`: absolute or relative to the configuration file. Directory paths select `opa` on Unix and `opa.exe` on Windows. `make agt-native` copies the host executable to `.acs/agt/bin/`. Not read by `go`. |
-| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `5s`, positive and a whole number of milliseconds. Not read by `go`. |
+| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `4s`, positive, a whole number of milliseconds, and shorter than `protocol.decision_timeout`. AGT's timer starts after `opa` starts, so leave room for process start and signing; `guardian.yaml` leaves one second. Not read by `go`. |
 | `policy.ask_substitution` | Endpoint behavior when ASK cannot be completed. | `none`, `deny` or `defer`. |
 | `policy.tool_aliases` | Optional map from an Observed Agent's tool name to the manifest's tool name. | Both names must be non-empty. |
 
@@ -62,10 +62,13 @@ The Guardian refuses startup if the build record is missing or its checksum diff
 
 | Key | Meaning | Constraint |
 | --- | --- | --- |
-| `security.hmac_key_id` | `key_id` advertised and used by the HMAC signer. | Non-empty. |
-| `security.hmac_secret_file` | File holding shared HMAC input keying material. | Absolute path, or relative to the configuration file; at least 32 bytes; protect with operating-system permissions. |
-| `audit.envelope_log` | JSONL file for inbound and outbound ACS envelopes. | Absolute path, or relative to the configuration file. |
-| `audit.event_log` | JSONL file for Guardian audit events. | Absolute path, or relative to the configuration file. |
+| `security.hmac_key_id` | The `key_id` the deployment gives its secret (§10): an opaque label, such as `2026-10`. A request signed under any other `key_id` is refused with `SIGNATURE_INVALID`. | Non-empty; no default. |
+| `security.hmac_secret_file` | File holding the shared HMAC secret, the HKDF input keying material. | Absolute path, or relative to the configuration file; standard base64 that decodes to at least 32 bytes, surrounding whitespace ignored; protect with operating-system permissions. |
+| `audit.envelope_log` | JSONL file for inbound and outbound ACS envelopes. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
+| `audit.event_log` | JSONL file for Guardian audit events. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
+| `audit.max_file_bytes` | Size at which each audit file rotates: it becomes `<file>.1`, older ones move up. `0` keeps every record, for a deployment that rotates the files with its own tooling. | Zero or positive. `guardian.yaml` ships 268435456 (256 MiB). |
+| `audit.max_files` | Rotated files kept per audit file; the one past it is deleted. A log keeps at most `max_file_bytes × (max_files + 1)` bytes, plus one record larger than `max_file_bytes`. | Zero or positive; needs `max_file_bytes`, which in turn needs at least 1, so a rotation never deletes the live log. `guardian.yaml` ships 3, so at most 1 GiB per log. |
+| `storage.provider` | Where sessions, replay history and policy state live. `memory`: in this process, lost when it stops, one process per endpoint. | `memory`, the one provider this command ships. A host that embeds the `guardian` package passes its own `SessionContextStore` for durability or replicas. |
 
 Envelope records contain raw requests and answers, including tool arguments
 and results. Treat both audit files as sensitive. The writer is asynchronous
@@ -99,7 +102,7 @@ communication fails. The `guardian.Config` zero value advertises `proceed`;
 | `limits.max_entries` | Context entries retained per session. | Positive integer. |
 | `limits.max_reservations` | Requests remembered per session for replay protection. Each reservation stores the request ID and its nonce when present. | Positive integer. |
 | `limits.max_skill_approvals` | Skill approvals retained across sessions. | Positive integer. |
-| `limits.max_engine_calls` | Policy evaluations allowed to run concurrently. | Positive integer. |
+| `limits.max_engine_calls` | Policy evaluations allowed to run concurrently. Under `agt` each one is an `opa` process. | Positive integer. `guardian.yaml` ships 32, measured in [Load](load.md); the library default is 256. |
 | `limits.max_policy_state_bytes` | Per-session engine state size. | Positive integer. |
 | `limits.max_body_bytes` | HTTP request-body size. | Positive integer. |
 | `limits.max_deferrals` | DEFER decisions allowed in one session. | Positive integer. |

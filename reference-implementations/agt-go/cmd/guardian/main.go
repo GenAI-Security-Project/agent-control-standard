@@ -54,9 +54,14 @@ type fileConfig struct {
 		HMACKeyID      string `koanf:"hmac_key_id"`
 		HMACSecretFile string `koanf:"hmac_secret_file"`
 	} `koanf:"security"`
+	Storage struct {
+		Provider string `koanf:"provider"`
+	} `koanf:"storage"`
 	Audit struct {
-		EnvelopeLog string `koanf:"envelope_log"`
-		EventLog    string `koanf:"event_log"`
+		EnvelopeLog  string `koanf:"envelope_log"`
+		EventLog     string `koanf:"event_log"`
+		MaxFileBytes int64  `koanf:"max_file_bytes"`
+		MaxFiles     int    `koanf:"max_files"`
 	} `koanf:"audit"`
 	Protocol struct {
 		OnDecisionFailure string        `koanf:"on_decision_failure"`
@@ -82,6 +87,8 @@ type config struct {
 	posture           acs.FailurePosture
 	envelopeLog       string
 	eventLog          string
+	auditRotation     guardian.JSONLRotation
+	storageProvider   string
 	keyID             string
 	secret            []byte
 	policyDir         string
@@ -188,9 +195,9 @@ func loadConfig(args, environ []string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("security.hmac_secret_file: %w", err)
 	}
-	secret, err := os.ReadFile(secretPath)
+	secret, err := guardian.ReadHMACSecretFile(secretPath)
 	if err != nil {
-		return config{}, fmt.Errorf("read security.hmac_secret_file %q: %w", secretPath, err)
+		return config{}, fmt.Errorf("security.hmac_secret_file %q: %w", secretPath, err)
 	}
 	envelopeLog, err := resolvePath(base, raw.Audit.EnvelopeLog)
 	if err != nil {
@@ -205,7 +212,9 @@ func loadConfig(args, environ []string) (config, error) {
 		path: absConfigPath, host: raw.Server.Host, port: raw.Server.Port,
 		posture:     acs.FailurePosture(raw.Protocol.OnDecisionFailure),
 		envelopeLog: envelopeLog, eventLog: eventLog,
-		keyID: raw.Security.HMACKeyID, secret: secret,
+		auditRotation:   guardian.JSONLRotation{MaxFileBytes: raw.Audit.MaxFileBytes, MaxFiles: raw.Audit.MaxFiles},
+		storageProvider: raw.Storage.Provider,
+		keyID:           raw.Security.HMACKeyID, secret: secret,
 		policyDir: policyDir, manifest: manifest, mapping: mapping,
 		evaluator: raw.Policy.Evaluator, opaPath: opaPath, opaTimeout: raw.Policy.OPATimeout,
 		askSubstitution: guardian.AskSubstitution(raw.Policy.AskSubstitution),
@@ -245,6 +254,10 @@ func policyPath(name, value string) (string, error) {
 	return path, nil
 }
 
+// storageMemory selects guardian.MemorySessionContextStore: sessions live in
+// the process and are lost when it stops, and one process serves them.
+const storageMemory = "memory"
+
 func (c config) validate() error {
 	var errs []error
 	if c.host == "" {
@@ -256,8 +269,11 @@ func (c config) validate() error {
 	if c.keyID == "" {
 		errs = append(errs, errors.New("security.hmac_key_id must not be empty"))
 	}
-	if len(c.secret) < guardian.MinHMACSecretBytes {
-		errs = append(errs, fmt.Errorf("security.hmac_secret_file must hold at least %d bytes of shared keying material", guardian.MinHMACSecretBytes))
+	if c.storageProvider != storageMemory {
+		errs = append(errs, fmt.Errorf("storage.provider must be %q, the one provider this command ships; a host that embeds the guardian package passes its own SessionContextStore", storageMemory))
+	}
+	if err := c.auditRotation.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("audit: %w", err))
 	}
 	if c.posture != acs.FailureProceed && c.posture != acs.FailureDeny {
 		errs = append(errs, fmt.Errorf("protocol.on_decision_failure must be %q or %q", acs.FailureProceed, acs.FailureDeny))
@@ -270,6 +286,9 @@ func (c config) validate() error {
 		}
 		if c.opaTimeout <= 0 {
 			errs = append(errs, errors.New("policy.opa_timeout must be positive for the agt evaluator"))
+		}
+		if c.opaTimeout >= c.decisionTimeout {
+			errs = append(errs, errors.New("policy.opa_timeout must be shorter than protocol.decision_timeout, or the agent stops waiting before AGT's deny for a slow opa arrives"))
 		}
 	default:
 		errs = append(errs, fmt.Errorf("policy.evaluator must be %q or %q", evaluatorAGT, evaluatorGo))
@@ -328,7 +347,7 @@ func run(args, environ []string) error {
 	if err != nil {
 		return err
 	}
-	audit, err := guardian.NewJSONLAuditLog(c.envelopeLog, c.eventLog, func(err error) {
+	audit, err := guardian.NewJSONLAuditLog(c.envelopeLog, c.eventLog, c.auditRotation, func(err error) {
 		fmt.Fprintln(os.Stderr, "guardian: audit log:", err)
 	})
 	if err != nil {

@@ -25,7 +25,7 @@ Twelve of those exercise behavior implemented by the Guardian itself.
 
 | External vector | Required behavior | Go tests |
 | --- | --- | --- |
-| `v412653087b92cb07`, `v78927805373a6c06`, `vae2037ee96435463` | Negotiate a compatible `0.1.x` version and reject another major version. | `guardian.TestHandshakeRefusals`, `internal/handshake.TestSelectVersion` |
+| `v412653087b92cb07`, `v78927805373a6c06`, `vae2037ee96435463` | Negotiate a compatible `0.1.x` version and reject `0.2.x`, `0.9.x` and another major version. | `guardian.TestHandshakeRefusals`, `internal/handshake.TestSelectVersion` |
 | `vb87b86b4930665ca`, `vd67cd207a4eb6798` | Reject an invalid signature over the complete canonical request. | `guardian.TestSignatureRequired`, `internal/envelope.TestSigningInputCoversEverythingButTheSignature` |
 | `v3e946bcfde26bbe2`, `vef655ce2a45f618b` | Accept a fresh request and reject a repeated `request_id`. | `guardian.TestReplayAndSkew` |
 | `va6d6e952d417c5a1`, `vb10df32610db1173` | Accept a timestamp inside the negotiated window and reject one outside it. | `guardian.TestReplayAndSkew`, `guardian.TestWithinSkew` |

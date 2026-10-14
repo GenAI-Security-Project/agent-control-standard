@@ -315,6 +315,8 @@ The audit log and the envelope log cannot be joined on `session_id`. The audit l
 The suite has 69 test files. Most tests use a real Guardian, the host shim, and the pinned policy bundle.
 The scenarios below are grouped by the behavior under test. Read each test file for the exact assertions.
 
+The Go Guardian replays this Guardian's recorded answers. A change to a path in `DecidingPaths` (`../agt-go/internal/tscases/tscases.go`) needs a new recording: run `scripts/record-ts-cases.sh` in `../agt-go`. If the new answers differ, the Go Guardian is changed to match them, or `../agt-go/docs/differences.md` records the difference. Recording needs Go and Bun. A change to `agt_ref` in `agt.lock` also needs the same commit in `../agt-go/agt-native.lock`, where the Go build pins the AGT it compiles.
+
 **Policy decisions over the wire**
 
 - A destructive shell command is denied. A benign command is allowed. The reason text is AGT's own. (`hosts/claude-code/test/hook.test.ts`)

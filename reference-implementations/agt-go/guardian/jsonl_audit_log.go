@@ -46,16 +46,42 @@ type line struct {
 // JSONLQueueCapacity is how many records the writer holds before it drops.
 const JSONLQueueCapacity = 4096
 
+// JSONLRotation bounds each of the two files. When a record would take a
+// file past MaxFileBytes, the file is renamed to <path>.1, earlier ones move
+// up to <path>.2 and so on, and the one past MaxFiles is deleted, so a log
+// keeps at most MaxFileBytes × (MaxFiles + 1) bytes, plus one record larger
+// than MaxFileBytes. The zero value keeps every record: a deployment that
+// rotates the files with its own tooling leaves it unset.
+type JSONLRotation struct {
+	MaxFileBytes int64
+	MaxFiles     int
+}
+
+// Validate refuses a negative value, MaxFiles without MaxFileBytes, and
+// MaxFileBytes without MaxFiles, which would delete the live log at each
+// rotation.
+func (r JSONLRotation) Validate() error {
+	switch {
+	case r.MaxFileBytes < 0 || r.MaxFiles < 0:
+		return errors.New("max_file_bytes and max_files cannot be negative")
+	case r.MaxFileBytes == 0 && r.MaxFiles != 0:
+		return errors.New("max_files needs max_file_bytes")
+	case r.MaxFileBytes > 0 && r.MaxFiles == 0:
+		return errors.New("max_file_bytes needs max_files of at least 1, or each rotation deletes the live log")
+	}
+	return nil
+}
+
 // NewJSONLAuditLog opens (creating directories as needed) the two files and
 // starts the writer. onError, which may be nil, receives the first failure
 // asynchronously, so it may safely close the log.
-func NewJSONLAuditLog(envelopePath, eventPath string, onError func(error)) (*JSONLAuditLog, error) {
+func NewJSONLAuditLog(envelopePath, eventPath string, rotation JSONLRotation, onError func(error)) (*JSONLAuditLog, error) {
+	if err := rotation.Validate(); err != nil {
+		return nil, err
+	}
 	var files [2]auditFile
 	for i, path := range []string{envelopePath, eventPath} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, err
-		}
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		f, err := openRotatingFile(path, rotation)
 		if err != nil {
 			if files[0] != nil {
 				_ = files[0].Close()
@@ -66,6 +92,85 @@ func NewJSONLAuditLog(envelopePath, eventPath string, onError func(error)) (*JSO
 	}
 	return newJSONLAuditLog(files, onError), nil
 }
+
+// rotatingFile appends to path and rotates it as JSONLRotation describes.
+// Only the writer goroutine uses it.
+type rotatingFile struct {
+	path     string
+	rotation JSONLRotation
+	f        *os.File
+	size     int64
+}
+
+func openRotatingFile(path string, rotation JSONLRotation) (*rotatingFile, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	r := &rotatingFile{path: path, rotation: rotation}
+	if err := r.open(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (r *rotatingFile) open() error {
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|auditOpenFlags, 0o600)
+	if err != nil {
+		return auditOpenError(r.path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := checkAuditFileMode(r.path, info); err != nil {
+		_ = f.Close()
+		return err
+	}
+	r.f, r.size = f, info.Size()
+	return nil
+}
+
+// Write appends one record, rotating first when the record would take the
+// file past MaxFileBytes; a record is never split across files.
+func (r *rotatingFile) Write(b []byte) (int, error) {
+	if r.rotation.MaxFileBytes > 0 && r.size > 0 && r.size+int64(len(b)) > r.rotation.MaxFileBytes {
+		if err := r.rotate(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := r.f.Write(b)
+	r.size += int64(n)
+	return n, err
+}
+
+func (r *rotatingFile) rotate() error {
+	if err := r.f.Close(); err != nil {
+		return err
+	}
+	numbered := func(i int) string { return fmt.Sprintf("%s.%d", r.path, i) }
+	keep := r.rotation.MaxFiles
+	last := r.path
+	if keep > 0 {
+		last = numbered(keep)
+	}
+	if err := os.Remove(last); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for i := keep - 1; i >= 1; i-- {
+		if err := os.Rename(numbered(i), numbered(i+1)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if keep > 0 {
+		if err := os.Rename(r.path, numbered(1)); err != nil {
+			return err
+		}
+	}
+	return r.open()
+}
+
+func (r *rotatingFile) Close() error { return r.f.Close() }
 
 type auditFile interface {
 	Write([]byte) (int, error)

@@ -291,6 +291,8 @@ func TestHandshakeRefusals(t *testing.T) {
 		code  acs.ErrorCode
 	}{
 		{"no_common_major_version", h2, func(c acs.ClientHello) acs.ClientHello { c.ACSVersionsSupported = []string{"1.0.0"}; return c }, acs.UnsupportedVersion},
+		{"no_compatible_0x_minor_0_9_0", h2, func(c acs.ClientHello) acs.ClientHello { c.ACSVersionsSupported = []string{"0.9.0"}; return c }, acs.UnsupportedVersion},
+		{"no_compatible_0x_minor_0_2_0", h2, func(c acs.ClientHello) acs.ClientHello { c.ACSVersionsSupported = []string{"0.2.0"}; return c }, acs.UnsupportedVersion},
 		{"provenance_required", newHarness(t, requiresProvenance), func(c acs.ClientHello) acs.ClientHello { return c }, acs.ProvenanceRequired},
 		{"no_common_transport", h2, func(c acs.ClientHello) acs.ClientHello { c.TransportsSupported = []string{"stdio"}; return c }, acs.SessionRefused},
 		{"client_hello_invalid", h2, func(c acs.ClientHello) acs.ClientHello { c.ACSVersionsSupported = nil; return c }, acs.InvalidParams},
@@ -322,6 +324,16 @@ func TestSignatureRequired(t *testing.T) {
 	forged := *c
 	forged.Signer = other
 	h.refusal(&forged, observedagent.Request{Method: acs.StepToolCallRequest, Payload: toolCall("ls")}, acs.SignatureInvalid)
+
+	// The configured secret under a key_id the Guardian does not hold is
+	// refused, never verified with the configured secret (§10).
+	relabelled, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k9", Secret: ikm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := *c
+	unknown.Signer, unknown.KeyID = relabelled, "k9"
+	h.refusal(&unknown, observedagent.Request{Method: acs.StepToolCallRequest, Payload: toolCall("ls")}, acs.SignatureInvalid)
 
 	body, err := c.Envelope(context.Background(), observedagent.Request{Method: acs.StepToolCallRequest, Payload: toolCall("ls")})
 	if err != nil {
@@ -459,39 +471,42 @@ func TestRejectedAuthenticatedRequestsCannotBeReplayed(t *testing.T) {
 		})
 	}
 
-	t.Run("unsupported ACS version", func(t *testing.T) {
-		h := newHarness(t)
-		c := h.session()
-		body, err := c.Envelope(context.Background(), observedagent.Request{
-			Method:    acs.StepToolCallRequest,
-			Payload:   toolCall("ls"),
-			RequestID: observedagent.NewUUID(),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var request map[string]any
-		if err := jsonv2.Unmarshal(body, &request); err != nil {
-			t.Fatal(err)
-		}
-		params := request["params"].(map[string]any)
-		params["acs_version"] = "1.0.0"
-		delete(params, "signature")
-		unsigned, err := jsonv2.Marshal(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		body = resign(t, c, unsigned)
+	// 0.x versions must share X.Y, so a 0.2.0 step is refused in a 0.1.0 session.
+	for _, offered := range []string{"1.0.0", "0.2.0"} {
+		t.Run("unsupported ACS version "+offered, func(t *testing.T) {
+			h := newHarness(t)
+			c := h.session()
+			body, err := c.Envelope(context.Background(), observedagent.Request{
+				Method:    acs.StepToolCallRequest,
+				Payload:   toolCall("ls"),
+				RequestID: observedagent.NewUUID(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request map[string]any
+			if err := jsonv2.Unmarshal(body, &request); err != nil {
+				t.Fatal(err)
+			}
+			params := request["params"].(map[string]any)
+			params["acs_version"] = offered
+			delete(params, "signature")
+			unsigned, err := jsonv2.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = resign(t, c, unsigned)
 
-		first, err := c.SendBody(context.Background(), body)
-		if err != nil || first.Error == nil || first.Error.Code != acs.UnsupportedVersion {
-			t.Fatalf("first request: %v %s", err, first.Raw)
-		}
-		second, err := c.SendBody(context.Background(), body)
-		if err != nil || second.Error == nil || second.Error.Code != acs.ReplayDetected {
-			t.Fatalf("replay: %v %s", err, second.Raw)
-		}
-	})
+			first, err := c.SendBody(context.Background(), body)
+			if err != nil || first.Error == nil || first.Error.Code != acs.UnsupportedVersion {
+				t.Fatalf("first request: %v %s", err, first.Raw)
+			}
+			second, err := c.SendBody(context.Background(), body)
+			if err != nil || second.Error == nil || second.Error.Code != acs.ReplayDetected {
+				t.Fatalf("replay: %v %s", err, second.Raw)
+			}
+		})
+	}
 }
 
 func TestReplayHistoryOutlivesEveryAcceptedTimestamp(t *testing.T) {
@@ -1408,5 +1423,32 @@ func TestWrappedMCPRefusesOverlappingModifications(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestUnresolvedRequestIDRefIsRecorded: a toolCallResult whose
+// request_id_ref names no toolCallRequest of the session is recorded, and one
+// that names the session's request is not; the decision stays the policy's
+// (hooks.md, toolCallResult).
+func TestUnresolvedRequestIDRefIsRecorded(t *testing.T) {
+	h := newHarness(t)
+	c := h.session()
+	const requestID = "7d3c1e9a-2b4f-4a6d-9c8e-1f0a3b5c7d9e"
+	o := h.send(c, observedagent.Request{Method: acs.StepToolCallRequest, Payload: toolCall("ls"), RequestID: requestID})
+	if o.Result == nil {
+		t.Fatalf("the request got %s", o.Raw)
+	}
+	result := func(ref string) acs.ToolCallResultPayload {
+		return acs.ToolCallResultPayload{Tool: acs.Tool{Name: "Bash"}, RequestIDRef: &ref, ExitStatus: "success", Outputs: []acs.ToolOutput{{Value: json.RawMessage(`"ok"`)}}}
+	}
+	h.decision(c, acs.StepToolCallResult, result(requestID))
+	if slices.Contains(h.audit.eventKinds(), guardian.EventRequestIDRefUnresolved) {
+		t.Fatal("a reference to the session's own request was recorded as unresolved")
+	}
+	if r := h.decision(c, acs.StepToolCallResult, result("0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b")); r.Disposition != acs.Allow {
+		t.Fatalf("the decision on an unresolved reference changed: %+v", r)
+	}
+	if !slices.Contains(h.audit.eventKinds(), guardian.EventRequestIDRefUnresolved) {
+		t.Fatal("an unresolved request_id_ref was not recorded")
 	}
 }

@@ -54,6 +54,8 @@ const executable = fileURLToPath(new URL("../../.acs/bin/acs-opencode-hook", imp
 const hookArguments = [
   "--guardian-url",
   process.env.ACS_GUARDIAN_URL || "http://127.0.0.1:8787/acs",
+  "--hmac-key-id",
+  process.env.ACS_OPENCODE_HMAC_KEY_ID || "2026-10",
   "--hmac-secret-file",
   process.env.ACS_OPENCODE_HMAC_SECRET_FILE || ".acs/hmac-secret",
   "--state-dir",

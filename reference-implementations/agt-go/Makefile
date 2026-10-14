@@ -48,7 +48,7 @@ BUILD_TAGS := $(if $(filter agt,$(EVALUATOR)),-tags agteval,)
 check-start = $(if $(ACS_CHECK_PROGRESS),@printf '[check] RUN: %s\n' '$(1)')
 check-pass = $(if $(ACS_CHECK_PROGRESS),@printf '[check] PASS: %s\n' '$(1)')
 
-.PHONY: all help setup agt-native build dev-secret run test test-race host-target image image-check example-runtime codex-example opencode-example require-bun require-conformance-deps example-check conformance fmt fmt-check vet lint vulncheck tidy-check coverage docs-check native-flags-check native-flags check check-all
+.PHONY: all help setup agt-native load build dev-secret run test test-race host-target image image-check example-runtime codex-example opencode-example require-bun require-conformance-deps example-check conformance fmt fmt-check vet lint vulncheck tidy-check coverage docs-check native-flags-check native-flags check check-all
 
 all: build
 
@@ -69,6 +69,7 @@ help:
 		'example-check     test the custom engine and host adapters' \
 		'conformance       run the shared ACS harness against this Guardian' \
 		'docs-check        validate documentation links and named tests' \
+		'load              measure the selected evaluator under concurrent clients (docs/load.md)' \
 		'check             run the complete local quality gate'
 
 setup: host-target require-bun agt-native
@@ -92,7 +93,7 @@ endif
 
 dev-secret:
 	mkdir -p .acs
-	@test -f .acs/hmac-secret || (umask 077; set -C; openssl rand -hex 32 > .acs/hmac-secret) || test -f .acs/hmac-secret
+	@test -f .acs/hmac-secret || (umask 077; set -C; openssl rand -base64 32 > .acs/hmac-secret) || test -f .acs/hmac-secret
 	chmod 600 .acs/hmac-secret
 
 run: example-runtime
@@ -166,6 +167,8 @@ vet:
 	$(call check-start,Go vet)
 	$(GO) vet ./...
 	$(AGT_CGO) $(GO) vet -tags agteval ./...
+	$(GO) vet -tags load ./agtbridge/
+	$(AGT_CGO) $(GO) vet -tags 'agteval load' ./agtbridge/
 	cd examples/custom-engine && $(GO) vet ./...
 	$(call check-pass,Go vet)
 
@@ -189,10 +192,13 @@ tidy-check:
 	cd examples/custom-engine && $(GO) mod tidy -diff
 	$(call check-pass,Module dependencies)
 
-coverage:
-	$(call check-start,Coverage)
-	scripts/check-coverage.sh
-	$(call check-pass,Coverage)
+coverage: $(if $(filter agt,$(EVALUATOR)),agt-native,)
+	$(call check-start,Coverage ($(EVALUATOR)))
+	$(BUILD_ENV) scripts/check-coverage.sh 80 $(BUILD_TAGS)
+	$(call check-pass,Coverage ($(EVALUATOR)))
+
+load: $(if $(filter agt,$(EVALUATOR)),agt-native,)
+	$(BUILD_ENV) $(GO) test -count=1 -tags '$(if $(filter agt,$(EVALUATOR)),agteval )load' -run '^TestLoad$$' -v -timeout 30m ./agtbridge/
 
 docs-check:
 	$(call check-start,Documentation)

@@ -53,7 +53,11 @@ func (e denyListEngine) Decide(_ context.Context, in guardian.PolicyInput) (guar
 
 // vaultSigner stands for a host's key custody: it looks the secret up by
 // key_id at each call and never hands it out.
-type vaultSigner struct{ vault map[string][]byte }
+type vaultSigner struct {
+	vault map[string][]byte
+	// signing is the key_id that signs an answer to an unsigned request.
+	signing string
+}
 
 func (vaultSigner) Algorithms() []string { return []string{acs.SignatureAlgorithmHMACSHA256} }
 
@@ -75,7 +79,7 @@ func (v vaultSigner) Verify(ctx context.Context, sessionID string, input []byte,
 
 func (v vaultSigner) Sign(ctx context.Context, sessionID, keyID string, input []byte) (acs.Signature, error) {
 	if keyID == "" {
-		keyID = "default"
+		keyID = v.signing
 	}
 	s, err := v.signer(keyID)
 	if err != nil {
@@ -108,7 +112,10 @@ func (stderrAuditLog) Event(_ context.Context, e guardian.AuditEvent) {
 	fmt.Fprintf(os.Stderr, "audit %s session=%s request=%s: %s\n", e.Kind, e.SessionID, e.RequestID, e.Message)
 }
 
-func newGuardian(secret []byte) (*guardian.Guardian, *countingStore, error) {
+func newGuardian(keyID string, secret []byte) (*guardian.Guardian, *countingStore, error) {
+	if keyID == "" {
+		return nil, nil, errors.New("the key_id must not be empty")
+	}
 	if len(secret) < guardian.MinHMACSecretBytes {
 		return nil, nil, errors.New("the secret must be at least 32 bytes")
 	}
@@ -125,7 +132,7 @@ func newGuardian(secret []byte) (*guardian.Guardian, *countingStore, error) {
 	store := &countingStore{MemorySessionContextStore: memory}
 	g, err := guardian.New(guardian.Config{
 		Engine:   denyListEngine{fragments: []string{"rm -rf", "mkfs"}},
-		Signer:   vaultSigner{vault: map[string][]byte{"default": secret}},
+		Signer:   vaultSigner{vault: map[string][]byte{keyID: secret}, signing: keyID},
 		Store:    store,
 		AuditLog: stderrAuditLog{},
 	})
@@ -135,7 +142,11 @@ func newGuardian(secret []byte) (*guardian.Guardian, *countingStore, error) {
 func main() {
 	addr := flag.String("listen", "127.0.0.1:8788", "address to serve POST /acs on")
 	flag.Parse()
-	g, _, err := newGuardian([]byte(os.Getenv("ACS_HMAC_SECRET")))
+	secret, err := guardian.DecodeHMACSecret([]byte(os.Getenv("ACS_HMAC_SECRET")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	g, _, err := newGuardian(os.Getenv("ACS_HMAC_KEY_ID"), secret)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 )
@@ -16,6 +18,31 @@ import (
 // accepts: the output length of SHA-256, below which a guessed secret costs
 // less than a guessed HMAC key (RFC 2104 §3).
 const MinHMACSecretBytes = sha256.Size
+
+// DecodeHMACSecret decodes input keying material written as standard base64
+// (RFC 4648 §4), surrounding whitespace ignored, and requires at least
+// MinHMACSecretBytes decoded bytes, the format #256 proposes for every
+// reference implementation, so one secret file serves every
+// Guardian and host adapter in a deployment.
+func DecodeHMACSecret(encoded []byte) ([]byte, error) {
+	secret, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(string(encoded)))
+	if err != nil {
+		return nil, fmt.Errorf("the HMAC secret is not standard base64: %w", err)
+	}
+	if len(secret) < MinHMACSecretBytes {
+		return nil, fmt.Errorf("the HMAC secret decodes to %d bytes, fewer than %d", len(secret), MinHMACSecretBytes)
+	}
+	return secret, nil
+}
+
+// ReadHMACSecretFile reads a file DecodeHMACSecret accepts.
+func ReadHMACSecretFile(path string) ([]byte, error) {
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeHMACSecret(encoded)
+}
 
 // HMACKey is deployment-provided input keying material and the key_id that
 // names it on the wire.
