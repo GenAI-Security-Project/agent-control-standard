@@ -10,8 +10,9 @@ A typical agent session produces a tree of spans:
 
 - A root **session** span (`acs.session`) opened by `steps/sessionStart` and closed by `steps/sessionEnd`. Carries `acs.session.id` and (when set) `acs.tenant_id`.
 - One **turn** span (`acs.turn`) per agent turn, opened by `steps/turnStart` and closed by `steps/turnEnd`. Carries `acs.turn.id`. Nested turns (e.g. subagent turns inside a parent turn awaiting `subagentStop`) record `acs.turn.parent_id`.
-- One **step** span per `steps/*` hook, parented to the enclosing turn (or session when the step is session-level: `agentTrigger`, `agbom/*` outside a turn).
-- Each **decision** is a span event on the step span carrying `acs.decision`, plus `acs.evaluator` (`deterministic` / `agent` / `composite`), `acs.reasoning`, and `acs.confidence` when the response carries them. Decisions are not separate spans because the verdict and the action it gates share a parent.
+- One **step** span per `steps/*` hook, parented to the enclosing turn (or session when the step is session-level: `agentTrigger`, `agbom/*` outside a turn). Every step span carries `acs.request_id` and `acs.session.id`, the pair a reader joins on.
+- Each **decision** is a span event on the step span carrying `acs.decision`, plus `acs.evaluator` (`deterministic` / `agent` / `composite`), `acs.reasoning`, and `acs.confidence` when the response carries them. The replay attributes on [Trace Events](./events.md) ride the same event. Decisions are not separate spans because the verdict and the action it gates share a parent.
+- A **decision failure** is a separate span event, `acs.decision.failure`, on the same step span. It records that no usable decision arrived and the deployment's failure posture.
 
 This hierarchy is deterministic — implementations that follow the mapping produce comparable traces across vendors and Guardians.
 
@@ -23,7 +24,7 @@ v0.1 emits factual provenance attributes only. Trust classification is computed 
 
 ## Sensitive data
 
-Attributes can carry user prompts, tool arguments, and retrieved knowledge. Implementations SHOULD apply the deployment's redaction or hashing policy at attribute-emit time rather than relying on backend-side scrubbing. The Guardian's `modifications.redactions` payload is the natural input to the policy: the same list that drives content rewriting drives attribute redaction.
+Attributes can carry user prompts, tool arguments, and retrieved knowledge. Any of it can carry text an attacker influenced. [Trace Events](./events.md) says how consumers treat it. Implementations SHOULD apply the deployment's redaction or hashing policy at attribute-emit time rather than relying on backend-side scrubbing. The Guardian's `modifications.redactions` payload is the natural input to the policy: the same list that drives content rewriting drives attribute redaction.
 
 ## Transport
 
