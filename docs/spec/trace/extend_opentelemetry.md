@@ -16,6 +16,152 @@ A typical agent session produces a tree of spans:
 
 This hierarchy is deterministic — implementations that follow the mapping produce comparable traces across vendors and Guardians.
 
+## Example: a denied tool call
+
+This is one span the reference Guardian exported, a `steps/toolCallRequest` the stock policy denied, copied from the committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl). Every value in it is synthetic. It's the OTLP/JSON shape the exporter writes, so attribute values are typed (`stringValue`, `arrayValue`).
+
+The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool name, and the two Provenance columns. `acs.provenance.source_id` has `""` where the second object has no `source_id`. The decision rides on the span as the `acs.decision` event, with the verdict, the reasoning, the reason codes and the three policy arrays. `acs.policy.versions` is `[""]`, because this Guardian doesn't send a policy version.
+
+```json
+{
+  "traceId": "85c4878c9bda9e5b4f2fc6aae242d31f",
+  "spanId": "dea6530ad1681c0e",
+  "name": "gen_ai.tool.call",
+  "kind": 1,
+  "startTimeUnixNano": "1791928279698000000",
+  "endTimeUnixNano": "1791928279749301083",
+  "attributes": [
+    {
+      "key": "acs.session.id",
+      "value": {
+        "stringValue": "5a3c1e7e-0b1d-4c6a-9e2f-7d4b8c0a1f01"
+      }
+    },
+    {
+      "key": "acs.request_id",
+      "value": {
+        "stringValue": "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b03"
+      }
+    },
+    {
+      "key": "gen_ai.tool.name",
+      "value": {
+        "stringValue": "Bash"
+      }
+    },
+    {
+      "key": "acs.provenance.origin",
+      "value": {
+        "arrayValue": {
+          "values": [
+            {
+              "stringValue": "user_input"
+            },
+            {
+              "stringValue": "agent_generated"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "key": "acs.provenance.source_id",
+      "value": {
+        "arrayValue": {
+          "values": [
+            {
+              "stringValue": "sample-user-1"
+            },
+            {
+              "stringValue": ""
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "droppedAttributesCount": 0,
+  "events": [
+    {
+      "attributes": [
+        {
+          "key": "acs.decision",
+          "value": {
+            "stringValue": "deny"
+          }
+        },
+        {
+          "key": "acs.reasoning",
+          "value": {
+            "stringValue": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0."
+          }
+        },
+        {
+          "key": "acs.reason_codes",
+          "value": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "destructive_shell_command_blocked"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "key": "acs.policy.ids",
+          "value": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "agt_stock"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "key": "acs.policy.versions",
+          "value": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "key": "acs.policy.rule_ids",
+          "value": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "destructive_shell_command_blocked"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "name": "acs.decision",
+      "timeUnixNano": "1791928279749295500",
+      "droppedAttributesCount": 0
+    }
+  ],
+  "droppedEventsCount": 0,
+  "status": {
+    "code": 0
+  },
+  "links": [],
+  "droppedLinksCount": 0,
+  "flags": 257
+}
+```
+
+To produce a trace like this yourself, follow [Produce a trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/README.md#produce-a-trace) in the reference implementation's README.
+
 ## Provenance attributes
 
 When a hook payload carries Provenance, the resulting span MUST carry `acs.provenance.origin` and SHOULD carry `acs.provenance.source_id` when populated. The set of provenance ids cited by a Guardian decision (the response envelope's `cited_provenance_ids`) MAY be expressed as OTel span links keyed by `provenance_id`, letting tools that index span links reconstruct the lineage graph without parsing payloads.
