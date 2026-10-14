@@ -1108,14 +1108,25 @@ async function dispatch(
   }
 
   // Wrapped MCP: protocols/MCP/tools/call is collapsed into the pre-tool-call
-  // gate per conformance.md. The payload may carry tool.name in the ACS shape
-  // or params.name in the native MCP shape; either way, the tool name reaches
+  // gate per conformance.md. The payload carries either tool.name in the ACS
+  // shape or params.name in the native MCP shape, and the tool name reaches
   // the same policy evaluation as steps/toolCallRequest.
+  //
+  // Never both. hooks.md has a wrapped method carry the MCP message intact,
+  // and a server that forwards it runs `params`. Evaluating `tool` and
+  // `arguments` beside it would decide one call while another ran.
   if (envelope.method === "protocols/MCP/tools/call") {
     const payload = envelope.params.payload as Record<string, unknown>;
     const toolObj = payload.tool as Record<string, unknown> | undefined;
     const mcpParams = payload.params as Record<string, unknown> | undefined;
-    const toolName = (toolObj?.name as string) ?? (mcpParams?.name as string) ?? "mcp_tool";
+    if (toolObj !== undefined && mcpParams !== undefined) {
+      const message =
+        "protocols/MCP/tools/call payload carries both the ACS shape (tool) and the MCP message (params); " +
+        "send exactly one";
+      const denial = denyOnInvalidEnvelope(raw, { reasonCode: "envelope_invalid", message });
+      return asDecisionResponse(rpcId, denial) ?? errorResponse(rpcId, ENVELOPE_INVALID_CODE, message);
+    }
+    const toolName = ((toolObj ?? mcpParams)?.name as string | undefined) ?? "mcp_tool";
 
     const entry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
       method: envelope.method,
@@ -1131,13 +1142,15 @@ async function dispatch(
 
       // Normalize to the ACS tool-call-request shape the assembler expects.
       // Native MCP carries params.name and raw arguments; ACS carries
-      // tool.name and {value}-wrapped arguments.
+      // tool.name and {value}-wrapped arguments. Only the ACS shape is
+      // unwrapped: a native argument that happens to have a `value` key is
+      // the argument, and unwrapping it would evaluate part of it.
       const sourceArgs = (toolObj
         ? payload.arguments
         : mcpParams?.arguments) as Record<string, unknown> | undefined ?? {};
       const wrappedArgs: Record<string, { value: unknown }> = {};
       for (const [key, val] of Object.entries(sourceArgs)) {
-        wrappedArgs[key] = (typeof val === "object" && val !== null && "value" in val)
+        wrappedArgs[key] = toolObj && typeof val === "object" && val !== null && "value" in val
           ? (val as { value: unknown })
           : { value: val };
       }
