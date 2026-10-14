@@ -47,6 +47,7 @@
  */
 import type { AcsRequestEnvelope } from "./build-envelope.ts";
 import type { AcsDecision } from "./decision-message.ts";
+import { REFUSAL_RPC_CODES } from "./failure-kinds.ts";
 import { verifyResponseSignature } from "./sign-envelope.ts";
 
 /**
@@ -254,7 +255,19 @@ export function createGuardianClient(url: string, clientOptions: GuardianClientO
         clientOptions.hmacSecret,
         sessionId,
       );
-      if (!verified.valid) {
+      // An unsigned refusal is still believed. The Guardian cannot sign some
+      // refusals at all -- an oversize body, a parse error, a request whose
+      // own signature failed -- because they come before any session key.
+      // Throwing here made them unclassifiable, so the posture answered and
+      // under `proceed` the step ran. Trusting one costs nothing: a refusal
+      // can only fail the step closed. Never with a `result` beside it,
+      // because requestDecision honours a result first and that would let an
+      // unsigned decision through.
+      const unsignedRefusal =
+        response.result === undefined &&
+        typeof response.error?.code === "number" &&
+        REFUSAL_RPC_CODES.has(response.error.code);
+      if (!verified.valid && !unsignedRefusal) {
         throw new GuardianSignatureError(verified.reason);
       }
     }

@@ -237,6 +237,7 @@ describe("GuardianClient.post", () => {
     });
     try {
       const envelope = signEnvelope(buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap), secret);
+      await handshakeFor(secured.url, envelope, hello => signEnvelope(hello as never, secret));
       await expect(
         createGuardianClient(secured.url, { hmacSecret: Buffer.alloc(32, 0x66) }).post(envelope),
       ).rejects.toThrow(GuardianSignatureError);
@@ -264,22 +265,48 @@ describe("GuardianClient.post", () => {
     }
   });
 
-  it("rejects an unsigned same-id error when response authentication is configured", async () => {
+  it("passes an unsigned refusal through, because it can only fail the step closed", async () => {
     const secret = Buffer.alloc(32, 0x58);
     const mock = Bun.serve({
       port: 0,
       async fetch(req) {
         const body = (await req.json()) as { id: string | number };
-        return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32020, message: "forged refusal" } });
+        return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32020, message: "unsigned refusal" } });
       },
     });
     try {
       const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
-      await expect(
-        createGuardianClient(`http://localhost:${mock.port}/acs`, { hmacSecret: secret }).post(envelope),
-      ).rejects.toThrow(GuardianSignatureError);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`, { hmacSecret: secret })
+        .requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      expect(classifyDeliveryFailure(outcome.decisionArrived ? undefined : outcome.failure).kind).toBe("refused");
     } finally {
       mock.stop(true);
+    }
+  });
+
+  it("still rejects an unsigned error whose code is not a refusal, and an unsigned refusal carrying a result", async () => {
+    const secret = Buffer.alloc(32, 0x5a);
+    const answers = [
+      { error: { code: -32601, message: "not a refusal" } },
+      { error: { code: -32020, message: "refusal" }, result: { decision: "allow" } },
+    ];
+    for (const answer of answers) {
+      const mock = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const body = (await req.json()) as { id: string | number };
+          return Response.json({ jsonrpc: "2.0", id: body.id, ...answer });
+        },
+      });
+      try {
+        const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+        await expect(
+          createGuardianClient(`http://localhost:${mock.port}/acs`, { hmacSecret: secret }).post(envelope),
+        ).rejects.toThrow(GuardianSignatureError);
+      } finally {
+        mock.stop(true);
+      }
     }
   });
 
