@@ -50,7 +50,7 @@ Every throw on the request path is caught. Nothing escapes the fetch handler, be
 
 ## Export traces
 
-Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter exists and the Guardian runs exactly as before. This is an exporter for the two live methods, not an ACS-Trace conformance claim.
+Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter exists and the Guardian runs exactly as before. This is an exporter for the two live methods, not an ACS-Trace conformance claim. To go from a fresh clone to a trace file of your own, follow [Produce a trace](../../README.md#produce-a-trace) in the tree README.
 
 ```bash
 ACS_OTEL_FILE=.acs/otel-traces.jsonl bun run guardian
