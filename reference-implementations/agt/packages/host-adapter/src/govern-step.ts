@@ -673,15 +673,24 @@ export async function governStep({
   // at the top of this function throws on it and audits nothing, because the
   // posture's answer to it could not be rendered either. Every other way
   // `buildEnvelope` can fail still lands here.
-  const buildRequest = (): AcsRequestEnvelope => {
-    const built = buildEnvelope(hookEventName, payload, hookmap);
-    return hmacSecret ? signEnvelope(built, hmacSecret) : built;
-  };
+  //
+  // Stage "sign" follows it and fails closed: signing canonicalises the whole
+  // envelope, and input nested deeply enough overflows that. An unsigned
+  // request is one an ACS-Core Guardian must refuse, so this host refuses it
+  // rather than letting a `proceed` posture run it.
+  const buildRequest = (): AcsRequestEnvelope => buildEnvelope(hookEventName, payload, hookmap);
+  const signRequest = (built: AcsRequestEnvelope): AcsRequestEnvelope =>
+    hmacSecret ? signEnvelope(built, hmacSecret) : built;
   let envelope: AcsRequestEnvelope;
   try {
     envelope = buildRequest();
   } catch (failure) {
     return resolveByPosture(failure, "request", undefined);
+  }
+  try {
+    envelope = signRequest(envelope);
+  } catch (failure) {
+    return resolveByPosture(failure, "sign", envelope);
   }
 
   // Established here, before anything is asked of a Guardian or audited: at a
@@ -760,7 +769,7 @@ export async function governStep({
         // decision's expiry is measured from the retry, not the refused request.
         const retryTimeoutMs = renegotiated.timeout_config.default_ms;
         const retryStartedAt = performance.now();
-        const retryEnvelope = buildRequest();
+        const retryEnvelope = signRequest(buildRequest());
         const retried = await guardian.requestDecision(retryEnvelope, { timeoutMs: retryTimeoutMs });
         if (retried.decisionArrived) {
           session = { config: renegotiated, failure: renegotiationFailure };
