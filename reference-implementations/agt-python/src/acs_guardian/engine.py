@@ -49,6 +49,12 @@ class Evaluation:
     modifications: dict[str, Any] | None = None
     ask_details: dict[str, Any] | None = None
     defer_details: dict[str, Any] | None = None
+    # §6.5: what the Observed Agent cannot apply, which v0.1 leaves to
+    # deployment-defined means. The engine is where the deployment's knowledge
+    # of its Observed Agents lives, so it reports the capability per
+    # evaluation, like the Go port's PolicyDecision.Client. The zero value is
+    # an Observed Agent that applies every disposition.
+    client_cannot_apply_modify: bool = False
 
 
 class PolicyEngine(Protocol):

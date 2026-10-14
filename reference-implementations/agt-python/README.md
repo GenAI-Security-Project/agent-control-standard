@@ -23,6 +23,7 @@ the ones this tree follows, so the two are intended to interoperate.
 | Request/response envelopes, JSON-RPC error taxonomy | Met | `schemas.py`, `server.py`, `tests/test_server.py` |
 | Hook taxonomy: all 19 `steps/*` hooks dispatched through one generic path, each schema pinned to its method | Met | `schemas.py` (`_HOOK_SCHEMAS`), `tests/test_server.py` |
 | Dispositions: all five, with required fields, schema-validated | Met | `engine.py`, `server.py`, `tests/test_server.py` |
+| MODIFY for an Observed Agent that cannot apply it (§6.5): DENY `modify_unsupported`, ALLOW at `postCompact`, audit event | Met | `server.py`, `engine.py` (`Evaluation.client_cannot_apply_modify`), `tests/test_server.py` |
 | SessionContext: append-only chain, §8.2 hash rule, published `chain_hash` | Met | `chain.py`, `tests/test_chain.py` |
 | Replay protection: duplicate `request_id`/`nonce`, timestamp skew (`-32005`, `-32006`) | Met | `server.py`, `tests/test_server.py` |
 | Baseline integrity: HKDF-SHA256 session key, HMAC-SHA256 signature | Met | `crypto.py`, `tests/test_crypto_vectors.py` |
@@ -45,13 +46,18 @@ tests that cover it. `acs-trace`, `acs-inspect`, `acs-provenance`,
 cd reference-implementations/agt-python
 uv sync
 printf 'change-me-32-bytes-minimum-secret' > /tmp/acs-secret
-uv run acs-guardian serve --secret-file /tmp/acs-secret --port 8787
+uv run acs-guardian serve --secret-file /tmp/acs-secret --key-id 2026-10 --port 8787
 ```
 
 Then POST an envelope to `http://127.0.0.1:8787/acs`. Configuration comes from
 flags or the environment: `ACS_GUARDIAN_HMAC_SECRET_FILE`,
-`ACS_GUARDIAN_KEY_ID`, `ACS_GUARDIAN_HOST`, `ACS_GUARDIAN_PORT`,
-`ACS_ON_DECISION_FAILURE`, `ACS_SPEC_ROOT`.
+`ACS_GUARDIAN_KEY_ID` (required; the label this deployment gives its one
+configured secret — there is no default, so a request naming a label this
+Guardian does not hold is refused `-32004`, never verified with the wrong
+secret), `ACS_GUARDIAN_HOST`, `ACS_GUARDIAN_PORT`, `ACS_ON_DECISION_FAILURE`,
+`ACS_SPEC_ROOT`. Audit events the standard requires of the Guardian (today,
+the §6.5 substitution) go to a deployment-supplied sink; the default writes
+one JSON line per event to stderr.
 
 The schemas are read from `specification/v0.1.0/` by relative path, so the
 console script works from a source checkout. An out-of-tree install must set
@@ -98,11 +104,21 @@ documents in its "Behavior that ACS v0.1.0 leaves undefined" table:
 - `entry_hash` is `SHA-256(JCS(entry minus entry_hash/previous_hash) ||
   prev_hash_bytes)`; optional members are omitted from the hashed content when
   absent, never written as `null`.
-- A ContextEntry's `timestamp` is the originating request's `timestamp`, not
-  the Guardian's wall clock at write time: two Guardians cannot agree on each
-  other's write time, and the field is inside the hashed content, so a
-  deterministic input is what makes cross-implementation `entry_hash`
-  comparison possible at all.
+- A ContextEntry's `entry_id` is the step's `request_id` and its `turn_id` is
+  the envelope's `metadata.turn_id` when the framework set one (turnStart
+  requires it propagated onto every per-step entry, and `context-entry.json`
+  names no member for it, so the envelope field's name is used). Its
+  `timestamp` is the Guardian's write clock, UTC RFC 3339, per
+  `context-entry.json` ("when the entry was written"). The
+  `request_id`/`turn_id` choices align what the entries commit to across
+  implementations for the same step; the two Guardians still disagree on
+  `timestamp` — and therefore on `entry_hash` — because write times differ
+  by definition.
+- The ServerHello names a version the client offered: the Guardian's own when
+  it was offered, otherwise the highest offered version sharing its major
+  (§3's forward-compat rule, the Go port's selection). A step whose
+  `acs_version` does not share the session's negotiated major version is
+  `-32001` with the session's version in `data.supported_versions`.
 - A wrapped MCP message's method must equal the part after `protocols/MCP/`
   for a request (a response carries no method and is wrapped under the method
   it answers). A `parameter_overrides` key names a member of the wrapped
@@ -115,9 +131,36 @@ documents in its "Behavior that ACS v0.1.0 leaves undefined" table:
   valid ServerHello, not a refusal.
 - `steps/sessionEnd` closes the session: a later step is answered with a DENY
   `session_closed`, while replay history survives so a replayed step is still
-  `REPLAY_DETECTED`. A key_id or agent_id other than the session's is answered
-  with a signed DENY (`key_not_bound`, `agent_id_not_bound`), not an error —
-  an error would leave the agent to its failure posture.
+  `REPLAY_DETECTED`. An `agent_id` other than the session's is answered with a
+  signed DENY (`agent_id_not_bound`), not an error — an error would leave the
+  agent to its failure posture. A signature whose `key_id` is not this
+  deployment's configured label never resolves a key, so the request is
+  refused `-32004`, unsigned: the Guardian does not verify with a secret the
+  label does not name.
+
+### Implementation limits (not wire-visible on conformant traffic)
+
+- A request nested past 128 object/array levels takes the normal dispatch
+  ladder with a fail-closed bias: if the body's own signature verifies
+  against its session, it gets that route's signed answer — the ping's
+  ALLOW, a signed refusal (`-32000`, `-32601`, `-32003`, `-32005`,
+  `-32602`), or a signed decision (`evaluation_failed`, or the hook's ALLOW
+  substitution where no DENY is permitted) with its chain entry; the
+  agent-binding and closed checks answer signed denials that write no
+  entry. An unverified body gets `-32600`, unsigned, and an internal
+  failure on a non-step route is an unsigned `-32603`, like the normal
+  path's. The verification and hashing for such bodies run on a single
+  serialized thread sized to the parse boundary: at most 10,000 structural
+  levels, and raw text past that is refused as a parse error before the
+  parser sees it (an interpreter's parser may refuse a body even earlier).
+- Duplicate object members are a parse error (`-32700`), like the Go port:
+  two parsers must not disagree about one signed body's meaning.
+- Once a step's signature has verified, a failure outside the error registry
+  (an internal exception on the governed path) is a signed DENY
+  (`evaluation_failed`), never an error; the step's chain entry is appended
+  when the failure pre-empted it, and `chain_hash` is sent only when this
+  step's entry is in the chain. Registry refusals (replay, skew, version,
+  schema, capability) keep their own signed error codes, per the spec.
 
 ### A deliberate deviation from an `extend_mcp.md` example
 

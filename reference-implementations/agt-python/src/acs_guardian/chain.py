@@ -15,7 +15,6 @@ canonical form rather than the stored dict, and why a test pins the vector.
 from __future__ import annotations
 
 import hashlib
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +31,7 @@ class ChainEntry:
     step_id: str
     step_type: str
     request_hash: str | None
+    turn_id: str | None
     timestamp: str | None
     previous_hash: str | None
     entry_hash: str
@@ -45,6 +45,8 @@ class ChainEntry:
         }
         if self.request_hash is not None:
             entry["request_hash"] = self.request_hash
+        if self.turn_id is not None:
+            entry["turn_id"] = self.turn_id
         if self.timestamp is not None:
             entry["timestamp"] = self.timestamp
         if self.previous_hash is not None:
@@ -81,19 +83,30 @@ class AuditChain:
         step_type: str,
         params: dict[str, Any] | None = None,
         timestamp: str | None = None,
+        turn_id: str | None = None,
     ) -> ChainEntry:
         previous = self.head
         # Optional members are omitted from the hashed content when absent,
         # never written as null: the spec's rule is "included in the entry's
         # content when present", and a null placeholder would make two
         # implementations hash different bytes for the same entry.
+        #
+        # entry_id is the step's request_id, like the Go port: a random id
+        # would make two Guardians disagree on every entry_hash for the same
+        # step, for no benefit (entry_id is only unique within a session, and
+        # a request_id already is).
         entry: dict[str, Any] = {
-            "entry_id": str(uuid.uuid4()),
+            "entry_id": step_id,
             "step_id": step_id,
             "step_type": step_type,
         }
         if params is not None:
             entry["request_hash"] = request_hash(params)
+        if turn_id is not None:
+            # turnStart requires metadata.turn_id propagated onto every
+            # per-step ContextEntry; context-entry.json names no member for
+            # it, so the envelope field's name is used, like the Go port.
+            entry["turn_id"] = turn_id
         if timestamp is not None:
             entry["timestamp"] = timestamp
         entry_hash = compute_entry_hash(entry, previous)
@@ -102,6 +115,7 @@ class AuditChain:
             step_id=entry["step_id"],
             step_type=entry["step_type"],
             request_hash=entry.get("request_hash"),
+            turn_id=entry.get("turn_id"),
             timestamp=entry.get("timestamp"),
             previous_hash=previous,
             entry_hash=entry_hash,

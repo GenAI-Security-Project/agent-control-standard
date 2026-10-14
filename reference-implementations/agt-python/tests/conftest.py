@@ -8,13 +8,13 @@ import pytest
 
 from acs_guardian.server import Guardian, GuardianConfig, serve
 
-from helpers import SECRET
+from helpers import KEY_ID, SECRET
 
 
 @pytest.fixture()
 def guardian() -> Guardian:
     # port 0: the HTTP fixture below binds a free port rather than a fixed one.
-    return Guardian(GuardianConfig(secret=SECRET, port=0))
+    return Guardian(GuardianConfig(secret=SECRET, key_id=KEY_ID, port=0))
 
 
 @pytest.fixture()

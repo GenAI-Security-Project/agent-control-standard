@@ -25,7 +25,6 @@ from .chain import AuditChain
 class Session:
     session_id: str
     agent_id: str
-    key_id: str
     negotiated_version: str
     methods_evaluated: tuple[str, ...]
     selected_transport: str

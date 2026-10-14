@@ -16,8 +16,6 @@ from pathlib import Path
 from .schemas import SPEC_ROOT_ENV
 from .server import Guardian, GuardianConfig, serve
 
-DEFAULT_KEY_ID = "conformance"
-
 
 def _build_config(args: argparse.Namespace) -> GuardianConfig:
     secret_file = args.secret_file or os.environ.get("ACS_GUARDIAN_HMAC_SECRET_FILE")
@@ -26,10 +24,17 @@ def _build_config(args: argparse.Namespace) -> GuardianConfig:
             "no HMAC secret: pass --secret-file or set ACS_GUARDIAN_HMAC_SECRET_FILE "
             "(the file's bytes are the HKDF input keying material, 32 bytes minimum)"
         )
+    key_id = args.key_id or os.environ.get("ACS_GUARDIAN_KEY_ID")
+    if not key_id:
+        raise SystemExit(
+            "no key_id: pass --key-id or set ACS_GUARDIAN_KEY_ID. It is the label this "
+            "deployment gives its one configured secret (an opaque string such as "
+            "'2026-10'); there is no default, so every deployment chooses its own."
+        )
     secret = Path(secret_file).read_bytes()
     return GuardianConfig(
         secret=secret,
-        key_id=args.key_id or os.environ.get("ACS_GUARDIAN_KEY_ID", DEFAULT_KEY_ID),
+        key_id=key_id,
         on_decision_failure=args.posture or os.environ.get("ACS_ON_DECISION_FAILURE", "proceed"),
         timeout_ms=args.timeout_ms,
         skew_window_ms=args.skew_window_ms,
@@ -47,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 
     serve_parser = sub.add_parser("serve", help="serve the ACS wire endpoint")
     serve_parser.add_argument("--secret-file", help="file holding the HKDF input keying material")
-    serve_parser.add_argument("--key-id", help="key_id carried in signatures (default: conformance)")
+    serve_parser.add_argument("--key-id", help="the label naming this deployment's configured secret (required)")
     serve_parser.add_argument("--host", help="bind address (default: 127.0.0.1)")
     serve_parser.add_argument("--port", type=int, help="bind port (default: 8787)")
     serve_parser.add_argument("--posture", choices=["proceed", "deny"], help="on_decision_failure")

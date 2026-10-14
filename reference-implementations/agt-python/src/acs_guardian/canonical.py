@@ -16,7 +16,6 @@ gets that wrong produces signatures only it can verify.
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import rfc8785
@@ -31,10 +30,19 @@ def canonical_bytes(value: Any) -> bytes:
 
 
 def _without_signature(envelope: dict[str, Any], holder: str) -> dict[str, Any]:
-    unsigned = copy.deepcopy(envelope)
+    """The envelope minus the signature, copied shallowly on purpose.
+
+    A ``copy.deepcopy`` here raised ``RecursionError`` on a signed request
+    nested a few hundred levels deep (the parser accepts such a body, so it
+    arrives), and an exception on the signing path is an unsigned answer the
+    Observed Agent can turn into a run with its ``on_decision_failure``
+    posture. Only the top level and the holder are copied; nothing below is
+    touched, and the caller's envelope is never mutated.
+    """
+    unsigned = dict(envelope)
     container = unsigned.get(holder)
     if isinstance(container, dict):
-        container.pop("signature", None)
+        unsigned[holder] = {key: value for key, value in container.items() if key != "signature"}
     return unsigned
 
 

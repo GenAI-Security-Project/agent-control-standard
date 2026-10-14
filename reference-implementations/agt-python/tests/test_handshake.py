@@ -46,8 +46,28 @@ def test_no_common_version_is_unsupported_version() -> None:
     assert caught.value.data == {"supported_versions": ["0.1.0"]}
 
 
-def test_same_major_version_negotiates_this_guardians_minor() -> None:
-    assert negotiate(_hello(acs_versions_supported=["0.7.3"])).negotiated_version == "0.1.0"
+def test_a_same_major_version_negotiates_an_offered_version() -> None:
+    """§3 forward compat: the answer names a version the client offered (the Go rule)."""
+    assert negotiate(_hello(acs_versions_supported=["0.7.3"])).negotiated_version == "0.7.3"
+
+
+def test_the_highest_offered_version_sharing_the_major_wins() -> None:
+    negotiated = negotiate(_hello(acs_versions_supported=["0.2.0", "0.9.0", "0.3.0"])).negotiated_version
+    assert negotiated == "0.9.0"
+
+
+def test_a_malformed_version_shares_no_major() -> None:
+    with pytest.raises(AcsError) as caught:
+        negotiate(_hello(acs_versions_supported=["0.1", "zero.1.0"]))
+    assert caught.value.code == UNSUPPORTED_VERSION
+
+
+def test_only_ascii_digit_parts_are_versions() -> None:
+    """int() would accept signs, whitespace, underscores, non-ASCII digits and very long strings."""
+    for malformed in ("+0.1.0", " 0.1.0", "-0.1.0", "0_1.0.0", "\u0661.0.0", "1" * 5000 + ".0.0"):
+        with pytest.raises(AcsError) as caught:
+            negotiate(_hello(acs_versions_supported=[malformed]))
+        assert caught.value.code == UNSUPPORTED_VERSION
 
 
 def test_version_mismatch_wins_over_every_other_refusal() -> None:

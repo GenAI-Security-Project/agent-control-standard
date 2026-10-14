@@ -33,9 +33,10 @@ SUPPORTED_VERSIONS = ("0.1.0",)
 # one the client offered, and the listener this tree ships speaks plain HTTP.
 SUPPORTED_TRANSPORTS = ("http", "https")
 # Every ACS-Core item in docs/spec/conformance.md is implemented (handshake,
-# envelopes, the 19 hooks, all five dispositions, the chain, replay, the HMAC
-# baseline, liveness, wrapped MCP), so the Guardian accepts acs-core. Trace,
-# Inspect, Provenance, Crypto, and Audit are not claimed.
+# envelopes, the 19 hooks, all five dispositions, the §6.5 substitution for a
+# MODIFY-incapable client, the chain, replay, the HMAC baseline, liveness,
+# wrapped MCP), so the Guardian accepts acs-core. Trace, Inspect, Provenance,
+# Crypto, and Audit are not claimed.
 SUPPORTED_PROFILES: tuple[str, ...] = ("acs-core",)
 SIGNATURE_ALGORITHMS = ("HMAC-SHA256",)
 DEFAULT_TIMEOUT_MS = 5000
@@ -96,11 +97,50 @@ def evaluates(name: str, declared: dict[str, tuple[str, ...]]) -> bool:
     return version is None or version in versions
 
 
+def _version_tuple(version: str) -> tuple[int, int, int] | None:
+    """``X.Y.Z`` as integers, or None when it is not a well-formed version.
+
+    Each part must be ASCII digits, at most 18 of them: ``int()`` alone would
+    accept signs, whitespace, underscores and non-ASCII digits, and it raises
+    on very long digit strings (CPython's int-conversion limit) where a
+    malformed version must simply be malformed.
+    """
+    parts = version.split(".")
+    if len(parts) != 3 or any(
+        not part.isascii() or not part.isdigit() or len(part) > 18 for part in parts
+    ):
+        return None
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+def same_major(version: str, ours: str) -> bool:
+    """§3's forward-compat rule: two versions interoperate on a matching major.
+
+    Both sides must be a well-formed ``X.Y.Z`` — three dot-separated
+    ASCII-numeric parts — and share the major component. The Go port's
+    ``SameMajor`` parses only the major part and ignores the rest, so it
+    tolerates a little more garbage on the wire; nothing conformant reaches
+    that difference.
+    """
+    parsed, base = _version_tuple(version), _version_tuple(ours)
+    return parsed is not None and base is not None and parsed[0] == base[0]
+
+
 def _select_version(client_versions: list[str]) -> str:
+    """Our version when offered; otherwise the highest offered one sharing our major.
+
+    §3 accepts an ``X.Y.Z`` matching the major version, and the ServerHello
+    must name a version the client offered: answering "0.1.0" to a client
+    that offered only 0.9.0 claims interoperability the client never asked
+    for. This is the Go port's selection.
+    """
     for supported in SUPPORTED_VERSIONS:
-        major = supported.split(".")[0]
-        if any(version.split(".")[0] == major for version in client_versions):
+        if supported in client_versions:
             return supported
+    ours = SUPPORTED_VERSIONS[0]
+    candidates = [version for version in client_versions if same_major(version, ours)]
+    if candidates:
+        return max(candidates, key=lambda version: _version_tuple(version) or (0, 0, 0))
     raise AcsError(
         UNSUPPORTED_VERSION,
         "no common ACS version",

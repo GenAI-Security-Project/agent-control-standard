@@ -40,6 +40,23 @@ def test_request_hash_commits_to_the_params_object() -> None:
     assert entry.request_hash == hashlib.sha256(canonical_bytes(params)).hexdigest()
 
 
+def test_entry_id_is_the_step_id() -> None:
+    """The Go port's choice, so two implementations agree on the hashed content."""
+    chain = AuditChain()
+    entry = chain.append(step_id="req-1", step_type="steps/toolCallRequest")
+    assert entry.entry_id == "req-1"
+    assert entry.to_dict()["entry_id"] == "req-1"
+
+
+def test_turn_id_is_carried_into_the_hashed_content() -> None:
+    with_turn = AuditChain().append(step_id="s-1", step_type="steps/toolCallRequest", turn_id="t-1")
+    without = AuditChain().append(step_id="s-1", step_type="steps/toolCallRequest")
+    assert with_turn.to_dict()["turn_id"] == "t-1"
+    assert "turn_id" not in without.to_dict()
+    assert with_turn.entry_hash != without.entry_hash
+    assert verify_chain([with_turn.to_dict()])
+
+
 def test_tampering_with_a_stored_entry_breaks_verification() -> None:
     chain = AuditChain()
     chain.append(step_id="s-1", step_type="steps/sessionStart")

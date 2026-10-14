@@ -10,6 +10,7 @@ import pytest
 
 from helpers import (
     AGENT_ID,
+    KEY_ID,
     SECRET,
     envelope,
     expect_decision,
@@ -23,11 +24,19 @@ from helpers import (
 )
 
 from acs_guardian.canonical import canonical_bytes, response_signing_input
+from acs_guardian.chain import AuditChain
 from acs_guardian.crypto import derive_session_key, sign
 from acs_guardian.engine import ASK, DEFER, MODIFY, Evaluation
 from acs_guardian.errors import INVALID_PARAMS, AcsError
 from acs_guardian.schemas import HOOK_METHODS
-from acs_guardian.server import Guardian, GuardianConfig
+from acs_guardian.server import (
+    DEEP_PARSE_LIMIT,
+    MAX_JSON_DEPTH,
+    Guardian,
+    GuardianConfig,
+    _in_deep_thread,
+    _modify_unsupported,
+)
 
 
 def _session(server, methods=("steps/toolCallRequest", "steps/toolCallResult", "system/ping")) -> str:
@@ -125,12 +134,38 @@ def test_ping_is_always_allowed_and_does_not_touch_the_chain(server) -> None:
     assert result["payload"]["status"] == "ok"
     assert result["payload"]["echo"] == "hi"
     assert "chain_hash" not in result
+    # A signed ping's answer is signed too (the Go port's rule).
+    assert result["signature"]["key_id"] == KEY_ID
 
 
-def test_ping_needs_no_signature(server) -> None:
+def test_an_unsigned_ping_is_answered_but_not_signed(server) -> None:
+    """Answering an unsigned ping signed would make the endpoint a signing oracle.
+
+    Anyone able to name a session could collect a Guardian-signed ALLOW under
+    that session's key, which an attacker on the network path could
+    substitute for a real signed DENY.
+    """
     session_id = _session(server)
     response = http_post(server.url, envelope("system/ping", session_id, {}))
     assert response["result"]["decision"] == "allow"
+    assert "signature" not in response["result"]
+
+
+def test_a_ping_with_a_bad_signature_is_answered_but_not_signed(server) -> None:
+    session_id = _session(server)
+    request = sign_request(envelope("system/ping", session_id, {"echo": "hi"}), session_id)
+    request["params"]["signature"]["value"] = "AAAA"
+    response = http_post(server.url, request)
+    assert response["result"]["decision"] == "allow"
+    assert "signature" not in response["result"]
+
+
+def test_a_ping_with_an_unknown_key_id_is_answered_but_not_signed(server) -> None:
+    session_id = _session(server)
+    request = sign_request(envelope("system/ping", session_id, {}), session_id, key_id="some-other-key")
+    response = http_post(server.url, request)
+    assert response["result"]["decision"] == "allow"
+    assert "signature" not in response["result"]
 
 
 def test_a_stale_handshake_is_outside_the_skew_window(server) -> None:
@@ -222,8 +257,8 @@ def test_deeply_nested_json_is_a_parse_error_not_a_dropped_connection(server) ->
     import json
     import urllib.request
 
-    # ~20 KB, far under the body cap, and far past the parser's ~1000-level
-    # recursion limit.
+    # ~20 KB, far under the body cap, and past the C parser's ~10,000-level
+    # recursion limit on the pinned interpreter.
     body = b"[" * 10_000 + b"]" * 10_000
     request = urllib.request.Request(
         server.url, data=body, headers={"content-type": "application/json"}, method="POST"
@@ -436,7 +471,7 @@ class _StubEngine:
     ],
 )
 def test_all_five_dispositions_produce_schema_valid_decisions(evaluation: Evaluation) -> None:
-    guardian = Guardian(GuardianConfig(secret=SECRET, port=0, engine=_StubEngine(evaluation)))
+    guardian = Guardian(GuardianConfig(secret=SECRET, key_id=KEY_ID, port=0, engine=_StubEngine(evaluation)))
     session_id = str(uuid.uuid4())
     hello = sign_request(
         envelope(
@@ -474,7 +509,7 @@ def test_all_five_dispositions_produce_schema_valid_decisions(evaluation: Evalua
 def test_an_incomplete_engine_decision_fails_closed() -> None:
     """A modify without modifications cannot be sent as one; it becomes a deny."""
     guardian = Guardian(
-        GuardianConfig(secret=SECRET, port=0, engine=_StubEngine(Evaluation(decision=MODIFY, reasoning="no payload")))
+        GuardianConfig(secret=SECRET, key_id=KEY_ID, port=0, engine=_StubEngine(Evaluation(decision=MODIFY, reasoning="no payload")))
     )
     session_id = str(uuid.uuid4())
     hello = sign_request(
@@ -518,8 +553,8 @@ def _kebab(method: str) -> str:
     return "".join(out)
 
 
-def _guardian_handshake(engine, methods=("steps/toolCallRequest",), *, key_id: str | None = None) -> tuple[Guardian, str]:
-    guardian = Guardian(GuardianConfig(secret=SECRET, port=0, engine=engine))
+def _guardian_handshake(engine, methods=("steps/toolCallRequest",), **config) -> tuple[Guardian, str]:
+    guardian = Guardian(GuardianConfig(secret=SECRET, key_id=KEY_ID, port=0, engine=engine, **config))
     session_id = str(uuid.uuid4())
     hello = sign_request(
         envelope(
@@ -534,18 +569,14 @@ def _guardian_handshake(engine, methods=("steps/toolCallRequest",), *, key_id: s
             },
         ),
         session_id,
-        **({"key_id": key_id} if key_id is not None else {}),
     )
     response = guardian.handle(hello)
-    if key_id is not None:
-        # The response label is the deployment's, not the client-chosen
-        # binding the session was opened with.
-        assert response["result"]["signature"]["key_id"] == "conformance"
+    verify_response(response, session_id, hello["id"])
     return guardian, session_id
 
 
 def _guardian_wrapped(engine) -> tuple[Guardian, str]:
-    guardian = Guardian(GuardianConfig(secret=SECRET, port=0, engine=engine))
+    guardian = Guardian(GuardianConfig(secret=SECRET, key_id=KEY_ID, port=0, engine=engine))
     session_id = str(uuid.uuid4())
     hello = sign_request(
         envelope(
@@ -572,7 +603,6 @@ def _tool_call(
     *,
     method: str = "steps/toolCallRequest",
     payload=None,
-    key_id: str | None = None,
 ):
     request = sign_request(
         envelope(
@@ -583,7 +613,6 @@ def _tool_call(
             else {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
         ),
         session_id,
-        **({"key_id": key_id} if key_id is not None else {}),
     )
     return request, guardian.handle(request)
 
@@ -772,20 +801,9 @@ def test_a_step_after_session_end_is_denied_and_a_replay_is_still_a_replay() -> 
     expect_error(response, -32005)
 
 
-def test_a_wrong_key_id_is_a_signed_denial_not_an_error() -> None:
-    # The session is opened with a client-chosen key_id, so the session's
-    # key_id differs from the deployment's ("conformance"): the response label
-    # must be the deployment's, and the binding must still be the client's.
-    guardian, session_id = _guardian_handshake(
-        _StubEngine(Evaluation(decision="allow")), key_id="client-chosen"
-    )
-    # A step first, so the chain is not empty: the denial still carries no
-    # chain_hash, because it wrote no entry — the previous step's head would
-    # be a false claim about this step, not a harmless omission.
-    ok, response = _tool_call(guardian, session_id, key_id="client-chosen")
-    verify_response(response, session_id, ok["id"])
-    assert response["result"]["chain_hash"]
-
+def test_a_request_naming_an_unknown_key_id_is_refused_unsigned() -> None:
+    """#118: a verifier MUST reject an unknown key_id, never fall back to its secret."""
+    guardian, session_id = _guardian_handshake(_StubEngine(Evaluation(decision="allow")))
     request = sign_request(
         envelope(
             "steps/toolCallRequest",
@@ -796,33 +814,40 @@ def test_a_wrong_key_id_is_a_signed_denial_not_an_error() -> None:
         key_id="some-other-key",
     )
     response = guardian.handle(request)
-    # Signed under the deployment's key_id: key_id names the key a verifier
-    # resolves, and that is the one this Guardian holds.
-    verify_response(response, session_id, request["id"])
-    assert response["result"]["signature"]["key_id"] == "conformance"
-    assert response["result"]["decision"] == "deny"
-    assert response["result"]["reason_codes"] == ["key_not_bound"]
-    # The step never reached the chain, so no chain_hash is sent (a null
-    # would fail response-envelope.json).
-    assert "chain_hash" not in response["result"]
-    assert guardian.schemas.validate_response(response) is None
-
-    # The id was recorded on arrival, so the same request again is a replay.
-    response = guardian.handle(request)
-    verify_response(response, session_id, request["id"])
-    expect_error(response, -32005)
+    expect_error(response, -32004)
+    # The request established no key under this label, so the answer is unsigned.
+    assert "signature" not in response["error"]
 
 
-def test_ping_is_signed_under_the_deployments_key_id() -> None:
-    guardian, session_id = _guardian_handshake(
-        _StubEngine(Evaluation(decision="allow")), methods=("system/ping",), key_id="client-chosen"
+def test_a_handshake_naming_an_unknown_key_id_is_refused_unsigned() -> None:
+    guardian = Guardian(GuardianConfig(secret=SECRET, key_id=KEY_ID, port=0, engine=_StubEngine(Evaluation(decision="allow"))))
+    session_id = str(uuid.uuid4())
+    hello = sign_request(
+        envelope(
+            "handshake/hello",
+            session_id,
+            {
+                "acs_versions_supported": ["0.1.0"],
+                "methods_implemented": ["steps/toolCallRequest"],
+                "transports_supported": ["http"],
+                "provenance_producer": "none",
+                "profiles_supported": ["acs-core"],
+            },
+        ),
+        session_id,
+        key_id="client-chosen",
     )
-    request = sign_request(
-        envelope("system/ping", session_id, {"echo": "hi"}), session_id, key_id="client-chosen"
-    )
-    response = guardian.handle(request)
-    verify_response(response, session_id, request["id"])
-    assert response["result"]["signature"]["key_id"] == "conformance"
+    response = guardian.handle(hello)
+    expect_error(response, -32004)
+    assert "signature" not in response["error"]
+    assert guardian.store.get(session_id) is None
+
+
+def test_guardian_configuration_requires_a_key_id() -> None:
+    with pytest.raises(TypeError):
+        GuardianConfig(secret=SECRET, port=0)  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="key_id"):
+        Guardian(GuardianConfig(secret=SECRET, key_id="", port=0))
 
 
 def test_a_wrong_agent_id_is_a_signed_denial_not_an_error() -> None:
@@ -864,3 +889,641 @@ def test_every_hook_payload_schema_loads_and_is_the_right_schema(guardian: Guard
         guardian.schemas.validate_payload(method, {})
     except AcsError as error:
         assert error.code == INVALID_PARAMS
+
+
+# -- fail-closed depth, version, §6.5, and Go alignment (review fixes) ------
+
+
+def _nested(value, levels):
+    for _ in range(levels):
+        value = {"a": value}
+    return value
+
+
+def test_a_body_within_the_depth_limit_still_evaluates(server) -> None:
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "ls"}, "deep": {"value": _nested("leaf", MAX_JSON_DEPTH - 20)}},
+            "raw_command": "ls",
+        },
+    )
+    response = signed_post(server.url, request, session_id)
+    assert response["result"]["decision"] == "allow"
+
+
+def test_a_body_past_the_depth_limit_is_a_signed_denial(server) -> None:
+    """Fail closed where failing open would be a run the Guardian never saw.
+
+    Before this guard, a signed request nested a few hundred levels deep hit
+    RecursionError on the signing path and came back as an unsigned -32603,
+    which the Observed Agent's default posture turns into a proceed.
+    """
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "rm -rf /"}, "deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}},
+            "raw_command": "rm -rf /",
+        },
+    )
+    response = signed_post(server.url, request, session_id)
+    assert response["result"]["decision"] == "deny"
+    assert response["result"]["reason_codes"] == ["evaluation_failed"]
+    # The verified step is recorded like any refusal: the entry is appended
+    # and the published head is this step's.
+    session = server.guardian.store.get(session_id)
+    assert response["result"]["chain_hash"] == session.chain.head
+
+    # Resending the same verified body is a replay: a signed -32005, and no
+    # second entry (a repeated body must not grow the chain without bound).
+    entries = len(session.chain.entries)
+    replay = http_post(server.url, request)
+    verify_response(replay, session_id, request["id"])
+    expect_error(replay, -32005)
+    assert len(session.chain.entries) == entries
+
+
+def test_a_verified_step_deeper_than_the_default_stack_is_still_decided(server) -> None:
+    """The parser accepts ~10,000 levels; JCS dies ~1,000 on the default limit.
+
+    In between, a verified step must still get a signed decision — the retry
+    canonicalizes on an enlarged thread — not an unsigned error the agent's
+    posture turns into a proceed.
+    """
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "rm -rf /"}, "deep": {"value": _nested("leaf", 3000)}},
+            "raw_command": "rm -rf /",
+        },
+    )
+    ok, _ = _in_deep_thread(lambda: sign_request(request, session_id))
+    assert ok
+    response = http_post(server.url, request)
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "deny"
+    assert response["result"]["reason_codes"] == ["evaluation_failed"]
+    session = server.guardian.store.get(session_id)
+    assert response["result"]["chain_hash"] == session.chain.head
+
+
+def test_a_verified_over_deep_postcompact_failure_substitutes_to_allow(server) -> None:
+    """postCompact permits no DENY, so a verified over-deep failure is its ALLOW."""
+    session_id = _session(server, methods=("steps/postCompact",))
+    request = envelope(
+        "steps/postCompact",
+        session_id,
+        {
+            "summary": {"value": "compacted", "provenance": {"provenance_id": "p1", "origin": "agent_generated"}},
+            "entries_compacted": ["s-1"],
+            "pre_compact_chain_hash": "0" * 64,
+            "post_compact_chain_hash": "0" * 64,
+            "deep": _nested("leaf", MAX_JSON_DEPTH + 5),
+        },
+    )
+    response = signed_post(server.url, request, session_id)
+    assert response["result"]["decision"] == "allow"
+    assert response["result"]["reason_codes"] == ["evaluation_failed", "disposition_not_permitted"]
+    session = server.guardian.store.get(session_id)
+    assert response["result"]["chain_hash"] == session.chain.head
+
+
+def test_an_over_deep_body_that_does_not_verify_gets_no_signed_answer(server) -> None:
+    """Nothing on this route may sign without verifying: key_id is not a secret.
+
+    At postCompact the failure substitution turns a DENY into an ALLOW, so an
+    unverified signing path here would mint a Guardian-signed ALLOW for an
+    attacker-chosen request_id — the strongest form of the old ping oracle.
+    """
+    session_id = _session(server)
+    payload = {
+        "summary": {"value": "compacted", "provenance": {"provenance_id": "p1", "origin": "agent_generated"}},
+        "entries_compacted": ["s-1"],
+        "pre_compact_chain_hash": "0" * 64,
+        "post_compact_chain_hash": "0" * 64,
+        "deep": _nested("leaf", MAX_JSON_DEPTH + 5),
+    }
+    unsigned = envelope("steps/postCompact", session_id, payload)
+    response = http_post(server.url, unsigned)
+    expect_error(response, -32600)
+    assert "signature" not in response["error"]
+
+    bad = sign_request(envelope("steps/postCompact", session_id, payload), session_id)
+    bad["params"]["signature"]["value"] = "AAAA"
+    response = http_post(server.url, bad)
+    expect_error(response, -32600)
+    assert "signature" not in response["error"]
+
+
+def test_an_over_deep_step_gets_the_normal_route_and_binding_checks(server) -> None:
+    """Over-deep is a depth guard, not a bypass of the dispatch ladder."""
+    session_id = _session(server, methods=("steps/toolCallRequest", "system/ping"))
+    session = server.guardian.store.get(session_id)
+
+    # A ping is answered without touching the chain, however deep it is.
+    ping = envelope("system/ping", session_id, {"echo": "x", "deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}})
+    response = signed_post(server.url, ping, session_id)
+    assert response["result"]["decision"] == "allow"
+    assert "chain_hash" not in response["result"]
+    assert len(session.chain.entries) == 0
+
+    # An undefined method is its own refusal, signed, nothing appended.
+    bogus = envelope("steps/noSuchHook", session_id, {"deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}})
+    response = signed_post(server.url, bogus, session_id)
+    expect_error(response, -32601)
+    assert len(session.chain.entries) == 0
+
+    # A request naming another agent is a signed denial, nothing appended.
+    other = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {"deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}},
+        agent_id="someone-else",
+    )
+    response = signed_post(server.url, other, session_id)
+    assert response["result"]["reason_codes"] == ["agent_id_not_bound"]
+    assert "chain_hash" not in response["result"]
+    assert len(session.chain.entries) == 0
+
+
+def test_an_over_deep_step_after_session_end_is_a_closed_denial(server) -> None:
+    """The closed check runs before the negotiated-method check, like _step.
+
+    The late step names a method this session never negotiated; a closed
+    session must get its signed denial, not a -32003 error the posture could
+    turn into a proceed.
+    """
+    session_id = _session(server, methods=("steps/toolCallRequest", "steps/sessionEnd"))
+    signed_post(server.url, envelope("steps/sessionEnd", session_id, {"reason": "cancelled"}), session_id)
+    session = server.guardian.store.get(session_id)
+    entries = len(session.chain.entries)
+    late = envelope("steps/memoryStore", session_id, {"deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}})
+    response = signed_post(server.url, late, session_id)
+    assert response["result"]["reason_codes"] == ["session_closed"]
+    assert "chain_hash" not in response["result"]
+    assert len(session.chain.entries) == entries
+
+
+def test_a_deep_verified_ping_is_answered_not_failed(server) -> None:
+    """A ping past the default recursion limit must get the ping answer.
+
+    Re-verifying and re-signing on the request thread would overflow, turning
+    a ping into an evaluation_failed denial — and, in a narrow depth band,
+    writing a chain entry, when pings never touch the chain.
+    """
+    session_id = _session(server, methods=("steps/toolCallRequest", "system/ping"))
+    session = server.guardian.store.get(session_id)
+
+    ping = envelope("system/ping", session_id, {"deep": {"value": _nested("leaf", 3000)}})
+    ok, _ = _in_deep_thread(lambda: sign_request(ping, session_id))
+    assert ok
+    response = http_post(server.url, ping)
+    verify_response(response, session_id, ping["id"])
+    assert response["result"]["decision"] == "allow"
+    assert "chain_hash" not in response["result"]
+    # A ping is not a step: no replay rejection, and still nothing appended.
+    again = http_post(server.url, ping)
+    verify_response(again, session_id, ping["id"])
+    assert again["result"]["decision"] == "allow"
+    assert len(session.chain.entries) == 0
+
+    # And a deep echo: signing the answer must also go through the enlarged
+    # thread rather than fail the ping.
+    echo_ping = envelope("system/ping", session_id, {"echo": {"value": _nested("leaf", 3000)}})
+    ok, _ = _in_deep_thread(lambda: sign_request(echo_ping, session_id))
+    assert ok
+    echoed = http_post(server.url, echo_ping)
+    ok, _ = _in_deep_thread(lambda: verify_response(echoed, session_id, echo_ping["id"]))
+    assert ok
+    assert echoed["result"]["decision"] == "allow"
+    assert len(session.chain.entries) == 0
+
+
+def test_an_over_deep_ping_with_a_nested_acs_version_still_answers(server) -> None:
+    """The ping echoes its version only when it is a string; it must not str() deep objects."""
+    session_id = _session(server, methods=("steps/toolCallRequest", "system/ping"))
+    ping = envelope("system/ping", session_id, {"deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}})
+    ping["params"]["acs_version"] = {"nested": {"value": _nested("leaf", 5)}}
+    signed = sign_request(ping, session_id)
+    response = http_post(server.url, signed)
+    verify_response(response, session_id, ping["id"])
+    assert response["result"]["decision"] == "allow"
+    assert response["result"]["acs_version"] == "0.1.0"
+
+
+def test_a_failed_over_deep_ping_is_an_unsigned_internal_error(monkeypatch, server) -> None:
+    """A ping has no decision to fail closed with: an internal failure is reported, not faked."""
+    session_id = _session(server, methods=("steps/toolCallRequest", "system/ping"))
+    session = server.guardian.store.get(session_id)
+    ping = envelope("system/ping", session_id, {"deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}})
+    signed = sign_request(ping, session_id)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("ping signing exploded")
+
+    monkeypatch.setattr(Guardian, "_signed_response_any_depth", explode)
+    response = http_post(server.url, signed)
+    expect_error(response, -32603)
+    assert "signature" not in response["error"]
+    assert len(session.chain.entries) == 0
+
+
+def test_an_over_deep_handshake_consumes_its_request_id(server) -> None:
+    """The normal handshake records the id/nonce before refusing; the deep one must too."""
+    session_id = _session(server)
+    shared_id = str(uuid.uuid4())
+    shared_nonce = str(uuid.uuid4())
+    hello = envelope(
+        "handshake/hello",
+        session_id,
+        {
+            "acs_versions_supported": ["0.1.0"],
+            "methods_implemented": ["steps/toolCallRequest"],
+            "transports_supported": ["http"],
+            "provenance_producer": "none",
+            "profiles_supported": ["acs-core"],
+            "deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)},
+        },
+        request_id=shared_id,
+    )
+    hello["params"]["nonce"] = shared_nonce
+    signed = sign_request(hello, session_id)
+    response = http_post(server.url, signed)
+    verify_response(response, session_id, hello["id"])
+    expect_error(response, -32000)
+
+    # A replay of the handshake is a replay...
+    again = http_post(server.url, signed)
+    verify_response(again, session_id, hello["id"])
+    expect_error(again, -32005)
+
+    # ...and the id and nonce are consumed: a later normal step reusing
+    # either is a replay.
+    step = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
+        request_id=shared_id,
+    )
+    replay = http_post(server.url, sign_request(step, session_id))
+    verify_response(replay, session_id, step["id"])
+    expect_error(replay, -32005)
+
+    nonce_only = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
+    )
+    nonce_only["params"]["nonce"] = shared_nonce
+    replay = http_post(server.url, sign_request(nonce_only, session_id))
+    verify_response(replay, session_id, nonce_only["id"])
+    expect_error(replay, -32005)
+
+
+def test_the_parse_boundary_scanner_counts_structure_not_string_contents() -> None:
+    from acs_guardian.server import _bytes_nesting_exceeds
+
+    assert _bytes_nesting_exceeds(b"[" * (DEEP_PARSE_LIMIT + 1), DEEP_PARSE_LIMIT)
+    assert not _bytes_nesting_exceeds(b"[" * DEEP_PARSE_LIMIT, DEEP_PARSE_LIMIT)
+    # Braces and brackets inside a string are not structure (a naive counter
+    # would see 21 levels here).
+    assert not _bytes_nesting_exceeds(b'["[[[[[[[[[[{{{{{{{{{{"]', 1)
+    # An escaped quote does not close the string early (the braces stay inside).
+    assert not _bytes_nesting_exceeds(b'["a\\"{{{{{{{{{{"]', 1)
+    # A real quote after an escaped backslash does close it; the depth after counts.
+    assert _bytes_nesting_exceeds(b'["a\\\\"[[[', 2)
+
+
+def test_a_body_past_the_parse_boundary_is_refused_by_the_scanner(server) -> None:
+    """10,001 structural levels come back a parse error from whichever layer refuses."""
+    import json
+    import urllib.request
+
+    n = DEEP_PARSE_LIMIT + 1
+    body = b'{"a":' * n + b"1" + b"}" * n
+    request = urllib.request.Request(server.url, data=body, headers={"content-type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request) as response:
+        payload = json.loads(response.read().decode())
+    expect_error(payload, -32700)
+
+
+def test_an_over_deep_body_without_a_string_request_id_is_a_signed_error(server) -> None:
+    """A body with no id must not reach the chain (its entry would not dedupe)."""
+    session_id = _session(server)
+    request = envelope("steps/toolCallRequest", session_id, {"deep": {"value": _nested("leaf", MAX_JSON_DEPTH + 5)}})
+    del request["params"]["request_id"]
+    signed = sign_request(request, session_id)
+    response = http_post(server.url, signed)
+    verify_response(response, session_id, request["id"])
+    expect_error(response, -32602)
+    session = server.guardian.store.get(session_id)
+    assert len(session.chain.entries) == 0
+
+    # Repeats stay refusals, not chain growth.
+    again = http_post(server.url, signed)
+    expect_error(again, -32602)
+    assert len(session.chain.entries) == 0
+
+
+def test_concurrent_deep_canonicalization_keeps_the_limits_intact() -> None:
+    """Two overlapping deep calls must not restore the global limits under each other.
+
+    The recursion limit is process-global; without serialization, one call
+    restoring it mid-recursion makes a verified body fail verification — the
+    fail-open the deep thread exists to prevent.
+    """
+    import sys
+    import threading
+
+    original_limit = sys.getrecursionlimit()
+    original_stack = threading.stack_size()
+    deep = _nested("leaf", 3000)
+    outcomes: list[bool] = []
+    lock = threading.Lock()
+
+    def run() -> None:
+        ok, _ = _in_deep_thread(lambda: canonical_bytes(deep))
+        with lock:
+            outcomes.append(ok)
+
+    workers = [threading.Thread(target=run) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert outcomes == [True, True, True, True]
+    assert sys.getrecursionlimit() == original_limit
+    assert threading.stack_size() == original_stack
+
+
+@pytest.mark.parametrize("levels", [500, 600, 985])
+def test_the_reviewers_regression_requests_are_signed_denials(server, levels) -> None:
+    """The depths from the review; 500 broke on the old code and 985 dropped the connection."""
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "rm -rf /"}, "nested": {"value": _nested("x", levels)}},
+            "raw_command": "rm -rf /",
+        },
+    )
+    ok, _ = _in_deep_thread(lambda: sign_request(request, session_id))
+    assert ok
+    response = http_post(server.url, request)
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "deny"
+    assert response["result"]["reason_codes"] == ["evaluation_failed"]
+
+
+def test_a_verified_step_near_the_parse_boundary_is_still_decided(server) -> None:
+    """The enlarged thread must cover the whole range the parser accepts."""
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "rm -rf /"}, "nested": {"value": _nested("x", 9000)}},
+            "raw_command": "rm -rf /",
+        },
+    )
+    ok, _ = _in_deep_thread(lambda: sign_request(request, session_id))
+    assert ok
+    response = http_post(server.url, request)
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "deny"
+    assert response["result"]["reason_codes"] == ["evaluation_failed"]
+    session = server.guardian.store.get(session_id)
+    assert response["result"]["chain_hash"] == session.chain.head
+
+
+def test_an_over_deep_request_without_a_negotiated_session_is_a_bad_request(server) -> None:
+    request = envelope("steps/toolCallRequest", str(uuid.uuid4()), {"deep": _nested("leaf", MAX_JSON_DEPTH + 5)})
+    response = http_post(server.url, request)
+    expect_error(response, -32600)
+    assert "signature" not in response["error"]
+
+
+def test_a_step_may_not_move_off_the_negotiated_major_version(server) -> None:
+    """§3/§4: a step's acs_version must share the session's major; else -32001."""
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
+    )
+    request["params"]["acs_version"] = "7.3.0"
+    response = signed_post(server.url, request, session_id)
+    expect_error(response, -32001)
+    assert response["error"]["data"]["supported_versions"] == ["0.1.0"]
+
+
+def test_a_step_on_an_offered_major_still_evaluates(server) -> None:
+    session_id = _session(server)
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
+    )
+    request["params"]["acs_version"] = "0.9.0"
+    response = signed_post(server.url, request, session_id)
+    assert response["result"]["decision"] == "allow"
+
+
+def test_a_modify_the_agent_cannot_apply_is_substituted_with_a_denial() -> None:
+    evaluation = Evaluation(
+        decision=MODIFY,
+        reasoning="redact the command",
+        modifications={"redactions": [{"path": "/arguments/command"}]},
+        client_cannot_apply_modify=True,
+    )
+    guardian, session_id = _guardian_handshake(_StubEngine(evaluation))
+    request, response = _tool_call(guardian, session_id)
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "deny"
+    # §6.5 pins the reason_codes value exactly.
+    assert response["result"]["reason_codes"] == ["modify_unsupported"]
+    assert "/arguments/command" in response["result"]["reasoning"]
+    assert guardian.schemas.validate_response(response) is None
+
+
+def test_a_modify_the_agent_cannot_apply_at_postcompact_is_an_allow() -> None:
+    events: list[dict] = []
+    evaluation = Evaluation(
+        decision=MODIFY,
+        reasoning="rewrite the summary",
+        modifications={"modified_content": "rewritten"},
+        client_cannot_apply_modify=True,
+    )
+    guardian, session_id = _guardian_handshake(
+        _StubEngine(evaluation), methods=("steps/postCompact",), audit=events.append
+    )
+    request, response = _tool_call(
+        guardian,
+        session_id,
+        method="steps/postCompact",
+        payload={
+            "summary": {"value": "compacted", "provenance": {"provenance_id": "p1", "origin": "agent_generated"}},
+            "entries_compacted": ["s-1"],
+            "pre_compact_chain_hash": "0" * 64,
+            "post_compact_chain_hash": "0" * 64,
+        },
+    )
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "allow"
+    assert response["result"]["reason_codes"] == ["modify_unsupported"]
+    # postCompact's audit event must name the rewrite it could not deliver.
+    assert [event["event"] for event in events] == ["modify_unsupported"]
+    assert events[0]["intended_modifications"] == {"modified_content": "rewritten"}
+    assert "modified_content" in events[0]["reasoning"]
+
+
+def test_a_modify_capable_agent_still_gets_modifications() -> None:
+    evaluation = Evaluation(
+        decision=MODIFY,
+        reasoning="redact the command",
+        modifications={"redactions": [{"path": "/arguments/command"}]},
+    )
+    guardian, session_id = _guardian_handshake(_StubEngine(evaluation))
+    request, response = _tool_call(guardian, session_id)
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "modify"
+
+
+def test_the_modify_substitution_is_recorded_with_the_audit_sink() -> None:
+    events: list[dict] = []
+    evaluation = Evaluation(
+        decision=MODIFY,
+        reasoning="redact the command",
+        modifications={"redactions": [{"path": "/arguments/command"}]},
+        client_cannot_apply_modify=True,
+    )
+    guardian, session_id = _guardian_handshake(_StubEngine(evaluation), audit=events.append)
+    _tool_call(guardian, session_id)
+    assert [event["event"] for event in events] == ["modify_unsupported"]
+    assert events[0]["session_id"] == session_id
+    assert events[0]["method"] == "steps/toolCallRequest"
+    assert events[0]["reason_codes"] == ["modify_unsupported"]
+    assert "/arguments/command" in events[0]["reasoning"]
+    assert events[0]["intended_modifications"] == {"redactions": [{"path": "/arguments/command"}]}
+
+
+def test_a_modify_at_a_hook_without_modify_keeps_its_own_reason_code() -> None:
+    """The permitted-dispositions substitution runs first: its code is the accurate one.
+
+    sessionStart permits ALLOW/DENY only, so the MODIFY is substituted with
+    disposition_not_permitted before §6.5 could ever see it — and no
+    modify_unsupported event is recorded, because nothing tried to deliver a
+    modification.
+    """
+    events: list[dict] = []
+    evaluation = Evaluation(
+        decision=MODIFY,
+        reasoning="stub",
+        modifications={"modified_content": "x"},
+        client_cannot_apply_modify=True,
+    )
+    guardian, session_id = _guardian_handshake(
+        _StubEngine(evaluation), methods=("steps/sessionStart",), audit=events.append
+    )
+    request, response = _tool_call(guardian, session_id, method="steps/sessionStart", payload={})
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "deny"
+    assert response["result"]["reason_codes"] == ["disposition_not_permitted"]
+    assert events == []
+
+
+def test_a_post_verification_failure_is_a_signed_denial(monkeypatch) -> None:
+    """A failure after the signature verified must not become an error the agent may proceed on."""
+    guardian, session_id = _guardian_handshake(_StubEngine(Evaluation(decision="allow")))
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("chain append exploded")
+
+    monkeypatch.setattr(AuditChain, "append", explode)
+    request = sign_request(
+        envelope(
+            "steps/toolCallRequest",
+            session_id,
+            {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
+        ),
+        session_id,
+    )
+    response = guardian.handle(request)
+    verify_response(response, session_id, request["id"])
+    assert response["result"]["decision"] == "deny"
+    assert response["result"]["reason_codes"] == ["evaluation_failed"]
+    assert "chain_hash" not in response["result"]
+
+
+def test_a_duplicate_member_is_a_parse_error(server) -> None:
+    """Two parsers must not disagree about one signed body (the Go port refuses it too)."""
+    import json
+    import urllib.request
+
+    body = b'{"jsonrpc":"2.0","method":"system/ping","id":"x","id":"y","params":{}}'
+    request = urllib.request.Request(server.url, data=body, headers={"content-type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request) as response:
+        payload = json.loads(response.read().decode())
+    expect_error(payload, -32700)
+
+
+def test_a_step_entry_carries_the_go_port_choices(server) -> None:
+    """entry_id = request_id, metadata.turn_id carried, timestamp is the write clock."""
+    session_id = _session(server)
+    request_timestamp = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
+    request = envelope(
+        "steps/toolCallRequest",
+        session_id,
+        {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, "raw_command": "ls"},
+        timestamp=request_timestamp,
+    )
+    request["params"]["metadata"]["turn_id"] = "t-1"
+    before = datetime.now(timezone.utc)
+    signed_post(server.url, request, session_id)
+    after = datetime.now(timezone.utc)
+    session = server.guardian.store.get(session_id)
+    entry = session.chain.entries[-1].to_dict()
+    assert entry["entry_id"] == request["params"]["request_id"]
+    assert entry["step_id"] == request["params"]["request_id"]
+    assert entry["turn_id"] == "t-1"
+    # The entry's timestamp is when the entry was written (context-entry.json
+    # says exactly that; the Go port does the same), not the request's stale
+    # timestamp — proven by the write happening between the two clocks.
+    written = datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00"))
+    assert before <= written <= after
+
+
+def test_modify_unsupported_names_the_intended_modification() -> None:
+    substituted = _modify_unsupported(
+        "steps/toolCallRequest",
+        Evaluation(
+            decision=MODIFY,
+            reasoning="redact",
+            modifications={"redactions": [{"path": "/arguments/token"}], "parameter_overrides": {"command": "ls"}},
+        ),
+    )
+    assert substituted.decision == "deny"
+    assert substituted.reason_codes == ["modify_unsupported"]
+    assert "/arguments/token" in substituted.reasoning
+    assert "command" in substituted.reasoning
+
+
+def test_modify_unsupported_at_postcompact_is_an_allow() -> None:
+    substituted = _modify_unsupported(
+        "steps/postCompact",
+        Evaluation(decision=MODIFY, reasoning="rewrite", modifications={"modified_content": "x"}),
+    )
+    assert substituted.decision == "allow"
+    assert substituted.reason_codes == ["modify_unsupported"]
