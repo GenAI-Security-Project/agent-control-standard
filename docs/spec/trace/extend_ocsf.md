@@ -2,18 +2,20 @@
 
 The Open Cybersecurity Schema Framework (OCSF) integration enables standardized security-event logging for AI agent activity. ACS-shaped events drop directly into existing SIEM pipelines without bespoke parsers.
 
-ACS events map to OCSF 1.5+ event classes. The normative class assignments and the disposition → `severity_id` mapping live on the [Trace Events](./events.md) page; the machine-readable mapping is at [`trace/ocsf-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json). This page describes how to assemble the events themselves and provides representative wire examples.
+ACS events map to OCSF 1.9.0 event classes. The normative class assignments and the disposition → `severity_id` mapping live on the [Trace Events](./events.md) page; the machine-readable mapping is at [`trace/ocsf-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json). This page describes how to assemble the events themselves and provides representative wire examples.
 
 ## Class assignments at a glance
 
 | ACS step | OCSF class | Class UID |
 |---|---|---|
 | `steps/sessionStart`, `steps/sessionEnd`, `steps/subagentStart`, `steps/subagentStop` | Authentication | 3002 |
-| `steps/userMessage`, `steps/agentResponse`, `steps/turnStart`, `steps/turnEnd` | Application Activity | 6002 |
+| `steps/agentTrigger`, `steps/userMessage`, `steps/agentResponse`, `steps/turnStart`, `steps/turnEnd` | Application Lifecycle | 6002 |
 | `steps/toolCallRequest`, `steps/toolCallResult` | Process Activity | 1007 |
+| `steps/skillLoad`, `steps/skillUnload` | Module Activity | 1005 (`activity_id` 1 load, 2 unload) |
 | `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval`, `steps/preCompact`, `steps/postCompact` | Datastore Activity | 6005 |
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
-| `agbom/snapshot`, `agbom/changed` | Inventory Info | 5001 |
+| `agbom/snapshot`, `agbom/changed` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
+| `steps/skillRegister` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
 
 ## Severity mapping
 
@@ -39,7 +41,7 @@ ACS events map to OCSF 1.5+ event classes. The normative class assignments and t
   "type_uid": 100701,
   "severity_id": 1,
   "metadata": {
-    "version": "1.5.0",
+    "version": "1.9.0",
     "product": { "name": "ACS Guardian", "vendor_name": "ACS" }
   },
   "actor": {
@@ -79,9 +81,10 @@ ACS events map to OCSF 1.5+ event classes. The normative class assignments and t
   "activity_id": 1,
   "activity_name": "Create",
   "time": 1706550000050,
+  "type_uid": 200401,
   "severity_id": 4,
   "status_id": 1,
-  "metadata": { "version": "1.5.0", "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
+  "metadata": { "version": "1.9.0", "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
   "finding_info": {
     "uid": "decision-001",
     "title": "Tool call denied: outside committed Intent",
@@ -103,22 +106,24 @@ ACS events map to OCSF 1.5+ event classes. The normative class assignments and t
 }
 ```
 
-## Example: AgBOM snapshot as Inventory Info (5001)
+## Example: AgBOM snapshot as Device Inventory Info (5001)
 
 ```json
 {
   "category_uid": 5,
   "category_name": "Discovery",
   "class_uid": 5001,
-  "class_name": "Inventory Info",
-  "activity_id": 1,
-  "activity_name": "Log",
+  "class_name": "Device Inventory Info",
+  "activity_id": 2,
+  "activity_name": "Collect",
   "time": 1706549900000,
+  "type_uid": 500102,
   "severity_id": 1,
-  "metadata": { "version": "1.5.0" },
+  "metadata": { "version": "1.9.0", "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
   "device": {
     "uid": "agent-123",
     "name": "CustomerServiceAgent",
+    "type_id": 99,
     "type": "AI Agent"
   },
   "unmapped": {
@@ -140,7 +145,7 @@ ACS events map to OCSF 1.5+ event classes. The normative class assignments and t
 ## Implementation notes
 
 - **`actor.user.type_id: 99`** is the OCSF "Other" sentinel; pair with `actor.user.type: "AI Agent"` so SIEM filters can distinguish agent identities from human ones.
-- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in v1.5. The structure mirrors the request envelope's `payload` plus the decision envelope's `policy_data` / `reason_codes`. Backends that index `unmapped` keep this fully searchable.
+- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. The structure mirrors the request envelope's `payload` plus the decision envelope's `policy_data` / `reason_codes`. Backends that index `unmapped` keep this fully searchable.
 - **Provenance** flows onto OCSF events under `unmapped.acs.provenance`. Trust classification is omitted on the wire for v0.1; backends that compute trust apply it as an enrichment step.
 
 For more worked examples — including A2A and MCP wrapped events — see [Implementation examples](./OCSF/implementation_examples.md).

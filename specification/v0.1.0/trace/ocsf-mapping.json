@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json",
   "title": "ACS Trace → OCSF event-class mapping",
-  "description": "Normative mapping from ACS hooks and decisions to OCSF (Open Cybersecurity Schema Framework) event classes. v0.1.0 conformance requires that a deployment emitting OCSF for the Trace pillar uses these class UIDs and severity rules verbatim. OCSF classes are referenced by their stable class_uid as of OCSF 1.5+.",
+  "description": "Normative mapping from ACS hooks and decisions to OCSF (Open Cybersecurity Schema Framework) event classes. v0.1.0 conformance requires that a deployment emitting OCSF for the Trace pillar uses these class UIDs and severity rules verbatim. Class UIDs, class names and activity IDs are those of OCSF 1.9.0.",
   "type": "object",
   "properties": {
     "step_to_class": {
@@ -20,11 +20,11 @@
       "default": {
         "steps/sessionStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1 },
         "steps/sessionEnd": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
-        "steps/userMessage": { "class_uid": 6002, "class_name": "Application Activity" },
-        "steps/agentResponse": { "class_uid": 6002, "class_name": "Application Activity" },
-        "steps/agentTrigger": { "class_uid": 6002, "class_name": "Application Activity" },
-        "steps/turnStart": { "class_uid": 6002, "class_name": "Application Activity" },
-        "steps/turnEnd": { "class_uid": 6002, "class_name": "Application Activity" },
+        "steps/userMessage": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/agentResponse": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/agentTrigger": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/turnStart": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/turnEnd": { "class_uid": 6002, "class_name": "Application Lifecycle" },
         "steps/toolCallRequest": { "class_uid": 1007, "class_name": "Process Activity" },
         "steps/toolCallResult": { "class_uid": 1007, "class_name": "Process Activity" },
         "steps/knowledgeRetrieval": { "class_uid": 6005, "class_name": "Datastore Activity" },
@@ -34,8 +34,11 @@
         "steps/postCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99 },
         "steps/subagentStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1, "_note": "Subagent spawn opens a new session — modeled as Authentication/Logon for OCSF symmetry with sessionStart." },
         "steps/subagentStop": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
-        "agbom/snapshot": { "class_uid": 5001, "class_name": "Inventory Info" },
-        "agbom/changed": { "class_uid": 5001, "class_name": "Inventory Info" }
+        "steps/skillRegister": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2, "_note": "Registration admits a skill to the component set and persists its definition ref and digest to the AgBOM. It is modeled as Device Inventory Info, the class agbom/* uses, with activity_id 2 (Collect)." },
+        "steps/skillLoad": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 1, "_note": "OCSF defines Module Activity as a process loading or unloading a module, and its required module object is the skill itself — not Process Activity, which needs a launched or terminated process that a skill load does not have; keeping loads off 1007 lets a reader tell a skill loading from the tool calls its actions raise." },
+        "steps/skillUnload": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 2 },
+        "agbom/snapshot": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 },
+        "agbom/changed": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 }
       }
     },
     "decision_class": {
@@ -47,7 +50,7 @@
         "required_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["finding.title", "finding.uid", "evidences", "verdict_id"]
+          "default": ["finding_info", "finding_info.title", "evidences", "verdict_id"]
         }
       }
     },
@@ -75,7 +78,7 @@
         "optional_enrichments": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs_provenance_source_id", "acs_provenance_lineage_depth"]
+          "default": ["acs_provenance_source_id"]
         }
       }
     }
