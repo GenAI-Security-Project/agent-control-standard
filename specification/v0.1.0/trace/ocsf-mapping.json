@@ -98,7 +98,7 @@
         },
         "evidence_fields": {
           "type": "object",
-          "description": "What every decision event carries in evidences, the only native place on a Detection Finding for the agent and the action. Detection Finding has no ai_operation, and the class rejects a top-level ai_agent. The action is the one the decision gates. For steps/toolCallRequest it is the tool name.",
+          "description": "What every decision event carries in evidences, the only native place on a Detection Finding for the agent and the action. Detection Finding has no ai_operation, and the class rejects a top-level ai_agent. api.operation is set only when the gated step is steps/toolCallRequest or steps/toolCallResult, to the tool name. For every other step, evidences carries ai_agent and actor.session only.",
           "additionalProperties": { "type": "string" },
           "default": {
             "ai_agent.uid": "metadata.agent_id",
@@ -108,7 +108,7 @@
         },
         "policy_fields": {
           "type": "object",
-          "description": "When the response carries a non-empty policy_references, the event carries authorizations, one entry per policy_references entry in the same order, each with a policy object built from these fields. policy_references stays under unmapped.acs as the exact copy.",
+          "description": "When the response carries a non-empty policy_references, the event carries authorizations, one entry per policy_references entry in the same order, each with a policy object built from these fields. An entry with neither policy_id nor policy_name MUST be an authorizations entry with no policy object, so positions still line up: OCSF requires a policy to carry uid or name. policy_references stays under unmapped.acs as the exact copy.",
           "additionalProperties": { "type": "string" },
           "default": {
             "policy.uid": "policy_id",
@@ -118,7 +118,7 @@
         },
         "late_decision": {
           "type": "object",
-          "description": "A Guardian that finishes a decision after the negotiated timeout still emits the decision event. A late deny under fail-open means the policy said no and the action ran, so suppressing the event would leave OCSF silent exactly when someone slows the Guardian down. action_id and disposition_id stay the verdict, as on an on-time decision. finding_info.types includes late_decision_fail_open or late_decision_fail_closed, from the on_decision_failure posture the Guardian sent in its ServerHello. unmapped.acs.failure carries the failure facts, named as the OTel acs.failure.* attributes are. is_alert follows alert_mapping, and is also true for any verdict other than allow under fail-open, because the action ran without what the policy required. The Guardian measures its own processing time, not network time, so a decision can still arrive late and look on time.",
+          "description": "A Guardian that finishes a decision after the negotiated timeout still emits the decision event. A late deny under fail-open means the policy said no and the action ran, so suppressing the event would leave OCSF silent exactly when someone slows the Guardian down. action_id and disposition_id stay the verdict, as on an on-time decision. finding_info.types includes late_decision_fail_open or late_decision_fail_closed, from the on_decision_failure posture the Guardian sent in its ServerHello. unmapped.acs.failure carries the failure facts, named as the OTel acs.failure.* attributes are. is_alert follows alert_mapping, and is also true for any verdict other than allow under fail-open, because the action ran without what the policy required. severity_id stays the value severity_mapping gives the verdict, so a late decision is the one case where is_alert can be true below severity 3. A reader MUST NOT count a decision event whose finding_info.types includes late_decision_fail_open or late_decision_fail_closed as an enforced outcome. The Guardian measures its own processing time, not network time, so a decision can still arrive late and look on time.",
           "properties": {
             "finding_types": {
               "type": "array",

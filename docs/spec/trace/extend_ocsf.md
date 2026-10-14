@@ -94,7 +94,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "metadata": {
     "version": "1.9.0",
     "profiles": ["security_control"],
-    "correlation_uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36:3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+    "correlation_uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36:7c4e9a1d-2f6b-4d8e-a3c5-1b9f0e7d6a52",
     "product": { "name": "ACS Guardian", "vendor_name": "ACS" }
   },
   "finding_info": {
@@ -123,7 +123,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
       "reason_codes": ["ibac_capability_mismatch"],
       "cited_provenance_ids": ["p1"],
       "chain_hash": "9f2c4e7a1b3d5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
-      "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+      "request_id": "7c4e9a1d-2f6b-4d8e-a3c5-1b9f0e7d6a52",
       "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"
     }
   }
@@ -143,7 +143,11 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
   "time": 1706549900000,
   "type_uid": 500102,
   "severity_id": 1,
-  "metadata": { "version": "1.9.0", "product": { "name": "ACS Guardian", "vendor_name": "ACS" } },
+  "metadata": {
+    "version": "1.9.0",
+    "correlation_uid": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36:8d2b7f40-1c3e-4a59-b6d8-0e9f1a2b3c4d",
+    "product": { "name": "ACS Guardian", "vendor_name": "ACS" }
+  },
   "device": {
     "uid": "agent-123",
     "name": "CustomerServiceAgent",
@@ -172,7 +176,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
 
 - **`actor.user.type_id: 99`** is the OCSF "Other" sentinel; pair with `actor.user.type: "AI Agent"` so SIEM filters can distinguish agent identities from human ones.
 - **Native fields first.** SIEM content reads native fields, not `unmapped`. A decision event puts the join pair in `metadata.correlation_uid`, the agent and the gated action in `evidences`, and the policies in `authorizations`. The example above shows each, and the [Trace Events](./events.md#ocsf-event-classes) page has the rules, including what a late decision carries.
-- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. On a step event it carries `request_id`, `session_id`, and the request's `payload`. On a decision event it carries the fields that `join_fields` and `acs_fields` in `ocsf-mapping.json` list. Backends that index `unmapped` keep this fully searchable.
+- **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. On a step event it carries `request_id`, `session_id`, and facts from the request that have no OCSF attribute of their own. On a decision event it carries the fields that `join_fields` and `acs_fields` in `ocsf-mapping.json` list. Backends that index `unmapped` keep this fully searchable.
 - **Provenance** flows onto OCSF events under `unmapped.acs.provenance`. Trust classification is omitted on the wire for v0.1; backends that compute trust apply it as an enrichment step.
 
 For more worked examples — including A2A and MCP wrapped events — see [Implementation examples](./OCSF/implementation_examples.md).
