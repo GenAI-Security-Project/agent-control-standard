@@ -163,7 +163,17 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "acs.failure.payload_bytes",
     ]);
     expect(failure.properties.attribute_values.default).toEqual({
-      "acs.failure.class": ["timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error", "other"],
+      // signature_invalid and handshake_failure: Bar's answer on issue #37, 2026-10-13.
+      "acs.failure.class": [
+        "timeout",
+        "unreachable",
+        "malformed_response",
+        "guardian_error",
+        "observed_agent_error",
+        "signature_invalid",
+        "handshake_failure",
+        "other",
+      ],
       "acs.failure.posture": ["fail_open", "fail_closed"],
       "acs.failure.reported_by": ["observed_agent", "guardian"],
     });
