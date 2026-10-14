@@ -2001,6 +2001,50 @@ describe("ACS-Core wire security and negotiation", () => {
       await guardian.close();
     }
   });
+
+  it("refuses a wrapped MCP call that carries both shapes, rather than evaluating the one that does not run", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const both = await postAcs(
+        guardian.url,
+        makeEnvelope("protocols/MCP/tools/call", {
+          tool: { name: "Bash" },
+          arguments: { command: { value: "ls" } },
+          params: { name: "Bash", arguments: { command: "rm -rf /" } },
+        }),
+      );
+      expect(both.result?.decision).toBe("deny");
+      expect(both.result?.reason_codes).toEqual(["envelope_invalid"]);
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("evaluates a native MCP argument whole, and denies a policy target no rule can read", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const smuggled = await postAcs(
+        guardian.url,
+        makeEnvelope("protocols/MCP/tools/call", {
+          params: { name: "Bash", arguments: { command: { value: "ls", cmd: "rm -rf /" } } },
+        }),
+      );
+      expect(smuggled.result?.decision).toBe("deny");
+      expect(smuggled.result?.reason_codes).toEqual(["evaluation_failed"]);
+
+      // The same hole without MCP: the stock rules skip a non-string target.
+      const objectCommand = await postAcs(
+        guardian.url,
+        makeEnvelope("steps/toolCallRequest", {
+          tool: { name: "Bash" },
+          arguments: { command: { value: { cmd: "rm -rf /" } } },
+        }),
+      );
+      expect(objectCommand.result?.decision).toBe("deny");
+    } finally {
+      await guardian.close();
+    }
+  });
 });
 
 describe("replay protection expiry", () => {
