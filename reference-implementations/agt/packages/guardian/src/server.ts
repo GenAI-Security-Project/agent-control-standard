@@ -93,6 +93,7 @@ import {
 import { checkResponse } from "./check-response.ts";
 import { buildServerHello, type ServerHello } from "./handshake.ts";
 import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
+import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
 import {
   appendContextEntry,
   createMemorySessionContextStore,
@@ -331,6 +332,17 @@ export type StartGuardianOptions = {
    * `sessionContextLog` when both are supplied.
    */
   sessionContextStore?: SessionContextStore;
+  /** OTLP/JSON trace file, one export request per line. Omitted means no
+   * span is written. `packages/guardian/src/main.ts` threads ACS_OTEL_FILE
+   * into this; otel-trace-exporter.ts says what a span carries. */
+  otelTraceFile?: string;
+  /** OTLP/HTTP traces endpoint. Omitted means no span is sent. main.ts
+   * threads ACS_OTEL_ENDPOINT into this. */
+  otelTraceEndpoint?: string;
+  /** Overrides the trace exporter entirely, bypassing both paths above.
+   * Exists so a test can read spans back in-process or stand in one that
+   * fails. Not meant for production use. */
+  traceExporter?: OtelTraceExporter;
 };
 export type StartedGuardian = { url: string; close(): Promise<void> };
 
@@ -398,6 +410,9 @@ export async function startGuardian({
   bridge: bridgeOverride,
   sessionContextLog,
   sessionContextStore: sessionContextStoreOverride,
+  otelTraceFile,
+  otelTraceEndpoint,
+  traceExporter: traceExporterOverride,
 }: StartGuardianOptions): Promise<StartedGuardian> {
   // Construct the bridge once at boot, not per request -- and through the
   // shared recipe rather than assembling one here, so this Guardian and every
@@ -420,6 +435,25 @@ export async function startGuardian({
     createMemorySessionContextStore(
       sessionContextLog ? { appendLine: createSessionContextLogAppender(sessionContextLog) } : {},
     );
+  // Off unless an output is named -- the same relationship envelopeLogPath
+  // has to the envelope log. The override wins over both paths, as the other
+  // test seams above do.
+  // The same ServerHello the handshake sends, read once here, so the trace
+  // agrees with what this Guardian told the host: which methods it
+  // evaluates, how long the host waits, and which posture it applies when
+  // no decision arrives. The timeout also bounds close() below.
+  const hello = buildServerHello(onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure });
+  const traceExporter =
+    traceExporterOverride ??
+    (otelTraceFile !== undefined || otelTraceEndpoint !== undefined
+      ? createOtelTraceExporter({
+          filePath: otelTraceFile,
+          endpoint: otelTraceEndpoint,
+          methodsEvaluated: hello.methods_evaluated,
+          timeoutConfig: hello.timeout_config,
+          posture: hello.on_decision_failure === "deny" ? "fail_closed" : "fail_open",
+        })
+      : NULL_OTEL_TRACE_EXPORTER);
 
   const server = Bun.serve({
     hostname: hostname ?? LOOPBACK_ONLY,
@@ -429,7 +463,7 @@ export async function startGuardian({
       if (req.method !== "POST" || pathname !== ACS_PATH) {
         return new Response("Not Found", { status: 404 });
       }
-      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore);
+      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
       return Response.json(response);
     },
   });
@@ -437,7 +471,25 @@ export async function startGuardian({
   return {
     url: `http://localhost:${server.port}${ACS_PATH}`,
     async close() {
-      await server.stop(true);
+      if (traceExporter === NULL_OTEL_TRACE_EXPORTER) {
+        // No exporter, nothing to close behind the drain: the close every
+        // Guardian had before trace export existed.
+        await server.stop(true);
+        return;
+      }
+      // Bun.serve's stop(true) closes every connection at once but resolves
+      // only when every in-flight handler has returned -- and a handler whose
+      // bridge never answers never returns. The drain is therefore bounded by
+      // the negotiated timeout: past it, no host is still waiting for the
+      // answer. The timer is unref'd so a prompt stop does not leave it
+      // holding the process open. The exporter shuts down after the drain,
+      // so a step still open then is closed as the failure it is rather
+      // than lost.
+      const deadline = new Promise<void>((resolve) => {
+        setTimeout(resolve, hello.timeout_config.default_ms).unref();
+      });
+      await Promise.race([server.stop(true), deadline]);
+      await traceExporter.shutdown();
     },
   };
 }
@@ -469,7 +521,10 @@ export async function startGuardian({
  * MAX_REQUEST_BODY_BYTES).
  *
  * The sink itself is total (see envelope-log-sink.ts): these two calls cannot
- * throw, so they cannot turn a governed tool call into an ungoverned one.
+ * throw, so they cannot turn a governed tool call into an ungoverned one. The
+ * trace exporter's `start` and `end` sit beside them: the handle `start`
+ * returns is what `end` closes, so a span can only ever close on its own
+ * response, and both are total for the same reason (otel-trace-exporter.ts).
  */
 async function handleAcsRequest(
   req: Request,
@@ -481,6 +536,7 @@ async function handleAcsRequest(
   envelopeLog: EnvelopeLogSink,
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
+  traceExporter: OtelTraceExporter,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const body = await readCappedBody(req);
   if (body.withinLimit === false) {
@@ -518,6 +574,7 @@ async function handleAcsRequest(
   // visible to the Inspector rather than invisible.
   const method = extractMethod(raw);
   envelopeLog.write("request", raw, method);
+  const stepSpan = traceExporter.start(raw, method, Buffer.byteLength(body.text));
 
   let response: JsonRpcSuccess | JsonRpcFailure;
   try {
@@ -563,6 +620,7 @@ async function handleAcsRequest(
   }
 
   envelopeLog.write("response", response, method);
+  traceExporter.end(stepSpan, response);
   return response;
 }
 
