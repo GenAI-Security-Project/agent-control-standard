@@ -160,3 +160,15 @@ def test_every_step_to_class_entry_uses_only_known_keys():
     known = set(ocsf["additionalProperties"]["properties"])
     unknown = {method: sorted(set(entry) - known) for method, entry in ocsf["default"].items() if set(entry) - known}
     assert not unknown, f"step_to_class entries with keys the entry schema does not declare: {unknown}"
+
+
+def test_failure_classes_are_the_ones_decided_on_issue_37():
+    # Bar's answer on issue #37 (2026-10-13) added signature_invalid, so a
+    # tampered response stands out from organic noise, and handshake_failure,
+    # so a session that starts unguarded is counted. PR #273's sessionEnd
+    # count keys on this exact set.
+    failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
+    assert set(failure["attribute_values"]["default"]["acs.failure.class"]) == {
+        "timeout", "unreachable", "malformed_response", "guardian_error",
+        "observed_agent_error", "signature_invalid", "handshake_failure", "other",
+    }
