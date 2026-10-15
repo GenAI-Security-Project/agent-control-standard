@@ -290,7 +290,7 @@ The `export NO_PROXY` line from step 1 keeps the spans off any `HTTP_PROXY`. The
 
 If `.acs/otel-collector-traces.jsonl` doesn't appear within about ten seconds of step 3, the collector isn't running this config.
 
-The Docker command has not been run yet. Rootless Docker, Podman, SELinux hosts and musl-based Linux haven't been verified either.
+Verified on macOS (arm64): natively with otelcol-contrib 0.162.0, and with the Docker command above on Docker Desktop for Mac. Rootless Docker, Podman, SELinux hosts and musl-based Linux haven't been verified.
 
 **Run it again.** Every output here except the converter's appends, so a second run on the same `.acs` doubles every count, and the converter refuses to run at all. Delete it first: `rm -rf .acs && mkdir -p .acs && chmod 700 .acs`.
 

@@ -54,6 +54,6 @@ describe("the walkthrough's collector step", () => {
   it("states what was verified, with no unfilled placeholder", () => {
     expect(readme).not.toContain("[run on");
     expect(readme).not.toContain("| not run yet]");
-    expect(readme).toContain("The Docker command has not been run yet.");
+    expect(readme).toContain("with the Docker command above on Docker Desktop for Mac");
   });
 });

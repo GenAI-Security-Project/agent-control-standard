@@ -210,7 +210,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
   // a hardlink to it, a symlink, the Guardian's own trace file, and a second
   // run over the same output, each of which the append-only exporter would
   // otherwise corrupt or double. It does not stop another process swapping
-  // the path mid-run; nothing here defends against a same-user writer.
+  // the path mid-run. Nothing here defends against a same-user writer.
   mkdirSync(dirname(otelPath), { recursive: true, mode: 0o700 });
   try {
     closeSync(openSync(otelPath, "wx", 0o600));

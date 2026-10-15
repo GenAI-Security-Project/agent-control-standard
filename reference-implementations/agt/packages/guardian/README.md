@@ -82,7 +82,7 @@ The failures only the host sees, a Guardian it could not reach or one that answe
 bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.jsonl
 ```
 
-Run it after the agent session has ended, into a file that does not exist when it starts. It refuses an existing output path, so it doesn't append into the audit log, the Guardian's trace file, or its own earlier run, and a run that fails before writing leaves no file behind.
+Run it after the agent session has ended, into a file that does not exist when it starts. It refuses an existing output path, so it doesn't append into the audit log, the Guardian's trace file, or its own earlier run, and a wrong audit path or mapping leaves no file behind.
 
 `acs.failure.posture` is the deployment's posture, not what became of the step. A refused request shows `fail_open` under a `proceed` deployment even though the host blocked it. The detail sentence says so, and the error code is in `acs.failure.error_code`. The detail is always a sentence the converter writes, never the host's message, which quotes the Guardian's error text.
 

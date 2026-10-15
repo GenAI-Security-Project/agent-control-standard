@@ -2,7 +2,7 @@
 # them as OTLP/JSON, one export request per line, the same shape
 # ACS_OTEL_FILE writes directly. Tested with otelcol-contrib 0.162.0, which
 # is where the `file` exporter lives. The walkthrough in README.md
-# ("Produce a trace", step 7) has the full sequence; in short:
+# ("Produce a trace", step 7) has the full sequence. In short:
 #
 #   Native:
 #     otelcol-contrib --config otel-collector.yaml

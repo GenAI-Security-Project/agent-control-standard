@@ -736,7 +736,7 @@ export function createOtelTraceExporter({
     // them as honored.
     construct(endpoint, () => {
       keepLoopbackOffProxy(endpoint);
-      return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" } as ConstructorParameters<typeof OTLPTraceExporter>[0]);
+      return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]>["compression"] });
     });
   }
   if (spanExporter !== undefined) {
