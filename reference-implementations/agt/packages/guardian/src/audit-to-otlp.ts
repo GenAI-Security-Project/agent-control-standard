@@ -34,12 +34,14 @@
  *
  * Reads the log with plain JSON.parse and loose field reads, importing
  * nothing from the host adapter: the file is the contract, the same way the
- * Inspector reads it. Run it after the Guardian has stopped. Two writers on
- * one file can interleave lines, and running it twice over the same log
- * writes every span twice.
+ * Inspector reads it. Run it after the agent session has ended, into a file
+ * that does not exist when it starts: it refuses an existing output path, so
+ * it does not append into the audit log, the Guardian's trace file, or its
+ * own earlier run.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { SpanStatusCode, type Attributes } from "@opentelemetry/api";
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { resourceFromAttributes } from "@opentelemetry/resources";
@@ -56,7 +58,7 @@ import {
   decisionFailureAttributes,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
-  OTEL_SERVICE_NAME,
+  SPAN_LIMITS,
   type FailureClass,
 } from "./otel-trace-exporter.ts";
 
@@ -192,18 +194,44 @@ function countingExporter(inner: SpanExporter): { exporter: SpanExporter; writte
   };
 }
 
+/** The converter's `service.name` and tracer name. Its own, not the
+ * Guardian's: these spans are derived after the fact from the host's audit
+ * log, and `acs.failure.reported_by` on each event already says which party
+ * claims the failure. A label, not attribution (see the Guardian README). */
+export const CONVERTER_SERVICE_NAME = "acs-reference-audit-converter";
+
 export async function convertAuditLog(auditPath: string, otelPath: string, mappingPath?: string): Promise<ConversionSummary> {
+  // Everything that can fail without writing goes first, so a wrong audit
+  // path or a bad mapping leaves no output behind to block the rerun.
   const mapping = loadOtelMapping(mappingPath);
+  const auditText = readFileSync(auditPath, "utf8");
+  // Exclusive create: an output path that exists when the converter starts is
+  // refused before anything is written. That one check covers the log itself,
+  // a hardlink to it, a symlink, the Guardian's own trace file, and a second
+  // run over the same output, each of which the append-only exporter would
+  // otherwise corrupt or double. It does not stop another process swapping
+  // the path mid-run. Nothing here defends against a same-user writer.
+  mkdirSync(dirname(otelPath), { recursive: true, mode: 0o700 });
+  try {
+    closeSync(openSync(otelPath, "wx", 0o600));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`refusing to write ${otelPath}: it already exists, perhaps from an earlier or failed run. Give the converter a new file, or delete this one first.`);
+    }
+    throw error;
+  }
   const output = countingExporter(createFileSpanExporter(otelPath));
   // One span per export, not batched: a batch processor's bounded queue
   // overflowed inside this synchronous loop and dropped spans silently.
   // Sampler set explicitly, so no OTEL_TRACES_SAMPLER can drop them either.
   const provider = new BasicTracerProvider({
-    resource: resourceFromAttributes({ "service.name": OTEL_SERVICE_NAME }),
+    resource: resourceFromAttributes({ "service.name": CONVERTER_SERVICE_NAME }),
     sampler: new AlwaysOnSampler(),
+    // Frozen shared limits, copied: no OTEL_* variable may truncate or drop output.
+    spanLimits: { ...SPAN_LIMITS },
     spanProcessors: [new SimpleSpanProcessor(output.exporter)],
   });
-  const tracer = provider.getTracer(OTEL_SERVICE_NAME);
+  const tracer = provider.getTracer(CONVERTER_SERVICE_NAME);
   const summary: ConversionSummary = {
     converted: 0,
     written: 0,
@@ -214,7 +242,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     skippedUnreadable: 0,
   };
 
-  for (const line of readFileSync(auditPath, "utf8").split("\n")) {
+  for (const line of auditText.split("\n")) {
     if (line.trim() === "") continue;
     let entry: JsonObject | undefined;
     try {
@@ -306,7 +334,13 @@ if (import.meta.main) {
     console.error("usage: bun run packages/guardian/src/audit-to-otlp.ts <audit.jsonl> <otel-file.jsonl>");
     process.exit(2);
   }
-  const summary = await convertAuditLog(auditPath, otelPath);
+  let summary: ConversionSummary;
+  try {
+    summary = await convertAuditLog(auditPath, otelPath);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   const noMethod = Object.entries(summary.skippedNoMethod)
     .map(([kind, count]) => `${count} ${kind}`)
     .join(", ");

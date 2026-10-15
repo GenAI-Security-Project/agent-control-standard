@@ -55,7 +55,7 @@ import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
+import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter, type SpanLimits } from "@opentelemetry/sdk-trace-base";
 
 /** How long the OTLP/HTTP exporter keeps retrying one batch against an
  * endpoint that does not answer before it reports the failure. */
@@ -88,6 +88,19 @@ const REPLAY_DETECTED_CODE = -32005;
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
 export const OTEL_SERVICE_NAME = "acs-reference-guardian";
+
+/** Every span limit, set in code so no OTEL_SPAN_* or OTEL_ATTRIBUTE_*
+ * variable changes what is exported: the SDK reads the environment for any
+ * limit left unset. Shared with the audit converter, so the two writers of
+ * the same file shape cannot drift. Frozen, because both providers hold it. */
+export const SPAN_LIMITS: Readonly<SpanLimits> = Object.freeze({
+  attributeValueLengthLimit: ATTRIBUTE_VALUE_LENGTH_LIMIT,
+  attributeCountLimit: 128,
+  eventCountLimit: 128,
+  attributePerEventCountLimit: 128,
+  linkCountLimit: 128,
+  attributePerLinkCountLimit: 128,
+});
 
 // The repository's own mapping, five directories up from this file -- the
 // same relationship SCHEMA_ROOT in validate-envelope.ts relies on.
@@ -562,6 +575,34 @@ export function createFileSpanExporter(path: string): SpanExporter {
   };
 }
 
+/**
+ * Adds a loopback endpoint's host to NO_PROXY and no_proxy, so an
+ * HTTP_PROXY in the Guardian's environment cannot route spans meant for this
+ * machine through a proxy: request content (reasoning text, provenance ids)
+ * would reach the proxy, and the collector would never see it. Bun's HTTP
+ * client honors these variables per request, and an explicit agent does not
+ * opt out, so the environment is the only lever. A non-loopback endpoint is
+ * left to the operator's proxy settings.
+ *
+ * The change is process-wide and permanent: it is written to process.env and
+ * never undone, so anything else in this process (a host adapter embedded
+ * with the Guardian) and any child process it spawns inherits it. That is
+ * acceptable because only loopback hosts are ever added, and traffic to this
+ * machine should not use a proxy for any of them.
+ */
+export function keepLoopbackOffProxy(endpoint: string): void {
+  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+    return;
+  }
+  for (const key of ["NO_PROXY", "no_proxy"]) {
+    const entries = (process.env[key] ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry !== "");
+    if (!entries.includes(host)) {
+      process.env[key] = [...entries, host].join(",");
+    }
+  }
+}
+
 /** One place spans go, with the name its failure is reported under: the
  * file's path, the endpoint's URL, or "span exporter" for an injected one. */
 type Output = { label: string; exporter: SpanExporter };
@@ -689,7 +730,14 @@ export function createOtelTraceExporter({
     // seconds rather than the 10 s default: long enough for a collector that
     // is restarting, short enough that a flush or a shutdown behind a dead
     // one does not hold the process for ten.
-    construct(endpoint, () => new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS }));
+    // compression set in code: OTEL_EXPORTER_OTLP_COMPRESSION would otherwise
+    // gzip the body. Headers from OTEL_EXPORTER_OTLP_*HEADERS are merged by
+    // the SDK under any set here and cannot be refused, so the README lists
+    // them as honored.
+    construct(endpoint, () => {
+      keepLoopbackOffProxy(endpoint);
+      return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]>["compression"] });
+    });
   }
   if (spanExporter !== undefined) {
     construct("span exporter", () => spanExporter);
@@ -709,16 +757,18 @@ export function createOtelTraceExporter({
       // away or drop decision events: the SDK reads OTEL_TRACES_SAMPLER and
       // the span limits from the environment for anything left unset.
       sampler: new AlwaysOnSampler(),
-      spanLimits: {
-        attributeValueLengthLimit: ATTRIBUTE_VALUE_LENGTH_LIMIT,
-        attributeCountLimit: 128,
-        eventCountLimit: 128,
-        attributePerEventCountLimit: 128,
-        linkCountLimit: 128,
-        attributePerLinkCountLimit: 128,
-      },
+      // Copied, because the SDK may write to the object it is given.
+      spanLimits: { ...SPAN_LIMITS },
       spanProcessors: outputs.map(
-        (output) => new BatchSpanProcessor(isolated(output, reportOutput), { exportTimeoutMillis: exportTimeoutMs }),
+        (output) =>
+          new BatchSpanProcessor(isolated(output, reportOutput), {
+            // The SDK defaults, written out: anything left unset is read from
+            // OTEL_BSP_*, and a queue of one drops spans.
+            maxQueueSize: 2048,
+            maxExportBatchSize: 512,
+            scheduledDelayMillis: 5000,
+            exportTimeoutMillis: exportTimeoutMs,
+          }),
       ),
     });
     tracer = provider.getTracer(OTEL_SERVICE_NAME);

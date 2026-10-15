@@ -1,16 +1,17 @@
-import { describe, expect, it } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
+import { afterEach, describe, expect, it } from "bun:test";
+import { appendFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
 import {
+  CONVERTER_SERVICE_NAME,
   convertAuditLog,
   FAILURE_CLASS_BY_KIND,
   FAILURE_DETAIL_BY_KIND,
   failureClassOf,
   sessionUuid as converterSessionUuid,
 } from "../packages/guardian/src/audit-to-otlp.ts";
-import { loadOtelMapping } from "../packages/guardian/src/otel-trace-exporter.ts";
+import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
  * The converter's contract, measured with the Guardian down. The host
@@ -330,4 +331,158 @@ describe("audit-to-otlp: review fixes", () => {
       else process.env.OTEL_TRACES_SAMPLER = saved;
     }
   });
+});
+
+// Issue #276 item 4 and the issue #274 service name: the converter's output
+// must not depend on OTEL_* variables in the shell that runs it, and its
+// spans carry their own producer label.
+describe("audit-to-otlp: output does not depend on the environment", () => {
+  const AUDIT_LINE = `${JSON.stringify({
+    seq: 1,
+    recorded_at: "2026-10-15T00:00:00.000Z",
+    session_id: "sess-1",
+    method: "steps/toolCallRequest",
+    rpc_id: "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+    outcome: "proceeded",
+    posture: "proceed",
+    posture_source: "negotiated",
+    failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+  })}\n`;
+  const HOSTILE: Record<string, string> = {
+    OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "8",
+    OTEL_SPAN_EVENT_COUNT_LIMIT: "0",
+    OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT: "1",
+    OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT: "1",
+    OTEL_TRACES_SAMPLER: "always_off",
+    OTEL_SERVICE_NAME: "zzz",
+    OTEL_RESOURCE_ATTRIBUTES: "service.name=evil",
+  };
+  const saved: Record<string, string | undefined> = {};
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("keeps full ids, the whole failure event, and the converter's own label", async () => {
+    for (const [key, value] of Object.entries(HOSTILE)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, AUDIT_LINE);
+      const summary = await convertAuditLog(auditPath, otelPath);
+      expect(summary.written).toBe(1);
+      const request = JSON.parse(readFileSync(otelPath, "utf8").split("\n")[0]!);
+      const resourceSpans = request.resourceSpans[0];
+      expect(resourceSpans.resource.attributes).toEqual([{ key: "service.name", value: { stringValue: CONVERTER_SERVICE_NAME } }]);
+      expect(resourceSpans.scopeSpans[0].scope.name).toBe(CONVERTER_SERVICE_NAME);
+      const span = resourceSpans.scopeSpans[0].spans[0];
+      expect(attribute(span, "acs.request_id")).toBe("3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01");
+      expect(attribute(span, "acs.session.id")).toBe(converterSessionUuid("sess-1"));
+      expect(span.droppedAttributesCount ?? 0).toBe(0);
+      const event = span.events.find((e: OtlpEvent) => e.name === "acs.decision.failure");
+      expect(event).toBeDefined();
+      expect(event.droppedAttributesCount ?? 0).toBe(0);
+      expect(attribute(event, "acs.failure.class")).toBe("unreachable");
+      expect(attribute(event, "acs.failure.posture")).toBe("fail_open");
+      expect(attribute(event, "acs.failure.reported_by")).toBe("observed_agent");
+      expect(attribute(event, "acs.failure.detail")).toBe(FAILURE_DETAIL_BY_KIND.transport);
+    });
+  }, 10_000);
+
+  it("labels its spans apart from the Guardian's", () => {
+    expect(CONVERTER_SERVICE_NAME).toBe("acs-reference-audit-converter");
+    expect(CONVERTER_SERVICE_NAME).not.toBe(OTEL_SERVICE_NAME);
+  });
+
+  it("shares one frozen set of span limits with the Guardian", () => {
+    expect(Object.isFrozen(SPAN_LIMITS)).toBe(true);
+    expect(SPAN_LIMITS).toEqual({
+      attributeValueLengthLimit: 4096,
+      attributeCountLimit: 128,
+      eventCountLimit: 128,
+      attributePerEventCountLimit: 128,
+      linkCountLimit: 128,
+      attributePerLinkCountLimit: 128,
+    });
+  });
+});
+
+// Converting onto an existing file appended OTLP lines to it. Onto the audit
+// log itself (or a hardlink of it) that corrupts the evidence and shifts the
+// next audit seq. Twice over the same output it doubles every span. Onto the
+// Guardian's trace file it merges the two streams. One rule covers all of them.
+describe("audit-to-otlp: refuses an output that already exists", () => {
+  const LINE = `${JSON.stringify({
+    seq: 1,
+    recorded_at: "2026-10-15T00:00:00.000Z",
+    session_id: "sess-1",
+    method: "steps/toolCallRequest",
+    rpc_id: "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+    outcome: "proceeded",
+    posture: "proceed",
+    posture_source: "negotiated",
+    failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+  })}\n`;
+
+  /** A fresh directory with the audit log in it, removed whatever the test does. */
+  async function inScratch(run: (dir: string, audit: string) => Promise<void>): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "acs-audit-exclusive-"));
+    const audit = join(dir, "audit.jsonl");
+    writeFileSync(audit, LINE);
+    try {
+      await run(dir, audit);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("refuses to convert a log onto itself and leaves it byte-identical", () =>
+    inScratch(async (_dir, audit) => {
+      await expect(convertAuditLog(audit, audit)).rejects.toThrow(/^refusing to write/);
+      expect(readFileSync(audit, "utf8")).toBe(LINE);
+    }));
+
+  it("refuses a hardlink to the log", () =>
+    inScratch(async (dir, audit) => {
+      const link = join(dir, "otel.jsonl");
+      linkSync(audit, link);
+      await expect(convertAuditLog(audit, link)).rejects.toThrow(/^refusing to write/);
+      expect(readFileSync(audit, "utf8")).toBe(LINE);
+    }));
+
+  it("refuses an existing unrelated output, such as the Guardian's trace file", () =>
+    inScratch(async (dir, audit) => {
+      const guardianTrace = join(dir, "otel-traces.jsonl");
+      writeFileSync(guardianTrace, "guardian line\n");
+      await expect(convertAuditLog(audit, guardianTrace)).rejects.toThrow(/^refusing to write/);
+      expect(readFileSync(guardianTrace, "utf8")).toBe("guardian line\n");
+    }));
+
+  it("refuses a dangling symlink and creates nothing at its target", () =>
+    inScratch(async (dir, audit) => {
+      const target = join(dir, "elsewhere.jsonl");
+      const link = join(dir, "otel.jsonl");
+      symlinkSync(target, link);
+      await expect(convertAuditLog(audit, link)).rejects.toThrow(/^refusing to write/);
+      expect(existsSync(target)).toBe(false);
+    }));
+
+  it("leaves no output behind when the audit log cannot be read, so the corrected rerun is not refused", () =>
+    inScratch(async (dir) => {
+      const out = join(dir, "otel.jsonl");
+      await expect(convertAuditLog(join(dir, "missing.jsonl"), out)).rejects.toThrow();
+      expect(existsSync(out)).toBe(false);
+    }));
+
+  it("writes a new output owner-only, creating its directory owner-only", () =>
+    inScratch(async (dir, audit) => {
+      const out = join(dir, "new-dir", "otel.jsonl");
+      const summary = await convertAuditLog(audit, out);
+      expect(summary.written).toBe(1);
+      expect(statSync(out).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, "new-dir")).mode & 0o777).toBe(0o700);
+    }));
 });

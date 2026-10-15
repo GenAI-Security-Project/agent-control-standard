@@ -1,11 +1,30 @@
 # An OpenTelemetry Collector that receives the Guardian's spans and writes
-# them as OTLP/JSON, one export request per line -- the same shape
-# ACS_OTEL_FILE writes directly. Run it with the contrib distribution, which
-# is where the `file` exporter lives:
-#   otelcol-contrib --config otel-collector.yaml
-# then start the Guardian with ACS_OTEL_ENDPOINT=http://127.0.0.1:4318/v1/traces
-# Tested with otelcol-contrib 0.162.0. In a container, run it as your own
-# user (--user "$(id -u):$(id -g)") so it can write into .acs/.
+# them as OTLP/JSON, one export request per line, the same shape
+# ACS_OTEL_FILE writes directly. Tested with otelcol-contrib 0.162.0, which
+# is where the `file` exporter lives. The walkthrough in README.md
+# ("Produce a trace", step 7) has the full sequence. In short:
+#
+#   Native:
+#     otelcol-contrib --config otel-collector.yaml
+#
+#   Docker (run from reference-implementations/agt, after
+#   mkdir -p .acs && chmod 700 .acs):
+#     docker run --rm --user "$(id -u):$(id -g)" -p 127.0.0.1:4318:4318 \
+#       -v "$PWD/otel-collector.yaml":/etc/otelcol-contrib/config.yaml:ro \
+#       -v "$PWD/.acs":/work/.acs -w /work \
+#       otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6 \
+#       --config /etc/otelcol-contrib/config.yaml \
+#       --set=receivers::otlp::protocols::http::endpoint=0.0.0.0:4318
+#
+#   Podman: the same, plus --userns=keep-id --umask 077, and :z on both
+#   mounts on an SELinux host.
+#
+# The endpoint below is loopback and literal on purpose. Inside a container
+# the receiver must listen on 0.0.0.0, and that override lives only on the
+# container command line above, where -p 127.0.0.1:... keeps the host side
+# on loopback. Never set it for a native run: it listens on every interface.
+# Loopback is not authentication: any local process can send to this port,
+# and in a container so can other containers on the same Docker network.
 receivers:
   otlp:
     protocols:
@@ -15,9 +34,12 @@ receivers:
 exporters:
   file:
     path: .acs/otel-collector-traces.jsonl
-    # A fresh checkout has no .acs/ yet, and without this the exporter
-    # refuses to start.
+    # Keep what earlier runs wrote: without this a restart truncates the file.
+    append: true
+    # A fresh checkout has no .acs/ yet. 0700 applies only when the collector
+    # creates it. The walkthrough creates it first and sets 0700 itself.
     create_directory: true
+    directory_permissions: "0700"
   # basic, not detailed: detailed prints every attribute, reasoning text
   # and provenance source ids included, to a stdout that often ends up in a
   # log system nobody planned for.
@@ -25,6 +47,9 @@ exporters:
     verbosity: basic
 
 service:
+  telemetry:
+    metrics:
+      level: none
   pipelines:
     traces:
       receivers: [otlp]
