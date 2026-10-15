@@ -240,7 +240,7 @@ Use made-up session ids and commands, because the trace records what you send.
 bun -e 'const clean = (s) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "?"); let bad = 0; for (const l of (await Bun.file(process.argv[1]).text()).split("\n").filter(Boolean)) { try { const req = JSON.parse(l); for (const r of req.resourceSpans) for (const s of r.scopeSpans) for (const p of s.spans) { const v = (e, k) => e.attributes?.find((a) => a.key === k)?.value.stringValue; console.log(clean(p.name), (p.events ?? []).map((e) => clean(v(e, "acs.decision") ?? v(e, "acs.failure.class"))).join(" ")) } } catch { bad++ } } if (bad) console.log(`${bad} line(s) were not readable and were skipped`)' .acs/otel-traces.jsonl
 ```
 
-To read the collector's file in step 7, run the same command with `.acs/otel-collector-traces.jsonl` at the end. Spans are written in batches about every five seconds, so a file read straight after step 3 can still be empty.
+To read the collector's file in step 7, run the same command with `.acs/otel-collector-traces.jsonl` at the end.
 
 You should see two `gen_ai.tool.call` spans, one `allow` and one `deny`, and one `gen_ai.tool.result` span with `allow`. The spans carry the attributes [`trace/otel-mapping.json`](../../specification/v0.1.0/trace/otel-mapping.json) lists, and the [Guardian README](packages/guardian/README.md#export-traces) says which ones appear when.
 
@@ -278,9 +278,9 @@ docker run --rm --user "$(id -u):$(id -g)" -p 127.0.0.1:4318:4318 \
 
 With Podman, use the same command with `podman` in place of `docker`, plus `--userns=keep-id --umask 077`, and `:z` on both mounts on an SELinux host.
 
-Repeat step 3. The collector writes what it received to `.acs/otel-collector-traces.jsonl`. If it won't start because port 8888 is in use, add `--set=service.telemetry.metrics.level=none`.
-
 Start the collector before the Guardian. The Guardian stops sending to an endpoint after its first failed send, and prints `disabled after failure` once. If you see that, or you restart the collector, stop the Guardian, restart the collector, then start the Guardian again.
+
+Repeat step 3. The collector writes what it received to `.acs/otel-collector-traces.jsonl`. That file can still be empty right after you repeat step 3, because spans go out in batches about every five seconds.
 
 Stop the collector with Ctrl-C or `docker stop`, never `kill -9` or `docker kill`. A hard kill can leave half a line, and the next batch the restarted collector writes is joined onto it. The step 5 reader skips that combined line and tells you, but the spans in it are lost.
 
@@ -292,7 +292,7 @@ If `.acs/otel-collector-traces.jsonl` doesn't appear within about ten seconds of
 
 The Docker command has not been run yet. Rootless Docker, Podman, SELinux hosts and musl-based Linux haven't been verified either.
 
-**Run it again.** Every output here appends, so a second run on the same `.acs` doubles every count. Delete it first: `rm -rf .acs && mkdir -p .acs && chmod 700 .acs`.
+**Run it again.** Every output here except the converter's appends, so a second run on the same `.acs` doubles every count, and the converter refuses to run at all. Delete it first: `rm -rf .acs && mkdir -p .acs && chmod 700 .acs`.
 
 **What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability` and `acs.request_id_ref`, because the shim doesn't send them yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)). The committed sample drives the Guardian directly, so it has both. Spans also lack `acs.evaluator` until the Guardian sends `metadata.evaluator` (PR #229).
 
