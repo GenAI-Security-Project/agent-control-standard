@@ -289,8 +289,9 @@ harness measures the wire, not the language behind it.
 
 ### Harden it for production
 
-Two gaps are named and open, not vague. The Guardian writes its envelope and audit logs
-as synchronous file appends on the decision path, with no batching. Trace export is
+Two gaps are named and open, not vague. The Guardian writes its envelope and
+session-context logs, and the host adapter writes its audit log, as synchronous file
+appends on the decision path, with no batching. Trace export is
 partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
 for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
 [Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
