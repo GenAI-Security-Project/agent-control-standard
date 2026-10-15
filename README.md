@@ -294,7 +294,10 @@ as synchronous file appends on the decision path, with no batching. Trace export
 partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
 for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
 [Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
-describes. A [sample trace](reference-implementations/agt/samples/trace/acs-trace-sample.jsonl)
+describes. Failures only the host sees, such as an unreachable Guardian, stay in the host's
+audit log until a converter turns them into spans of the same format.
+[How the reference Guardian produces a trace](docs/spec/trace/extend_opentelemetry.md#how-the-reference-guardian-produces-a-trace)
+explains how the two streams join. A [sample trace](reference-implementations/agt/samples/trace/acs-trace-sample.jsonl)
 shows that output without running anything, and [Produce a trace](reference-implementations/agt/README.md#produce-a-trace)
 walks you from a fresh clone to a trace file of your own.
 

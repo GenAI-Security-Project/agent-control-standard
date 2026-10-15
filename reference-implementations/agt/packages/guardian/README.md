@@ -72,6 +72,25 @@ The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Coll
 
 Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged.
 
+The diagram shows the exporter's inside. Look for the split after a span ends: each output gets its own batch processor and its own failure switch, so nothing on one side can stop the other.
+
+```mermaid
+flowchart LR
+    start["Request recorded:<br/>span starts"] --> finish["Response recorded:<br/>event added, span ends"]
+    finish --> bspfile["BatchSpanProcessor<br/>for the file"]
+    finish --> bspend["BatchSpanProcessor<br/>for the endpoint"]
+    bspfile --> outfile["File output"]
+    bspend --> outend["Endpoint output"]
+    outfile --> file["ACS_OTEL_FILE"]
+    outend --> collector["ACS_OTEL_ENDPOINT"]
+    outfile -.->|"first failure"| off["Output disabled,<br/>one stderr line"]
+    outend -.->|"first failure"| off
+    stop["SIGINT or SIGTERM"] -->|"close open spans, flush, 3 s limit"| bspfile
+    stop -->|"close open spans, flush, 3 s limit"| bspend
+```
+
+Each processor sends a batch about every five seconds. At shutdown, the exporter first ends any span still open with an `acs.decision.failure` event, then flushes both processors. An output that hasn't finished within three seconds is reported on stderr and its unexported spans are dropped.
+
 Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too ([issue #71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
 
 ### Convert the host audit log
@@ -104,6 +123,17 @@ bun run sample:trace
 ```
 
 That command regenerates it. `test/sample-trace.test.ts` checks the sample against `otel-mapping.json` and fails when the exporter's output no longer matches it, so a change to the exporter or the mapping comes with a regenerated sample. The converted span has no `gen_ai.tool.name`, because the audit log does not record the tool (issue #274). Like the exporter, the sample covers two hook methods and is not an ACS-Trace conformance claim.
+
+### Troubleshooting
+
+These are the messages export can print, with what each one means. None of them changes a decision.
+
+- `otel trace export to <path or URL> disabled after failure: <reason>` on the Guardian's stderr. That output failed its first write or send and is off until the Guardian restarts. The other output keeps running. For an endpoint, the usual cause is a collector that wasn't running yet or was restarted: stop the Guardian, start the collector, then start the Guardian again.
+- `otel trace exporter disabled after failure: <reason>`, with no output named. The exporter as a whole stopped, for example because `otel-mapping.json` didn't load. No spans reach either output for the rest of the process.
+- `otel trace exporter shutdown disabled after failure: did not finish within 3000 ms; unexported spans were dropped`. An output stalled at shutdown. The spans still in its queue are lost.
+- `otel trace export to <URL>: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt <host>, so on some Bun versions these spans go through the proxy.` at startup. Your shell has `HTTP_PROXY` set, and the loopback host isn't in the proxy exemption list Bun reads. The Guardian adds the host itself, which takes effect on Bun 1.3.14 and later. On older versions, start the Guardian with the host in both `NO_PROXY` and `no_proxy`, as step 1 of [Produce a trace](../../README.md#produce-a-trace) does.
+- `refusing to write <path>: it already exists, perhaps from an earlier or failed run.` from the converter, which then exits with status 1. It never appends. Delete the old output or name a new file.
+- An empty `.acs/otel-collector-traces.jsonl` in the first five seconds after you send a step. That's normal: spans leave in batches about every five seconds, and stopping the Guardian with Ctrl-C sends the last one. If the file still hasn't appeared after about ten seconds, the collector isn't running [`otel-collector.yaml`](../../otel-collector.yaml), or the Guardian printed the `disabled after failure` line above.
 
 ## Use it in-process
 
