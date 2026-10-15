@@ -47,7 +47,7 @@
  */
 import type { AcsRequestEnvelope } from "./build-envelope.ts";
 import type { AcsDecision } from "./decision-message.ts";
-import { REFUSAL_RPC_CODES } from "./failure-kinds.ts";
+import { isRefusalCode } from "./failure-kinds.ts";
 import { verifyResponseSignature } from "./sign-envelope.ts";
 
 /**
@@ -263,10 +263,7 @@ export function createGuardianClient(url: string, clientOptions: GuardianClientO
       // can only fail the step closed. Never with a `result` beside it,
       // because requestDecision honours a result first and that would let an
       // unsigned decision through.
-      const unsignedRefusal =
-        response.result === undefined &&
-        typeof response.error?.code === "number" &&
-        REFUSAL_RPC_CODES.has(response.error.code);
+      const unsignedRefusal = response.result === undefined && isRefusalCode(response.error?.code);
       if (!verified.valid && !unsignedRefusal) {
         throw new GuardianSignatureError(verified.reason);
       }
