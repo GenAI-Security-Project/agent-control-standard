@@ -1,16 +1,17 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
 import {
+  CONVERTER_SERVICE_NAME,
   convertAuditLog,
   FAILURE_CLASS_BY_KIND,
   FAILURE_DETAIL_BY_KIND,
   failureClassOf,
   sessionUuid as converterSessionUuid,
 } from "../packages/guardian/src/audit-to-otlp.ts";
-import { loadOtelMapping } from "../packages/guardian/src/otel-trace-exporter.ts";
+import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
  * The converter's contract, measured with the Guardian down. The host
@@ -329,5 +330,82 @@ describe("audit-to-otlp: review fixes", () => {
       if (saved === undefined) delete process.env.OTEL_TRACES_SAMPLER;
       else process.env.OTEL_TRACES_SAMPLER = saved;
     }
+  });
+});
+
+// Issue #276 item 4 and the issue #274 service name: the converter's output
+// must not depend on OTEL_* variables in the shell that runs it, and its
+// spans carry their own producer label.
+describe("audit-to-otlp: output does not depend on the environment", () => {
+  const AUDIT_LINE = `${JSON.stringify({
+    seq: 1,
+    recorded_at: "2026-10-15T00:00:00.000Z",
+    session_id: "sess-1",
+    method: "steps/toolCallRequest",
+    rpc_id: "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+    outcome: "proceeded",
+    posture: "proceed",
+    posture_source: "negotiated",
+    failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+  })}\n`;
+  const HOSTILE: Record<string, string> = {
+    OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "8",
+    OTEL_SPAN_EVENT_COUNT_LIMIT: "0",
+    OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT: "1",
+    OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT: "1",
+    OTEL_TRACES_SAMPLER: "always_off",
+    OTEL_SERVICE_NAME: "zzz",
+    OTEL_RESOURCE_ATTRIBUTES: "service.name=evil",
+  };
+  const saved: Record<string, string | undefined> = {};
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("keeps full ids, the whole failure event, and the converter's own label", async () => {
+    for (const [key, value] of Object.entries(HOSTILE)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, AUDIT_LINE);
+      const summary = await convertAuditLog(auditPath, otelPath);
+      expect(summary.written).toBe(1);
+      const request = JSON.parse(readFileSync(otelPath, "utf8").split("\n")[0]!);
+      const resourceSpans = request.resourceSpans[0];
+      expect(resourceSpans.resource.attributes).toEqual([{ key: "service.name", value: { stringValue: CONVERTER_SERVICE_NAME } }]);
+      expect(resourceSpans.scopeSpans[0].scope.name).toBe(CONVERTER_SERVICE_NAME);
+      const span = resourceSpans.scopeSpans[0].spans[0];
+      expect(attribute(span, "acs.request_id")).toBe("3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01");
+      expect(attribute(span, "acs.session.id")).toBe(converterSessionUuid("sess-1"));
+      expect(span.droppedAttributesCount ?? 0).toBe(0);
+      const event = span.events.find((e: OtlpEvent) => e.name === "acs.decision.failure");
+      expect(event).toBeDefined();
+      expect(event.droppedAttributesCount ?? 0).toBe(0);
+      expect(attribute(event, "acs.failure.class")).toBe("unreachable");
+      expect(attribute(event, "acs.failure.posture")).toBe("fail_open");
+      expect(attribute(event, "acs.failure.reported_by")).toBe("observed_agent");
+      expect(attribute(event, "acs.failure.detail")).toBe(FAILURE_DETAIL_BY_KIND.transport);
+    });
+  }, 10_000);
+
+  it("labels its spans apart from the Guardian's", () => {
+    expect(CONVERTER_SERVICE_NAME).toBe("acs-reference-audit-converter");
+    expect(CONVERTER_SERVICE_NAME).not.toBe(OTEL_SERVICE_NAME);
+  });
+
+  it("shares one frozen set of span limits with the Guardian", () => {
+    expect(Object.isFrozen(SPAN_LIMITS)).toBe(true);
+    expect(SPAN_LIMITS).toEqual({
+      attributeValueLengthLimit: 4096,
+      attributeCountLimit: 128,
+      eventCountLimit: 128,
+      attributePerEventCountLimit: 128,
+      linkCountLimit: 128,
+      attributePerLinkCountLimit: 128,
+    });
   });
 });

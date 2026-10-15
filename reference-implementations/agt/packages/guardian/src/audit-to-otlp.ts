@@ -56,7 +56,7 @@ import {
   decisionFailureAttributes,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
-  OTEL_SERVICE_NAME,
+  SPAN_LIMITS,
   type FailureClass,
 } from "./otel-trace-exporter.ts";
 
@@ -192,6 +192,12 @@ function countingExporter(inner: SpanExporter): { exporter: SpanExporter; writte
   };
 }
 
+/** The converter's `service.name` and tracer name. Its own, not the
+ * Guardian's: these spans are derived after the fact from the host's audit
+ * log, and `acs.failure.reported_by` on each event already says which party
+ * claims the failure. A label, not attribution (see the Guardian README). */
+export const CONVERTER_SERVICE_NAME = "acs-reference-audit-converter";
+
 export async function convertAuditLog(auditPath: string, otelPath: string, mappingPath?: string): Promise<ConversionSummary> {
   const mapping = loadOtelMapping(mappingPath);
   const output = countingExporter(createFileSpanExporter(otelPath));
@@ -199,11 +205,13 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
   // overflowed inside this synchronous loop and dropped spans silently.
   // Sampler set explicitly, so no OTEL_TRACES_SAMPLER can drop them either.
   const provider = new BasicTracerProvider({
-    resource: resourceFromAttributes({ "service.name": OTEL_SERVICE_NAME }),
+    resource: resourceFromAttributes({ "service.name": CONVERTER_SERVICE_NAME }),
     sampler: new AlwaysOnSampler(),
+    // Frozen shared limits, copied: no OTEL_* variable may truncate or drop output.
+    spanLimits: { ...SPAN_LIMITS },
     spanProcessors: [new SimpleSpanProcessor(output.exporter)],
   });
-  const tracer = provider.getTracer(OTEL_SERVICE_NAME);
+  const tracer = provider.getTracer(CONVERTER_SERVICE_NAME);
   const summary: ConversionSummary = {
     converted: 0,
     written: 0,

@@ -55,7 +55,7 @@ import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter } from "@opentelemetry/sdk-trace-base";
+import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter, type SpanLimits } from "@opentelemetry/sdk-trace-base";
 
 /** How long the OTLP/HTTP exporter keeps retrying one batch against an
  * endpoint that does not answer before it reports the failure. */
@@ -88,6 +88,19 @@ const REPLAY_DETECTED_CODE = -32005;
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
 export const OTEL_SERVICE_NAME = "acs-reference-guardian";
+
+/** Every span limit, set in code so no OTEL_SPAN_* or OTEL_ATTRIBUTE_*
+ * variable changes what is exported: the SDK reads the environment for any
+ * limit left unset. Shared with the audit converter, so the two writers of
+ * the same file shape cannot drift. Frozen, because both providers hold it. */
+export const SPAN_LIMITS: Readonly<SpanLimits> = Object.freeze({
+  attributeValueLengthLimit: ATTRIBUTE_VALUE_LENGTH_LIMIT,
+  attributeCountLimit: 128,
+  eventCountLimit: 128,
+  attributePerEventCountLimit: 128,
+  linkCountLimit: 128,
+  attributePerLinkCountLimit: 128,
+});
 
 // The repository's own mapping, five directories up from this file -- the
 // same relationship SCHEMA_ROOT in validate-envelope.ts relies on.
@@ -709,14 +722,8 @@ export function createOtelTraceExporter({
       // away or drop decision events: the SDK reads OTEL_TRACES_SAMPLER and
       // the span limits from the environment for anything left unset.
       sampler: new AlwaysOnSampler(),
-      spanLimits: {
-        attributeValueLengthLimit: ATTRIBUTE_VALUE_LENGTH_LIMIT,
-        attributeCountLimit: 128,
-        eventCountLimit: 128,
-        attributePerEventCountLimit: 128,
-        linkCountLimit: 128,
-        attributePerLinkCountLimit: 128,
-      },
+      // Copied, because the SDK may write to the object it is given.
+      spanLimits: { ...SPAN_LIMITS },
       spanProcessors: outputs.map(
         (output) => new BatchSpanProcessor(isolated(output, reportOutput), { exportTimeoutMillis: exportTimeoutMs }),
       ),
