@@ -37,10 +37,7 @@ func TestRecordedCases(t *testing.T) {
 	if d := corpusDifference(rec.Cases, tscases.Corpus()); d != "" {
 		t.Fatalf("the recording was made from another corpus (%s); run scripts/record-ts-cases.sh", d)
 	}
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := testSigner(t)
 	for name, evaluator := range recordedEvaluators {
 		t.Run(name, func(t *testing.T) {
 			g, err := guardian.New(guardian.Config{Engine: engineOver(t, evaluator(t)), Signer: signer})

@@ -187,17 +187,23 @@ func (m *mapping) decision(v Verdict, point, argument string) (acs.Decision, err
 	return d, nil
 }
 
-// field reads a string verdict field a mapping source names.
+// field reads a string verdict field a mapping source names. An empty string
+// is absent: response-envelope.json requires a non-empty rule_id, and Trace
+// reads "" in its policy arrays as absent.
 func (v Verdict) field(source string) *string {
+	var value *string
 	switch source {
 	case "verdict.reason":
-		return v.Reason
+		value = v.Reason
 	case "verdict.message":
-		return v.Message
+		value = v.Message
 	case "verdict.decision":
-		return &v.Decision
+		value = &v.Decision
 	}
-	return nil
+	if value == nil || *value == "" {
+		return nil
+	}
+	return value
 }
 
 // reasoning is composeReasoning: the template filled in order, each
@@ -207,11 +213,11 @@ func (m *mapping) reasoning(ruleID, message *string, policyID, point string) *st
 	if rule.Template == nil {
 		return message
 	}
-	if ruleID == nil || *ruleID == "" {
+	if ruleID == nil {
 		return nil
 	}
 	detail := ""
-	if rule.Detail != nil && message != nil && *message != "" {
+	if rule.Detail != nil && message != nil {
 		if hit := m.detail.FindStringSubmatch(*message); hit != nil {
 			group := ""
 			if len(hit) > 1 {

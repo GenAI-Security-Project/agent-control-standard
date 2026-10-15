@@ -56,10 +56,7 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("evaluator %q is not built in; agt needs the agteval tag", name)
 	}
 	requests := loadRequests()
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := testSigner(t)
 	t.Logf("evaluator=%s, max_engine_calls=%d, %d steps per client, audit rotation %d bytes x %d files", name, maxEngineCalls, steps, rotation.MaxFileBytes, rotation.MaxFiles)
 	t.Logf("%8s %9s %8s %8s %8s %8s %10s %10s %12s", "clients", "decided/s", "p50", "p95", "p99", "max", "saturated", "opa_peak", "opa_rss_MiB")
 	for _, n := range clients {

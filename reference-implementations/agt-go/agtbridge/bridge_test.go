@@ -61,6 +61,16 @@ func goEngine(fsys fs.FS, manifestPath, mappingPath string, opts agtbridge.Optio
 	return agtbridge.New(fsys, mappingPath, evaluator, opts)
 }
 
+// testSigner is the one HMAC key every Guardian in these tests signs with.
+func testSigner(t testing.TB) guardian.Signer {
+	t.Helper()
+	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
 // pointsEvaluator governs the given points and must never be asked.
 type pointsEvaluator []string
 
@@ -128,10 +138,7 @@ func TestNonStringPolicyTargetIsDenied(t *testing.T) {
 		})
 	}
 
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := testSigner(t)
 	for name, evaluator := range recordedEvaluators {
 		t.Run(name, func(t *testing.T) {
 			g, err := guardian.New(guardian.Config{Engine: engineOver(t, evaluator(t)), Signer: signer})
@@ -199,6 +206,72 @@ func TestDecisions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// verdictEvaluator answers every pre_tool_call with one fixed verdict.
+type verdictEvaluator agtbridge.Verdict
+
+func (verdictEvaluator) Governs(point string) bool { return point == "pre_tool_call" }
+
+func (v verdictEvaluator) Evaluate(context.Context, string, map[string]any) (agtbridge.Verdict, error) {
+	return agtbridge.Verdict(v), nil
+}
+
+func (verdictEvaluator) AGTVersion() string { return "" }
+
+// response-envelope.json requires a non-empty rule_id, and Trace reads "" in
+// its policy arrays as absent, so an empty AGT reason names no rule and no code.
+func TestEmptyVerdictReasonNamesNoRule(t *testing.T) {
+	empty := ""
+	for _, decision := range []string{"allow", "deny"} {
+		t.Run(decision, func(t *testing.T) {
+			e := engineOver(t, verdictEvaluator{Decision: decision, Reason: &empty})
+			d, err := e.Decide(context.Background(), input(t, acs.StepToolCallRequest, shell("ls")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.PolicyReferences != nil || d.ReasonCodes != nil || d.Reasoning != "" {
+				t.Fatalf("got %+v", d.Decision)
+			}
+		})
+	}
+	signer := testSigner(t)
+	// A deny names no rule and so has no reasoning, which §6 requires: the
+	// Guardian refuses it as unfit rather than sending it.
+	wire := []struct {
+		decision    string
+		disposition acs.Disposition
+		reasonCodes []string
+	}{
+		{"allow", acs.Allow, nil},
+		{"deny", acs.Deny, []string{disposition.ReasonEvaluationFailed}},
+	}
+	for _, tt := range wire {
+		t.Run("guardian_"+tt.decision, func(t *testing.T) {
+			g, err := guardian.New(guardian.Config{Engine: engineOver(t, verdictEvaluator{Decision: tt.decision, Reason: &empty}), Signer: signer})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o, err := openSession(t, g, signer).Send(context.Background(), observedagent.Request{Method: acs.StepToolCallRequest, Payload: shell("ls")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if o.Result == nil {
+				t.Fatalf("no decision: %s", o.Raw)
+			}
+			d := o.Result.Decision
+			if d.Disposition != tt.disposition || !slices.Equal(d.ReasonCodes, tt.reasonCodes) || len(d.PolicyReferences) != 0 {
+				t.Fatalf("got %s", o.Raw)
+			}
+		})
+	}
+	t.Run("warn", func(t *testing.T) {
+		e := engineOver(t, verdictEvaluator{Decision: "warn", Reason: &empty})
+		_, err := e.Decide(context.Background(), input(t, acs.StepToolCallRequest, shell("ls")))
+		if err == nil || !strings.Contains(err.Error(), "verdict.reason was empty") {
+			t.Fatalf("got error %v", err)
+		}
+	})
 }
 
 func TestToolAliasesArePolicyInputOnly(t *testing.T) {

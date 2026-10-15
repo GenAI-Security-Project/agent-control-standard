@@ -48,10 +48,7 @@ func agtEvaluator(t testing.TB) *agteval.Evaluator {
 // knownDifferences does not list for their pair of AGT versions, and on a
 // listed difference that no longer occurs.
 func TestEvaluatorsAgree(t *testing.T) {
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k", Secret: []byte("0123456789abcdef0123456789abcdef")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer := testSigner(t)
 	native := agtEvaluator(t)
 	reproduced := goEvaluator(t)
 	guardians := map[agtbridge.Evaluator]*guardian.Guardian{}
