@@ -199,6 +199,21 @@ The shim never runs the command. It only asks the Guardian.
 
 This walks you from a fresh clone to an OpenTelemetry trace file of your own, in about ten minutes. You don't need Claude Code or a collector for it. Every command runs from `reference-implementations/agt` unless the step says otherwise.
 
+The steps below write four files under `.acs/`. The diagram shows which process writes each one and in which step, so you know what to stop before you delete anything.
+
+```mermaid
+flowchart LR
+    shim["Claude Code shim<br/>(steps 3 and 6)"] -->|"hook payloads"| guardian["Guardian<br/>(step 2)"]
+    guardian -->|"ACS_OTEL_FILE"| traces[".acs/otel-traces.jsonl"]
+    shim -->|"steps with no decision"| audit[".acs/audit.jsonl"]
+    audit --> converter["audit-to-otlp.ts<br/>(step 6)"]
+    converter --> auditotlp[".acs/otel-audit.jsonl"]
+    guardian -->|"ACS_OTEL_ENDPOINT"| collector["otelcol-contrib<br/>(step 7, optional)"]
+    collector --> coltraces[".acs/otel-collector-traces.jsonl"]
+```
+
+The Guardian's file and the converter's file share a format and a join key, so you can read them as one trace. The collector's file holds Guardian spans too, received over OTLP/HTTP instead of written directly.
+
 If you only want to see what the output looks like, open [`samples/trace/acs-trace-sample.jsonl`](samples/trace/acs-trace-sample.jsonl). It's a committed run of the same exporter.
 
 **1. Get the code.** You need `git` and [Bun](https://bun.sh) 1.3 (CI runs 1.3.11). If someone gave you a commit to use, check it out, so your results match theirs.
