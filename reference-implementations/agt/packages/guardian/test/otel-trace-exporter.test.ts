@@ -1,5 +1,6 @@
-import { describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
@@ -1235,4 +1236,165 @@ describe("createOtelTraceExporter -- review fixes", () => {
       rmdirSync(dir);
     }
   });
+});
+
+// Issue #274: nothing in the lab's shell changes what the Guardian exports.
+describe("the Guardian's exporter does not depend on its environment", () => {
+  const saved: Record<string, string | undefined> = {};
+  const remember = (key: string): void => {
+    if (!(key in saved)) saved[key] = process.env[key];
+  };
+  const setEnv = (values: Record<string, string>): void => {
+    for (const [key, value] of Object.entries(values)) {
+      remember(key);
+      process.env[key] = value;
+    }
+  };
+  const unsetEnv = (...keys: string[]): void => {
+    for (const key of keys) {
+      remember(key);
+      delete process.env[key];
+    }
+  };
+  /** A local stand-in for the collector that records what it receives. */
+  const startCollector = () => {
+    const received: { headers: Headers }[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        // Copied now: Bun invalidates the Request once the handler returns,
+        // and a header read after that comes back empty.
+        received.push({ headers: new Headers(request.headers) });
+        return new Response("{}", { headers: { "content-type": "application/json" } });
+      },
+    });
+    return { server, received, url: `http://127.0.0.1:${server.port}/v1/traces` };
+  };
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        // Bun's HTTP client latches a proxy variable when it is set and does
+        // not see it deleted, so every later fetch in this process would go
+        // to the dead proxy. Assigning an empty value first clears it.
+        process.env[key] = "";
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
+  const envelope = (id: number) => ({
+    jsonrpc: "2.0",
+    method: "steps/toolCallRequest",
+    id,
+    params: {
+      acs_version: "0.1.0",
+      request_id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      metadata: { agent_id: "a", session_id: crypto.randomUUID() },
+      payload: { tool: { name: "run_shell" }, capability: "process.exec", arguments: { command: { value: "ls" } } },
+    },
+  });
+  const allow = (id: number) => ({ jsonrpc: "2.0", id, result: { type: "final", acs_version: "0.1.0", request_id: "r", decision: "allow" } });
+
+  it("keeps every span when OTEL_BSP_MAX_QUEUE_SIZE is 1", async () => {
+    setEnv({ OTEL_BSP_MAX_QUEUE_SIZE: "1" });
+    const dir = mkdtempSync(join(tmpdir(), "acs-bsp-"));
+    try {
+      const path = join(dir, "trace.jsonl");
+      const exporter = createOtelTraceExporter({ filePath: path, methodsEvaluated: METHODS_EVALUATED });
+      // Three spans ended in one synchronous turn: with a queue of one, the
+      // SDK's default-from-environment processor drops the ones that arrive
+      // while the first export is in flight.
+      for (const id of [1, 2, 3]) exporter.end(exporter.start(envelope(id), "steps/toolCallRequest"), allow(id));
+      await exporter.shutdown();
+      const spans = readFileSync(path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .flatMap((line) => JSON.parse(line).resourceSpans[0].scopeSpans[0].spans);
+      expect(spans.length).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it("keeps full ids, every attribute, and its own service.name under hostile limit and resource variables", async () => {
+    // A guard, not a red test: the Guardian already set its limits in code.
+    // It pins that the Task 1 refactor to the shared SPAN_LIMITS kept them.
+    setEnv({
+      OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: "8",
+      OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT: "1",
+      OTEL_SERVICE_NAME: "zzz",
+      OTEL_RESOURCE_ATTRIBUTES: "service.name=evil",
+    });
+    const dir = mkdtempSync(join(tmpdir(), "acs-attr-"));
+    try {
+      const path = join(dir, "trace.jsonl");
+      const exporter = createOtelTraceExporter({ filePath: path, methodsEvaluated: METHODS_EVALUATED });
+      const request = envelope(1);
+      exporter.end(exporter.start(request, "steps/toolCallRequest"), allow(1));
+      await exporter.shutdown();
+      const resourceSpans = JSON.parse(readFileSync(path, "utf8").split("\n")[0]!).resourceSpans[0];
+      expect(resourceSpans.resource.attributes).toEqual([{ key: "service.name", value: { stringValue: OTEL_SERVICE_NAME } }]);
+      const span = resourceSpans.scopeSpans[0].spans[0];
+      expect(span.droppedAttributesCount ?? 0).toBe(0);
+      expect(span.attributes.find((a: { key: string }) => a.key === "acs.request_id").value.stringValue).toBe(request.params.request_id);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it("sends uncompressed JSON even when OTEL_EXPORTER_OTLP_COMPRESSION is gzip", async () => {
+    setEnv({ OTEL_EXPORTER_OTLP_COMPRESSION: "gzip", OTEL_EXPORTER_OTLP_TRACES_COMPRESSION: "gzip" });
+    const collector = startCollector();
+    try {
+      const exporter = createOtelTraceExporter({ endpoint: collector.url, methodsEvaluated: METHODS_EVALUATED });
+      exporter.end(exporter.start(envelope(1), "steps/toolCallRequest"), allow(1));
+      await exporter.shutdown();
+      expect(collector.received.map((r) => r.headers.get("content-encoding"))).toEqual([null]);
+    } finally {
+      collector.server.stop(true);
+    }
+  }, 10_000);
+
+  it("still sends headers from OTEL_EXPORTER_OTLP_TRACES_HEADERS, which the README lists as honored", async () => {
+    // The SDK merges environment headers under any set in code, so they
+    // cannot be refused. This pins today's behavior: if an SDK update changes
+    // it, the README's sentence has to change with it.
+    setEnv({ OTEL_EXPORTER_OTLP_TRACES_HEADERS: "x-acs-probe=1" });
+    const collector = startCollector();
+    try {
+      const exporter = createOtelTraceExporter({ endpoint: collector.url, methodsEvaluated: METHODS_EVALUATED });
+      exporter.end(exporter.start(envelope(1), "steps/toolCallRequest"), allow(1));
+      await exporter.shutdown();
+      expect(collector.received.map((r) => r.headers.get("x-acs-probe"))).toEqual(["1"]);
+    } finally {
+      collector.server.stop(true);
+    }
+  }, 10_000);
+
+  it("sends to a loopback endpoint directly when HTTP_PROXY is set", async () => {
+    // A proxy that only counts connections and never answers.
+    let proxyConnections = 0;
+    const proxy = createServer((socket) => {
+      proxyConnections += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+    setEnv({ HTTP_PROXY: proxyUrl, http_proxy: proxyUrl });
+    unsetEnv("NO_PROXY", "no_proxy");
+    const collector = startCollector();
+    try {
+      const exporter = createOtelTraceExporter({ endpoint: collector.url, methodsEvaluated: METHODS_EVALUATED });
+      exporter.end(exporter.start(envelope(1), "steps/toolCallRequest"), allow(1));
+      await exporter.shutdown();
+      expect({ proxyConnections, collected: collector.received.length }).toEqual({ proxyConnections: 0, collected: 1 });
+    } finally {
+      collector.server.stop(true);
+      proxy.close();
+    }
+  }, 10_000);
 });
