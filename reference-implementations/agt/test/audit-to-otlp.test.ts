@@ -413,7 +413,7 @@ describe("audit-to-otlp: output does not depend on the environment", () => {
 // Converting onto an existing file appended OTLP lines to it: onto the audit
 // log itself (or a hardlink of it) that corrupts the evidence and shifts the
 // next audit seq; twice over the same output it doubles every span; onto the
-// Guardian's trace file it merges the two streams. One rule covers all four.
+// Guardian's trace file it merges the two streams. One rule covers all of them.
 describe("audit-to-otlp: refuses an output that already exists", () => {
   const LINE = `${JSON.stringify({
     seq: 1,

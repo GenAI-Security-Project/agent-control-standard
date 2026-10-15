@@ -216,7 +216,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     closeSync(openSync(otelPath, "wx", 0o600));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`refusing to write ${otelPath}: it already exists. Give the converter a new file, or delete this one first.`);
+      throw new Error(`refusing to write ${otelPath}: it already exists, perhaps from an earlier or failed run. Give the converter a new file, or delete this one first.`);
     }
     throw error;
   }
