@@ -7,12 +7,16 @@ community:
     url: https://github.com/GenAI-Security-Project/agent-control-standard/discussions
     description: Specification discussion, questions, and proposals for the Agent Control Standard.
 # The nest-schema caps `leaders` at 5 entries and gives Person no `role` field,
-# so this list carries the project lead and the two creators only. The full
-# leadership roster, workstream assignments, and founding credit live in
-# GOVERNANCE.md. Update both when leadership changes.
+# so this list carries the three project leads and the two creators, which
+# fills the cap. The full leadership roster, workstream assignments, and
+# founding credit live in GOVERNANCE.md. Update both when leadership changes.
 leaders:
   - name: Rock Lambros
     github: rocklambros
+  - name: Ariel Fogel
+    github: afogel
+  - name: Bar Kaduri
+    github: bar-capsule
   - name: Michael Bargury
     github: mbrg
   - name: Ory Segal

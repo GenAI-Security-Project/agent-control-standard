@@ -71,8 +71,8 @@ today.
 
 `bun install` does not install `trash`, because `trash` is a system command the test and
 verification scripts call, not an npm package. Running `bun test` without it on `PATH`
-fails 26 of the suite's 1,111 tests, all in the conformance and upstream-watch scripts
-that clean up scratch directories. Install `trash-cli` first, or expect those 26
+fails 26 tests, all in the conformance and upstream-watch scripts that clean up scratch
+directories. Install `trash-cli` first, or expect those 26
 failures and ignore them.
 
 The Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
@@ -244,7 +244,7 @@ the one sending hook requests like the ones above. The **Guardian Agent** sits o
 other end of the wire and decides what happens next.
 
 A **hook** is a point in the Observed Agent's execution where it stops and asks before
-acting. `toolCallRequest` is one of ACS's sixteen native lifecycle hooks. Others fire at
+acting. `toolCallRequest` is one of ACS's nineteen native lifecycle hooks. Others fire at
 session start and end, before and after a turn, on knowledge retrieval, and around
 memory reads and writes.
 
@@ -290,10 +290,23 @@ harness measures the wire, not the language behind it.
 ### Harden it for production
 
 The Guardian batches its envelope and session-context logs for asynchronous append,
-with bounded queues and a drain on graceful shutdown. No OpenTelemetry collector or
-exporter exists yet. The conformance harness only measures which
-attributes a consumer *could* emit from the envelopes, not that anything ships them.
-Start in [`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
+with bounded queues and a drain on graceful shutdown. The host adapter still writes
+its audit log synchronously on the decision path. Trace export is
+partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
+for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
+[Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
+describes. Failures only the host sees, such as an unreachable Guardian, stay in the host's
+audit log until a converter turns them into spans of the same format.
+[How the reference Guardian produces a trace](docs/spec/trace/extend_opentelemetry.md#how-the-reference-guardian-produces-a-trace)
+explains how the two streams join. A [sample trace](reference-implementations/agt/samples/trace/acs-trace-sample.jsonl)
+shows that output without running anything, and [Produce a trace](reference-implementations/agt/README.md#produce-a-trace)
+walks you from a fresh clone to a trace file of your own.
+
+That exporter does not make the reference ACS-Trace conformant, and this tree claims no
+Trace profile. It covers two methods, emits no OCSF, and leaves out a required attribute
+when the request omits it. The conformance harness still measures which attributes a
+consumer *could* emit from the wire, not what the exporter ships. Start in
+[`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
 
 ### Go deeper
 
@@ -331,9 +344,9 @@ flowchart LR
 ```
 
 Every issue starts from one of six forms. There are no blank issues. A form applies a
-`type:` label and `status:needs-triage` automatically, and nothing else. Only a
-maintainer can move an issue to `status:accepted`, and only an accepted issue enters the
-backlog. A pull request that changes behavior, alters normative text, or adds code
+`type:` label and `status:needs-triage` automatically, and nothing else.
+[Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who can move an
+issue to `status:accepted`, and only an accepted issue enters the backlog. A pull request that changes behavior, alters normative text, or adds code
 references an accepted issue. An editorial correction, a typo or a broken link, needs
 none.
 
@@ -351,15 +364,12 @@ taxonomy, and the sign-off every commit needs. Start there, not here.
 
 ## What's next
 
-Specification v0.1.0 ships today. The tagged release is v0.1.1. The next specification
-release, v0.2.0, targets March 2027. A v1.0 date has not been set.
+Specification v0.1.0 ships today. Every tagged release is listed on the
+[tags page](https://github.com/GenAI-Security-Project/agent-control-standard/tags). The
+next specification release, v0.2.0, targets March 2027. A v1.0 date has not been set.
 
-The near term runs against four GitHub milestones: Day 14 (September 24), Day 30
-(October 9), Day 60 (November 6), and Day 90 (December 4, 2026). Each carries the
-project's committed outcome as its description. What is in focus for the current window
-lives in one place, the Current Priority Scope in
-[CONTRIBUTING.md](./CONTRIBUTING.md), reviewed at every milestone so it never drifts
-from what that section says.
+What is in focus right now lives in one place, the Current Priority Scope in
+[CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Where to go next
 
@@ -371,7 +381,7 @@ from what that section says.
 - [CONTRIBUTING.md](./CONTRIBUTING.md): how work gets accepted.
 - [SECURITY.md](./SECURITY.md): how to report a vulnerability.
 - [GOVERNANCE.md](./GOVERNANCE.md): who leads which workstream.
-- [Project board](https://github.com/orgs/GenAI-Security-Project/projects/9): tracked work across the milestones above.
+- [Project board](https://github.com/orgs/GenAI-Security-Project/projects/9): open work and where each item stands.
 
 ## About
 

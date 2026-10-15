@@ -30,4 +30,5 @@ Load is the runtime gate. It governs each activation in live context and carries
 
 - **Instrument**: the [`skillRegister`, `skillLoad`, and `skillUnload` hooks](../spec/instrument/hooks.md#skillregister).
 - **Inspect**: the `skill` [AgBOM component type](../spec/inspect/README.md).
+- **Trace**: the [span names and OCSF classes](../spec/trace/events.md) the three hooks emit.
 - See also [Capability](./capability.md), [Provenance](./provenance.md), and [Trust basis](./trust.md).
