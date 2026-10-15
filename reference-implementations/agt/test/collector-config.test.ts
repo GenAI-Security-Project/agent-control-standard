@@ -41,3 +41,19 @@ describe("otel-collector.yaml", () => {
     expect(text).toContain(IMAGE);
   });
 });
+
+const README_PATH = fileURLToPath(new URL("../README.md", import.meta.url));
+const readme = readFileSync(README_PATH, "utf8");
+
+describe("the walkthrough's collector step", () => {
+  it("names the same digest-pinned image and loopback-only port as the config", () => {
+    expect(readme).toContain(IMAGE);
+    expect(readme).toContain("-p 127.0.0.1:4318:4318");
+  });
+
+  it("states what was verified, with no unfilled placeholder", () => {
+    expect(readme).not.toContain("[run on");
+    expect(readme).not.toContain("| not run yet]");
+    expect(readme).toContain("The Docker command has not been run yet.");
+  });
+});

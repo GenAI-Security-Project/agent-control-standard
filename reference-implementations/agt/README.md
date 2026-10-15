@@ -207,7 +207,11 @@ cd agent-control-standard
 git checkout <commit>        # skip this line to use the latest integration
 cd reference-implementations/agt
 bun install --frozen-lockfile
+mkdir -p .acs && chmod 700 .acs     # owner-only, even if .acs already existed
+export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost   # keep local traffic off any HTTP_PROXY
 ```
+
+Run every later step in a terminal where you've run the `export` line. Without it, an `HTTP_PROXY` in your shell sends the shim's requests and the Guardian's spans to the proxy.
 
 **2. Start the Guardian with trace export on.** Leave it running in its own terminal.
 
@@ -233,12 +237,14 @@ Use made-up session ids and commands, because the trace records what you send.
 **5. Read the trace.** `.acs/otel-traces.jsonl` holds one OTLP export request per line. This prints one line per span: its name, then the decision, or the failure class when no decision arrived.
 
 ```bash
-bun -e 'for (const l of (await Bun.file(".acs/otel-traces.jsonl").text()).split("\n").filter(Boolean)) for (const r of JSON.parse(l).resourceSpans) for (const s of r.scopeSpans) for (const p of s.spans) { const v = (e, k) => e.attributes?.find((a) => a.key === k)?.value.stringValue; console.log(p.name, (p.events ?? []).map((e) => v(e, "acs.decision") ?? v(e, "acs.failure.class")).join(" ")) }'
+bun -e 'const clean = (s) => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "?"); let bad = 0; for (const l of (await Bun.file(process.argv[1]).text()).split("\n").filter(Boolean)) { try { const req = JSON.parse(l); for (const r of req.resourceSpans) for (const s of r.scopeSpans) for (const p of s.spans) { const v = (e, k) => e.attributes?.find((a) => a.key === k)?.value.stringValue; console.log(clean(p.name), (p.events ?? []).map((e) => clean(v(e, "acs.decision") ?? v(e, "acs.failure.class"))).join(" ")) } } catch { bad++ } } if (bad) console.log(`${bad} line(s) were not readable and were skipped`)' .acs/otel-traces.jsonl
 ```
+
+To read the collector's file in step 7, run the same command with `.acs/otel-collector-traces.jsonl` at the end. Spans are written in batches about every five seconds, so a file read straight after step 3 can still be empty.
 
 You should see two `gen_ai.tool.call` spans, one `allow` and one `deny`, and one `gen_ai.tool.result` span with `allow`. The spans carry the attributes [`trace/otel-mapping.json`](../../specification/v0.1.0/trace/otel-mapping.json) lists, and the [Guardian README](packages/guardian/README.md#export-traces) says which ones appear when.
 
-**6. Capture the failures only the host sees.** With the Guardian stopped, send one more step. The shim can't reach the Guardian, so it proceeds under the default posture and records that in `.acs/audit.jsonl`. The converter turns that record into a span in the same format.
+**6. Capture the failures only the host sees.** With the Guardian stopped, send one more step. The shim can't reach the Guardian, so it proceeds under the posture the Guardian declared when the session started, which is `proceed` for the stock Guardian, and records that in `.acs/audit.jsonl`. The converter turns that record into a span in the same format.
 
 ```bash
 echo '{"session_id":"trace-demo","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' \
@@ -248,16 +254,49 @@ bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.
 
 The converter prints how many spans it wrote. Its spans carry the same session and request ids as the Guardian's, so you can read both files as one trace.
 
-**7. Check it with a real collector (optional).** If you want an independent check that the output is valid OTLP, install [otelcol-contrib](https://github.com/open-telemetry/opentelemetry-collector-releases/releases) 0.162.0, which the repository was tested with, and send the spans to it, not to a file:
+Run the converter after the agent session has ended. It refuses to write to a file that already exists, so it can't append into the audit log or the Guardian's trace. Delete `.acs/otel-audit.jsonl` first if you're running it again. If its summary shows a non-zero replay count, those were steps that proceeded without a decision that this trace doesn't show yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)).
+
+**7. Check it with a real collector (optional).** If you want an independent check that the output is valid OTLP, install [otelcol-contrib](https://github.com/open-telemetry/opentelemetry-collector-releases/releases) 0.162.0, which the repository was tested with, and send the spans to it, not to a file. Check that nothing else is listening first: `lsof -nP -iTCP:4318 -sTCP:LISTEN` should print nothing.
 
 ```bash
-otelcol-contrib --config otel-collector.yaml      # in one terminal
-ACS_OTEL_ENDPOINT=http://127.0.0.1:4318/v1/traces bun run guardian   # in another
+umask 077
+otelcol-contrib --config otel-collector.yaml      # wait for "Everything is ready"
+NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+  ACS_OTEL_ENDPOINT=http://127.0.0.1:4318/v1/traces bun run guardian   # in another terminal
 ```
+
+To run the collector in Docker instead, from `reference-implementations/agt`:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -p 127.0.0.1:4318:4318 \
+  -v "$PWD/otel-collector.yaml":/etc/otelcol-contrib/config.yaml:ro \
+  -v "$PWD/.acs":/work/.acs -w /work \
+  otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6 \
+  --config /etc/otelcol-contrib/config.yaml \
+  --set=receivers::otlp::protocols::http::endpoint=0.0.0.0:4318
+```
+
+With Podman, use the same command with `podman` in place of `docker`, plus `--userns=keep-id --umask 077`, and `:z` on both mounts on an SELinux host.
 
 Repeat step 3. The collector writes what it received to `.acs/otel-collector-traces.jsonl`. If it won't start because port 8888 is in use, add `--set=service.telemetry.metrics.level=none`.
 
-**What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability` and `acs.request_id_ref`, because the shim doesn't send them yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)). The committed sample drives the Guardian directly, so it has both.
+Start the collector before the Guardian. The Guardian stops sending to an endpoint after its first failed send, and prints `disabled after failure` once. If you see that, or you restart the collector, stop the Guardian, restart the collector, then start the Guardian again.
+
+Stop the collector with Ctrl-C or `docker stop`, never `kill -9` or `docker kill`. A hard kill can leave half a line, and the next batch the restarted collector writes is joined onto it. The step 5 reader skips that combined line and tells you, but the spans in it are lost.
+
+The collector appends across restarts. Natively under `umask 077` the file is `0600`. In a container it's `0644`, and the `0700` `.acs` directory is what keeps other users out ([issue #71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71) tracks file modes).
+
+The `export NO_PROXY` line from step 1 keeps the spans off any `HTTP_PROXY`. The Guardian also adds a loopback endpoint to `NO_PROXY` itself. `OTEL_EXPORTER_OTLP_*HEADERS` variables still add headers to every send, so unset them if you don't mean them.
+
+If `.acs/otel-collector-traces.jsonl` doesn't appear within about ten seconds of step 3, the collector isn't running this config.
+
+The Docker command has not been run yet. Rootless Docker, Podman, SELinux hosts and musl-based Linux haven't been verified either.
+
+**Run it again.** Every output here appends, so a second run on the same `.acs` doubles every count. Delete it first: `rm -rf .acs && mkdir -p .acs && chmod 700 .acs`.
+
+**What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability` and `acs.request_id_ref`, because the shim doesn't send them yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)). The committed sample drives the Guardian directly, so it has both. Spans also lack `acs.evaluator` until the Guardian sends `metadata.evaluator` (PR #229).
+
+The trace files, the audit log and the collector's port can be written by any process running as you, the observed agent included, and in a container by other containers on the same Docker network, so the output isn't tamper-evident. `service.name` (`acs-reference-guardian`, `acs-reference-audit-converter`) is a label each writer sets for itself, not authentication, and loopback isn't authentication either. These labels belong to the reference implementation, not to the ACS specification.
 
 ## View the contract
 
