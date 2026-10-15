@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
@@ -408,4 +408,81 @@ describe("audit-to-otlp: output does not depend on the environment", () => {
       attributePerLinkCountLimit: 128,
     });
   });
+});
+
+// Converting onto an existing file appended OTLP lines to it: onto the audit
+// log itself (or a hardlink of it) that corrupts the evidence and shifts the
+// next audit seq; twice over the same output it doubles every span; onto the
+// Guardian's trace file it merges the two streams. One rule covers all four.
+describe("audit-to-otlp: refuses an output that already exists", () => {
+  const LINE = `${JSON.stringify({
+    seq: 1,
+    recorded_at: "2026-10-15T00:00:00.000Z",
+    session_id: "sess-1",
+    method: "steps/toolCallRequest",
+    rpc_id: "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
+    outcome: "proceeded",
+    posture: "proceed",
+    posture_source: "negotiated",
+    failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+  })}\n`;
+
+  /** A fresh directory with the audit log in it, removed whatever the test does. */
+  async function inScratch(run: (dir: string, audit: string) => Promise<void>): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "acs-audit-exclusive-"));
+    const audit = join(dir, "audit.jsonl");
+    writeFileSync(audit, LINE);
+    try {
+      await run(dir, audit);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("refuses to convert a log onto itself and leaves it byte-identical", () =>
+    inScratch(async (_dir, audit) => {
+      await expect(convertAuditLog(audit, audit)).rejects.toThrow(/^refusing to write/);
+      expect(readFileSync(audit, "utf8")).toBe(LINE);
+    }));
+
+  it("refuses a hardlink to the log", () =>
+    inScratch(async (dir, audit) => {
+      const link = join(dir, "otel.jsonl");
+      linkSync(audit, link);
+      await expect(convertAuditLog(audit, link)).rejects.toThrow(/^refusing to write/);
+      expect(readFileSync(audit, "utf8")).toBe(LINE);
+    }));
+
+  it("refuses an existing unrelated output, such as the Guardian's trace file", () =>
+    inScratch(async (dir, audit) => {
+      const guardianTrace = join(dir, "otel-traces.jsonl");
+      writeFileSync(guardianTrace, "guardian line\n");
+      await expect(convertAuditLog(audit, guardianTrace)).rejects.toThrow(/^refusing to write/);
+      expect(readFileSync(guardianTrace, "utf8")).toBe("guardian line\n");
+    }));
+
+  it("refuses a dangling symlink and creates nothing at its target", () =>
+    inScratch(async (dir, audit) => {
+      const target = join(dir, "elsewhere.jsonl");
+      const link = join(dir, "otel.jsonl");
+      symlinkSync(target, link);
+      await expect(convertAuditLog(audit, link)).rejects.toThrow(/^refusing to write/);
+      expect(existsSync(target)).toBe(false);
+    }));
+
+  it("leaves no output behind when the audit log cannot be read, so the corrected rerun is not refused", () =>
+    inScratch(async (dir) => {
+      const out = join(dir, "otel.jsonl");
+      await expect(convertAuditLog(join(dir, "missing.jsonl"), out)).rejects.toThrow();
+      expect(existsSync(out)).toBe(false);
+    }));
+
+  it("writes a new output owner-only, creating its directory owner-only", () =>
+    inScratch(async (dir, audit) => {
+      const out = join(dir, "new-dir", "otel.jsonl");
+      const summary = await convertAuditLog(audit, out);
+      expect(summary.written).toBe(1);
+      expect(statSync(out).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, "new-dir")).mode & 0o777).toBe(0o700);
+    }));
 });
