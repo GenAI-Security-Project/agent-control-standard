@@ -15,6 +15,7 @@ import {
   createOtelTraceExporter,
   DECISION_ATTRIBUTE_SOURCES,
   loadOtelMapping,
+  loopbackProxyWarning,
   METHODS_WITHOUT_SPAN,
   NULL_OTEL_TRACE_EXPORTER,
   OTEL_SERVICE_NAME,
@@ -1425,10 +1426,62 @@ describe("keepLoopbackOffProxy", () => {
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["localhost", "localhost"]);
   });
 
-  it("adds ::1 without brackets for an IPv6 loopback endpoint", () => {
+  it("adds ::1 both bare and bracketed for an IPv6 loopback endpoint, because Bun matches only [::1]", () => {
     reset(undefined);
     keepLoopbackOffProxy("http://[::1]:4318/v1/traces");
-    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["::1", "::1"]);
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["::1,[::1]", "::1,[::1]"]);
+  });
+
+  // Bar's finding on issue #274: Bun 1.3.14 reads a non-empty no_proxy in
+  // preference to NO_PROXY, so creating the one the user did not set switches
+  // off every exemption in the one they did.
+  it("appends to NO_PROXY alone when only NO_PROXY is set, and does not create no_proxy", () => {
+    reset(undefined);
+    process.env.NO_PROXY = "corp.internal";
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    expect(process.env.NO_PROXY).toBe("corp.internal,127.0.0.1");
+    expect("no_proxy" in process.env).toBe(false);
+  });
+
+  it("appends to no_proxy alone when only no_proxy is set, and does not create NO_PROXY", () => {
+    reset(undefined);
+    process.env.no_proxy = "corp.internal";
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    expect(process.env.no_proxy).toBe("corp.internal,127.0.0.1");
+    expect("NO_PROXY" in process.env).toBe(false);
+  });
+
+  it("treats an empty no_proxy as unset, since Bun then falls back to NO_PROXY", () => {
+    reset(undefined);
+    process.env.NO_PROXY = "corp.internal";
+    process.env.no_proxy = "";
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["corp.internal,127.0.0.1", ""]);
+  });
+
+  it("fills a no_proxy that holds no entries, because Bun reads any non-empty value as the list", () => {
+    for (const blank of [",", " ", " , "]) {
+      reset(undefined);
+      process.env.NO_PROXY = "corp.internal";
+      process.env.no_proxy = blank;
+      keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+      expect({ blank, NO_PROXY: process.env.NO_PROXY, no_proxy: process.env.no_proxy }).toEqual({
+        blank,
+        NO_PROXY: "corp.internal,127.0.0.1",
+        no_proxy: "127.0.0.1",
+      });
+    }
+  });
+
+  it("sets both when neither is set, and appends once to each when both are set", () => {
+    reset(undefined);
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["127.0.0.1", "127.0.0.1"]);
+    process.env.NO_PROXY = "a.internal";
+    process.env.no_proxy = "b.internal";
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["a.internal,127.0.0.1", "b.internal,127.0.0.1"]);
   });
 
   it("does not duplicate the entry when called twice", () => {
@@ -1453,4 +1506,91 @@ describe("keepLoopbackOffProxy", () => {
     keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces");
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["example.internal", "example.internal"]);
   });
+});
+
+// Bun 1.3.11 reads the proxy variables only when the process starts, so the
+// runtime edit above cannot help there. The warning is what every version
+// gets: it judges the variables as they stand when the exporter is built.
+describe("loopbackProxyWarning", () => {
+  const endpoint = "http://127.0.0.1:4318/v1/traces";
+
+  it("warns when a proxy is set and the list Bun reads does not exempt the host", () => {
+    const warning = loopbackProxyWarning(endpoint, { HTTP_PROXY: "http://proxy:3128", NO_PROXY: "corp.internal" });
+    expect(warning).toContain("127.0.0.1");
+    expect(warning).toContain("NO_PROXY");
+  });
+
+  it("judges by no_proxy when it is non-empty, the list Bun reads first", () => {
+    expect(loopbackProxyWarning(endpoint, { http_proxy: "http://proxy:3128", NO_PROXY: "127.0.0.1", no_proxy: "corp.internal" })).toBeDefined();
+    expect(loopbackProxyWarning(endpoint, { http_proxy: "http://proxy:3128", NO_PROXY: "corp.internal", no_proxy: "127.0.0.1" })).toBeUndefined();
+    expect(loopbackProxyWarning(endpoint, { http_proxy: "http://proxy:3128", NO_PROXY: "127.0.0.1", no_proxy: "" })).toBeUndefined();
+  });
+
+  it("stays quiet with no proxy, with a wildcard exemption, or for a non-loopback endpoint", () => {
+    expect(loopbackProxyWarning(endpoint, {})).toBeUndefined();
+    expect(loopbackProxyWarning(endpoint, { HTTP_PROXY: "http://proxy:3128", NO_PROXY: "*" })).toBeUndefined();
+    expect(loopbackProxyWarning("http://collector.example.com:4318/v1/traces", { HTTP_PROXY: "http://proxy:3128" })).toBeUndefined();
+  });
+
+  it("wants the bracketed form for IPv6, the only one Bun matches", () => {
+    const v6 = "http://[::1]:4318/v1/traces";
+    expect(loopbackProxyWarning(v6, { HTTP_PROXY: "http://proxy:3128", NO_PROXY: "::1" })).toBeDefined();
+    expect(loopbackProxyWarning(v6, { HTTP_PROXY: "http://proxy:3128", NO_PROXY: "[::1]" })).toBeUndefined();
+  });
+});
+
+// Routing, not strings. It runs in a fresh child with its environment set at
+// spawn, because Bun latches proxy variables across edits within a process,
+// which makes any in-process routing check pass for the wrong reason. Bun
+// 1.3.11 ignores runtime edits altogether, so this is gated to 1.3.14 and
+// later, and CI on 1.3.11 skips it.
+describe("keepLoopbackOffProxy, routed through a real proxy in a child process", () => {
+  const runtimeEditsHonored = Bun.semver.satisfies(Bun.version, ">=1.3.14");
+
+  it.skipIf(!runtimeEditsHonored)("keeps loopback off the proxy without switching off the user's existing NO_PROXY entries", async () => {
+    let proxyConnections = 0;
+    const proxy = createServer((socket) => {
+      proxyConnections += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+    const source = new URL("../src/otel-trace-exporter.ts", import.meta.url).pathname;
+    const script = `
+      const { keepLoopbackOffProxy } = await import(${JSON.stringify(source)});
+      const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+      const go = async (host) => {
+        try {
+          const response = await fetch("http://" + host + ":" + target.port + "/", { signal: AbortSignal.timeout(1500) });
+          return (await response.text()) === "ok" ? "direct" : "other";
+        } catch {
+          return "proxied";
+        }
+      };
+      const guard = await go("127.0.0.1");
+      keepLoopbackOffProxy("http://127.0.0.1:" + target.port + "/v1/traces");
+      const loopback = await go("127.0.0.1");
+      const existing = await go("localhost");
+      console.log(JSON.stringify({ guard, loopback, existing }));
+      target.stop(true);
+      process.exit(0);
+    `;
+    try {
+      // localhost stands in for a corporate host the user already exempted.
+      // Async spawn, not spawnSync: the proxy listener runs on this process's
+      // event loop and could not count the child's connection while blocked.
+      const child = Bun.spawn([process.execPath, "-e", script], {
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", HTTP_PROXY: proxyUrl, http_proxy: proxyUrl, NO_PROXY: "localhost" },
+        stdout: "pipe",
+      });
+      const output = await new Response(child.stdout).text();
+      await child.exited;
+      const result = JSON.parse(output.trim().split("\n").pop()!);
+      // The guard proves the proxy was in the path before the call.
+      expect(result).toEqual({ guard: "proxied", loopback: "direct", existing: "direct" });
+      expect(proxyConnections).toBe(1);
+    } finally {
+      proxy.close();
+    }
+  }, 15_000);
 });
