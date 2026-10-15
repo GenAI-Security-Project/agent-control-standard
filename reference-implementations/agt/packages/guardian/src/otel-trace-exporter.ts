@@ -583,6 +583,12 @@ export function createFileSpanExporter(path: string): SpanExporter {
  * client honors these variables per request, and an explicit agent does not
  * opt out, so the environment is the only lever. A non-loopback endpoint is
  * left to the operator's proxy settings.
+ *
+ * The change is process-wide and permanent: it is written to process.env and
+ * never undone, so anything else in this process (a host adapter embedded
+ * with the Guardian) and any child process it spawns inherits it. That is
+ * acceptable because only loopback hosts are ever added, and traffic to this
+ * machine should not use a proxy for any of them.
  */
 export function keepLoopbackOffProxy(endpoint: string): void {
   const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");

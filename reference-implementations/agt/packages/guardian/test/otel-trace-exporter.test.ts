@@ -11,6 +11,7 @@ import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import {
   createFileSpanExporter,
+  keepLoopbackOffProxy,
   createOtelTraceExporter,
   DECISION_ATTRIBUTE_SOURCES,
   loadOtelMapping,
@@ -1277,6 +1278,7 @@ describe("the Guardian's exporter does not depend on its environment", () => {
         // Bun's HTTP client latches a proxy variable when it is set and does
         // not see it deleted, so every later fetch in this process would go
         // to the dead proxy. Assigning an empty value first clears it.
+        // Seen on Bun 1.3.14 (the suite was also confirmed on 1.3.11).
         process.env[key] = "";
         delete process.env[key];
       } else {
@@ -1397,4 +1399,58 @@ describe("the Guardian's exporter does not depend on its environment", () => {
       proxy.close();
     }
   }, 10_000);
+});
+
+describe("keepLoopbackOffProxy", () => {
+  const saved: Record<string, string | undefined> = {
+    NO_PROXY: process.env.NO_PROXY,
+    no_proxy: process.env.no_proxy,
+  };
+  const reset = (value: string | undefined): void => {
+    for (const key of ["NO_PROXY", "no_proxy"]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("adds localhost for a localhost endpoint", () => {
+    reset(undefined);
+    keepLoopbackOffProxy("http://localhost:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["localhost", "localhost"]);
+  });
+
+  it("adds ::1 without brackets for an IPv6 loopback endpoint", () => {
+    reset(undefined);
+    keepLoopbackOffProxy("http://[::1]:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["::1", "::1"]);
+  });
+
+  it("does not duplicate the entry when called twice", () => {
+    reset(undefined);
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["127.0.0.1", "127.0.0.1"]);
+  });
+
+  it("preserves existing entries", () => {
+    reset("example.internal");
+    keepLoopbackOffProxy("http://localhost:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["example.internal,localhost", "example.internal,localhost"]);
+  });
+
+  it("leaves both variables exactly as they were for a non-loopback endpoint", () => {
+    reset(undefined);
+    keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces");
+    expect("NO_PROXY" in process.env).toBe(false);
+    expect("no_proxy" in process.env).toBe(false);
+    reset("example.internal");
+    keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces");
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["example.internal", "example.internal"]);
+  });
 });
