@@ -575,6 +575,23 @@ export function createFileSpanExporter(path: string): SpanExporter {
   };
 }
 
+/** The NO_PROXY entries that exempt a loopback endpoint's host, or none
+ * when the endpoint is not loopback. IPv6 gets both forms: Bun matches only
+ * `[::1]`, and other clients expect the bare `::1`. */
+function loopbackProxyEntries(endpoint: string): string[] {
+  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
+  if (host === "127.0.0.1" || host === "localhost") {
+    return [host];
+  }
+  return host === "::1" ? ["::1", "[::1]"] : [];
+}
+
+const splitProxyList = (value: string): string[] =>
+  value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+
 /**
  * Adds a loopback endpoint's host to NO_PROXY and no_proxy, so an
  * HTTP_PROXY in the Guardian's environment cannot route spans meant for this
@@ -584,6 +601,18 @@ export function createFileSpanExporter(path: string): SpanExporter {
  * opt out, so the environment is the only lever. A non-loopback endpoint is
  * left to the operator's proxy settings.
  *
+ * Only the variables the user set are touched. Bun 1.3.14 reads a non-empty
+ * no_proxy in preference to NO_PROXY, so creating the one the user did not
+ * set would switch off every exemption in the one they did. "Set" follows
+ * Bun's own rule: any value but the empty string counts, and an empty one
+ * makes Bun fall back to the other. A set variable that holds no entries
+ * (a stray comma, say) is what Bun reads, so it is filled with the host.
+ * When neither is set, both get the host, and nothing is lost.
+ *
+ * Bun 1.3.11 reads these variables only when the process starts, so on that
+ * version this edit has no effect, and loopbackProxyWarning below is what
+ * tells the operator.
+ *
  * The change is process-wide and permanent: it is written to process.env and
  * never undone, so anything else in this process (a host adapter embedded
  * with the Guardian) and any child process it spawns inherits it. That is
@@ -591,16 +620,45 @@ export function createFileSpanExporter(path: string): SpanExporter {
  * machine should not use a proxy for any of them.
  */
 export function keepLoopbackOffProxy(endpoint: string): void {
-  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
-  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+  const additions = loopbackProxyEntries(endpoint);
+  if (additions.length === 0) {
     return;
   }
-  for (const key of ["NO_PROXY", "no_proxy"]) {
-    const entries = (process.env[key] ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry !== "");
-    if (!entries.includes(host)) {
-      process.env[key] = [...entries, host].join(",");
+  const keys = ["NO_PROXY", "no_proxy"] as const;
+  const setKeys = keys.filter((key) => (process.env[key] ?? "") !== "");
+  for (const key of setKeys.length === 0 ? keys : setKeys) {
+    const entries = splitProxyList(process.env[key] ?? "");
+    const missing = additions.filter((entry) => !entries.includes(entry));
+    if (missing.length > 0) {
+      process.env[key] = [...entries, ...missing].join(",");
     }
   }
+}
+
+/**
+ * A warning when a loopback endpoint would reach an HTTP proxy, judged by
+ * the variables as they stand: a proxy is set, and the list Bun reads (a
+ * non-empty no_proxy, otherwise NO_PROXY) does not exempt the host. Called
+ * before keepLoopbackOffProxy, so on Bun 1.3.11, which ignores the runtime
+ * edit, the operator still learns that spans may go through the proxy and
+ * what to set before starting the Guardian.
+ */
+export function loopbackProxyWarning(endpoint: string, env: Record<string, string | undefined> = process.env): string | undefined {
+  const additions = loopbackProxyEntries(endpoint);
+  const proxy = env.http_proxy || env.HTTP_PROXY;
+  if (additions.length === 0 || !proxy) {
+    return undefined;
+  }
+  const list = splitProxyList(env.no_proxy ? env.no_proxy : (env.NO_PROXY ?? ""));
+  // The bracketed form is the one Bun matches for IPv6.
+  const needed = additions[additions.length - 1]!;
+  if (list.includes("*") || list.includes(needed)) {
+    return undefined;
+  }
+  return (
+    `otel trace export to ${endpoint}: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt ${needed}, ` +
+    `so on some Bun versions these spans go through the proxy. Start the Guardian with ${needed} in both NO_PROXY and no_proxy.`
+  );
 }
 
 /** One place spans go, with the name its failure is reported under: the
@@ -735,6 +793,10 @@ export function createOtelTraceExporter({
     // the SDK under any set here and cannot be refused, so the README lists
     // them as honored.
     construct(endpoint, () => {
+      const warning = loopbackProxyWarning(endpoint);
+      if (warning !== undefined) {
+        console.error(warning);
+      }
       keepLoopbackOffProxy(endpoint);
       return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]>["compression"] });
     });
@@ -957,3 +1019,4 @@ export function createOtelTraceExporter({
     },
   };
 }
+
