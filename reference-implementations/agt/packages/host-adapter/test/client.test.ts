@@ -285,6 +285,53 @@ describe("GuardianClient.post", () => {
     }
   });
 
+  it("denies an unsigned overload code no list knows yet under a proceed posture", async () => {
+    // -32008 is Discussion #257's proposed retryable overload code. It has
+    // to pass the unsigned-refusal check AND classify as refused, or the
+    // step falls through to `proceed`.
+    const secret = Buffer.alloc(32, 0x5b);
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as { id: string | number };
+        return Response.json({
+          jsonrpc: "2.0",
+          id: body.id,
+          error: { code: -32008, message: "guardian overloaded", data: { retry_after_ms: 1000 } },
+        });
+      },
+    });
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`, { hmacSecret: secret })
+        .requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      const events: AuditEvent[] = [];
+      const decision = applyFailurePosture({
+        failure: outcome.decisionArrived ? undefined : outcome.failure,
+        session: {
+          config: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+          },
+          failure: undefined,
+        },
+        sessionId: "sess-1",
+        method: envelope.method,
+        rpcId: envelope.id,
+        audit: { path: "test", write: (e) => (events.push(e), true) },
+      });
+      expect(decision.decision).toBe("deny");
+      expect(decision.reason_codes).toEqual(["guardian_refused"]);
+      expect(events[0]).toMatchObject({ posture: "proceed", outcome: "blocked", failure: { kind: "refused" } });
+    } finally {
+      mock.stop(true);
+    }
+  });
+
   it("still rejects an unsigned error whose code is not a refusal, and an unsigned refusal carrying a result", async () => {
     const secret = Buffer.alloc(32, 0x5a);
     const answers = [

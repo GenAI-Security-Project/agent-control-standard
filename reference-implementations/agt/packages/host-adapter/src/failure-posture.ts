@@ -18,7 +18,7 @@
  * answering `-32020 evaluation failed` and a dead socket were the same kind,
  * and under the shipped default posture (`proceed`) both became `allow` --
  * a governance tool proceeding on the Guardian's own "no". See
- * REFUSAL_RPC_CODES for which codes mean that, and why the set is enumerated.
+ * isRefusalCode for which codes mean that.
  *
  * It is NOT reached when a decision arrived. A `deny` that arrives is
  * honoured regardless of posture, and that is enforced by the caller never
@@ -49,7 +49,7 @@ import type {
   StepFailureKind,
 } from "./failure-kinds.ts";
 import type { AcsDecision } from "./decision-message.ts";
-import { REFUSAL_RPC_CODES } from "./failure-kinds.ts";
+import { isRefusalCode } from "./failure-kinds.ts";
 import { GuardianTimeoutError } from "./guardian-client.ts";
 import { SessionConfigNotStoredError, type ResolvedSessionConfig } from "./handshake.ts";
 
@@ -153,10 +153,9 @@ export function classifyDeliveryFailure(
       const { code, message } = failure as ErrorLike;
       // An error object means something answered: the wire worked, and the
       // question is whether what answered was the Guardian refusing this
-      // envelope. `typeof code === "number"` is the guard, not a cast -- a
-      // non-conformant peer can put anything on `code`, and Set.has on a
-      // string that happens to read "-32020" would miss anyway.
-      const refused = typeof code === "number" && REFUSAL_RPC_CODES.has(code);
+      // envelope. isRefusalCode checks the type, not a cast: a
+      // non-conformant peer can put anything on `code`.
+      const refused = isRefusalCode(code);
       return {
         kind: refused ? "refused" : "error_without_decision",
         message: refused
@@ -260,7 +259,7 @@ export function applyFailurePosture({
   // Classified BEFORE the resolution is read, because for one kind it decides
   // the resolution. Everything else is the wire's business and the posture's;
   // a refusal is the Guardian's, and a governance tool does not proceed on it
-  // -- see REFUSAL_RPC_CODES and REFUSAL_RESOLUTION.
+  // -- see isRefusalCode and REFUSAL_RESOLUTION.
   const classified = classifyStepFailure(stage, failure);
   const refused = classified.kind === "refused";
   const unsignable = classified.kind === "unsignable";

@@ -43,9 +43,8 @@
  *
  * `error_without_decision` is what is left of the JSON-RPC-error case once
  * the refusals are taken out of it: an error whose code this host does not
- * recognise as a refusal of this envelope. See REFUSAL_RPC_CODES below
- * for why the recognised set is enumerated rather than
- * inferred, and for what that leaves in this bucket.
+ * recognise as a refusal of this envelope. See isRefusalCode below
+ * for which codes are recognised, and for what that leaves in this bucket.
  */
 export type DeliveryFailureKind = "timeout" | "transport" | "error_without_decision" | "unknown";
 
@@ -174,10 +173,10 @@ export type SessionFailureKind =
  * applyFailurePosture).
  *
  * Declared here by value rather than imported: this package has no runtime
- * dependency on the Guardian and is not about to grow one for four integers
+ * dependency on the Guardian and is not about to grow one for a few integers
  * -- the same arrangement DEFAULT_TIMEOUT_MS keeps with the Guardian's
- * declared default. The four are the complete set this deployment's Guardian
- * mints for a request it will not decide (packages/guardian/src/server.ts):
+ * declared default. Besides §17.1's own codes, these are the ones this
+ * deployment's Guardian mints for a request it will not decide (packages/guardian/src/server.ts):
  *
  *   -32700  Parse error. Nothing the host sent was JSON. Answered with
  *           `id: null`, since there is no envelope to read an id out of --
@@ -209,30 +208,14 @@ export type SessionFailureKind =
  * A host that read the second as the first would fail open on precisely the
  * disagreement it should surface.
  *
- * Enumerated rather than inferred ("any error object is a refusal"), for the
- * reason TRANSPORT_ERROR_CODES is: the four above are checkable against a
- * live Guardian, and client.test.ts drives each route to prove the list
- * matches what the Guardian actually sends rather than what this file
- * believes. An unrecognised code therefore stays `error_without_decision` and
- * keeps the posture. That is a genuine remaining hole -- a future Guardian
- * code would fail open under `proceed` until it is added here -- and it is
- * preferred to guessing, because widening this to every error object would
- * also fail closed on an intermediary's error the Guardian never sent.
+ * Recognised by range, not by list. Every §17.1 code and every code this
+ * Guardian mints sits in JSON-RPC's server-error range, -32000 to -32099, which
+ * ACS uses for nothing but refusals. A list would fail open under `proceed` on
+ * any code added after it was written, such as a retryable overload code: the
+ * step would run because the host did not yet know the code. Codes outside
+ * the range, like an intermediary's -32601 or -32603, stay
+ * `error_without_decision` and keep the posture.
  */
-export const REFUSAL_RPC_CODES: ReadonlySet<number> = new Set([
-  -32700,
-  // ACS §17.1's complete mandated-refusal registry. None of these is a
-  // transport accident or permission to apply the availability posture.
-  -32000,
-  -32001,
-  -32002,
-  -32003,
-  -32004,
-  -32005,
-  -32006,
-  -32007,
-  // Reference-implementation refusal codes.
-  -32010,
-  -32011,
-  -32020,
-]);
+export function isRefusalCode(code: unknown): boolean {
+  return typeof code === "number" && (code === -32700 || (code <= -32000 && code >= -32099));
+}

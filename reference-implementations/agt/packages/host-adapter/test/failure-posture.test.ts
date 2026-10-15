@@ -406,16 +406,19 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
       .toBe("transport");
   });
 
-  // An error code this host does not recognise as a refusal. It stays a
-  // delivery failure and keeps the posture, which is the deliberate limit of
-  // the enumerated refusal set: the shipped Guardian mints none of these
-  // today, but an intermediary or a non-conformant peer can, and guessing
-  // that every error object is the Guardian refusing would fail closed on an
-  // error the Guardian never sent.
-  it("classifies an error response whose code it does not recognise as a refusal", () => {
-    const { kind, message } = classifyDeliveryFailure({ code: -32601, message: "Method not found" });
+  // An error code outside the server-error range. It stays a delivery
+  // failure and keeps the posture: an intermediary or a non-conformant peer
+  // can send one, and the Guardian's refusals all sit inside the range.
+  it.each([-32601, -32603, -32100, -31999])("keeps %i, outside the server-error range, a delivery failure", (code) => {
+    const { kind, message } = classifyDeliveryFailure({ code, message: "not a refusal" });
     expect(kind).toBe("error_without_decision");
-    expect(message).toContain("-32601");
+    expect(message).toContain(String(code));
+  });
+
+  // A code no list here knows yet, such as the retryable overload code
+  // Discussion #257 proposes. A list would let it fall through to `proceed`.
+  it.each([-32008, -32050, -32099])("classifies the not-yet-registered %i as a refusal by its range", (code) => {
+    expect(classifyDeliveryFailure({ code, message: "server error" }).kind).toBe("refused");
   });
 
   // The codes ACS and this deployment reserve for a request the Guardian will not
