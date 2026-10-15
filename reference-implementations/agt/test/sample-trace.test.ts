@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CONVERTER_SERVICE_NAME } from "../packages/guardian/src/audit-to-otlp.ts";
+import { OTEL_SERVICE_NAME } from "../packages/guardian/src/otel-trace-exporter.ts";
 import { generateSampleTrace, SAMPLE_PATH, SCENARIOS } from "../scripts/make-sample-trace.ts";
 
 /**
@@ -26,13 +28,29 @@ type OtlpSpan = {
   events?: OtlpEvent[];
   status?: { code?: number; message?: string };
 };
-type OtlpRequest = { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] };
+type OtlpRequest = {
+  resourceSpans: {
+    resource?: { attributes?: OtlpAttribute[] };
+    scopeSpans: { scope?: { name?: string }; spans: OtlpSpan[] }[];
+  }[];
+};
+type LabeledSpan = OtlpSpan & { service?: string; scope?: string };
 
-function spansIn(path: string | URL): OtlpSpan[] {
+function spansIn(path: string | URL): LabeledSpan[] {
   return readFileSync(path, "utf8")
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .flatMap((line) => (JSON.parse(line) as OtlpRequest).resourceSpans.flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans)));
+    .flatMap((line) =>
+      (JSON.parse(line) as OtlpRequest).resourceSpans.flatMap((rs) =>
+        rs.scopeSpans.flatMap((ss) =>
+          ss.spans.map((span) => ({
+            ...span,
+            service: rs.resource?.attributes?.find((a) => a.key === "service.name")?.value.stringValue,
+            scope: ss.scope?.name,
+          })),
+        ),
+      ),
+    );
 }
 
 function plain(value: OtlpValue): unknown {
@@ -47,9 +65,11 @@ function attributes(carrier: { attributes?: OtlpAttribute[] } | undefined): Reco
 
 /** What a span says once the values that differ between runs are taken out:
  * ids, timestamps, elapsed time, and which export batch it landed in. */
-function normalize(spans: OtlpSpan[]): unknown[] {
+function normalize(spans: LabeledSpan[]): unknown[] {
   return spans
     .map((span) => ({
+      service: span.service,
+      scope: span.scope,
       name: span.name,
       attributes: attributes(span),
       status: span.status ?? {},
@@ -95,6 +115,14 @@ describe("the committed sample trace matches the mapping", () => {
     expect(SPANS.length).toBeGreaterThan(0);
     for (const span of SPANS) {
       expect({ name: span.name, mapped: span.name in STEP_BY_SPAN_NAME }).toEqual({ name: span.name, mapped: true });
+    }
+  });
+
+  it("labels converter spans as the converter and every other span as the Guardian", () => {
+    for (const span of SPANS) {
+      const fromConverter = failureOf(span)?.["acs.failure.reported_by"] === "observed_agent";
+      const expected = fromConverter ? CONVERTER_SERVICE_NAME : OTEL_SERVICE_NAME;
+      expect({ span: span.name, service: span.service, scope: span.scope }).toEqual({ span: span.name, service: expected, scope: expected });
     }
   });
 
