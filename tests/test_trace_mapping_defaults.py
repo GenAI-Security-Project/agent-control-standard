@@ -101,3 +101,74 @@ def test_every_conditional_attribute_stays_conditional_and_its_source_stays_opti
         assert field not in payload.get("required", []), (
             f"{hook} now requires {field}, so {attribute} on {method} belongs in required_attributes"
         )
+
+
+def test_ocsf_decision_tables_match_the_wire():
+    """The disposition and severity tables key exactly the five dispositions,
+    acs_fields names only real response fields, and every enumerated failure
+    attribute is one the failure event lists. A typo in any of them used to
+    pass every check."""
+    acs_result = json.loads((TRACE.parent / "response-envelope.json").read_text(encoding="utf-8"))["$defs"]["AcsResult"]["properties"]
+    ocsf = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]
+    dispositions = set(acs_result["decision"]["enum"])
+    assert set(ocsf["decision_class"]["properties"]["disposition_mapping"]["default"]) == dispositions
+    assert set(ocsf["severity_mapping"]["default"]) == dispositions
+    assert set(ocsf["decision_class"]["properties"]["acs_fields"]["default"]) <= set(acs_result)
+    assert ocsf["decision_class"]["properties"]["join_fields"]["default"] == ["request_id", "session_id"]
+    failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
+    listed = set(failure["required_attributes"]["default"]) | set(failure["conditional_attributes"]["default"])
+    assert set(failure["attribute_values"]["default"]) <= listed
+
+
+def test_ocsf_decision_codes_match_the_answered_proposal():
+    # The Spec leads fixed these values on issue #228. Defer is 99, not 14
+    # (Delayed), because an ACS defer holds the step and denies on timeout;
+    # modify gets action_id 4 because disposition_id has no value for it.
+    decision = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_class"]["properties"]
+    assert decision["disposition_mapping"]["default"] == {"allow": 1, "deny": 2, "modify": 99, "ask": 99, "defer": 99}
+    assert decision["action_mapping"]["default"] == {"allow": 1, "deny": 2, "modify": 4, "ask": 99, "defer": 99}
+    assert decision["alert_mapping"]["default"] == {"allow": False, "deny": True, "modify": False, "ask": True, "defer": True}
+    severity = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["severity_mapping"]["default"]
+    assert {d: severity[d] >= 3 for d in severity} == decision["alert_mapping"]["default"], "is_alert must be true exactly when severity_id is 3 or higher"
+    assert decision["required_fields"]["default"] == [
+        "finding_info", "finding_info.title", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid",
+    ]
+    assert decision["late_decision"]["properties"]["finding_types"]["default"] == [
+        "late_decision_fail_open", "late_decision_fail_closed",
+    ]
+    failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
+    failure_fields = {name.removeprefix("acs.failure.") for name in failure["required_attributes"]["default"] + failure["conditional_attributes"]["default"]}
+    assert set(decision["late_decision"]["properties"]["failure_fields"]["default"]) <= failure_fields
+
+
+def test_padded_source_fields_reject_the_empty_string():
+    # Trace pads the policy and provenance arrays with "" where a value is
+    # absent, so "" must never be a legal wire value for these fields (#263).
+    spec = TRACE.parent
+    policy = json.loads((spec / "response-envelope.json").read_text(encoding="utf-8"))["$defs"]["AcsResult"]["properties"]["policy_references"]["items"]["properties"]
+    for field in ("policy_id", "policy_version", "policy_name", "rule_id"):
+        assert policy[field].get("minLength") == 1, f"policy_references.{field} accepts an empty string"
+    provenance = json.loads((spec / "provenance.json").read_text(encoding="utf-8"))["properties"]
+    assert provenance["source_id"].get("minLength") == 1, "provenance source_id accepts an empty string"
+
+
+def test_every_step_to_class_entry_uses_only_known_keys():
+    # The OCSF twin of the step_to_span key check: a typo such as activty_id
+    # would otherwise drop the activity and change type_uid with every check
+    # green. Checked here so the published schema stays open.
+    ocsf = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["step_to_class"]
+    known = set(ocsf["additionalProperties"]["properties"])
+    unknown = {method: sorted(set(entry) - known) for method, entry in ocsf["default"].items() if set(entry) - known}
+    assert not unknown, f"step_to_class entries with keys the entry schema does not declare: {unknown}"
+
+
+def test_failure_classes_are_the_ones_decided_on_issue_37():
+    # Bar's answer on issue #37 (2026-10-13) added signature_invalid, so a
+    # tampered response stands out from organic noise, and handshake_failure,
+    # so a session that starts unguarded is counted. PR #273's sessionEnd
+    # count keys on this exact set.
+    failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
+    assert set(failure["attribute_values"]["default"]["acs.failure.class"]) == {
+        "timeout", "unreachable", "malformed_response", "guardian_error",
+        "observed_agent_error", "signature_invalid", "handshake_failure", "other",
+    }

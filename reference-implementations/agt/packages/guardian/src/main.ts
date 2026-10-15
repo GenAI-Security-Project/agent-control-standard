@@ -31,6 +31,10 @@ const hostname = process.env.ACS_GUARDIAN_HOST;
 const manifestPath = process.env.ACS_MANIFEST_PATH ?? DEFAULT_MANIFEST_PATH;
 const envelopeLogPath = process.env.ACS_ENVELOPE_LOG ?? DEFAULT_ENVELOPE_LOG;
 const sessionContextLog = process.env.ACS_SESSION_CONTEXT_LOG ?? DEFAULT_SESSION_CONTEXT_LOG;
+// Trace export is off unless one of these names an output. Read here and
+// passed in, like ACS_ENVELOPE_LOG: server.ts reads no env itself.
+const otelTraceFile = process.env.ACS_OTEL_FILE;
+const otelTraceEndpoint = process.env.ACS_OTEL_ENDPOINT;
 
 // Read and validate the posture BEFORE starting the server. Not the audit
 // sink's path: that file is the host's, written by the hook, not by
@@ -44,8 +48,33 @@ const sessionContextLog = process.env.ACS_SESSION_CONTEXT_LOG ?? DEFAULT_SESSION
 // healthy start immediately followed by one.
 const posture = buildServerHello().on_decision_failure;
 
-const guardian = await startGuardian({ port, hostname, manifestPath, envelopeLogPath, sessionContextLog });
+const guardian = await startGuardian({
+  port,
+  hostname,
+  manifestPath,
+  envelopeLogPath,
+  sessionContextLog,
+  otelTraceFile,
+  otelTraceEndpoint,
+});
 console.log(`Guardian listening at ${guardian.url}`);
 console.log(`Envelope log: ${envelopeLogPath}`);
 console.log(`Session context log: ${sessionContextLog}`);
 console.log(`Failure posture: ${posture}   (override with ACS_ON_DECISION_FAILURE=deny)`);
+
+// Only when export is on. The four lines above are what README.md captures
+// and test/readme-captures.test.ts holds them to the line, so a fifth line
+// appears only for a Guardian the quickstart does not run.
+const traceOutputs = [otelTraceFile, otelTraceEndpoint].filter((target): target is string => target !== undefined);
+if (traceOutputs.length > 0) {
+  console.log(`OTel traces: ${traceOutputs.join(", ")}`);
+  // The last batch of spans reaches its output only if the processor is
+  // flushed before the process goes, so a signal closes the Guardian rather
+  // than ending it mid-batch.
+  const stop = async (): Promise<void> => {
+    await guardian.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+}

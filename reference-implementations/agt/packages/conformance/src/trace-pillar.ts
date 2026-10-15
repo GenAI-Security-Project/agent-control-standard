@@ -13,6 +13,8 @@
  *   - `properties.step_to_span.default` -- an object keyed by ACS method,
  *     21 entries, each `{span_name, required_attributes,
  *     conditional_attributes?, optional_attributes?}`.
+ *   - `properties.step_span_attributes.properties.required_attributes.default`
+ *     -- one string array, the attributes every step span carries.
  *   - `properties.decision_event.properties.{required_attributes,
  *     conditional_attributes}.default` -- two string arrays.
  *   - `properties.provenance_attributes.properties.required.default` -- one
@@ -66,7 +68,7 @@
  * every `required` row must read emittable, and the suite asserts it.
  * `optional_attributes` names no obligation and is not read.
  *
- * Decision facts (`acs.decision` and the five conditional attributes) are
+ * Decision facts (`acs.decision` and the eleven conditional attributes) are
  * recorded as a span EVENT named `acs.decision` on the parent step span --
  * not a span of their own -- so every row built from
  * `decision_event` carries that literal string as its `span`, matching
@@ -74,11 +76,21 @@
  * plainer still: `provenance_attributes`'s own description says they land
  * as ordinary attributes "on the resulting span" whichever step that is, so
  * that row's `span` is a parenthesised description rather than a literal
- * OTel name -- there is no single step span to point at. This is why
- * `TraceRow.span` (below) is typed as a bare `string`: a caller reading it
- * off a `TraceRow` this module returns cannot assume it is always a literal
- * OTel span or event name -- one of the seventeen rows' `span` value (the
- * provenance row) is not.
+ * OTel name -- there is no single step span to point at. `acs.request_id`
+ * and `acs.session.id` (`step_span_attributes`, #228) are the same shape:
+ * one row each, on every step span. This is why `TraceRow.span` (below) is
+ * typed as a bare `string`: a caller reading it off a `TraceRow` this module
+ * returns cannot assume it is always a literal OTel span or event name --
+ * three rows' `span` values (the provenance row and the two every-step-span
+ * rows) are not.
+ *
+ * NOT MEASURED: `decision_failure_event` (`acs.decision.failure`, #37 and
+ * #228). That event records a decision that never arrived, or arrived
+ * unusable, so its attributes describe what the recording party saw, not a
+ * field of either envelope. "Could a wire consumer emit this from the wire"
+ * has no answer for it, and a row here would read as a gap that is not one.
+ * The test suite pins both halves: the mapping defines the event, and no
+ * row names it, so including it later is a deliberate change.
  *
  * WHAT `resolveField` DOES NOT MODEL: JSON Schema's conditional-requirement
  * keywords (`allOf`/`if`/`then`), which `response-envelope.json`'s
@@ -121,7 +133,7 @@ import { fileURLToPath } from "node:url";
 export type TraceRow = {
   attribute: string;
   /** The OTel span or span-event name this attribute is recorded on --
-   * EXCEPT for the provenance row, whose `span` is a parenthesised
+   * EXCEPT for the provenance and every-step-span rows, whose `span` is a parenthesised
    * description rather than a literal OTel name (module header): nothing in
    * `otel-mapping.json` names a span or event for provenance facts the way
    * `decision_event`'s `event_name` const names one for decision facts. A
@@ -196,6 +208,11 @@ type StepSpanEntry = {
 type OtelMappingSchema = {
   properties: {
     step_to_span: { default: Record<string, StepSpanEntry> };
+    step_span_attributes: {
+      properties: {
+        required_attributes: { default: string[] };
+      };
+    };
     decision_event: {
       properties: {
         required_attributes: { default: string[] };
@@ -419,13 +436,38 @@ export function checkTracePillar(): TraceRow[] {
     }
   }
 
+  // Attributes every step span carries, whichever step it is (module
+  // header) -- one row each, like the provenance row below.
+  const EVERY_STEP_SPAN = "(every step span)";
+  for (const attribute of otelMapping.properties.step_span_attributes.properties.required_attributes.default) {
+    // Both sources are required on every step request, and every step
+    // request has AcsParams, so neither row can be omitted by a hook payload.
+    const site: Record<string, { path: string[]; label: string }> = {
+      "acs.request_id": { path: ["request_id"], label: "AcsParams.request_id" },
+      "acs.session.id": { path: ["metadata", "session_id"], label: "AcsParams.metadata.session_id" },
+    };
+    const known = site[attribute];
+    if (known === undefined) {
+      throw new Error(`checkTracePillar: no known wire site for step_span_attributes attribute "${attribute}" -- add one here`);
+    }
+    rows.push(
+      buildRow(attribute, EVERY_STEP_SPAN, "required", {
+        file: "request-envelope.json",
+        fileRoot: requestEnvelope,
+        startNode: acsParams,
+        path: known.path,
+        label: known.label,
+      }),
+    );
+  }
+
   // Decision facts ride the "acs.decision" span EVENT, not a step span of
   // their own (module header).
   const DECISION_SPAN = "acs.decision";
 
   /** Where each `decision_event` attribute lives on `AcsResult`. Explicit,
    * not derived from the attribute name: a mechanical `"acs.".length` slice
-   * would be wrong for four of these six, because `acs.evaluator`,
+   * would be wrong for four of these twelve, because `acs.evaluator`,
    * `acs.confidence`, `acs.evaluator_version` and `acs.model_id` are not
    * siblings of `AcsResult.decision` -- they live one level deeper, at
    * `AcsResult.metadata.<name>` (verified by reading
@@ -434,7 +476,12 @@ export function checkTracePillar(): TraceRow[] {
    * are both silent on them, which is exactly what makes the row read not emittable under
    * this module's rule -- metadata itself is optional on `AcsResult`, and
    * none of its own fields is required either). `acs.decision` and
-   * `acs.reasoning` remain direct `AcsResult` siblings. A `decision_event`
+   * `acs.reasoning` remain direct `AcsResult` siblings, as are the replay
+   * fields #228 added: `reason_codes`, `cited_provenance_ids`, `chain_hash`,
+   * and `policy_references`. The three `acs.policy.*` columns resolve to
+   * `policy_references` itself, not to one field of its entries: the
+   * padding rule emits all three whenever the array is non-empty, filling
+   * `""` for a missing field, so presence follows the array. A `decision_event`
    * attribute this table does not name throws, rather than silently
    * degrading to "no wire source" the way the mechanical derivation did. */
   function decisionAttributeSite(attribute: string): FieldSite {
@@ -475,6 +522,28 @@ export function checkTracePillar(): TraceRow[] {
           path: ["metadata", "model_id"],
           label: "AcsResult.metadata.model_id",
         };
+      case "acs.reason_codes":
+        return { file: "response-envelope.json", fileRoot: responseEnvelope, startNode: acsResult, path: ["reason_codes"], label: "AcsResult.reason_codes" };
+      case "acs.policy.ids":
+      case "acs.policy.versions":
+      case "acs.policy.rule_ids":
+        return {
+          file: "response-envelope.json",
+          fileRoot: responseEnvelope,
+          startNode: acsResult,
+          path: ["policy_references"],
+          label: "AcsResult.policy_references",
+        };
+      case "acs.cited_provenance_ids":
+        return {
+          file: "response-envelope.json",
+          fileRoot: responseEnvelope,
+          startNode: acsResult,
+          path: ["cited_provenance_ids"],
+          label: "AcsResult.cited_provenance_ids",
+        };
+      case "acs.chain_hash":
+        return { file: "response-envelope.json", fileRoot: responseEnvelope, startNode: acsResult, path: ["chain_hash"], label: "AcsResult.chain_hash" };
       default:
         throw new Error(
           `checkTracePillar: no known wire site for decision_event attribute "${attribute}" -- add one to decisionAttributeSite`,
