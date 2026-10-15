@@ -79,9 +79,12 @@ The full mapping lives in [`trace/ocsf-mapping.json`](https://genai-security-pro
 | `steps/subagentStart`, `steps/subagentStop` | Authentication | 3002 (logon/logoff for the subagent's session) |
 | `steps/turnStart`, `steps/turnEnd` | Application Lifecycle | 6002 |
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
+| Decision (allow) | Application Lifecycle | 6002 |
 | `agbom/snapshot`, `agbom/changed` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
 | `steps/skillRegister` | Device Inventory Info | 5001 (`activity_id` 2, Collect: skill enters the component set) |
 | `steps/sessionEnd` | Authentication | 3002 (logoff) |
+
+An allow goes to Application Lifecycle (6002) with `severity_id` 1. A deployment MAY record allows as Detection Findings instead, for audit symmetry, and then every decision event rule below applies to them. A 6002 allow carries the decision's `unmapped.acs` fields as a decision event does, so `unmapped.acs.decision` holds the disposition and `unmapped.acs.metadata` holds the evaluator. It sets `metadata.correlation_uid` to the gated step's pair. `allow_class` in the mapping lists its required fields.
 
 OCSF `severity_id` for decision events is set from the disposition:
 

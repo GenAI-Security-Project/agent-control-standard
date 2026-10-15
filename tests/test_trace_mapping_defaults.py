@@ -141,6 +141,25 @@ def test_ocsf_decision_codes_match_the_answered_proposal():
     assert set(decision["late_decision"]["properties"]["failure_fields"]["default"]) <= failure_fields
 
 
+def test_ocsf_allow_class_is_structured_and_its_fields_exist():
+    # Issue #198: the allow rule lived only in decision_class.description, so
+    # nothing held its class or said where the disposition goes. Its class
+    # name must match the step_to_class caption for 6002, and every
+    # unmapped.acs field it requires must be one a decision event carries.
+    ocsf = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]
+    decision = ocsf["decision_class"]["properties"]
+    allow = decision["allow_class"]["properties"]
+    assert allow["class_uid"]["const"] == 6002
+    captions = {entry["class_name"] for entry in ocsf["step_to_class"]["default"].values() if entry["class_uid"] == 6002}
+    assert captions == {allow["class_name"]["const"]}
+    carried = set(decision["join_fields"]["default"]) | set(decision["acs_fields"]["default"])
+    required = allow["required_fields"]["default"]
+    assert "unmapped.acs.decision" in required
+    unknown = [field for field in required if field.startswith("unmapped.acs.") and field.removeprefix("unmapped.acs.") not in carried]
+    assert not unknown, f"allow_class requires unmapped.acs fields no decision event carries: {unknown}"
+    assert ocsf["severity_mapping"]["default"]["allow"] == 1
+
+
 def test_padded_source_fields_reject_the_empty_string():
     # Trace pads the policy and provenance arrays with "" where a value is
     # absent, so "" must never be a legal wire value for these fields (#263).
