@@ -11,6 +11,11 @@ If you've contributed and aren't listed here, open a PR. We'd rather over-credit
 - **Bar Kaduri** ([@bar-capsule](https://github.com/bar-capsule))
 - **Eva Benn** ([@evabenn](https://github.com/evabenn))
 - **Fred Wilmot** ([@fewdisc](https://github.com/fewdisc))
+- **narko4u** ([@narko4u](https://github.com/narko4u))
+- **ossumpossum** ([@ossumpossum](https://github.com/ossumpossum))
+- **Prem Methuku** ([@Premmethuku75](https://github.com/Premmethuku75))
+- **Saba Siddique** ([@sabasiddique1](https://github.com/sabasiddique1))
+- **Sankalp Gilda** ([@astrogilda](https://github.com/astrogilda))
 - **Stefano Amorelli** ([@stefanoamorelli](https://github.com/stefanoamorelli))
 
 ## How attribution works here
