@@ -40,7 +40,7 @@
  * output fails on its own: the first failed or throwing export disables
  * that output alone, reports once under its label, and reaches the
  * processor as a success, so a collector that is down, restarting or
- * answering 4xx cannot reject a flush and take the file down with it -- the
+ * answering 4xx cannot reject a flush and take the file down with it. The
  * lab reads the file. A broken mapping or a bug inside start/end still
  * disables everything, once. Ended spans go to one BatchSpanProcessor per
  * output and the file is appended asynchronously, so serialisation and I/O
@@ -155,7 +155,7 @@ export type StepSpan = {
  * points: `start` where the request is recorded, `end` where the response
  * is, with the handle `start` returned. */
 export type OtelTraceExporter = {
-  /** Null when this request produces no span -- `end` then does nothing.
+  /** Null when this request produces no span, and `end` then does nothing.
    * `payloadBytes` is the request body's size, for the failure event. */
   start(envelope: unknown, method: string | null, payloadBytes?: number): StepSpan | null;
   end(stepSpan: StepSpan | null, response: unknown): void;
@@ -188,7 +188,7 @@ export type CreateOtelTraceExporterOptions = {
   /** A span exporter used beside (or instead of) the two above. Exists so
    * tests can read spans back in-process; not meant for production use. */
   spanExporter?: SpanExporter;
-  /** The methods this Guardian dispatches -- the ServerHello's own list.
+  /** The methods this Guardian dispatches: the ServerHello's own list.
    * A method outside it produces no span even when the mapping names one. */
   methodsEvaluated: readonly string[];
   /** The ServerHello's `timeout_config`: how long the host waits for a
@@ -543,7 +543,7 @@ export function createOtelTraceExporter({
           }
         }
         openSpans.clear();
-        // Flushes every processor, then releases them -- bounded, because a
+        // Flushes every processor, then releases them. Bounded, because a
         // stalled output would otherwise hold the process open. The SDK's own
         // export timeout covers a batch in flight; this covers an exporter
         // whose shutdown never returns.

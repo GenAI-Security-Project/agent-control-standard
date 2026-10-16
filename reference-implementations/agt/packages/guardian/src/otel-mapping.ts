@@ -9,7 +9,7 @@
  * attribute. That is the one piece of knowledge this module adds, in the
  * four source tables below, written once by hand. An attribute the mapping
  * names and no table knows is not emitted, and nothing is invented to fill a
- * slot the wire did not carry -- a required attribute the envelope lacks is
+ * slot the wire did not carry. A required attribute the envelope lacks is
  * simply absent, which is itself a fact worth seeing.
  */
 import { readFileSync } from "node:fs";
@@ -27,7 +27,7 @@ const PROVENANCE_COLUMN_LIMIT = 64;
  * that earlier, legitimate decision as not enforced. */
 export const REPLAY_DETECTED_CODE = -32005;
 
-// The repository's own mapping, five directories up from this file -- the
+// The repository's own mapping, five directories up from this file, the
 // same relationship SCHEMA_ROOT in validate-envelope.ts relies on.
 const OTEL_MAPPING_PATH = fileURLToPath(
   new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url),
@@ -115,7 +115,7 @@ type StepSpanEntry = {
 export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
 
 /** otel-mapping.json is a JSON Schema whose data lives inside `default`
- * keys -- the same three places `packages/conformance/src/trace-pillar.ts`
+ * keys, the same three places `packages/conformance/src/trace-pillar.ts`
  * reads. This type names only those. */
 type OtelMappingSchema = {
   properties: {
@@ -140,10 +140,10 @@ export type OtelMapping = {
   stepToSpan: Record<string, StepSpanEntry>;
   decisionEventName: string;
   /** The event's required attributes first, then its conditional ones. Both
-   * are read the same way -- emitted when a value is present -- so one list
+   * are read the same way (emitted when a value is present), so one list
    * serves. */
   decisionAttributes: string[];
-  /** Required first, then optional -- carried on a step span whose payload
+  /** Required first, then optional. Carried on a step span whose payload
    * has a Provenance object attached, as the mapping's own text says. */
   provenanceAttributes: string[];
 };
@@ -305,7 +305,7 @@ export const DECISION_DETAIL_NAMES = [
  * it reads. Unlike the tables above, each of these becomes a COLUMN: one
  * array per attribute, one element per Provenance object the payload
  * carries, in wire order. A span has one value per attribute key, and a
- * payload can carry several Provenance objects -- one per argument -- so an
+ * payload can carry several Provenance objects (one per argument), so an
  * array is the only shape that keeps every object visible; the i-th element
  * of each column describes the i-th object, and `acs.provenance.origin` is
  * always complete because provenance.json requires `origin`.
@@ -326,8 +326,8 @@ export const PROVENANCE_ATTRIBUTE_SOURCES: Record<string, (provenance: JsonObjec
  * bytes' order because `JSON.parse` has already hoisted integer-like
  * argument names ahead of the rest (envelope-log-sink.ts notes `{"0": ...}`
  * is a real shape), so this is the order every reader of the envelope log
- * sees too. The two never meet on one payload -- the request gate carries
- * `arguments`, the result gate `outputs` -- and an argument or output
+ * sees too. The two never meet on one payload (the request gate carries
+ * `arguments`, the result gate `outputs`), and an argument or output
  * without one contributes nothing. */
 export function provenanceObjects(payload: JsonObject): JsonObject[] {
   const carriers: unknown[] = [
@@ -348,7 +348,7 @@ export function provenanceObjects(payload: JsonObject): JsonObject[] {
 }
 
 /** One column over every Provenance object, in order, padded with `""`
- * where an object lacks the field -- the same rule policyColumn applies, for
+ * where an object lacks the field, which is the same rule policyColumn applies, for
  * the same reason: every column is the length of `acs.provenance.origin`, so
  * the i-th element of each describes the i-th object, and a `source_id` one
  * argument carries is never hidden by another argument that has none. */

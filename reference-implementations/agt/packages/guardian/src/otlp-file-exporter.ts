@@ -15,8 +15,8 @@ function asError(error: unknown): Error {
 }
 
 /**
- * Writes OTLP/JSON, one `ExportTraceServiceRequest` per line -- the shape
- * the OpenTelemetry Collector's file exporter writes -- serialised by the
+ * Writes OTLP/JSON, one `ExportTraceServiceRequest` per line (the shape
+ * the OpenTelemetry Collector's file exporter writes), serialised by the
  * official JsonTraceSerializer rather than by hand.
  *
  * The append is asynchronous: this exporter runs on the same event loop the
