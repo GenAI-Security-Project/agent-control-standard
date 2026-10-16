@@ -160,7 +160,7 @@ export function loadOtelMapping(path: string = OTEL_MAPPING_PATH): OtelMapping {
   };
 }
 
-type JsonObject = Record<string, unknown>;
+export type JsonObject = Record<string, unknown>;
 
 export function asObject(value: unknown): JsonObject | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonObject) : undefined;
