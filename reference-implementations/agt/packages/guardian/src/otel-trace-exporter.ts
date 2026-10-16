@@ -97,6 +97,9 @@ export {
 export { createFileSpanExporter } from "./otlp-file-exporter.ts";
 export { keepLoopbackOffProxy, loopbackProxyWarning } from "./loopback-proxy.ts";
 
+/** The SDK's compression enum, which this package does not import directly. */
+type OtlpCompression = NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]>["compression"];
+
 /** How long the OTLP/HTTP exporter keeps retrying one batch against an
  * endpoint that does not answer before it reports the failure. */
 const ENDPOINT_TIMEOUT_MS = 2000;
@@ -339,9 +342,10 @@ export function createOtelTraceExporter({
     // gzip the body. Headers from OTEL_EXPORTER_OTLP_*HEADERS are merged by
     // the SDK under any set here and cannot be refused, so the README lists
     // them as honored.
-    construct(endpoint, () => {
-      return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]>["compression"] });
-    });
+    construct(
+      endpoint,
+      () => new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as OtlpCompression }),
+    );
   }
   if (spanExporter !== undefined) {
     construct("span exporter", () => spanExporter);
