@@ -38,11 +38,12 @@ To see a decision without an agent client, pipe a hook payload into the Claude C
 
 1. The raw envelope is appended to the envelope log, before anything else.
 2. The envelope is validated against `request-envelope.json`. A `steps/toolCallRequest` or `steps/toolCallResult` is also validated against its own payload schema. An invalid envelope on a `steps/*` method is answered with an honoured `deny`, not a bare error, so the host has a decision to act on.
-3. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
-4. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
-5. The verdict is mapped to an ACS decision with the tables in `mapping.yaml`. A `transform` becomes a `modify` whose modification differs by gate: a parameter override at the request gate, a redaction on the result payload at the result gate.
-6. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
-7. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
+3. A `steps/toolCallResult` whose `request_id_ref` names no `toolCallRequest` in the session gets a `finding` line in the envelope log, because `hooks.md` requires the Guardian to record a reference it cannot resolve. The decision is left to policy.
+4. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
+5. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
+6. The verdict is mapped to an ACS decision with the tables in `mapping.yaml`. A `transform` becomes a `modify` whose modification differs by gate: a parameter override at the request gate, a redaction on the result payload at the result gate.
+7. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
+8. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
 
 `handshake/hello` is answered with a constant ServerHello that names exactly the methods this Guardian dispatches: `steps/toolCallRequest` and `steps/toolCallResult`. The Guardian does not read the ClientHello. Any other method is answered with a JSON-RPC error carrying `METHOD_NOT_DISPATCHED_CODE`, which the conformance harness reads back to confirm the ServerHello tells the truth.
 

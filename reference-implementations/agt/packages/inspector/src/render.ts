@@ -233,7 +233,7 @@ export function renderOutcome(message: OutcomeMessage, options: RenderOptions = 
  */
 export function renderEnvelopeLogEntry(entry: EnvelopeLogEntry, options: RenderOptions = {}): string {
   const color = options.color ?? false;
-  const arrow = entry.direction === "request" ? "→ REQUEST " : "← RESPONSE";
+  const arrow = { request: "→ REQUEST ", response: "← RESPONSE", finding: "! FINDING " }[entry.direction];
   const method = entry.method ?? "(no method)";
   const id = entry.rpc_id === null ? "(unpaired)" : `id=${entry.rpc_id}`;
 

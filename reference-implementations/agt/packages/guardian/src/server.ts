@@ -89,6 +89,7 @@ import {
   isToolCallResult,
   validateEnvelope,
   type AcsRequestEnvelope,
+  type ToolCallResultEnvelope,
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
 import { buildServerHello, type ServerHello } from "./handshake.ts";
@@ -574,7 +575,7 @@ async function handleAcsRequest(
 
   let response: JsonRpcSuccess | JsonRpcFailure;
   try {
-    response = await dispatch(raw, bridge, mapping, onDecisionFailure, sessionContextStore);
+    response = await dispatch(raw, bridge, mapping, onDecisionFailure, sessionContextStore, envelopeLog);
   } catch (error) {
     // The outer net. Deliberately a bare JSON-RPC error, not an ACS `deny`:
     // this route is `dispatch` rethrowing entirely past denyOnInvalidEnvelope
@@ -712,12 +713,47 @@ async function readCappedBody(req: Request): Promise<CappedBody> {
     : { withinLimit: true, text: text + decoder.decode() };
 }
 
+/**
+ * hooks.md, toolCallResult: a Guardian SHOULD resolve `request_id_ref` against
+ * the `toolCallRequest` records it holds for the session, and MUST record a
+ * reference it cannot resolve. The decision is left to policy, so this only
+ * records; an unresolvable reference is evidence, and it has to survive even
+ * when the result is allowed. Resolution reads the session's own chain because
+ * `request_id` is unique only within a session (Specification §10.3). A chain
+ * restarted by eviction makes an older reference unresolvable, which is
+ * recorded too: the Guardian no longer holds the request it names.
+ */
+function recordUnresolvedRequestIdRef(
+  envelope: ToolCallResultEnvelope,
+  sessionContextStore: SessionContextStore,
+  envelopeLog: EnvelopeLogSink,
+): void {
+  const ref = envelope.params.payload.request_id_ref;
+  if (ref === undefined) {
+    return;
+  }
+  const sessionId = envelope.params.metadata.session_id;
+  const resolved = sessionContextStore
+    .context(sessionId)
+    .entries.some((entry) => entry.method === "steps/toolCallRequest" && entry.request_id === ref);
+  if (resolved) {
+    return;
+  }
+  envelopeLog.write(
+    "finding",
+    { finding: "request_id_ref_unresolved", session_id: sessionId, request_id: envelope.params.request_id, request_id_ref: ref },
+    envelope.method,
+    envelope.id,
+  );
+}
+
 async function dispatch(
   raw: unknown,
   bridge: PolicyBridge<GuardianSnapshot>,
   mapping: Mapping,
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
+  envelopeLog: EnvelopeLogSink,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const rpcId = extractId(raw);
 
@@ -778,6 +814,7 @@ async function dispatch(
 
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
+    recordUnresolvedRequestIdRef(envelope, sessionContextStore, envelopeLog);
     return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore);
   }
 

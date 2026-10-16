@@ -19,7 +19,7 @@
     "request_id_ref": {
       "type": "string",
       "format": "uuid",
-      "description": "Links to the originating toolCallRequest"
+      "description": "The request_id of the originating toolCallRequest. A Guardian SHOULD resolve it against the session's toolCallRequest records and MUST record it when it cannot be resolved; whether that is grounds to deny is deployment policy (hooks.md, toolCallResult)."
     },
     "exit_status": {
       "type": "string",

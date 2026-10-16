@@ -420,7 +420,7 @@ The `.acs/` directory holds four kinds of local file. None is ever committed.
 
 | File | Written by | Holds |
 |---|---|---|
-| `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation |
+| `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation, plus a `finding` line for a fact the spec requires the Guardian to record, such as a `request_id_ref` it cannot resolve |
 | `session-context.jsonl` | Guardian | One hash-chain entry per governed step |
 | `audit.jsonl` | Host shim | Every fail-open proceed and every posture-driven block |
 | `sessions/<session_id>.json` | Host shim, Claude Code only | The negotiated ServerHello, so the next hook subprocess finds it |
