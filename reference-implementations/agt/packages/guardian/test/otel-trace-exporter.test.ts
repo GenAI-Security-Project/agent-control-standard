@@ -9,6 +9,7 @@ import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
+import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
 import {
   createFileSpanExporter,
   keepLoopbackOffProxy,
@@ -32,37 +33,6 @@ const MAPPING = loadOtelMapping();
  * the same source server.ts builds the exporter from. */
 const METHODS_EVALUATED = buildServerHello().methods_evaluated;
 const TOOL_CALL_SPAN = MAPPING.stepToSpan["steps/toolCallRequest"]!;
-
-function makeEnvelope(
-  method: string,
-  payload: Record<string, unknown>,
-  overrides: { id?: number | null; requestId?: string; sessionId?: string } = {},
-): Record<string, unknown> {
-  const { id = 1, requestId = crypto.randomUUID(), sessionId = crypto.randomUUID() } = overrides;
-  return {
-    jsonrpc: "2.0",
-    method,
-    ...(id === null ? {} : { id }),
-    params: {
-      acs_version: "0.1.0",
-      request_id: requestId,
-      timestamp: new Date().toISOString(),
-      metadata: { agent_id: "agent-1", session_id: sessionId },
-      payload,
-    },
-  };
-}
-
-/** Carries `capability`, which hooks/tool-call-request.json declares
- * optional and the mapping requires on the span -- so a span built from this
- * envelope has every required attribute the mapping names. */
-function toolCallEnvelope(command: string, overrides: { id?: number | null; requestId?: string; sessionId?: string } = {}) {
-  return makeEnvelope(
-    "steps/toolCallRequest",
-    { tool: { name: "run_shell" }, capability: "process.exec", arguments: { command: { value: command } } },
-    overrides,
-  );
-}
 
 /** A Provenance object as provenance.json defines it: `provenance_id` and
  * `origin` required, everything else optional. */
