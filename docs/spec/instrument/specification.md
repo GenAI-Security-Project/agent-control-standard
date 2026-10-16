@@ -62,7 +62,7 @@ A worked example appears in [ACS in Action](../../topics/ACS_in_action_example.m
 
 | Element | Choice |
 |---|---|
-| Envelope | JSON-RPC 2.0, with top-level `acs_version` |
+| Envelope | JSON-RPC 2.0, with `acs_version` in `params` (requests) and `result` (responses) |
 | Transports | HTTP(S) and stdio (Content-Length framing, UTF-8) |
 | Method namespaces | `steps/*`, `protocols/A2A/*`, `protocols/MCP/*`, `agbom/*`, `system/*`, `handshake/*`, `trace/*` (reserved) |
 | Wrapped methods | `protocols/MCP/*` is the canonical v0.1 namespace for MCP wrapping (e.g. `protocols/MCP/tools/call`). The `wrapped:` prefix is an alternative explicit-version form for deployments that pin a specific protocol version on the wire (e.g. `wrapped:mcp-2025-06-18/tools/call`). Both are valid; `protocols/*` is preferred. A2A wrapping deferred to v0.2. |
