@@ -9,16 +9,11 @@
  * same way -- apply the deployment's declared posture -- and that every step
  * which proceeds without a decision MUST be audited.
  *
- * With ONE exception, which is not §6.4's case at all, and which is why this
- * module now reads the failure before it reads the posture: a JSON-RPC error
- * whose code means the Guardian was alive and REFUSED this envelope. §6.4 is
- * about a decision that failed to arrive; a refusal is a decision withheld,
- * by the very component this host defers to. So a refusal resolves to `deny`
- * regardless of posture, and is still audited. Without that, a live Guardian
- * answering `-32020 evaluation failed` and a dead socket were the same kind,
- * and under the shipped default posture (`proceed`) both became `allow` --
- * a governance tool proceeding on the Guardian's own "no". See
- * REFUSAL_RPC_CODES for which codes mean that, and why the set is enumerated.
+ * Two answered-response cases are not §6.4 delivery failures, so this module
+ * reads the failure before the posture: a JSON-RPC refusal and a response that
+ * fails the canonical ACS schema. The Guardian answered in both cases, but no
+ * valid decision exists. Both resolve to `deny` regardless of posture and are
+ * audited under distinct failure kinds.
  *
  * It is NOT reached when a decision arrived. A `deny` that arrives is
  * honoured regardless of posture, and that is enforced by the caller never
@@ -36,14 +31,15 @@
  * with a write it was told did not happen.
  *
  * Nothing here knows the policy runtime behind the wire. A delivery failure
- * is a property of the wire, and a refusal is a property of the Guardian's
- * willingness to answer this envelope -- neither is a property of whatever
- * evaluates policy on the other side of it, and nothing here names one.
+ * is a property of the wire; a refusal or invalid response is a property of
+ * what the Guardian returned. None is a property of the policy runtime.
  */
 import type { AuditEvent, AuditSink } from "./audit-sink.ts";
 import type {
   DeliveryFailureKind,
   FailureStage,
+  HostFailureKind,
+  InvalidResponseFailureKind,
   RefusalFailureKind,
   SessionFailureKind,
   StepFailureKind,
@@ -51,6 +47,11 @@ import type {
 import type { AcsDecision } from "./decision-message.ts";
 import { GuardianTimeoutError } from "./guardian-client.ts";
 import { SessionConfigNotStoredError, type ResolvedSessionConfig } from "./handshake.ts";
+import {
+  GuardianDecisionResponseError,
+  GuardianResponseValidationError,
+  GuardianResponseValidatorError,
+} from "./validate-response.ts";
 
 // The failure taxonomies this module classifies into live in
 // `./failure-kinds.ts`, shared with the audit sink that stores them, and are
@@ -60,6 +61,7 @@ export type {
   DeliveryFailureKind,
   FailureStage,
   HostFailureKind,
+  InvalidResponseFailureKind,
   RefusalFailureKind,
   SessionFailureKind,
   StepFailureKind,
@@ -183,10 +185,19 @@ const REFUSAL_RPC_CODES = new Set([-32700, -32010, -32011, -32020]);
  */
 export function classifyDeliveryFailure(
   failure: unknown,
-): { kind: DeliveryFailureKind | RefusalFailureKind; message: string } {
+): {
+  kind: DeliveryFailureKind | RefusalFailureKind | InvalidResponseFailureKind | HostFailureKind;
+  message: string;
+} {
   try {
     if (failure instanceof GuardianTimeoutError) {
       return { kind: "timeout", message: failure.message };
+    }
+    if (failure instanceof GuardianResponseValidationError || failure instanceof GuardianDecisionResponseError) {
+      return { kind: "invalid_response", message: failure.message };
+    }
+    if (failure instanceof GuardianResponseValidatorError) {
+      return { kind: "response_validation_unavailable", message: failure.message };
     }
     if (failure instanceof Error) {
       // Two independent routes to "transport", because no single one is
@@ -310,15 +321,17 @@ export function applyFailurePosture({
 }: ApplyFailurePostureInput): FailureResolvedAcsDecision {
   const { config: sessionConfig, failure: sessionFailure } = session;
   const posture = sessionConfig?.on_decision_failure ?? DEFAULT_POSTURE;
-  // Classified BEFORE the resolution is read, because for one kind it decides
-  // the resolution. Everything else is the wire's business and the posture's;
-  // a refusal is the Guardian's, and a governance tool does not proceed on it
-  // -- see REFUSAL_RPC_CODES and REFUSAL_RESOLUTION.
+  // Classified BEFORE the resolution is read, because two answered-response
+  // kinds decide it. A refusal and an invalid response both came from a live
+  // Guardian, and a governance tool does not proceed on either.
   const classified = classifyStepFailure(stage, failure);
   const refused = classified.kind === "refused";
+  const invalidResponse = classified.kind === "invalid_response";
+  const validationUnavailable = classified.kind === "response_validation_unavailable";
+  const failClosed = refused || invalidResponse;
   // One resolution, read once, in the three vocabularies it is expressed in --
   // see RESOLUTION_BY_POSTURE.
-  const { decision, outcome } = refused ? REFUSAL_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
+  const { decision, outcome } = failClosed ? FAIL_CLOSED_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
 
   // Computed before the audit write, and written into it: "the guardian was
   // down for this whole session" (default) and "this deployment chose to
@@ -369,10 +382,16 @@ export function applyFailurePosture({
   // (github.com/afogel/ACS_reference_implementation, docs/demos/v3-runbook.md), reproduced
   // against a live Guardian.
   // It is not to be reworded without re-capturing them.
-  const cause = refused
-    ? `the guardian refused the envelope for ${method ?? "this step"} rather than deciding it ` +
-      `(${classified.kind}: ${classified.message})`
-    : stage === "request"
+  const cause = failClosed
+    ? invalidResponse
+      ? `the guardian returned an invalid response for ${method ?? "this step"} ` +
+        `(${classified.kind}: ${classified.message})`
+      : `the guardian refused the envelope for ${method ?? "this step"} rather than deciding it ` +
+        `(${classified.kind}: ${classified.message})`
+    : validationUnavailable
+      ? `this host could not validate the response for ${method ?? "this step"} ` +
+        `(${classified.kind}: ${classified.message})`
+      : stage === "request"
       ? `this host could not build a request for this step, so no decision was ever sought ` +
         `(${classified.kind}: ${classified.message})`
       : stage === "render"
@@ -388,22 +407,21 @@ export function applyFailurePosture({
 
   // Returns before both of the two exits below, because both of them speak
   // about `on_decision_failure` -- what this deployment declared should happen
-  // when a decision does not arrive -- and a refusal is a decision withheld,
-  // not one lost. Saying "on_decision_failure=proceed, so this step was
+  // when no response arrives. A refusal or invalid response is an answer, not
+  // a lost delivery. Saying "on_decision_failure=proceed, so this step was
   // blocked" would read as a posture contradicting itself; saying it was
   // blocked for want of an audit entry would name the wrong reason entirely.
   // It is still audited -- the write above already happened -- and an
-  // unauditable refusal needs no downgrade for the same reason an unauditable
-  // deny does not: the step is blocked either way, and the failed write is
-  // reported by the sink's own error path.
-  if (refused) {
+  // unauditable fail-closed outcome needs no downgrade: the step is blocked
+  // either way, and the failed write is reported by the sink's own error path.
+  if (failClosed) {
     return {
       decision,
       reasoning:
         `${cause};${sessionNote} the guardian was reachable and answered, so this is not a delivery failure ` +
-        `and on_decision_failure=${posture} does not apply -- a step the guardian would not decide is not a ` +
-        "step this host may proceed with, so it was blocked.",
-      reason_codes: [REFUSAL_REASON_CODE],
+        `and on_decision_failure=${posture} does not apply -- a step without a valid guardian decision is not ` +
+        "a step this host may proceed with, so it was blocked.",
+      reason_codes: [invalidResponse ? INVALID_RESPONSE_REASON_CODE : REFUSAL_REASON_CODE],
     };
   }
 
@@ -430,7 +448,7 @@ export function applyFailurePosture({
   return {
     decision,
     reasoning: `${cause};${sessionNote} ${postureOrigin} -- on_decision_failure=${posture}, so this step was ${outcome}.`,
-    reason_codes: [REASON_CODE_BY_STAGE[stage]],
+    reason_codes: [validationUnavailable ? "response_validation_unavailable" : REASON_CODE_BY_STAGE[stage]],
   };
 }
 
@@ -455,9 +473,9 @@ export function applyFailurePosture({
  * word no posture can ever resolve to, admitted into the one table whose job
  * is that the posture, the decision and the outcome agree by construction.
  *
- * Consulted for every failure except a refusal, which REFUSAL_RESOLUTION
- * answers instead -- there is no posture row for it, because the deployment
- * never got to declare one.
+ * Consulted for delivery and host failures. Refusals and invalid responses use
+ * FAIL_CLOSED_RESOLUTION instead because they are answered-response failures,
+ * outside the posture's declaration about missing delivery.
  */
 type PostureResolvedAuditEvent = Extract<AuditEvent, { outcome: "proceeded" | "blocked" }>;
 
@@ -470,26 +488,21 @@ const RESOLUTION_BY_POSTURE: Record<
 };
 
 /**
- * A refusal's resolution: the one that is not read out of a posture.
+ * The resolution for an answered response that cannot supply a valid decision.
  *
  * `blocked` rather than a fourth outcome word, because `AuditEntry.outcome`
  * reports what became of the step and the step was blocked -- inventing
- * `refused` there would give the Inspector a badge stem to learn for a fact
- * the entry already carries twice over, in `failure.kind` and in the code
- * inside `failure.message`. A refusal-driven block stays distinguishable from
- * a posture-driven one in the log without that: `failure.kind` names it
- * outright, and `posture: "proceed"` beside `outcome: "blocked"` is a pair no
- * posture-driven entry can produce (the unauditable-proceed downgrade denies
- * only when the write failed, which is precisely when no entry exists).
+ * A new outcome word would give the Inspector another badge stem for a fact
+ * already carried by `failure.kind`. These blocks stay distinguishable from
+ * posture-driven ones because the kind is `refused` or `invalid_response`.
  *
  * Shaped like a RESOLUTION_BY_POSTURE row, and read off the same
  * `PostureResolvedAuditEvent` arm, so the two cannot drift into disagreeing
  * about what a `blocked` step is. The ARM and not `AuditEvent` whole, for the
  * reason RESOLUTION_BY_POSTURE gives: the union's other member carries
- * `"ungoverned"`, and a refusal is a step this deployment governed and
- * blocked -- the one thing it is certainly not is ungoverned.
+ * `"ungoverned"`; these are steps this deployment governed and blocked.
  */
-const REFUSAL_RESOLUTION: { decision: "allow" | "deny"; outcome: PostureResolvedAuditEvent["outcome"] } = {
+const FAIL_CLOSED_RESOLUTION: { decision: "allow" | "deny"; outcome: PostureResolvedAuditEvent["outcome"] } = {
   decision: "deny",
   outcome: "blocked",
 };
@@ -506,6 +519,8 @@ const REASON_CODE_BY_STAGE: Record<FailureStage, string> = {
  * stage, and `decision_failure` there would tell a machine reader that no
  * decision arrived when the Guardian's refusal is exactly what did. */
 const REFUSAL_REASON_CODE = "guardian_refused";
+/** A schema-invalid response has its own machine-readable reason. */
+const INVALID_RESPONSE_REASON_CODE = "guardian_response_invalid";
 
 /**
  * The classified `{kind, message}` for one step, at the stage that failed --

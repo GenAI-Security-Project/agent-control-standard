@@ -9,6 +9,7 @@ import {
 import { GuardianTimeoutError } from "../src/guardian-client.ts";
 import { SessionConfigStoreFailedError, type ResolvedSessionConfig } from "../src/handshake.ts";
 import type { SessionConfig } from "../src/session-config.ts";
+import { GuardianResponseValidatorError } from "../src/validate-response.ts";
 
 /** The arm of `AuditEvent` this module writes. `applyFailurePosture` answers
  * a failure with a posture, and every entry it files is that; the other arm
@@ -376,6 +377,13 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
     expect(classifyDeliveryFailure(new GuardianTimeoutError(5000)).kind).toBe("timeout");
   });
 
+  it("classifies local validator unavailability as a host fault", () => {
+    expect(classifyDeliveryFailure(new GuardianResponseValidatorError("schema files are unavailable"))).toEqual({
+      kind: "response_validation_unavailable",
+      message: "Host could not validate the Guardian response: schema files are unavailable",
+    });
+  });
+
   // MUST NOT be replaced with a synthetic error. A hand-built
   // `new TypeError(...)` would only prove classifyDeliveryFailure handles a
   // TypeError correctly, never that a real refused connection produces one.
@@ -434,6 +442,37 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
   it("never throws on an unknown shape", () => {
     expect(classifyDeliveryFailure(Object.create(null)).kind).toBe("unknown");
     expect(classifyDeliveryFailure(undefined).kind).toBe("unknown");
+  });
+});
+
+describe("applyFailurePosture — local response validation is unavailable", () => {
+  it("uses the negotiated posture without blaming the Guardian", () => {
+    const proceeding = recordingSink();
+    const proceed = applyFailurePosture({
+      failure: new GuardianResponseValidatorError("schema files are unavailable"),
+      session: SESSION("proceed"),
+      audit: proceeding.sink,
+      ...CALL,
+    });
+    expect(proceed.decision).toBe("allow");
+    expect(proceed.reason_codes).toEqual(["response_validation_unavailable"]);
+    expect(proceed.reasoning).toMatch(/this host could not validate/i);
+    expect(proceed.reasoning).not.toMatch(/guardian returned an invalid response/i);
+    expect(proceeding.events[0]).toMatchObject({
+      posture: "proceed",
+      outcome: "proceeded",
+      failure: { kind: "response_validation_unavailable" },
+    });
+
+    const denying = recordingSink();
+    expect(
+      applyFailurePosture({
+        failure: new GuardianResponseValidatorError("schema files are unavailable"),
+        session: SESSION("deny"),
+        audit: denying.sink,
+        ...CALL,
+      }).decision,
+    ).toBe("deny");
   });
 });
 

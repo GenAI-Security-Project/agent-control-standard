@@ -97,14 +97,12 @@ type PostureResolvedAuditEntry = AuditEntryIdentity & {
    *
    * Derived from the posture in exactly one place (failure-posture.ts's
    * RESOLUTION_BY_POSTURE), so the two can never disagree about a step --
-   * with one exception, which is the one combination worth knowing how to
-   * read here. A step the Guardian REFUSED (`failure.kind: "refused"`) is
-   * `blocked` whatever the posture said, because the posture answers a
-   * decision that did not arrive and a refusal is one that was withheld. So
-   * `posture: "proceed"` beside `outcome: "blocked"` is a refusal, always:
-   * the only other route from a `proceed` posture to a blocked step is the
-   * unauditable-proceed downgrade, and that one denies precisely because the
-   * write failed, so it leaves no entry to read.
+   * with two answered-response exceptions. A Guardian refusal
+   * (`failure.kind: "refused"`) and a schema-invalid Guardian response
+   * (`failure.kind: "invalid_response"`) are blocked whatever the posture
+   * said. The kind distinguishes them. The only other route from a `proceed`
+   * posture to a blocked step is the unauditable-proceed downgrade, which
+   * leaves no entry because the write itself failed.
    */
   outcome: "proceeded" | "blocked";
   /** The posture in force -- negotiated, or the ACS default when nothing was. */
@@ -121,10 +119,10 @@ type PostureResolvedAuditEntry = AuditEntryIdentity & {
    *
    * `kind` carries the taxonomy rather than a bare `string`.
    * `applyFailurePosture` goes to some trouble to tell a delivery failure
-   * from a refusal and from a host-side fault -- `DeliveryFailureKind` was
-   * deliberately narrowed for it, `RefusalFailureKind` exists because a
-   * Guardian that answered "no" is not a Guardian that failed to answer, and
-   * `HostFailureKind` exists so a host misconfiguration is not filed as an
+   * from an answered-response failure and from a host-side fault --
+   * `DeliveryFailureKind` was deliberately narrowed, the Guardian-response
+   * kinds distinguish refusal from invalid structure, and `HostFailureKind`
+   * exists so a host misconfiguration is not filed as an
    * unknown delivery failure -- and this is the only boundary that outlives
    * the process, so a widening here is where all of that would have been
    * lost. It is also the only place an incident review ever reads: a value
