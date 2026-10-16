@@ -1378,28 +1378,78 @@ describe("the Guardian's exporter does not depend on its environment", () => {
     }
   }, 10_000);
 
-  it("sends to a loopback endpoint directly when HTTP_PROXY is set", async () => {
-    // A proxy that only counts connections and never answers.
-    let proxyConnections = 0;
-    const proxy = createServer((socket) => {
-      proxyConnections += 1;
-      socket.destroy();
-    });
-    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
-    const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
-    setEnv({ HTTP_PROXY: proxyUrl, http_proxy: proxyUrl });
+  // The exemption is main.ts's to apply (Ariel's review on PR #286), so this
+  // test applies it the way main.ts does, before the exporter is built. It
+  // runs in a fresh child for the reason the routing test further down
+  // gives: Bun latches proxy variables across edits within a process. In
+  // process, this test passed only when an earlier test had already put
+  // 127.0.0.1 in NO_PROXY, and failed when run alone. Gated to Bun 1.3.14
+  // and later, which honor a runtime edit; 1.3.11 reads the variables only
+  // at startup, so main.ts's warning is what an operator gets there.
+  it.skipIf(!Bun.semver.satisfies(Bun.version, ">=1.3.14"))(
+    "sends to a loopback endpoint directly when HTTP_PROXY is set and the exemption is applied",
+    async () => {
+      // A proxy that only counts connections and never answers.
+      let proxyConnections = 0;
+      const proxy = createServer((socket) => {
+        proxyConnections += 1;
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+      const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+      const source = new URL("../src/otel-trace-exporter.ts", import.meta.url).pathname;
+      const script = `
+        const { createOtelTraceExporter, keepLoopbackOffProxy } = await import(${JSON.stringify(source)});
+        let collected = 0;
+        const collector = Bun.serve({
+          port: 0,
+          hostname: "127.0.0.1",
+          fetch() {
+            collected += 1;
+            return new Response("{}", { headers: { "content-type": "application/json" } });
+          },
+        });
+        const endpoint = "http://127.0.0.1:" + collector.port + "/v1/traces";
+        keepLoopbackOffProxy(endpoint, process.env);
+        const exporter = createOtelTraceExporter({ endpoint, methodsEvaluated: ["steps/toolCallRequest"], onError: () => {} });
+        exporter.end(exporter.start(${JSON.stringify(envelope(1))}, "steps/toolCallRequest"), ${JSON.stringify(allow(1))});
+        await exporter.shutdown();
+        console.log(JSON.stringify({ collected }));
+        collector.stop(true);
+        process.exit(0);
+      `;
+      try {
+        // Async spawn, so the proxy listener on this event loop can count
+        // the child's connections.
+        const child = Bun.spawn([process.execPath, "-e", script], {
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", HTTP_PROXY: proxyUrl, http_proxy: proxyUrl },
+          stdout: "pipe",
+        });
+        const output = await new Response(child.stdout).text();
+        await child.exited;
+        const result = JSON.parse(output.trim().split("\n").pop()!);
+        expect({ proxyConnections, collected: result.collected }).toEqual({ proxyConnections: 0, collected: 1 });
+      } finally {
+        proxy.close();
+      }
+    },
+    10_000,
+  );
+
+  // Ariel's review on PR #286: the composition root owns the environment.
+  // main.ts applies the loopback exemption, so an embedder that builds the
+  // exporter itself decides whether its own environment changes.
+  it("leaves NO_PROXY and no_proxy as they were when built for a loopback endpoint", async () => {
     unsetEnv("NO_PROXY", "no_proxy");
-    const collector = startCollector();
-    try {
-      const exporter = createOtelTraceExporter({ endpoint: collector.url, methodsEvaluated: METHODS_EVALUATED });
-      exporter.end(exporter.start(envelope(1), "steps/toolCallRequest"), allow(1));
-      await exporter.shutdown();
-      expect({ proxyConnections, collected: collector.received.length }).toEqual({ proxyConnections: 0, collected: 1 });
-    } finally {
-      collector.server.stop(true);
-      proxy.close();
-    }
-  }, 10_000);
+    const unset = createOtelTraceExporter({ endpoint: "http://127.0.0.1:4318/v1/traces", methodsEvaluated: METHODS_EVALUATED, onError: () => {} });
+    await unset.shutdown();
+    expect({ NO_PROXY: "NO_PROXY" in process.env, no_proxy: "no_proxy" in process.env }).toEqual({ NO_PROXY: false, no_proxy: false });
+
+    setEnv({ NO_PROXY: "corp.internal", no_proxy: "corp.internal" });
+    const set = createOtelTraceExporter({ endpoint: "http://127.0.0.1:4318/v1/traces", methodsEvaluated: METHODS_EVALUATED, onError: () => {} });
+    await set.shutdown();
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["corp.internal", "corp.internal"]);
+  });
 });
 
 describe("keepLoopbackOffProxy", () => {
@@ -1422,13 +1472,13 @@ describe("keepLoopbackOffProxy", () => {
 
   it("adds localhost for a localhost endpoint", () => {
     reset(undefined);
-    keepLoopbackOffProxy("http://localhost:4318/v1/traces");
+    keepLoopbackOffProxy("http://localhost:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["localhost", "localhost"]);
   });
 
   it("adds ::1 both bare and bracketed for an IPv6 loopback endpoint, because Bun matches only [::1]", () => {
     reset(undefined);
-    keepLoopbackOffProxy("http://[::1]:4318/v1/traces");
+    keepLoopbackOffProxy("http://[::1]:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["::1,[::1]", "::1,[::1]"]);
   });
 
@@ -1438,7 +1488,7 @@ describe("keepLoopbackOffProxy", () => {
   it("appends to NO_PROXY alone when only NO_PROXY is set, and does not create no_proxy", () => {
     reset(undefined);
     process.env.NO_PROXY = "corp.internal";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
     expect(process.env.NO_PROXY).toBe("corp.internal,127.0.0.1");
     expect("no_proxy" in process.env).toBe(false);
   });
@@ -1446,7 +1496,7 @@ describe("keepLoopbackOffProxy", () => {
   it("appends to no_proxy alone when only no_proxy is set, and does not create NO_PROXY", () => {
     reset(undefined);
     process.env.no_proxy = "corp.internal";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
     expect(process.env.no_proxy).toBe("corp.internal,127.0.0.1");
     expect("NO_PROXY" in process.env).toBe(false);
   });
@@ -1455,7 +1505,7 @@ describe("keepLoopbackOffProxy", () => {
     reset(undefined);
     process.env.NO_PROXY = "corp.internal";
     process.env.no_proxy = "";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["corp.internal,127.0.0.1", ""]);
   });
 
@@ -1464,7 +1514,7 @@ describe("keepLoopbackOffProxy", () => {
       reset(undefined);
       process.env.NO_PROXY = "corp.internal";
       process.env.no_proxy = blank;
-      keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+      keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
       expect({ blank, NO_PROXY: process.env.NO_PROXY, no_proxy: process.env.no_proxy }).toEqual({
         blank,
         NO_PROXY: "corp.internal,127.0.0.1",
@@ -1475,35 +1525,35 @@ describe("keepLoopbackOffProxy", () => {
 
   it("sets both when neither is set, and appends once to each when both are set", () => {
     reset(undefined);
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["127.0.0.1", "127.0.0.1"]);
     process.env.NO_PROXY = "a.internal";
     process.env.no_proxy = "b.internal";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["a.internal,127.0.0.1", "b.internal,127.0.0.1"]);
   });
 
   it("does not duplicate the entry when called twice", () => {
     reset(undefined);
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces");
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["127.0.0.1", "127.0.0.1"]);
   });
 
   it("preserves existing entries", () => {
     reset("example.internal");
-    keepLoopbackOffProxy("http://localhost:4318/v1/traces");
+    keepLoopbackOffProxy("http://localhost:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["example.internal,localhost", "example.internal,localhost"]);
   });
 
   it("leaves both variables exactly as they were for a non-loopback endpoint", () => {
     reset(undefined);
-    keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces");
+    keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces", process.env);
     expect("NO_PROXY" in process.env).toBe(false);
     expect("no_proxy" in process.env).toBe(false);
     reset("example.internal");
-    keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces");
+    keepLoopbackOffProxy("http://collector.example.com:4318/v1/traces", process.env);
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["example.internal", "example.internal"]);
   });
 });
@@ -1568,7 +1618,7 @@ describe("keepLoopbackOffProxy, routed through a real proxy in a child process",
         }
       };
       const guard = await go("127.0.0.1");
-      keepLoopbackOffProxy("http://127.0.0.1:" + target.port + "/v1/traces");
+      keepLoopbackOffProxy("http://127.0.0.1:" + target.port + "/v1/traces", process.env);
       const loopback = await go("127.0.0.1");
       const existing = await go("localhost");
       console.log(JSON.stringify({ guard, loopback, existing }));

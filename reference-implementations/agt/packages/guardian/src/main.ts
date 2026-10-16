@@ -19,6 +19,7 @@
  * surface and server.ts reads none itself.
  */
 import { buildServerHello } from "./handshake.ts";
+import { keepLoopbackOffProxy, loopbackProxyWarning } from "./otel-trace-exporter.ts";
 import { startGuardian } from "./server.ts";
 
 const DEFAULT_PORT = 8787;
@@ -35,6 +36,23 @@ const sessionContextLog = process.env.ACS_SESSION_CONTEXT_LOG ?? DEFAULT_SESSION
 // passed in, like ACS_ENVELOPE_LOG: server.ts reads no env itself.
 const otelTraceFile = process.env.ACS_OTEL_FILE;
 const otelTraceEndpoint = process.env.ACS_OTEL_ENDPOINT;
+// The proxy variables are environment too, so they are read and edited here
+// and never by the exporter. The warning judges them as the operator set
+// them, before the edit: Bun 1.3.11 ignores a runtime edit, and there the
+// warning is all the operator gets. An endpoint that is not a URL is left to
+// the exporter, which reports it and disables that output without stopping
+// the Guardian.
+if (otelTraceEndpoint !== undefined) {
+  try {
+    const warning = loopbackProxyWarning(otelTraceEndpoint, process.env);
+    if (warning !== undefined) {
+      console.error(warning);
+    }
+    keepLoopbackOffProxy(otelTraceEndpoint, process.env);
+  } catch {
+    // Not a URL. createOtelTraceExporter reports it below.
+  }
+}
 
 // Read and validate the posture BEFORE starting the server. Not the audit
 // sink's path: that file is the host's, written by the hook, not by

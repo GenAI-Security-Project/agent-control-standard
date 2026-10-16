@@ -613,24 +613,26 @@ const splitProxyList = (value: string): string[] =>
  * version this edit has no effect, and loopbackProxyWarning below is what
  * tells the operator.
  *
- * The change is process-wide and permanent: it is written to process.env and
- * never undone, so anything else in this process (a host adapter embedded
- * with the Guardian) and any child process it spawns inherits it. That is
- * acceptable because only loopback hosts are ever added, and traffic to this
- * machine should not use a proxy for any of them.
+ * The edit is made to the `env` it is given and never undone. main.ts
+ * passes process.env, so there the change is process-wide and permanent:
+ * anything else in that process (a host adapter embedded with the Guardian)
+ * and any child process it spawns inherits it. That is acceptable because
+ * only loopback hosts are ever added, and traffic to this machine should not
+ * use a proxy for any of them. The exporter never calls this itself, so an
+ * embedder that builds the exporter decides whether its environment changes.
  */
-export function keepLoopbackOffProxy(endpoint: string): void {
+export function keepLoopbackOffProxy(endpoint: string, env: Record<string, string | undefined>): void {
   const additions = loopbackProxyEntries(endpoint);
   if (additions.length === 0) {
     return;
   }
   const keys = ["NO_PROXY", "no_proxy"] as const;
-  const setKeys = keys.filter((key) => (process.env[key] ?? "") !== "");
+  const setKeys = keys.filter((key) => (env[key] ?? "") !== "");
   for (const key of setKeys.length === 0 ? keys : setKeys) {
-    const entries = splitProxyList(process.env[key] ?? "");
+    const entries = splitProxyList(env[key] ?? "");
     const missing = additions.filter((entry) => !entries.includes(entry));
     if (missing.length > 0) {
-      process.env[key] = [...entries, ...missing].join(",");
+      env[key] = [...entries, ...missing].join(",");
     }
   }
 }
@@ -638,12 +640,12 @@ export function keepLoopbackOffProxy(endpoint: string): void {
 /**
  * A warning when a loopback endpoint would reach an HTTP proxy, judged by
  * the variables as they stand: a proxy is set, and the list Bun reads (a
- * non-empty no_proxy, otherwise NO_PROXY) does not exempt the host. Called
- * before keepLoopbackOffProxy, so on Bun 1.3.11, which ignores the runtime
- * edit, the operator still learns that spans may go through the proxy and
- * what to set before starting the Guardian.
+ * non-empty no_proxy, otherwise NO_PROXY) does not exempt the host. main.ts
+ * calls it before keepLoopbackOffProxy, so on Bun 1.3.11, which ignores the
+ * runtime edit, the operator still learns that spans may go through the
+ * proxy and what to set before starting the Guardian.
  */
-export function loopbackProxyWarning(endpoint: string, env: Record<string, string | undefined> = process.env): string | undefined {
+export function loopbackProxyWarning(endpoint: string, env: Record<string, string | undefined>): string | undefined {
   const additions = loopbackProxyEntries(endpoint);
   const proxy = env.http_proxy || env.HTTP_PROXY;
   if (additions.length === 0 || !proxy) {
@@ -793,11 +795,6 @@ export function createOtelTraceExporter({
     // the SDK under any set here and cannot be refused, so the README lists
     // them as honored.
     construct(endpoint, () => {
-      const warning = loopbackProxyWarning(endpoint);
-      if (warning !== undefined) {
-        console.error(warning);
-      }
-      keepLoopbackOffProxy(endpoint);
       return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as NonNullable<ConstructorParameters<typeof OTLPTraceExporter>[0]>["compression"] });
     });
   }
