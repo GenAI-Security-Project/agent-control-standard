@@ -31,7 +31,9 @@
  * those into the same event with `reported_by` set to the observed agent.
  *
  * Off by default. With no file and no endpoint configured, startGuardian is
- * handed NULL_OTEL_TRACE_EXPORTER and behaves exactly as before.
+ * handed NULL_OTEL_TRACE_EXPORTER, which emits nothing. The Guardian's
+ * decisions are the same as with export on, and so is the bounded drain in
+ * close().
  *
  * Total by construction, as envelope-log-sink.ts is. Every entry point is
  * wrapped, and nothing propagates into or delays the decision path. Each
