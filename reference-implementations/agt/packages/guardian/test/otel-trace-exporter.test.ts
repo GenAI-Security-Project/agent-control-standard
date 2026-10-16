@@ -950,6 +950,39 @@ describe("Guardian trace export wiring", () => {
     }
   }, 15_000);
 
+  // Ariel's review on PR #286: close() applies the same bounded drain with
+  // export off as with it on, since the null exporter's shutdown resolves at
+  // once. Before, a Guardian with export off waited on stop(true) alone. On
+  // Bun 1.3.11 that waits for every in-flight handler, and a handler whose
+  // bridge never answers never returns, so close() hung. Bun 1.3.14 resolves
+  // stop(true) at once, and there this test passes either way.
+  it("closes in bounded time with export off while a step is still in flight", async () => {
+    let reached: () => void = () => {};
+    const reachedBridge = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const silent: PolicyBridge<GuardianSnapshot> = {
+      evaluate() {
+        reached();
+        return new Promise(() => {});
+      },
+    };
+    const guardian = await startGuardian({ ...baseOptions, bridge: silent });
+    const pending = postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1 })).then(
+      () => "answered",
+      () => "connection closed",
+    );
+    await reachedBridge;
+    const closeStarted = performance.now();
+    await guardian.close();
+    const closeMs = performance.now() - closeStarted;
+    // The request is never decided. It ends because the server went away.
+    expect(await Promise.race([pending, Bun.sleep(2000).then(() => "still open")])).toBe("connection closed");
+    // At most the ServerHello's default timeout, 5 s: past it, no host is
+    // still waiting for the answer.
+    expect(closeMs).toBeLessThan(buildServerHello().timeout_config.default_ms + 1000);
+  }, 15_000);
+
   // server.ts builds the exporter from the ServerHello, so the posture on a
   // failure event is the one this Guardian declared to the host. An envelope
   // with neither an id nor a request_id earns a deny that cannot be

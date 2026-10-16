@@ -474,7 +474,7 @@ export type OtelTraceExporter = {
 
 /** The exporter a Guardian gets when neither output is configured: the
  * composition root disabling trace export gets a value of the same type,
- * not a special case. */
+ * not a special case. server.ts's close() treats it like any other. */
 export const NULL_OTEL_TRACE_EXPORTER: OtelTraceExporter = {
   start(): null {
     return null;
