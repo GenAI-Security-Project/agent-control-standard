@@ -1,0 +1,132 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "substrate",
+  "expected": {
+    "code": "CAPABILITY_NOT_NEGOTIATED",
+    "codeValue": -32003,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-7",
+  "id": "v10351021bf6e46b1",
+  "kind": "reject",
+  "payload": {
+    "policy": {
+      "budget": {
+        "max_calls_per_turn": 3,
+        "tool": "records.lookup"
+      }
+    },
+    "steps": [
+      {
+        "request": {
+          "acs": "0.1",
+          "metadata": {
+            "session_id": "s-0001",
+            "turn_id": "t-0001"
+          },
+          "method": "hooks/toolCallRequest",
+          "params": {
+            "tool": {
+              "arguments": {
+                "id": "c-1"
+              },
+              "name": "records.lookup"
+            }
+          },
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "signature": {
+            "algorithm": "HMAC-SHA256",
+            "key_id": "k1",
+            "value": "AAAA"
+          },
+          "timestamp": "2026-09-09T12:00:00Z"
+        }
+      },
+      {
+        "request": {
+          "acs": "0.1",
+          "metadata": {
+            "session_id": "s-0001",
+            "turn_id": "t-0001"
+          },
+          "method": "hooks/toolCallRequest",
+          "params": {
+            "tool": {
+              "arguments": {
+                "id": "c-1"
+              },
+              "name": "records.lookup"
+            }
+          },
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "signature": {
+            "algorithm": "HMAC-SHA256",
+            "key_id": "k1",
+            "value": "AAAA"
+          },
+          "timestamp": "2026-09-09T12:00:00Z"
+        }
+      },
+      {
+        "request": {
+          "acs": "0.1",
+          "metadata": {
+            "session_id": "s-0001",
+            "turn_id": "t-0001"
+          },
+          "method": "hooks/toolCallRequest",
+          "params": {
+            "tool": {
+              "arguments": {
+                "id": "c-1"
+              },
+              "name": "records.lookup"
+            }
+          },
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "signature": {
+            "algorithm": "HMAC-SHA256",
+            "key_id": "k1",
+            "value": "AAAA"
+          },
+          "timestamp": "2026-09-09T12:00:00Z"
+        }
+      },
+      {
+        "request": {
+          "acs": "0.1",
+          "metadata": {
+            "session_id": "s-0001",
+            "session_state": {
+              "records.lookup_calls_this_turn": 0
+            },
+            "turn_id": "t-0001"
+          },
+          "method": "hooks/toolCallRequest",
+          "params": {
+            "tool": {
+              "arguments": {
+                "id": "c-1"
+              },
+              "name": "records.lookup"
+            }
+          },
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "signature": {
+            "algorithm": "HMAC-SHA256",
+            "key_id": "k1",
+            "value": "AAAA"
+          },
+          "timestamp": "2026-09-09T12:00:00Z"
+        }
+      }
+    ]
+  },
+  "requirements": [
+    "ACS-R-009"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}
