@@ -57,3 +57,25 @@ describe("the walkthrough's collector step", () => {
     expect(readme).toContain("with the Docker command above on Docker Desktop for Mac");
   });
 });
+
+// Bar's two pre-handoff findings on issue #274.
+describe("the walkthrough's proxy and rerun instructions", () => {
+  const STOP_FIRST =
+    "Stop the Guardian and the collector first, with Ctrl-C or `docker stop acs-otelcol`. A process that is still running keeps writing into the deleted file, and its spans are lost without an error.";
+
+  it("tells the reader to stop the Guardian and the collector before deleting .acs", () => {
+    const paragraph = readme.slice(readme.indexOf("**Run it again.**"));
+    expect(paragraph.indexOf(STOP_FIRST)).toBeGreaterThan(-1);
+    expect(paragraph.indexOf(STOP_FIRST)).toBeLessThan(paragraph.indexOf("rm -rf .acs"));
+  });
+
+  it("names the container, so docker stop has something to stop, in both the README and the config", () => {
+    expect(readme).toContain("docker run --rm --name acs-otelcol");
+    expect(text).toContain("docker run --rm --name acs-otelcol");
+  });
+
+  it("keeps the reader's own exemptions in both proxy variables in step 1", () => {
+    expect(readme).toContain('export NO_PROXY="${NO_PROXY:+$NO_PROXY,}${no_proxy:+$no_proxy,}127.0.0.1,localhost"\nexport no_proxy="$NO_PROXY"');
+    expect(readme).not.toContain("export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost");
+  });
+});
