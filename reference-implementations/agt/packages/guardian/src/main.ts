@@ -19,7 +19,7 @@
  * surface and server.ts reads none itself.
  */
 import { buildServerHello } from "./handshake.ts";
-import { keepLoopbackOffProxy, loopbackProxyWarning } from "./otel-trace-exporter.ts";
+import { keepLoopbackOffProxy, loopbackProxyWarning } from "./loopback-proxy.ts";
 import { startGuardian } from "./server.ts";
 
 const DEFAULT_PORT = 8787;

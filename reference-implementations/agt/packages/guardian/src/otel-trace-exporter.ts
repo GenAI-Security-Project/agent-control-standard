@@ -6,12 +6,11 @@
  * from `specification/v0.1.0/trace/otel-mapping.json`, read once at
  * construction. A rename in that mapping needs no change here.
  *
- * What the mapping does not say is which envelope field feeds which
- * attribute. That is the one piece of knowledge this module adds, in the
- * four source tables below, written once by hand. An attribute the mapping
- * names and no table knows is not emitted, and nothing is invented to fill a
- * slot the wire did not carry -- a required attribute the envelope lacks is
- * simply absent, which is itself a fact worth seeing.
+ * This file assembles the exporter. Three neighbors hold the rest:
+ * otel-mapping.ts reads the mapping and says which envelope field feeds
+ * which attribute, otlp-file-exporter.ts writes the OTLP/JSON file, and
+ * loopback-proxy.ts holds the proxy helpers main.ts applies before the
+ * Guardian starts.
  *
  * Span lifetime follows the envelope log. `start` is called where the
  * request is recorded and hands back the span; `end` is called with that
@@ -46,16 +45,57 @@
  * happen off the request's own turn. Observability degrades; governance
  * does not.
  */
-import { mkdirSync, readFileSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { SpanStatusCode, type Attributes, type AttributeValue, type Span, type Tracer } from "@opentelemetry/api";
+import { SpanStatusCode, type Attributes, type Span, type Tracer } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter, type SpanLimits } from "@opentelemetry/sdk-trace-base";
+import {
+  asNumber,
+  asObject,
+  collect,
+  CORRELATION_ATTRIBUTE_SOURCES,
+  DECISION_ATTRIBUTE_SOURCES,
+  DECISION_DETAIL_NAMES,
+  DECISION_FAILURE_EVENT,
+  decisionFailureAttributes,
+  GUARDIAN_ERROR_STATUS,
+  loadOtelMapping,
+  PROVENANCE_ATTRIBUTE_SOURCES,
+  provenanceColumn,
+  provenanceObjects,
+  REPLAY_DETECTED_CODE,
+  requestParts,
+  resultParts,
+  STEP_ATTRIBUTE_SOURCES,
+  type DecisionFailure,
+  type FailureClass,
+  type OtelMapping,
+} from "./otel-mapping.ts";
+import { createFileSpanExporter } from "./otlp-file-exporter.ts";
+
+// Every name this module exported before the split, so existing importers
+// keep working.
+export {
+  DECISION_ATTRIBUTE_SOURCES,
+  DECISION_FAILURE_EVENT,
+  decisionFailureAttributes,
+  FAILURE_ATTRIBUTES,
+  GUARDIAN_ERROR_STATUS,
+  loadOtelMapping,
+  METHODS_WITHOUT_SPAN,
+  STEP_ATTRIBUTE_SOURCES,
+  type DecisionFailure,
+  type FailureClass,
+  type FailurePosture,
+  type FailureReporter,
+  type OtelMapping,
+  type RequestParts,
+  type ResultParts,
+  type Source,
+} from "./otel-mapping.ts";
+export { createFileSpanExporter } from "./otlp-file-exporter.ts";
+export { keepLoopbackOffProxy, loopbackProxyWarning } from "./loopback-proxy.ts";
 
 /** How long the OTLP/HTTP exporter keeps retrying one batch against an
  * endpoint that does not answer before it reports the failure. */
@@ -74,17 +114,6 @@ const EXPORT_TIMEOUT_MS = ENDPOINT_TIMEOUT_MS + 1000;
  * this is cut to it. */
 const ATTRIBUTE_VALUE_LENGTH_LIMIT = 4096;
 
-/** The most Provenance objects one step span describes. The length limit
- * above bounds each string, not how many a column holds. Both columns are
- * cut at the same index, so the i-th element of each still describes the
- * same object. */
-const PROVENANCE_COLUMN_LIMIT = 64;
-
-/** JSON-RPC REPLAY_DETECTED. The pair on a replayed request belongs to the
- * earlier request, so #228 forbids a failure event for it: one would mark
- * that earlier, legitimate decision as not enforced. */
-const REPLAY_DETECTED_CODE = -32005;
-
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
 export const OTEL_SERVICE_NAME = "acs-reference-guardian";
@@ -101,344 +130,6 @@ export const SPAN_LIMITS: Readonly<SpanLimits> = Object.freeze({
   linkCountLimit: 128,
   attributePerLinkCountLimit: 128,
 });
-
-// The repository's own mapping, five directories up from this file -- the
-// same relationship SCHEMA_ROOT in validate-envelope.ts relies on.
-const OTEL_MAPPING_PATH = fileURLToPath(
-  new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url),
-);
-
-/**
- * `acs.decision.failure` is not in otel-mapping.json yet; #228 adds it next
- * to `decision_event`. Until then its names live here, in one place, the way
- * DECISION_DETAIL_SOURCES holds the decision extras: the event name, its
- * attribute keys, and the values the decision on #37 fixed for the class,
- * the posture and the reporter. When the mapping gains the event, read the
- * name from it the way `decision_event` is read.
- */
-export const DECISION_FAILURE_EVENT = "acs.decision.failure";
-
-/** The span status for a step answered with an error instead of a decision.
- * One sentence for both writers, the Guardian here and the audit converter,
- * so a query on status text finds both sides of the same failure. */
-export const GUARDIAN_ERROR_STATUS = "The Guardian returned an error instead of a decision.";
-
-/** The event's attribute keys: the three required ones first, then the
- * ones carried when known. */
-export const FAILURE_ATTRIBUTES = {
-  class: "acs.failure.class",
-  posture: "acs.failure.posture",
-  reportedBy: "acs.failure.reported_by",
-  detail: "acs.failure.detail",
-  errorCode: "acs.failure.error_code",
-  timeoutMs: "acs.failure.timeout_ms",
-  elapsedMs: "acs.failure.elapsed_ms",
-  payloadBytes: "acs.failure.payload_bytes",
-} as const;
-
-export type FailureClass = "timeout" | "unreachable" | "malformed_response" | "guardian_error" | "observed_agent_error" | "other";
-export type FailurePosture = "fail_open" | "fail_closed";
-export type FailureReporter = "guardian" | "observed_agent";
-
-/** One decision failure, as the event records it. `detail` is required
- * when the class is `other`; the rest travel when known. */
-export type DecisionFailure = {
-  class: FailureClass;
-  posture: FailurePosture;
-  reportedBy: FailureReporter;
-  detail?: string;
-  errorCode?: number;
-  timeoutMs?: number;
-  elapsedMs?: number;
-  payloadBytes?: number;
-};
-
-/** The event's attributes: the required three always, the others when
- * present. One function for both reporters, so the exporter below and the
- * audit-log converter (audit-to-otlp.ts) build the same event. */
-export function decisionFailureAttributes(failure: DecisionFailure): Attributes {
-  const attributes: Attributes = {
-    [FAILURE_ATTRIBUTES.class]: failure.class,
-    [FAILURE_ATTRIBUTES.posture]: failure.posture,
-    [FAILURE_ATTRIBUTES.reportedBy]: failure.reportedBy,
-  };
-  if (failure.detail !== undefined) attributes[FAILURE_ATTRIBUTES.detail] = failure.detail;
-  if (failure.errorCode !== undefined) attributes[FAILURE_ATTRIBUTES.errorCode] = failure.errorCode;
-  if (failure.timeoutMs !== undefined) attributes[FAILURE_ATTRIBUTES.timeoutMs] = failure.timeoutMs;
-  if (failure.elapsedMs !== undefined) attributes[FAILURE_ATTRIBUTES.elapsedMs] = failure.elapsedMs;
-  if (failure.payloadBytes !== undefined) attributes[FAILURE_ATTRIBUTES.payloadBytes] = failure.payloadBytes;
-  return attributes;
-}
-
-/** One `step_to_span` entry. `conditional_attributes` is the list #227
- * adds, for attributes the wire carries only sometimes (`acs.capability`
- * among them); read the same way as the other two. */
-type StepSpanEntry = {
-  span_name: string;
-  required_attributes: string[];
-  conditional_attributes?: string[];
-  optional_attributes?: string[];
-};
-
-/**
- * Methods this Guardian evaluates that have no `step_to_span` entry in
- * otel-mapping.json yet, and why. A method here gets no span. The test
- * fails for an evaluated method that is neither mapped nor listed here, so
- * a new method cannot quietly go untraced: it is either mapped or named
- * with its reason.
- */
-export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
-
-/** otel-mapping.json is a JSON Schema whose data lives inside `default`
- * keys -- the same three places `packages/conformance/src/trace-pillar.ts`
- * reads. This type names only those. */
-type OtelMappingSchema = {
-  properties: {
-    step_to_span: { default: Record<string, StepSpanEntry> };
-    decision_event: {
-      properties: {
-        event_name: { const: string };
-        required_attributes: { default: string[] };
-        conditional_attributes: { default: string[] };
-      };
-    };
-    provenance_attributes: {
-      properties: {
-        required: { default: string[] };
-        optional: { default: string[] };
-      };
-    };
-  };
-};
-
-export type OtelMapping = {
-  stepToSpan: Record<string, StepSpanEntry>;
-  decisionEventName: string;
-  /** The event's required attributes first, then its conditional ones. Both
-   * are read the same way -- emitted when a value is present -- so one list
-   * serves. */
-  decisionAttributes: string[];
-  /** Required first, then optional -- carried on a step span whose payload
-   * has a Provenance object attached, as the mapping's own text says. */
-  provenanceAttributes: string[];
-};
-
-export function loadOtelMapping(path: string = OTEL_MAPPING_PATH): OtelMapping {
-  const schema = JSON.parse(readFileSync(path, "utf8")) as OtelMappingSchema;
-  const decision = schema.properties.decision_event.properties;
-  const provenance = schema.properties.provenance_attributes.properties;
-  return {
-    stepToSpan: schema.properties.step_to_span.default,
-    decisionEventName: decision.event_name.const,
-    decisionAttributes: [...decision.required_attributes.default, ...decision.conditional_attributes.default],
-    provenanceAttributes: [...provenance.required.default, ...provenance.optional.default],
-  };
-}
-
-type JsonObject = Record<string, unknown>;
-
-function asObject(value: unknown): JsonObject | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonObject) : undefined;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-/** A non-empty array of strings, or nothing. An empty array is carried by
- * the wire (`policy_references: []` on an envelope-invalid deny) but says
- * nothing a reader can use, so it is not emitted. */
-function asStrings(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) return undefined;
-  return value.every((item) => typeof item === "string") ? (value as string[]) : undefined;
-}
-
-/**
- * One column of `policy_references`, in the wire's own order: the same
- * length as `policy_references`, with `""` where a reference lacks the
- * field. That is the rule agreed on #228, so a reader lines the three
- * columns up by position and never loses the values the other references
- * did carry. Absent only when there are no references at all.
- */
-function policyColumn(references: unknown, field: string): string[] | undefined {
-  if (!Array.isArray(references) || references.length === 0) return undefined;
-  return references.map((reference) => asString(asObject(reference)?.[field]) ?? "");
-}
-
-/** The parts of a request envelope the source tables read. Read off the
- * parsed JSON rather than the validated envelope, because the span starts
- * before validation runs and an envelope that fails the schema is still a
- * step this session took. */
-export type RequestParts = { params: JsonObject; metadata: JsonObject; payload: JsonObject; tool: JsonObject };
-
-function requestParts(envelope: unknown): RequestParts {
-  const params = asObject(asObject(envelope)?.params) ?? {};
-  const metadata = asObject(params.metadata) ?? {};
-  const payload = asObject(params.payload) ?? {};
-  const tool = asObject(payload.tool) ?? {};
-  return { params, metadata, payload, tool };
-}
-
-/** The decision half of a success response: the `result` and its optional
- * `metadata`. `undefined` for a JSON-RPC error response, which carries no
- * decision. */
-export type ResultParts = { result: JsonObject; metadata: JsonObject };
-
-function resultParts(response: unknown): ResultParts | undefined {
-  const result = asObject(asObject(response)?.result);
-  if (result === undefined) return undefined;
-  return { result, metadata: asObject(result.metadata) ?? {} };
-}
-
-export type Source<Parts> = (parts: Parts) => AttributeValue | undefined;
-
-/**
- * Attribute name -> where it is read from on the request envelope, for every
- * attribute `step_to_span` can name on a span this Guardian emits. The
- * mapping decides WHICH of these a span carries; this table only says HOW
- * each one is read. Paths follow the hook payload schemas
- * (`hooks/tool-call-request.json`, `hooks/tool-call-result.json`) and
- * `request-envelope.json`'s `AcsParams.metadata`.
- */
-export const STEP_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<RequestParts>>> = {
-  "acs.session.id": (r) => asString(r.metadata.session_id),
-  "acs.agent.id": (r) => asString(r.metadata.agent_id),
-  "gen_ai.tool.name": (r) => asString(r.tool.name),
-  "acs.tool.provider": (r) => asString(r.tool.provider),
-  "acs.tool.version": (r) => asString(r.tool.version),
-  "acs.capability": (r) => asString(r.payload.capability),
-  "acs.operation": (r) => asString(r.payload.operation),
-  "acs.exit_status": (r) => asString(r.payload.exit_status),
-  "acs.duration_ms": (r) => asNumber(r.payload.duration_ms),
-  "acs.request_id_ref": (r) => asString(r.payload.request_id_ref),
-};
-
-/**
- * Carried on every span, whatever the mapping lists for it, so a reader can
- * rebuild a session and pair each span with its two envelope-log lines.
- * `acs.session.id` is the mapping's own name for the session.
- * `acs.request_id` is this module's name for `params.request_id`, the ACS
- * correlation id the response echoes; the mapping has no attribute for the
- * step's own request id (its `acs.request_id_ref` names the request a
- * RESULT refers back to, which is a different fact).
- */
-const CORRELATION_ATTRIBUTE_SOURCES: Record<string, Source<RequestParts>> = {
-  "acs.session.id": (r) => asString(r.metadata.session_id),
-  "acs.request_id": (r) => asString(r.params.request_id),
-};
-
-/**
- * The `acs.decision` event's attributes, for every name the mapping's
- * `decision_event` lists. Paths follow `response-envelope.json`'s
- * `AcsResult`: `decision` and `reasoning` are direct members; the other four
- * sit under `metadata`. `acs.evaluator` is read off the wire like the rest
- * and never filled in here: the value this Guardian would send is
- * `deterministic`, but it has to come from the Guardian's response (#229
- * puts it there), or the trace says something the wire never said and a
- * reader cannot tell the two apart.
- */
-export const DECISION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<ResultParts>>> = {
-  "acs.decision": (d) => asString(d.result.decision),
-  "acs.evaluator": (d) => asString(d.metadata.evaluator),
-  "acs.reasoning": (d) => asString(d.result.reasoning),
-  "acs.confidence": (d) => asNumber(d.metadata.confidence),
-  "acs.evaluator_version": (d) => asString(d.metadata.evaluator_version),
-  "acs.model_id": (d) => asString(d.metadata.model_id),
-  // The decision facts #228 adds to the mapping. Each is emitted only when
-  // the response carries it; `acs.chain_hash` in particular appears only once
-  // a Guardian puts the chain head on the wire.
-  "acs.reason_codes": (d) => asStrings(d.result.reason_codes),
-  "acs.policy.ids": (d) => policyColumn(d.result.policy_references, "policy_id"),
-  "acs.policy.versions": (d) => policyColumn(d.result.policy_references, "policy_version"),
-  "acs.policy.rule_ids": (d) => policyColumn(d.result.policy_references, "rule_id"),
-  "acs.cited_provenance_ids": (d) => asStrings(d.result.cited_provenance_ids),
-  "acs.chain_hash": (d) => asString(d.result.chain_hash),
-};
-
-/**
- * The decision facts emitted whether or not the mapping lists them yet.
- * Before #228 the mapping does not name them; after it, it does. Reading
- * this list beside the mapping's own makes the exporter correct under both,
- * so this PR and #228 can land in either order. Once #228 is in, the mapping
- * alone covers them and this list can go.
- */
-const DECISION_DETAIL_NAMES = [
-  "acs.reason_codes",
-  "acs.policy.ids",
-  "acs.policy.versions",
-  "acs.policy.rule_ids",
-  "acs.cited_provenance_ids",
-  "acs.chain_hash",
-] as const;
-
-/**
- * Attribute name -> which field of a Provenance object (`provenance.json`)
- * it reads. Unlike the tables above, each of these becomes a COLUMN: one
- * array per attribute, one element per Provenance object the payload
- * carries, in wire order. A span has one value per attribute key, and a
- * payload can carry several Provenance objects -- one per argument -- so an
- * array is the only shape that keeps every object visible; the i-th element
- * of each column describes the i-th object, and `acs.provenance.origin` is
- * always complete because provenance.json requires `origin`.
- *
- * `acs.provenance.lineage_depth` is in the mapping's optional list and has
- * no entry here. provenance.json defines no lineage_depth field, so there is
- * nothing on the wire to read it from, and deriving one (from the length of
- * `derived_from`, say) would be a value nobody sent.
- */
-const PROVENANCE_ATTRIBUTE_SOURCES: Record<string, (provenance: JsonObject) => string | undefined> = {
-  "acs.provenance.origin": (p) => asString(p.origin),
-  "acs.provenance.source_id": (p) => asString(p.source_id),
-};
-
-/** The Provenance objects a payload carries, in wire order: one per
- * argument that has one, in the order the parsed object holds them, then one
- * per output that has one, in array order. "Parsed" order rather than the
- * bytes' order because `JSON.parse` has already hoisted integer-like
- * argument names ahead of the rest (envelope-log-sink.ts notes `{"0": ...}`
- * is a real shape), so this is the order every reader of the envelope log
- * sees too. The two never meet on one payload -- the request gate carries
- * `arguments`, the result gate `outputs` -- and an argument or output
- * without one contributes nothing. */
-function provenanceObjects(payload: JsonObject): JsonObject[] {
-  const carriers: unknown[] = [
-    ...Object.values(asObject(payload.arguments) ?? {}),
-    ...(Array.isArray(payload.outputs) ? payload.outputs : []),
-  ];
-  const found: JsonObject[] = [];
-  for (const carrier of carriers) {
-    if (found.length === PROVENANCE_COLUMN_LIMIT) {
-      break;
-    }
-    const provenance = asObject(asObject(carrier)?.provenance);
-    if (provenance !== undefined) {
-      found.push(provenance);
-    }
-  }
-  return found;
-}
-
-/** One column over every Provenance object, in order, padded with `""`
- * where an object lacks the field -- the same rule policyColumn applies, for
- * the same reason: every column is the length of `acs.provenance.origin`, so
- * the i-th element of each describes the i-th object, and a `source_id` one
- * argument carries is never hidden by another argument that has none. */
-function provenanceColumn(objects: JsonObject[], read: (provenance: JsonObject) => string | undefined): string[] {
-  return objects.map((object) => read(object) ?? "");
-}
-
-function collect<Parts>(into: Attributes, names: Iterable<string>, sources: Record<string, Source<Parts>>, parts: Parts): void {
-  for (const name of names) {
-    const value = sources[name]?.(parts);
-    if (value !== undefined) {
-      into[name] = value;
-    }
-  }
-}
 
 /**
  * The span this module started for one step, handed to the caller so the
@@ -516,152 +207,6 @@ export type CreateOtelTraceExporterOptions = {
    * line each. */
   onError?: (error: unknown) => void;
 };
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-/**
- * Writes OTLP/JSON, one `ExportTraceServiceRequest` per line -- the shape
- * the OpenTelemetry Collector's file exporter writes -- serialised by the
- * official JsonTraceSerializer rather than by hand.
- *
- * The append is asynchronous: this exporter runs on the same event loop the
- * Guardian answers requests on, and a synchronous write would hold every
- * in-flight decision for the duration of the disk I/O. Writes are chained on
- * one promise so lines land in export order even when two batches are in
- * flight, and `forceFlush` and `shutdown` await the chain so a close never
- * leaves a batch unwritten. The chain itself never rejects: one failed write
- * is reported through its own batch's callback and cannot poison every write
- * after it.
- *
- * 0o700 on the directory and 0o600 on the file: the file holds reasoning
- * text and provenance source ids, so other local users should not read it
- * (#71 is the same problem in the envelope log). The mode applies when the
- * exporter creates the path; an existing file keeps whatever it had.
- */
-export function createFileSpanExporter(path: string): SpanExporter {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  let chain: Promise<void> = Promise.resolve();
-  return {
-    export(spans, resultCallback): void {
-      let line: string;
-      try {
-        const bytes = JsonTraceSerializer.serializeRequest(spans);
-        if (bytes === undefined) {
-          throw new Error("JsonTraceSerializer produced no request");
-        }
-        line = `${new TextDecoder().decode(bytes)}\n`;
-      } catch (error) {
-        resultCallback({ code: ExportResultCode.FAILED, error: asError(error) });
-        return;
-      }
-      const write = chain.then(() => appendFile(path, line, { mode: 0o600 }));
-      chain = write.then(
-        () => undefined,
-        () => undefined,
-      );
-      write.then(
-        () => resultCallback({ code: ExportResultCode.SUCCESS }),
-        (error: unknown) => resultCallback({ code: ExportResultCode.FAILED, error: asError(error) }),
-      );
-    },
-    async shutdown(): Promise<void> {
-      await chain;
-    },
-    async forceFlush(): Promise<void> {
-      await chain;
-    },
-  };
-}
-
-/** The NO_PROXY entries that exempt a loopback endpoint's host, or none
- * when the endpoint is not loopback. IPv6 gets both forms: Bun matches only
- * `[::1]`, and other clients expect the bare `::1`. */
-function loopbackProxyEntries(endpoint: string): string[] {
-  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
-  if (host === "127.0.0.1" || host === "localhost") {
-    return [host];
-  }
-  return host === "::1" ? ["::1", "[::1]"] : [];
-}
-
-const splitProxyList = (value: string): string[] =>
-  value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry !== "");
-
-/**
- * Adds a loopback endpoint's host to NO_PROXY and no_proxy, so an
- * HTTP_PROXY in the Guardian's environment cannot route spans meant for this
- * machine through a proxy: request content (reasoning text, provenance ids)
- * would reach the proxy, and the collector would never see it. Bun's HTTP
- * client honors these variables per request, and an explicit agent does not
- * opt out, so the environment is the only lever. A non-loopback endpoint is
- * left to the operator's proxy settings.
- *
- * Only the variables the user set are touched. Bun 1.3.14 reads a non-empty
- * no_proxy in preference to NO_PROXY, so creating the one the user did not
- * set would switch off every exemption in the one they did. "Set" follows
- * Bun's own rule: any value but the empty string counts, and an empty one
- * makes Bun fall back to the other. A set variable that holds no entries
- * (a stray comma, say) is what Bun reads, so it is filled with the host.
- * When neither is set, both get the host, and nothing is lost.
- *
- * Bun 1.3.11 reads these variables only when the process starts, so on that
- * version this edit has no effect, and loopbackProxyWarning below is what
- * tells the operator.
- *
- * The edit is made to the `env` it is given and never undone. main.ts
- * passes process.env, so there the change is process-wide and permanent:
- * anything else in that process (a host adapter embedded with the Guardian)
- * and any child process it spawns inherits it. That is acceptable because
- * only loopback hosts are ever added, and traffic to this machine should not
- * use a proxy for any of them. The exporter never calls this itself, so an
- * embedder that builds the exporter decides whether its environment changes.
- */
-export function keepLoopbackOffProxy(endpoint: string, env: Record<string, string | undefined>): void {
-  const additions = loopbackProxyEntries(endpoint);
-  if (additions.length === 0) {
-    return;
-  }
-  const keys = ["NO_PROXY", "no_proxy"] as const;
-  const setKeys = keys.filter((key) => (env[key] ?? "") !== "");
-  for (const key of setKeys.length === 0 ? keys : setKeys) {
-    const entries = splitProxyList(env[key] ?? "");
-    const missing = additions.filter((entry) => !entries.includes(entry));
-    if (missing.length > 0) {
-      env[key] = [...entries, ...missing].join(",");
-    }
-  }
-}
-
-/**
- * A warning when a loopback endpoint would reach an HTTP proxy, judged by
- * the variables as they stand: a proxy is set, and the list Bun reads (a
- * non-empty no_proxy, otherwise NO_PROXY) does not exempt the host. main.ts
- * calls it before keepLoopbackOffProxy, so on Bun 1.3.11, which ignores the
- * runtime edit, the operator still learns that spans may go through the
- * proxy and what to set before starting the Guardian.
- */
-export function loopbackProxyWarning(endpoint: string, env: Record<string, string | undefined>): string | undefined {
-  const additions = loopbackProxyEntries(endpoint);
-  const proxy = env.http_proxy || env.HTTP_PROXY;
-  if (additions.length === 0 || !proxy) {
-    return undefined;
-  }
-  const list = splitProxyList(env.no_proxy ? env.no_proxy : (env.NO_PROXY ?? ""));
-  // The bracketed form is the one Bun matches for IPv6.
-  const needed = additions[additions.length - 1]!;
-  if (list.includes("*") || list.includes(needed)) {
-    return undefined;
-  }
-  return (
-    `otel trace export to ${endpoint}: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt ${needed}, ` +
-    `so on some Bun versions these spans go through the proxy. Start the Guardian with ${needed} in both NO_PROXY and no_proxy.`
-  );
-}
 
 /** One place spans go, with the name its failure is reported under: the
  * file's path, the endpoint's URL, or "span exporter" for an injected one. */
