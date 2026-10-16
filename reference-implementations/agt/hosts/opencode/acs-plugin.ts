@@ -129,6 +129,7 @@ import {
   // and would still audit.
   governsTool,
   loadHookmap,
+  negotiateSessionConfig,
   resolveSessionConfig,
   toSessionUuid,
   // `AuditSink`/`GuardianClient`/`SessionConfigStore` -- the three
@@ -1182,6 +1183,7 @@ type Deployment = {
   readonly guardian: GuardianClient;
   readonly audit: AuditSink;
   readonly store: SessionConfigStore;
+  readonly hmacSecret?: Buffer;
 };
 
 /**
@@ -1317,15 +1319,15 @@ async function runExchange(
   // mixed.
   const { payload, live } = assemble(input.tool, input.sessionID);
 
-  const session = await resolveSessionConfig(
-    {
-      guardian: deployment.guardian,
-      agentId: deployment.hookmap.host,
-      sessionId: toSessionUuid(input.sessionID),
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-    },
-    deployment.store,
-  );
+  const handshake = {
+    guardian: deployment.guardian,
+    agentId: deployment.hookmap.host,
+    sessionId: toSessionUuid(input.sessionID),
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    hmacSecret: deployment.hmacSecret,
+  };
+  const session = await resolveSessionConfig(handshake, deployment.store);
+  const renegotiate = () => negotiateSessionConfig(handshake, deployment.store);
 
   const governed = await governStep({
     hookEventName,
@@ -1349,6 +1351,8 @@ async function runExchange(
     // the actual command through. Both of this shim's gates pass through
     // here, so this one line is both of its call sites.
     scopedTool: input.tool,
+    hmacSecret: deployment.hmacSecret,
+    renegotiate,
   });
 
   applyOpenCodeOutput(governed.output, live);
@@ -1394,15 +1398,19 @@ export const AcsPlugin: Plugin = async () => {
   // Built once, here, and handed to `runExchange` on every call -- the four
   // this deployment runs on, in one object so the exchange both gates
   // share can take them as one argument.
+  const hmacSecret = process.env.ACS_HMAC_SECRET
+    ? Buffer.from(process.env.ACS_HMAC_SECRET, "base64")
+    : undefined;
   const deployment: Deployment = {
     hookmap,
-    guardian: createGuardianClient(process.env.ACS_GUARDIAN_URL ?? DEFAULT_GUARDIAN_URL),
+    guardian: createGuardianClient(process.env.ACS_GUARDIAN_URL ?? DEFAULT_GUARDIAN_URL, { hmacSecret }),
     audit: createAuditSink({ path: process.env.ACS_AUDIT_LOG ?? ".acs/audit.jsonl" }),
     // In memory: one plugin object per session, so the negotiated config
     // survives in a variable and the second hook of a session skips the
     // handshake round trip. One interface, two implementations, and the
     // adapter never learns which host is running.
     store: createMemorySessionConfigStore(),
+    hmacSecret,
   };
 
   // Named as a const rather than returned inline, so `Object.keys` below

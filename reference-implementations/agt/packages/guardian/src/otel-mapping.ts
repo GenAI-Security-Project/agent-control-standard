@@ -112,7 +112,10 @@ type StepSpanEntry = {
  * a new method cannot quietly go untraced: it is either mapped or named
  * with its reason.
  */
-export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
+export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {
+  "protocols/MCP/tools/call":
+    "otel-mapping.json maps only steps/* and agbom/* methods; a span for a protocol method needs a step_to_span entry in the spec first",
+};
 
 /** otel-mapping.json is a JSON Schema whose data lives inside `default`
  * keys, the same three places `packages/conformance/src/trace-pillar.ts`

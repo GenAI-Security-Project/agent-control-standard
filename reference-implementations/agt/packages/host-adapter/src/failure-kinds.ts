@@ -43,9 +43,8 @@
  *
  * `error_without_decision` is what is left of the JSON-RPC-error case once
  * the refusals are taken out of it: an error whose code this host does not
- * recognise as a refusal of this envelope. See REFUSAL_RPC_CODES in
- * failure-posture.ts for why the recognised set is enumerated rather than
- * inferred, and for what that leaves in this bucket.
+ * recognise as a refusal of this envelope. See isRefusalCode below
+ * for which codes are recognised, and for what that leaves in this bucket.
  */
 export type DeliveryFailureKind = "timeout" | "transport" | "error_without_decision" | "unknown";
 
@@ -72,7 +71,15 @@ export type HostFailureKind =
    * guardian" tells an incident reviewer to go and look at a Guardian that
    * answered correctly, when the fault is in this host's own rendering table.
    */
-  | "decision_unrenderable";
+  | "decision_unrenderable"
+  /**
+   * The request was built but this host could not sign it -- input nested
+   * deeply enough to overflow canonicalisation, say. Never sent, and never
+   * answered by the posture: an ACS-Core Guardian must refuse an unsigned
+   * request, so this host refuses it first, the same as a refusal. Under
+   * `proceed` the posture would have run a step that without HMAC is denied.
+   */
+  | "unsignable";
 
 /**
  * What the Guardian did when it was ALIVE and would not answer this envelope
@@ -118,14 +125,16 @@ export type StepFailureKind = DeliveryFailureKind | RefusalFailureKind | HostFai
  *   "request"  -- no request was ever built, so nothing was asked of
  *                 anything. Host-side configuration, and the reasoning must
  *                 not name a Guardian that was never contacted.
+ *   "sign"     -- a request was built and this host could not sign it, so
+ *                 it was never sent. Fails closed, never by posture.
  *   "render"   -- a decision arrived and was honoured in principle; this
  *                 host could not express it.
  *
- * A boolean could only express two of the three, and a second boolean would
+ * A boolean could only express two of these, and a second boolean would
  * have admitted a combination that means nothing ("nothing was sent, and a
  * decision arrived").
  */
-export type FailureStage = "delivery" | "request" | "render";
+export type FailureStage = "delivery" | "request" | "sign" | "render";
 
 /** What went wrong establishing this session's negotiated config, for
  * `AuditEntry.session_failure`. */
@@ -156,3 +165,57 @@ export type SessionFailureKind =
    * emitting the wrong shape, not a host that cannot write to its own disk.
    */
   | "server_hello_invalid";
+
+/**
+ * The JSON-RPC error codes that mean the Guardian was ALIVE and refused this
+ * envelope, rather than that the wire failed. A response carrying one of
+ * these is a governance outcome and fails closed regardless of posture (see
+ * applyFailurePosture).
+ *
+ * Declared here by value rather than imported: this package has no runtime
+ * dependency on the Guardian and is not about to grow one for a few integers
+ * -- the same arrangement DEFAULT_TIMEOUT_MS keeps with the Guardian's
+ * declared default. Besides §17.1's own codes, these are the ones this
+ * deployment's Guardian mints for a request it will not decide (packages/guardian/src/server.ts):
+ *
+ *   -32700  Parse error. Nothing the host sent was JSON. Answered with
+ *           `id: null`, since there is no envelope to read an id out of --
+ *           which is why guardian-client.ts's post() has to let an
+ *           unaddressed error through before its id-correlation check, or
+ *           this code could never reach classifyDeliveryFailure at all.
+ *   -32010  The envelope failed schema validation and the Guardian could not
+ *           address a deny decision to it (no top-level id, or an id it
+ *           cannot put in a response), or the body exceeded the Guardian's
+ *           request cap. denyOnInvalidEnvelope converts the ADDRESSABLE
+ *           steps/* cases into honoured denies Guardian-side; this closes the
+ *           rest from the host's own side, which is what makes the
+ *           Guardian's inability to address every deny non-load-bearing.
+ *   -32011  The Guardian dispatched no handler for the method.
+ *   -32020  Evaluation itself failed -- mapVerdict's own checks, a policy
+ *           runtime error, or the outer net around dispatch.
+ *
+ * -32011 is the arguable one, so the reasoning is recorded rather than
+ * assumed. A host only ever sends methods its own hookmap maps, so a Guardian
+ * refusing to dispatch one is a misconfiguration of THIS deployment -- the
+ * hookmap and the Guardian disagree about what is governed -- and that is not
+ * a permission to proceed. The alternative reading, deliberately rejected:
+ * handshake.json's `methods_evaluated` says "Methods listed by the client but
+ * absent here are NOT evaluated ... Clients MAY still emit them for audit but
+ * MUST treat them as ALLOW-by-default", which would make an undispatched
+ * method an allow. That rule is about a method the ServerHello DECLARED it
+ * would not evaluate -- negotiated coverage, known before the step -- not
+ * about one the Guardian accepted at handshake and then refused at dispatch.
+ * A host that read the second as the first would fail open on precisely the
+ * disagreement it should surface.
+ *
+ * Recognised by range, not by list. Every §17.1 code and every code this
+ * Guardian mints sits in JSON-RPC's server-error range, -32000 to -32099, which
+ * ACS uses for nothing but refusals. A list would fail open under `proceed` on
+ * any code added after it was written, such as a retryable overload code: the
+ * step would run because the host did not yet know the code. Codes outside
+ * the range, like an intermediary's -32601 or -32603, stay
+ * `error_without_decision` and keep the posture.
+ */
+export function isRefusalCode(code: unknown): boolean {
+  return typeof code === "number" && (code === -32700 || (code <= -32000 && code >= -32099));
+}

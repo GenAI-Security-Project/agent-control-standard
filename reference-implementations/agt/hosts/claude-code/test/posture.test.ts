@@ -1229,3 +1229,84 @@ describe("acs-hook — the negotiated posture, end to end", () => {
     }
   });
 });
+
+/**
+ * Turning HMAC on must never turn a deny into an allow. The Guardian cannot
+ * sign a refusal it issues before any session key exists, so these pin what
+ * the host DECIDES when such a refusal arrives unsigned, not merely which
+ * error the client raised on the way.
+ */
+describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
+  const GUARDIAN_KEY = Buffer.alloc(32, 0x61).toString("base64");
+
+  it("withholds a keyed tool result over the Guardian's 1 MiB request cap, as guardian_refused", async () => {
+    const dir = scratch();
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: GUARDIAN_KEY });
+    try {
+      const env = {
+        ACS_GUARDIAN_URL: guardian.url,
+        ACS_SESSION_DIR: join(dir, "sessions"),
+        ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+        ACS_HMAC_SECRET: GUARDIAN_KEY,
+      };
+      const secret = "TOKEN=ghp_ABCDEF123456\n";
+      const out = await runShim(resultPayload(secret + "x".repeat(2 * 1024 * 1024)), env);
+      const decision = JSON.parse(out.stdout) as Record<string, unknown>;
+      expect(decision.decision).toBe("block");
+      expect(out.stdout).not.toContain("ghp_ABCDEF123456");
+      const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(audit.at(-1)).toMatchObject({ outcome: "blocked", failure: { kind: "refused" } });
+      expect(audit.at(-1).reason_codes ?? []).not.toContain("on_decision_failure_proceed");
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("denies a keyed tool call whose input is too deep to sign, under the proceed posture", async () => {
+    const dir = scratch();
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: GUARDIAN_KEY });
+    try {
+      const deep = "[".repeat(20_000) + "]".repeat(20_000);
+      const stdin = JSON.stringify({
+        session_id: "sess-1",
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "ls -la" },
+      }).replace('"ls -la"}', `"ls -la","extra":${deep}}`);
+      const out = await runShim(stdin, {
+        ACS_GUARDIAN_URL: guardian.url,
+        ACS_SESSION_DIR: join(dir, "sessions"),
+        ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+        ACS_HMAC_SECRET: GUARDIAN_KEY,
+      });
+      expect(expectQuietDecision(out).permissionDecision).toBe("deny");
+      const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(audit.at(-1)).toMatchObject({ posture: "proceed", outcome: "blocked", failure: { kind: "unsignable" } });
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("denies rm -rf / from a host whose key does not match a deny-posture Guardian's", async () => {
+    const dir = scratch();
+    const guardian = await startGuardian({
+      port: 0,
+      manifestPath: MANIFEST,
+      hmacSecret: GUARDIAN_KEY,
+      onDecisionFailure: "deny",
+    });
+    try {
+      const out = await runShim(payload("rm -rf /"), {
+        ACS_GUARDIAN_URL: guardian.url,
+        ACS_SESSION_DIR: join(dir, "sessions"),
+        ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+        ACS_HMAC_SECRET: Buffer.alloc(32, 0x62).toString("base64"),
+      });
+      expect(expectQuietDecision(out).permissionDecision).toBe("deny");
+      const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      expect(audit.at(-1)).toMatchObject({ outcome: "blocked", failure: { kind: "refused" } });
+    } finally {
+      await guardian.close();
+    }
+  });
+});

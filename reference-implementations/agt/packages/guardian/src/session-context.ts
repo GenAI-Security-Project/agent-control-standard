@@ -33,6 +33,7 @@
  * chain's integrity.
  */
 import { createHash } from "node:crypto";
+import { jcsCanonicalise } from "./verify-signature.ts";
 
 /**
  * AGT's IFC tags: the type of the `ifc_labels` field below, and nothing wider.
@@ -89,17 +90,23 @@ export type SessionProvenance = {
 export type Intent = { readonly text: string; readonly recorded_at: string };
 
 /** What a step contributes to the chain. Deliberately not the whole envelope. */
-export type SessionStep = { method: string; request_id: string; tool_name: string };
+export type SessionStep = { method: string; request_id: string; tool_name: string; request_hash: string };
+
+/** context-entry.json `request_hash`: lowercase-hex SHA-256 of the JCS-canonicalized request params. */
+export function requestHash(params: unknown): string {
+  return createHash("sha256").update(jcsCanonicalise(params), "utf8").digest("hex");
+}
 
 export type SessionContextEntry = {
   session_id: string;
   seq: number;
-  prev_hash: string;
+  prev_hash: string | null;
   hash: string;
   recorded_at: string;
   method: string;
   request_id: string;
   tool_name: string;
+  request_hash: string;
 };
 
 /** One session's hash chain, and nothing else the session happens to own. */
@@ -126,26 +133,26 @@ export type SessionState = {
   provenance: SessionProvenance;
 };
 
-/** The `prev_hash` of a session's first entry. */
-export const GENESIS_HASH = "0".repeat(64);
+/** The `prev_hash` of a session's first entry, as context-entry.json requires. */
+export const GENESIS_HASH: null = null;
 
 /**
- * The hash covering one entry: its predecessor, its position, and its own
- * facts. Key order is fixed by the literal below rather than by
- * `JSON.stringify` of a caller's object, so the digest cannot change because
- * a field was declared somewhere else.
+ * The portable ACS v0.1 ContextEntry commitment. The store keeps a richer
+ * implementation-specific record, so this function first projects it onto
+ * the schema's canonical export shape. `entry_hash` and `previous_hash` are
+ * excluded from the JCS content; the predecessor is appended as raw digest
+ * bytes (or no bytes for genesis), exactly as context-entry.json specifies.
  */
 export function hashEntry(input: Omit<SessionContextEntry, "hash">): string {
-  const canonical = JSON.stringify([
-    input.prev_hash,
-    input.session_id,
-    input.seq,
-    input.recorded_at,
-    input.method,
-    input.request_id,
-    input.tool_name,
-  ]);
-  return createHash("sha256").update(canonical).digest("hex");
+  const content = {
+    entry_id: `${input.session_id}:${input.seq}`,
+    step_id: input.request_id,
+    step_type: input.method,
+    timestamp: input.recorded_at,
+    request_hash: input.request_hash,
+  };
+  const previousBytes = input.prev_hash === null ? Buffer.alloc(0) : Buffer.from(input.prev_hash, "hex");
+  return createHash("sha256").update(jcsCanonicalise(content), "utf8").update(previousBytes).digest("hex");
 }
 
 /** A session with no history yet: no entries, no intent, and its labels at the lattice floor. */
