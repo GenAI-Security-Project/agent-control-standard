@@ -20,16 +20,16 @@ This hierarchy is deterministic — implementations that follow the mapping prod
 
 This is one span the reference Guardian exported, a `steps/toolCallRequest` the stock policy denied, copied from the committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl). Every value in it is synthetic. It's the OTLP/JSON shape the exporter writes, so attribute values are typed (`stringValue`, `arrayValue`).
 
-The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool name, and the two Provenance columns. `acs.provenance.source_id` has `""` where the second object has no `source_id`. The decision rides on the span as the `acs.decision` event, with the verdict, the reasoning, the reason codes and the three policy arrays. `acs.policy.versions` is `[""]`, because this Guardian doesn't send a policy version.
+The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool name, and the two Provenance columns. `acs.provenance.source_id` has `""` where the second object has no `source_id`. The decision rides on the span as the `acs.decision` event, with the verdict, the evaluator, the reasoning, the reason codes, the three policy arrays and the chain hash. `acs.policy.versions` is `[""]`, because this Guardian doesn't send a policy version.
 
 ```json
 {
-  "traceId": "85c4878c9bda9e5b4f2fc6aae242d31f",
-  "spanId": "dea6530ad1681c0e",
+  "traceId": "fec4863f765aa75f58d6b73a73fb1452",
+  "spanId": "c9ebadffc7ce3b81",
   "name": "gen_ai.tool.call",
   "kind": 1,
-  "startTimeUnixNano": "1791928279698000000",
-  "endTimeUnixNano": "1791928279749301083",
+  "startTimeUnixNano": "1792168061449000000",
+  "endTimeUnixNano": "1792168061501907988",
   "attributes": [
     {
       "key": "acs.session.id",
@@ -91,6 +91,12 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
           }
         },
         {
+          "key": "acs.evaluator",
+          "value": {
+            "stringValue": "deterministic"
+          }
+        },
+        {
           "key": "acs.reasoning",
           "value": {
             "stringValue": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0."
@@ -143,10 +149,16 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
               ]
             }
           }
+        },
+        {
+          "key": "acs.chain_hash",
+          "value": {
+            "stringValue": "b169efd600a813f5bc104a46626934f436d2066dfeb30018de9e2676f9482351"
+          }
         }
       ],
       "name": "acs.decision",
-      "timeUnixNano": "1791928279749295500",
+      "timeUnixNano": "1792168061501896967",
       "droppedAttributesCount": 0
     }
   ],
