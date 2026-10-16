@@ -315,7 +315,7 @@ Schema: [`hooks/session-end.json`](https://genai-security-project.github.io/agen
 
 Session termination, audit finalization. The Guardian seals the chain at this point.
 
-**Payload:** `session_reason` (`completed`, `cancelled`, `error`, `timeout`), final aggregates.
+**Payload:** `reason` (`completed`, `cancelled`, `error`, `timeout`, `abandoned`), and an optional `summary` with the outcome, step count, errors, and `decision_failures`, the number of decision failures in each failure class (Specification §6.4).
 
 **Decision:** Audit only.
 
