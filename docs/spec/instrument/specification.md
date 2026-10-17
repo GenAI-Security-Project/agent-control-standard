@@ -350,12 +350,12 @@ This rule preserves the security guarantee (actions that would have been `ASK`'d
 An approver's grant authorizes what the ASK that requested it covered, in the session that raised it, and nothing after that. Three terms fix the scope:
 
 - A **one-time approval** is a grant with no `intent_extension`, or with an `intent_extension` whose `scope` is `this_request`. It authorizes one request: the request the ASK was raised for, identified by that request's `request_id`.
-- A one-time approval is **consumed** once the Guardian has returned the decision the grant resolves for that request. From then on it authorizes nothing.
+- A one-time approval is **consumed** once the Guardian has returned the decision the grant resolves for that request. From then on it authorizes nothing. It never authorized any other request, so a second request that presents it is refused even when that request arrives before the first decision returns.
 - Every grant is **session-bound**: it belongs to the `session_id` of the ASK that raised it, including a grant whose `intent_extension.scope` is `session`, and it authorizes nothing in any other session.
 
-A request presents an approval when it relies on that approval for its authority: it names the grant by the `step_id` of the ASK that raised it, or it carries the approver's decision. A Guardian MUST refuse a consumed one-time approval, or one bound to an earlier session, presented again in a fresh signed request, with `REPLAY_CONSUMED` (`-32009`, §17.1). This holds when the request's own `request_id`, `timestamp`, `nonce` and signature are all valid: what is replayed is the authorization, not the request, so §10.3 does not reach it.
+A request presents an approval when it relies on that approval for its authority: it names the grant by the `step_id` of the ASK that raised it, or it carries the approver's decision. ACS v0.1 defines no request field for either, so this applies wherever a deployment or a later version carries one. A Guardian MUST refuse a consumed one-time approval, or one bound to an earlier session, presented again in a fresh signed request, with `REPLAY_CONSUMED` (`-32009`, §17.1). This holds when the request's own `request_id`, `timestamp`, `nonce` and signature are all valid: what is replayed is the authorization, not the request, so §10.3 does not reach it.
 
-A Guardian that keeps approvals across requests, for example keyed by tool and arguments, MUST NOT apply a consumed one-time approval or another session's grant to a later request. It evaluates that request as though the grant had never been made, which can raise a new ASK.
+A Guardian that keeps approvals across requests, for example keyed by tool and arguments, MUST NOT apply a consumed one-time approval or another session's grant to a later request. It evaluates that request as though the grant had never been made, which can raise a new ASK. On the v0.1 wire this is the observable half of the rule: approve an ASK, send the same action again under a new `request_id`, and the second request does not inherit the first one's approval.
 
 ## 10. Cryptographic Signatures
 
