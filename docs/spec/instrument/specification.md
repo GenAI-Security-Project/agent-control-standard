@@ -345,6 +345,18 @@ The choice is policy-driven: deployments SHOULD prefer `DEFER` when the request 
 
 This rule preserves the security guarantee (actions that would have been `ASK`'d in an approver-capable deployment are not silently allowed) while letting clients without approver UX participate in ACS sessions as fully conformant ACS-Core deployments.
 
+### 9.3 Approval lifetime (normative)
+
+An approver's grant authorizes what the ASK that requested it covered, in the session that raised it, and nothing after that. Three terms fix the scope:
+
+- A **one-time approval** is a grant with no `intent_extension`, or with an `intent_extension` whose `scope` is `this_request`. It authorizes one request: the request the ASK was raised for, identified by that request's `request_id`.
+- A one-time approval is **consumed** once the Guardian has returned the decision the grant resolves for that request. From then on it authorizes nothing.
+- Every grant is **session-bound**: it belongs to the `session_id` of the ASK that raised it, including a grant whose `intent_extension.scope` is `session`, and it authorizes nothing in any other session.
+
+A request presents an approval when it relies on that approval for its authority: it names the grant by the `step_id` of the ASK that raised it, or it carries the approver's decision. A Guardian MUST refuse a consumed one-time approval, or one bound to an earlier session, presented again in a fresh signed request, with `REPLAY_CONSUMED` (`-32009`, §17.1). This holds when the request's own `request_id`, `timestamp`, `nonce` and signature are all valid: what is replayed is the authorization, not the request, so §10.3 does not reach it.
+
+A Guardian that keeps approvals across requests, for example keyed by tool and arguments, MUST NOT apply a consumed one-time approval or another session's grant to a later request. It evaluates that request as though the grant had never been made, which can raise a new ASK.
+
 ## 10. Cryptographic Signatures
 
 A signature over the §10 canonical input is REQUIRED in ACS-Core. The signature envelope is `{ algorithm, value, key_id }`, the algorithm drawn from the registry below and the per-direction supported set declared in the handshake. `HMAC-SHA256` is the baseline that satisfies the requirement; ACS-Core does not require asymmetric or post-quantum signatures, which are the ACS-Crypto profile (§10.1). The per-session HMAC key is `HKDF`-derived from deployment-provided input keying material (a pre-shared secret, or a transport channel binding such as a TLS exporter) together with the `session_id`. ACS v0.1 defines no in-band key-exchange: a deployment with neither a shared secret nor a secure transport cannot use the HMAC baseline and satisfies the requirement with an ACS-Crypto algorithm whose key distribution it manages out of band.
@@ -376,7 +388,7 @@ For any algorithm of the form `<PQC>+<CLASSICAL>`, the `value` field carries the
 
 ### 10.3 Replay protection
 
-`request_id` (UUID), `timestamp` (ISO 8601), and optional `nonce` (16–64 bytes). Guardians MUST reject requests whose `timestamp` is more than the negotiated skew window (`skew_window_ms` in ServerHello, §4; RECOMMENDED default 300000) in the past or future, returning `TIMESTAMP_OUT_OF_WINDOW` (`-32006`, §17.1), MUST reject duplicate `request_id` values within the session with `REPLAY_DETECTED` (`-32005`, §17.1), and SHOULD reject duplicate `nonce` values within a sliding window the deployment configures (also `REPLAY_DETECTED`). The Observed Agent uses `skew_window_ms` for clock-drift diagnostics.
+`request_id` (UUID), `timestamp` (ISO 8601), and optional `nonce` (16–64 bytes). Guardians MUST reject requests whose `timestamp` is more than the negotiated skew window (`skew_window_ms` in ServerHello, §4; RECOMMENDED default 300000) in the past or future, returning `TIMESTAMP_OUT_OF_WINDOW` (`-32006`, §17.1), MUST reject duplicate `request_id` values within the session with `REPLAY_DETECTED` (`-32005`, §17.1), and SHOULD reject duplicate `nonce` values within a sliding window the deployment configures (also `REPLAY_DETECTED`). The Observed Agent uses `skew_window_ms` for clock-drift diagnostics. A replayed approval, as opposed to a replayed request, is covered by [§9.3](#93-approval-lifetime-normative).
 
 ## 11. Platform / OS Independence
 
@@ -486,5 +498,6 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 | `-32005` | `REPLAY_DETECTED` | Duplicate `request_id` or `nonce` within the session (§10.3). | Regenerate `request_id` (and `nonce`) and retry. |
 | `-32006` | `TIMESTAMP_OUT_OF_WINDOW` | `timestamp` falls outside the negotiated skew window (§10.3); `data.skew_window_ms` carries the window. | Correct clock drift and retry within the window. |
 | `-32007` | `CHAIN_MISMATCH` | The client's `chain_hash` does not match the Guardian's computed head (§8.6). Also exposable as a deny `reason_code: "chain_mismatch"` when the Guardian can still return a decision. | Re-fetch session state; a persistent mismatch is an integrity event, not a transient error. |
+| `-32009` | `REPLAY_CONSUMED` | A request presents a one-time approval that is already consumed, or a grant bound to an earlier session (§9.3). The request itself can be fresh and validly signed. | Do not retry with the same approval; obtain a new one through ASK. |
 
 `system/ping` MUST NOT return an ACS-specific error, so liveness probing survives signature-rotation and key-resolution failures (§13).
