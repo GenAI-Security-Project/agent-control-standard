@@ -27,6 +27,8 @@ The runner starts its own Guardian on an OS-assigned port for the one check that
 
 **The trace-pillar rows** list, for each of the six methods in scope, which OpenTelemetry attributes a consumer could emit from the envelopes alone. This tree does not claim the Trace profile, and the rows measure that non-claim.
 
+Each row comes from the mapping's required or conditional list for that span. ✔ means a consumer can always emit the attribute. ○ means the attribute is conditional, so the envelope may omit its source and the exporter emits it only when present. ✖ means the mapping requires an attribute the wire doesn't guarantee, which is a mapping defect.
+
 ## The checks
 
 | Check | What it measures |
