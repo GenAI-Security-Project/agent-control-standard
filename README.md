@@ -244,7 +244,7 @@ the one sending hook requests like the ones above. The **Guardian Agent** sits o
 other end of the wire and decides what happens next.
 
 A **hook** is a point in the Observed Agent's execution where it stops and asks before
-acting. `toolCallRequest` is one of ACS's sixteen native lifecycle hooks. Others fire at
+acting. `toolCallRequest` is one of ACS's nineteen native lifecycle hooks. Others fire at
 session start and end, before and after a turn, on knowledge retrieval, and around
 memory reads and writes.
 
@@ -289,12 +289,24 @@ harness measures the wire, not the language behind it.
 
 ### Harden it for production
 
-Two gaps are named and open, not vague. The Guardian writes its envelope and audit logs
-as synchronous file appends on the decision path, with no batching, so trace spans need
-a batched writer before a Trace-pillar claim would hold up under load. No OpenTelemetry
-collector or exporter exists yet. The conformance harness only measures which
-attributes a consumer *could* emit from the envelopes, not that anything ships them.
-Start in [`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
+Two gaps are named and open, not vague. The Guardian writes its envelope and
+session-context logs, and the host adapter writes its audit log, as synchronous file
+appends on the decision path, with no batching. Trace export is
+partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
+for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
+[Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
+describes. Failures only the host sees, such as an unreachable Guardian, stay in the host's
+audit log until a converter turns them into spans of the same format.
+[How the reference Guardian produces a trace](docs/spec/trace/extend_opentelemetry.md#how-the-reference-guardian-produces-a-trace)
+explains how the two streams join. A [sample trace](reference-implementations/agt/samples/trace/acs-trace-sample.jsonl)
+shows that output without running anything, and [Produce a trace](reference-implementations/agt/README.md#produce-a-trace)
+walks you from a fresh clone to a trace file of your own.
+
+That exporter does not make the reference ACS-Trace conformant, and this tree claims no
+Trace profile. It covers two methods, emits no OCSF, and leaves out a required attribute
+when the request omits it. The conformance harness still measures which attributes a
+consumer *could* emit from the wire, not what the exporter ships. Start in
+[`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
 
 ### Go deeper
 

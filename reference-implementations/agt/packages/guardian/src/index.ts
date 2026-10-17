@@ -74,3 +74,7 @@ export {
   type SessionProvenance,
 } from "./session-context-store.ts";
 export { persistIfcLabels, supplySourceLabels } from "./ifc-labels.ts";
+// Not governance verbs, but startGuardian's otelTraceEndpoint leaves the
+// proxy variables alone, and an embedder that wants main.ts's loopback
+// exemption needs these two to apply it.
+export { keepLoopbackOffProxy, loopbackProxyWarning } from "./loopback-proxy.ts";

@@ -48,7 +48,7 @@ Who verifies a conformance claim: nobody, in v0.1.0. `profiles_supported` and `p
 
 Adds deterministic Trace event emission per [Trace Events](./trace/events.md). A deployment claiming ACS-Trace MUST:
 
-1. Emit at least one of {OTel, OCSF} for every supported ACS step, with the required attributes populated.
+1. Emit at least one of {OTel, OCSF} for every supported ACS step, with the required attributes populated and each conditional attribute populated whenever its source field is present.
 2. Record decisions as Trace events.
 3. Carry provenance facts forward onto Trace events.
 
