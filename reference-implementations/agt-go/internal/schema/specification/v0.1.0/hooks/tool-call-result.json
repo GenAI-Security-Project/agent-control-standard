@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-result.json",
+  "title": "steps/toolCallResult payload",
+  "description": "Payload for the toolCallResult hook. Fires after tool execution, before the result reaches the agent. Output redaction gate.",
+  "type": "object",
+  "required": ["tool", "exit_status", "outputs"],
+  "properties": {
+    "tool": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "provider": { "type": "string" }
+      }
+    },
+    "operation": { "type": "string" },
+    "request_id_ref": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Links to the originating toolCallRequest"
+    },
+    "exit_status": {
+      "type": "string",
+      "enum": ["success", "failure", "timeout", "blocked"]
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "value": {},
+          "provenance": {
+            "$ref": "../provenance.json",
+            "description": "OPTIONAL in the base schema; REQUIRED on every output item under provenance_producer: deterministic (ACS-Provenance). Validate against tool-call-result.acs-provenance.json when the profile is claimed. See Specification section 7."
+          }
+        }
+      }
+    },
+    "duration_ms": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -68,6 +68,7 @@ import { mergeCells } from "./merge-cells.ts";
 import { renderCoverageMatrix, renderMappingTable, renderTraceRows } from "./render.ts";
 import { checkPolicyInputSchema } from "./policy-input-schema.ts";
 import { resolveExitCode } from "./exit-code.ts";
+import { checkExternalGuardian } from "./external-guardian.ts";
 
 const MANIFEST_PATH = "policy/manifest.yaml";
 const MAPPING_PATH = "mapping.yaml";
@@ -147,10 +148,14 @@ export async function main(): Promise<ConformanceRun> {
     const cells = mergeCells(n41, n42, n43, n44);
     const traceRows = checkTracePillar();
     const schemaLeg = await checkPolicyInputSchema(bridge);
+    const externalGuardian = await checkExternalGuardian();
 
     const schemaLegLine = schemaLeg.ran
       ? `policy-input schema (AGT's own policy-input.schema.json, at the pinned ref): RAN -- validated ${schemaLeg.points.join(", ")}`
       : `policy-input schema (AGT's own policy-input.schema.json, at the pinned ref): DID NOT RUN -- ${schemaLeg.reason}`;
+    const externalGuardianLine = externalGuardian.ran
+      ? `external Guardian wire checks: RAN -- ${externalGuardian.probes} probes passed`
+      : `external Guardian wire checks: DID NOT RUN -- ${externalGuardian.reason}`;
 
     const output = [
       "=== Mapping table: what this implementation declares (from mapping.yaml) ===",
@@ -168,6 +173,7 @@ export async function main(): Promise<ConformanceRun> {
       "verdict round trip (through the Guardian's own verdict mapping): RAN",
       "action identity (recomputed at pre_tool_call and post_tool_call, merged): RAN",
       "deny fails closed (live Guardian, over the wire): RAN",
+      externalGuardianLine,
       "trace pillar: RAN",
     ].join("\n");
 
