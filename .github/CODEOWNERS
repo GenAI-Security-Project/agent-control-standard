@@ -64,7 +64,7 @@
 # The conformance suite is owned by the Testing and Validation workstream in GOVERNANCE.md.
 # These lines follow /reference-implementations/ because the last matching pattern wins.
 # @astrogilda does not hold write access yet, so his entries stay inert until he does.
-/conformance/                            @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @astrogilda
+/conformance/                                @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro @astrogilda
 /reference-implementations/agt/conformance/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro @astrogilda
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
