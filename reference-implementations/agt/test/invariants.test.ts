@@ -300,6 +300,7 @@ describe("architectural invariants", () => {
     // second shim has to be added here consciously.
     expect(scanned.map(({ file }) => file).sort()).toEqual([
       "claude-code/acs-hook.ts",
+      "grok/acs-hook.ts",
       "opencode/acs-plugin.ts",
       "opencode/apply-opencode-output.ts",
     ]);

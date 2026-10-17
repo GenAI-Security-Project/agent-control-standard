@@ -1,0 +1,117 @@
+# The per-host mapping table: with the hook shim, the only artifact in this
+# repository specific to Grok Build TUI.
+#
+# Pure data. Same shape as claude-code.hookmap.yaml, against the same adapter.
+# What differs is entirely data, which is the whole claim of adding a third
+# host. Every path below was MEASURED against Grok Build TUI 1.0.25
+# (GenAI-Security-Project/agent-control-standard#107), not read off docs
+# alone -- where the two disagree, the measurement wins.
+#
+# Grok emits both Claude-shaped snake_case aliases (`tool_name`, `tool_input`,
+# `tool_response`, `session_id`, `hook_event_name`) and its own camelCase.
+# These paths use the aliases so a payload that only carried Claude's names
+# still builds, and so the measured dual-key payload from 1.0.25 still
+# builds. `tool_name` on the wire is `run_terminal_command`.
+host: grok
+hooks:
+  PreToolUse:
+    acs_method: steps/toolCallRequest
+    tool_name: $.tool_name
+    arguments: $.tool_input
+    # ACS's own raw_command: the command line this step IS, verbatim.
+    # Measured: Grok's `tool_input.command` for `run_terminal_command` is
+    # that string (`echo rm -rf /` in the #107 capture).
+    raw_command: $.tool_input.command
+    # WHY `defer` RENDERS `defer`. Grok's PreToolUse output accepts
+    # permissionDecision "allow" | "deny" | "ask" | "defer" (Grok Build
+    # user guide, Hooks). Claude Code has no deferral state and maps this
+    # to deny; Grok does, so the least-wrong mapping here is the native
+    # value. Nothing upstream of this hookmap produces an ACS `defer`
+    # decision today, so this entry is a guard against a Guardian that
+    # emits one rather than a path this deployment exercises.
+    decisions:
+      allow:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: allow }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      deny:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: deny }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      ask:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: ask }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      defer:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: defer }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+      modify:
+        output:
+          hookSpecificOutput.permissionDecision:       { value: allow }
+          hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.updatedInput:             { from: applied_input }
+  # The result gate. `outputs.from` is the leaf that becomes the ACS payload's
+  # outputs[0].value; `outputs.within` is the object a `modify` decision is
+  # applied back into, so the replacement handed to the host preserves every
+  # sibling field.
+  #
+  # Measured: Grok's `tool_response` is a tagged object
+  # `{type: "Bash", output_for_prompt, exit_code, output (byte array), ...}`.
+  # There is no `stdout`. Pointing `from` at `$.tool_response.stdout` is the
+  # #107 finding: buildEnvelope throws, the negotiated posture answers, and
+  # under `proceed` the result is delivered ungoverned.
+  #
+  # Grok validates `updatedToolOutput` against that tagged shape. A
+  # replacement that is only the redacted string is dropped and the original
+  # output reaches the model. `within: $.tool_response` is the difference
+  # between a redaction and an unredacted delivery.
+  #
+  # THIS GATE'S MATCHER STAYS SINGLE-TOOL WHILE `outputs.from` IS A SINGLE
+  # PATH. hooks.json matches `run_terminal_command` only. A second tool
+  # shape belongs here once `outputs` can name a path per tool.
+  #
+  # KNOWN AND PARKED: `tool_response.output` is a byte array of the raw
+  # output, a sibling of `output_for_prompt`. The adapter's `mirrors` replace
+  # a string copy of the leaf; a number array is not that, so this file does
+  # not declare a mirror. A redaction patches `output_for_prompt` (what the
+  # model reads) and leaves the byte array as it was. Same class of residual
+  # as OpenCode's parked session-record leak, weaker while this gate stays
+  # scoped to one tool whose model-facing leaf is the named path.
+  PostToolUse:
+    acs_method: steps/toolCallResult
+    tool_name: $.tool_name
+    outputs:
+      from: $.tool_response.output_for_prompt
+      within: $.tool_response
+    # Measured: Grok's PostToolUse carries `tool_response.exit_code` as a
+    # number. The adapter maps 0 to ACS `success` and anything else to
+    # `failure` (build-envelope.ts `exitStatusOf`).
+    exit_status: { from: $.tool_response.exit_code }
+    decisions:
+      allow:
+        output:
+          hookSpecificOutput.additionalContext: { from: reasoning, type: string }
+      deny:
+        output:
+          decision:                             { value: block }
+          reason:                               { from: reasoning, type: string }
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+      # At this gate the tool has already run. Grok has no pending state
+      # for a formed result, so ask and defer withhold the same way deny
+      # does -- `decision: block` plus a tagged replacement. Native `defer`
+      # on PreToolUse does not extend here.
+      ask:
+        output:
+          decision:                             { value: block }
+          reason:                               { from: reasoning, type: string }
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+      defer:
+        output:
+          decision:                             { value: block }
+          reason:                               { from: reasoning, type: string }
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+      modify:
+        output:
+          hookSpecificOutput.updatedToolOutput: { from: applied_output }
+          hookSpecificOutput.additionalContext: { from: reasoning, type: string }
