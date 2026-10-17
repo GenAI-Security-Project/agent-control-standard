@@ -44,17 +44,13 @@ Concrete APIs, packages, classes, and file layouts can follow language conventio
 
 #### Signing keys and secrets
 
-Implementations are expected to sign and verify ACS messages according to the specification.
+Implementations are expected to sign and verify ACS messages as [§10 of the specification](../docs/spec/instrument/specification.md#10-cryptographic-signatures) defines, including the HMAC-SHA256 key derivation and the meaning of `key_id`.
 
-For the HMAC-SHA256 baseline, per-session keys are expected to be derived with HKDF using SHA-256, an empty salt, the `session_id` as info, and a 32-byte output.
+In addition to the specification, implementations are expected to meet the following:
 
-A sender should set `key_id` to the `session_id` of the session the message belongs to. A verifier should treat a `key_id` that does not match the session's `session_id` as an invalid signature. A signed response should carry the same `key_id` as the request it answers.
-
-Key material is expected to be base64-encoded and to decode to at least 32 bytes. It is read from a file or an environment variable. The decoded bytes are the HKDF input keying material.
-
-Key material should be supplied through deployment configuration. It should not be hard-coded and should not appear in ACS messages or logs.
-
-Documentation is expected to describe how key material is configured and replaced.
+- key material is base64-encoded, decodes to at least 32 bytes, and is read from a file or an environment variable;
+- key material is not hard-coded and does not appear in ACS messages or logs;
+- the documentation says how key material is configured and replaced.
 
 #### Configurable storage
 
