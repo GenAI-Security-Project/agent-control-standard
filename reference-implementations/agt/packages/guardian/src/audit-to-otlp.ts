@@ -53,14 +53,17 @@ import {
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
 import {
-  createFileSpanExporter,
+  asObject,
   DECISION_FAILURE_EVENT,
   decisionFailureAttributes,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
-  SPAN_LIMITS,
+  REPLAY_DETECTED_CODE,
   type FailureClass,
-} from "./otel-trace-exporter.ts";
+  type JsonObject,
+} from "./otel-mapping.ts";
+import { SPAN_LIMITS } from "./otel-trace-exporter.ts";
+import { createFileSpanExporter } from "./otlp-file-exporter.ts";
 
 /**
  * The host's `failure.kind` (packages/host-adapter/src/failure-kinds.ts)
@@ -110,7 +113,6 @@ const GENERIC_DETAIL = "The host recorded a failure this converter does not clas
  * (packages/host-adapter/src/failure-posture.ts). Only the integer is
  * taken; nothing else in the message is copied. */
 const ERROR_CODE_IN_MESSAGE = /^guardian (?:refused the envelope with|returned) error (-?\d+):/;
-const REPLAY_DETECTED_CODE = -32005;
 
 /**
  * The host adapter's `toSessionUuid` (packages/host-adapter/src/build-envelope.ts),
@@ -153,12 +155,6 @@ export type ConversionSummary = {
   /** Lines that were not JSON, not an audit entry, or had no posture. */
   skippedUnreadable: number;
 };
-
-type JsonObject = Record<string, unknown>;
-
-function readObject(value: unknown): JsonObject | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonObject) : undefined;
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -246,7 +242,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     if (line.trim() === "") continue;
     let entry: JsonObject | undefined;
     try {
-      entry = readObject(JSON.parse(line));
+      entry = asObject(JSON.parse(line));
     } catch {
       entry = undefined;
     }
@@ -267,7 +263,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       summary.skippedUnreadable += 1;
       continue;
     }
-    const failure = readObject(entry.failure) ?? {};
+    const failure = asObject(entry.failure) ?? {};
     const kind = readString(failure.kind);
     const method = readString(entry.method);
     if (method === undefined) {

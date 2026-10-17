@@ -30,6 +30,7 @@ This release changes ACS-Trace for producers and consumers. The specification ve
 - `otel-collector.yaml` stays on loopback, keeps its file across restarts, writes owner-only, and pins its container image by digest (PR #277, issue #276).
 - `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*`, `OTEL_BSP_*` and OTLP compression variables no longer change what the Guardian or the converter exports. `OTEL_EXPORTER_OTLP_*HEADERS` still apply (PR #277).
 - A loopback trace endpoint is added to whichever of `NO_PROXY` and `no_proxy` is set, keeping the user's own entries, and the Guardian warns at startup when a proxy is set and loopback isn't exempt. The walkthrough says to stop the Guardian and the collector before deleting `.acs` ([PR #279](https://github.com/GenAI-Security-Project/agent-control-standard/pull/279), issue #274).
+- The Guardian's `main.ts`, not the trace exporter, now reads the proxy environment and applies the loopback exemption, and `close()` applies the same bounded drain whether trace export is on or off (Ariel's review on PR #286).
 
 ### Removed
 

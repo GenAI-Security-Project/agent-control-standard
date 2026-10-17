@@ -149,6 +149,8 @@ await guardian.close();
 
 `StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog`, `otelTraceFile`, `otelTraceEndpoint` and `onDecisionFailure`, which mirror the environment variables above, and five options for tests: `mappingPath`, `annotator`, `bridge`, `sessionContextStore` and `traceExporter`. Each is documented where it is declared, in `src/server.ts`.
 
+`otelTraceEndpoint` leaves the proxy variables alone. `src/main.ts` prints the proxy warning and adds a loopback endpoint's host to whichever of `NO_PROXY` and `no_proxy` is set, or to both when neither is. An embedder that wants the same imports `loopbackProxyWarning` and `keepLoopbackOffProxy` from `guardian` and calls each with `(endpoint, process.env)` before it starts the Guardian.
+
 The package has two entry points. `guardian` exports the governance verbs listed in `src/index.ts`. `guardian/deployment` exports `createDeploymentBridge`, the one function that builds the deployment's bridge with the egress annotator wired in. The conformance harness imports the second so it measures the bridge the Guardian ships, not a replica.
 
 ## Files
@@ -167,7 +169,10 @@ The package has two entry points. `guardian` exports the governance verbs listed
 | `src/deny-on-invalid-envelope.ts` | Turns a schema failure on a `steps/*` method into an honoured `deny` |
 | `src/session-context-store.ts`, `src/session-context.ts`, `src/ifc-labels.ts` | The per-session hash chain, provenance, and information-flow labels |
 | `src/envelope-log-sink.ts` | The envelope log writer |
-| `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter and its OTLP/JSON file writer |
+| `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter, assembled from the three files below |
+| `src/otel-mapping.ts` | Reads `otel-mapping.json`, and says which envelope field feeds each span attribute |
+| `src/otlp-file-exporter.ts` | The OTLP/JSON file writer |
+| `src/loopback-proxy.ts` | Keeps a loopback trace endpoint off an HTTP proxy, applied by `src/main.ts` |
 | `src/audit-to-otlp.ts` | Converts the host adapter's audit log into the same OTLP/JSON file |
 | `src/acs-result.ts` | The decision result type |
 
