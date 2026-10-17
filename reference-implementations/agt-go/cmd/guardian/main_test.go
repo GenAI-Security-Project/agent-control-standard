@@ -202,6 +202,8 @@ func TestRefusesToStart(t *testing.T) {
 		{"negative_audit_rotation", base64.StdEncoding.EncodeToString([]byte(secret)), "audit: max_file_bytes and max_files cannot be negative", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_FILES=-1"}},
 		{"audit_files_without_a_size", base64.StdEncoding.EncodeToString([]byte(secret)), "audit: max_files needs max_file_bytes", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_FILE_BYTES=0"}},
 		{"audit_size_without_files", base64.StdEncoding.EncodeToString([]byte(secret)), "audit: max_file_bytes needs max_files", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_FILES=0"}},
+		{"non_positive_audit_queue_records", base64.StdEncoding.EncodeToString([]byte(secret)), "audit.max_queue_records must be positive", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_QUEUE_RECORDS=0"}},
+		{"audit_queue_smaller_than_a_request", base64.StdEncoding.EncodeToString([]byte(secret)), "audit.max_queue_bytes must be at least 2097408 to hold one request of limits.max_body_bytes", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_QUEUE_BYTES=2097407"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

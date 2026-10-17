@@ -32,7 +32,13 @@ func (e *cancellationEngine) Decide(ctx context.Context, _ guardian.PolicyInput)
 	return guardian.PolicyDecision{}, ctx.Err()
 }
 
+// The decision grace is short, so the engine's decision is cancelled; the
+// denial then has guardian.yaml's shutdown_grace to reach the agent.
 func TestShutdownDeliversCancellationDenial(t *testing.T) {
+	c, err := loadReferenceConfig(t, "ACS__POLICY__EVALUATOR=go", "ACS__POLICY__OPA_PATH=")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for range 5 {
 		engine := &cancellationEngine{started: make(chan struct{})}
 		signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "k1", Secret: []byte(shutdownTestSecret)})
@@ -78,7 +84,7 @@ func TestShutdownDeliversCancellationDenial(t *testing.T) {
 			transportErr <- err
 		}()
 		<-engine.started
-		if err := shutdown(server, g, 20*time.Millisecond); err != nil {
+		if err := shutdown(server, g, 20*time.Millisecond, c.shutdownGrace); err != nil {
 			t.Fatal(err)
 		}
 		if err := <-transportErr; err != nil {

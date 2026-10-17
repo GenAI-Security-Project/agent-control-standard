@@ -20,31 +20,87 @@ import (
 //
 // The envelope file has the TypeScript reference's line shape, {seq,
 // recorded_at, direction, method, rpc_id, envelope} with direction request
-// or response, so its Inspector reads it. Records beyond the queue's
-// capacity are dropped and counted, and a write failure disables the log;
-// both are reported through onError once, never to the caller.
+// or response, so its Inspector reads it.
+//
+// The queue holds the records JSONLQueue allows, the record being written
+// included. A record that would exceed either limit is dropped and counted,
+// and logging continues as space frees. A write failure turns the log off for
+// the rest of the process: the failed record and every later one are dropped
+// and counted. Each kind of failure
+// reaches onError once, never the caller, and Close reports every dropped
+// record.
 type JSONLAuditLog struct {
 	queue   chan line
 	done    chan struct{}
 	onError func(error)
+	limits  JSONLQueue
 
-	mu       sync.Mutex
-	closed   bool
-	dropped  int
-	failure  error
-	reported bool
+	mu                sync.Mutex
+	closed            bool
+	failed            bool
+	queued            int
+	queuedBytes       int64
+	envelopes, events int
+	dropped           int
+	queueFull         error
+	writeFailure      error
+	offeredAfterClose error
 }
 
-// line is one record to write; exactly one of its fields is set. The writer
-// numbers it from one per process run, so a reader detects gaps within a run;
-// a restart appending to the same file repeats the numbers already in it.
+// line is one record to write; exactly one of envelope and event is set.
+// It is numbered when offered, from one per file and process run, so a
+// record dropped from a full queue leaves a gap a reader detects; a restart
+// appending to the same file repeats the numbers already in it.
 type line struct {
 	envelope *envelopeLine
 	event    *eventLine
+	size     int64
 }
 
-// JSONLQueueCapacity is how many records the writer holds before it drops.
-const JSONLQueueCapacity = 4096
+// JSONLQueue bounds the records the writer holds. Zero means the default.
+type JSONLQueue struct {
+	MaxQueueRecords int
+	MaxQueueBytes   int64
+}
+
+const (
+	// DefaultMaxQueueRecords holds about 6.5 MiB at the 1.6 KB per step
+	// docs/load.md measures.
+	DefaultMaxQueueRecords = 4096
+	// DefaultMaxQueueBytes holds a stalled disk to 64 MiB of records rather
+	// than DefaultMaxQueueRecords requests of DefaultMaxBodyBytes, 4 GiB.
+	DefaultMaxQueueBytes = 64 << 20
+)
+
+// Validate refuses a negative limit.
+func (q JSONLQueue) Validate() error {
+	if q.MaxQueueRecords < 0 || q.MaxQueueBytes < 0 {
+		return errors.New("max_queue_records and max_queue_bytes cannot be negative")
+	}
+	return nil
+}
+
+func (q JSONLQueue) withDefaults() JSONLQueue {
+	if q.MaxQueueRecords == 0 {
+		q.MaxQueueRecords = DefaultMaxQueueRecords
+	}
+	if q.MaxQueueBytes == 0 {
+		q.MaxQueueBytes = DefaultMaxQueueBytes
+	}
+	return q
+}
+
+// JSONLRecordBytes is the most that the record of a request of bodyBytes
+// counts against MaxQueueBytes: the body, its method and JSON-RPC id, which
+// are copied out of it, and the fixed part of a record. A MaxQueueBytes below
+// it drops every such request.
+func JSONLRecordBytes(bodyBytes int64) int64 {
+	return lineOverheadBytes + 2*bodyBytes
+}
+
+// lineOverheadBytes is the memory a record holds beyond its variable-length
+// fields: the structs, pointers and timestamp.
+const lineOverheadBytes = 256
 
 // JSONLRotation bounds each of the two files. When a record would take a
 // file past MaxFileBytes, the file is renamed to <path>.1, earlier ones move
@@ -73,10 +129,14 @@ func (r JSONLRotation) Validate() error {
 }
 
 // NewJSONLAuditLog opens (creating directories as needed) the two files and
-// starts the writer. onError, which may be nil, receives the first failure
-// asynchronously, so it may safely close the log.
-func NewJSONLAuditLog(envelopePath, eventPath string, rotation JSONLRotation, onError func(error)) (*JSONLAuditLog, error) {
+// starts the writer. onError, which may be nil, receives the first failure of
+// each kind - queue full, write failure, offer after Close - asynchronously
+// and possibly concurrently, so it may safely close the log.
+func NewJSONLAuditLog(envelopePath, eventPath string, rotation JSONLRotation, queue JSONLQueue, onError func(error)) (*JSONLAuditLog, error) {
 	if err := rotation.Validate(); err != nil {
+		return nil, err
+	}
+	if err := queue.Validate(); err != nil {
 		return nil, err
 	}
 	var files [2]auditFile
@@ -90,7 +150,7 @@ func NewJSONLAuditLog(envelopePath, eventPath string, rotation JSONLRotation, on
 		}
 		files[i] = f
 	}
-	return newJSONLAuditLog(files, onError), nil
+	return newJSONLAuditLog(files, queue, onError), nil
 }
 
 // rotatingFile appends to path and rotates it as JSONLRotation describes.
@@ -177,8 +237,9 @@ type auditFile interface {
 	Close() error
 }
 
-func newJSONLAuditLog(files [2]auditFile, onError func(error)) *JSONLAuditLog {
-	l := &JSONLAuditLog{queue: make(chan line, JSONLQueueCapacity), done: make(chan struct{}), onError: onError}
+func newJSONLAuditLog(files [2]auditFile, queue JSONLQueue, onError func(error)) *JSONLAuditLog {
+	limits := queue.withDefaults()
+	l := &JSONLAuditLog{queue: make(chan line, limits.MaxQueueRecords), done: make(chan struct{}), onError: onError, limits: limits}
 	go l.write(files)
 	return l
 }
@@ -210,7 +271,10 @@ func (l *JSONLAuditLog) Envelope(_ context.Context, r EnvelopeRecord) {
 	}
 	var method *string
 	if r.Method != "" {
-		method = &r.Method
+		// A pointer into r would keep r.Body, the caller's buffer, alive
+		// beside the copy the queue counts.
+		m := r.Method
+		method = &m
 	}
 	var head struct {
 		ID json.RawMessage `json:"id"`
@@ -222,77 +286,108 @@ func (l *JSONLAuditLog) Envelope(_ context.Context, r EnvelopeRecord) {
 	}
 	// The body is copied: the caller may reuse its buffer once Envelope
 	// returns, and the writer reads it later.
-	l.enqueue(line{envelope: &envelopeLine{RecordedAt: stamp(r.RecordedAt), Direction: direction, Method: method, RPCID: slices.Clone(id), Envelope: slices.Clone(r.Body)}})
+	l.enqueue(line{
+		envelope: &envelopeLine{RecordedAt: stamp(r.RecordedAt), Direction: direction, Method: method, RPCID: slices.Clone(id), Envelope: slices.Clone(r.Body)},
+		size:     lineOverheadBytes + int64(len(r.Method)+len(id)+len(r.Body)),
+	})
 }
 
 // Event implements AuditLog.
 func (l *JSONLAuditLog) Event(_ context.Context, e AuditEvent) {
-	l.enqueue(line{event: &eventLine{RecordedAt: stamp(e.RecordedAt), Kind: e.Kind, SessionID: e.SessionID, RequestID: e.RequestID, Method: e.Method, Message: e.Message}})
+	l.enqueue(line{
+		event: &eventLine{RecordedAt: stamp(e.RecordedAt), Kind: e.Kind, SessionID: e.SessionID, RequestID: e.RequestID, Method: e.Method, Message: e.Message},
+		size:  lineOverheadBytes + int64(len(e.Kind)+len(e.SessionID)+len(e.RequestID)+len(e.Method)+len(e.Message)),
+	})
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
-// enqueue queues a record, or drops and counts it when the queue is full
-// or the log is closed. onError is called after the lock is released, so a
-// slow or re-entrant callback cannot hold a governed request.
+// enqueue numbers a record and queues it, or drops and counts it when the
+// queue is full, the log has failed or the log is closed. onError is called
+// after the lock is released, so a slow or re-entrant callback cannot hold a
+// governed request.
 func (l *JSONLAuditLog) enqueue(ln line) {
-	var failure error
+	report := func() {}
 	l.mu.Lock()
+	if ln.envelope != nil {
+		l.envelopes++
+		ln.envelope.Seq = l.envelopes
+	} else {
+		l.events++
+		ln.event.Seq = l.events
+	}
 	switch {
 	case l.closed:
 		l.dropped++
-		failure = errors.New("audit log closed; records are being dropped")
+		report = l.firstOf(&l.offeredAfterClose, errors.New("audit log closed; records are being dropped and counted"))
+	case l.failed:
+		l.dropped++
+	case l.queued == l.limits.MaxQueueRecords || l.queuedBytes+ln.size > l.limits.MaxQueueBytes:
+		l.dropped++
+		report = l.firstOf(&l.queueFull, errors.New("audit log queue full; records are being dropped and counted"))
 	default:
-		select {
-		case l.queue <- ln:
-		default:
-			l.dropped++
-			failure = errors.New("audit log queue full; records are being dropped")
-		}
+		l.queued++
+		l.queuedBytes += ln.size
+		// Never blocks: the channel holds at most queued records, and queued
+		// falls only after the writer has received a record and written it.
+		l.queue <- ln
 	}
 	l.mu.Unlock()
-	if failure != nil {
-		l.report(failure)
+	report()
+}
+
+// write writes each queued record and releases its place in the queue only
+// once its write returns, so the record in flight counts against the limits.
+func (l *JSONLAuditLog) write(files [2]auditFile) {
+	defer close(l.done)
+	failed := false
+	for ln := range l.queue {
+		var err error
+		if !failed {
+			err = writeLine(files, ln)
+		}
+		l.mu.Lock()
+		l.queued--
+		l.queuedBytes -= ln.size
+		report := func() {}
+		if failed || err != nil {
+			l.dropped++
+		}
+		if err != nil {
+			failed, l.failed = true, true
+			report = l.firstOf(&l.writeFailure, fmt.Errorf("audit log write failed; logging is off for the rest of the process: %w", err))
+		}
+		l.mu.Unlock()
+		report()
+	}
+	for _, f := range files {
+		if err := f.Close(); err != nil {
+			l.mu.Lock()
+			report := l.firstOf(&l.writeFailure, fmt.Errorf("audit log close failed: %w", err))
+			l.mu.Unlock()
+			report()
+		}
 	}
 }
 
-func (l *JSONLAuditLog) write(files [2]auditFile) {
-	defer close(l.done)
-	var envelopes, events int
-	failed := false
-	for ln := range l.queue {
-		if failed {
-			continue
-		}
-		var (
-			f      auditFile
-			record any
-		)
-		if ln.envelope != nil {
-			envelopes++
-			ln.envelope.Seq, f, record = envelopes, files[0], ln.envelope
-		} else {
-			events++
-			ln.event.Seq, f, record = events, files[1], ln.event
-		}
-		b, err := jsonv2.Marshal(record)
-		if err == nil {
-			_, err = f.Write(append(b, '\n'))
-		}
-		if err != nil {
-			failed = true
-			l.report(err)
-		}
+func writeLine(files [2]auditFile, ln line) error {
+	f, record := files[0], any(ln.envelope)
+	if ln.event != nil {
+		f, record = files[1], ln.event
 	}
-	for _, f := range files {
-		if err := f.Close(); err != nil && !failed {
-			l.report(err)
-		}
+	b, err := jsonv2.Marshal(record)
+	if err != nil {
+		return err
 	}
+	_, err = f.Write(append(b, '\n'))
+	return err
 }
 
 // Close writes every queued record and closes the files until ctx expires.
-// Records sent after Close are dropped and reported.
+// It returns the first error of each kind and the number of records that did
+// not reach the files, counting those still queued when ctx expires. Records
+// sent after Close are dropped and counted, and reported only through
+// onError.
 func (l *JSONLAuditLog) Close(ctx context.Context) error {
 	l.mu.Lock()
 	if !l.closed {
@@ -300,33 +395,35 @@ func (l *JSONLAuditLog) Close(ctx context.Context) error {
 		close(l.queue)
 	}
 	l.mu.Unlock()
+	var timeout error
 	select {
 	case <-l.done:
 	case <-ctx.Done():
-		return ctx.Err()
+		timeout = ctx.Err()
 	}
 	l.mu.Lock()
-	dropped, failure := l.dropped, l.failure
-	l.mu.Unlock()
-	var droppedErr error
-	if dropped > 0 {
-		droppedErr = fmt.Errorf("the audit log dropped %d records", dropped)
+	defer l.mu.Unlock()
+	errs := []error{timeout, l.writeFailure, l.queueFull, l.offeredAfterClose}
+	switch {
+	case timeout != nil && l.queued > 0:
+		errs = append(errs, fmt.Errorf("the audit log dropped %d records and %d were still queued", l.dropped, l.queued))
+	case l.dropped > 0:
+		errs = append(errs, fmt.Errorf("the audit log dropped %d records", l.dropped))
 	}
-	return errors.Join(failure, droppedErr)
+	return errors.Join(errs...)
 }
 
-// report sends the first failure to onError outside l.mu. The callback runs
-// asynchronously because a synchronous callback that closes the log would
-// otherwise wait for the writer that called it.
-func (l *JSONLAuditLog) report(err error) {
-	l.mu.Lock()
-	first := !l.reported
-	if l.failure == nil {
-		l.failure = err
+// firstOf keeps err in *slot when it is the first of its kind and returns the
+// report to make after l.mu is released. The callback runs asynchronously
+// because a synchronous callback that closes the log would otherwise wait for
+// the writer that called it. Callers hold l.mu.
+func (l *JSONLAuditLog) firstOf(slot *error, err error) func() {
+	if *slot != nil {
+		return func() {}
 	}
-	l.reported = true
-	l.mu.Unlock()
-	if first && l.onError != nil {
-		go l.onError(err)
+	*slot = err
+	if l.onError == nil {
+		return func() {}
 	}
+	return func() { go l.onError(err) }
 }

@@ -61,8 +61,7 @@ func TestLoad(t *testing.T) {
 	t.Logf("%8s %9s %8s %8s %8s %8s %10s %10s %12s", "clients", "decided/s", "p50", "p95", "p99", "max", "saturated", "opa_peak", "opa_rss_MiB")
 	for _, n := range clients {
 		dir := t.TempDir()
-		var auditErr atomic.Value
-		audit, err := guardian.NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), filepath.Join(dir, "events.jsonl"), rotation, func(err error) { auditErr.Store(err) })
+		audit, err := guardian.NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), filepath.Join(dir, "events.jsonl"), rotation, guardian.JSONLQueue{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,10 +89,7 @@ func TestLoad(t *testing.T) {
 		close(stop)
 		sample := <-peak
 		if err := audit.Close(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if err, _ := auditErr.Load().(error); err != nil {
-			t.Errorf("audit log: %v", err)
+			t.Fatalf("audit log: %v", err)
 		}
 
 		all := slices.Concat(latencies...)

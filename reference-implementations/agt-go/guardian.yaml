@@ -32,6 +32,8 @@ audit:
   event_log: .acs/guardian-events.jsonl
   max_file_bytes: 268435456 # 256 MiB; with max_files 3, at most 1 GiB per log
   max_files: 3
+  max_queue_records: 4096
+  max_queue_bytes: 67108864 # 64 MiB of records waiting for a stalled disk
 
 protocol:
   on_decision_failure: deny

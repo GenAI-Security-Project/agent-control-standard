@@ -58,10 +58,12 @@ type fileConfig struct {
 		Provider string `koanf:"provider"`
 	} `koanf:"storage"`
 	Audit struct {
-		EnvelopeLog  string `koanf:"envelope_log"`
-		EventLog     string `koanf:"event_log"`
-		MaxFileBytes int64  `koanf:"max_file_bytes"`
-		MaxFiles     int    `koanf:"max_files"`
+		EnvelopeLog     string `koanf:"envelope_log"`
+		EventLog        string `koanf:"event_log"`
+		MaxFileBytes    int64  `koanf:"max_file_bytes"`
+		MaxFiles        int    `koanf:"max_files"`
+		MaxQueueRecords int    `koanf:"max_queue_records"`
+		MaxQueueBytes   int64  `koanf:"max_queue_bytes"`
 	} `koanf:"audit"`
 	Protocol struct {
 		OnDecisionFailure string        `koanf:"on_decision_failure"`
@@ -88,6 +90,7 @@ type config struct {
 	envelopeLog       string
 	eventLog          string
 	auditRotation     guardian.JSONLRotation
+	auditQueue        guardian.JSONLQueue
 	storageProvider   string
 	keyID             string
 	secret            []byte
@@ -213,6 +216,7 @@ func loadConfig(args, environ []string) (config, error) {
 		posture:     acs.FailurePosture(raw.Protocol.OnDecisionFailure),
 		envelopeLog: envelopeLog, eventLog: eventLog,
 		auditRotation:   guardian.JSONLRotation{MaxFileBytes: raw.Audit.MaxFileBytes, MaxFiles: raw.Audit.MaxFiles},
+		auditQueue:      guardian.JSONLQueue{MaxQueueRecords: raw.Audit.MaxQueueRecords, MaxQueueBytes: raw.Audit.MaxQueueBytes},
 		storageProvider: raw.Storage.Provider,
 		keyID:           raw.Security.HMACKeyID, secret: secret,
 		policyDir: policyDir, manifest: manifest, mapping: mapping,
@@ -274,6 +278,12 @@ func (c config) validate() error {
 	}
 	if err := c.auditRotation.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("audit: %w", err))
+	}
+	if c.auditQueue.MaxQueueRecords <= 0 {
+		errs = append(errs, errors.New("audit.max_queue_records must be positive"))
+	}
+	if need := guardian.JSONLRecordBytes(c.maxBodyBytes); c.auditQueue.MaxQueueBytes < need {
+		errs = append(errs, fmt.Errorf("audit.max_queue_bytes must be at least %d to hold one request of limits.max_body_bytes", need))
 	}
 	if c.posture != acs.FailureProceed && c.posture != acs.FailureDeny {
 		errs = append(errs, fmt.Errorf("protocol.on_decision_failure must be %q or %q", acs.FailureProceed, acs.FailureDeny))
@@ -338,7 +348,7 @@ func (c config) validate() error {
 	return errors.Join(errs...)
 }
 
-func run(args, environ []string) error {
+func run(args, environ []string) (err error) {
 	c, err := loadConfig(args, environ)
 	if err != nil {
 		return err
@@ -347,20 +357,16 @@ func run(args, environ []string) error {
 	if err != nil {
 		return err
 	}
-	audit, err := guardian.NewJSONLAuditLog(c.envelopeLog, c.eventLog, c.auditRotation, func(err error) {
+	audit, err := guardian.NewJSONLAuditLog(c.envelopeLog, c.eventLog, c.auditRotation, c.auditQueue, func(err error) {
 		fmt.Fprintln(os.Stderr, "guardian: audit log:", err)
 	})
 	if err != nil {
 		return err
 	}
-	auditClosed := false
 	defer func() {
-		if auditClosed {
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), c.shutdownGrace)
 		defer cancel()
-		_ = audit.Close(ctx)
+		err = errors.Join(err, audit.Close(ctx))
 	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -411,25 +417,17 @@ func run(args, environ []string) error {
 		return err
 	case <-ctx.Done():
 	}
-	if err := shutdown(server, g, c.shutdownGrace); err != nil {
-		return err
-	}
-	auditGrace, auditCancel := context.WithTimeout(context.Background(), c.shutdownGrace)
-	err = audit.Close(auditGrace)
-	auditCancel()
-	auditClosed = true
-	if err != nil {
-		return err
-	}
-	return nil
+	return shutdown(server, g, c.shutdownGrace, c.shutdownGrace)
 }
 
-func shutdown(server *http.Server, g *guardian.Guardian, grace time.Duration) error {
+// shutdown lets decisions in flight finish within decisionGrace, then gives
+// their answers, cancellation denials included, deliveryGrace to be written.
+func shutdown(server *http.Server, g *guardian.Guardian, decisionGrace, deliveryGrace time.Duration) error {
 	serverContext, stopServer := context.WithCancel(context.Background())
 	closed := make(chan error, 1)
 	go func() { closed <- server.Shutdown(serverContext) }()
 
-	decisionContext, stopDecisions := context.WithTimeout(context.Background(), grace)
+	decisionContext, stopDecisions := context.WithTimeout(context.Background(), decisionGrace)
 	guardianErr := g.Shutdown(decisionContext)
 	stopDecisions()
 	if guardianErr != nil && !errors.Is(guardianErr, context.DeadlineExceeded) {
@@ -438,7 +436,7 @@ func shutdown(server *http.Server, g *guardian.Guardian, grace time.Duration) er
 		return guardianErr
 	}
 
-	deliveryContext, stopDelivery := context.WithTimeout(context.Background(), grace)
+	deliveryContext, stopDelivery := context.WithTimeout(context.Background(), deliveryGrace)
 	defer stopDelivery()
 	select {
 	case err := <-closed:

@@ -48,7 +48,7 @@ BUILD_TAGS := $(if $(filter agt,$(EVALUATOR)),-tags agteval,)
 check-start = $(if $(ACS_CHECK_PROGRESS),@printf '[check] RUN: %s\n' '$(1)')
 check-pass = $(if $(ACS_CHECK_PROGRESS),@printf '[check] PASS: %s\n' '$(1)')
 
-.PHONY: all help setup agt-native load build dev-secret run test test-race host-target image image-check example-runtime codex-example opencode-example require-bun require-conformance-deps example-check conformance fmt fmt-check vet lint vulncheck tidy-check coverage docs-check native-flags-check native-flags check check-all
+.PHONY: all help setup agt-native load build dev-secret run test test-race host-target image image-check example-runtime codex-example opencode-example require-bun require-conformance-deps example-check conformance fmt files-check fmt-check vet lint vulncheck tidy-check coverage docs-check native-flags-check native-flags check check-all
 
 all: build
 
@@ -157,6 +157,11 @@ conformance: example-runtime require-bun require-conformance-deps
 fmt:
 	$(GO) fmt ./...
 
+files-check:
+	$(call check-start,Tracked files)
+	scripts/check-tracked-files.sh
+	$(call check-pass,Tracked files)
+
 fmt-check:
 	$(call check-start,Formatting)
 	@unformatted="$$(gofmt -l $$(find . -type f -name '*.go' -not -path './vendor/*' -not -path './.acs/*'))"; \
@@ -218,7 +223,7 @@ native-flags:
 check:
 	@bash scripts/check.sh '$(MAKE)'
 
-check-all: host-target fmt-check tidy-check native-flags-check vet lint vulncheck build test-race test example-check conformance coverage docs-check
+check-all: host-target files-check fmt-check tidy-check native-flags-check vet lint vulncheck build test-race test example-check conformance coverage docs-check
 	$(MAKE) build EVALUATOR=go
 	$(MAKE) test EVALUATOR=go
 ifneq ($(EVALUATOR),agt)

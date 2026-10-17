@@ -83,8 +83,11 @@ Each step writes about 1.6 KB to the two audit files, under either evaluator. At
 decisions per second `agt` sustains on this host, that is about 12 MiB a minute; at the
 9900 per second `go` sustains, about 0.9 GiB a minute. `audit.max_file_bytes` and
 `audit.max_files` rotate each file and bound it: `guardian.yaml` keeps at most 1 GiB per
-log ([Configuration](configuration.md)). The writer's queue is bounded too
-(`guardian.JSONLQueueCapacity`).
+log ([Configuration](configuration.md)). The writer's queue is bounded by
+`audit.max_queue_records` and `audit.max_queue_bytes`, 4096 records and 64 MiB in
+`guardian.yaml`, so a stalled disk does not grow it further; records past either limit
+are dropped and counted. At 1.6 KB per step, 4096 records take about 6.5 MiB. A write
+failure turns the log off for the rest of the process.
 
 Rotation under load, 15 October 2026, same host, `go` evaluator, 256 clients of 500
 steps, `max_engine_calls` 32, 32 MiB × 3 files:

@@ -68,12 +68,27 @@ The Guardian refuses startup if the build record is missing or its checksum diff
 | `audit.event_log` | JSONL file for Guardian audit events. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
 | `audit.max_file_bytes` | Size at which each audit file rotates: it becomes `<file>.1`, older ones move up. `0` keeps every record, for a deployment that rotates the files with its own tooling. | Zero or positive. `guardian.yaml` ships 268435456 (256 MiB). |
 | `audit.max_files` | Rotated files kept per audit file; the one past it is deleted. A log keeps at most `max_file_bytes × (max_files + 1)` bytes, plus one record larger than `max_file_bytes`. | Zero or positive; needs `max_file_bytes`, which in turn needs at least 1, so a rotation never deletes the live log. `guardian.yaml` ships 3, so at most 1 GiB per log. |
+| `audit.max_queue_records` | Records waiting for the background writer, the one being written included. A record past it is dropped and counted. | Positive. `guardian.yaml` ships 4096. |
+| `audit.max_queue_bytes` | Bytes of records waiting for the writer, the one being written included, so a stalled disk holds at most this many bytes of records. A record past it is dropped and counted. | At least `2 × limits.max_body_bytes + 256`, so one request of the largest body fits. `guardian.yaml` ships 67108864 (64 MiB). |
 | `storage.provider` | Where sessions, replay history and policy state live. `memory`: in this process, lost when it stops, one process per endpoint. | `memory`, the one provider this command ships. A host that embeds the `guardian` package passes its own `SessionContextStore` for durability or replicas. |
 
 Envelope records contain raw requests and answers, including tool arguments
-and results. Treat both audit files as sensitive. The writer is asynchronous
-and bounded. Shutdown gives the writer its own `server.shutdown_grace`; failure
-to flush makes the command exit with an error.
+and results. Treat both audit files as sensitive.
+
+A background writer appends the records, so a slow disk never delays a
+decision. When a record would take its queue past `audit.max_queue_records`
+or `audit.max_queue_bytes`, it is dropped and counted; logging continues as
+space frees. A write failure turns
+the log off for the rest of the process, and every later record is dropped
+and counted. The first queue-full drop, the first write failure and the first
+record offered after shutdown closed the log each print one line to stderr. A
+dropped record keeps its `seq`, so the numbers in a file skip it within one
+run. Shutdown gives the writer its own `server.shutdown_grace`. The command
+exits with an error when a record was dropped or the queue did not flush, and
+names how many records were lost; a record offered after that count, by an
+engine that ignored cancellation, gets only its stderr line. The Guardian
+records a request before it checks the signature, so unsigned requests share
+the queue with signed ones and can push them out of a full queue.
 
 Two standalone processes may share this configuration file, policy directory
 and HMAC secret. Give each process its own `server.port`, `audit.envelope_log`

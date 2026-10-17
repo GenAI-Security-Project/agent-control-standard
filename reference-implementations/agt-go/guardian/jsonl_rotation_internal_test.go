@@ -98,7 +98,7 @@ func TestJSONLRotationRefusesAnInconsistentBound(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			if _, err := NewJSONLAuditLog(filepath.Join(dir, "e"), filepath.Join(dir, "v"), r, nil); err == nil {
+			if _, err := NewJSONLAuditLog(filepath.Join(dir, "e"), filepath.Join(dir, "v"), r, JSONLQueue{}, nil); err == nil {
 				t.Fatal("accepted")
 			}
 		})
@@ -110,7 +110,7 @@ func TestJSONLRotationRefusesAnInconsistentBound(t *testing.T) {
 func TestJSONLAuditLogRotates(t *testing.T) {
 	dir := t.TempDir()
 	rotation := JSONLRotation{MaxFileBytes: 2048, MaxFiles: 1}
-	l, err := NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), filepath.Join(dir, "events.jsonl"), rotation, nil)
+	l, err := NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), filepath.Join(dir, "events.jsonl"), rotation, JSONLQueue{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

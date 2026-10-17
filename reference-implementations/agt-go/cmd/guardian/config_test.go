@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
@@ -73,6 +75,39 @@ func TestPolicyPathStaysInsideDeploymentDir(t *testing.T) {
 			}
 			if got != want {
 				t.Fatalf("policyPath(%q) = %q, want %q", value, got, want)
+			}
+		})
+	}
+}
+
+// The audit queue limits reach the command as configured, and
+// audit.max_queue_bytes is checked against the configured limits.max_body_bytes.
+func TestAuditQueueConfiguration(t *testing.T) {
+	const body = 4096
+	least := guardian.JSONLRecordBytes(body)
+	for name, tt := range map[string]struct {
+		queueBytes int64
+		wantErr    bool
+	}{
+		"holds_one_request": {queueBytes: least},
+		"one_byte_short":    {queueBytes: least - 1, wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, err := loadReferenceConfig(t, "ACS__POLICY__EVALUATOR=go", "ACS__POLICY__OPA_PATH=",
+				"ACS__LIMITS__MAX_BODY_BYTES="+strconv.Itoa(body),
+				"ACS__AUDIT__MAX_QUEUE_RECORDS=7",
+				"ACS__AUDIT__MAX_QUEUE_BYTES="+strconv.FormatInt(tt.queueBytes, 10))
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "audit.max_queue_bytes must be at least") {
+					t.Fatalf("error %v, want the audit.max_queue_bytes bound", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := (guardian.JSONLQueue{MaxQueueRecords: 7, MaxQueueBytes: tt.queueBytes}); c.auditQueue != want {
+				t.Fatalf("audit queue %+v, want %+v", c.auditQueue, want)
 			}
 		})
 	}
