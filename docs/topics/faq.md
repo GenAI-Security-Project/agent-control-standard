@@ -49,12 +49,12 @@ The audit-only hooks matter too: they are how the audit chain learns that the th
 
 ### How does it all combine in one session?
 
-Four moves, in order:
+Four moves, in order, for a deployment that also claims the ACS-Trace, ACS-Inspect and ACS-Inspect-Dynamic profiles (ACS-Core alone covers the hooks, the decisions and the audit chain):
 
 1. **Session starts.** The framework and Guardian shake hands and declare what each supports. The framework sends an Agent Bill of Materials (AgBOM) listing what the agent is composed of: models, tools, MCP servers, skills.
 2. **The agent runs.** Every consequential action fires a hook before it executes. The Guardian decides. The framework honors the decision.
 3. **Everything is recorded.** Every decision lands in a hash-chained audit log. Every step emits OpenTelemetry or OCSF events into the SIEM the security team already uses. If the agent picks up a new tool or loads a skill mid-session, the AgBOM updates and the Guardian sees it.
-4. **Session ends.** The audit chain is sealed and signed. The whole session is reconstructible from the record.
+4. **Session ends.** The Guardian's final chain head is published and signed. The chain commits to every step through hashes, so as long as the deployment keeps the request and response data, the session can be reconstructed later and checked against it.
 
 That is the three pillars at work: **Instrument** (the hooks and decisions), **Trace** (the events flowing into the SIEM), **Inspect** (the AgBOM tracking what is there). One spec, one Guardian, one audit chain across whatever frameworks the deployment runs.
 
@@ -62,11 +62,11 @@ That is the three pillars at work: **Instrument** (the hooks and decisions), **T
 
 Three groups, with different motivations:
 
-- **Enterprise security teams** running multiple AI agents (coding assistants, IDE copilots, internal automations) need one policy that governs all of them. ACS gives them one runtime control envelope — wire contract, Guardian, audit chain, Trace events into the SIEM, AgBOM into supply-chain tooling — that works across every conformant framework, instead of building each piece per framework.
+- **Enterprise security teams** running multiple AI agents (coding assistants, IDE copilots, internal automations) need one policy that governs all of them. ACS gives them one runtime control envelope that works across every conformant framework, instead of building each piece per framework: the wire contract, the Guardian and the audit chain, plus Trace events into the SIEM and an AgBOM into supply-chain tooling with the optional ACS-Trace and ACS-Inspect profiles.
 - **Framework and platform builders** need a way to make their security story portable. Adopting ACS means their customers' existing security investments work against the framework on day one, without bespoke integration.
-- **Compliance and audit functions** need their agent governance to produce a record an outside auditor will trust — tamper-evident, cryptographically signed, and reconstructible after the fact. The first two groups want to prevent the wrong action in real time; this group needs to *prove* what happened, months later, in a form that survives a regulator's challenge. ACS-Audit (hash-chained audit log committing to request content) plus ACS-Crypto (signed envelopes, post-quantum-ready) produce that record; most off-the-shelf agent platforms cannot.
+- **Compliance and audit functions** need their agent governance to produce a record an outside auditor will trust — tamper-evident, cryptographically signed, and reconstructible after the fact. The first two groups want to prevent the wrong action in real time; this group needs to *prove* what happened, months later, in a form that survives a regulator's challenge. ACS-Audit (a hash-chained audit log committing to request content) plus ACS-Crypto (signed envelopes, post-quantum-ready) make that record tamper-evident; most off-the-shelf agent platforms cannot. Reconstructing it months later also needs the deployment to keep the underlying request and response data, because the spec fixes only how entries are hashed and leaves storage to the deployment.
 
-This is true even for a single agent on a single framework. ACS adds four concrete things on top of what the framework provides: actions intercepted before they execute (the framework calls the Guardian and waits before sending the email or making the API call), a hash-chained audit log of every action and decision, a policy authority that sits outside the agent's LLM context, and OTel + OCSF event streams the SIEM consumes without bespoke parsing.
+This is true even for a single agent on a single framework. ACS adds four concrete things on top of what the framework provides: actions intercepted before they execute (the framework calls the Guardian and waits before sending the email or making the API call), a hash-chained audit log of every action and decision, a policy authority that sits outside the agent's LLM context, and, with the ACS-Trace profile, OTel or OCSF event streams the SIEM consumes without bespoke parsing.
 
 On that third one, be precise about what "outside" buys you. A deterministic Guardian running Cedar or Rego evaluates policy the agent's context cannot reach. A deployment that also enables the optional LLM-backed Agent layer puts a second model in the path, and that model does read attacker-reachable content, which is why [§12.2](../spec/instrument/specification.md#122-agent-layer) requires it to treat untrusted data as data and to wrap untrusted fields. The deterministic layer always runs first.
 
@@ -108,7 +108,7 @@ Observability is now one of three pillars. Trace records what happened, Instrume
 
 No, and no runtime mechanism can. Current research finds essentially every production LLM remains vulnerable to some form of prompt injection. What ACS adds is that the agent acting on injected reasoning becomes visible and gateable, rather than silent.
 
-One caveat belongs here rather than buried further down. The default failure posture is fail-open with a mandatory audit record, so an attacker who can stall or break the Guardian channel converts enforcement into audit. Deployments that will not accept that trade set `on_decision_failure: deny`. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
+One caveat belongs here rather than buried further down. The default failure posture is fail-open with a mandatory audit record, so an attacker who can stall or break the Guardian channel converts enforcement into audit. Deployments that will not accept that trade set `on_decision_failure: deny`, and set the startup posture to `refuse` so a failed handshake stops the session instead of starting it unguarded. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
 
 The mechanism is **deviation detection**. ACS lets the agent declare what it is doing this session (its intent) and requires it to send each proposed action through a Guardian before executing it. The Guardian compares the action against the declared intent when the deployment uses one, the policy library, and the trust basis of the data driving the action. An injected agent generally deviates on at least one of those, and the Guardian denies, modifies, or escalates the action before it runs.
 
@@ -167,7 +167,7 @@ Profiles compose: a minimal IDE harness declares `["acs-core"]`; a full-coverage
 
 The framework advertises in `methods_implemented` at handshake time the hooks it implements. The Guardian's `methods_evaluated` response names the subset it will actually evaluate against policy, and the Guardian may refuse the session if a hook its policy requires is absent. So the negotiation is explicit on both sides — the framework says what it can emit, the Guardian says what it needs to see, and they either agree to proceed or the session does not start.
 
-The conformance line is between *not having the surface* and *suppressing the hook for an event that did happen*. The first is fine and negotiated explicitly. The second is non-conformant: a framework that observed the event and skipped the hook is in violation, regardless of which surrounding hooks it did fire.
+The conformance line is between *not having the surface* and *suppressing the hook for an event that did happen*. The first is fine and negotiated explicitly. The second is non-conformant for a required hook, and for any hook the framework advertised in `methods_implemented`: once declared, it must fire for every event that happens. The other observable hooks are SHOULD-implement, so a framework can leave one out of `methods_implemented` and still conform.
 
 ### Does ACS require a specific transport, cryptography, or identity system?
 
@@ -210,7 +210,7 @@ Two costs are easy to miss when estimating. Where the adapter spawns a process p
 
 ### What happens when the Guardian fails?
 
-The default is fail-open with mandatory audit: if the Guardian times out, the transport fails, or the Guardian returns an error, the action proceeds and the bypass is recorded as an audit event. Deployments that prefer fail-closed flip one field in the handshake (`on_decision_failure: deny`). One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. Silence fails open; expressed-but-unresolved concerns fail closed. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative).
+The default is fail-open with mandatory audit: if the Guardian times out, the transport fails, or the Guardian returns an error, the action proceeds and the bypass is recorded as an audit event. Deployments that prefer fail-closed set `on_decision_failure: deny` in the handshake. That field governs a session once the handshake succeeds. If the handshake itself fails (the Guardian is unreachable, silent past the connection timeout, or errors without a ServerHello), the out-of-band startup posture applies instead, and it also defaults to `proceed`, so a fail-closed deployment sets it to `refuse` too. A Guardian that explicitly refuses the session has decided, and the refusal is honored. One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. Silence fails open; expressed-but-unresolved concerns fail closed. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative) and [§4.1](../spec/instrument/specification.md#41-handshake-failure-normative).
 
 ```
               ┌────────────────┐
@@ -262,11 +262,11 @@ ACS exposes control points and audit surface; the deployment's policy library de
 | ASI09 Human-Agent Trust Exploitation | ASK routes decisions to a human approver as a wire-level primitive; `agentResponse` gates agent output before delivery and records the proposed response together with the Guardian's decision |
 | ASI10 Rogue Agents | Handshake identity and, with ACS-Inspect, an AgBOM baseline of the agent's composition; continuous hook traffic makes behavior observable, and the Guardian can deny at any decision-eligible hook |
 
-**NIST AI RMF:** the framework requires identification, measurement, and management of AI risks, with traceability and human-control obligations. ACS contributes the runtime traceability layer — ACS-Audit's hash-chained record, ACS-Inspect's AgBOM, ACS-Trace's events — and the ASK disposition gives human oversight as a wire-level primitive.
+**NIST AI RMF:** the framework is voluntary guidance that recommends identifying, measuring, and managing AI risks, with traceability and human oversight among its outcomes. ACS contributes the runtime traceability layer — ACS-Audit's hash-chained record, ACS-Inspect's AgBOM, ACS-Trace's events — and the ASK disposition gives human oversight as a wire-level primitive.
 
 **EU AI Act (high-risk AI systems):** requires logging that allows post-hoc reconstruction, transparency obligations, and human oversight. ACS-Audit's `request_hash`-committing chain produces a tamper-evident reconstruction surface; ACS-Inspect's AgBOM identifies the components, models, and data sources used; ACS-Crypto's signed envelopes give non-repudiation. DEFER and ASK dispositions give human-oversight checkpoints expressible at the wire level.
 
-A deployment claiming `acs-core` + `acs-provenance` + `acs-inspect` + `acs-audit` + `acs-crypto` covers the bulk of the surface across all three frameworks at the protocol level. Whether the coverage catches a specific attack or satisfies a specific auditor depends on the policy library and the deployment's procedures.
+A deployment claiming `acs-core` + `acs-trace` + `acs-provenance` + `acs-inspect` + `acs-audit` + `acs-crypto` supports selected runtime controls and audit evidence across all three frameworks at the protocol level. Whether the coverage catches a specific attack or satisfies a specific auditor depends on the policy library and the deployment's procedures.
 
 ---
 
