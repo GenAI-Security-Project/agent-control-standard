@@ -109,12 +109,12 @@ describe("batched log writes", () => {
     writer.write("é\n"); // Three bytes remain in flight.
     writer.write("a\n");
     writer.write("b\n");
-    expect(errors).toHaveLength(1);
-    expect(String(errors[0])).toContain("buffer limit exceeded");
-    expect(stream.destroyed).toBe(true);
+    expect(errors).toEqual([]);
+    expect(writer.droppedRecords).toBe(2);
+    expect(stream.destroyed).toBe(false);
     finishWrite?.();
     await writer.close();
-    expect(errors).toHaveLength(1);
+    expect(errors).toEqual([]);
   });
 
   it("bounds the number of queued records even when each is tiny", async () => {
@@ -125,8 +125,9 @@ describe("batched log writes", () => {
     writer.write("\n");
     writer.write("\n");
     await writer.close();
-    expect(errors).toHaveLength(1);
-    expect(batches).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(writer.droppedRecords).toBe(1);
+    expect(batches).toEqual([["\n", "\n"]]);
   });
 
   it("reports an asynchronous disk failure once and absorbs a throwing reporter", async () => {
@@ -146,4 +147,53 @@ describe("batched log writes", () => {
     expect(errors).toHaveLength(1);
     expect(String(errors[0])).toContain("disk full");
   });
+});
+
+it("keeps queued records and accepts later traffic after a full buffer", async () => {
+  const lines: string[] = [];
+  const second = Promise.withResolvers<void>();
+  let release: (() => void) | undefined;
+  const stream = new Writable({
+    write(chunk, _encoding, done) {
+      lines.push(chunk.toString());
+      if (lines.length === 1) release = done;
+      else { done(); second.resolve(); }
+    },
+  });
+  const errors: unknown[] = [];
+  const writer = batchLogWrites(stream, (error) => errors.push(error), { batchSize: 1, maxBufferedBytes: 4 });
+  try {
+    writer.write("a\n");
+    writer.write("b\n");
+    writer.write("c\n");
+    expect(stream.destroyed).toBe(false);
+    release?.();
+    await second.promise;
+    writer.write("d\n");
+    await writer.close();
+    expect(lines).toEqual(["a\n", "b\n", "d\n"]);
+    expect(writer.droppedRecords).toBe(1);
+    expect(errors).toEqual([]);
+  } finally {
+    release?.();
+    stream.destroy();
+    await writer.close();
+  }
+});
+
+
+it("counts oversized drops, reports a bounded summary, and retains valid records", async () => {
+  const { stream, batches } = capture();
+  const reports: number[] = [];
+  const writer = batchLogWrites(stream, () => { throw new Error("unexpected disk failure"); }, {
+    maxBufferedBytes: 2,
+    onDrop: (count) => { reports.push(count); throw new Error("reporter failed"); },
+  });
+  writer.write("large\n");
+  writer.write("large again\n");
+  writer.write("a\n");
+  await writer.close();
+  expect(writer.droppedRecords).toBe(2);
+  expect(reports).toEqual([1, 2]);
+  expect(batches.flat()).toEqual(["a\n"]);
 });

@@ -28,7 +28,7 @@ it("closes within the negotiated deadline when a decision never finishes, withou
     port: 0, manifestPath: "policy/manifest.yaml",
     bridge: { async evaluate() { entered.resolve(); await release.promise; return { decision: "allow" }; } },
   });
-  const response = fetch(guardian.url, { method: "POST", body: JSON.stringify(request()) });
+  const response = fetch(guardian.url, { method: "POST", body: JSON.stringify(request()) }).catch(() => undefined);
   try {
     await entered.promise;
     const closing = guardian.close();

@@ -398,6 +398,9 @@ export async function startGuardian({
         })
       : NULL_OTEL_TRACE_EXPORTER);
 
+  let closing: Promise<void> | undefined;
+  let activeRequests = 0;
+  let requestsDrained: (() => void) | undefined;
   const server = Bun.serve({
     hostname: hostname ?? LOOPBACK_ONLY,
     port,
@@ -406,21 +409,32 @@ export async function startGuardian({
       if (req.method !== "POST" || pathname !== ACS_PATH) {
         return new Response("Not Found", { status: 404 });
       }
-      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
-      return Response.json(response);
+      if (closing) return new Response("Guardian is shutting down", { status: 503 });
+      activeRequests += 1;
+      try {
+        const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
+        return Response.json(response);
+      } finally {
+        activeRequests -= 1;
+        if (activeRequests === 0) requestsDrained?.();
+      }
     },
   });
 
-  let closing: Promise<void> | undefined;
   return {
     url: `http://localhost:${server.port}${ACS_PATH}`,
     close() {
       return closing ??= (async () => {
         // Requests and log writes share the negotiated timeout. A stuck bridge
         // or disk must not prevent the exporter from shutting down afterwards.
+        const pendingRequests = activeRequests === 0
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => { requestsDrained = resolve; });
         let timer: ReturnType<typeof setTimeout> | undefined;
+        let timedOut = false;
         const deadline = new Promise<void>((resolve) => {
           timer = setTimeout(() => {
+            timedOut = true;
             try {
               console.error(`Guardian shutdown drain exceeded ${hello.timeout_config.default_ms} ms; pending requests or log records may be lost`);
             } catch {
@@ -432,6 +446,9 @@ export async function startGuardian({
         try {
           await Promise.race([
             (async () => {
+              // Bun 1.3.11 cannot upgrade an already-started graceful stop to
+              // stop(true), so wait for handlers before choosing how to stop.
+              await pendingRequests;
               await server.stop();
               await Promise.all([envelopeLog.close(), contextLog.close()]);
             })(),
@@ -439,6 +456,11 @@ export async function startGuardian({
           ]);
         } finally {
           clearTimeout(timer);
+        }
+        if (timedOut) {
+          void server.stop(true);
+          void envelopeLog.close();
+          void contextLog.close();
         }
         await traceExporter.shutdown();
       })();

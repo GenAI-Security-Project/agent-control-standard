@@ -41,6 +41,9 @@ it("close waits for an active decision and drains its response and session recor
     const response = fetch(guardian.url, { method: "POST", body: JSON.stringify(request()) });
     await entered.promise;
     const closing = guardian.close();
+    const refused = await fetch(guardian.url, { method: "POST", body: JSON.stringify(request()) });
+    expect(refused.status).toBe(503);
+    await refused.arrayBuffer();
     let closed = false;
     void closing.then(() => { closed = true; });
     await Promise.resolve();
@@ -62,11 +65,14 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   for (const tracing of [false, true]) {
     it(`the standalone Guardian drains its logs on ${signal} with trace export ${tracing ? "on" : "off"}`, async () => {
       const dir = mkdtempSync(join(tmpdir(), "acs-log-signal-"));
+      const env = { ...process.env };
+      delete env.ACS_OTEL_FILE;
+      delete env.ACS_OTEL_ENDPOINT;
+      if (tracing) env.ACS_OTEL_FILE = join(dir, "traces.jsonl");
       const child = Bun.spawn([process.execPath, "run", "packages/guardian/src/main.ts"], {
         env: {
-          ...process.env, ACS_GUARDIAN_PORT: "0",
+          ...env, ACS_GUARDIAN_PORT: "0",
           ACS_ENVELOPE_LOG: join(dir, "envelopes.jsonl"), ACS_SESSION_CONTEXT_LOG: join(dir, "context.jsonl"),
-          ACS_OTEL_FILE: tracing ? join(dir, "traces.jsonl") : "", ACS_OTEL_ENDPOINT: "",
         },
         stdout: "pipe", stderr: "pipe", timeout: 3000,
       });
@@ -89,6 +95,17 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
         expect(((await response.json()) as { result: { decision: string } }).result.decision).toBe("allow");
         child.kill(signal);
         expect(await child.exited).toBe(0);
+        const remaining = child.stdout.getReader();
+        try {
+          while (true) {
+            const { done, value } = await remaining.read();
+            if (done) break;
+            output += decoder.decode(value, { stream: true });
+          }
+        } finally {
+          remaining.releaseLock();
+        }
+        expect(output.includes("OTel traces:")).toBe(tracing);
         expect(readLines(join(dir, "envelopes.jsonl")).map((entry) => entry.seq)).toEqual([1, 2]);
         expect(readLines(join(dir, "context.jsonl")).map((entry) => entry.seq)).toEqual([1]);
         if (tracing) expect(readLines(join(dir, "traces.jsonl"))).toHaveLength(1);
