@@ -17,9 +17,9 @@ in a message is never compared (#53 requirement 7).
 
 The signature is HMAC-SHA256, the ACS-Core baseline in section 10, over the RFC 8785 form
 of the JSON-RPC request with `params.signature` removed. The per-session key is HKDF-SHA256
-with the pre-shared secret as input keying material, an empty salt, and the session_id as
-info. Section 10 leaves the HKDF salt and info to the deployment, so this runner fixes them
-and a Guardian under test is configured the same way. The canonical form here is
+with no salt, the session_id as info and a 32-byte output, applied to a pre-shared secret:
+the parameters #272 writes into section 10. A Guardian under test holds the same secret,
+passed with `--psk`. The canonical form here is
 `json.dumps` with sorted keys and no whitespace, which equals RFC 8785 for the ASCII
 strings and integers these vectors carry.
 """
