@@ -387,13 +387,13 @@ def test_every_runner_mutant_is_caught(tmp_path, name, old, new, control):
 
 # --- the reference Guardian ---------------------------------------------------------------
 
-# Each is a finding against the reference Guardian, not a defect in the vector. The strict
-# marker turns a fix into a failing run, so the list cannot go stale silently.
+# Each is a MUST the reference Guardian fails, not an optional case and not a defect in the
+# vector. The strict marker turns a fix into a failing run, so the list cannot go stale.
 REFERENCE_GAPS = {
-    "signature-invalid": "the reference Guardian does not verify signatures (#184; #229 proposes a fix)",
-    "signature-missing": "the reference Guardian accepts an unsigned request (#184; #229 proposes a fix)",
-    "request-id-repeated": "the reference Guardian does not track request_id (#184; #229 proposes a fix)",
-    "timestamp-outside-window": "the reference Guardian does not check the skew window (#184; #229 proposes a fix)",
+    "signature-invalid": "a section 10 MUST the reference Guardian fails today: it does not verify signatures (#184)",
+    "signature-missing": "a section 10 MUST the reference Guardian fails today: it accepts an unsigned request (#184)",
+    "request-id-repeated": "a section 10.3 MUST the reference Guardian fails today: it does not track request_id (#184)",
+    "timestamp-outside-window": "a section 10.3 MUST the reference Guardian fails today: it does not check the skew window (#184)",
 }
 
 
