@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "run_terminal_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"$GROK_PROJECT_DIR/reference-implementations/agt/hosts/grok/acs-hook.ts\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "run_terminal_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"$GROK_PROJECT_DIR/reference-implementations/agt/hosts/grok/acs-hook.ts\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

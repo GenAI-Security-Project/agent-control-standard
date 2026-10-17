@@ -1,15 +1,15 @@
 # Host adapter
 
-The host side of the wire, shared by both host shims. It turns a host's own hook payload into an ACS envelope, negotiates the session with the Guardian, posts the envelope, validates the decision that comes back, applies the failure posture when no decision arrives, renders the decision in the host's own output shape, and writes the audit log.
+The host side of the wire, shared by the host shims. It turns a host's own hook payload into an ACS envelope, negotiates the session with the Guardian, posts the envelope, validates the decision that comes back, applies the failure posture when no decision arrives, renders the decision in the host's own output shape, and writes the audit log.
 
-It contains no policy-runtime vocabulary and names no host output field. Both boundaries are enforced by [`test/invariants.test.ts`](../../test/invariants.test.ts) at the root of the tree. A second host arrives as another thin shim against this package, unchanged.
+It contains no policy-runtime vocabulary and names no host output field. Both boundaries are enforced by [`test/invariants.test.ts`](../../test/invariants.test.ts) at the root of the tree. A new host arrives as another thin shim against this package, unchanged.
 
 ## Get started
 
-A shim is thin because this package does the work. The two shipped shims are the worked examples. [`hosts/claude-code/acs-hook.ts`](../../hosts/claude-code/README.md) runs as a fresh subprocess per hook. [`hosts/opencode/acs-plugin.ts`](../../hosts/opencode/README.md) runs as one long-lived plugin object. Both call the same sequence, imported from the package root:
+A shim is thin because this package does the work. The shipped shims are the worked examples. [`hosts/claude-code/acs-hook.ts`](../../hosts/claude-code/README.md) and [`hosts/grok/acs-hook.ts`](../../hosts/grok/README.md) run as a fresh subprocess per hook. [`hosts/opencode/acs-plugin.ts`](../../hosts/opencode/README.md) runs as one long-lived plugin object. They call the same sequence, imported from the package root:
 
 1. `loadHookmap` reads the host's hookmap and validates it. A hookmap whose `decisions` block cannot render both `allow` and `deny` is refused at load, so the failure posture always has an output it can express.
-2. `resolveSessionConfig` returns the negotiated ServerHello for the session. The first hook of a session sends `handshake/hello` through `negotiateSessionConfig`. Later hooks read the stored answer. The Claude Code shim stores it in a file with `createFileSessionConfigStore`, because each hook is a new process. The OpenCode plugin uses `createMemorySessionConfigStore`.
+2. `resolveSessionConfig` returns the negotiated ServerHello for the session. The first hook of a session sends `handshake/hello` through `negotiateSessionConfig`. Later hooks read the stored answer. The Claude Code and Grok shims store it in a file with `createFileSessionConfigStore`, because each hook is a new process. The OpenCode plugin uses `createMemorySessionConfigStore`.
 3. `governStep` builds the envelope, posts it through the client `createGuardianClient` returns, validates the decision, and resolves a missing decision through the negotiated posture. Every fail-open proceed is written to the audit sink before it is returned.
 4. `renderDecision` maps the decision onto the host's output shape, as the hookmap's `decisions` block declares it. The shim applies that output: printed to stdout, or written into the live tool call object.
 
@@ -35,7 +35,7 @@ A hook may carry a `tools` list. A tool outside that list is not governed, and `
 | Malformed `modifications` | Fails closed |
 | A modification the host cannot apply | Refused. At the result gate the refusal withholds the output |
 
-`DEFAULT_POSTURE` and `DEFAULT_TIMEOUT_MS` are exported so both shims agree without one copying the other's number. The stage at which a failure happened, before the request was built, after it went out, or after a decision arrived that the host could not express, is recorded on the audit entry, because the three are different incidents.
+`DEFAULT_POSTURE` and `DEFAULT_TIMEOUT_MS` are exported so the shims agree without one copying the other's number. The stage at which a failure happened, before the request was built, after it went out, or after a decision arrived that the host could not express, is recorded on the audit entry, because the three are different incidents.
 
 ## The audit log
 
