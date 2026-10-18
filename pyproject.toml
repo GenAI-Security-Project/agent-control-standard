@@ -28,4 +28,4 @@ testpaths = ["tests"]
 
 [tool.uv.sources]
 # Pinned to the commit that carries the controls until a release on PyPI does.
-agent-evidence-vectors = { git = "https://github.com/probityai/agent-evidence-vectors", rev = "9b2a003ce4812d2402b85e0a5792c2f60d8d4e8c" }
+agent-evidence-vectors = { git = "https://github.com/probityai/agent-evidence-vectors", rev = "c2ffcedd69875bca97d3f3aca76cd45cc2a2da63" }
