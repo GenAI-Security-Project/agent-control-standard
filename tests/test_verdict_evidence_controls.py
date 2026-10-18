@@ -59,6 +59,8 @@ DRAFT_RULES = {
     "peer_artifact_unverified:transcript_digest_mismatch": "the retained transcript differs",
     "witness_scope_misderived": "PEER or EXTERNAL with no peer statement behind it",
     "field_invalid:provenance.lift_state": "a lift field written by the runner",
+    "peer_disagrees": "the peer saw another result, or its statement is reused for another verdict",
+    "payload_digest_fields_incomplete": "a digest that leaves out a field, such as expiry_disposition",
     "quarantine_digest_mismatch": "a quarantine field edited after the digest",
     "quarantine_overdue": "review_by has passed",
 }
