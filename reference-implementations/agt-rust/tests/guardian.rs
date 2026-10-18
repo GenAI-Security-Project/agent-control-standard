@@ -62,6 +62,13 @@ async fn guardian_matches_the_two_tool_gates_and_refuses_invalid_steps() {
         json!(["steps/toolCallRequest", "steps/toolCallResult"])
     );
     assert_eq!(hello["result"]["on_decision_failure"], "proceed");
+    let opa_timeout = agent_control_specification::OpaRegoRunner::from_environment()
+        .eval_timeout()
+        .as_millis();
+    assert_eq!(
+        hello["result"]["timeout_config"]["default_ms"],
+        json!(opa_timeout + 1000)
+    );
 
     let denied = send(request(
         "steps/toolCallRequest",

@@ -8,6 +8,15 @@ on:
     branches: ["main"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      source:
+        description: "Who started this run. The nightly roadmap refresh passes 'nightly'."
+        type: string
+        default: manual
+      preview:
+        description: "Build roadmap data from live GitHub without publishing anything."
+        type: boolean
+        default: false
 
 # Deny by default. Each job grants itself only what it needs.
 permissions: {}
@@ -46,10 +55,17 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.gate.outputs.publish }}
     permissions:
       contents: read
       # configure-pages calls GET /repos/{owner}/{repo}/pages, which needs this.
       pages: read
+      # The roadmap fetch reads milestones and issues. Public data, read-only.
+      issues: read
+      # The fetch reads which pull request closed each issue, so roadmap.json can verify
+      # that the close landed on main (decision 13). Read-only.
+      pull-requests: read
     steps:
       - name: Decide whether this run deploys
         id: gate
@@ -58,8 +74,9 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref }}
+          PREVIEW: ${{ inputs.preview }}
         run: |
-          if [ "$EVENT_NAME" != "pull_request" ] && [ "$REF_NAME" = "refs/heads/main" ]; then
+          if [ "$EVENT_NAME" != "pull_request" ] && [ "$REF_NAME" = "refs/heads/main" ] && [ "$PREVIEW" != "true" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
@@ -71,11 +88,30 @@ jobs:
           # Nothing here pushes with git, so the checkout's token has no reason to
           # stay behind in .git/config.
           persist-credentials: false
+          # The roadmap fetch asks git whether each closing commit is on main. A shallow
+          # clone cannot answer, and the fetch then reports the data unavailable.
+          fetch-depth: 0
+
+      - name: Fetch roadmap data
+        # The first tool step, before setup-uv installs anything, so no third-party code has
+        # run in this job while the token is in use. Pull requests render the committed
+        # fixture instead, so a fork pull request spends no API calls.
+        if: github.event_name != 'pull_request' && (vars.ROADMAP_RENDER_ENABLED == 'true' || inputs.preview)
+        timeout-minutes: 5
+        # A killed or failed fetch must never fail the job, which would skip the schema
+        # publish. The next step treats a missing data file as "unavailable".
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -S tools/fetch_roadmap.py --out "$RUNNER_TEMP/roadmap-data.json"
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.9.9"
+          # setup-uv defaults this input to the job token, which now carries issues: read.
+          # The version is pinned, so it needs no API call.
+          github-token: ""
 
       - name: Install dependencies from the lockfile
         run: uv sync --locked --no-dev
@@ -103,6 +139,27 @@ jobs:
         # Fails when any $id is unsafe or duplicated, or any $ref does not resolve.
         run: uv run --no-dev python tools/publish_schemas.py specification _site/schema
 
+      - name: Build the roadmap data
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE: ${{ inputs.source }}
+          PREVIEW: ${{ inputs.preview }}
+          RENDER_ENABLED: ${{ vars.ROADMAP_RENDER_ENABLED }}
+          COMMIT: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          PAGES_BASE: ${{ steps.pages.outputs.base_url || 'https://genai-security-project.github.io/agent-control-standard' }}
+        run: >-
+          python3 tools/build_roadmap_data.py
+          --data "$RUNNER_TEMP/roadmap-data.json"
+          --fixture tests/fixtures/roadmap-data.json
+          --out _site/roadmap/roadmap.json
+          --repo-root .
+          --event "$EVENT_NAME" --source "$SOURCE" --preview "$PREVIEW"
+          --render-enabled "$RENDER_ENABLED"
+          --commit "$COMMIT" --run "$RUN_ID"
+          --published-url "${PAGES_BASE%/}/roadmap/roadmap.json"
+          --summary "$GITHUB_STEP_SUMMARY"
+
       - name: Upload the artifact
         # Gated on the same branch check the deploy job enforces, rather than on
         # the event alone. If the gate step is ever skipped, its output is empty and this step
@@ -118,7 +175,7 @@ jobs:
   deploy:
     # event_name alone is not enough. workflow_dispatch can target any ref, so without
     # the branch check a feature branch could publish to the production site.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: needs.build.outputs.publish == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

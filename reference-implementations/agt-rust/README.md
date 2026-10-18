@@ -11,7 +11,7 @@ The TypeScript Claude Code and OpenCode shims can point to this server through `
 ## Prerequisites and run
 
 - Rust 1.89 or newer (the current dependency graph includes Cedar Policy 4.13).
-- An `opa` executable compatible with the pinned AGT policy bundle. Install OPA or set `ACS_OPA_PATH` to its executable path. Construction checks that OPA starts, then loads the AGT manifest. Local tests used the AGT SDK's bundled OPA 0.70.0.
+- OPA **0.70.0**, the version used by the pinned AGT policy bundle. Set `ACS_OPA_PATH` to its executable path. Startup checks the reported version and refuses other versions before loading the manifest. CI uses the AGT platform package verified by `../agt/bun.lock`.
 - Run from this checkout. The default paths deliberately resolve to the sibling `agt/` tree and the repository schemas.
 
 ```sh
@@ -31,6 +31,8 @@ The shim's `ACS_GUARDIAN_URL` defaults to the same endpoint. The shim does not e
 
 The Guardian reads `ACS_GUARDIAN_HOST`, `ACS_GUARDIAN_PORT`, `ACS_MANIFEST_PATH`, `ACS_ON_DECISION_FAILURE`, `ACS_ENVELOPE_LOG`, `ACS_SESSION_CONTEXT_LOG`, and `ACS_OPA_PATH`. It binds to loopback and declares `proceed` on decision delivery failure by default. `ACS_ON_DECISION_FAILURE=deny` changes the handshake's declared posture; other values stop startup. The local logs default to `agt/.acs/envelopes-rust.jsonl` and `agt/.acs/session-context-rust.jsonl`. They can contain raw arguments and should be protected as sensitive local data. They are ignored by Git.
 
+The AGT SDK reads `ACS_OPA_TIMEOUT_MS`, defaulting to 5000 milliseconds. The handshake advertises this evaluator timeout plus 1000 milliseconds for request handling and decision delivery. The default host deadline is therefore 6000 milliseconds; setting `ACS_OPA_TIMEOUT_MS=30000` advertises 31000 milliseconds. A timeout too large to represent with the delivery margin stops startup.
+
 ## Test
 
 ```sh
@@ -40,9 +42,11 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ACS_OPA_PATH=/absolute/path/to/opa ACS_OPA_TIMEOUT_MS=30000 cargo test --workspace --all-features
 ```
 
-The integration test starts a real HTTP Guardian and uses the pinned AGT bundle for handshake, allow, deny, request and result redaction, egress denial, WebFetch allowance, malformed payload, unknown method, parse error, oversized body, and log cases. It requires OPA. The test command gives slow test machines a longer OPA subprocess deadline; the server's default AGT deadline remains five seconds. The existing TypeScript tests are a separate baseline and can be run from `../agt` with Bun 1.3.11.
+Six unit tests cover verdict mapping, session state, OPA version validation, and host deadline calculation. The HTTP integration test starts a real Guardian and uses the pinned AGT bundle for handshake, allow, deny, request and result redaction, egress denial, WebFetch allowance, malformed payload, unknown method, parse error, oversized body, and log cases. It also checks the advertised deadline. It requires OPA. The test command gives slow test machines a longer OPA subprocess deadline and correspondingly extends the host deadline. The existing TypeScript tests are a separate baseline and can be run from `../agt` with Bun 1.3.11.
 
-For a direct wire comparison, start the Rust Guardian on port 8787 and the TypeScript Guardian on port 8788 with the same AGT policy bundle, then run `node tests/compare-guardians.mjs` from this directory. It sends nine identical requests to both servers and fails on any JSON response difference. `RUST_GUARDIAN_URL` and `TS_GUARDIAN_URL` can override the endpoints. CI also starts both Guardians and runs this comparison on every relevant pull request, so cross-language response drift fails the `Reference implementation` workflow rather than relying on a manual check.
+For a direct wire comparison, start the Rust Guardian on port 8787 and the TypeScript Guardian on port 8788 with the same AGT policy bundle, then run `node tests/compare-guardians.mjs` from this directory. `RUST_GUARDIAN_URL` and `TS_GUARDIAN_URL` can override the endpoints. CI also runs these nine cases: eight complete response comparisons and one handshake comparison excluding the intentionally different `timeout_config.default_ms`.
+
+This is evidence for those nine cases, not general parity. The comparison does not cover non-object arguments, handshake validation error details, alternative UUID or timestamp formats, warn or escalate verdicts, or evaluation failures. Those inputs can differ between the Guardians.
 
 ## Scope and parity
 

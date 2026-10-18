@@ -32,6 +32,7 @@ in the repository, because the board is organization-owned and a workflow's
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import shlex
 import subprocess
@@ -47,6 +48,18 @@ REPO = "GenAI-Security-Project/agent-control-standard"
 # spelled out a second time, since the board and the repository share one org.
 BOARD_OWNER = REPO.split("/", 1)[0]
 BOARD_PROJECT_NUMBER = 9
+
+# GitHub Actions' app id. A required check pinned to it passes only on a run of an Actions
+# workflow, so a commit status that any other integration posts under the same name cannot
+# satisfy it.
+GITHUB_ACTIONS_APP_ID = 15368
+
+# Fields GitHub returns on a ruleset but refuses or ignores on a write. Everything else in
+# the live JSON goes back unchanged, so a field this module does not model survives a PUT.
+_READ_ONLY_RULESET_KEYS = frozenset({
+    "id", "node_id", "source", "source_type", "created_at", "updated_at",
+    "current_user_can_bypass", "_links",
+})
 
 # The step names this tool will run. Anything else, including every step name in
 # HUMAN_STEPS, is refused rather than guessed at.
@@ -165,6 +178,7 @@ class Ruleset:
     required_review_thread_resolution: bool = True
     enforcement: str = "active"
     bypass_actors: tuple[dict, ...] = field(default_factory=_default_bypass_actors)
+    check_integration_id: int = GITHUB_ACTIONS_APP_ID
 
 
 @dataclass(frozen=True)
@@ -224,7 +238,7 @@ def desired_labels() -> list[Label]:
         ),
         Label(
             name="scope:deferred", color="fbca04",
-            description="Real work, tracked, lands after Day 90. Maintainers only",
+            description="Real work, tracked, lands in a later release. Maintainers only",
         ),
         Label(
             name="scope:out", color="e4e669",
@@ -294,44 +308,14 @@ def desired_labels() -> list[Label]:
 
 
 def desired_milestones() -> list[Milestone]:
-    """The four milestones from Phase 2 Step 11, dates and descriptions verbatim."""
-    return [
-        Milestone(
-            title="Day 14",
-            due_on="2026-09-24",
-            description=(
-                "Reference Implementation lead named. PR #21 floor decision closed. "
-                "Discussions seeded. Domain transfer counterpart identified."
-            ),
-        ),
-        Milestone(
-            title="Day 30",
-            due_on="2026-10-09",
-            description=(
-                "PR #22 merged with the emission-conformance suite in CI. Documentation "
-                "and Testing lead seats filled. Conformance claim template published. "
-                "Fail-open resolution decided."
-            ),
-        ),
-        Milestone(
-            title="Day 60",
-            due_on="2026-11-06",
-            description=(
-                "Installable reference Guardian published. Milestone #33 requirement "
-                "ledger drafted. AARM mapping session held. Domains transferred. "
-                "OpenSSF registered."
-            ),
-        ),
-        Milestone(
-            title="Day 90",
-            due_on="2026-12-04",
-            description=(
-                "AGT interoperability benchmark published with results and "
-                "disagreements. Cursor file-read gap closed. One external ACS-Core "
-                "compatibility claim."
-            ),
-        ),
-    ]
+    """No milestones are declared here any more.
+
+    The Day 14/30/60/90 checkpoints were replaced by deliverable milestones on
+    2026-10-04 (design/2026-10-04-roadmap-page-design.md). Those change whenever triage
+    does, in the GitHub UI, so declaring them as desired state would rewrite them on every
+    run of this tool.
+    """
+    return []
 
 
 def desired_issues() -> list[Issue]:
@@ -431,7 +415,6 @@ def desired_issues() -> list[Issue]:
                 "make an ACS-Core conformance claim. Open decision, Day 30 date."
             ),
             labels=onramp + ("workstream:spec", "priority:P1"),
-            milestone="Day 30",
         ),
         Issue(
             title=(
@@ -444,7 +427,6 @@ def desired_issues() -> list[Issue]:
                 "decision, Day 30 date."
             ),
             labels=onramp + ("workstream:coding-agents", "priority:P1"),
-            milestone="Day 30",
         ),
     ]
 
@@ -529,19 +511,29 @@ def desired_issues() -> list[Issue]:
 
 
 def desired_rulesets() -> list[Ruleset]:
-    """protect-integration and protect-release, from Phase 2 Step 5.
+    """protect-integration and protect-release, from Phase 2 Step 5 and rollout package E.
 
     Both mirror the pre-change protect-main: one approval, code owner review, stale
-    reviews dismissed on push, last-push approval, required thread resolution, the
-    `test` and `build` checks, and squash or rebase merges only. Both also inherit
-    the admin always-bypass from the Ruleset default, matching protect-main. Without
-    this bypass, a sole maintainer cannot merge into a branch requiring review, since
-    GitHub does not let anyone approve their own pull request. Every field left at
-    its default on Ruleset already carries that shape, so the two instances below
-    differ only in the two fields Step 5 says differ: the name and the target ref.
+    reviews dismissed on push, last-push approval, required thread resolution, and the
+    `test` and `build` checks pinned to the GitHub Actions app. Both also inherit the
+    admin always-bypass from the Ruleset default, matching protect-main. Without this
+    bypass, a sole maintainer cannot merge into a branch requiring review, since GitHub
+    does not let anyone approve their own pull request.
+
+    protect-integration allows squash merges only. A rebase merge lands every commit
+    message of the branch, and any of them can close an issue past the closing-choice
+    check, which reads the pull request description only.
+    protect-integration also requires `closing-choice`, from the Order's step 3, once a
+    project lead has set CLOSING_CHOICE_SINCE. Before that date the check passes every pull
+    request with a notice, so requiring it blocks nothing that was open.
     """
     return [
-        Ruleset(name="protect-integration", target_ref="refs/heads/integration"),
+        Ruleset(
+            name="protect-integration",
+            target_ref="refs/heads/integration",
+            required_status_checks=("test", "build", "closing-choice"),
+            allowed_merge_methods=("squash",),
+        ),
         Ruleset(name="protect-release", target_ref="refs/heads/release/*"),
     ]
 
@@ -655,52 +647,64 @@ def _ruleset_matches(live: dict, desired: Ruleset) -> bool:
         and live.get("required_review_thread_resolution") == desired.required_review_thread_resolution
         and tuple(live.get("required_status_checks", ())) == desired.required_status_checks
         and tuple(live.get("allowed_merge_methods", ())) == desired.allowed_merge_methods
+        and tuple(live.get("check_integration_ids", ()))
+        == (desired.check_integration_id,) * len(desired.required_status_checks)
     )
 
 
-def _ruleset_payload(desired: Ruleset) -> dict:
-    """Rebuild GitHub's nested rules array from a flat Ruleset.
+def _required_checks(contexts: Iterable[str], integration_id: int) -> list[dict]:
+    return [{"context": context, "integration_id": integration_id} for context in contexts]
 
-    Deletion and non-fast-forward protection are unconditional, per the plan's Step 5,
-    so they are written here rather than carried as fields with only one valid value.
+
+def _writable(live: dict | None) -> dict:
+    """A deep copy of a live ruleset with the read-only fields removed."""
+    return {key: value for key, value in copy.deepcopy(live or {}).items() if key not in _READ_ONLY_RULESET_KEYS}
+
+
+def _ruleset_payload(desired: Ruleset, live: dict | None = None) -> dict:
+    """Rebuild GitHub's nested rules array from a flat Ruleset, on top of the live JSON.
+
+    A PUT replaces the whole ruleset, so a payload built from the declared fields alone
+    drops every live field this module does not model, such as
+    require_extra_approval_for_unattributed_changes. Starting from the live ruleset and
+    overwriting only the declared fields keeps them. Deletion and non-fast-forward
+    protection are unconditional, per the plan's Step 5, so they are added when absent.
     bypass_actors is rendered at the top level so GitHub recognizes the admin bypass.
     """
-    return {
+    payload = _writable(live)
+    payload.update({
         "name": desired.name,
         "target": "branch",
         "enforcement": desired.enforcement,
         "conditions": {"ref_name": {"include": [desired.target_ref], "exclude": []}},
         "bypass_actors": list(desired.bypass_actors),
-        "rules": [
-            {"type": "deletion"},
-            {"type": "non_fast_forward"},
-            {
-                "type": "pull_request",
-                "parameters": {
-                    "required_approving_review_count": desired.required_approving_review_count,
-                    "require_code_owner_review": desired.require_code_owner_review,
-                    "dismiss_stale_reviews_on_push": desired.dismiss_stale_reviews_on_push,
-                    "require_last_push_approval": desired.require_last_push_approval,
-                    "required_review_thread_resolution": desired.required_review_thread_resolution,
-                    "allowed_merge_methods": list(desired.allowed_merge_methods),
-                },
-            },
-            {
-                "type": "required_status_checks",
-                "parameters": {
-                    "required_status_checks": [
-                        {"context": check} for check in desired.required_status_checks
-                    ],
-                    # GitHub returns HTTP 422 with the rule index (/rules/3) rather than
-                    # a field name if these two parameters are missing. Their presence is
-                    # required even when set to false. Set both false to match the
-                    # protect-main shape this repository already runs successfully.
-                    "strict_required_status_checks_policy": False,
-                    "do_not_enforce_on_create": False,
-                },
-            },
-        ],
-    }
+    })
+    rules = {rule["type"]: rule for rule in payload.get("rules", [])}
+    order = [rule["type"] for rule in payload.get("rules", [])]
+    for kind in ("deletion", "non_fast_forward", "pull_request", "required_status_checks"):
+        if kind not in rules:
+            rules[kind] = {"type": kind}
+            order.append(kind)
+    pull_request = rules["pull_request"].setdefault("parameters", {})
+    pull_request.update({
+        "required_approving_review_count": desired.required_approving_review_count,
+        "require_code_owner_review": desired.require_code_owner_review,
+        "dismiss_stale_reviews_on_push": desired.dismiss_stale_reviews_on_push,
+        "require_last_push_approval": desired.require_last_push_approval,
+        "required_review_thread_resolution": desired.required_review_thread_resolution,
+        "allowed_merge_methods": list(desired.allowed_merge_methods),
+    })
+    checks = rules["required_status_checks"].setdefault("parameters", {})
+    checks.update({
+        "required_status_checks": _required_checks(desired.required_status_checks, desired.check_integration_id),
+        # GitHub returns HTTP 422 with the rule index (/rules/3) rather than a field name
+        # if these two parameters are missing. Their presence is required even when set to
+        # false. Set both false to match the protect-main shape this repository runs.
+        "strict_required_status_checks_policy": False,
+        "do_not_enforce_on_create": False,
+    })
+    payload["rules"] = [rules[kind] for kind in order]
+    return payload
 
 
 def plan_ruleset_actions(live_rulesets: list[dict], desired: tuple[Ruleset, ...]) -> list[Action]:
@@ -721,8 +725,27 @@ def plan_ruleset_actions(live_rulesets: list[dict], desired: tuple[Ruleset, ...]
                 "--input", "@@PAYLOAD@@",
             )
             description = f"Update ruleset {ruleset.name!r}"
-        actions.append(Action("rulesets", description, argv, payload=_ruleset_payload(ruleset)))
+        live = current.get("raw") if current is not None else None
+        actions.append(Action("rulesets", description, argv, payload=_ruleset_payload(ruleset, live)))
     return actions
+
+
+def removed_required_checks(live_rulesets: list[dict], desired: tuple[Ruleset, ...]) -> list[tuple[str, str]]:
+    """Live required checks a write would drop, as (ruleset name, check) pairs.
+
+    A lead may add a required check by hand before its declaration lands here. A full
+    run would then silently strip it, so main refuses unless the operator says so.
+    """
+    by_name = {entry["name"]: entry for entry in live_rulesets}
+    dropped: list[tuple[str, str]] = []
+    for ruleset in desired:
+        current = by_name.get(ruleset.name)
+        if current is None:
+            continue
+        for check in current.get("required_status_checks", ()):
+            if check not in ruleset.required_status_checks:
+                dropped.append((ruleset.name, check))
+    return dropped
 
 
 def plan_actions(live_state: dict, desired_state: DesiredState) -> list[Action]:
@@ -780,64 +803,46 @@ def plan_default_branch_actions(live_state: dict) -> list[Action]:
 def plan_required_check_actions(live_state: dict) -> list[Action]:
     """Phase 2 Step 10: add base-branch-guard to protect-main's required checks.
 
-    Only the check list changes. Every other protect-main field is read back from
-    live_state and written unchanged, because this step runs against a ruleset a
-    human already configured in Step 1 and this tool must not relitigate the rest of
-    it while adding one check.
+    Only the check list changes. Every other protect-main field comes from the live
+    ruleset's full JSON and is written back unchanged, because this step runs against a
+    ruleset a human configured and this tool must not relitigate the rest of it while
+    adding one check. Without the live JSON there is nothing safe to write.
     """
     protect_main = live_state.get("protect_main")
-    if protect_main is None:
-        # No live ruleset to patch. The caller fetched nothing, so there is nothing
-        # to diff, not an inferred "it must already be fine".
+    if protect_main is None or protect_main.get("raw") is None:
         return []
     checks = tuple(protect_main.get("required_status_checks", ()))
     if "base-branch-guard" in checks:
         return []
-    updated = dict(protect_main)
-    updated["required_status_checks"] = checks + ("base-branch-guard",)
     ruleset_id = protect_main.get("id")
     return [
         Action(
             "required-check",
             "Add base-branch-guard to protect-main's required checks",
             ("gh", "api", "-X", "PUT", f"repos/{REPO}/rulesets/{ruleset_id}", "--input", "@@PAYLOAD@@"),
-            payload=_protect_main_payload(updated),
+            payload=_protect_main_payload(protect_main["raw"], checks + ("base-branch-guard",)),
         )
     ]
 
 
-def _protect_main_payload(protect_main: dict) -> dict:
-    """Render protect-main's flat live shape back into GitHub's nested rules array."""
-    return {
-        "name": "protect-main",
-        "target": "branch",
-        "enforcement": protect_main.get("enforcement", "active"),
-        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
-        "rules": [
-            {"type": "deletion"},
-            {"type": "non_fast_forward"},
-            {
-                "type": "pull_request",
-                "parameters": {
-                    "required_approving_review_count": protect_main.get(
-                        "required_approving_review_count", 1
-                    ),
-                    "allowed_merge_methods": list(
-                        protect_main.get("allowed_merge_methods", ("squash", "rebase", "merge"))
-                    ),
-                },
-            },
-            {
-                "type": "required_status_checks",
-                "parameters": {
-                    "required_status_checks": [
-                        {"context": check}
-                        for check in protect_main.get("required_status_checks", ())
-                    ],
-                },
-            },
-        ],
-    }
+def _protect_main_payload(live: dict, checks: tuple[str, ...]) -> dict:
+    """protect-main's live JSON with only its required check list replaced.
+
+    The earlier version rebuilt protect-main from four flat fields, which dropped code
+    owner review, stale review dismissal, last-push approval, and thread resolution, and
+    would have weakened main on its next run.
+    """
+    payload = _writable(live)
+    rules = payload.setdefault("rules", [])
+    existing = next((rule for rule in rules if rule.get("type") == "required_status_checks"), None)
+    if existing is None:
+        existing = {"type": "required_status_checks"}
+        rules.append(existing)
+    parameters = existing.setdefault("parameters", {})
+    parameters["required_status_checks"] = _required_checks(checks, GITHUB_ACTIONS_APP_ID)
+    parameters.setdefault("strict_required_status_checks_policy", False)
+    parameters.setdefault("do_not_enforce_on_create", False)
+    return payload
 
 
 # --- Board reconciliation -------------------------------------------------------
@@ -1072,12 +1077,16 @@ def _normalize_ruleset(detail: dict) -> dict:
         "target_ref": refs[0] if refs else "",
         "enforcement": detail.get("enforcement", "active"),
         "required_status_checks": tuple(check["context"] for check in checks),
+        "check_integration_ids": tuple(check.get("integration_id") for check in checks),
         "allowed_merge_methods": tuple(pr_params.get("allowed_merge_methods", ())),
         "required_approving_review_count": pr_params.get("required_approving_review_count"),
         "require_code_owner_review": pr_params.get("require_code_owner_review"),
         "dismiss_stale_reviews_on_push": pr_params.get("dismiss_stale_reviews_on_push"),
         "require_last_push_approval": pr_params.get("require_last_push_approval"),
         "required_review_thread_resolution": pr_params.get("required_review_thread_resolution"),
+        # The full response, so a write can start from every live field rather than from
+        # the handful this module compares.
+        "raw": detail,
     }
 
 
@@ -1248,6 +1257,41 @@ def fetch_live_state() -> dict:
     }
 
 
+# --- Ruleset preconditions -------------------------------------------------------
+
+RULESET_STEPS = (None, "rulesets", "required-check")
+
+
+def ruleset_refusal(porcelain: str, head: str, integration_tip: str) -> str | None:
+    """Why ruleset planning must not run from this checkout, or None when it may.
+
+    The declarations in this file are only the agreed state when they are the ones on the
+    live tip of integration. A stale or edited checkout would write its own older or
+    unreviewed rulesets over the live ones.
+    """
+    if porcelain.strip():
+        return "The working tree has uncommitted changes. Ruleset planning runs only from a clean checkout."
+    if not head or head.strip() != integration_tip.strip():
+        return (
+            "HEAD is not the live tip of integration. Run `git fetch origin` and check out "
+            "origin/integration, so the rulesets this tool writes are the ones that were reviewed."
+        )
+    return None
+
+
+def _checkout_state() -> tuple[str, str, str]:
+    """The working tree status, HEAD, and the live integration tip, for ruleset_refusal."""
+    root = Path(__file__).resolve().parents[1]
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    tip = _gh("api", f"repos/{REPO}/branches/integration", "--jq", ".commit.sha").strip()
+    return porcelain, head, tip
+
+
 # --- CLI ----------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1276,6 +1320,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="STEP",
         help=f"Run a single step. One of: {', '.join(AUTOMATABLE_STEPS)}.",
     )
+    parser.add_argument(
+        "--allow-ruleset-reduction",
+        action="store_true",
+        help="Allow a ruleset write to drop a live required check this tool does not declare.",
+    )
     return parser
 
 
@@ -1301,7 +1350,23 @@ def main(argv: list[str] | None = None) -> int:
     # mutation, so passing both is a no-op rather than a contradiction.
     apply_changes = args.apply
 
+    if args.only in RULESET_STEPS:
+        refusal = ruleset_refusal(*_checkout_state())
+        if refusal is not None:
+            print(refusal, file=sys.stderr)
+            return 2
+
     live_state = fetch_live_state()
+    if args.only in RULESET_STEPS:
+        dropped = removed_required_checks(live_state.get("rulesets", []), desired_rulesets())
+        if dropped and not args.allow_ruleset_reduction:
+            names = ", ".join(f"{check} on {ruleset}" for ruleset, check in dropped)
+            print(
+                f"Refusing: this run would drop live required checks ({names}). Declare them "
+                "in desired_rulesets(), or pass --allow-ruleset-reduction to drop them.",
+                file=sys.stderr,
+            )
+            return 2
     actions = collect_actions(live_state, only=args.only)
 
     if not actions:

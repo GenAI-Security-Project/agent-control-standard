@@ -70,6 +70,18 @@ for (const [name, input] of cases) {
     assert.equal(response.status, 200, `${name} at ${url} returned HTTP ${response.status}`);
     return response.json();
   }));
-  assert.deepStrictEqual(responses[0], responses[1], `${name} differs`);
-  console.log(`${name}: equal`);
+  if (name === "handshake") {
+    // Rust advertises the evaluator deadline plus delivery time. The TypeScript
+    // reference currently advertises a fixed five-second deadline.
+    for (const response of responses) {
+      assert.ok(Number.isSafeInteger(response.result.timeout_config.default_ms));
+      assert.ok(response.result.timeout_config.default_ms > 0);
+      delete response.result.timeout_config.default_ms;
+    }
+    assert.deepStrictEqual(responses[0], responses[1], `${name} differs beyond default_ms`);
+    console.log(`${name}: equal except deployment-specific default_ms`);
+  } else {
+    assert.deepStrictEqual(responses[0], responses[1], `${name} differs`);
+    console.log(`${name}: equal`);
+  }
 }

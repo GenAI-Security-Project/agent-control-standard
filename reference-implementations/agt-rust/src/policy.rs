@@ -1,43 +1,68 @@
 use agent_control_specification::{
     AgentControl, AnnotatorDispatcher, AnnotatorInvocation, EnforcementMode, InterventionPoint,
-    JsonValue, RuntimeError, Verdict,
+    JsonValue, OpaRegoRunner, RuntimeError, Verdict,
 };
 use regex::Regex;
 use serde_json::json;
-use std::{path::Path, process::Command, sync::Arc};
+use std::{path::Path, process::Command, sync::Arc, time::Duration};
 use url::Url;
 
 pub(crate) struct Policy {
     runtime: AgentControl,
+    decision_timeout_ms: u64,
+}
+
+const REQUIRED_OPA_VERSION: &str = "0.70.0";
+
+fn check_opa_version(stdout: &[u8]) -> Result<(), String> {
+    let output = std::str::from_utf8(stdout).map_err(|_| "OPA version output is not UTF-8")?;
+    let version = output
+        .lines()
+        .find_map(|line| line.strip_prefix("Version:").map(str::trim));
+    if version != Some(REQUIRED_OPA_VERSION) {
+        return Err(format!(
+            "OPA {REQUIRED_OPA_VERSION} is required by the pinned AGT bundle; found {}",
+            version.unwrap_or("no Version field")
+        ));
+    }
+    Ok(())
+}
+
+fn decision_timeout_ms(opa_timeout: Duration) -> Result<u64, String> {
+    u64::try_from(opa_timeout.as_millis())
+        .ok()
+        .and_then(|millis| millis.checked_add(1000))
+        .ok_or_else(|| "OPA timeout is too large to advertise a host deadline".into())
 }
 
 impl Policy {
     pub(crate) fn load(manifest: &Path) -> Result<Self, String> {
-        // The pinned AGT runtime invokes OPA as a subprocess. Check this at boot,
-        // so a missing evaluator cannot silently turn every decision into a deny.
-        let opa = std::env::var_os("ACS_OPA_PATH").unwrap_or_else(|| "opa".into());
-        let output = Command::new(&opa)
+        // Use the SDK's path and timeout resolution, including its default timeout.
+        let runner = OpaRegoRunner::from_environment();
+        let opa = runner.executable();
+        let decision_timeout_ms = decision_timeout_ms(runner.eval_timeout())?;
+        let output = Command::new(opa)
             .arg("version")
             .output()
-            .map_err(|error| {
-                format!(
-                    "cannot execute OPA at {}: {error}",
-                    Path::new(&opa).display()
-                )
-            })?;
+            .map_err(|error| format!("cannot execute OPA at {}: {error}", opa.display()))?;
         if !output.status.success() {
-            return Err(format!(
-                "OPA at {} failed its version check",
-                Path::new(&opa).display()
-            ));
+            return Err(format!("OPA at {} failed its version check", opa.display()));
         }
+        check_opa_version(&output.stdout)?;
         let runtime = AgentControl::from_path_with_dispatchers(
             manifest,
             Some(Arc::new(EgressAnnotator)),
             None,
         )
         .map_err(|error| format!("AGT runtime: {error}"))?;
-        Ok(Self { runtime })
+        Ok(Self {
+            runtime,
+            decision_timeout_ms,
+        })
+    }
+
+    pub(crate) fn decision_timeout_ms(&self) -> u64 {
+        self.decision_timeout_ms
     }
 
     pub(crate) fn evaluate(&self, point: &str, snapshot: JsonValue) -> Result<Verdict, String> {
@@ -86,5 +111,32 @@ impl AnnotatorDispatcher for EgressAnnotator {
             Ok(url) => Ok(json!({"destination": url.origin().ascii_serialization()})),
             Err(_) => Ok(json!({"destination": "https://unresolved.invalid"})),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_opa_version, decision_timeout_ms};
+    use std::time::Duration;
+
+    #[test]
+    fn requires_the_exact_pinned_opa_version() {
+        assert!(check_opa_version(b"Version: 0.70.0\r\nBuild Commit: abc\r\n").is_ok());
+        for output in [
+            b"Version: 1.0.0\n".as_slice(),
+            b"Version: 0.70.0-dev\n".as_slice(),
+            b"Build Commit: 0.70.0\n".as_slice(),
+            b"Version: 0.70.0\n\xff".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert!(check_opa_version(output).is_err(), "{output:?}");
+        }
+    }
+
+    #[test]
+    fn host_deadline_leaves_a_second_for_delivery_after_opa() {
+        assert_eq!(decision_timeout_ms(Duration::from_secs(5)), Ok(6000));
+        assert_eq!(decision_timeout_ms(Duration::from_secs(30)), Ok(31000));
+        assert!(decision_timeout_ms(Duration::from_millis(u64::MAX)).is_err());
     }
 }

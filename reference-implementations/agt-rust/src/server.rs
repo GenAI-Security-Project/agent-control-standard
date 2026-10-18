@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{self, Write},
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -98,7 +98,10 @@ impl Guardian {
         self.write_envelope("request", &raw, method.as_deref());
         let response = self.dispatch(&raw);
         if let Err(error) = self.schemas.validate_response(&response) {
-            eprintln!("guardian sent a response that fails response-envelope.json: {error}");
+            let _ = writeln!(
+                io::stderr().lock(),
+                "guardian sent a response that fails response-envelope.json: {error}"
+            );
         }
         self.write_envelope("response", &response, method.as_deref());
         response
@@ -126,7 +129,7 @@ impl Guardian {
                     "negotiated_version": "0.1.0",
                     "methods_evaluated": ["steps/toolCallRequest", "steps/toolCallResult"],
                     "selected_transport": "http",
-                    "timeout_config": {"default_ms": 5000},
+                    "timeout_config": {"default_ms": self.policy.decision_timeout_ms()},
                     "on_decision_failure": self.posture,
                 }),
             );
@@ -244,7 +247,7 @@ impl Guardian {
             return;
         };
         if let Err(error) = write_line(file, &entry) {
-            eprintln!("envelope log write failed: {error}");
+            let _ = writeln!(io::stderr().lock(), "envelope log write failed: {error}");
             log.file = None;
         } else {
             log.seq += 1;
@@ -256,7 +259,10 @@ impl Guardian {
         let Ok(mut guard) = log.lock() else { return };
         let Some(file) = guard.as_mut() else { return };
         if let Err(error) = write_line(file, entry) {
-            eprintln!("session context log write failed: {error}");
+            let _ = writeln!(
+                io::stderr().lock(),
+                "session context log write failed: {error}"
+            );
             *guard = None;
         }
     }
@@ -383,7 +389,10 @@ fn open_log_best_effort(path: &PathBuf) -> Option<File> {
     match open_log(path) {
         Ok(file) => Some(file),
         Err(error) => {
-            eprintln!("log sink disabled after open failure: {error}");
+            let _ = writeln!(
+                io::stderr().lock(),
+                "log sink disabled after open failure: {error}"
+            );
             None
         }
     }

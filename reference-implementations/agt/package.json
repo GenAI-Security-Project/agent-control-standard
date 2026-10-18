@@ -11,7 +11,8 @@
     "conformance": "bash scripts/run-conformance.sh",
     "watch:upstream": "bash scripts/run-upstream-watch.sh",
     "guardian": "bun run packages/guardian/src/main.ts",
-    "inspector": "bun run packages/inspector/src/main.ts"
+    "inspector": "bun run packages/inspector/src/main.ts",
+    "sample:trace": "bun run scripts/make-sample-trace.ts"
   },
   "dependencies": {
     "agent-control-specification": "0.3.1-beta.0"
