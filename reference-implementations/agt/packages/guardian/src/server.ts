@@ -63,8 +63,6 @@
  * -- a Guardian in its own container, say -- opts in explicitly through the
  * `hostname` option (main.ts reads ACS_GUARDIAN_HOST for it).
  */
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotator, PolicyBridge } from "agt-bridge";
 import { createDeploymentBridge } from "./deployment-bridge.ts";
@@ -92,6 +90,7 @@ import {
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
 import { buildServerHello, type ServerHello } from "./handshake.ts";
+import { createBatchedFileLog, NULL_LOG_WRITER } from "./batched-log-writer.ts";
 import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
 import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
 import {
@@ -346,59 +345,6 @@ export type StartGuardianOptions = {
 };
 export type StartedGuardian = { url: string; close(): Promise<void> };
 
-/**
- * A total-by-construction `appendLine` for the session-context chain's
- * optional JSONL projection -- shaped like `createEnvelopeLogSink`'s own
- * write path (envelope-log-sink.ts: mkdirSync guarded once at construction,
- * every write wrapped, disabled and reported once rather than thrown after
- * the first failure), but not a call into that function.
- * `EnvelopeLogSink.write(direction, envelope, method)` builds its own
- * `EnvelopeLogEntry` (seq, recorded_at, direction, method, rpc_id, envelope)
- * around whatever it is handed; `SessionContextStore`'s `appendLine`
- * contract is one already-serialized JSON line with no wrapping object at
- * all (`session-context-store.ts`: "Called once per appended entry with its
- * JSON line, no trailing newline"). Routing the chain's lines through
- * `createEnvelopeLogSink` would nest every session-context entry inside an
- * unrelated `EnvelopeLogEntry` -- `direction: "request"` on a chain entry is
- * meaningless, and the JSONL shape `test/session-context-roundtrip.test.ts`
- * pins (`{session_id, seq, request_id, ...}` at the line's own top level)
- * would break. The failure behaviour is duplicated because the invariant it
- * upholds is the same one envelope-log-sink.ts states for the envelope log:
- * a projection write must never be able to turn a governed tool call into a
- * denied one.
- */
-function createSessionContextLogAppender(path: string): (line: string) => void {
-  let disabled = false;
-
-  const fail = (error: unknown): void => {
-    disabled = true;
-    try {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`session context log disabled after failure (${path}): ${message}`);
-    } catch {
-      // Silently swallow any error from console.error, matching
-      // envelope-log-sink.ts's own guard -- total means total.
-    }
-  };
-
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-  } catch (error) {
-    fail(error);
-  }
-
-  return (line: string): void => {
-    if (disabled) {
-      return;
-    }
-    try {
-      appendFileSync(path, `${line}\n`);
-    } catch (error) {
-      fail(error);
-    }
-  };
-}
-
 export async function startGuardian({
   port,
   hostname,
@@ -422,19 +368,16 @@ export async function startGuardian({
   const bridge = bridgeOverride ?? createDeploymentBridge(manifestPath, annotator);
   const mapping = loadMapping(mappingPath ?? MAPPING_PATH);
   const envelopeLog = envelopeLogPath ? createEnvelopeLogSink({ path: envelopeLogPath }) : NULL_ENVELOPE_LOG_SINK;
-  // The session-context store is always the in-memory one, or the caller's
-  // own override -- sessionContextLog never becomes an alternative backing
-  // store, only a JSONL projection of whichever store is in use, the same
-  // relationship envelopeLogPath has to the envelope log. The `??` below
-  // means the projection is wired up (and its directory created) only in
-  // the branch that actually constructs the default store -- an override in
-  // sessionContextStore short-circuits past both, per that option's own doc
-  // comment.
-  const sessionContextStore =
-    sessionContextStoreOverride ??
-    createMemorySessionContextStore(
-      sessionContextLog ? { appendLine: createSessionContextLogAppender(sessionContextLog) } : {},
-    );
+  // The JSONL is a projection, not the store. An override owns its persistence.
+  const contextLog = sessionContextLog && !sessionContextStoreOverride
+    ? createBatchedFileLog(sessionContextLog, (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`session context log disabled after failure (${sessionContextLog}): ${message}`);
+      })
+    : NULL_LOG_WRITER;
+  const sessionContextStore = sessionContextStoreOverride ?? createMemorySessionContextStore(
+    sessionContextLog ? { appendLine: (line) => contextLog.write(`${line}\n`) } : {},
+  );
   // Off unless an output is named -- the same relationship envelopeLogPath
   // has to the envelope log. The override wins over both paths, as the other
   // test seams above do.
@@ -455,6 +398,9 @@ export async function startGuardian({
         })
       : NULL_OTEL_TRACE_EXPORTER);
 
+  let closing: Promise<void> | undefined;
+  let activeRequests = 0;
+  let requestsDrained: (() => void) | undefined;
   const server = Bun.serve({
     hostname: hostname ?? LOOPBACK_ONLY,
     port,
@@ -463,29 +409,61 @@ export async function startGuardian({
       if (req.method !== "POST" || pathname !== ACS_PATH) {
         return new Response("Not Found", { status: 404 });
       }
-      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
-      return Response.json(response);
+      if (closing) return new Response("Guardian is shutting down", { status: 503 });
+      activeRequests += 1;
+      try {
+        const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
+        return Response.json(response);
+      } finally {
+        activeRequests -= 1;
+        if (activeRequests === 0) requestsDrained?.();
+      }
     },
   });
 
   return {
     url: `http://localhost:${server.port}${ACS_PATH}`,
-    async close() {
-      // The same close whether trace export is on or off:
-      // NULL_OTEL_TRACE_EXPORTER's shutdown resolves at once, so with export
-      // off the drain is all that remains. Bun.serve's stop(true) closes
-      // every connection at once, and on Bun 1.3.11 it resolves only when
-      // every in-flight handler has returned. A handler whose bridge never
-      // answers never returns, so the drain is bounded by the negotiated
-      // timeout: past it, no host is still waiting for the answer. The timer
-      // is unref'd so a prompt stop does not leave it holding the process
-      // open. The exporter shuts down after the drain, so a step still open
-      // then is closed as the failure it is rather than lost.
-      const deadline = new Promise<void>((resolve) => {
-        setTimeout(resolve, hello.timeout_config.default_ms).unref();
-      });
-      await Promise.race([server.stop(true), deadline]);
-      await traceExporter.shutdown();
+    close() {
+      return closing ??= (async () => {
+        // Requests and log writes share the negotiated timeout. A stuck bridge
+        // or disk must not prevent the exporter from shutting down afterwards.
+        const pendingRequests = activeRequests === 0
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => { requestsDrained = resolve; });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timedOut = false;
+        const deadline = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            try {
+              console.error(`Guardian shutdown drain exceeded ${hello.timeout_config.default_ms} ms; pending requests or log records may be lost`);
+            } catch {
+              // A broken stderr must not keep shutdown waiting.
+            }
+            resolve();
+          }, hello.timeout_config.default_ms).unref();
+        });
+        try {
+          await Promise.race([
+            (async () => {
+              // Bun 1.3.11 cannot upgrade an already-started graceful stop to
+              // stop(true), so wait for handlers before choosing how to stop.
+              await pendingRequests;
+              await server.stop();
+              await Promise.all([envelopeLog.close(), contextLog.close()]);
+            })(),
+            deadline,
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (timedOut) {
+          void server.stop(true);
+          void envelopeLog.close();
+          void contextLog.close();
+        }
+        await traceExporter.shutdown();
+      })();
     },
   };
 }
@@ -610,7 +588,7 @@ async function handleAcsRequest(
   } catch {
     // A reporting failure (an EPIPE on stderr, say) must not be able to
     // throw out of handleAcsRequest with nothing above it to catch it --
-    // matching envelope-log-sink.ts / createSessionContextLogAppender's own
+    // matching envelope-log-sink.ts / createBatchedFileLog's own
     // guard: total means total, including the reporter that exists only to
     // report a different total component's own finding.
   }

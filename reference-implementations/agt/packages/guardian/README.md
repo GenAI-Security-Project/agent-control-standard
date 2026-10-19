@@ -36,7 +36,7 @@ To see a decision without an agent client, pipe a hook payload into the Claude C
 
 ## What happens to each request
 
-1. The raw envelope is appended to the envelope log, before anything else.
+1. The raw envelope is serialized and queued for the envelope log, before validation.
 2. The envelope is validated against `request-envelope.json`. A `steps/toolCallRequest` or `steps/toolCallResult` is also validated against its own payload schema. An invalid envelope on a `steps/*` method is answered with an honoured `deny`, not a bare error, so the host has a decision to act on.
 3. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
 4. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
@@ -169,12 +169,44 @@ The package has two entry points. `guardian` exports the governance verbs listed
 | `src/deny-on-invalid-envelope.ts` | Turns a schema failure on a `steps/*` method into an honoured `deny` |
 | `src/session-context-store.ts`, `src/session-context.ts`, `src/ifc-labels.ts` | The per-session hash chain, provenance, and information-flow labels |
 | `src/envelope-log-sink.ts` | The envelope log writer |
+| `src/batched-log-writer.ts` | Bounded asynchronous JSONL batching and shutdown drain |
 | `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter, assembled from the three files below |
 | `src/otel-mapping.ts` | Reads `otel-mapping.json`, and says which envelope field feeds each span attribute |
 | `src/otlp-file-exporter.ts` | The OTLP/JSON file writer |
 | `src/loopback-proxy.ts` | Keeps a loopback trace endpoint off an HTTP proxy, applied by `src/main.ts` |
 | `src/audit-to-otlp.ts` | Converts the host adapter's audit log into the same OTLP/JSON file |
 | `src/acs-result.ts` | The decision result type |
+
+## Log batching and shutdown
+
+Envelope and session-context logs keep their existing JSONL formats. Each sink releases
+a batch after 64 records or 100 ms from the first queued record, then appends it
+asynchronously. The timer schedules a flush; it does not guarantee a disk-completion
+deadline. The Inspector can therefore see a decision after the HTTP response arrives.
+No file is opened until a record arrives.
+
+New log directories are created with mode `0700`, and new files with mode `0600`,
+subject to the process umask on POSIX systems. Existing directories and files keep
+their permissions. On Windows, access remains governed by filesystem ACLs.
+
+Each sink admits at most 4 MiB of serialized UTF-8 data and 4,096 records, counting
+writes already in flight. A record that would exceed either limit
+is dropped and counted, while queued records are retained and later traffic is accepted
+as space becomes available. The first drop and the total at shutdown are reported on
+stderr. A real write error disables the sink and reports once; queued records may be lost. Logging
+failure does not change the Guardian's policy decision, and the session store remains
+authoritative. The host adapter's audit log is a separate writer and is unchanged.
+
+`await guardian.close()` refuses new ACS requests, waits for active requests, and
+drains both logs within one negotiated request timeout (currently five seconds), then
+shuts down the trace exporter, whose own deadline is three seconds. Repeated calls
+wait for the same shutdown. The standalone Guardian does this on SIGINT and SIGTERM,
+with or without trace export. A drain that exceeds its deadline is reported on stderr;
+shutdown continues and pending requests or log records may be lost. SIGKILL, a crash,
+or power loss can also lose buffered records. Finishing the append does not fsync it.
+
+This batches the reference implementation's existing logs alongside the trace exporter.
+It does not claim ACS-Trace conformance.
 
 ## The wire is not secured
 
@@ -186,4 +218,4 @@ The endpoint has no authentication, no origin check and no request signing. It b
 bun test packages/guardian
 ```
 
-Thirteen files. Most start a real Guardian on port 0 and drive real envelopes through the pinned policy bundle. One test copies `src/` one directory deeper into a fixed scratch directory, so the relative schema path resolves to nothing. It proves that a missing schema directory becomes a recorded JSON-RPC error and never an HTML page. The scratch directories are gitignored and removed in a `finally`.
+Most tests start a real Guardian on port 0 and drive real envelopes through the pinned policy bundle. One test copies `src/` one directory deeper into a fixed scratch directory, so the relative schema path resolves to nothing. It proves that a missing schema directory becomes a recorded JSON-RPC error and never an HTML page. The scratch directories are gitignored and removed in a `finally`.

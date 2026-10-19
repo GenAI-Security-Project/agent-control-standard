@@ -86,13 +86,11 @@ console.log(`Failure posture: ${posture}   (override with ACS_ON_DECISION_FAILUR
 const traceOutputs = [otelTraceFile, otelTraceEndpoint].filter((target): target is string => target !== undefined);
 if (traceOutputs.length > 0) {
   console.log(`OTel traces: ${traceOutputs.join(", ")}`);
-  // The last batch of spans reaches its output only if the processor is
-  // flushed before the process goes, so a signal closes the Guardian rather
-  // than ending it mid-batch.
-  const stop = async (): Promise<void> => {
-    await guardian.close();
-    process.exit(0);
-  };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
 }
+
+// Finish active decisions and drain both log streams before a normal shutdown.
+const shutdown = (): void => {
+  void guardian.close().then(() => process.exit(0));
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
