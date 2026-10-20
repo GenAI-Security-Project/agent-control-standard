@@ -1002,14 +1002,18 @@ const INVOCATION_ID_NAMESPACE = "5d0f6a3e-2b71-4c8e-9a54-0e1d7c3b9f62";
  * session (Specification §10.3) and a host's call ids need not be unique
  * across sessions. Not a secret: anyone who knows both ids can compute it,
  * which is fine for an identifier the envelope carries in the clear.
+ *
+ * A name-based UUIDv8 over SHA-256 (RFC 9562 §5.8 and Appendix B.2) rather
+ * than a v5: the same construction with a current hash, so no SHA-1 enters
+ * new code.
  */
 export function toInvocationRequestId(sessionUuid: string, invocationId: string): string {
   const namespaceBytes = Buffer.from(INVOCATION_ID_NAMESPACE.replace(/-/g, ""), "hex");
-  const hash = createHash("sha1")
+  const hash = createHash("sha256")
     .update(Buffer.concat([namespaceBytes, Buffer.from(`${sessionUuid}\n${invocationId}`, "utf8")]))
     .digest();
 
-  hash[6] = (hash[6]! & 0x0f) | 0x50; // version 5
+  hash[6] = (hash[6]! & 0x0f) | 0x80; // version 8
   hash[8] = (hash[8]! & 0x3f) | 0x80; // RFC 4122 variant
 
   const hex = hash.subarray(0, 16).toString("hex");

@@ -1246,7 +1246,7 @@ describe("call_id: the real hookmaps, and the derivation pinned", () => {
   it("keeps the derivation stable, because a changed one unpairs every call that straddles an upgrade", () => {
     expect(toSessionUuid("abc123")).toBe("4c0c070f-241c-57eb-b406-ca28fe9f1229");
     expect(toInvocationRequestId("4c0c070f-241c-57eb-b406-ca28fe9f1229", "toolu_01")).toBe(
-      "6fbb0490-d44d-58ef-8ac2-2934598a7962",
+      "044e7d73-4d3f-8dc7-abdc-6200ff5a7734",
     );
   });
 
