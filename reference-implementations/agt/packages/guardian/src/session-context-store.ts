@@ -99,6 +99,7 @@ export {
 /** What the Guardian's request path is told and asks on every step. */
 export interface SessionContextStore {
   context(sessionId: string): SessionContext;
+  hasToolCallRequest(sessionId: string, requestId: string): boolean;
   append(sessionId: string, step: SessionStep): SessionContextEntry;
   replaceIfcLabels(sessionId: string, labels: IfcLabels): void;
   sourceLabels(sessionId: string): IfcLabels;
@@ -226,6 +227,10 @@ export function createMemorySessionContextStore(
       return { session_id: sessionId, entries: [...read(sessionId).entries] };
     },
 
+    hasToolCallRequest(sessionId, requestId) {
+      return read(sessionId).toolCallRequestIds.has(requestId);
+    },
+
     append(sessionId, step) {
       const state = ensure(sessionId);
       const previous = state.entries.at(-1);
@@ -244,6 +249,9 @@ export function createMemorySessionContextStore(
       // N per step, N^2 per session -- and the module doc above says what a
       // Guardian that slow does to the decision that never arrives.
       state.entries.push(entry);
+      if (step.method === "steps/toolCallRequest") {
+        state.toolCallRequestIds.add(step.request_id);
+      }
       appendLine?.(JSON.stringify(entry));
       return entry;
     },

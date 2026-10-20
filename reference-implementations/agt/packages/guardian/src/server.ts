@@ -718,7 +718,7 @@ async function readCappedBody(req: Request): Promise<CappedBody> {
  * the `toolCallRequest` records it holds for the session, and MUST record a
  * reference it cannot resolve. The decision is left to policy, so this only
  * records; an unresolvable reference is evidence, and it has to survive even
- * when the result is allowed. Resolution reads the session's own chain because
+ * when the result is allowed. Resolution reads the session's own requests because
  * `request_id` is unique only within a session (Specification §10.3). A chain
  * restarted by eviction makes an older reference unresolvable, which is
  * recorded too: the Guardian no longer holds the request it names.
@@ -733,10 +733,7 @@ function recordUnresolvedRequestIdRef(
     return;
   }
   const sessionId = envelope.params.metadata.session_id;
-  const resolved = sessionContextStore
-    .context(sessionId)
-    .entries.some((entry) => entry.method === "steps/toolCallRequest" && entry.request_id === ref);
-  if (resolved) {
+  if (sessionContextStore.hasToolCallRequest(sessionId, ref)) {
     return;
   }
   envelopeLog.write(
@@ -814,7 +811,13 @@ async function dispatch(
 
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
-    recordUnresolvedRequestIdRef(envelope, sessionContextStore, envelopeLog);
+    // Outside evaluateStep's try, so guarded here: a caller-supplied store
+    // that throws on the lookup must cost the record, never the decision.
+    try {
+      recordUnresolvedRequestIdRef(envelope, sessionContextStore, envelopeLog);
+    } catch (error) {
+      console.error(`request_id_ref check failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore);
   }
 

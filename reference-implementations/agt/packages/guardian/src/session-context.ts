@@ -122,6 +122,12 @@ export type SessionContext = {
  */
 export type SessionState = {
   entries: SessionContextEntry[];
+  /**
+   * The `request_id` of every `toolCallRequest` in `entries`, kept beside the
+   * chain so resolving a result's `request_id_ref` is a lookup, not a scan of
+   * the whole history on every result.
+   */
+  toolCallRequestIds: Set<string>;
   intent: Intent | undefined;
   provenance: SessionProvenance;
 };
@@ -152,6 +158,7 @@ export function hashEntry(input: Omit<SessionContextEntry, "hash">): string {
 export function emptySessionState(sessionId: string): SessionState {
   return {
     entries: [],
+    toolCallRequestIds: new Set(),
     intent: undefined,
     // `origin` names where data entered the system, and this record is one the
     // Guardian synthesizes to hold a session's labels -- so "system", with the

@@ -522,6 +522,7 @@ These findings are open on this tree. They are recorded here so a reader does no
 - A `steps/skillLoad` hook that drives AGT's `content_hash` gate is planned, not built. No code for it exists in the tree, and the ServerHello does not name it.
 - Two AGT intervention points, `pre_model_call` and `post_model_call`, have no ACS v0.1.0 method. Whether this project proposes `steps/modelCall` for ACS v0.2 is open.
 - Whether to report a fail-open to AGT upstream is open: a `./`-prefixed `bundle:` path silently disables all policy and returns `allow`. This tree throws on that path as a backstop.
+- The `request_id_ref` finding is recorded only in the envelope log. A Guardian started with no envelope log path, or whose envelope log disabled itself after a write error, records nothing, so this tree meets the `hooks.md` MUST only while the envelope log is enabled. The finding does not reach the OTel export. A reference to a request the Guardian denied counts as resolved, so a result for a denied tool call gets no finding. The shipped host shims do not send `request_id_ref` yet, so in this tree only a hand-built or third-party result exercises the check.
 - Six required Trace-pillar attributes exist on the wire but are optional there. Requiring them is an ask for v0.2. The Guardian also leaves `AcsResult.metadata` empty, which it could fill today.
 
 ## Verify

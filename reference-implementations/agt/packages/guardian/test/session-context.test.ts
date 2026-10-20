@@ -285,3 +285,34 @@ describe("append pushes onto the chain rather than rebuilding it", () => {
     expect(large / small).toBeLessThan(3);
   });
 });
+
+describe("SessionContextStore.hasToolCallRequest", () => {
+  it("knows a session's toolCallRequest ids and no other step's", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", step(1));
+    appendContextEntry(store, "sess-a", { method: "steps/toolCallResult", request_id: "res-1", tool_name: "Bash" });
+    expect(store.hasToolCallRequest("sess-a", "req-1")).toBe(true);
+    expect(store.hasToolCallRequest("sess-a", "res-1")).toBe(false);
+  });
+
+  it("answers per session, because request_id is unique only within one", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", step(1));
+    expect(store.hasToolCallRequest("sess-b", "req-1")).toBe(false);
+  });
+
+  it("forgets an evicted session's requests along with its chain", () => {
+    const store = createMemorySessionContextStore({ maxSessions: 1, onEvict: () => {} });
+    appendContextEntry(store, "sess-a", step(1));
+    appendContextEntry(store, "sess-b", step(2));
+    expect(store.hasToolCallRequest("sess-a", "req-1")).toBe(false);
+  });
+
+  it("keeps the ids across the store's other writes to the session", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", step(1));
+    store.replaceIfcLabels("sess-a", ["confidential"]);
+    store.setIntent("sess-a", "list files");
+    expect(store.hasToolCallRequest("sess-a", "req-1")).toBe(true);
+  });
+});
