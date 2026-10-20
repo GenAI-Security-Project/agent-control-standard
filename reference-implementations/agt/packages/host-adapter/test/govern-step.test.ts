@@ -1188,3 +1188,65 @@ describe("governsTool — the rule both hosts and governStep share", () => {
     expect(governsTool(scopedHookmap, "toString", "bash")).toBe(true);
   });
 });
+
+describe("governStep — a request id derived from the host's call id", () => {
+  // buildEnvelope derives a request's id from the host's call id, so a host
+  // that asks twice about one call sends the same id twice. A Guardian
+  // enforcing Specification §10.3 answers the repeat with REPLAY_DETECTED,
+  // which carries no decision and would otherwise go to the posture.
+  const paired: Hookmap = { host: "test-host", hooks: { OnStep: { ...ON_STEP, call_id: "$.call" } } };
+  const pairedPayload = { ...payload, call: "call-1" };
+  const REPLAY = { decisionArrived: false, failure: { code: -32005, message: "duplicate request_id" } } as const;
+  const ALLOW = { decisionArrived: true, decision: { type: "decision", decision: "allow" } } as unknown as DecisionOrFailure;
+
+  function scripted(answers: DecisionOrFailure[]): { guardian: GuardianClient; sent: string[] } {
+    const sent: string[] = [];
+    return {
+      sent,
+      guardian: {
+        requestDecision: (envelope) => {
+          sent.push(envelope.params.request_id);
+          return Promise.resolve(answers.shift() ?? REPLAY);
+        },
+        post: () => Promise.reject(new Error("governStep must not use the wire primitive")),
+      },
+    };
+  }
+
+  it("retries once with a fresh random id, and honours the decision that arrives", async () => {
+    const { sink, events } = recordingSink();
+    const { guardian, sent } = scripted([REPLAY, ALLOW]);
+
+    const governed = await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload });
+
+    expect(governed.stage).toBe("honoured");
+    expect(governed.decision?.decision).toBe("allow");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).not.toBe(sent[0]);
+    expect(events).toHaveLength(0);
+  });
+
+  it("retries only once, and leaves a second REPLAY_DETECTED to the delivery posture (issue #32)", async () => {
+    const { sink } = recordingSink();
+    const { guardian, sent } = scripted([REPLAY, REPLAY]);
+
+    const governed = await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload });
+
+    expect(sent).toHaveLength(2);
+    expect(governed.stage).toBe("delivery");
+  });
+
+  it("does not retry at the result gate, whose own id is always random", async () => {
+    const { sink } = recordingSink();
+    const { guardian, sent } = scripted([REPLAY, ALLOW]);
+    const resultHookmap: Hookmap = { host: "test-host", hooks: { OnResult: { ...ON_RESULT, call_id: "$.call" } } };
+
+    await governRaw(guardian, sink, undefined, {
+      hookmap: resultHookmap,
+      hookEventName: "OnResult",
+      payload: { ...resultPayload, call: "call-1" },
+    });
+
+    expect(sent).toHaveLength(1);
+  });
+});

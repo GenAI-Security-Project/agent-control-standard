@@ -70,6 +70,17 @@ type HookmapHookEntryCommon = {
   /** JSONPath-lite (`$.foo.bar`) into the raw hook payload for the tool/step name. */
   tool_name: string;
   /**
+   * JSONPath-lite into the raw hook payload for the host's own id of this one
+   * tool call, the same on the hook before the call and the hook after it.
+   * Each host's hookmap names its own field. Optional. When it
+   * resolves, the request's `request_id` is derived from it and the result
+   * carries the same value as `request_id_ref`, so the Guardian can pair the
+   * two without the shim keeping any state. When it does not resolve, the
+   * request gets a random `request_id` and the result no `request_id_ref`,
+   * which is what every hookmap without this key gets.
+   */
+  call_id?: string;
+  /**
    * This hook's own decision -> host-output mapping, consumed by
    * `renderDecision` and never by this module.
    *
@@ -204,6 +215,8 @@ export type AcsToolCallRequestPayload = {
   /** ACS's optional `raw_command`. Present only when the hookmap declared a
    * path for it AND that path resolved to a string. */
   raw_command?: string;
+  /** Only a result names the request it answers. */
+  request_id_ref?: never;
   exit_status?: never;
   outputs?: never;
 };
@@ -221,6 +234,9 @@ export type AcsToolCallResultPayload = {
    * exclusive union stays exclusive and `raw_command` reads as `string |
    * undefined` on either payload shape without a cast. */
   raw_command?: never;
+  /** The originating request's `request_id`, present when the hookmap's
+   * `call_id` resolved (see HookmapHookEntryCommon). */
+  request_id_ref?: string;
   exit_status: string;
   outputs: AcsOutput[];
 };
@@ -434,6 +450,60 @@ function assertToolsWellFormed(hookmap: Hookmap, path: string): void {
 }
 
 /**
+ * Rejects a malformed `call_id` at load time, for the reason the checks
+ * around it give: a throw reached only from `buildEnvelope` is answered with
+ * the delivery posture, so under `proceed` a typo here would run every
+ * governed step ungoverned. `call_id` is also refused on any hook that is not
+ * one of the two tool gates, because the request id it derives is shared by
+ * exactly one request and the result that answers it.
+ */
+function assertPairingPathWellFormed(hookmap: Hookmap, path: string): void {
+  // Per tool gate: which hooks declare `call_id` and which do not.
+  const declared = { "steps/toolCallRequest": [] as string[], "steps/toolCallResult": [] as string[] };
+  const undeclared = { "steps/toolCallRequest": [] as string[], "steps/toolCallResult": [] as string[] };
+  for (const [hookEventName, entry] of Object.entries(hookmap.hooks ?? {})) {
+    if (!isPlainObject(entry)) {
+      continue;
+    }
+    const method = (entry as { acs_method?: unknown }).acs_method;
+    const pairingPath = (entry as { call_id?: unknown }).call_id ?? undefined;
+    if (pairingPath === undefined) {
+      if (method === "steps/toolCallRequest" || method === "steps/toolCallResult") {
+        undeclared[method].push(hookEventName);
+      }
+      continue;
+    }
+    if (typeof pairingPath !== "string" || !pairingPath.startsWith("$.") || pairingPath.length <= 2) {
+      throw new Error(
+        `loadHookmap: ${path}'s "hooks.${hookEventName}.call_id" is ${JSON.stringify(pairingPath)} -- when present, ` +
+          `"call_id" must be one JSONPath-lite string such as "$.tool_use_id"`,
+      );
+    }
+    if (method !== "steps/toolCallRequest" && method !== "steps/toolCallResult") {
+      throw new Error(
+        `loadHookmap: ${path}'s "hooks.${hookEventName}" declares "call_id" on ${JSON.stringify(method)} -- ` +
+          `"call_id" pairs a tool call's request with its result, so only those two gates may declare it`,
+      );
+    }
+    declared[method].push(hookEventName);
+  }
+  // Declared on one gate and not the other is a pairing that cannot work. A
+  // result-side gap is the dangerous half: results would stop carrying the
+  // reference and the Guardian would see nothing to check, with no signal.
+  const requestSide = declared["steps/toolCallRequest"].length > 0;
+  const resultSide = declared["steps/toolCallResult"].length > 0;
+  const missing = requestSide || resultSide
+    ? [...undeclared["steps/toolCallRequest"], ...undeclared["steps/toolCallResult"]]
+    : [];
+  if (missing.length > 0) {
+    throw new Error(
+      `loadHookmap: ${path} declares "call_id" on some tool gates but not on ${JSON.stringify(missing)} -- ` +
+        `a request and its result are paired only when both gates name the host's call id`,
+    );
+  }
+}
+
+/**
  * Rejects a hookmap entry whose `exit_status` declares both `literal` and
  * `from`, at load time -- the same seam `assertMirrorsWellFormed` and
  * `assertToolsWellFormed` use, and for the identical reason: a throw reached
@@ -577,6 +647,7 @@ export function loadHookmap(path: string): Hookmap {
   assertToolsWellFormed(hookmap, path);
   assertExitStatusNotBothForms(hookmap, path);
   assertRequestGateDeclaresNoOutputs(hookmap, path);
+  assertPairingPathWellFormed(hookmap, path);
   return normalizeTools(hookmap);
 }
 
@@ -918,6 +989,54 @@ export function toSessionUuid(rawSessionId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+// A second fixed namespace, separate from SESSION_ID_NAMESPACE, so the two
+// derivations draw from unrelated spaces. Never regenerate it: doing
+// so changes every derived request_id, and a result built by a newer shim
+// would no longer name the request an older shim sent.
+const INVOCATION_ID_NAMESPACE = "5d0f6a3e-2b71-4c8e-9a54-0e1d7c3b9f62";
+
+/**
+ * The `request_id` for one tool call, derived from the host's call id so the
+ * hook before the call and the hook after it compute the same value. The
+ * session is part of the name because `request_id` is unique only within a
+ * session (Specification §10.3) and a host's call ids need not be unique
+ * across sessions. Not a secret: anyone who knows both ids can compute it,
+ * which is fine for an identifier the envelope carries in the clear.
+ */
+export function toInvocationRequestId(sessionUuid: string, invocationId: string): string {
+  const namespaceBytes = Buffer.from(INVOCATION_ID_NAMESPACE.replace(/-/g, ""), "hex");
+  const hash = createHash("sha1")
+    .update(Buffer.concat([namespaceBytes, Buffer.from(`${sessionUuid}\n${invocationId}`, "utf8")]))
+    .digest();
+
+  hash[6] = (hash[6]! & 0x0f) | 0x50; // version 5
+  hash[8] = (hash[8]! & 0x3f) | 0x80; // RFC 4122 variant
+
+  const hex = hash.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * The host's call id for this invocation, or undefined. Never a throw: a call
+ * id is optional, and a step whose host did not send one is still fully
+ * governable, the same reasoning `raw_command` follows in buildPayload. A
+ * declared path that is not a string is a hookmap fault and does throw.
+ */
+function invocationIdOf(event: string, entry: HookmapHookEntry, payload: Record<string, unknown>): string | undefined {
+  const path = entry.call_id ?? undefined;
+  if (path === undefined) {
+    return undefined;
+  }
+  if (typeof path !== "string") {
+    throw new Error(
+      `buildEnvelope: hookmap entry for hook "${event}" declares "call_id" as ${JSON.stringify(path)} -- ` +
+        `"call_id" names the host's per-call id with a single JSONPath-lite string`,
+    );
+  }
+  const invocationId = resolvePath(payload, path);
+  return typeof invocationId === "string" && invocationId.length > 0 ? invocationId : undefined;
+}
+
 /**
  * Builds an ACS v0.1.0 request envelope from a raw hook invocation.
  * `hookmap` drives every host-shape decision: the ACS method, which of the two
@@ -926,7 +1045,12 @@ export function toSessionUuid(rawSessionId: string): string {
  * `hookmap.hooks` throws, and so does an entry naming no single payload shape --
  * there is no default method, no default shape, and no partial envelope.
  */
-export function buildEnvelope(event: string, payload: Record<string, unknown>, hookmap: Hookmap): AcsRequestEnvelope {
+export function buildEnvelope(
+  event: string,
+  payload: Record<string, unknown>,
+  hookmap: Hookmap,
+  options: { pairWithHostCall?: boolean } = {},
+): AcsRequestEnvelope {
   const entry = hookmap.hooks[event];
   if (!entry) {
     throw new Error(`buildEnvelope: hookmap has no entry for hook "${event}"`);
@@ -946,7 +1070,18 @@ export function buildEnvelope(event: string, payload: Record<string, unknown>, h
     throw new Error(`buildEnvelope: hook payload for "${event}" is missing a "session_id" string field`);
   }
 
-  const requestId = randomUUID();
+  const sessionUuid = toSessionUuid(rawSessionId);
+  // `pairWithHostCall: false` is governStep's retry after a REPLAY_DETECTED
+  // answer: a fresh random id, and the pairing given up for this one call.
+  const invocationId = options.pairWithHostCall === false ? undefined : invocationIdOf(event, entry, payload);
+  const invocationRequestId = invocationId === undefined ? undefined : toInvocationRequestId(sessionUuid, invocationId);
+  // The request gate takes the derived id as its own; the result gate names
+  // it as the request it answers and keeps a fresh id for itself.
+  const isResult = acsPayload.outputs !== undefined;
+  const requestId = !isResult && invocationRequestId !== undefined ? invocationRequestId : randomUUID();
+  if (acsPayload.outputs !== undefined && invocationRequestId !== undefined) {
+    acsPayload.request_id_ref = invocationRequestId;
+  }
 
   return {
     jsonrpc: "2.0",
@@ -958,7 +1093,7 @@ export function buildEnvelope(event: string, payload: Record<string, unknown>, h
       timestamp: new Date().toISOString(),
       metadata: {
         agent_id: hookmap.host,
-        session_id: toSessionUuid(rawSessionId),
+        session_id: sessionUuid,
       },
       payload: acsPayload,
     },

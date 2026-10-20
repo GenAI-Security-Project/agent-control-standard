@@ -54,9 +54,14 @@ export type EnvelopeLogEntry = {
   envelope: unknown;
 };
 
-/** Where envelope-log lines go: the Guardian-side writer role. */
+/**
+ * Where envelope-log lines go: the Guardian-side writer role. `write` says
+ * whether the line landed. Most callers ignore that, because the log is
+ * observability; a caller recording a fact the spec requires it to keep
+ * reads it and puts the fact somewhere else when the log did not take it.
+ */
 export type EnvelopeLogSink = {
-  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null, rpcId?: string | number | null): void;
+  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null, rpcId?: string | number | null): boolean;
   readonly path: string | null;
 };
 
@@ -73,7 +78,9 @@ export type CreateEnvelopeLogSinkOptions = {
  * `EnvelopeLogSink` type, not a special case. */
 export const NULL_ENVELOPE_LOG_SINK: EnvelopeLogSink = {
   path: null,
-  write(): void {},
+  write(): boolean {
+    return false;
+  },
 };
 
 /** The JSON-RPC id, when it is a scalar. Both request and response envelopes
@@ -119,9 +126,9 @@ export function createEnvelopeLogSink({
 
   return {
     path,
-    write(direction, envelope, method, rpcId): void {
+    write(direction, envelope, method, rpcId): boolean {
       if (disabled) {
-        return;
+        return false;
       }
       try {
         const entry: EnvelopeLogEntry = {
@@ -137,8 +144,10 @@ export function createEnvelopeLogSink({
         const line = `${JSON.stringify(entry)}\n`;
         appendFileSync(path, line);
         seq += 1;
+        return true;
       } catch (error) {
         fail(error);
+        return false;
       }
     },
   };

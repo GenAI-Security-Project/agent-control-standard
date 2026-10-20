@@ -89,6 +89,7 @@ import {
   isToolCallResult,
   validateEnvelope,
   type AcsRequestEnvelope,
+  type ToolCallRequestEnvelope,
   type ToolCallResultEnvelope,
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
@@ -736,12 +737,70 @@ function recordUnresolvedRequestIdRef(
   if (sessionContextStore.hasToolCallRequest(sessionId, ref)) {
     return;
   }
-  envelopeLog.write(
-    "finding",
+  recordFinding(
+    envelopeLog,
     { finding: "request_id_ref_unresolved", session_id: sessionId, request_id: envelope.params.request_id, request_id_ref: ref },
     envelope.method,
     envelope.id,
   );
+}
+
+/**
+ * Specification §10.3: a Guardian MUST reject a duplicate `request_id` within
+ * a session. This Guardian does not enforce that yet, so it records the
+ * duplicate instead. A repeat matters more now that hosts derive a request's
+ * id from their own call id: a host that reuses a call id makes two requests
+ * share one id, and a later result then resolves against whichever came first.
+ */
+function recordDuplicateRequestId(
+  envelope: ToolCallRequestEnvelope,
+  sessionContextStore: SessionContextStore,
+  envelopeLog: EnvelopeLogSink,
+): void {
+  const sessionId = envelope.params.metadata.session_id;
+  if (!sessionContextStore.hasToolCallRequest(sessionId, envelope.params.request_id)) {
+    return;
+  }
+  recordFinding(
+    envelopeLog,
+    { finding: "request_id_duplicate", session_id: sessionId, request_id: envelope.params.request_id },
+    envelope.method,
+    envelope.id,
+  );
+}
+
+/**
+ * Writes a finding to the envelope log, or, when no envelope log was
+ * configured or it disabled itself after a write error, to stderr as
+ * `acs-finding ` followed by one JSON object carrying the same fields the log
+ * line would. Never throws: a finding is a record, and losing the record must
+ * never cost the decision it sits beside.
+ */
+function recordFinding(
+  envelopeLog: EnvelopeLogSink,
+  finding: Record<string, unknown>,
+  method: string,
+  rpcId: string | number | null,
+): void {
+  if (envelopeLog.write("finding", finding, method, rpcId)) {
+    return;
+  }
+  try {
+    console.error(
+      `acs-finding ${JSON.stringify({ recorded_at: new Date().toISOString(), method, rpc_id: rpcId, ...finding })}`,
+    );
+  } catch {
+    // stderr itself failed (an EPIPE, say). Nothing is left to report to.
+  }
+}
+
+/** One stderr line for a check that threw, itself unable to throw. */
+function reportCheckFailure(check: string, error: unknown): void {
+  try {
+    console.error(`${check} check failed: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    // stderr itself failed. The decision still goes ahead.
+  }
 }
 
 async function dispatch(
@@ -806,6 +865,14 @@ async function dispatch(
   //     shape. Anything neither predicate answers falls past both, to
   //     METHOD_NOT_DISPATCHED_CODE below.
   if (isToolCallRequest(envelope)) {
+    // Checked before evaluateStep appends this request, so the id is in the
+    // session already only if an earlier request carried it. Guarded the same
+    // way as the result gate's check below.
+    try {
+      recordDuplicateRequestId(envelope, sessionContextStore, envelopeLog);
+    } catch (error) {
+      reportCheckFailure("request_id", error);
+    }
     return await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore);
   }
 
@@ -816,7 +883,7 @@ async function dispatch(
     try {
       recordUnresolvedRequestIdRef(envelope, sessionContextStore, envelopeLog);
     } catch (error) {
-      console.error(`request_id_ref check failed: ${error instanceof Error ? error.message : String(error)}`);
+      reportCheckFailure("request_id_ref", error);
     }
     return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore);
   }

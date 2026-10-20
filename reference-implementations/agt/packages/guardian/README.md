@@ -38,12 +38,13 @@ To see a decision without an agent client, pipe a hook payload into the Claude C
 
 1. The raw envelope is appended to the envelope log, before anything else.
 2. The envelope is validated against `request-envelope.json`. A `steps/toolCallRequest` or `steps/toolCallResult` is also validated against its own payload schema. An invalid envelope on a `steps/*` method is answered with an honoured `deny`, not a bare error, so the host has a decision to act on.
-3. A `steps/toolCallResult` whose `request_id_ref` names no `toolCallRequest` in the session gets a `finding` line in the envelope log, because `hooks.md` requires the Guardian to record a reference it cannot resolve. The decision is left to policy.
-4. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
-5. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
-6. The verdict is mapped to an ACS decision with the tables in `mapping.yaml`. A `transform` becomes a `modify` whose modification differs by gate: a parameter override at the request gate, a redaction on the result payload at the result gate.
-7. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
-8. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
+3. A `steps/toolCallResult` whose `request_id_ref` names no `toolCallRequest` in the session gets a `finding` line in the envelope log, because `hooks.md` requires the Guardian to record a reference it cannot resolve. With no envelope log, or one that has disabled itself, the same finding goes to stderr as an `acs-finding` line. The decision is left to policy. Both shipped hookmaps name the host's per-call id as `call_id` (`tool_use_id` for Claude Code, `callID` for OpenCode). The shim derives the request's `request_id` from it and sends the same value as the result's `request_id_ref`. A host that leaves the id out gets a random `request_id` and no reference. Results are governed only for the tools the hookmaps name, and Claude Code reports a failed call through `PostToolUseFailure`, which isn't mapped, so a failed call sends no result.
+4. A `steps/toolCallRequest` whose `request_id` the session already holds gets a `request_id_duplicate` finding the same way, and is still decided.
+5. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
+6. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
+7. The verdict is mapped to an ACS decision with the tables in `mapping.yaml`. A `transform` becomes a `modify` whose modification differs by gate: a parameter override at the request gate, a redaction on the result payload at the result gate.
+8. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
+9. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
 
 `handshake/hello` is answered with a constant ServerHello that names exactly the methods this Guardian dispatches: `steps/toolCallRequest` and `steps/toolCallResult`. The Guardian does not read the ClientHello. Any other method is answered with a JSON-RPC error carrying `METHOD_NOT_DISPATCHED_CODE`, which the conformance harness reads back to confirm the ServerHello tells the truth.
 
