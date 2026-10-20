@@ -1002,21 +1002,17 @@ export function toSessionUuid(rawSessionId: string): string {
     .update(Buffer.concat([namespaceBytes, Buffer.from(rawSessionId, "utf8")]))
     .digest();
 
-  hash[6] = (hash[6]! & 0x0f) | 0x50; // version 5
-  hash[8] = (hash[8]! & 0x3f) | 0x80; // RFC 4122 variant
-
-  const hex = hash.subarray(0, 16).toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return formatNameBasedUuid(hash, 5);
 }
 
 /**
  * The first 16 bytes of a name-based hash as a UUID string, with the version
- * nibble and the RFC 9562 variant bits set. toSessionUuid above keeps its own
- * inline copy on purpose: it is a SHA-1 UUIDv5 that every derived session id
- * depends on, and it stays byte-for-byte as it was rather than being touched
- * for a refactor.
+ * nibble and the RFC 9562 variant bits set. Shared by both derivations so the
+ * bit layout lives in one place. The digest is the caller's: SHA-1 for the
+ * session id's UUIDv5, as RFC 9562 defines v5, and SHA-256 for the request
+ * id's UUIDv8.
  */
-function formatNameBasedUuid(hash: Buffer, version: 8): string {
+function formatNameBasedUuid(hash: Buffer, version: 5 | 8): string {
   const bytes = Buffer.from(hash.subarray(0, 16));
   bytes[6] = (bytes[6]! & 0x0f) | (version << 4);
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
