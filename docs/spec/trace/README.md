@@ -7,6 +7,22 @@ AI agents make autonomous decisions that impact business outcomes. Without obser
 !!! info "ACS Extends Industry Standards"
     We already have great observability standards, so ACS doesn't introduce a new one. Instead, it extends existing industry-proven standards: OpenTelemetry and OCSF to support AI agent-specific components.
 
+## Where Trace Sits
+
+Instrument decides in the moment. Trace records what happened, out of the request path, so someone can rebuild a session afterwards: what the agent tried, what the Guardian decided, and which steps got no usable decision at all.
+
+Both parties write to the trace, because each one sees something the other can't. In the diagram, notice that the Observed Agent and the Guardian each emit their own stream, and the two streams meet only at the reader.
+
+```mermaid
+flowchart LR
+    agent["Observed Agent"] -->|"hook request"| guardian["Guardian"]
+    agent -->|"spans and events"| formats["OpenTelemetry or OCSF"]
+    guardian -->|"spans and events"| formats
+    formats --> reader["Reader joins on<br/>session id + request id"]
+```
+
+The reader matches records from the two parties by each step's session id and request id. [Trace Events](./events.md) defines that join and the rule for counting a decision as enforced. To see it as real files, read [How the reference Guardian produces a trace](./extend_opentelemetry.md#how-the-reference-guardian-produces-a-trace), or open the committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl).
+
 ## Why Agent Observability Matters
 
 Modern agents orchestrate complex workflows: reasoning chains, tool execution, knowledge retrieval, multi-agent collaboration. When things go wrong, or right, you need to understand exactly what happened.
