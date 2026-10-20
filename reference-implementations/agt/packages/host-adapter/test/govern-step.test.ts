@@ -1189,7 +1189,7 @@ describe("governsTool — the rule both hosts and governStep share", () => {
   });
 });
 
-describe("governStep — a request id derived from the host's call id", () => {
+describe("governStep: a request id derived from the host's call id", () => {
   // buildEnvelope derives a request's id from the host's call id, so a host
   // that asks twice about one call sends the same id twice. A Guardian
   // enforcing Specification §10.3 answers the repeat with REPLAY_DETECTED,
@@ -1227,13 +1227,27 @@ describe("governStep — a request id derived from the host's call id", () => {
   });
 
   it("retries only once, and leaves a second REPLAY_DETECTED to the delivery posture (issue #32)", async () => {
-    const { sink } = recordingSink();
+    const { sink, events } = recordingSink();
     const { guardian, sent } = scripted([REPLAY, REPLAY]);
 
     const governed = await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload });
 
     expect(sent).toHaveLength(2);
     expect(governed.stage).toBe("delivery");
+    // The audit entry names the request id the retry actually sent.
+    expect(events).toHaveLength(1);
+    expect(events[0]?.request_id).toBe(sent[1]);
+  });
+
+  it("audits the derived request_id apart from the random JSON-RPC id when no decision arrives", async () => {
+    const { sink, events } = recordingSink();
+    const { guardian, sent } = scripted([{ decisionArrived: false, failure: new GuardianTimeoutError(120) }]);
+
+    await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.request_id).toBe(sent[0]);
+    expect(events[0]?.rpc_id).not.toBe(sent[0]);
   });
 
   it("does not retry at the result gate, whose own id is always random", async () => {

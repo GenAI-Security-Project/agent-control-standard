@@ -467,9 +467,13 @@ export function renderSessionChainRow(
   options: RenderOptions = {},
 ): string {
   const color = options.color ?? false;
+  const findings =
+    entry.findings === undefined || entry.findings.length === 0
+      ? ""
+      : `  ! ${entry.findings.join(", ")}${entry.request_id_ref === undefined ? "" : ` ref=${entry.request_id_ref}`}`;
   const row =
     `#${entry.seq}  ${entry.tool_name}  hash=${entry.hash.slice(0, SHORT_HASH_LENGTH)}  ` +
-    `session_id=${entry.session_id}`;
+    `session_id=${entry.session_id}${findings}`;
   return link.broken ? paint(`✖ CHAIN BREAK  ${row}`, RED, color) : row;
 }
 

@@ -1177,7 +1177,9 @@ describe("call_id: pairing a result with its request", () => {
     expect(() => validateEnvelope(request)).not.toThrow();
     expect(() => validateEnvelope(result)).not.toThrow();
     expect(result.params.payload.request_id_ref).toBe(request.params.request_id);
-    expect(request.id).toBe(request.params.request_id);
+    // The JSON-RPC id stays random, so two asks about one call never share it.
+    expect(request.id).not.toBe(request.params.request_id);
+    expect(buildEnvelope("PreToolUse", before, withCallId).id).not.toBe(request.id);
     expect(result.params.request_id).not.toBe(request.params.request_id);
   });
 
@@ -1259,6 +1261,22 @@ describe("call_id: the real hookmaps, and the derivation pinned", () => {
     expect(() =>
       loadEdited((yaml) => yaml.slice(0, lastAt(yaml)) + yaml.slice(lastAt(yaml) + LINE.length)),
     ).toThrow(/declares "call_id" on some tool gates but not on \["PostToolUse"\]/);
+  });
+
+  it("refuses at load a call_id naming a reserved segment, which resolvePath would refuse on every step", () => {
+    expect(() => loadEdited((yaml) => yaml.split(LINE).join("    call_id: $.constructor\n"))).toThrow(
+      /call_id" is not a usable path: .*reserved segment "constructor"/,
+    );
+  });
+
+  it("refuses at load a call_id on result gates when the hookmap maps no request gate", () => {
+    // Drop the PreToolUse entry whole: everything from its key to the next hook.
+    const withoutRequestGate = (yaml: string) => {
+      const start = yaml.indexOf("  PreToolUse:\n");
+      const end = yaml.indexOf("  PostToolUse:\n");
+      return yaml.slice(0, start) + yaml.slice(end);
+    };
+    expect(() => loadEdited(withoutRequestGate)).toThrow(/declares "call_id" only on result gates/);
   });
 
   it("loads a hookmap that declares call_id on neither gate", () => {

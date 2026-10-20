@@ -89,7 +89,7 @@
         "chain_hash": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
-          "description": "Rolling SHA-256 audit-chain head (lowercase hex) after this step's ContextEntry was appended. The Guardian MUST include it on every response for a step where it wrote a ContextEntry, the content-bearing steps (Specification 8). Publishing the head on the wire lets an observer that records traffic detect a chain rewritten after the fact. It is covered by the response signature. Under the HMAC baseline this gives integrity and tamper-evidence to a key-holder and supports cross-Guardian comparison; both parties hold the key, so a signed head is attributable to neither, and non-repudiation requires the asymmetric ACS-Crypto profile (Specification 8.6)."
+          "description": "Rolling SHA-256 audit-chain head (lowercase hex) after this step's ContextEntry was appended. The Guardian MUST include it on every response for a step where it wrote a ContextEntry, the content-bearing steps (Specification 8). Publishing the head on the wire lets an observer that records traffic detect a chain rewritten after the fact. It is covered by the response signature. Under the HMAC baseline this gives integrity and tamper-evidence to a key-holder and supports cross-Guardian comparison. Both parties hold the key, so a signed head is attributable to neither, and non-repudiation requires the asymmetric ACS-Crypto profile (Specification 8.6)."
         },
         "signature": {
           "$ref": "request-envelope.json#/$defs/Signature",

@@ -57,7 +57,7 @@ export type EnvelopeLogEntry = {
 /**
  * Where envelope-log lines go: the Guardian-side writer role. `write` says
  * whether the line landed. Most callers ignore that, because the log is
- * observability; a caller recording a fact the spec requires it to keep
+ * observability. A caller recording a fact the spec requires it to keep
  * reads it and puts the fact somewhere else when the log did not take it.
  */
 export type EnvelopeLogSink = {

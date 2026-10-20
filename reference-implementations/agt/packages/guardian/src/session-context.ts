@@ -89,7 +89,19 @@ export type SessionProvenance = {
 export type Intent = { readonly text: string; readonly recorded_at: string };
 
 /** What a step contributes to the chain. Deliberately not the whole envelope. */
-export type SessionStep = { method: string; request_id: string; tool_name: string };
+/**
+ * What the Guardian established about a step when it arrived, carried on the
+ * step's own chain entry so the published chain commits to it. `hooks.md`
+ * requires a Guardian to record a `request_id_ref` it cannot resolve, and the
+ * chain is this Guardian's audit record. `request_id_ref` is the unresolved
+ * reference, present only with `request_id_ref_unresolved`.
+ */
+export type StepFindings = {
+  findings: Array<"request_id_ref_unresolved" | "request_id_duplicate">;
+  request_id_ref?: string;
+};
+
+export type SessionStep = { method: string; request_id: string; tool_name: string } & Partial<StepFindings>;
 
 export type SessionContextEntry = {
   session_id: string;
@@ -100,7 +112,7 @@ export type SessionContextEntry = {
   method: string;
   request_id: string;
   tool_name: string;
-};
+} & Partial<StepFindings>;
 
 /** One session's hash chain, and nothing else the session happens to own. */
 export type SessionContext = {
@@ -128,6 +140,9 @@ export type SessionState = {
    * the whole history on every result.
    */
   toolCallRequestIds: Set<string>;
+  /** Every `request_id` the session has carried, on any method, for the
+   * Specification §10.3 duplicate check. */
+  requestIds: Set<string>;
   intent: Intent | undefined;
   provenance: SessionProvenance;
 };
@@ -142,6 +157,10 @@ export const GENESIS_HASH = "0".repeat(64);
  * a field was declared somewhere else.
  */
 export function hashEntry(input: Omit<SessionContextEntry, "hash">): string {
+  // Findings are appended only when present, so an entry without any hashes
+  // exactly as it did before findings existed and every older chain still
+  // verifies. An entry with findings hashes a longer array, which no entry
+  // without them can produce.
   const canonical = JSON.stringify([
     input.prev_hash,
     input.session_id,
@@ -150,6 +169,7 @@ export function hashEntry(input: Omit<SessionContextEntry, "hash">): string {
     input.method,
     input.request_id,
     input.tool_name,
+    ...(input.findings === undefined ? [] : [input.findings, input.request_id_ref ?? null]),
   ]);
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -159,6 +179,7 @@ export function emptySessionState(sessionId: string): SessionState {
   return {
     entries: [],
     toolCallRequestIds: new Set(),
+    requestIds: new Set(),
     intent: undefined,
     // `origin` names where data entered the system, and this record is one the
     // Guardian synthesizes to hold a session's labels -- so "system", with the

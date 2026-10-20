@@ -20,8 +20,8 @@ import {
 const HOOKMAP_PATH = fileURLToPath(new URL("../claude-code.hookmap.yaml", import.meta.url));
 
 // The shipped hookmap names `tool_use_id` as the call id. Claude Code's hooks
-// reference shows the field on both PreToolUse and PostToolUse; a transcript
-// check found the same value on both hooks of one call.
+// reference shows the field on both PreToolUse and PostToolUse, and a
+// transcript check found the same value on both hooks of one call.
 function findingLines(path: string): unknown[] {
   if (!existsSync(path)) {
     return [];

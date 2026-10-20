@@ -11,7 +11,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { resolvePath } from "./hookmap-path.ts";
+import { pathSegments, resolvePath } from "./hookmap-path.ts";
 
 /**
  * A hookmap value the host sent no field for: the constant this hook always
@@ -479,6 +479,17 @@ function assertPairingPathWellFormed(hookmap: Hookmap, path: string): void {
           `"call_id" must be one JSONPath-lite string such as "$.tool_use_id"`,
       );
     }
+    // The same segment rules resolvePath applies on every call, applied here
+    // once, so a reserved segment such as `$.constructor` fails at startup and
+    // not on every governed step.
+    try {
+      pathSegments(pairingPath);
+    } catch (failure) {
+      throw new Error(
+        `loadHookmap: ${path}'s "hooks.${hookEventName}.call_id" is not a usable path: ` +
+          `${failure instanceof Error ? failure.message : String(failure)}`,
+      );
+    }
     if (method !== "steps/toolCallRequest" && method !== "steps/toolCallResult") {
       throw new Error(
         `loadHookmap: ${path}'s "hooks.${hookEventName}" declares "call_id" on ${JSON.stringify(method)} -- ` +
@@ -499,6 +510,15 @@ function assertPairingPathWellFormed(hookmap: Hookmap, path: string): void {
     throw new Error(
       `loadHookmap: ${path} declares "call_id" on some tool gates but not on ${JSON.stringify(missing)} -- ` +
         `a request and its result are paired only when both gates name the host's call id`,
+    );
+  }
+  // One side declaring it and the other side absent entirely: results would
+  // name requests that were never sent, or requests would be paired with
+  // results that never come, and every result would be a finding.
+  if (requestSide !== resultSide) {
+    throw new Error(
+      `loadHookmap: ${path} declares "call_id" only on ${requestSide ? "request" : "result"} gates -- ` +
+        `a request and its result are paired only when both a request gate and a result gate name the host's call id`,
     );
   }
 }
@@ -982,10 +1002,20 @@ export function toSessionUuid(rawSessionId: string): string {
     .update(Buffer.concat([namespaceBytes, Buffer.from(rawSessionId, "utf8")]))
     .digest();
 
-  hash[6] = (hash[6]! & 0x0f) | 0x50; // version 5
-  hash[8] = (hash[8]! & 0x3f) | 0x80; // RFC 4122 variant
+  return formatNameBasedUuid(hash, 5);
+}
 
-  const hex = hash.subarray(0, 16).toString("hex");
+/**
+ * The first 16 bytes of a name-based hash as a UUID string, with the version
+ * nibble and the RFC 9562 variant bits set. Shared by both derivations so the
+ * bit layout lives in one place. The digest is the caller's, so the hash
+ * choice stays with each derivation.
+ */
+function formatNameBasedUuid(hash: Buffer, version: 5 | 8): string {
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | (version << 4);
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -1013,11 +1043,7 @@ export function toInvocationRequestId(sessionUuid: string, invocationId: string)
     .update(Buffer.concat([namespaceBytes, Buffer.from(`${sessionUuid}\n${invocationId}`, "utf8")]))
     .digest();
 
-  hash[6] = (hash[6]! & 0x0f) | 0x80; // version 8
-  hash[8] = (hash[8]! & 0x3f) | 0x80; // RFC 4122 variant
-
-  const hex = hash.subarray(0, 16).toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return formatNameBasedUuid(hash, 8);
 }
 
 /**
@@ -1076,21 +1102,31 @@ export function buildEnvelope(
 
   const sessionUuid = toSessionUuid(rawSessionId);
   // `pairWithHostCall: false` is governStep's retry after a REPLAY_DETECTED
-  // answer: a fresh random id, and the pairing given up for this one call.
+  // answer. Only this request gets a fresh random id. The host's result hook
+  // runs on its own and still names the derived id, so the result resolves
+  // against the earlier request that carried it: the first time the host
+  // asked about this call.
   const invocationId = options.pairWithHostCall === false ? undefined : invocationIdOf(event, entry, payload);
   const invocationRequestId = invocationId === undefined ? undefined : toInvocationRequestId(sessionUuid, invocationId);
-  // The request gate takes the derived id as its own; the result gate names
-  // it as the request it answers and keeps a fresh id for itself.
-  const isResult = acsPayload.outputs !== undefined;
-  const requestId = !isResult && invocationRequestId !== undefined ? invocationRequestId : randomUUID();
-  if (acsPayload.outputs !== undefined && invocationRequestId !== undefined) {
-    acsPayload.request_id_ref = invocationRequestId;
+  // The request gate takes the derived id as its request_id. The result gate
+  // names it as the request it answers and keeps a fresh id of its own.
+  let requestId: string = randomUUID();
+  if (invocationRequestId !== undefined) {
+    if (acsPayload.outputs === undefined) {
+      requestId = invocationRequestId;
+    } else {
+      acsPayload.request_id_ref = invocationRequestId;
+    }
   }
+  // The JSON-RPC id stays random even when request_id is derived. The
+  // envelope log and the Inspector pair a request with its response by this
+  // id, and a host asking twice about one call would otherwise repeat it.
+  const rpcId = requestId === invocationRequestId ? randomUUID() : requestId;
 
   return {
     jsonrpc: "2.0",
     method: entry.acs_method,
-    id: requestId,
+    id: rpcId,
     params: {
       acs_version: ACS_VERSION,
       request_id: requestId,

@@ -195,4 +195,39 @@ describe("request_id_ref resolution", () => {
     expect(recorded).toHaveProperty("recorded_at");
     expect(recorded).toHaveProperty("rpc_id");
   });
+
+  it("records a toolCallResult that reuses an earlier request's request_id, since §10.3 covers every method", async () => {
+    await withGuardian(async (url, logPath) => {
+      const sessionId = crypto.randomUUID();
+      const requestId = crypto.randomUUID();
+      await post(url, toolRequest(sessionId, requestId));
+
+      const reused = toolResult(sessionId, requestId);
+      reused.params.request_id = requestId;
+      await post(url, reused);
+
+      const codes = findings(logPath).map((entry) => (entry.envelope as { finding: string }).finding);
+      expect(codes).toEqual(["request_id_duplicate"]);
+    });
+  });
+
+  it("puts the finding on the result's own chain entry, which is the Guardian's audit record", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-request-id-ref-"));
+    const chainPath = join(dir, "session-context.jsonl");
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", sessionContextLog: chainPath });
+    try {
+      const unknownRef = crypto.randomUUID();
+      await post(guardian.url, toolResult(crypto.randomUUID(), unknownRef));
+    } finally {
+      await guardian.close();
+    }
+    try {
+      const [entry] = readFileSync(chainPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(entry.findings).toEqual(["request_id_ref_unresolved"]);
+      expect(entry.request_id_ref).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+

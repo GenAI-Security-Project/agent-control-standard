@@ -102,6 +102,7 @@ import {
   type IfcLabels,
   type SessionContextStore,
 } from "./session-context-store.ts";
+import type { StepFindings } from "./session-context.ts";
 import { persistIfcLabels, supplySourceLabels } from "./ifc-labels.ts";
 
 /**
@@ -715,58 +716,71 @@ async function readCappedBody(req: Request): Promise<CappedBody> {
 }
 
 /**
- * hooks.md, toolCallResult: a Guardian SHOULD resolve `request_id_ref` against
- * the `toolCallRequest` records it holds for the session, and MUST record a
- * reference it cannot resolve. The decision is left to policy, so this only
- * records; an unresolvable reference is evidence, and it has to survive even
- * when the result is allowed. Resolution reads the session's own requests because
- * `request_id` is unique only within a session (Specification §10.3). A chain
- * restarted by eviction makes an older reference unresolvable, which is
- * recorded too: the Guardian no longer holds the request it names.
+ * What this Guardian establishes about a step as it arrives, before the step
+ * is appended to the chain.
+ *
+ * `request_id_ref_unresolved`: hooks.md, toolCallResult. A Guardian SHOULD
+ * resolve `request_id_ref` against the session's `toolCallRequest` records and
+ * MUST record one it cannot resolve. The decision is left to policy, so this
+ * only records. Resolution reads the session's own requests, because
+ * `request_id` is unique only within a session. A restart or an eviction
+ * makes an older reference unresolvable, and that is recorded too.
+ *
+ * `request_id_duplicate`: Specification §10.3 says a Guardian MUST reject a
+ * `request_id` the session has already carried, on any method. This Guardian
+ * does not enforce that yet, so it records the repeat instead.
+ *
+ * The findings go onto the step's own chain entry, which is this Guardian's
+ * audit record, and a copy goes to the envelope log (or stderr) for reading.
  */
-function recordUnresolvedRequestIdRef(
-  envelope: ToolCallResultEnvelope,
+function examineStep(
+  envelope: ToolCallRequestEnvelope | ToolCallResultEnvelope,
   sessionContextStore: SessionContextStore,
   envelopeLog: EnvelopeLogSink,
-): void {
-  const ref = envelope.params.payload.request_id_ref;
-  if (ref === undefined) {
-    return;
-  }
+): StepFindings | undefined {
   const sessionId = envelope.params.metadata.session_id;
-  if (sessionContextStore.hasToolCallRequest(sessionId, ref)) {
-    return;
+  const requestId = envelope.params.request_id;
+  const findings: StepFindings["findings"] = [];
+  let unresolvedRef: string | undefined;
+
+  if (sessionContextStore.hasRequestId(sessionId, requestId)) {
+    findings.push("request_id_duplicate");
+    recordFinding(envelopeLog, { finding: "request_id_duplicate", session_id: sessionId, request_id: requestId }, envelope.method, envelope.id);
   }
-  recordFinding(
-    envelopeLog,
-    { finding: "request_id_ref_unresolved", session_id: sessionId, request_id: envelope.params.request_id, request_id_ref: ref },
-    envelope.method,
-    envelope.id,
-  );
+
+  const ref = isToolCallResult(envelope) ? envelope.params.payload.request_id_ref : undefined;
+  if (ref !== undefined && !sessionContextStore.hasToolCallRequest(sessionId, ref)) {
+    findings.push("request_id_ref_unresolved");
+    unresolvedRef = ref;
+    recordFinding(
+      envelopeLog,
+      { finding: "request_id_ref_unresolved", session_id: sessionId, request_id: requestId, request_id_ref: ref },
+      envelope.method,
+      envelope.id,
+    );
+  }
+
+  if (findings.length === 0) {
+    return undefined;
+  }
+  return unresolvedRef === undefined ? { findings } : { findings, request_id_ref: unresolvedRef };
 }
 
 /**
- * Specification §10.3: a Guardian MUST reject a duplicate `request_id` within
- * a session. This Guardian does not enforce that yet, so it records the
- * duplicate instead. A repeat matters more now that hosts derive a request's
- * id from their own call id: a host that reuses a call id makes two requests
- * share one id, and a later result then resolves against whichever came first.
+ * examineStep, unable to throw. A caller-supplied store that throws on the
+ * lookup costs the findings, never the decision.
  */
-function recordDuplicateRequestId(
-  envelope: ToolCallRequestEnvelope,
+function examineStepSafely(
+  envelope: ToolCallRequestEnvelope | ToolCallResultEnvelope,
   sessionContextStore: SessionContextStore,
   envelopeLog: EnvelopeLogSink,
-): void {
-  const sessionId = envelope.params.metadata.session_id;
-  if (!sessionContextStore.hasToolCallRequest(sessionId, envelope.params.request_id)) {
-    return;
+): StepFindings | undefined {
+  try {
+    return examineStep(envelope, sessionContextStore, envelopeLog);
+  } catch (error) {
+    reportCheckFailure("step findings", error);
+    return undefined;
   }
-  recordFinding(
-    envelopeLog,
-    { finding: "request_id_duplicate", session_id: sessionId, request_id: envelope.params.request_id },
-    envelope.method,
-    envelope.id,
-  );
 }
 
 /**
@@ -865,27 +879,16 @@ async function dispatch(
   //     shape. Anything neither predicate answers falls past both, to
   //     METHOD_NOT_DISPATCHED_CODE below.
   if (isToolCallRequest(envelope)) {
-    // Checked before evaluateStep appends this request, so the id is in the
-    // session already only if an earlier request carried it. Guarded the same
-    // way as the result gate's check below.
-    try {
-      recordDuplicateRequestId(envelope, sessionContextStore, envelopeLog);
-    } catch (error) {
-      reportCheckFailure("request_id", error);
-    }
-    return await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore);
+    // Examined before evaluateStep appends this step, so a request id is in
+    // the session already only if an earlier step carried it.
+    const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
+    return await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, findings);
   }
 
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
-    // Outside evaluateStep's try, so guarded here: a caller-supplied store
-    // that throws on the lookup must cost the record, never the decision.
-    try {
-      recordUnresolvedRequestIdRef(envelope, sessionContextStore, envelopeLog);
-    } catch (error) {
-      reportCheckFailure("request_id_ref", error);
-    }
-    return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore);
+    const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
+    return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings);
   }
 
   // A well-formed envelope (it passed validateEnvelope: the method matched
@@ -964,6 +967,7 @@ async function evaluateStep<E extends SteppedEnvelope>(
   bridge: PolicyBridge<GuardianSnapshot>,
   mapping: Mapping,
   sessionContextStore: SessionContextStore,
+  findings?: StepFindings,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   try {
     // The chain entry is appended on arrival, before any verdict exists: a
@@ -974,6 +978,7 @@ async function evaluateStep<E extends SteppedEnvelope>(
       method: envelope.method,
       request_id: envelope.params.request_id,
       tool_name: envelope.params.payload.tool.name,
+      ...findings,
     });
 
     // Resolved BEFORE the snapshot is assembled, where it used to be resolved
