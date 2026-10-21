@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import test from "node:test"
 
 import plugin, { applyAfterReply } from "../../.opencode/plugins/acs.ts"
@@ -96,4 +97,23 @@ test("an unusable modification fails closed", () => {
     message: "The Guardian modification could not be applied",
     metadata: { acs: { decision: "deny" } },
   })
+})
+
+test("without ACS_OPENCODE_HMAC_KEY_ID the plugin blocks a tool call", () => {
+  const pluginURL = new URL("../../.opencode/plugins/acs.ts", import.meta.url).href
+  const script = `
+    const { default: plugin } = await import(${JSON.stringify(pluginURL)})
+    const callbacks = {}
+    await plugin.setup({ tool: { hook: async (name, callback) => { callbacks[name] = callback } } })
+    if (!callbacks["execute.before"] || !callbacks["execute.after"]) throw new Error("hooks not registered")
+    console.log("hooks registered")
+    await callbacks["execute.before"]({ sessionID: "s", messageID: "m", id: "c", tool: "shell", input: { command: "true" } })
+  `
+  const { ACS_OPENCODE_HMAC_KEY_ID: _, ...unset } = process.env
+  for (const env of [unset, { ...unset, ACS_OPENCODE_HMAC_KEY_ID: "" }]) {
+    const child = spawnSync(process.execPath, ["-e", script], { env, encoding: "utf8" })
+    assert.match(child.stdout, /hooks registered/)
+    assert.notEqual(child.status, 0)
+    assert.match(child.stderr, /ACS_OPENCODE_HMAC_KEY_ID must name the key_id/)
+  }
 })

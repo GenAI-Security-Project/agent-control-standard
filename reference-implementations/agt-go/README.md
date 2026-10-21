@@ -42,7 +42,7 @@ These tests establish parity for the recorded behavior.
 
 The AGT build supports Linux amd64 and arm64 and both Mac architectures.
 It also builds for Windows amd64, but that build is not tested on Windows.
-The build requires Go 1.27.2 or newer and a C compiler.
+The build requires Go 1.27.3 or newer and a C compiler.
 Install Make, OpenSSL, Git, curl, jq, and [rustup](https://rustup.rs).
 The quality gate also requires Bun 1.3.11 or newer.
 

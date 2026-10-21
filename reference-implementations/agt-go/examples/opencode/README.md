@@ -40,11 +40,14 @@ and set the endpoint for the OpenCode process:
 
 ```bash
 go build -o .acs/bin/acs-opencode-hook ./examples/opencode/cmd/acs-opencode-hook
-ACS_GUARDIAN_URL=http://127.0.0.1:8788/acs opencode
+ACS_GUARDIAN_URL=http://127.0.0.1:8788/acs ACS_OPENCODE_HMAC_KEY_ID=2026-10 opencode
 ```
 
-`ACS_OPENCODE_HMAC_KEY_ID` and `ACS_OPENCODE_HMAC_SECRET_FILE` select the matching
-`key_id` and shared-secret file. The defaults are `http://127.0.0.1:8787/acs`, `2026-10`
-and `.acs/hmac-secret`, the values `guardian.yaml` and `make dev-secret` use.
+`ACS_OPENCODE_HMAC_KEY_ID` names the `key_id` of the shared secret and has no default:
+without it the plugin blocks every tool call. It does not refuse at load, because
+OpenCode skips a plugin whose setup throws and runs tools ungoverned.
+`make opencode-example` sets it to `2026-10`, the value `guardian.yaml` uses. `ACS_OPENCODE_HMAC_SECRET_FILE` selects the secret file.
+The other defaults are `http://127.0.0.1:8787/acs` and `.acs/hmac-secret`, the values
+`guardian.yaml` and `make dev-secret` use.
 If the initial handshake produces no ServerHello, this example uses the ACS startup
 posture `refuse` and blocks the tool event.

@@ -137,7 +137,7 @@ codex-example: example-runtime
 opencode-example: example-runtime
 	@command -v opencode >/dev/null || { printf '%s\n' 'opencode is required on PATH'; exit 1; }
 	$(GO) build -o .acs/bin/acs-opencode-hook ./examples/opencode/cmd/acs-opencode-hook
-	scripts/run-host-example.sh opencode
+	ACS_OPENCODE_HMAC_KEY_ID=2026-10 scripts/run-host-example.sh opencode
 
 example-check: example-runtime require-bun
 	$(call check-start,Examples)
@@ -145,7 +145,7 @@ example-check: example-runtime require-bun
 	$(GO) test ./examples/codex/cmd/acs-codex-hook
 	$(GO) test ./examples/opencode/cmd/acs-opencode-hook
 	$(GO) build -o .acs/bin/acs-opencode-hook ./examples/opencode/cmd/acs-opencode-hook
-	ACS_HOST_EXAMPLE_PORT=0 scripts/run-host-example.sh bun test examples/opencode/plugin.test.mjs
+	ACS_HOST_EXAMPLE_PORT=0 ACS_OPENCODE_HMAC_KEY_ID=2026-10 scripts/run-host-example.sh bun test examples/opencode/plugin.test.mjs
 	bash -n scripts/run-host-example.sh
 	$(call check-pass,Examples)
 

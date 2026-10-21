@@ -51,11 +51,12 @@ interface PluginContext {
 
 const projectRoot = fileURLToPath(new URL("../../", import.meta.url))
 const executable = fileURLToPath(new URL("../../.acs/bin/acs-opencode-hook", import.meta.url))
+const hmacKeyID = process.env.ACS_OPENCODE_HMAC_KEY_ID ?? ""
 const hookArguments = [
   "--guardian-url",
   process.env.ACS_GUARDIAN_URL || "http://127.0.0.1:8787/acs",
   "--hmac-key-id",
-  process.env.ACS_OPENCODE_HMAC_KEY_ID || "2026-10",
+  hmacKeyID,
   "--hmac-secret-file",
   process.env.ACS_OPENCODE_HMAC_SECRET_FILE || ".acs/hmac-secret",
   "--state-dir",
@@ -64,8 +65,14 @@ const hookArguments = [
   ".acs/opencode-audit.jsonl",
 ]
 
+// A missing key_id blocks every tool call here rather than failing setup:
+// OpenCode (checked on 2.0.11) logs a plugin whose setup throws and runs tools without it.
 const invoke = (event: unknown): Promise<Reply> =>
   new Promise((resolve, reject) => {
+    if (hmacKeyID === "") {
+      reject(new Error("ACS_OPENCODE_HMAC_KEY_ID must name the key_id the deployment gave the HMAC secret"))
+      return
+    }
     const child = spawn(executable, hookArguments, {
       cwd: projectRoot,
       stdio: ["pipe", "pipe", "pipe"],
