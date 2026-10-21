@@ -22,6 +22,24 @@ function deriveSessionKey(masterSecret: Buffer, sessionId: string): Buffer {
   return Buffer.from(hkdfSync("sha256", masterSecret, Buffer.alloc(0), sessionId, 32));
 }
 
+/** A deployment's HMAC secret and the label that names it (§10, `key_id`
+ * for HMAC). The label comes from configuration, never from the secret or
+ * the session, and it is what the Guardian looks the secret up by. */
+export type HmacKey = { keyId: string; secret: Buffer };
+
+/** Reads the HMAC key from ACS_HMAC_SECRET and ACS_HMAC_KEY_ID. Neither set
+ * means an unsigned deployment; one without the other is a configuration
+ * error, because a label has no default. */
+export function hmacKeyFromEnv(env: Record<string, string | undefined> = process.env): HmacKey | undefined {
+  const secret = env.ACS_HMAC_SECRET;
+  const keyId = env.ACS_HMAC_KEY_ID;
+  if (!secret && !keyId) return undefined;
+  if (!secret || !keyId) {
+    throw new Error("ACS_HMAC_SECRET and ACS_HMAC_KEY_ID must be set together: key_id names the configured secret (Specification §10)");
+  }
+  return { keyId, secret: Buffer.from(secret, "base64") };
+}
+
 type SignableRequest = {
   params: { metadata: { session_id: string } };
 };
@@ -40,15 +58,16 @@ export type ResponseSignatureVerificationResult =
 
 /**
  * Signs an ACS request envelope with HMAC-SHA256 using an HKDF-derived
- * per-session key (§10). Returns a new envelope with params.signature
- * populated. The original is not mutated.
+ * per-session key (§10), naming the secret by its configured `key_id`.
+ * Returns a new envelope with params.signature populated. The original is
+ * not mutated.
  */
 export function signEnvelope<T extends SignableRequest>(
   envelope: T,
-  masterSecret: Buffer,
+  key: HmacKey,
 ): SignedRequestEnvelope<T> {
   const sessionId = envelope.params.metadata.session_id;
-  const sessionKey = deriveSessionKey(masterSecret, sessionId);
+  const sessionKey = deriveSessionKey(key.secret, sessionId);
 
   const { signature: _, ...paramsWithoutSig } = envelope.params as T["params"] & {
     signature?: unknown;
@@ -60,15 +79,17 @@ export function signEnvelope<T extends SignableRequest>(
     ...envelope,
     params: {
       ...envelope.params,
-      signature: { algorithm: "HMAC-SHA256", value, key_id: sessionId },
+      signature: { algorithm: "HMAC-SHA256", value, key_id: key.keyId },
     },
   };
 }
 
-/** Verifies the Guardian's HMAC over a JSON-RPC result or error response. */
+/** Verifies the Guardian's HMAC over a JSON-RPC result or error response.
+ * §10: a response is signed with the key of the request it answers, so it
+ * must name the same `key_id` this host signed with. */
 export function verifyResponseSignature(
   response: Record<string, unknown>,
-  masterSecret: Buffer,
+  key: HmacKey,
   sessionId: string,
 ): ResponseSignatureVerificationResult {
   const result = response.result;
@@ -89,8 +110,8 @@ export function verifyResponseSignature(
   if (fields.algorithm !== "HMAC-SHA256") {
     return { valid: false, reason: `unsupported response signature algorithm: ${String(fields.algorithm)}` };
   }
-  if (fields.key_id !== sessionId) {
-    return { valid: false, reason: "response signature key_id does not match the session" };
+  if (fields.key_id !== key.keyId) {
+    return { valid: false, reason: "response signature key_id does not name this host's key" };
   }
   if (typeof fields.value !== "string") {
     return { valid: false, reason: "response signature value is not a string" };
@@ -100,7 +121,7 @@ export function verifyResponseSignature(
   const input = result === carrier
     ? jcsCanonicalise({ ...response, result: carrierWithoutSignature })
     : jcsCanonicalise({ ...response, error: carrierWithoutSignature });
-  const sessionKey = deriveSessionKey(masterSecret, sessionId);
+  const sessionKey = deriveSessionKey(key.secret, sessionId);
   const computed = createHmac("sha256", sessionKey).update(input).digest();
   const supplied = Buffer.from(fields.value, "base64");
   if (supplied.length !== computed.length || !timingSafeEqual(supplied, computed)) {

@@ -10,6 +10,7 @@ Run it from `reference-implementations/agt`. Its default paths are relative to t
 
 ```bash
 export ACS_HMAC_SECRET="$(openssl rand -base64 32)"
+export ACS_HMAC_KEY_ID="2026-10"
 bun run guardian
 ```
 
@@ -34,6 +35,7 @@ It constructs the AGT runtime once, at startup, against `policy/manifest.yaml`, 
 | `ACS_OTEL_FILE` | unset | Writes one OpenTelemetry span per decided step as OTLP/JSON, one export request per line. Unset means no trace export |
 | `ACS_OTEL_ENDPOINT` | unset | Sends the same spans to an OTLP/HTTP collector, for example `http://127.0.0.1:4318/v1/traces` |
 | `ACS_HMAC_SECRET` | required | Base64-encoded input keying material of at least 32 bytes. The Guardian derives per-session keys, verifies requests, and signs addressable non-ping results and errors |
+| `ACS_HMAC_KEY_ID` | required | The label that names `ACS_HMAC_SECRET`, carried as `key_id` in every signature (§10). No default. A request naming another label gets an unsigned `-32004 SIGNATURE_INVALID` |
 
 To see a decision without an agent client, pipe a hook payload into the Claude Code shim while the Guardian runs. The [tree README](../../README.md#drive-one-hook-by-hand) shows the command and its output.
 
@@ -149,6 +151,7 @@ const guardian = await startGuardian({
   port: 0,
   manifestPath: "policy/manifest.yaml",
   hmacSecret: process.env.ACS_HMAC_SECRET,
+  hmacKeyId: process.env.ACS_HMAC_KEY_ID,
 });
 // guardian.url is the full endpoint, on the port the OS assigned.
 await guardian.close();

@@ -4,7 +4,7 @@
 
 ## Get started
 
-1. Start the Guardian from `reference-implementations/agt`. The [tree README](../../README.md#start-the-guardian) shows the command. Export the same `ACS_HMAC_SECRET` value in the terminal that starts OpenCode.
+1. Start the Guardian from `reference-implementations/agt`. The [tree README](../../README.md#start-the-guardian) shows the command. Export the same `ACS_HMAC_SECRET` and `ACS_HMAC_KEY_ID` values in the terminal that starts OpenCode.
 
 2. Point OpenCode at the plugin. The `opencode.json` at the root of this tree already does, with a relative path, so an `opencode` started from `reference-implementations/agt` needs no edit. From any other project, add the plugin to that project's `opencode.json` by absolute path.
 
@@ -40,6 +40,7 @@ Because OpenCode has no field that reads a reason back after the tool has run, t
 | `ACS_HOOKMAP_PATH` | `opencode.hookmap.yaml`, beside the plugin | Which hookmap to load. Leave it unset in a deployment |
 | `ACS_DEBUG` | unset | Prints each decision's reason on stderr |
 | `ACS_HMAC_SECRET` | required with the standalone Guardian | The same base64-encoded secret supplied to the Guardian; signs ClientHello and step requests and verifies non-ping responses. Omission is compatibility mode for an explicitly unsecured in-process Guardian, not ACS-Core |
+| `ACS_HMAC_KEY_ID` | required with `ACS_HMAC_SECRET` | The same label supplied to the Guardian; names the secret as `key_id` in every request and must match the label on every verified response. Setting only one of the two is a configuration error |
 
 There is no session directory. The plugin lives for the whole session and keeps the negotiated ServerHello in memory, so only the first hook of a session sends `handshake/hello`.
 

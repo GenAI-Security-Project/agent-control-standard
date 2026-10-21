@@ -1241,13 +1241,14 @@ describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
 
   it("withholds a keyed tool result over the Guardian's 1 MiB request cap, as guardian_refused", async () => {
     const dir = scratch();
-    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: GUARDIAN_KEY });
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: GUARDIAN_KEY, hmacKeyId: "test-key" });
     try {
       const env = {
         ACS_GUARDIAN_URL: guardian.url,
         ACS_SESSION_DIR: join(dir, "sessions"),
         ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
         ACS_HMAC_SECRET: GUARDIAN_KEY,
+        ACS_HMAC_KEY_ID: "test-key",
       };
       const secret = "TOKEN=ghp_ABCDEF123456\n";
       const out = await runShim(resultPayload(secret + "x".repeat(2 * 1024 * 1024)), env);
@@ -1264,7 +1265,7 @@ describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
 
   it("denies a keyed tool call whose input is too deep to sign, under the proceed posture", async () => {
     const dir = scratch();
-    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: GUARDIAN_KEY });
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: GUARDIAN_KEY, hmacKeyId: "test-key" });
     try {
       const deep = "[".repeat(20_000) + "]".repeat(20_000);
       const stdin = JSON.stringify({
@@ -1278,6 +1279,7 @@ describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
         ACS_SESSION_DIR: join(dir, "sessions"),
         ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
         ACS_HMAC_SECRET: GUARDIAN_KEY,
+        ACS_HMAC_KEY_ID: "test-key",
       });
       expect(expectQuietDecision(out).permissionDecision).toBe("deny");
       const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -1293,6 +1295,7 @@ describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
       port: 0,
       manifestPath: MANIFEST,
       hmacSecret: GUARDIAN_KEY,
+      hmacKeyId: "test-key",
       onDecisionFailure: "deny",
     });
     try {
@@ -1301,6 +1304,7 @@ describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
         ACS_SESSION_DIR: join(dir, "sessions"),
         ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
         ACS_HMAC_SECRET: Buffer.alloc(32, 0x62).toString("base64"),
+        ACS_HMAC_KEY_ID: "test-key",
       });
       expect(expectQuietDecision(out).permissionDecision).toBe("deny");
       const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));

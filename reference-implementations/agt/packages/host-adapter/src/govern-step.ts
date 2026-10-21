@@ -77,7 +77,7 @@
  * different wire shape (see render-decision.ts).
  */
 import { buildEnvelope, modificationDocumentOf, type AcsRequestEnvelope, type Hookmap } from "./build-envelope.ts";
-import { signEnvelope } from "./sign-envelope.ts";
+import { signEnvelope, type HmacKey } from "./sign-envelope.ts";
 import type { AuditSink } from "./audit-sink.ts";
 import {
   applyFailurePosture,
@@ -169,9 +169,10 @@ export type GovernStepInput = {
    * into a silent skip any more.
    */
   scopedTool?: string;
-  /** Base64-encoded IKM for HMAC-SHA256 request signing (§10). When set,
-   *  every envelope is signed with an HKDF-derived per-session key. */
-  hmacSecret?: Buffer;
+  /** The deployment's HMAC key for request signing (§10). When set, every
+   *  envelope is signed with an HKDF-derived per-session key and names the
+   *  key's configured `key_id`. */
+  hmacKey?: HmacKey;
   /**
    * Repeats this session's handshake. When the Guardian answers a step with
    * -32003 (no handshake on record, as after a Guardian restart), §17.1's
@@ -448,7 +449,7 @@ export async function governStep({
   sessionId,
   audit,
   scopedTool,
-  hmacSecret,
+  hmacKey,
   renegotiate,
 }: GovernStepInput): Promise<GovernedStep> {
   // Every render below -- the arriving decision's and the posture's -- goes
@@ -680,7 +681,7 @@ export async function governStep({
   // rather than letting a `proceed` posture run it.
   const buildRequest = (): AcsRequestEnvelope => buildEnvelope(hookEventName, payload, hookmap);
   const signRequest = (built: AcsRequestEnvelope): AcsRequestEnvelope =>
-    hmacSecret ? signEnvelope(built, hmacSecret) : built;
+    hmacKey ? signEnvelope(built, hmacKey) : built;
   let envelope: AcsRequestEnvelope;
   try {
     envelope = buildRequest();

@@ -75,7 +75,7 @@ Each part has its own README that says how to start it.
 | Five dispositions | `allow`, `deny`, `modify`, and `ask` are emitted as schema-valid decisions. Both hosts validate and safely render `defer`, but no pinned AGT verdict maps to it. |
 | SessionContext with published `chain_hash` | The Guardian keeps a per-session chain using ACS v0.1's JCS-content-plus-raw-predecessor algorithm, writes it to a log, and publishes `chain_hash` on every response for a chain-recorded step, including denial responses when evaluation throws. |
 | Replay protection | Implemented. Duplicate `request_id` values within a session are rejected (`-32005`) from a replay store independent of the bounded audit chain. Timestamps outside the negotiated `skew_window_ms` (default 5 minutes) are rejected (`-32006`). Only the liveness ping is exempt. Open Core gap: the replay store is held in memory, so a Guardian restart forgets it and accepts a replay of a request whose timestamp is still inside the window. |
-| Baseline HMAC-SHA256 signature | Implemented. The runnable Guardian requires `ACS_HMAC_SECRET`, derives per-session HMAC keys via HKDF (§10), verifies requests using JCS canonicalization, rejects unsigned requests with `-32004`, and signs every addressable non-ping result or error. Both shipped hosts sign requests—including ClientHello—and verify non-ping response signatures. `system/ping` is signature-exempt in both directions. |
+| Baseline HMAC-SHA256 signature | Implemented. The runnable Guardian requires `ACS_HMAC_SECRET`, derives per-session HMAC keys via HKDF (§10), looks the secret up by the request's `key_id` and requires `ACS_HMAC_KEY_ID` to name it, verifies requests using JCS canonicalization, rejects unsigned requests with `-32004`, and signs every addressable non-ping result or error. Both shipped hosts sign requests—including ClientHello—and verify non-ping response signatures. `system/ping` is signature-exempt in both directions. |
 | Decision honoring and `on_decision_failure` | Implemented on both hosts. Every fail-open proceed is written to the audit log. |
 | Liveness, `system/ping` | Implemented. Always returns `allow` with an echo of the client's payload and a server timestamp. No chain entry, no signature required. |
 | Wrapped MCP, `protocols/MCP/tools/call` | Implemented. It extracts the tool name from the ACS or native MCP payload shape, records a chain entry, evaluates against the pre-tool-call policy, and fails closed on evaluation errors. Declared in `methods_evaluated`. Other `protocols/MCP/*` methods are not claimed. |
@@ -109,10 +109,11 @@ This installs the AGT SDK at the pinned version and the OPA binary it bundles. T
 
 Open a terminal at `reference-implementations/agt`. Start the Guardian.
 
-First provide at least 32 bytes of base64-encoded key material. Keep this value in the environment of the Guardian and either host:
+First provide at least 32 bytes of base64-encoded key material and a label that names it. The label is the `key_id` every signature carries (§10), so it is any name you choose, such as the month the secret was made. Keep both values in the environment of the Guardian and either host:
 
 ```bash
 export ACS_HMAC_SECRET="$(openssl rand -base64 32)"
+export ACS_HMAC_KEY_ID="2026-10"
 ```
 
 ```bash
@@ -129,10 +130,11 @@ Signature verification: HMAC-SHA256 (required)
 
 Leave it running. The Guardian constructs the AGT runtime once against `policy/lib` and serves ACS on `POST /acs`. The [Guardian README](packages/guardian/README.md) lists what it reads and what it writes.
 
-Every host process must receive that same value. In each terminal where you start Claude Code or OpenCode, export the copied base64 value first:
+Every host process must receive those same values. In each terminal where you start Claude Code or OpenCode, export the copied base64 value and its label first:
 
 ```bash
 export ACS_HMAC_SECRET='<same value used by the Guardian>'
+export ACS_HMAC_KEY_ID='<same label used by the Guardian>'
 ```
 
 ### Start the Inspector
@@ -163,7 +165,7 @@ cp hosts/claude-code/settings.json .claude/settings.json
 
 This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash` and `WebFetch` tools, before the tool runs. `PostToolUse` fires for the `Bash` tool, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The [Claude Code host README](hosts/claude-code/README.md) has the details.
 
-2. Confirm this terminal has the same `ACS_HMAC_SECRET` as the Guardian, then start Claude Code.
+2. Confirm this terminal has the same `ACS_HMAC_SECRET` and `ACS_HMAC_KEY_ID` as the Guardian, then start Claude Code.
 
 ```bash
 claude
@@ -189,7 +191,7 @@ The same Guardian governs OpenCode at the same time. Do not restart anything.
 }
 ```
 
-2. Confirm this terminal has the same `ACS_HMAC_SECRET` as the Guardian, then start `opencode` from that project directory.
+2. Confirm this terminal has the same `ACS_HMAC_SECRET` and `ACS_HMAC_KEY_ID` as the Guardian, then start `opencode` from that project directory.
 
 The plugin hooks `tool.execute.before` for the `bash` and `webfetch` tools and `tool.execute.after` for the `bash` tool. A deny before the tool runs is a thrown error that carries the Guardian's reason. A deny after the tool runs replaces the result object, because OpenCode discards a throwing hook's changes. The [OpenCode host README](hosts/opencode/README.md) shows how to drive OpenCode against a local stub model with no paid account.
 
@@ -570,8 +572,9 @@ The quickstart requires one shared secret in the Guardian and host environments;
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 | `ACS_HMAC_SECRET` | required with the standalone Guardian | The same base64-encoded secret supplied to the Guardian; signs requests and verifies results and errors. Omission is compatibility mode for an explicitly unsecured in-process Guardian, not ACS-Core |
+| `ACS_HMAC_KEY_ID` | required with `ACS_HMAC_SECRET` | The same label supplied to the Guardian. Every request names the secret by it, and a response that names another label is rejected. Setting only one of the two is a configuration error |
 
-**The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG`, `ACS_HOOKMAP_PATH`, and the shared `ACS_HMAC_SECRET` with the same meanings. The secret is required with the standalone Guardian; omission exists only for compatibility with an explicitly unsecured in-process Guardian and does not negotiate ACS-Core. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.
+**The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG`, `ACS_HOOKMAP_PATH`, and the shared `ACS_HMAC_SECRET` and `ACS_HMAC_KEY_ID` with the same meanings. The secret and its label are required with the standalone Guardian; omission exists only for compatibility with an explicitly unsecured in-process Guardian and does not negotiate ACS-Core. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.
 
 **The Guardian** (`bun run guardian`):
 
@@ -584,6 +587,7 @@ The quickstart requires one shared secret in the Guardian and host environments;
 | `ACS_ENVELOPE_LOG` | `.acs/envelopes.jsonl` | Where every envelope is recorded |
 | `ACS_SESSION_CONTEXT_LOG` | `.acs/session-context.jsonl` | Where each session's hash chain is written |
 | `ACS_HMAC_SECRET` | required | Base64-encoded input keying material of at least 32 bytes. The Guardian derives a per-session key via HKDF, verifies requests, and signs addressable non-ping results and errors. The hosts use the same value to sign requests—including ClientHello—and verify responses. `system/ping` is signature-exempt in both directions |
+| `ACS_HMAC_KEY_ID` | required | The `key_id` that names `ACS_HMAC_SECRET` (§10). There is no default. A request naming any other label is refused with `-32004 SIGNATURE_INVALID`, unsigned, and never verified against another secret. A response is signed with, and names, the label of the request it answers |
 
 **The Inspector** (`bun run inspector`) reads `ACS_ENVELOPE_LOG`, `ACS_AUDIT_LOG` and `ACS_SESSION_CONTEXT_LOG` with the same defaults. The flags `--envelope-log`, `--audit-log` and `--session-context-log` override them. It honours `NO_COLOR` and prints no colour when stdout is not a terminal.
 

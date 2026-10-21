@@ -72,6 +72,9 @@ function clientHello(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
+/** The label every signed test names its secret by (§10, key_id for HMAC). */
+const TEST_KEY_ID = "test-key";
+
 /** The key each signed test session used, so postAcs signs its handshake with the same one. */
 const SIGNING_SECRETS = new Map<string, Buffer>();
 
@@ -86,7 +89,7 @@ function signRequest(envelope: Record<string, unknown>, masterSecret: Buffer): R
     ...envelope,
     params: {
       ...params,
-      signature: { algorithm: "HMAC-SHA256", value, key_id: sessionId },
+      signature: { algorithm: "HMAC-SHA256", value, key_id: TEST_KEY_ID },
     },
   };
 }
@@ -1737,13 +1740,13 @@ describe("hook traffic needs a handshake that declared the method (§4, §17.1)"
 describe("ACS-Core wire security and negotiation", () => {
   const masterSecret = Buffer.alloc(32, 0x5a);
   const encodedSecret = masterSecret.toString("base64");
+  const hmac = { hmacSecret: encodedSecret, hmacKeyId: TEST_KEY_ID };
 
   it("answers JSON-RPC, never an HTML 500, when the signing boundary cannot process a request", async () => {
-    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", ...hmac });
     const signedLooking = (envelope: Record<string, unknown>) => {
       const params = envelope.params as Record<string, unknown>;
-      const sessionId = (params.metadata as Record<string, unknown>).session_id;
-      params.signature = { algorithm: "HMAC-SHA256", key_id: sessionId, value: "AAAA" };
+      params.signature = { algorithm: "HMAC-SHA256", key_id: TEST_KEY_ID, value: "AAAA" };
       return envelope;
     };
     // HKDF caps its info input at 1024 bytes, and the session id is that input.
@@ -1768,7 +1771,7 @@ describe("ACS-Core wire security and negotiation", () => {
   });
 
   it("rejects unsigned and incorrectly signed requests when HMAC is configured", async () => {
-    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", ...hmac });
     try {
       const unsigned = toolCallEnvelope("ls -la");
       expect((await postAcs(secured.url, unsigned)).error?.code).toBe(-32004);
@@ -1783,16 +1786,22 @@ describe("ACS-Core wire security and negotiation", () => {
       const wrongKeyParams = wrongKeyId.params as Record<string, unknown>;
       wrongKeyParams.signature = {
         ...(wrongKeyParams.signature as Record<string, unknown>),
-        key_id: crypto.randomUUID(),
+        key_id: "unconfigured-key",
       };
-      expect((await postAcs(secured.url, wrongKeyId)).error?.code).toBe(-32004);
+      // Signed with the configured secret, but naming a label that is not
+      // configured: §10 rejects it rather than falling back to that secret,
+      // and the rejection is unsigned because no secret matches the label.
+      const unknownKeyId = await postAcs(secured.url, wrongKeyId);
+      expect(unknownKeyId.error?.code).toBe(-32004);
+      expect(unknownKeyId.error?.data).toEqual({ reason: "signature key_id names no configured secret" });
+      expect(unknownKeyId.error?.signature).toBeUndefined();
     } finally {
       await secured.close();
     }
   });
 
   it("checks authentication before method-specific payload validation", async () => {
-    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", ...hmac });
     try {
       const malformedUnsigned = makeEnvelope("steps/toolCallRequest", {});
       expect((await postAcs(secured.url, malformedUnsigned)).error?.code).toBe(-32004);
@@ -1809,7 +1818,7 @@ describe("ACS-Core wire security and negotiation", () => {
     const secured = await startGuardian({
       port: 0,
       manifestPath: "policy/manifest.yaml",
-      hmacSecret: encodedSecret,
+      ...hmac,
       sessionContextStore: store,
     });
     try {
@@ -1849,18 +1858,28 @@ describe("ACS-Core wire security and negotiation", () => {
     }
   });
 
+  it("refuses a secret without the key_id that names it, and a key_id without a secret", async () => {
+    await expect(
+      startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret }),
+    ).rejects.toThrow(/hmacKeyId/);
+    await expect(
+      startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacKeyId: TEST_KEY_ID }),
+    ).rejects.toThrow(/hmacKeyId/);
+  });
+
   it("refuses key material too short to support the documented HMAC baseline", async () => {
     await expect(
       startGuardian({
         port: 0,
         manifestPath: "policy/manifest.yaml",
         hmacSecret: Buffer.alloc(16).toString("base64"),
+        hmacKeyId: TEST_KEY_ID,
       }),
     ).rejects.toThrow(/at least 32 bytes/);
   });
 
   it("accepts a valid signature and signs the exact response it sends", async () => {
-    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", ...hmac });
     try {
       const request = signRequest(toolCallEnvelope("ls -la"), masterSecret);
       const response = await postAcs(secured.url, request);
@@ -1869,7 +1888,7 @@ describe("ACS-Core wire security and negotiation", () => {
       const signature = response.result?.signature as { algorithm: string; value: string; key_id: string };
       const sessionId = ((request.params as Record<string, unknown>).metadata as Record<string, unknown>).session_id as string;
       expect(signature.algorithm).toBe("HMAC-SHA256");
-      expect(signature.key_id).toBe(sessionId);
+      expect(signature.key_id).toBe(TEST_KEY_ID);
       const key = deriveSessionKey(masterSecret, sessionId);
       const expected = createHmac("sha256", key)
         .update(responseSigningInput(response as unknown as Record<string, unknown>))
@@ -1881,7 +1900,7 @@ describe("ACS-Core wire security and negotiation", () => {
   });
 
   it("signs addressable JSON-RPC errors", async () => {
-    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", ...hmac });
     try {
       const request = signRequest(makeEnvelope("steps/unknownHook", {}), masterSecret);
       const response = await postAcs(secured.url, request);
@@ -1939,7 +1958,7 @@ describe("ACS-Core wire security and negotiation", () => {
   });
 
   it("negotiates profiles, advertised signature support, and validates ClientHello", async () => {
-    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", hmacSecret: encodedSecret });
+    const secured = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", ...hmac });
     try {
       const response = await postAcs(
         secured.url,

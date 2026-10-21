@@ -443,7 +443,15 @@ export type StartGuardianOptions = {
    * only for in-process compatibility tests and advertises no `acs-core`
    * profile; the standalone deployment requires ACS_HMAC_SECRET. */
   hmacSecret?: string;
+  /** The label naming `hmacSecret` (§10, `key_id` for HMAC): required with
+   * it and meaningless without it. A request is verified with the secret its
+   * `key_id` names, and an unknown label is SIGNATURE_INVALID. */
+  hmacKeyId?: string;
 };
+
+/** Configured HMAC secrets by `key_id`. A Map, so a label is only ever a
+ * key, never a lookup into an object's prototype. */
+type HmacKeyring = ReadonlyMap<string, Buffer>;
 export type StartedGuardian = { url: string; close(): Promise<void> };
 
 /**
@@ -515,10 +523,17 @@ export async function startGuardian({
   traceExporter: traceExporterOverride,
   replayProtectionStore: replayProtectionStoreOverride,
   hmacSecret,
+  hmacKeyId,
 }: StartGuardianOptions): Promise<StartedGuardian> {
   if (hmacSecret !== undefined && Buffer.from(hmacSecret, "base64").length < 32) {
     throw new Error("hmacSecret must decode to at least 32 bytes");
   }
+  if ((hmacSecret === undefined) !== (hmacKeyId === undefined) || hmacKeyId === "") {
+    throw new Error("hmacSecret and a non-empty hmacKeyId must be given together");
+  }
+  const hmacKeys: HmacKeyring | undefined = hmacSecret === undefined || hmacKeyId === undefined
+    ? undefined
+    : new Map([[hmacKeyId, Buffer.from(hmacSecret, "base64")]]);
 
   // Construct the bridge once at boot, not per request -- and through the
   // shared recipe rather than assembling one here, so this Guardian and every
@@ -582,7 +597,7 @@ export async function startGuardian({
         replayProtectionStore,
         negotiatedSessions,
         registeredTools,
-        hmacSecret,
+        hmacKeys,
         traceExporter,
       );
       return Response.json(response);
@@ -656,7 +671,7 @@ async function handleAcsRequest(
   replayProtectionStore: ReplayProtectionStore,
   negotiatedSessions: NegotiatedSessions,
   registeredTools: ReadonlySet<string>,
-  hmacSecret: string | undefined,
+  hmacKeys: HmacKeyring | undefined,
   traceExporter: OtelTraceExporter,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const body = await readCappedBody(req);
@@ -708,7 +723,7 @@ async function handleAcsRequest(
       replayProtectionStore,
       negotiatedSessions,
       registeredTools,
-      hmacSecret,
+      hmacKeys,
     );
   } catch (error) {
     // The outer net. Deliberately a bare JSON-RPC error, not an ACS `deny`:
@@ -738,22 +753,21 @@ async function handleAcsRequest(
   // carry a valid signature, so its answer goes out unsigned, exactly like
   // any other unauthenticated request's.
   try {
-    if (
-      hmacSecret &&
-      extractMethod(raw) !== "system/ping" &&
-      requestHasValidSignature(raw, Buffer.from(hmacSecret, "base64"))
-    ) {
-      const sessionId = extractSessionId(raw);
-      if (sessionId) {
-        const sessionKey = deriveSessionKey(Buffer.from(hmacSecret, "base64"), sessionId);
-        const sig = signResponseHmacSha256(response as Record<string, unknown>, sessionKey);
-        const carrier = "result" in response ? response.result : response.error;
-        (carrier as Record<string, unknown>).signature = {
-          algorithm: "HMAC-SHA256",
-          value: sig,
-          key_id: sessionId,
-        };
-      }
+    // §10: a response is signed with the secret, and names the key_id, of
+    // the request it answers. A request naming an unknown key_id verifies
+    // under nothing, so its SIGNATURE_INVALID goes out unsigned.
+    const requestKey = hmacKeys && extractMethod(raw) !== "system/ping"
+      ? verifiedRequestKey(raw, hmacKeys)
+      : undefined;
+    if (requestKey) {
+      const sessionKey = deriveSessionKey(requestKey.secret, requestKey.sessionId);
+      const sig = signResponseHmacSha256(response as Record<string, unknown>, sessionKey);
+      const carrier = "result" in response ? response.result : response.error;
+      (carrier as Record<string, unknown>).signature = {
+        algorithm: "HMAC-SHA256",
+        value: sig,
+        key_id: requestKey.keyId,
+      };
     }
   } catch (error) {
     try {
@@ -897,7 +911,7 @@ async function dispatch(
   replayProtectionStore: ReplayProtectionStore,
   negotiatedSessions: NegotiatedSessions,
   registeredTools: ReadonlySet<string>,
-  hmacSecret: string | undefined,
+  hmacKeys: HmacKeyring | undefined,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const rpcId = extractId(raw);
 
@@ -956,7 +970,7 @@ async function dispatch(
   // deployment configures a key. The session id needed for HKDF is already
   // present in the handshake envelope; capability negotiation is not key
   // exchange, because ACS v0.1 provisions HMAC material out of band.
-  if (hmacSecret) {
+  if (hmacKeys) {
     if (!envelope.params.signature) {
       return errorResponse(rpcId, SIGNATURE_INVALID_CODE, "SIGNATURE_INVALID", {
         reason: "signature required but not present",
@@ -967,12 +981,15 @@ async function dispatch(
         reason: `unsupported algorithm: ${envelope.params.signature.algorithm}`,
       });
     }
-    if (envelope.params.signature.key_id !== envelope.params.metadata.session_id) {
+    // §10: key_id names a configured secret. An unknown one is rejected,
+    // never answered by falling back to another secret.
+    const secret = hmacKeys.get(envelope.params.signature.key_id);
+    if (secret === undefined) {
       return errorResponse(rpcId, SIGNATURE_INVALID_CODE, "SIGNATURE_INVALID", {
-        reason: "signature key_id does not match metadata.session_id",
+        reason: "signature key_id names no configured secret",
       });
     }
-    const sessionKey = deriveSessionKey(Buffer.from(hmacSecret, "base64"), envelope.params.metadata.session_id);
+    const sessionKey = deriveSessionKey(secret, envelope.params.metadata.session_id);
     const result = verifyHmacSha256(
       raw as Record<string, unknown>,
       envelope.params.signature.value,
@@ -1070,8 +1087,8 @@ async function dispatch(
     const env = onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure };
     const clientProfiles = new Set((clientHello?.profiles_supported as string[] | undefined) ?? []);
     const hello = buildServerHello(env, {
-      hmacEnabled: hmacSecret !== undefined,
-      profilesAccepted: hmacSecret !== undefined && clientProfiles.has("acs-core") ? ["acs-core"] : [],
+      hmacEnabled: hmacKeys !== undefined,
+      profilesAccepted: hmacKeys !== undefined && clientProfiles.has("acs-core") ? ["acs-core"] : [],
     });
 
     const clientMethods = Array.isArray(clientHello?.methods_implemented)
@@ -1378,48 +1395,40 @@ function extractMethod(raw: unknown): string | null {
   return null;
 }
 
-function extractSessionId(raw: unknown): string | null {
-  if (typeof raw === "object" && raw !== null && "params" in raw) {
-    const params = (raw as Record<string, unknown>).params;
-    if (typeof params === "object" && params !== null && "metadata" in params) {
-      const metadata = (params as Record<string, unknown>).metadata;
-      if (typeof metadata === "object" && metadata !== null && "session_id" in metadata) {
-        const sid = (metadata as Record<string, unknown>).session_id;
-        if (typeof sid === "string") return sid;
-      }
-    }
-  }
-  return null;
-}
-
-/** Whether an addressable response may be authenticated as belonging to an
- * authenticated request. Rechecked at the signing boundary so a top-level
- * validation failure cannot become a chosen-message signing oracle merely by
- * carrying a victim session id. */
-function requestHasValidSignature(raw: unknown, masterSecret: Buffer): boolean {
-  if (typeof raw !== "object" || raw === null || !("params" in raw)) return false;
+/** The configured key an authenticated request was signed under, or
+ * undefined when the request does not verify. Rechecked at the signing
+ * boundary so a top-level validation failure cannot become a chosen-message
+ * signing oracle merely by carrying a victim session id. */
+function verifiedRequestKey(
+  raw: unknown,
+  hmacKeys: HmacKeyring,
+): { keyId: string; secret: Buffer; sessionId: string } | undefined {
+  if (typeof raw !== "object" || raw === null || !("params" in raw)) return undefined;
   const params = (raw as Record<string, unknown>).params;
-  if (typeof params !== "object" || params === null) return false;
+  if (typeof params !== "object" || params === null) return undefined;
   const metadata = (params as Record<string, unknown>).metadata;
   const signature = (params as Record<string, unknown>).signature;
   if (typeof metadata !== "object" || metadata === null || typeof signature !== "object" || signature === null) {
-    return false;
+    return undefined;
   }
   const sessionId = (metadata as Record<string, unknown>).session_id;
   const fields = signature as Record<string, unknown>;
   if (
     typeof sessionId !== "string" ||
     fields.algorithm !== "HMAC-SHA256" ||
-    fields.key_id !== sessionId ||
+    typeof fields.key_id !== "string" ||
     typeof fields.value !== "string"
   ) {
-    return false;
+    return undefined;
   }
-  return verifyHmacSha256(
+  const secret = hmacKeys.get(fields.key_id);
+  if (secret === undefined) return undefined;
+  const valid = verifyHmacSha256(
     raw as Record<string, unknown>,
     fields.value,
-    deriveSessionKey(masterSecret, sessionId),
+    deriveSessionKey(secret, sessionId),
   ).valid;
+  return valid ? { keyId: fields.key_id, secret, sessionId } : undefined;
 }
 
 /** Whether the raw envelope names a `steps/*` method -- read before

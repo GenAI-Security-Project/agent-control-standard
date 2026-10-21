@@ -61,7 +61,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { GuardianClient, JsonRpcRequest } from "./guardian-client.ts";
-import { signEnvelope } from "./sign-envelope.ts";
+import { signEnvelope, type HmacKey } from "./sign-envelope.ts";
 import { isSessionConfig, type SessionConfig, type SessionConfigStore } from "./session-config.ts";
 
 const HANDSHAKE_METHOD = "handshake/hello";
@@ -77,10 +77,10 @@ export type HandshakeOptions = {
   agentId: string;
   /** This session's identity on the wire (ACS metadata.session_id, a uuid). */
   sessionId: string;
-  /** Shared HMAC input keying material. ACS-Core signs the ClientHello too:
-   * the handshake negotiates capabilities, not the already-provisioned
+  /** The deployment's HMAC key. ACS-Core signs the ClientHello too: the
+   * handshake negotiates capabilities, not the already-provisioned
    * deployment secret. */
-  hmacSecret?: Buffer;
+  hmacKey?: HmacKey;
   /** Bounds this handshake round trip (§6.4). There is no negotiated
    * `timeout_config` yet -- negotiating it is what this call is for -- so a
    * caller with nothing better should pass the ACS default
@@ -205,7 +205,7 @@ export async function negotiateSessionConfig(
   store: SessionConfigStore,
 ): Promise<SessionConfig> {
   const requestId = randomUUID();
-  const profilesSupported = options.hmacSecret ? ["acs-core"] : [];
+  const profilesSupported = options.hmacKey ? ["acs-core"] : [];
 
   const unsignedEnvelope = {
     jsonrpc: "2.0",
@@ -246,8 +246,8 @@ export async function negotiateSessionConfig(
       },
     },
   } satisfies JsonRpcRequest;
-  const envelope = options.hmacSecret
-    ? signEnvelope(unsignedEnvelope, options.hmacSecret)
+  const envelope = options.hmacKey
+    ? signEnvelope(unsignedEnvelope, options.hmacKey)
     : unsignedEnvelope;
 
   // `post`, not `requestDecision`: this method's result is a ServerHello, not
@@ -280,7 +280,7 @@ export async function negotiateSessionConfig(
     );
   }
 
-  if (options.hmacSecret) {
+  if (options.hmacKey) {
     const coreProfiles = serverHello.profiles_accepted;
     const signatureAlgorithms = serverHello.signature_algorithms_supported;
     if (!Array.isArray(coreProfiles) || !coreProfiles.includes("acs-core")) {

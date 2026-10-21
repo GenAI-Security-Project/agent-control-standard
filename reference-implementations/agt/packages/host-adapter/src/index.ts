@@ -140,6 +140,8 @@ export { isReservedSegment, findReservedKey } from "./reserved-segments.ts";
 export {
   signEnvelope,
   verifyResponseSignature,
+  hmacKeyFromEnv,
+  type HmacKey,
   type SignedAcsRequestEnvelope,
   type ResponseSignatureVerificationResult,
 } from "./sign-envelope.ts";
