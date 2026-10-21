@@ -118,6 +118,8 @@ import {
   auditUngovernedStep,
   createAuditSink,
   createGuardianClient,
+  hmacKeyFromEnv,
+  type HmacKey,
   createMemorySessionConfigStore,
   DEFAULT_TIMEOUT_MS,
   governStep,
@@ -1183,7 +1185,10 @@ type Deployment = {
   readonly guardian: GuardianClient;
   readonly audit: AuditSink;
   readonly store: SessionConfigStore;
-  readonly hmacSecret?: Buffer;
+  readonly hmacKey?: HmacKey;
+  /** Why the HMAC key could not be read, if it could not. Thrown from every
+   * hook rather than from the factory: see `AcsPlugin`. */
+  readonly hmacKeyError?: unknown;
 };
 
 /**
@@ -1270,6 +1275,8 @@ async function runExchange(
   input: { tool: string; sessionID: string; callID: string },
   assemble: (tool: string, sessionID: string) => AssembledStep,
 ): Promise<void> {
+  if (deployment.hmacKeyError !== undefined) throw deployment.hmacKeyError;
+
   // `tool` first, ahead of the `tools` check below: a list membership test
   // cannot tell a malformed `tool` from a genuinely out-of-scope one, so a
   // broken host contract for `tool` has to be refused here, the same
@@ -1324,7 +1331,7 @@ async function runExchange(
     agentId: deployment.hookmap.host,
     sessionId: toSessionUuid(input.sessionID),
     timeoutMs: DEFAULT_TIMEOUT_MS,
-    hmacSecret: deployment.hmacSecret,
+    hmacKey: deployment.hmacKey,
   };
   const session = await resolveSessionConfig(handshake, deployment.store);
   const renegotiate = () => negotiateSessionConfig(handshake, deployment.store);
@@ -1351,7 +1358,7 @@ async function runExchange(
     // the actual command through. Both of this shim's gates pass through
     // here, so this one line is both of its call sites.
     scopedTool: input.tool,
-    hmacSecret: deployment.hmacSecret,
+    hmacKey: deployment.hmacKey,
     renegotiate,
   });
 
@@ -1398,19 +1405,29 @@ export const AcsPlugin: Plugin = async () => {
   // Built once, here, and handed to `runExchange` on every call -- the four
   // this deployment runs on, in one object so the exchange both gates
   // share can take them as one argument.
-  const hmacSecret = process.env.ACS_HMAC_SECRET
-    ? Buffer.from(process.env.ACS_HMAC_SECRET, "base64")
-    : undefined;
+  // Not thrown here, unlike the hookmap checks above: an HMAC secret set
+  // without its ACS_HMAC_KEY_ID is the likeliest misconfiguration after an
+  // upgrade, and a factory throw would unload this plugin and leave every
+  // tool ungoverned. Thrown from each hook instead, so every tool call is
+  // refused until the deployment is fixed.
+  let hmacKey: HmacKey | undefined;
+  let hmacKeyError: unknown;
+  try {
+    hmacKey = hmacKeyFromEnv();
+  } catch (error) {
+    hmacKeyError = error;
+  }
   const deployment: Deployment = {
     hookmap,
-    guardian: createGuardianClient(process.env.ACS_GUARDIAN_URL ?? DEFAULT_GUARDIAN_URL, { hmacSecret }),
+    guardian: createGuardianClient(process.env.ACS_GUARDIAN_URL ?? DEFAULT_GUARDIAN_URL, { hmacKey }),
     audit: createAuditSink({ path: process.env.ACS_AUDIT_LOG ?? ".acs/audit.jsonl" }),
     // In memory: one plugin object per session, so the negotiated config
     // survives in a variable and the second hook of a session skips the
     // handshake round trip. One interface, two implementations, and the
     // adapter never learns which host is running.
     store: createMemorySessionConfigStore(),
-    hmacSecret,
+    hmacKey,
+    hmacKeyError,
   };
 
   // Named as a const rather than returned inline, so `Object.keys` below

@@ -660,6 +660,82 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 });
 
 describe("Guardian trace export wiring", () => {
+  // #229's own checks, end to end: each refusal is recorded apart, and the
+  // genuine request keeps the only span under its pair (issue #283).
+  it("records a replayed request apart, so the genuine call keeps the only span under its ids", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    const ids = { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
+    try {
+      await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1, ...ids }));
+      expect(((await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 2, ...ids }))).error as { code: number }).code).toBe(-32005);
+      await exporter.flush();
+
+      expect(spans().filter((span) => span.attributes["acs.request_id"] === ids.requestId)).toHaveLength(1);
+      const rejected = spans().filter((span) => span.name === "guardian.rejected_request");
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.attributes["guardian.rejected.reason"]).toBe("replay_detected");
+      expect(rejected[0]?.attributes["guardian.rejected.claimed_request_id"]).toBe(ids.requestId);
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("records a request whose signature fails apart, never under the ids it claims", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({
+      ...baseOptions,
+      hmacSecret: Buffer.alloc(32, 0x5a).toString("base64"),
+      hmacKeyId: "test-key",
+      traceExporter: exporter,
+    });
+    const requestId = crypto.randomUUID();
+    try {
+      const response = await fetch(guardian.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(toolCallEnvelope("ls -la", { id: 1, requestId })),
+      });
+      expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32004);
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(1);
+      expect(spans()[0]?.name).toBe("guardian.rejected_request");
+      expect(spans()[0]?.attributes["guardian.rejected.reason"]).toBe("signature_invalid");
+      expect(spans()[0]?.attributes["acs.request_id"]).toBeUndefined();
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("records a forged handshake/hello apart too, though a hello has no step span", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({
+      ...baseOptions,
+      hmacSecret: Buffer.alloc(32, 0x5a).toString("base64"),
+      hmacKeyId: "test-key",
+      traceExporter: exporter,
+    });
+    try {
+      const hello = makeEnvelope("handshake/hello", {
+        acs_versions_supported: ["0.1.0"],
+        methods_implemented: ["steps/toolCallRequest"],
+        transports_supported: ["http"],
+        provenance_producer: "none",
+        profiles_supported: ["acs-core"],
+      });
+      const response = await fetch(guardian.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(hello) });
+      expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32004);
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(1);
+      expect(spans()[0]?.name).toBe("guardian.rejected_request");
+      expect(spans()[0]?.attributes["guardian.rejected.reason"]).toBe("signature_invalid");
+    } finally {
+      await guardian.close();
+    }
+  });
+
   // One test below moves the working directory. A test that times out skips
   // its own finally, so the directory is put back here as well.
   const suiteCwd = process.cwd();

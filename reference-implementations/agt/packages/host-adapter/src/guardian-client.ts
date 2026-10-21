@@ -48,7 +48,7 @@
 import type { AcsRequestEnvelope } from "./build-envelope.ts";
 import type { AcsDecision } from "./decision-message.ts";
 import { isRefusalCode } from "./failure-kinds.ts";
-import { verifyResponseSignature } from "./sign-envelope.ts";
+import { verifyResponseSignature, type HmacKey } from "./sign-envelope.ts";
 
 /**
  * The minimal JSON-RPC 2.0 request shape this client sends -- the transport
@@ -207,9 +207,10 @@ export type GuardianClient = {
 };
 
 /** Binds a Guardian's ACS endpoint and returns the client role for it.
- * Supplying `hmacSecret` makes every non-ping result or error require a valid
- * per-session HMAC. The protocol's liveness ping is exempt in both directions. */
-export type GuardianClientOptions = { hmacSecret?: Buffer };
+ * Supplying `hmacKey` makes every non-ping result or error require a valid
+ * per-session HMAC under that key. The protocol's liveness ping is exempt in
+ * both directions. */
+export type GuardianClientOptions = { hmacKey?: HmacKey };
 
 export function createGuardianClient(url: string, clientOptions: GuardianClientOptions = {}): GuardianClient {
   async function post(envelope: JsonRpcRequest, options: PostOptions = {}): Promise<JsonRpcResponse> {
@@ -244,7 +245,7 @@ export function createGuardianClient(url: string, clientOptions: GuardianClientO
     // `system/ping` is the protocol's signature-exempt liveness channel.
     // Exempt only a request whose own method is ping; deciding from the
     // response shape would let a substituted ping bypass verification.
-    if (clientOptions.hmacSecret && envelope.method !== "system/ping") {
+    if (clientOptions.hmacKey && envelope.method !== "system/ping") {
       const metadata = envelope.params.metadata as Record<string, unknown> | undefined;
       const sessionId = metadata?.session_id;
       if (typeof sessionId !== "string") {
@@ -252,7 +253,7 @@ export function createGuardianClient(url: string, clientOptions: GuardianClientO
       }
       const verified = verifyResponseSignature(
         response as unknown as Record<string, unknown>,
-        clientOptions.hmacSecret,
+        clientOptions.hmacKey,
         sessionId,
       );
       // An unsigned refusal is still believed. The Guardian cannot sign some

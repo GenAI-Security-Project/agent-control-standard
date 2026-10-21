@@ -76,6 +76,12 @@ const decodedHmacSecret = Buffer.from(hmacSecret, "base64");
 if (decodedHmacSecret.length < 32) {
   throw new Error("ACS_HMAC_SECRET must decode to at least 32 bytes");
 }
+// §10: key_id is a label the deployment chooses for its secret, so there is
+// no default to fall back on.
+const hmacKeyId = process.env.ACS_HMAC_KEY_ID;
+if (!hmacKeyId) {
+  throw new Error("ACS_HMAC_KEY_ID is required: set it to the label that names ACS_HMAC_SECRET (Specification §10, key_id for HMAC)");
+}
 const guardian = await startGuardian({
   port,
   hostname,
@@ -85,6 +91,7 @@ const guardian = await startGuardian({
   otelTraceFile,
   otelTraceEndpoint,
   hmacSecret,
+  hmacKeyId,
 });
 console.log(`Guardian listening at ${guardian.url}`);
 console.log(`Envelope log: ${envelopeLogPath}`);

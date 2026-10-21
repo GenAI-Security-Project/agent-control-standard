@@ -208,6 +208,7 @@ describe("README.md's quickstart captures are what the processes actually print"
         ACS_GUARDIAN_PORT: "0",
         ACS_MANIFEST_PATH: MANIFEST,
         ACS_HMAC_SECRET: Buffer.alloc(32, 7).toString("base64"),
+        ACS_HMAC_KEY_ID: "test-key",
       },
       documented.split("\n").length,
     );
