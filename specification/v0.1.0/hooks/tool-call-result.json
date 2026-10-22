@@ -19,7 +19,7 @@
     "request_id_ref": {
       "type": "string",
       "format": "uuid",
-      "description": "Links to the originating toolCallRequest"
+      "description": "The request_id of the originating toolCallRequest. How a Guardian resolves it, and what it records when it cannot, is in hooks.md, toolCallResult."
     },
     "exit_status": {
       "type": "string",
