@@ -123,6 +123,9 @@ describe('AcsPlugin\'s "tool.execute.before" hook -- the request gate, against a
       "tool.execute.before",
       { tool: TOOL, session_id: sessionID, callID: "c1", args: { command } },
       hookmap,
+      // Its own request_id: the hook already sent the one derived from "c1",
+      // and the Guardian refuses a repeat as a replay (§10.3).
+      { pairWithHostCall: false },
     );
     const response = await createGuardianClient(guardian.url).post(envelope);
     expect(response.error).toBeUndefined();

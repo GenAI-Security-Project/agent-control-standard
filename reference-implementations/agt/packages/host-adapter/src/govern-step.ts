@@ -375,6 +375,12 @@ export function governsTool(hookmap: Hookmap, hookEventName: string, tool: strin
   return tools === undefined || tools.includes(tool);
 }
 
+/** JSON-RPC REPLAY_DETECTED (Specification §17.1), as the raw error object
+ * GuardianClient hands back when no decision arrived. */
+function isReplayDetected(failure: unknown): boolean {
+  return typeof failure === "object" && failure !== null && (failure as { code?: unknown }).code === -32005;
+}
+
 /**
  * Records a step this gate declined to govern -- the `tools` skip, in the
  * one log that outlives the process.
@@ -657,6 +663,7 @@ export async function governStep({
       sessionId,
       method: envelope?.method ?? null,
       rpcId: envelope?.id ?? null,
+      requestId: envelope?.params.request_id ?? null,
       audit,
       stage,
     });
@@ -790,6 +797,27 @@ export async function governStep({
     // and there are no arguments at that step). `modificationDocumentOf` reads which
     // from the envelope it just built.
     const modificationDocument = modificationDocumentOf(envelope);
+
+    // A request id derived from the host's call id (see buildEnvelope's
+    // `call_id`) repeats if the host ever asks twice about one call, and a
+    // Guardian enforcing Specification §10.3 answers the repeat with
+    // REPLAY_DETECTED. That code carries no decision, so under `proceed` it
+    // would run the step ungoverned. §17.1's recovery is to regenerate the id
+    // and retry, so this does that once, with a random id, inside whatever is
+    // left of the timeout. The result hook still names the derived id, which
+    // resolves against the first request the host sent for this call. Only
+    // the request gate derives its own id, so only it can hit this.
+    if (
+      answer.decisionArrived === false &&
+      isReplayDetected(answer.failure) &&
+      envelope.params.payload.outputs === undefined
+    ) {
+      const remainingMs = timeoutMs - (performance.now() - startedAt);
+      if (remainingMs > 0) {
+        envelope = signRequest(buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false }));
+        answer = await guardian.requestDecision(envelope, { timeoutMs: remainingMs });
+      }
+    }
     const elapsedMs = performance.now() - startedAt;
 
     if (answer.decisionArrived === false) {

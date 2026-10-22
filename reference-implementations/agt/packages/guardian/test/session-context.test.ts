@@ -6,6 +6,7 @@ import {
   createMemorySessionContextStore,
   loadSessionContext,
 } from "../src/session-context-store.ts";
+import { hashEntry } from "../src/session-context.ts";
 
 const at = (iso: string) => () => new Date(iso);
 const step = (n: number) => ({ method: "steps/toolCallRequest", request_id: `req-${n}`, tool_name: "Bash", request_hash: "a".repeat(64) });
@@ -312,3 +313,71 @@ describe("append pushes onto the chain rather than rebuilding it", () => {
     expect(large / small).toBeLessThan(3);
   });
 });
+
+describe("SessionContextStore.hasToolCallRequest", () => {
+  it("knows a session's toolCallRequest ids and no other step's", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", step(1));
+    appendContextEntry(store, "sess-a", { method: "steps/toolCallResult", request_id: "res-1", tool_name: "Bash", request_hash: "b".repeat(64) });
+    expect(store.hasToolCallRequest("sess-a", "req-1")).toBe(true);
+    expect(store.hasToolCallRequest("sess-a", "res-1")).toBe(false);
+  });
+
+  it("answers per session, because request_id is unique only within one", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", step(1));
+    expect(store.hasToolCallRequest("sess-b", "req-1")).toBe(false);
+  });
+
+  it("forgets an evicted session's requests along with its chain", () => {
+    const store = createMemorySessionContextStore({ maxSessions: 1, onEvict: () => {} });
+    appendContextEntry(store, "sess-a", step(1));
+    appendContextEntry(store, "sess-b", step(2));
+    expect(store.hasToolCallRequest("sess-a", "req-1")).toBe(false);
+  });
+
+  it("keeps the ids across the store's other writes to the session", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", step(1));
+    store.replaceIfcLabels("sess-a", ["confidential"]);
+    store.setIntent("sess-a", "list files");
+    expect(store.hasToolCallRequest("sess-a", "req-1")).toBe(true);
+  });
+});
+
+describe("SessionContext: findings on a chain entry", () => {
+  it("hashes an entry without findings exactly as before, so older chains still verify", () => {
+    const store = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
+    const plain = appendContextEntry(store, "sess-a", step(1));
+    const { hash, ...withoutHash } = plain;
+    expect(hashEntry(withoutHash)).toBe(hash);
+    expect("findings" in plain).toBe(false);
+  });
+
+  it("carries findings and the unresolved reference, and the hash covers both", () => {
+    const store = createMemorySessionContextStore({ now: at("2026-08-14T00:00:00.000Z") });
+    const entry = appendContextEntry(store, "sess-a", {
+      method: "steps/toolCallResult",
+      request_id: "res-1",
+      tool_name: "Bash",
+      request_hash: "b".repeat(64),
+      findings: ["request_id_ref_unresolved"],
+      request_id_ref: "req-9",
+    });
+    expect(entry.findings).toEqual(["request_id_ref_unresolved"]);
+    expect(entry.request_id_ref).toBe("req-9");
+    const { hash, ...withoutHash } = entry;
+    expect(hashEntry(withoutHash)).toBe(hash);
+    // Stripping the finding changes the digest, so a rewritten entry shows.
+    const { findings: _f, request_id_ref: _r, ...stripped } = withoutHash;
+    expect(hashEntry(stripped)).not.toBe(hash);
+  });
+
+  it("remembers every request id, on any method, for the duplicate check", () => {
+    const store = createMemorySessionContextStore();
+    appendContextEntry(store, "sess-a", { method: "steps/toolCallResult", request_id: "res-1", tool_name: "Bash", request_hash: "b".repeat(64) });
+    expect(store.hasRequestId("sess-a", "res-1")).toBe(true);
+    expect(store.hasToolCallRequest("sess-a", "res-1")).toBe(false);
+  });
+});
+

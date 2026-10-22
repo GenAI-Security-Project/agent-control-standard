@@ -56,6 +56,11 @@ export type SessionContextLogEntry = {
   request_id: string;
   tool_name: string;
   request_hash: string;
+  /** What the Guardian established about the step as it arrived, present
+   * only when it established something. */
+  findings?: string[];
+  /** The unresolved reference, present only with `request_id_ref_unresolved`. */
+  request_id_ref?: string;
 };
 
 export type TailSessionContextLogOptions = {
@@ -99,7 +104,10 @@ function isSessionContextLogEntryShape(value: unknown): value is SessionContextL
     typeof candidate.method === "string" &&
     typeof candidate.request_id === "string" &&
     typeof candidate.tool_name === "string" &&
-    typeof candidate.request_hash === "string"
+    typeof candidate.request_hash === "string" &&
+    (candidate.findings === undefined ||
+      (Array.isArray(candidate.findings) && candidate.findings.every((finding) => typeof finding === "string"))) &&
+    (candidate.request_id_ref === undefined || typeof candidate.request_id_ref === "string")
   );
 }
 
