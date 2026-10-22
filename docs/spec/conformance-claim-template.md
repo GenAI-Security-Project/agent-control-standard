@@ -30,10 +30,12 @@ cannot name anything else.
 This block is not optional and it is not a formality. ACS-Core's baseline integrity is
 HMAC-SHA256 with an HKDF-derived per-session key from deployment-provided key material. It is
 symmetric, so it authenticates possession of that key but cannot give the non-repudiation and
-external verifiability that ACS-Crypto adds. Two deployments can fill the rest of this page
-identically and truthfully while one operates both ends and the other governs a customer's
-agents behind an independently operated Guardian. The second is making a much weaker claim.
-Without this block the page does not show it.
+external verifiability that ACS-Crypto adds. Both ends hold the same key, so a signed decision
+is not attributable to the Guardian against the Observed Agent (§8.6).
+
+Two deployments can fill the rest of this page identically and truthfully while one operates
+both ends and the other governs a customer's agents behind an independently operated Guardian.
+The second is making a much weaker claim, and without this block the page does not show it.
 
 ## 3. Profile matrix
 
@@ -103,16 +105,15 @@ enforcement.
 | `on_decision_failure` posture as configured (§6.4) | `<proceed / deny>` |
 | Startup posture on handshake failure (§4.1) | `<proceed / refuse>` |
 | Sessions observed in this run | `<n>` |
-| Steps that proceeded without a decision | `<n>` |
+| Decision failures recorded, by failure class (`sessionEnd` `summary.decision_failures`) | `<class: n, ...>` |
 | Sessions started unguarded after handshake failure | `<n>` |
-| Where the fail-open audit events were recorded | `<Guardian audit / deployment audit log / not recorded>` |
+| Where the decision-failure audit events were recorded | `<Guardian audit / deployment audit log / not recorded>` |
 
 An action permitted by policy and an action permitted because no decision happened are
-indistinguishable on the wire and both look like conformance. Section 6.4 requires every step
-that proceeds without a decision to be recorded as an audit event. A session started unguarded
-has no Guardian to receive that event and belongs in the deployment's own log. `Issue #37`
-tracks the absence of a conformant shape for that MUST, so until it resolves, say here what was
-recorded and where.
+indistinguishable on the wire and both look like conformance. Section 6.4 requires every
+decision failure to be recorded as an audit event, fail-open or fail-closed, and `sessionEnd`
+reports the count for each failure class in `summary.decision_failures`. A session started
+unguarded has no Guardian to receive that event, so it belongs in the deployment's own log.
 
 ## 6. Limits of this claim
 
