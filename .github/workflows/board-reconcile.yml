@@ -90,7 +90,10 @@ jobs:
         id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ vars.BOARD_APP_ID }}
+          # client-id, not app-id: create-github-app-token deprecated app-id and
+          # annotates every run that uses it. Both identify the same App and neither is
+          # a secret, so this is a rename rather than a change of trust.
+          client-id: ${{ vars.BOARD_APP_CLIENT_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           # Without an owner the token is scoped to this repository alone and cannot
           # reach an organization-owned project. The App is installed with

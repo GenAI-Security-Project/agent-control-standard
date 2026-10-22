@@ -28,8 +28,13 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-/** Which side of the exchange one envelope-log line recorded. */
-export type EnvelopeLogDirection = "request" | "response";
+/**
+ * Which side of the exchange one envelope-log line recorded, or "finding" for
+ * a fact the Guardian established about a request that the spec requires it
+ * to record. A finding's `envelope` is the Guardian's own record, not a
+ * JSON-RPC object, and its `rpc_id` names the request it concerns.
+ */
+export type EnvelopeLogDirection = "request" | "response" | "finding";
 
 /**
  * One line of the envelope log, named for what was recorded rather than for
@@ -49,9 +54,14 @@ export type EnvelopeLogEntry = {
   envelope: unknown;
 };
 
-/** Where envelope-log lines go: the Guardian-side writer role. */
+/**
+ * Where envelope-log lines go: the Guardian-side writer role. `write` says
+ * whether the line landed. Most callers ignore that, because the log is
+ * observability. A caller recording a fact the spec requires it to keep
+ * reads it and puts the fact somewhere else when the log did not take it.
+ */
 export type EnvelopeLogSink = {
-  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null): void;
+  write(direction: EnvelopeLogDirection, envelope: unknown, method: string | null, rpcId?: string | number | null): boolean;
   readonly path: string | null;
 };
 
@@ -68,7 +78,9 @@ export type CreateEnvelopeLogSinkOptions = {
  * `EnvelopeLogSink` type, not a special case. */
 export const NULL_ENVELOPE_LOG_SINK: EnvelopeLogSink = {
   path: null,
-  write(): void {},
+  write(): boolean {
+    return false;
+  },
 };
 
 /** The JSON-RPC id, when it is a scalar. Both request and response envelopes
@@ -114,9 +126,9 @@ export function createEnvelopeLogSink({
 
   return {
     path,
-    write(direction, envelope, method): void {
+    write(direction, envelope, method, rpcId): boolean {
       if (disabled) {
-        return;
+        return false;
       }
       try {
         const entry: EnvelopeLogEntry = {
@@ -124,14 +136,18 @@ export function createEnvelopeLogSink({
           recorded_at: now().toISOString(),
           direction,
           method,
-          rpc_id: extractRpcId(envelope),
+          // A finding carries no JSON-RPC id of its own, so the caller names
+          // the request it concerns.
+          rpc_id: rpcId === undefined ? extractRpcId(envelope) : rpcId,
           envelope,
         };
         const line = `${JSON.stringify(entry)}\n`;
         appendFileSync(path, line);
         seq += 1;
+        return true;
       } catch (error) {
         fail(error);
+        return false;
       }
     },
   };

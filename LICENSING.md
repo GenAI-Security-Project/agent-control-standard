@@ -18,6 +18,7 @@ Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors.
 | `overrides/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `design/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `landing/assets/fonts/**` | SIL Open Font License 1.1 | `OFL-1.1` |
+| `CHANGELOG.md` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `reference-implementations/agt/policy/lib/**` | MIT License, Copyright (c) Microsoft Corporation | `MIT` |
 | Everything else, including any new top-level directory | Apache License 2.0 | `Apache-2.0` |
 

@@ -1,14 +1,13 @@
-# Opens the weekly promotion pull request from integration to main.
+# Opens the promotion pull request from integration to main, on dispatch only.
 #
-# A three-tier branching model pays its whole cost up front and returns nothing until a
-# promotion happens. Leaving promotion to memory is how integration accrues specification
-# work while main keeps publishing schemas nobody is reading.
+# The organization blocks Actions from opening pull requests, so the weekly schedule failed
+# every Thursday. The roadmap health issue now says when a promotion is pending and gives the
+# command that opens one, and a project lead opens and merges it (decision 15). The title and
+# body below are the ones that command uses, and tests/test_roadmap_sync_promotion.py keeps
+# the two the same.
 name: Open promotion pull request
 
 on:
-  schedule:
-    # 13:00 UTC Thursday, the morning of the weekly call.
-    - cron: "0 13 * * 4"
   workflow_dispatch:
 
 permissions: {}
@@ -23,6 +22,9 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Open the promotion pull request if integration is ahead

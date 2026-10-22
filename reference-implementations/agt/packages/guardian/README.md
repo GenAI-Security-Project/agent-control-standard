@@ -29,6 +29,8 @@ It constructs the AGT runtime once, at startup, against `policy/manifest.yaml`, 
 | `ACS_MANIFEST_PATH` | `policy/manifest.yaml` | The AGT manifest. `policy/manifest.drift.yaml` is the second manifest, used to reach the `warn` verdict |
 | `ACS_ENVELOPE_LOG` | `.acs/envelopes.jsonl` | Where every envelope is recorded |
 | `ACS_SESSION_CONTEXT_LOG` | `.acs/session-context.jsonl` | Where each session's hash chain is written |
+| `ACS_OTEL_FILE` | unset | Writes one OpenTelemetry span per decided step as OTLP/JSON, one export request per line. Unset means no trace export |
+| `ACS_OTEL_ENDPOINT` | unset | Sends the same spans to an OTLP/HTTP collector, for example `http://127.0.0.1:4318/v1/traces` |
 
 To see a decision without an agent client, pipe a hook payload into the Claude Code shim while the Guardian runs. The [tree README](../../README.md#drive-one-hook-by-hand) shows the command and its output.
 
@@ -36,15 +38,104 @@ To see a decision without an agent client, pipe a hook payload into the Claude C
 
 1. The raw envelope is appended to the envelope log, before anything else.
 2. The envelope is validated against `request-envelope.json`. A `steps/toolCallRequest` or `steps/toolCallResult` is also validated against its own payload schema. An invalid envelope on a `steps/*` method is answered with an honoured `deny`, not a bare error, so the host has a decision to act on.
-3. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
-4. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
-5. The verdict is mapped to an ACS decision with the tables in `mapping.yaml`. A `transform` becomes a `modify` whose modification differs by gate: a parameter override at the request gate, a redaction on the result payload at the result gate.
-6. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
-7. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
+3. A `steps/toolCallResult` whose `request_id_ref` names no `toolCallRequest` in the session gets the finding `request_id_ref_unresolved` on its own hash-chain entry (step 8), because `hooks.md` requires the Guardian to record a reference it cannot resolve. A readable copy goes to the envelope log as a `finding` line, or to stderr as an `acs-finding` line when there is no envelope log or it has disabled itself. The decision is left to policy. Both shipped hookmaps name the host's per-call id as `call_id` (`tool_use_id` for Claude Code, `callID` for OpenCode). The shim derives the request's `request_id` from it and sends the same value as the result's `request_id_ref`. A host that leaves the id out gets a random `request_id` and no reference. Results are governed only for the tools the hookmaps name, and Claude Code reports a failed call through `PostToolUseFailure`, which isn't mapped, so a failed call sends no result.
+4. A step whose `request_id` an earlier step in the session already carried gets a `request_id_duplicate` finding the same way, and is still decided.
+5. The AGT intervention point for the method is resolved from `mapping.yaml`, and so is the argument the policy target is read from for the tool the payload names.
+6. The AGT snapshot is assembled, one shape per gate, and evaluated through the bridge.
+7. The verdict is mapped to an ACS decision with the tables in `mapping.yaml`. A `transform` becomes a `modify` whose modification differs by gate: a parameter override at the request gate, a redaction on the result payload at the result gate.
+8. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
+9. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
 
 `handshake/hello` is answered with a constant ServerHello that names exactly the methods this Guardian dispatches: `steps/toolCallRequest` and `steps/toolCallResult`. The Guardian does not read the ClientHello. Any other method is answered with a JSON-RPC error carrying `METHOD_NOT_DISPATCHED_CODE`, which the conformance harness reads back to confirm the ServerHello tells the truth.
 
 Every throw on the request path is caught. Nothing escapes the fetch handler, because an unhandled rejection would produce an HTML error page, the host's client would fail to parse it, and Claude Code would read the failed hook as "never fired" and proceed ungoverned.
+
+## Export traces
+
+Set `ACS_OTEL_FILE`, `ACS_OTEL_ENDPOINT`, or both. With neither set, no exporter exists and the Guardian runs exactly as before. This is an exporter for the two live methods, not an ACS-Trace conformance claim. To go from a fresh clone to a trace file of your own, follow [Produce a trace](../../README.md#produce-a-trace) in the tree README.
+
+```bash
+ACS_OTEL_FILE=.acs/otel-traces.jsonl bun run guardian
+```
+
+Each decided step becomes one span, named by [`trace/otel-mapping.json`](../../../../specification/v0.1.0/trace/otel-mapping.json): `gen_ai.tool.call` for `steps/toolCallRequest` and `gen_ai.tool.result` for `steps/toolCallResult`. The span opens when the request is recorded and closes when the response is. It carries each attribute the mapping lists for it when the envelope supplies a value. An attribute the envelope omits, such as `acs.capability`, is absent from the span.
+
+Every span also carries `acs.session.id`, and `acs.request_id` whenever the envelope has one, so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span carries `acs.provenance.origin` as an array, one element per Provenance object in wire order. `acs.provenance.source_id` is the matching array, with `""` where an object has no `source_id`, and it is left out when no object has one. Both stop at 64 objects. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
+
+Every string attribute is cut at 4096 characters, a long `acs.reasoning` included, so one large request cannot grow the export queue without bound. The sampler and span limits are set in code, so `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*` and `OTEL_BSP_*` variables in the environment do not change what is exported, and the endpoint output is never compressed. `OTEL_EXPORTER_OTLP_*HEADERS` still add headers to the endpoint's requests, and a loopback endpoint is added to `NO_PROXY` so an `HTTP_PROXY` cannot route it.
+
+The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian sends it once PR #229 is merged.
+
+This Guardian does not send `chain_hash`, `cited_provenance_ids`, or `policy_version` on its responses yet. `acs.chain_hash` and `acs.cited_provenance_ids` are absent from its spans, and `acs.policy.versions` carries `""` for each policy reference. The three policy arrays always have the same length as `policy_references`, with `""` where a reference has no value. `handshake/hello`, methods this Guardian does not dispatch, and unparseable bodies produce no span.
+
+A step that got no decision is recorded as an `acs.decision.failure` event on the same span, with `acs.failure.class`, `acs.failure.posture` and `acs.failure.reported_by`, plus the error code, the timeout, the elapsed time and the request size when known. The Guardian emits it for an error it answered instead of a decision, for a decision it finished after the negotiated timeout, and for a step still open when it shut down. It carries the error code but never the error text, because that text can quote the request. A replay rejection (`-32005`) gets no event, because its pair belongs to the earlier request. The converter below produces the same event, reported by the observed agent, from the host adapter's audit log.
+
+The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian` (the converter below uses `acs-reference-audit-converter`, and both are labels, not attribution). Spans are batched and flushed when the Guardian closes on SIGINT or SIGTERM. A SIGKILL loses the last batch, and so does an output that has not finished three seconds into shutdown: the Guardian reports it on stderr and exits instead of waiting. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
+
+Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged.
+
+The diagram shows the exporter's inside. Look for the split after a span ends: each output gets its own batch processor and its own failure switch, so nothing on one side can stop the other.
+
+```mermaid
+flowchart LR
+    start["Request recorded:<br/>span starts"] --> finish["Response recorded:<br/>event added, span ends"]
+    finish --> bspfile["BatchSpanProcessor<br/>for the file"]
+    finish --> bspend["BatchSpanProcessor<br/>for the endpoint"]
+    bspfile --> outfile["File output"]
+    bspend --> outend["Endpoint output"]
+    outfile --> file["ACS_OTEL_FILE"]
+    outend --> collector["ACS_OTEL_ENDPOINT"]
+    outfile -.->|"first failure"| off["Output disabled,<br/>one stderr line"]
+    outend -.->|"first failure"| off
+    stop["SIGINT or SIGTERM"] -->|"close open spans, flush, 3 s limit"| bspfile
+    stop -->|"close open spans, flush, 3 s limit"| bspend
+```
+
+Each processor sends a batch about every five seconds. At shutdown, the exporter first ends any span still open with an `acs.decision.failure` event, then flushes both processors. An output that hasn't finished within three seconds is reported on stderr and its unexported spans are dropped.
+
+Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too ([issue #71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
+
+### Convert the host audit log
+
+The failures only the host sees, a Guardian it could not reach or one that answered too late, are in the host adapter's audit log, not in the Guardian's file. `audit-to-otlp.ts` turns that log into the same OTLP/JSON shape: one span per posture entry, with an `acs.decision.failure` event whose `acs.failure.reported_by` is `observed_agent`. Each span carries the same `acs.session.id` and `acs.request_id` as the Guardian's span for that request, so the two files join. It does not carry `gen_ai.tool.name`, because the audit log does not record the tool.
+
+```bash
+bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.jsonl
+```
+
+Run it after the agent session has ended, into a file that does not exist when it starts. It refuses an existing output path, so it doesn't append into the audit log, the Guardian's trace file, or its own earlier run, and a wrong audit path or mapping leaves no file behind.
+
+`acs.failure.posture` is the deployment's posture, not what became of the step. A refused request shows `fail_open` under a `proceed` deployment even though the host blocked it. The detail sentence says so, and the error code is in `acs.failure.error_code`. The detail is always a sentence the converter writes, never the host's message, which quotes the Guardian's error text.
+
+Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked about, which the failure classes do not cover. Also skipped, and counted on stdout:
+
+- entries whose method has no `step_to_span` entry;
+- entries with no method, by failure kind, because the host never built a request for them;
+- replay rejections;
+- lines it cannot read.
+
+It prints how many spans reached the file and exits non-zero when that is fewer than it built.
+
+### Sample trace
+
+[`samples/trace/acs-trace-sample.jsonl`](../../samples/trace/acs-trace-sample.jsonl) is what this export looks like, so you can read it without running the Guardian. It holds six steps: an allowed tool call and its result, linked by `acs.request_id_ref`, a denied call carrying reasoning, reason codes, policy references and provenance, a call the Guardian answered with an error, a decision that finished after the timeout, and a step the host could not deliver, converted from its audit log. The decisions come from the stock policy, and the one late decision is delayed on purpose. Every value in it is synthetic.
+
+```bash
+bun run sample:trace
+```
+
+That command regenerates it. `test/sample-trace.test.ts` checks the sample against `otel-mapping.json` and fails when the exporter's output no longer matches it, so a change to the exporter or the mapping comes with a regenerated sample. The converted span has no `gen_ai.tool.name`, because the audit log does not record the tool (issue #274). Like the exporter, the sample covers two hook methods and is not an ACS-Trace conformance claim.
+
+### Troubleshooting
+
+These are the messages export can print, with what each one means. None of them changes a decision.
+
+- `otel trace export to <path or URL> disabled after failure: <reason>` on the Guardian's stderr. That output failed its first write or send and is off until the Guardian restarts. The other output keeps running. For an endpoint, the usual cause is a collector that wasn't running yet or was restarted: stop the Guardian, start the collector, then start the Guardian again.
+- `otel trace exporter disabled after failure: <reason>`, with no output named. The exporter as a whole stopped, for example because `otel-mapping.json` didn't load. No spans reach either output for the rest of the process.
+- `otel trace exporter shutdown disabled after failure: did not finish within 3000 ms; unexported spans were dropped`. An output stalled at shutdown. The spans still in its queue are lost.
+- `otel trace export to <URL>: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt <host>, so on some Bun versions these spans go through the proxy.` at startup. Your shell has `HTTP_PROXY` set, and the loopback host isn't in the proxy exemption list Bun reads. The Guardian adds the host itself, which takes effect on Bun 1.3.14 and later. On older versions, start the Guardian with the host in both `NO_PROXY` and `no_proxy`, as step 1 of [Produce a trace](../../README.md#produce-a-trace) does.
+- `refusing to write <path>: it already exists, perhaps from an earlier or failed run.` from the converter, which then exits with status 1. It never appends. Delete the old output or name a new file.
+- An empty `.acs/otel-collector-traces.jsonl` in the first five seconds after you send a step. That's normal: spans leave in batches about every five seconds, and stopping the Guardian with Ctrl-C sends the last one. If the file still hasn't appeared after about ten seconds, the collector isn't running [`otel-collector.yaml`](../../otel-collector.yaml), or the Guardian printed the `disabled after failure` line above.
 
 ## Use it in-process
 
@@ -58,7 +149,9 @@ const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.y
 await guardian.close();
 ```
 
-`StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog` and `onDecisionFailure`, which mirror the environment variables above, and four options for tests: `mappingPath`, `annotator`, `bridge` and `sessionContextStore`. Each is documented where it is declared, in `src/server.ts`.
+`StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog`, `otelTraceFile`, `otelTraceEndpoint` and `onDecisionFailure`, which mirror the environment variables above, and five options for tests: `mappingPath`, `annotator`, `bridge`, `sessionContextStore` and `traceExporter`. Each is documented where it is declared, in `src/server.ts`.
+
+`otelTraceEndpoint` leaves the proxy variables alone. `src/main.ts` prints the proxy warning and adds a loopback endpoint's host to whichever of `NO_PROXY` and `no_proxy` is set, or to both when neither is. An embedder that wants the same imports `loopbackProxyWarning` and `keepLoopbackOffProxy` from `guardian` and calls each with `(endpoint, process.env)` before it starts the Guardian.
 
 The package has two entry points. `guardian` exports the governance verbs listed in `src/index.ts`. `guardian/deployment` exports `createDeploymentBridge`, the one function that builds the deployment's bridge with the egress annotator wired in. The conformance harness imports the second so it measures the bridge the Guardian ships, not a replica.
 
@@ -78,6 +171,11 @@ The package has two entry points. `guardian` exports the governance verbs listed
 | `src/deny-on-invalid-envelope.ts` | Turns a schema failure on a `steps/*` method into an honoured `deny` |
 | `src/session-context-store.ts`, `src/session-context.ts`, `src/ifc-labels.ts` | The per-session hash chain, provenance, and information-flow labels |
 | `src/envelope-log-sink.ts` | The envelope log writer |
+| `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter, assembled from the three files below |
+| `src/otel-mapping.ts` | Reads `otel-mapping.json`, and says which envelope field feeds each span attribute |
+| `src/otlp-file-exporter.ts` | The OTLP/JSON file writer |
+| `src/loopback-proxy.ts` | Keeps a loopback trace endpoint off an HTTP proxy, applied by `src/main.ts` |
+| `src/audit-to-otlp.ts` | Converts the host adapter's audit log into the same OTLP/JSON file |
 | `src/acs-result.ts` | The decision result type |
 
 ## The wire is not secured
@@ -90,4 +188,4 @@ The endpoint has no authentication, no origin check and no request signing. It b
 bun test packages/guardian
 ```
 
-Twelve files. Most start a real Guardian on port 0 and drive real envelopes through the pinned policy bundle. One test copies `src/` one directory deeper into a fixed scratch directory, so the relative schema path resolves to nothing. It proves that a missing schema directory becomes a recorded JSON-RPC error and never an HTML page. The scratch directories are gitignored and removed in a `finally`.
+Thirteen files. Most start a real Guardian on port 0 and drive real envelopes through the pinned policy bundle. One test copies `src/` one directory deeper into a fixed scratch directory, so the relative schema path resolves to nothing. It proves that a missing schema directory becomes a recorded JSON-RPC error and never an HTML page. The scratch directories are gitignored and removed in a `finally`.

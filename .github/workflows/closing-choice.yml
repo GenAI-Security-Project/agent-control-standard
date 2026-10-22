@@ -1,0 +1,54 @@
+# Makes every pull request into integration say, for each issue it names, whether it closes
+# the issue or contributes to it. Early feedback for contributors: the roadmap's delivery
+# verification is what stops a false claim, so this catches ordinary mistakes and does not
+# try to be airtight.
+#
+# pull_request_target is used so a fork pull request gets the same answer. That trigger runs
+# with the base repository's token, so this job checks out main, never the pull request's
+# head, holds contents: read only, and passes the title and body to the script through env
+# as data. The script prints fixed text and issue numbers only.
+#
+# The rule binds only from the date in the CLOSING_CHOICE_SINCE repository variable.
+# Unsetting it is the kill switch. tests/test_closing_choice_workflow.py pins this file.
+name: Closing choice
+
+on:
+  # zizmor flags every pull_request_target. The paragraph above is why this one is safe.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, edited, synchronize, reopened]
+    branches: [integration]
+
+permissions: {}
+
+concurrency:
+  group: closing-choice-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  closing-choice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Check the closing choice for each referenced issue
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+          CLOSING_CHOICE_SINCE: ${{ vars.CLOSING_CHOICE_SINCE }}
+        # main lacks the script until the promotion that carries it, so until then the
+        # job passes with a notice rather than failing every pull request.
+        run: |
+          if [ -f tools/closing_choice.py ]; then
+            python3 -I -S tools/closing_choice.py
+          else
+            echo "::notice::main does not carry the closing-choice check yet."
+          fi
