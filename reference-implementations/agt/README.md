@@ -312,7 +312,7 @@ Verified on macOS (arm64): natively with otelcol-contrib 0.162.0, and with the D
 
 **Run it again.** Every output here except the converter's appends, so a second run on the same `.acs` doubles every count, and the converter refuses to run at all. Stop the Guardian and the collector first, with Ctrl-C or `docker stop acs-otelcol`. A process that is still running keeps writing into the deleted file, and its spans are lost without an error. Then delete it: `rm -rf .acs && mkdir -p .acs && chmod 700 .acs`.
 
-**What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability` and `acs.request_id_ref`, because the shim doesn't send them yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)). The committed sample drives the Guardian directly, so it has both. Spans also lack `acs.evaluator` until the Guardian sends `metadata.evaluator` (PR #229).
+**What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability`, because the shim doesn't send it yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)). They carry `acs.request_id_ref` on a result when the host supplied its call id. The committed sample drives the Guardian directly, so it carries `acs.capability`, and `acs.request_id_ref` on its results. Spans also lack `acs.evaluator` until the Guardian sends `metadata.evaluator` (PR #229).
 
 The trace files, the audit log and the collector's port can be written by any process running as you, the observed agent included, and in a container by other containers on the same Docker network, so the output isn't tamper-evident. `service.name` (`acs-reference-guardian`, `acs-reference-audit-converter`) is a label each writer sets for itself, not authentication, and loopback isn't authentication either. These labels belong to the reference implementation, not to the ACS specification.
 
@@ -420,7 +420,7 @@ The `.acs/` directory holds four kinds of local file. None is ever committed.
 
 | File | Written by | Holds |
 |---|---|---|
-| `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation |
+| `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation, plus a `finding` line for a fact the spec requires the Guardian to record, such as a `request_id_ref` it cannot resolve |
 | `session-context.jsonl` | Guardian | One hash-chain entry per governed step |
 | `audit.jsonl` | Host shim | Every fail-open proceed and every posture-driven block |
 | `sessions/<session_id>.json` | Host shim, Claude Code only | The negotiated ServerHello, so the next hook subprocess finds it |
@@ -492,7 +492,7 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 
 These are known limits of the tree as it stands. None is fixed.
 
-- **Memory and disk grow without bound.** The Guardian's session store never evicts a session. The envelope log, the audit log and the session-context log have no rotation and no size cap. A long-lived Guardian grows until something else stops it.
+- **Memory and disk grow without bound.** The Guardian's session store keeps at most 1024 sessions and evicts the least recently written one, but it bounds sessions, not the steps within one. The envelope log, the audit log and the session-context log have no rotation and no size cap. A long-lived Guardian grows until something else stops it.
 - **Log writes sit on the decision path.** The Guardian writes two synchronous file appends per request in a single-threaded server. A slow disk blocks every in-flight decision.
 - **The wire is unauthenticated.** See [What this project is, and is not](#what-this-project-is-and-is-not). Loopback by default is the only protection.
 - **The egress gate has three measured soft spots.** A shell command whose destination the extractor cannot parse falls through to `allow`, not `deny`. With the shipped allowlist, any command whose text contains an off-list URL is denied, whether or not it reaches that URL. A `WebFetch` URL reaches AGT's gate with no parsing, so four userinfo-style URL shapes pass on the fetch route and fail on the shell route. Closing the last one means editing a `.rego` file, which this project does not do.
@@ -522,6 +522,11 @@ These findings are open on this tree. They are recorded here so a reader does no
 - A `steps/skillLoad` hook that drives AGT's `content_hash` gate is planned, not built. No code for it exists in the tree, and the ServerHello does not name it.
 - Two AGT intervention points, `pre_model_call` and `post_model_call`, have no ACS v0.1.0 method. Whether this project proposes `steps/modelCall` for ACS v0.2 is open.
 - Whether to report a fail-open to AGT upstream is open: a `./`-prefixed `bundle:` path silently disables all policy and returns `allow`. This tree throws on that path as a backstop.
+- A finding is recorded on the step's own entry in the hash chain (`session-context.jsonl`), as `findings` plus the unresolved `request_id_ref`, and the entry's hash covers both. Entries with no findings hash exactly as before. A readable copy goes to the envelope log, or, when there is no envelope log or it has disabled itself, to stderr as `acs-finding ` followed by one JSON object with the same fields plus `recorded_at`, `method` and `rpc_id`. Findings don't reach the OTel export. The chain is tamper-evident only as far as §8.6 allows, since this Guardian publishes no chain head.
+- A reference fails to resolve for three ordinary reasons as well as a suspicious one: the request was recorded before a Guardian restart, its session was evicted, or the request never reached this Guardian and the host proceeded under its posture. The finding doesn't say which. Run one Guardian per session, or route by session, or every result that lands on a different Guardian is a finding.
+- A reference to a request the Guardian denied counts as resolved, so a result for a denied tool call gets no finding.
+- Specification §10.3 says a Guardian MUST reject a duplicate `request_id` in a session. This Guardian records a `request_id_duplicate` finding instead, for a `steps/toolCallRequest` or `steps/toolCallResult` that reuses an id any earlier step in the session carried, and still decides the step. It sees only the two methods it dispatches.
+- The shim derives a request's `request_id` from the host's call id, so asking twice about one call repeats the id. If a Guardian answers that with `REPLAY_DETECTED`, the shim retries that request once with a random id. The result hook runs on its own and still names the derived id, so the result resolves against the first request the host sent for that call. The JSON-RPC `id` stays random either way, so the envelope log never pairs two requests under one id, and the host audit log records the `request_id` separately as `request_id`.
 - Six required Trace-pillar attributes exist on the wire but are optional there. Requiring them is an ask for v0.2. The Guardian also leaves `AcsResult.metadata` empty, which it could fill today.
 
 ## Verify
