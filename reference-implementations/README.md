@@ -38,7 +38,7 @@ Policy evaluation is expected to use AGT's policy runtime built from the AGT com
 
 Reimplementing the runtime's behavior, or evaluating its policy bundle directly, is not an acceptable substitute. AGT's Go module, `agent-governance-golang`, is a different policy engine and does not qualify.
 
-An implementation may also ship another evaluator, under three conditions. AGT is the default, and the implementation's tests and any conformance claim run against AGT. The other evaluator is never used as an automatic fallback when AGT fails to load. Every decision it makes names it in `metadata.evaluator`, so a trace shows which evaluator decided.
+AGT's runtime is the only evaluator a maintained implementation ships, so every port runs the same policy engine and is reviewed against one rule. A test may compare AGT's decisions with another evaluator's, for example to catch drift, as long as that evaluator never answers a request.
 
 #### Architectural boundaries
 
@@ -84,7 +84,7 @@ Reading a request and evaluating policy are expected to be bounded by configurab
 
 #### Bounded logging
 
-Each retained diagnostic log is expected to have a configurable size cap with a finite documented default, and reaching it never blocks a decision. The cap does not apply to the audit events §6.4, §6.5 and §9.2 require, or to the §8 session chain. When audit storage is full, the Guardian answers `deny` rather than drop an audit record.
+Every log, the audit log included, is expected to have a configurable size cap with a finite documented default, and reaching the cap never blocks a decision. A full log rotates, and the rotated file can move to an archive such as object storage or a telemetry backend. A diagnostic log may drop its oldest entries. The audit events §6.4, §6.5 and §9.2 require, and the §8 session chain, are never dropped: if the Guardian cannot rotate or archive them, it answers `deny` rather than lose an audit record.
 
 **Not met yet** by the TypeScript Guardian (issue #312).
 
