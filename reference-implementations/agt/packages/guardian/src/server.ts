@@ -96,6 +96,7 @@ import { checkResponse } from "./check-response.ts";
 import { buildServerHello, type ServerHello } from "./handshake.ts";
 import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
 import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
+import type { RejectionReason } from "./otel-mapping.ts";
 import {
   appendContextEntry,
   createMemorySessionContextStore,
@@ -571,13 +572,30 @@ async function handleAcsRequest(
 
   // Recorded before validation, so an envelope that fails the schema is
   // visible to the Inspector rather than invisible.
+  const receivedAt = performance.now();
   const method = extractMethod(raw);
   envelopeLog.write("request", raw, method);
-  const stepSpan = traceExporter.start(raw, method, Buffer.byteLength(body.text));
+  // Validated once, here, before the span opens, because the span has to
+  // know whether the Guardian trusts this request: Trace Events forbids an
+  // acs.decision under the ids of a request rejected before it was trusted.
+  // A rejected request is recorded apart, as a rejected-request span (issue
+  // #283). dispatch acts on the same result rather than validating again. A
+  // signature, replay or timestamp rejection answered from inside dispatch
+  // is caught by its error code when the span ends (PRE_TRUST_REJECTION_CODES).
+  const validation = validateForDispatch(raw);
+  const payloadBytes = Buffer.byteLength(body.text);
+  const stepSpan = traceExporter.start(
+    raw,
+    method,
+    validation.kind === "valid"
+      ? { trusted: true, payloadBytes, receivedAt }
+      : { trusted: false, reason: validation.kind === "invalid" ? "envelope_invalid" : "guardian_fault", payloadBytes, receivedAt },
+  );
 
   let response: JsonRpcSuccess | JsonRpcFailure;
+  let rejection: RejectionReason | undefined;
   try {
-    response = await dispatch(raw, bridge, mapping, onDecisionFailure, sessionContextStore, envelopeLog);
+    ({ response, rejection } = await dispatch(raw, validation, bridge, mapping, onDecisionFailure, sessionContextStore, envelopeLog));
   } catch (error) {
     // The outer net. Deliberately a bare JSON-RPC error, not an ACS `deny`:
     // this route is `dispatch` rethrowing entirely past denyOnInvalidEnvelope
@@ -619,7 +637,7 @@ async function handleAcsRequest(
   }
 
   envelopeLog.write("response", response, method);
-  traceExporter.end(stepSpan, response);
+  traceExporter.end(stepSpan, response, rejection);
   return response;
 }
 
@@ -784,6 +802,26 @@ function examineStepSafely(
 }
 
 /**
+ * validateEnvelope's outcome, held rather than thrown so handleAcsRequest can
+ * read it before the trace span opens and dispatch can act on it after.
+ * `failed` is anything validateEnvelope threw that is not a validation
+ * verdict (a missing schema directory, say). dispatch rethrows it, so it
+ * still reaches the outer net exactly as it did when dispatch validated.
+ */
+type Validation =
+  | { kind: "valid"; envelope: AcsRequestEnvelope }
+  | { kind: "invalid"; error: EnvelopeValidationError }
+  | { kind: "failed"; error: unknown };
+
+function validateForDispatch(raw: unknown): Validation {
+  try {
+    return { kind: "valid", envelope: validateEnvelope(raw) };
+  } catch (error) {
+    return error instanceof EnvelopeValidationError ? { kind: "invalid", error } : { kind: "failed", error };
+  }
+}
+
+/**
  * Writes a finding to the envelope log, or, when no envelope log was
  * configured or it disabled itself after a write error, to stderr as
  * `acs-finding ` followed by one JSON object carrying the same fields the log
@@ -817,45 +855,53 @@ function reportCheckFailure(check: string, error: unknown): void {
   }
 }
 
+/**
+ * What dispatch answered, and whether it rejected the request before trusting
+ * it. `rejection` is how a check inside dispatch tells the trace exporter so,
+ * whatever the response looks like: a signature, replay or timestamp check
+ * (PR #229) answering with an error, or with an honoured deny the way an
+ * invalid envelope is answered. The exporter then records the request apart
+ * from the steps instead of under the ids it claimed.
+ */
+type Dispatched = { response: JsonRpcSuccess | JsonRpcFailure; rejection?: RejectionReason };
+
 async function dispatch(
   raw: unknown,
+  validation: Validation,
   bridge: PolicyBridge<GuardianSnapshot>,
   mapping: Mapping,
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
   envelopeLog: EnvelopeLogSink,
-): Promise<JsonRpcSuccess | JsonRpcFailure> {
+): Promise<Dispatched> {
   const rpcId = extractId(raw);
 
-  let envelope: AcsRequestEnvelope;
-  try {
-    // validateEnvelope checks the general request-envelope.json shape for
-    // every method, plus -- only for steps/toolCallRequest -- the
-    // hook-specific payload schema. Failure is a THROWN typed error, never
-    // a decision itself -- validateEnvelope stays total to its own contract
-    // (see its doc comment) -- but the catch below (denyOnInvalidEnvelope)
-    // turns a steps/* failure into an honoured ACS `deny` decision rather
-    // than a bare JSON-RPC error, since there is an identifiable step to
-    // answer for. A handshake failure and an undispatched method are not
-    // steps/*, so they always fall through to the JSON-RPC error unchanged.
-    envelope = validateEnvelope(raw);
-  } catch (error) {
-    if (error instanceof EnvelopeValidationError) {
-      if (isStepMethod(raw)) {
-        const denial = denyOnInvalidEnvelope(raw, { reasonCode: "envelope_invalid", message: error.message });
-        const decisionResponse = asDecisionResponse(rpcId, denial);
-        if (decisionResponse) {
-          return decisionResponse;
-        }
-      }
-      return errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { pointer: error.pointer });
-    }
-    throw error;
+  // validateEnvelope checked the general request-envelope.json shape for
+  // every method, plus -- only for steps/toolCallRequest -- the hook-specific
+  // payload schema (validateForDispatch, above). An invalid steps/* envelope
+  // becomes an honoured ACS `deny` decision rather than a bare JSON-RPC error,
+  // since there is an identifiable step to answer for. A handshake failure
+  // and an undispatched method are not steps/*, so they always fall through
+  // to the JSON-RPC error unchanged.
+  if (validation.kind === "failed") {
+    throw validation.error;
   }
+  if (validation.kind === "invalid") {
+    const { error } = validation;
+    if (isStepMethod(raw)) {
+      const denial = denyOnInvalidEnvelope(raw, { reasonCode: "envelope_invalid", message: error.message });
+      const decisionResponse = asDecisionResponse(rpcId, denial);
+      if (decisionResponse) {
+        return { response: decisionResponse, rejection: "envelope_invalid" };
+      }
+    }
+    return { response: errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { pointer: error.pointer }), rejection: "envelope_invalid" };
+  }
+  const envelope = validation.envelope;
 
   if (envelope.method === HANDSHAKE_METHOD) {
     const env = onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure };
-    return successResponse(envelope.id, buildServerHello(env));
+    return { response: successResponse(envelope.id, buildServerHello(env)) };
   }
 
   // Two gated branches, one per ACS method this Guardian assembles a snapshot
@@ -882,22 +928,22 @@ async function dispatch(
     // Examined before evaluateStep appends this step, so a request id is in
     // the session already only if an earlier step carried it.
     const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, findings);
+    return { response: await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
   }
 
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
     const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings);
+    return { response: await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
   }
 
   // A well-formed envelope (it passed validateEnvelope: the method matched
   // the required prefix pattern) naming a method this Guardian has no
   // handler for -- distinct from a malformed envelope, which never reaches
   // here because validateEnvelope already threw above.
-  return errorResponse(rpcId, METHOD_NOT_DISPATCHED_CODE, `method not dispatched by this Guardian: ${envelope.method}`, {
+  return { response: errorResponse(rpcId, METHOD_NOT_DISPATCHED_CODE, `method not dispatched by this Guardian: ${envelope.method}`, {
     method: envelope.method,
-  });
+  }) };
 }
 
 /**
