@@ -44,10 +44,24 @@
     },
     "decision_class": {
       "type": "object",
-      "description": "Decisions (deny/modify/ask/defer) are emitted as Detection Finding events. 'allow' is normally emitted as Application Activity with informational severity rather than as a finding, unless the deployment elects to record allows as findings for full audit symmetry. action_id and disposition_id record the Guardian's verdict. Only the Observed Agent sees the enforced outcome (Specification §6.4), so an action_id of 2 (Denied) or a disposition_id of 2 (Blocked) never proves the action was blocked. When any acs.decision.failure event in either party's stream carries the same session_id and request_id, a reader MUST NOT count the decision event as an enforced outcome. A missing failure event does not prove the decision was enforced. A Guardian SHOULD NOT set verdict_id or the finding's status_id, because both belong to whoever triages the finding.",
+      "description": "Decisions (deny/modify/ask/defer) are emitted as Detection Finding events. allow_class says where an allow goes. action_id and disposition_id record the Guardian's verdict. Only the Observed Agent sees the enforced outcome (Specification §6.4), so an action_id of 2 (Denied) or a disposition_id of 2 (Blocked) never proves the action was blocked. When any acs.decision.failure event in either party's stream carries the same session_id and request_id, a reader MUST NOT count the decision event as an enforced outcome. A missing failure event does not prove the decision was enforced. A Guardian SHOULD NOT set verdict_id or the finding's status_id, because both belong to whoever triages the finding.",
       "properties": {
         "class_uid": { "type": "integer", "const": 2004 },
         "class_name": { "type": "string", "const": "Detection Finding" },
+        "allow_class": {
+          "type": "object",
+          "description": "Where an allow decision goes. An allow is emitted as Application Lifecycle (6002) with severity_id 1, unless the deployment elects to record allows as Detection Findings for audit symmetry, in which case every rule for a decision event applies to it. A 6002 allow carries the decision's join_fields and acs_fields under unmapped.acs, as a decision event does, so unmapped.acs.decision holds the disposition and unmapped.acs.metadata the evaluator, and it sets metadata.correlation_uid to the gated step's pair. Its activity_id is open with the other 6002 rows.",
+          "properties": {
+            "class_uid": { "type": "integer", "const": 6002 },
+            "class_name": { "type": "string", "const": "Application Lifecycle" },
+            "required_fields": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Fields every allow event emitted as Application Lifecycle carries. The rest of acs_fields ride under unmapped.acs whenever the response carries them.",
+              "default": ["severity_id", "metadata.correlation_uid", "unmapped.acs.request_id", "unmapped.acs.session_id", "unmapped.acs.decision"]
+            }
+          }
+        },
         "required_fields": {
           "type": "array",
           "items": { "type": "string" },
