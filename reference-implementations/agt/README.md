@@ -25,7 +25,7 @@ Today, each policy vendor writes one module for each agent client. AGT itself sh
 ACS is one wire contract between an agent client and a policy runtime. This tree shows that contract in use:
 
 - One policy runtime, AGT, at a pinned upstream commit, with no source changes.
-- Two agent clients, Claude Code and OpenCode, with different hook designs.
+- Three agent clients, Claude Code, OpenCode, and Grok Build TUI, with different hook designs.
 - One Guardian that translates ACS envelopes into AGT policy input and AGT verdicts into ACS decisions.
 - One translation table, `mapping.yaml`, that is the single source of truth for that translation.
 - Tools to read the contract, watch the events on the wire, and measure what the contract can and cannot express.
@@ -38,6 +38,7 @@ This is a demonstration and a measurement, not a product. The section [What this
  Claude Code ──hook subprocess──▶ hosts/claude-code/acs-hook.ts ──┐
                                                                   │  ACS envelopes
  OpenCode ─────in-process plugin─▶ hosts/opencode/acs-plugin.ts ──┤  (JSON-RPC over HTTP)
+ Grok Build ───hook subprocess──▶ hosts/grok/acs-hook.ts ─────────┤
                                                                   ▼
                                    packages/host-adapter   ──▶  packages/guardian  ──▶  packages/agt-bridge  ──▶  AGT SDK + OPA
                                    (host side, no AGT code)      (ACS server)             (no host code)           policy/lib (pinned)
@@ -52,7 +53,8 @@ Each part has its own README that says how to start it.
 |---|---|---|
 | Host shim, Claude Code | [`hosts/claude-code/`](hosts/claude-code/README.md) | Runs as a hook subprocess. Reads the hook payload on stdin. Writes the decision on stdout. |
 | Host shim, OpenCode | [`hosts/opencode/`](hosts/opencode/README.md) | Runs as an in-process plugin. Mutates the live tool call object or throws. |
-| Host adapter | [`packages/host-adapter/`](packages/host-adapter/README.md) | Builds envelopes, negotiates the session, applies decisions, applies the failure posture, writes the audit log. Shared by both shims. |
+| Host shim, Grok Build TUI | [`hosts/grok/`](hosts/grok/README.md) | Runs as a hook subprocess, like Claude Code. Tool name is `run_terminal_command`. Native `defer` on PreToolUse. |
+| Host adapter | [`packages/host-adapter/`](packages/host-adapter/README.md) | Builds envelopes, negotiates the session, applies decisions, applies the failure posture, writes the audit log. Shared by the shims. |
 | Guardian | [`packages/guardian/`](packages/guardian/README.md) | Serves `POST /acs`. Validates envelopes. Assembles AGT policy input. Maps AGT verdicts to ACS decisions. Keeps session state. Records every envelope. |
 | AGT bridge | [`packages/agt-bridge/`](packages/agt-bridge/README.md) | Constructs the AGT SDK runtime against the pinned policy bundle. Publishes the bundled OPA binary to the process environment. |
 | Inspector | [`packages/inspector/`](packages/inspector/README.md) | Tails the Guardian's logs and renders each envelope, decision, audit entry and session chain entry. |
@@ -179,6 +181,28 @@ The same Guardian governs OpenCode at the same time. Do not restart anything.
 2. Start `opencode` from that project directory.
 
 The plugin hooks `tool.execute.before` for the `bash` and `webfetch` tools and `tool.execute.after` for the `bash` tool. A deny before the tool runs is a thrown error that carries the Guardian's reason. A deny after the tool runs replaces the result object, because OpenCode discards a throwing hook's changes. The [OpenCode host README](hosts/opencode/README.md) shows how to drive OpenCode against a local stub model with no paid account.
+
+### Connect Grok Build TUI
+
+The same Guardian governs Grok at the same time. Do not restart anything.
+
+1. Copy the shipped hook file into Grok's global hooks directory. Grok's workspace root is the git repo, not this `agt/` tree, so a project-relative `hosts/grok/` path does not resolve.
+
+```bash
+cp hosts/grok/hooks.json ~/.grok/hooks/acs-agt.json
+```
+
+The shipped file names `bun run "$GROK_PROJECT_DIR/reference-implementations/agt/hosts/grok/acs-hook.ts"`. That resolves when Grok's workspace is the ACS git root. From any other workspace, replace that path with this file's absolute path. Both events match `run_terminal_command` only. The [Grok host README](hosts/grok/README.md) has the details.
+
+2. Start Grok.
+
+```bash
+grok --trust
+```
+
+3. Ask Grok to run `echo rm -rf /`. The hook sends the call to the Guardian. AGT's stock pattern rule denies it. Ask for `ls -la` in the same session and it runs.
+
+The shipped Claude Code matcher `^(Bash|WebFetch)$` does not block Grok's PreToolUse. Do not copy `hosts/claude-code/settings.json` into a Grok session and expect it to govern.
 
 ### Drive one hook by hand
 
@@ -423,7 +447,7 @@ The `.acs/` directory holds four kinds of local file. None is ever committed.
 | `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation, plus a `finding` line for a fact the spec requires the Guardian to record, such as a `request_id_ref` it cannot resolve |
 | `session-context.jsonl` | Guardian | One hash-chain entry per governed step |
 | `audit.jsonl` | Host shim | Every fail-open proceed and every posture-driven block |
-| `sessions/<session_id>.json` | Host shim, Claude Code only | The negotiated ServerHello, so the next hook subprocess finds it |
+| `sessions/<session_id>.json` | Host shim, Claude Code and Grok | The negotiated ServerHello, so the next hook subprocess finds it |
 
 The Inspector reads the first three. Its banner shows the last posture an audit entry carried and a count of fail-open proceeds. This is an audit entry, written when the Guardian was not reachable under the default posture:
 
@@ -435,7 +459,7 @@ The audit log and the envelope log cannot be joined on `session_id`. The audit l
 
 ## The scenarios the tests check
 
-The suite has 68 test files. Most of them drive a real Guardian, the real host shim and the pinned policy bundle. The scenarios below are grouped by what they prove. The file names are the place to read the exact assertions.
+The suite has 77 test files. Most of them drive a real Guardian, the real host shim and the pinned policy bundle. The scenarios below are grouped by what they prove. The file names are the place to read the exact assertions.
 
 **Policy decisions over the wire**
 
@@ -452,6 +476,13 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 - A modification the host cannot apply, or a `modified_content` replacement, is refused and the refusal withholds. (same file)
 - Each ACS decision renders to the exact `permissionDecision` shape Claude Code accepts. A `defer` renders as `deny`, because Claude Code has no deferral state. (`hosts/claude-code/test/wire-shape.test.ts`)
 - The shim exits with the blocking code on a payload it cannot parse, a missing session id, a traversal-shaped session id, or a hookmap that declares an output the host does not accept. (`hosts/claude-code/test/posture.test.ts`)
+
+**Host behaviour, Grok Build TUI**
+
+- A destructive `run_terminal_command` is denied as `destructive_shell_command_blocked`, not as `tool_unknown`. (`hosts/grok/test/hook.test.ts`)
+- Each ACS decision renders to the exact `permissionDecision` shape Grok accepts. A `defer` renders as `defer`, because Grok has native deferral. (`hosts/grok/test/wire-shape.test.ts`)
+- The result gate patches `output_for_prompt` and keeps the tagged siblings. A string replacement is not Grok's output shape. (`hosts/grok/test/post-tool-use.test.ts`)
+- A payload that only carries camelCase `sessionId` and `hookEventName` still governs. (`hosts/grok/test/posture.test.ts`)
 
 **Host behaviour, OpenCode**
 
@@ -559,6 +590,8 @@ Everything above runs with no configuration. These are the variables each proces
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 
+**The Grok shim** (`hosts/grok/acs-hook.ts`) reads the same four variables as the Claude Code shim. Its hookmap default is `hosts/grok/grok.hookmap.yaml`. It also accepts a payload that only carries camelCase `sessionId` and `hookEventName`.
+
 **The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG` and `ACS_HOOKMAP_PATH` with the same meanings. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.
 
 **The Guardian** (`bun run guardian`):
@@ -584,6 +617,7 @@ Everything above runs with no configuration. These are the variables each proces
 | [`packages/inspector/README.md`](packages/inspector/README.md) | The flags and what each rendered line means |
 | [`packages/conformance/README.md`](packages/conformance/README.md) | The three tables, the cell statuses, the exit rule, and the upstream watch |
 | [`hosts/claude-code/README.md`](hosts/claude-code/README.md) | Registering the hook, the exit codes, and driving it by hand |
+| [`hosts/grok/README.md`](hosts/grok/README.md) | Registering the hook for Grok Build TUI, native `defer`, and the tagged result shape |
 | [`hosts/opencode/README.md`](hosts/opencode/README.md) | Registering the plugin, how each decision lands, and a stub model for a run with no paid account |
 | [`../../docs/spec/conformance.md`](../../docs/spec/conformance.md) | The ACS profiles and the ACS-Core baseline this tree is measured against |
 | [`../../LICENSING.md`](../../LICENSING.md) | Which license covers which path, including the MIT bundle under `policy/lib/` |
