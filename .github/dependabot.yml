@@ -15,6 +15,20 @@ version: 2
 # Setting target-branch would make this depend on undocumented security-update targeting
 # behavior for no benefit.
 updates:
+  - package-ecosystem: "cargo"
+    directory: "/reference-implementations/agt-rust"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "rust"
+
   # GitHub Actions run with write access to the repository. Actions are pinned
   # to commit SHAs in the workflows, and Dependabot understands SHA pins and
   # updates them along with the version comment.
