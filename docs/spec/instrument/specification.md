@@ -492,3 +492,15 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 | `-32007` | `CHAIN_MISMATCH` | The client's `chain_hash` does not match the Guardian's computed head (§8.6). Also exposable as a deny `reason_code: "chain_mismatch"` when the Guardian can still return a decision. | Re-fetch session state; a persistent mismatch is an integrity event, not a transient error. |
 
 `system/ping` MUST NOT return an ACS-specific error, so liveness probing survives signature-rotation and key-resolution failures (§13).
+
+### 17.2 Registered reason codes
+
+`reason_codes` stays free vocabulary (§6). Where this specification names the reason code a `DENY` carries, the code is registered here, so a conformance vector can assert it and an SDK can branch on it without reading prose. A Guardian returning one of these denials MUST include the registered code in `reason_codes`, spelled as registered, and MAY add codes of its own beside it. The third column says whether the section requires the denial or only permits it; registering a code does not make an optional denial required.
+
+| Code | Named in | Denial | Raised when |
+|---|---|---|---|
+| `modify_unsupported` | §6.5 | required | A `MODIFY` was substituted with `DENY` because the client cannot apply it, or a client treated an unappliable `MODIFY` as `DENY`. |
+| `approver_unavailable` | §9.2 | required when no recovery path exists | An `ASK` was substituted with `DENY` because the client cannot route it and no recovery path exists. |
+| `chain_mismatch` | §8.6 | optional (`MAY`) | The client's `chain_hash` disagrees with the Guardian's computed head and the Guardian chooses to return a decision rather than the `CHAIN_MISMATCH` error (§17.1). |
+
+A refusal whose code the specification does not name, such as a policy finding that evidence is stale or names the wrong principal, carries whatever reason code the deployment chooses. A code joins this table when a revision names the code for the refusal it describes.
