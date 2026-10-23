@@ -61,6 +61,7 @@ nav:
   - Topics:
     - Core concepts: topics/core_concepts.md
     - ACS in Action: topics/ACS_in_action_example.md
+    - FAQ: topics/faq.md
   - Concepts:
     - Overview: concepts/README.md
     - Agents: concepts/agents.md
