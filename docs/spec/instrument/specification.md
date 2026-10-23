@@ -68,7 +68,7 @@ A worked example appears in [ACS in Action](../../topics/ACS_in_action_example.m
 | Wrapped methods | `protocols/MCP/*` is the canonical v0.1 namespace for MCP wrapping (e.g. `protocols/MCP/tools/call`). The `wrapped:` prefix is an alternative explicit-version form for deployments that pin a specific protocol version on the wire (e.g. `wrapped:mcp-2025-06-18/tools/call`). Both are valid; `protocols/*` is preferred. A2A wrapping deferred to v0.2. |
 | Error code range | `-32000` to `-32099` reserved for ACS |
 | Response shape | Discriminated union: `{ "type": "final", ... }` |
-| Forward compat | Accept `X.Y.Z` matching major version; ignore unknown fields |
+| Forward compat | Accept `X.Y.Z` with a matching major version. While the major version is 0, require a matching `X.Y` and accept any patch. Ignore unknown fields. |
 
 Streaming and notifications are not supported in v0.1.0. Batching is permitted as standard JSON-RPC 2.0 — Guardians SHOULD accept array-shaped requests and return an array of correlated responses, but ACS does not add atomicity, ordering, or cross-request dependency semantics in v0.1. Each request in a batch is evaluated independently, in declared order, with each carrying its own `request_id` and (if signed) its own signature. A Guardian that does not support batching MUST return `-32600 Invalid Request` for array-shaped inputs so the Observed Agent can fall back to sequential requests.
 
