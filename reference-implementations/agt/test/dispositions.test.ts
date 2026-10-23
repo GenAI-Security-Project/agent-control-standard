@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { startGuardian } from "guardian";
 import { buildConfigBundle, buildManifest } from "./helpers/config-bundle.ts";
+import { fetchWithHandshake } from "./helpers/handshake.ts";
 
 const DESTRUCTIVE = ["(?i)rm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+/(?:\\s|$)"];
 const cleanups: (() => void)[] = [];
@@ -15,7 +16,7 @@ async function decide(config: unknown, command: string, annotator?: () => unknow
   const guardian = await startGuardian({ port: 0, manifestPath, annotator });
   try {
     const requestId = crypto.randomUUID();
-    const res = await fetch(guardian.url, {
+    const res = await fetchWithHandshake(guardian.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -57,7 +58,16 @@ describe("all five AGT verdicts arrive as ACS decisions, from the pinned bundle"
 
   it("escalate arrives as ask", async () => {
     const { result } = await decide({ ...PATTERNS, approval: { required: true, approvers: ["security-team"] } }, "ls -la");
-    expect(result).toMatchObject({ decision: "ask", reason_codes: ["approval_required"] });
+    expect(result).toMatchObject({
+      decision: "ask",
+      reason_codes: ["approval_required"],
+      ask_details: {
+        approver: { type: "human", id: "deployment-default" },
+        timeout_seconds: 300,
+        timeout_disposition: "deny",
+      },
+    });
+    expect((result?.ask_details as { question?: unknown }).question).toEqual(expect.any(String));
   });
 
   it("transform arrives as modify, carrying the rewritten argument", async () => {

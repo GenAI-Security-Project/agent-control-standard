@@ -53,17 +53,16 @@
  * and evaluated statelessly.
  *
  * The listening socket defaults to loopback (127.0.0.1). Bun.serve with no
- * `hostname` binds `*` -- every interface, dual-stack -- and this endpoint has
- * no authentication, no origin check and no request signing, so anything that
- * can open the port is both a policy oracle (ask it what would be allowed)
- * and a policy sink (feed it envelopes it evaluates as if a governed host had
- * sent them). Until the wire is authenticated, reachability IS the access
- * control, so the default is the narrowest bind a host shim on the same
- * machine can still reach. A deployment that genuinely needs a routable bind
- * -- a Guardian in its own container, say -- opts in explicitly through the
- * `hostname` option (main.ts reads ACS_GUARDIAN_HOST for it).
+ * `hostname` binds `*` -- every interface, dual-stack. HMAC authenticates ACS
+ * messages when `hmacSecret` is configured (and the standalone CLI requires
+ * it), but it does not provide transport confidentiality or an origin check.
+ * The default therefore remains the narrowest bind a host shim on the same
+ * machine can reach. A deployment that genuinely needs a routable bind -- a
+ * Guardian in its own container, say -- opts in explicitly through the
+ * `hostname` option (main.ts reads ACS_GUARDIAN_HOST for it) and must protect
+ * the transport and provision the same secret to every intended peer.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotator, PolicyBridge } from "agt-bridge";
@@ -81,13 +80,15 @@ import {
   mapVerdict,
   resolveInterventionPoint,
   resolvePolicyTargetArgument,
+  ToolUnregisteredError,
   type Mapping,
 } from "./map-verdict.ts";
 import {
   EnvelopeValidationError,
   isToolCallRequest,
   isToolCallResult,
-  validateEnvelope,
+  validateEnvelopeShape,
+  validateMethodPayload,
   type AcsRequestEnvelope,
   type ToolCallRequestEnvelope,
   type ToolCallResultEnvelope,
@@ -99,11 +100,13 @@ import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExport
 import {
   appendContextEntry,
   createMemorySessionContextStore,
+  requestHash,
   type IfcLabels,
   type SessionContextStore,
 } from "./session-context-store.ts";
 import type { StepFindings } from "./session-context.ts";
 import { persistIfcLabels, supplySourceLabels } from "./ifc-labels.ts";
+import { deriveSessionKey, verifyHmacSha256, signResponseHmacSha256 } from "./verify-signature.ts";
 
 /**
  * Every snapshot message this Guardian can send an intervention point -- one
@@ -121,6 +124,92 @@ const MAPPING_PATH = fileURLToPath(new URL("../../../mapping.yaml", import.meta.
 
 const HANDSHAKE_METHOD = "handshake/hello";
 const ACS_PATH = "/acs";
+
+/** §10.3: the window outside which a timestamp is rejected. 5 minutes is the
+ * spec's own example and matches the skew_window_ms the ServerHello declares. */
+const SKEW_WINDOW_MS = 300_000;
+
+/**
+ * §4: each session's ClientHello `methods_implemented`, recorded at
+ * `handshake/hello`. A step from a session with no entry, or for a method the
+ * session did not declare, is refused with -32003. Bounded and least recently
+ * used first: an evicted session is refused the same way and its host
+ * re-handshakes, which is the -32003 recovery action in §17.1.
+ */
+export type NegotiatedSessions = Map<string, ReadonlySet<string>>;
+const MAX_NEGOTIATED_SESSIONS = 4096;
+
+function rememberNegotiated(sessions: NegotiatedSessions, sessionId: string, methods: ReadonlySet<string>): void {
+  sessions.delete(sessionId);
+  sessions.set(sessionId, methods);
+  if (sessions.size > MAX_NEGOTIATED_SESSIONS) sessions.delete(sessions.keys().next().value!);
+}
+
+export type ReplayProtectionStore = {
+  seenOrRemember(
+    sessionId: string,
+    requestId: string,
+    nowMs: number,
+    validUntilMs: number,
+  ): "fresh" | "replay" | "capacity";
+};
+
+/** Replay state is deliberately independent of the bounded audit-chain store.
+ * Entries need live only as long as a timestamp can still pass the skew gate. */
+export function createReplayProtectionStore(maxSessions = 4096, maxEntries = 65_536): ReplayProtectionStore {
+  const sessions = new Map<string, Map<string, number>>();
+  return {
+    seenOrRemember(sessionId, requestId, nowMs, validUntilMs) {
+      // Prune every session, not only the one currently addressed, and remove
+      // empty buckets. Otherwise fresh session UUIDs grow this map forever.
+      for (const [knownSessionId, knownIds] of sessions) {
+        for (const [id, expiresAt] of knownIds) {
+          if (expiresAt < nowMs) knownIds.delete(id);
+        }
+        if (knownIds.size === 0) sessions.delete(knownSessionId);
+      }
+
+      let entryCount = 0;
+      for (const knownIds of sessions.values()) entryCount += knownIds.size;
+
+      let ids = sessions.get(sessionId);
+      if (!ids) {
+        // Never evict a still-valid replay record to make room: doing so
+        // would turn a session-flood into a replay bypass. Saturation fails
+        // closed until time-based pruning frees capacity.
+        if (sessions.size >= maxSessions || entryCount >= maxEntries) return "capacity";
+        ids = new Map<string, number>();
+        sessions.set(sessionId, ids);
+      } else {
+        // Refresh insertion order so the session cap evicts the least
+        // recently used session rather than the earliest-created active one.
+        sessions.delete(sessionId);
+        sessions.set(sessionId, ids);
+      }
+      if (ids.has(requestId)) return "replay";
+      if (entryCount >= maxEntries) return "capacity";
+      // A future-dated request stays timestamp-valid until timestamp + skew,
+      // which can be almost two windows after receipt. Retain its id for that
+      // entire validity interval rather than a fixed interval after arrival.
+      ids.set(requestId, validUntilMs);
+      return "fresh";
+    },
+  };
+}
+
+function loadRegisteredTools(manifestPath: string): ReadonlySet<string> {
+  const manifest = Bun.YAML.parse(readFileSync(manifestPath, "utf8")) as { tools?: unknown };
+  if (typeof manifest.tools !== "object" || manifest.tools === null || Array.isArray(manifest.tools)) {
+    throw new Error(`manifest ${JSON.stringify(manifestPath)} declares no usable tools registry`);
+  }
+  return new Set(Object.keys(manifest.tools));
+}
+
+function assertToolRegistered(registeredTools: ReadonlySet<string>, toolName: string): void {
+  if (!registeredTools.has(toolName)) {
+    throw new ToolUnregisteredError(`tool ${JSON.stringify(toolName)} is not registered in the deployment manifest`);
+  }
+}
 
 /** The default bind address -- see the module header for why it is loopback
  * and not `*`. Spelled as the literal address rather than "localhost": the
@@ -220,6 +309,7 @@ export const METHOD_NOT_DISPATCHED_CODE = -32011;
  * own require_policy_references check, an AGT runtime error, or -- through
  * handleAcsRequest's outer net -- a failure to even build the schema registry.
  * The module header explains why none of this may become dead code. */
+const SIGNATURE_INVALID_CODE = -32004;
 const EVALUATION_FAILED_CODE = -32020;
 
 /**
@@ -251,16 +341,20 @@ type JsonRpcSuccess = { jsonrpc: "2.0"; id: string | number; result: AcsFinalRes
 type JsonRpcFailure = {
   jsonrpc: "2.0";
   id: string | number | null;
-  error: { code: number; message: string; data?: unknown };
+  error: {
+    code: number;
+    message: string;
+    data?: unknown;
+    signature?: { algorithm: string; value: string; key_id: string };
+  };
 };
 
 export type StartGuardianOptions = {
   port: number;
   manifestPath: string;
-  /** The address to bind. Defaults to loopback; set it only to widen the
-   * bind deliberately, and read the module header first -- the endpoint is
-   * unauthenticated, so widening it hands the policy decision to whoever can
-   * reach the port. main.ts threads ACS_GUARDIAN_HOST into this. */
+  /** The address to bind. Defaults to loopback; set it only to widen the bind
+   * deliberately, after arranging transport protection and shared-secret
+   * provisioning. main.ts threads ACS_GUARDIAN_HOST into this. */
   hostname?: string;
   /** Overrides the mapping.yaml path this Guardian loads. Defaults to the
    * repo's real mapping.yaml; exists so tests can inject a deliberately
@@ -306,9 +400,9 @@ export type StartGuardianOptions = {
    * exercises that manifest through this option. */
   annotator?: Annotator;
   /** Overrides the bridge this Guardian evaluates snapshots against,
-   * bypassing `createBridge(manifestPath, ...)` entirely -- and, with it,
-   * `manifestPath` and `annotator`: both are silently unused whenever
-   * `bridge` is supplied, since `createBridge` is never called. Exists so a
+   * bypassing `createBridge(manifestPath, ...)` and `annotator`. The manifest
+   * remains authoritative for the registered-tool allowlist, so
+   * `manifestPath` is still read even when `bridge` is supplied. Exists so a
    * test can see exactly which snapshot reached evaluation and choose the
    * `result_labels` that come back. The real bridge supplies neither. It does
    * produce `result_labels` -- `policy/lib/data.json` sets
@@ -346,7 +440,21 @@ export type StartGuardianOptions = {
    * Exists so a test can read spans back in-process or stand in one that
    * fails. Not meant for production use. */
   traceExporter?: OtelTraceExporter;
+  /** The replay-protection store, for tests. Omitted means a fresh default one. */
+  replayProtectionStore?: ReplayProtectionStore;
+  /** Base64-encoded shared HMAC input keying material. Omission is supported
+   * only for in-process compatibility tests and advertises no `acs-core`
+   * profile; the standalone deployment requires ACS_HMAC_SECRET. */
+  hmacSecret?: string;
+  /** The label naming `hmacSecret` (§10, `key_id` for HMAC): required with
+   * it and meaningless without it. A request is verified with the secret its
+   * `key_id` names, and an unknown label is SIGNATURE_INVALID. */
+  hmacKeyId?: string;
 };
+
+/** Configured HMAC secrets by `key_id`. A Map, so a label is only ever a
+ * key, never a lookup into an object's prototype. */
+type HmacKeyring = ReadonlyMap<string, Buffer>;
 export type StartedGuardian = { url: string; close(): Promise<void> };
 
 /**
@@ -416,7 +524,20 @@ export async function startGuardian({
   otelTraceFile,
   otelTraceEndpoint,
   traceExporter: traceExporterOverride,
+  replayProtectionStore: replayProtectionStoreOverride,
+  hmacSecret,
+  hmacKeyId,
 }: StartGuardianOptions): Promise<StartedGuardian> {
+  if (hmacSecret !== undefined && Buffer.from(hmacSecret, "base64").length < 32) {
+    throw new Error("hmacSecret must decode to at least 32 bytes");
+  }
+  if ((hmacSecret === undefined) !== (hmacKeyId === undefined) || hmacKeyId === "") {
+    throw new Error("hmacSecret and a non-empty hmacKeyId must be given together");
+  }
+  const hmacKeys: HmacKeyring | undefined = hmacSecret === undefined || hmacKeyId === undefined
+    ? undefined
+    : new Map([[hmacKeyId, Buffer.from(hmacSecret, "base64")]]);
+
   // Construct the bridge once at boot, not per request -- and through the
   // shared recipe rather than assembling one here, so this Guardian and every
   // other caller that evaluates this deployment's manifest get the identical
@@ -424,6 +545,9 @@ export async function startGuardian({
   // actually lives; see its own module.
   const bridge = bridgeOverride ?? createDeploymentBridge(manifestPath, annotator);
   const mapping = loadMapping(mappingPath ?? MAPPING_PATH);
+  const registeredTools = loadRegisteredTools(manifestPath);
+  const replayProtectionStore = replayProtectionStoreOverride ?? createReplayProtectionStore();
+  const negotiatedSessions: NegotiatedSessions = new Map();
   const envelopeLog = envelopeLogPath ? createEnvelopeLogSink({ path: envelopeLogPath }) : NULL_ENVELOPE_LOG_SINK;
   // The session-context store is always the in-memory one, or the caller's
   // own override -- sessionContextLog never becomes an alternative backing
@@ -466,7 +590,19 @@ export async function startGuardian({
       if (req.method !== "POST" || pathname !== ACS_PATH) {
         return new Response("Not Found", { status: 404 });
       }
-      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
+      const response = await handleAcsRequest(
+        req,
+        bridge,
+        mapping,
+        envelopeLog,
+        onDecisionFailure,
+        sessionContextStore,
+        replayProtectionStore,
+        negotiatedSessions,
+        registeredTools,
+        hmacKeys,
+        traceExporter,
+      );
       return Response.json(response);
     },
   });
@@ -535,6 +671,10 @@ async function handleAcsRequest(
   envelopeLog: EnvelopeLogSink,
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
+  replayProtectionStore: ReplayProtectionStore,
+  negotiatedSessions: NegotiatedSessions,
+  registeredTools: ReadonlySet<string>,
+  hmacKeys: HmacKeyring | undefined,
   traceExporter: OtelTraceExporter,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const body = await readCappedBody(req);
@@ -577,7 +717,18 @@ async function handleAcsRequest(
 
   let response: JsonRpcSuccess | JsonRpcFailure;
   try {
-    response = await dispatch(raw, bridge, mapping, onDecisionFailure, sessionContextStore, envelopeLog);
+    response = await dispatch(
+      raw,
+      bridge,
+      mapping,
+      onDecisionFailure,
+      sessionContextStore,
+      replayProtectionStore,
+      negotiatedSessions,
+      registeredTools,
+      hmacKeys,
+      envelopeLog,
+    );
   } catch (error) {
     // The outer net. Deliberately a bare JSON-RPC error, not an ACS `deny`:
     // this route is `dispatch` rethrowing entirely past denyOnInvalidEnvelope
@@ -588,6 +739,46 @@ async function handleAcsRequest(
     // it.
     const message = toRepoRelativeMessage(error);
     response = errorResponse(extractId(raw), EVALUATION_FAILED_CODE, `guardian failed to handle the request: ${message}`);
+  }
+
+  // §10: sign every addressable response when a key is configured. This
+  // happens before the outbound schema check so the object checked is exactly
+  // the one sent. Responses to bodies with no usable session id cannot be
+  // session-keyed; a configured client rejects those as unauthenticated.
+  // Liveness is deliberately outside the authenticated decision channel.
+  // Signing an unsigned ping would let a caller mint a valid `allow` with a
+  // chosen session/id and substitute it for a governed step response whose
+  // identifiers collide. Keep both halves of ping signature-exempt.
+  //
+  // Wrapped because the request half runs on unauthenticated input: HKDF
+  // throws on a session id over 1024 bytes, and canonicalization recurses
+  // once per nesting level. A throw here would escape as an HTML 500, which a
+  // host reads as a hook that never fired. A request that throws here cannot
+  // carry a valid signature, so its answer goes out unsigned, exactly like
+  // any other unauthenticated request's.
+  try {
+    // §10: a response is signed with the secret, and names the key_id, of
+    // the request it answers. A request naming an unknown key_id verifies
+    // under nothing, so its SIGNATURE_INVALID goes out unsigned.
+    const requestKey = hmacKeys && extractMethod(raw) !== "system/ping"
+      ? verifiedRequestKey(raw, hmacKeys)
+      : undefined;
+    if (requestKey) {
+      const sessionKey = deriveSessionKey(requestKey.secret, requestKey.sessionId);
+      const sig = signResponseHmacSha256(response as Record<string, unknown>, sessionKey);
+      const carrier = "result" in response ? response.result : response.error;
+      (carrier as Record<string, unknown>).signature = {
+        algorithm: "HMAC-SHA256",
+        value: sig,
+        key_id: requestKey.keyId,
+      };
+    }
+  } catch (error) {
+    try {
+      console.error(`guardian sent an unsigned response: signing failed (${toRepoRelativeMessage(error)})`);
+    } catch {
+      // Total means total, as for the checkResponse reporter below.
+    }
   }
 
   const responseCheck = checkResponse(response);
@@ -823,6 +1014,10 @@ async function dispatch(
   mapping: Mapping,
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
+  replayProtectionStore: ReplayProtectionStore,
+  negotiatedSessions: NegotiatedSessions,
+  registeredTools: ReadonlySet<string>,
+  hmacKeys: HmacKeyring | undefined,
   envelopeLog: EnvelopeLogSink,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const rpcId = extractId(raw);
@@ -838,7 +1033,7 @@ async function dispatch(
     // than a bare JSON-RPC error, since there is an identifiable step to
     // answer for. A handshake failure and an undispatched method are not
     // steps/*, so they always fall through to the JSON-RPC error unchanged.
-    envelope = validateEnvelope(raw);
+    envelope = validateEnvelopeShape(raw);
   } catch (error) {
     if (error instanceof EnvelopeValidationError) {
       if (isStepMethod(raw)) {
@@ -853,9 +1048,268 @@ async function dispatch(
     throw error;
   }
 
+  // Ping alone bypasses signature, replay, and timestamp checks. Its payload
+  // is still schema-validated before the liveness response is constructed.
+  if (envelope.method === "system/ping") {
+    try {
+      validateMethodPayload(envelope);
+    } catch (error) {
+      if (error instanceof EnvelopeValidationError) {
+        return errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { pointer: error.pointer });
+      }
+      throw error;
+    }
+    const echo = (envelope.params.payload as Record<string, unknown>).echo;
+    return successResponse(envelope.id, {
+      type: "final" as const,
+      acs_version: envelope.params.acs_version,
+      request_id: envelope.params.request_id,
+      decision: "allow" as const,
+      payload: {
+        status: "ok",
+        ...(echo === undefined ? {} : { echo }),
+        server_timestamp: new Date().toISOString(),
+      },
+    } as unknown as AcsFinalResult);
+  }
+
+  // §10: verify every non-ping request, including ClientHello, when the
+  // deployment configures a key. The session id needed for HKDF is already
+  // present in the handshake envelope; capability negotiation is not key
+  // exchange, because ACS v0.1 provisions HMAC material out of band.
+  if (hmacKeys) {
+    if (!envelope.params.signature) {
+      return errorResponse(rpcId, SIGNATURE_INVALID_CODE, "SIGNATURE_INVALID", {
+        reason: "signature required but not present",
+      });
+    }
+    if (envelope.params.signature.algorithm !== "HMAC-SHA256") {
+      return errorResponse(rpcId, SIGNATURE_INVALID_CODE, "SIGNATURE_INVALID", {
+        reason: `unsupported algorithm: ${envelope.params.signature.algorithm}`,
+      });
+    }
+    // §10: key_id names a configured secret. An unknown one is rejected,
+    // never answered by falling back to another secret.
+    const secret = hmacKeys.get(envelope.params.signature.key_id);
+    if (secret === undefined) {
+      return errorResponse(rpcId, SIGNATURE_INVALID_CODE, "SIGNATURE_INVALID", {
+        reason: "signature key_id names no configured secret",
+      });
+    }
+    const sessionKey = deriveSessionKey(secret, envelope.params.metadata.session_id);
+    const result = verifyHmacSha256(
+      raw as Record<string, unknown>,
+      envelope.params.signature.value,
+      sessionKey,
+    );
+    if (!result.valid) {
+      return errorResponse(rpcId, SIGNATURE_INVALID_CODE, "SIGNATURE_INVALID", { reason: result.reason });
+    }
+  }
+
+  // §10.3: reject timestamps outside the negotiated skew window.
+  const nowMs = Date.now();
+  const requestTimestampMs = Date.parse(envelope.params.timestamp);
+  const drift = Math.abs(nowMs - requestTimestampMs);
+  // Date.parse returns NaN for leap seconds (23:59:60), which date-time accepts.
+  if (!Number.isFinite(drift) || drift > SKEW_WINDOW_MS) {
+    return errorResponse(rpcId, -32006, "TIMESTAMP_OUT_OF_WINDOW", { skew_window_ms: SKEW_WINDOW_MS });
+  }
+
+  // §4 and §17.1: hook traffic only after a handshake, and only for methods
+  // the handshake declared. Checked before the replay store remembers the
+  // request_id, so a host that re-handshakes can retry without a false replay.
+  const sessionId = envelope.params.metadata.session_id;
+  if (envelope.method !== HANDSHAKE_METHOD) {
+    const negotiated = negotiatedSessions.get(sessionId);
+    if (!negotiated?.has(envelope.method)) {
+      return errorResponse(rpcId, -32003, "CAPABILITY_NOT_NEGOTIATED", {
+        method: envelope.method,
+        reason: negotiated ? "method not in this session's methods_implemented" : "no handshake/hello for this session",
+      });
+    }
+    // Map.get does not touch insertion order, so refresh it here: eviction
+    // follows a session's last step, not its handshake.
+    rememberNegotiated(negotiatedSessions, sessionId, negotiated);
+  }
+
+  // §10.3: reject duplicate request_id values within the session. This store
+  // is separate from SessionContext so audit-chain eviction cannot erase the
+  // replay memory and undispatched requests are remembered too.
+  const replayStatus = replayProtectionStore.seenOrRemember(
+    sessionId,
+    envelope.params.request_id,
+    nowMs,
+    requestTimestampMs + SKEW_WINDOW_MS,
+  );
+  if (replayStatus === "replay") return errorResponse(rpcId, -32005, "REPLAY_DETECTED");
+  // A full cache is not a replay: §17.1 recovers from -32005 by regenerating
+  // request_id, which cannot succeed here. -32000 is the registry code every
+  // client already treats as a refusal. §17.1 has no retryable code for this.
+  if (replayStatus === "capacity") {
+    return errorResponse(rpcId, -32000, "SESSION_REFUSED", { reason: "replay_protection_capacity" });
+  }
+
+  // Method-specific validation runs only after authentication and freshness
+  // checks. This prevents malformed non-ping traffic from bypassing the wire
+  // security gates and receiving a trusted decision.
+  try {
+    validateMethodPayload(envelope);
+  } catch (error) {
+    if (error instanceof EnvelopeValidationError) {
+      if (isStepMethod(raw)) {
+        const denial = denyOnInvalidEnvelope(raw, { reasonCode: "envelope_invalid", message: error.message });
+        const decisionResponse = asDecisionResponse(rpcId, denial);
+        if (decisionResponse) return decisionResponse;
+      }
+      return errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { pointer: error.pointer });
+    }
+    throw error;
+  }
+
   if (envelope.method === HANDSHAKE_METHOD) {
+    const clientHello = envelope.params.payload as Record<string, unknown> | undefined;
+    const clientVersions = Array.isArray(clientHello?.acs_versions_supported)
+      ? (clientHello.acs_versions_supported as string[])
+      : [];
+
+    if (!clientVersions.includes("0.1.0")) {
+      return errorResponse(rpcId, -32001, "UNSUPPORTED_VERSION", {
+        supported_versions: ["0.1.0"],
+        offered: clientVersions,
+      });
+    }
+
+    const clientTransports = Array.isArray(clientHello?.transports_supported)
+      ? (clientHello.transports_supported as string[])
+      : [];
+    if (!clientTransports.includes("http")) {
+      return errorResponse(rpcId, -32003, "CAPABILITY_NOT_NEGOTIATED", {
+        capability: "transport",
+        selected_transport: "http",
+        offered: clientTransports,
+      });
+    }
+
     const env = onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure };
-    return successResponse(envelope.id, buildServerHello(env));
+    const clientProfiles = new Set((clientHello?.profiles_supported as string[] | undefined) ?? []);
+    const hello = buildServerHello(env, {
+      hmacEnabled: hmacKeys !== undefined,
+      profilesAccepted: hmacKeys !== undefined && clientProfiles.has("acs-core") ? ["acs-core"] : [],
+    });
+
+    const clientMethods = Array.isArray(clientHello?.methods_implemented)
+      ? new Set(clientHello.methods_implemented as string[])
+      : undefined;
+    if (clientMethods !== undefined) {
+      hello.methods_evaluated = hello.methods_evaluated.filter(m => clientMethods.has(m));
+    }
+    rememberNegotiated(negotiatedSessions, sessionId, clientMethods ?? new Set());
+
+    return successResponse(envelope.id, hello);
+  }
+
+  // Conformance taxonomy: the four non-tool hooks that ACS-Core requires a
+  // Guardian to accept. They remain absent from methods_evaluated because
+  // they are allow-by-default rather than policy-evaluated. Answering them
+  // (rather than returning method_not_dispatched) keeps the chain complete: a session whose
+  // start is invisible is a chain an incident review cannot use.
+  const ALLOW_BY_DEFAULT_METHODS = new Set([
+    "steps/sessionStart",
+    "steps/sessionEnd",
+    "steps/userMessage",
+    "steps/agentResponse",
+  ]);
+
+  if (ALLOW_BY_DEFAULT_METHODS.has(envelope.method)) {
+    const entry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
+      method: envelope.method,
+      request_id: envelope.params.request_id,
+      request_hash: requestHash(envelope.params),
+      tool_name: "",
+    });
+    return successResponse(envelope.id, finalResult(envelope.params, { decision: "allow" }, entry.hash));
+  }
+
+  // Wrapped MCP: protocols/MCP/tools/call is collapsed into the pre-tool-call
+  // gate per conformance.md. The payload carries either tool.name in the ACS
+  // shape or params.name in the native MCP shape, and the tool name reaches
+  // the same policy evaluation as steps/toolCallRequest.
+  //
+  // Never both. hooks.md has a wrapped method carry the MCP message intact,
+  // and a server that forwards it runs `params`. Evaluating `tool` and
+  // `arguments` beside it would decide one call while another ran.
+  if (envelope.method === "protocols/MCP/tools/call") {
+    const payload = envelope.params.payload as Record<string, unknown>;
+    const toolObj = payload.tool as Record<string, unknown> | undefined;
+    const mcpParams = payload.params as Record<string, unknown> | undefined;
+    if (toolObj !== undefined && mcpParams !== undefined) {
+      const message =
+        "protocols/MCP/tools/call payload carries both the ACS shape (tool) and the MCP message (params); " +
+        "send exactly one";
+      const denial = denyOnInvalidEnvelope(raw, { reasonCode: "envelope_invalid", message });
+      return asDecisionResponse(rpcId, denial) ?? errorResponse(rpcId, ENVELOPE_INVALID_CODE, message);
+    }
+    const toolName = ((toolObj ?? mcpParams)?.name as string | undefined) ?? "mcp_tool";
+
+    const entry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
+      method: envelope.method,
+      request_id: envelope.params.request_id,
+      request_hash: requestHash(envelope.params),
+      tool_name: toolName,
+    });
+
+    try {
+      assertToolRegistered(registeredTools, toolName);
+      const point = resolveInterventionPoint("steps/toolCallRequest", mapping);
+      const policyTargetArgument = resolvePolicyTargetArgument(mapping, point, toolName);
+
+      // Normalize to the ACS tool-call-request shape the assembler expects.
+      // Native MCP carries params.name and raw arguments; ACS carries
+      // tool.name and {value}-wrapped arguments. Only the ACS shape is
+      // unwrapped: a native argument that happens to have a `value` key is
+      // the argument, and unwrapping it would evaluate part of it.
+      const sourceArgs = (toolObj
+        ? payload.arguments
+        : mcpParams?.arguments) as Record<string, unknown> | undefined ?? {};
+      const wrappedArgs: Record<string, { value: unknown }> = {};
+      for (const [key, val] of Object.entries(sourceArgs)) {
+        wrappedArgs[key] = toolObj && typeof val === "object" && val !== null && "value" in val
+          ? (val as { value: unknown })
+          : { value: val };
+      }
+      const normalizedEnvelope = {
+        ...envelope,
+        params: {
+          ...envelope.params,
+          payload: { tool: { name: toolName }, arguments: wrappedArgs },
+        },
+      };
+
+      const snapshot = assemblePreToolCallSnapshot(
+        normalizedEnvelope as unknown as Parameters<typeof assemblePreToolCallSnapshot>[0],
+        supplySourceLabels(sessionContextStore, envelope.params.metadata.session_id),
+        policyTargetArgument,
+      );
+      const verdict = await bridge.evaluate(point, snapshot);
+      const decision = mapVerdict(verdict, mapping, point, policyTargetArgument);
+      persistIfcLabels(sessionContextStore, envelope.params.metadata.session_id, verdict.result_labels);
+      return successResponse(envelope.id, finalResult(envelope.params, decision, entry.hash));
+    } catch (error) {
+      // Fail closed: a wrapped MCP call whose evaluation throws is denied,
+      // not allowed — matching evaluateStep's own contract.
+      const message = toRepoRelativeMessage(error);
+      const reasonCode = error instanceof ToolUnregisteredError ? "tool_unregistered" : "evaluation_failed";
+      const denial = denyOnInvalidEnvelope(raw, { reasonCode, message });
+      const decisionResponse = asDecisionResponse(rpcId, denial);
+      if (decisionResponse) {
+        if ("result" in decisionResponse) {
+          (decisionResponse.result as Record<string, unknown>).chain_hash = entry.hash;
+        }
+        return decisionResponse;
+      }
+      return errorResponse(rpcId, EVALUATION_FAILED_CODE, `${reasonCode}: ${message}`);
+    }
   }
 
   // Two gated branches, one per ACS method this Guardian assembles a snapshot
@@ -882,13 +1336,13 @@ async function dispatch(
     // Examined before evaluateStep appends this step, so a request id is in
     // the session already only if an earlier step carried it.
     const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, findings);
+    return await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, registeredTools, findings);
   }
 
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
     const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings);
+    return await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, registeredTools, findings);
   }
 
   // A well-formed envelope (it passed validateEnvelope: the method matched
@@ -967,25 +1421,24 @@ async function evaluateStep<E extends SteppedEnvelope>(
   bridge: PolicyBridge<GuardianSnapshot>,
   mapping: Mapping,
   sessionContextStore: SessionContextStore,
+  registeredTools: ReadonlySet<string>,
   findings?: StepFindings,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
+  // Declared outside try so the catch can publish chain_hash on denials —
+  // the ContextEntry was already appended before the evaluation threw.
+  let chainHash: string | undefined;
   try {
-    // The chain entry is appended on arrival, before any verdict exists: a
-    // step that is later denied is still a step this session took, and a
-    // chain that recorded only permitted steps would be a chain an incident
-    // review cannot use.
-    appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
+    const chainEntry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
       method: envelope.method,
       request_id: envelope.params.request_id,
+      request_hash: requestHash(envelope.params),
       tool_name: envelope.params.payload.tool.name,
       ...findings,
     });
+    chainHash = chainEntry.hash;
 
-    // Resolved BEFORE the snapshot is assembled, where it used to be resolved
-    // after: the assembler needs to know which of this tool's arguments the
-    // policy target is read from, and mapVerdict needs the same answer to key
-    // any override it has to write back. One resolution, two readers -- asking
-    // twice would let them differ.
+    assertToolRegistered(registeredTools, envelope.params.payload.tool.name);
+
     const point = resolveInterventionPoint(envelope.method, mapping);
     const policyTargetArgument = resolvePolicyTargetArgument(mapping, point, envelope.params.payload.tool.name);
 
@@ -997,31 +1450,22 @@ async function evaluateStep<E extends SteppedEnvelope>(
     const verdict = await bridge.evaluate(point, snapshot);
     const decision = mapVerdict(verdict, mapping, point, policyTargetArgument);
 
-    // `verdict.result_labels` is `undefined` when the IFC gate did not run
-    // at all and `[]` when it ran and propagated nothing; `persistIfcLabels`
-    // keeps those apart deliberately -- see its own doc comment.
     persistIfcLabels(sessionContextStore, envelope.params.metadata.session_id, verdict.result_labels);
 
-    return successResponse(envelope.id, finalResult(envelope.params, decision));
+    return successResponse(envelope.id, finalResult(envelope.params, decision, chainEntry.hash));
   } catch (error) {
-    // This produces a parseable JSON-RPC error rather than an HTML 500.
-    // denyOnInvalidEnvelope goes one step further: AGT's evaluation layer
-    // fails closed, and this catch is where that failure surfaces, so it is
-    // delivered as an honoured `deny` decision rather than a bare error,
-    // keeping it inside §6.4's honoured path. An AGT evaluation failure is a
-    // deny; a delivery failure is the host's negotiated posture, decided
-    // elsewhere and never merged with this.
     const message = toRepoRelativeMessage(error);
-    // The same best-effort id `dispatch` reads for its own failure paths, off
-    // the same raw body: a response the client cannot correlate is not a
-    // decision it can honour (see asDecisionResponse).
     const rpcId = extractId(raw);
-    const denial = denyOnInvalidEnvelope(raw, { reasonCode: "evaluation_failed", message });
+    const reasonCode = error instanceof ToolUnregisteredError ? "tool_unregistered" : "evaluation_failed";
+    const denial = denyOnInvalidEnvelope(raw, { reasonCode, message });
     const decisionResponse = asDecisionResponse(rpcId, denial);
     if (decisionResponse) {
+      if (chainHash && "result" in decisionResponse) {
+        (decisionResponse.result as Record<string, unknown>).chain_hash = chainHash;
+      }
       return decisionResponse;
     }
-    return errorResponse(rpcId, EVALUATION_FAILED_CODE, `evaluation failed: ${message}`);
+    return errorResponse(rpcId, EVALUATION_FAILED_CODE, `${reasonCode}: ${message}`);
   }
 }
 
@@ -1062,6 +1506,42 @@ function extractMethod(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+/** The configured key an authenticated request was signed under, or
+ * undefined when the request does not verify. Rechecked at the signing
+ * boundary so a top-level validation failure cannot become a chosen-message
+ * signing oracle merely by carrying a victim session id. */
+function verifiedRequestKey(
+  raw: unknown,
+  hmacKeys: HmacKeyring,
+): { keyId: string; secret: Buffer; sessionId: string } | undefined {
+  if (typeof raw !== "object" || raw === null || !("params" in raw)) return undefined;
+  const params = (raw as Record<string, unknown>).params;
+  if (typeof params !== "object" || params === null) return undefined;
+  const metadata = (params as Record<string, unknown>).metadata;
+  const signature = (params as Record<string, unknown>).signature;
+  if (typeof metadata !== "object" || metadata === null || typeof signature !== "object" || signature === null) {
+    return undefined;
+  }
+  const sessionId = (metadata as Record<string, unknown>).session_id;
+  const fields = signature as Record<string, unknown>;
+  if (
+    typeof sessionId !== "string" ||
+    fields.algorithm !== "HMAC-SHA256" ||
+    typeof fields.key_id !== "string" ||
+    typeof fields.value !== "string"
+  ) {
+    return undefined;
+  }
+  const secret = hmacKeys.get(fields.key_id);
+  if (secret === undefined) return undefined;
+  const valid = verifyHmacSha256(
+    raw as Record<string, unknown>,
+    fields.value,
+    deriveSessionKey(secret, sessionId),
+  ).valid;
+  return valid ? { keyId: fields.key_id, secret, sessionId } : undefined;
 }
 
 /** Whether the raw envelope names a `steps/*` method -- read before

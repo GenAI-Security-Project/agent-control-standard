@@ -10,6 +10,8 @@ import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
+import { createMemorySessionContextStore, type SessionContextStore } from "../src/session-context-store.ts";
+import { handshakeFor } from "../../../test/helpers/handshake.ts";
 import {
   createFileSpanExporter,
   keepLoopbackOffProxy,
@@ -72,11 +74,18 @@ function throwingSpanExporter(): SpanExporter {
 }
 
 async function postRaw(url: string, body: unknown): Promise<Record<string, unknown>> {
+  await handshakeFor(url, body);
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return (await res.json()) as Record<string, unknown>;
 }
 
 const baseOptions = { port: 0, manifestPath: "policy/manifest.yaml" } as const;
+
+/** The response carries `chain_hash`, which covers each entry's recorded time,
+ * so two Guardians answer identically only on the same clock. */
+function frozenClock(): { sessionContextStore: SessionContextStore } {
+  return { sessionContextStore: createMemorySessionContextStore({ now: () => new Date(0) }) };
+}
 
 /** The OTLP/JSON `ExportTraceServiceRequest` shape, as far as these tests
  * read it: resource attributes, and span names and events. */
@@ -639,9 +648,8 @@ describe("Guardian trace export wiring", () => {
       const [event] = span?.events ?? [];
       expect(event?.name).toBe(MAPPING.decisionEventName);
       expect(event?.attributes?.["acs.decision"]).toBe("deny");
-      // This Guardian sends metadata.evaluator once #229 lands; until then
-      // the event carries none, rather than one the exporter made up.
-      expect(event?.attributes?.["acs.evaluator"]).toBeUndefined();
+      // Taken from the response's metadata.evaluator, not made up by the exporter.
+      expect(event?.attributes?.["acs.evaluator"]).toBe("deterministic");
       expect(typeof event?.attributes?.["acs.reasoning"]).toBe("string");
       expect(Array.isArray(event?.attributes?.["acs.reason_codes"])).toBe(true);
       expect(Array.isArray(event?.attributes?.["acs.policy.ids"])).toBe(true);
@@ -794,8 +802,8 @@ describe("Guardian trace export wiring", () => {
   it("answers identically with a failing exporter and with export off, and reports once", async () => {
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     const exporter = createOtelTraceExporter({ spanExporter: throwingSpanExporter(), methodsEvaluated: METHODS_EVALUATED });
-    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
-    const silent = await startGuardian(baseOptions);
+    const exporting = await startGuardian({ ...baseOptions, ...frozenClock(), traceExporter: exporter });
+    const silent = await startGuardian({ ...baseOptions, ...frozenClock() });
     try {
       const requestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
@@ -995,8 +1003,8 @@ describe("Guardian trace export wiring", () => {
       methodsEvaluated: METHODS_EVALUATED,
       onError: (error) => errors.push(error),
     });
-    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
-    const silent = await startGuardian(baseOptions);
+    const exporting = await startGuardian({ ...baseOptions, ...frozenClock(), traceExporter: exporter });
+    const silent = await startGuardian({ ...baseOptions, ...frozenClock() });
     let exportingClosed = false;
     try {
       // Decisions are the same as with export off, before the endpoint dies.

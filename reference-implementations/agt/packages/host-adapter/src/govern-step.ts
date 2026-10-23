@@ -77,6 +77,7 @@
  * different wire shape (see render-decision.ts).
  */
 import { buildEnvelope, modificationDocumentOf, type AcsRequestEnvelope, type Hookmap } from "./build-envelope.ts";
+import { signEnvelope, type HmacKey } from "./sign-envelope.ts";
 import type { AuditSink } from "./audit-sink.ts";
 import {
   applyFailurePosture,
@@ -87,7 +88,8 @@ import {
 import type { GuardianClient } from "./guardian-client.ts";
 import type { AcsDecision, ValidatedAcsDecision } from "./decision-message.ts";
 import { renderDecision, type HostOutput } from "./render-decision.ts";
-import type { ResolvedSessionConfig } from "./handshake.ts";
+import { SessionConfigNotStoredError, type ResolvedSessionConfig } from "./handshake.ts";
+import type { SessionConfig } from "./session-config.ts";
 import { assertOutputIsReplaceable, withResultOutput, type HostOutputLocation } from "./result-output.ts";
 import { validateDecision } from "./validate-decision.ts";
 
@@ -167,7 +169,21 @@ export type GovernStepInput = {
    * into a silent skip any more.
    */
   scopedTool?: string;
+  /** The deployment's HMAC key for request signing (§10). When set, every
+   *  envelope is signed with an HKDF-derived per-session key and names the
+   *  key's configured `key_id`. */
+  hmacKey?: HmacKey;
+  /**
+   * Repeats this session's handshake. When the Guardian answers a step with
+   * -32003 (no handshake on record, as after a Guardian restart), §17.1's
+   * recovery action is to re-handshake: `governStep` calls this once and
+   * retries the step with a fresh request under the config it returns.
+   * Without it, -32003 is a refusal.
+   */
+  renegotiate?: () => Promise<SessionConfig>;
 };
+
+const CAPABILITY_NOT_NEGOTIATED = -32003;
 
 /**
  * What a host is told once a step has been governed: the output to write, the
@@ -435,10 +451,12 @@ export async function governStep({
   payload,
   hookmap,
   guardian,
-  session,
+  session: initialSession,
   sessionId,
   audit,
   scopedTool,
+  hmacKey,
+  renegotiate,
 }: GovernStepInput): Promise<GovernedStep> {
   // Every render below -- the arriving decision's and the posture's -- goes
   // through the hook's own decisions block, so a hook this hookmap does not map
@@ -556,6 +574,8 @@ export async function governStep({
     return { output: {}, decision: null, stage: "ungoverned" };
   }
 
+  // `let`: a re-handshake after -32003 replaces it for the retried step.
+  let session = initialSession;
   const timeoutMs = session.config?.timeout_config.default_ms ?? DEFAULT_TIMEOUT_MS;
 
   // Which kind of gate this hook is, read off the entry's own shape and never
@@ -650,7 +670,7 @@ export async function governStep({
     return { output: render(decision), decision, stage };
   }
 
-  const startedAt = performance.now();
+  let startedAt = performance.now();
 
   // Stage "request": nothing has been asked of anything yet. A payload the
   // hookmap's paths do not resolve against, or an entry naming no single payload
@@ -661,11 +681,24 @@ export async function governStep({
   // at the top of this function throws on it and audits nothing, because the
   // posture's answer to it could not be rendered either. Every other way
   // `buildEnvelope` can fail still lands here.
+  //
+  // Stage "sign" follows it and fails closed: signing canonicalises the whole
+  // envelope, and input nested deeply enough overflows that. An unsigned
+  // request is one an ACS-Core Guardian must refuse, so this host refuses it
+  // rather than letting a `proceed` posture run it.
+  const buildRequest = (): AcsRequestEnvelope => buildEnvelope(hookEventName, payload, hookmap);
+  const signRequest = (built: AcsRequestEnvelope): AcsRequestEnvelope =>
+    hmacKey ? signEnvelope(built, hmacKey) : built;
   let envelope: AcsRequestEnvelope;
   try {
-    envelope = buildEnvelope(hookEventName, payload, hookmap);
+    envelope = buildRequest();
   } catch (failure) {
     return resolveByPosture(failure, "request", undefined);
+  }
+  try {
+    envelope = signRequest(envelope);
+  } catch (failure) {
+    return resolveByPosture(failure, "sign", envelope);
   }
 
   // Established here, before anything is asked of a Guardian or audited: at a
@@ -721,6 +754,40 @@ export async function governStep({
   // would still be a request that produced no decision if it ever did.
   let decision: ValidatedAcsDecision;
   try {
+    let answer = await guardian.requestDecision(envelope, { timeoutMs });
+    if (
+      answer.decisionArrived === false &&
+      renegotiate !== undefined &&
+      (answer.failure as { code?: unknown } | null)?.code === CAPABILITY_NOT_NEGOTIATED
+    ) {
+      // Only a decision replaces the refusal. A failed re-handshake, or a
+      // retry that gets no decision, leaves the -32003 standing, so this path
+      // cannot turn a refusal into a posture fail-open.
+      // A config negotiated but not persisted still governs this step, with
+      // the persistence failure kept for the audit, as resolveSessionConfig does.
+      const { config: renegotiated, failure: renegotiationFailure } = await renegotiate().then(
+        config => ({ config, failure: undefined as unknown }),
+        (error: unknown) => ({
+          config: error instanceof SessionConfigNotStoredError ? error.config : undefined,
+          failure: error,
+        }),
+      );
+      if (renegotiated !== undefined) {
+        // The retry runs under what the Guardian just negotiated, and its
+        // decision's expiry is measured from the retry, not the refused request.
+        const retryTimeoutMs = renegotiated.timeout_config.default_ms;
+        const retryStartedAt = performance.now();
+        const retryEnvelope = signRequest(buildRequest());
+        const retried = await guardian.requestDecision(retryEnvelope, { timeoutMs: retryTimeoutMs });
+        if (retried.decisionArrived) {
+          session = { config: renegotiated, failure: renegotiationFailure };
+          startedAt = retryStartedAt;
+          envelope = retryEnvelope;
+          answer = retried;
+        }
+      }
+    }
+
     // The same document that just went out on the wire -- so a `modify`
     // decision's §6.3 pointers apply against exactly the structure the Guardian
     // saw and addressed. At a gate that decides whether a step runs that is the
@@ -731,7 +798,6 @@ export async function governStep({
     // from the envelope it just built.
     const modificationDocument = modificationDocumentOf(envelope);
 
-    let answer = await guardian.requestDecision(envelope, { timeoutMs });
     // A request id derived from the host's call id (see buildEnvelope's
     // `call_id`) repeats if the host ever asks twice about one call, and a
     // Guardian enforcing Specification §10.3 answers the repeat with
@@ -748,7 +814,7 @@ export async function governStep({
     ) {
       const remainingMs = timeoutMs - (performance.now() - startedAt);
       if (remainingMs > 0) {
-        envelope = buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false });
+        envelope = signRequest(buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false }));
         answer = await guardian.requestDecision(envelope, { timeoutMs: remainingMs });
       }
     }

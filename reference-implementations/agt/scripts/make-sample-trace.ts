@@ -83,6 +83,20 @@ function bash(command: string, extra: Record<string, unknown> = {}): Record<stri
 /** The envelopes the Guardian receives, in order. */
 function requests(): Record<string, unknown>[] {
   return [
+    // §4: the Guardian answers a session's steps only after its hello declares
+    // them. The hello gets no span.
+    envelope(
+      "handshake/hello",
+      "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b00",
+      {
+        acs_versions_supported: ["0.1.0"],
+        methods_implemented: ["steps/toolCallRequest", "steps/toolCallResult"],
+        transports_supported: ["http"],
+        provenance_producer: "none",
+        profiles_supported: ["acs-core"],
+      },
+      0,
+    ),
     envelope("steps/toolCallRequest", requestIdOf("allowed"), bash("ls -la", { capability: "process.exec" }), 1),
     envelope(
       "steps/toolCallResult",
