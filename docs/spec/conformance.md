@@ -96,7 +96,7 @@ Profiles compose. A deployment that wants full observability and supply-chain in
 | Profile | What it adds | When to claim |
 |---|---|---|
 | `acs-core` | Handshake, envelope, minimum hook set (incl. `subagentStart` for subagent-capable clients), four MUST-support dispositions (ALLOW/DENY/ASK/DEFER) with MODIFY SHOULD-support (§6.5), SessionContext + published chain head, replay protection, baseline signature (HMAC-SHA256), decision honoring, declared liveness mechanism, Wrapped MCP when sessions involve MCP | Always (mandatory) |
-| `acs-trace` | OTel + OCSF event emission per step | Cross-vendor observability or SIEM integration |
+| `acs-trace` | OTel or OCSF Trace events per supported step, decisions and provenance included | Cross-vendor observability or SIEM integration |
 | `acs-inspect` | `agbom/snapshot` + canonical AgBOM serialization | Policy depends on component inventory |
 | `acs-inspect-dynamic` | `agbom/changed` on mutation | Agent hot-swaps components mid-session |
 | `acs-provenance` | Field-level Provenance objects | Enforcing FIDES, CaMeL, or AARM-style information-flow paradigms |
