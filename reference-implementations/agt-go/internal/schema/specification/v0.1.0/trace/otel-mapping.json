@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json",
+  "title": "ACS Trace → OpenTelemetry semconv mapping",
+  "description": "Normative mapping from ACS hooks and decisions to OpenTelemetry spans and span events. v0.1.0 conformance requires that a deployment emitting OTel for the Trace pillar uses these span names and required attributes verbatim. Decisions are recorded as span events on the parent step span, not as separate spans, so that the enforcement verdict and the action it gates share a parent and an OTel context.",
+  "type": "object",
+  "properties": {
+    "step_to_span": {
+      "type": "object",
+      "description": "Map ACS step methods to OTel span names and attributes. A required attribute's source field is required on the wire. A conditional attribute's source field is optional on the wire.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["span_name", "required_attributes"],
+        "properties": {
+          "span_name": { "type": "string" },
+          "required_attributes": { "type": "array", "items": { "type": "string" } },
+          "conditional_attributes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Attributes populated whenever the hook payload carries the source field. An exporter MUST emit each one when its source field is present and MUST omit it when the source field is absent. An empty source array counts as absent."
+          },
+          "optional_attributes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Attributes an exporter MAY emit when its source field is present."
+          },
+          "_note": { "type": "string", "description": "Explanation for readers. The normative rules are in the lists and descriptions." }
+        }
+      },
+      "default": {
+        "steps/sessionStart": {
+          "span_name": "acs.session",
+          "required_attributes": ["acs.session.id"],
+          "optional_attributes": ["acs.tenant_id", "acs.user.id", "acs.policy_mode"]
+        },
+        "steps/agentTrigger": {
+          "span_name": "acs.agent.trigger",
+          "required_attributes": ["acs.agent.id", "acs.trigger.type"]
+        },
+        "steps/userMessage": {
+          "span_name": "acs.message.user",
+          "required_attributes": ["acs.session.id", "acs.content.types"]
+        },
+        "steps/agentResponse": {
+          "span_name": "acs.message.agent",
+          "required_attributes": ["acs.session.id", "acs.agent.id"]
+        },
+        "steps/toolCallRequest": {
+          "span_name": "gen_ai.tool.call",
+          "required_attributes": ["gen_ai.tool.name"],
+          "conditional_attributes": ["acs.capability"],
+          "optional_attributes": ["acs.tool.provider", "acs.tool.version", "acs.operation"]
+        },
+        "steps/toolCallResult": {
+          "span_name": "gen_ai.tool.result",
+          "required_attributes": ["gen_ai.tool.name", "acs.exit_status"],
+          "conditional_attributes": ["acs.request_id_ref"],
+          "optional_attributes": ["acs.duration_ms"]
+        },
+        "steps/knowledgeRetrieval": {
+          "span_name": "acs.knowledge.retrieval",
+          "required_attributes": ["acs.results.count"],
+          "conditional_attributes": ["acs.source.type"]
+        },
+        "steps/memoryStore": {
+          "span_name": "acs.memory.store",
+          "required_attributes": [],
+          "conditional_attributes": ["acs.memory_store.name", "acs.operation"]
+        },
+        "steps/memoryContextRetrieval": {
+          "span_name": "acs.memory.retrieval",
+          "required_attributes": ["acs.results.count"],
+          "conditional_attributes": ["acs.memory_store.name"]
+        },
+        "steps/sessionEnd": {
+          "span_name": "acs.session.end",
+          "required_attributes": ["acs.session.reason"]
+        },
+        "steps/turnStart": {
+          "span_name": "acs.turn",
+          "required_attributes": ["acs.turn.id", "acs.turn.triggered_by"],
+          "optional_attributes": ["acs.turn.parent_id"]
+        },
+        "steps/turnEnd": {
+          "span_name": "acs.turn.end",
+          "required_attributes": ["acs.turn.id", "acs.turn.outcome"],
+          "optional_attributes": ["acs.turn.step_count"]
+        },
+        "steps/preCompact": {
+          "span_name": "acs.compact",
+          "required_attributes": ["acs.compact.entry_count", "acs.compact.triggered_by"],
+          "optional_attributes": ["acs.compact.estimated_input_tokens"]
+        },
+        "steps/postCompact": {
+          "span_name": "acs.compact.complete",
+          "required_attributes": ["acs.compact.entry_count"],
+          "optional_attributes": ["acs.compact.lineage_depth_after"]
+        },
+        "steps/subagentStart": {
+          "span_name": "acs.subagent",
+          "required_attributes": ["acs.subagent.session_id", "acs.subagent.parent_session_id", "acs.subagent.intent_derivation"]
+        },
+        "steps/subagentStop": {
+          "span_name": "acs.subagent.end",
+          "required_attributes": ["acs.subagent.session_id", "acs.subagent.outcome"],
+          "conditional_attributes": ["acs.subagent.final_chain_hash"]
+        },
+        "steps/skillRegister": {
+          "span_name": "acs.skill.register",
+          "required_attributes": ["acs.skill.id", "acs.skill.digest.algorithm", "acs.skill.digest.value", "acs.skill.declared_capabilities"]
+        },
+        "steps/skillLoad": {
+          "span_name": "acs.skill.load",
+          "required_attributes": ["acs.skill.id", "acs.skill.digest.algorithm", "acs.skill.digest.value", "acs.skill.load_trigger", "acs.skill.load_path"],
+          "optional_attributes": ["acs.skill.digest_verified", "acs.skill.registration_ref"]
+        },
+        "steps/skillUnload": {
+          "span_name": "acs.skill.unload",
+          "required_attributes": ["acs.skill.id", "acs.skill.reason"],
+          "optional_attributes": ["acs.skill.replaced_by"]
+        },
+        "agbom/snapshot": {
+          "span_name": "acs.agbom",
+          "required_attributes": ["acs.agbom.format", "acs.agbom.component_count"],
+          "_note": "acs.agbom.format names the AgBOM form the span records. No AgBOM payload carries a format field, because the wire form is always canonical. An exporter recording the payload sets canonical. A Guardian recording a serialization it rendered sets that serialization's agbom_serializations_supported value from the handshake."
+        },
+        "agbom/changed": {
+          "span_name": "acs.agbom",
+          "required_attributes": ["acs.agbom.format"],
+          "conditional_attributes": ["acs.agbom.change_reason"],
+          "_note": "acs.agbom.format is sourced as on agbom/snapshot."
+        }
+      }
+    },
+    "step_span_attributes": {
+      "type": "object",
+      "description": "Attributes every step_to_span span carries in addition to its own entry's lists. acs.request_id is the step's own request_id and acs.session.id its session_id, both required on every request envelope. acs.request_id_ref on a steps/toolCallResult span joins to the steps/toolCallRequest span it reports on. The Observed Agent chooses request_id, and it is unique only within a session (Specification §10.3), so a join keys on acs.session.id and acs.request_id together. The Observed Agent and the Guardian may each emit a span for one request, and a reader joins the two. When the Observed Agent retries a step with a new request_id, each attempt is its own request: the Observed Agent emits a step span for each attempt that reached the Guardian, carrying that attempt's request_id. A Guardian event whose pair matches no Observed Agent step span is a discrepancy worth investigating.",
+      "properties": {
+        "required_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.request_id", "acs.session.id"]
+        }
+      }
+    },
+    "decision_event": {
+      "type": "object",
+      "description": "Decisions are recorded as a span event named 'acs.decision' on the parent step span. The event MUST carry the disposition. It MUST carry each conditional attribute whenever the response carries the source field, and MUST omit it when the source field is absent. An empty source array counts as absent. The event records the Guardian's verdict. Only the Observed Agent knows the applied outcome. When any acs.decision.failure event in either party's stream carries the same acs.session.id and acs.request_id, a reader MUST NOT count the acs.decision event as an enforced outcome. acs.reason_codes, acs.cited_provenance_ids and acs.chain_hash come from the response fields of the same name. acs.reason_codes is a set: its order carries no meaning, and it does not line up with the policy arrays. acs.policy.ids, acs.policy.versions and acs.policy.rule_ids come from policy_references as three parallel string arrays. Their source field is policy_references itself, so the conditional rule tests its presence, not the presence of the member fields. All three are emitted whenever the response carries a non-empty policy_references, and none is emitted otherwise. Each has the same length and order as policy_references, with an empty string where an entry lacks the field, so a reader can line up a policy, its version and its rule by position. An empty string on the wire could not be told from an absent field, so response-envelope.json rejects one in a policy_references entry. acs.chain_hash is a copy of the response field and proves nothing on its own. The trace carries neither the response signature nor the ContextEntries a verifier needs (Specification §8.2, §8.6), and a Guardian's own trace is no independent witness of its chain head. When the Guardian's and the Observed Agent's streams show different acs.chain_hash values for the same acs.session.id and acs.request_id, that is an integrity event (Specification §8.6).",
+      "properties": {
+        "event_name": { "type": "string", "const": "acs.decision" },
+        "required_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.decision"]
+        },
+        "conditional_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "acs.evaluator",
+            "acs.reasoning",
+            "acs.confidence",
+            "acs.evaluator_version",
+            "acs.model_id",
+            "acs.reason_codes",
+            "acs.policy.ids",
+            "acs.policy.versions",
+            "acs.policy.rule_ids",
+            "acs.cited_provenance_ids",
+            "acs.chain_hash"
+          ]
+        }
+      }
+    },
+    "decision_failure_event": {
+      "type": "object",
+      "description": "A decision failure is recorded as a span event named 'acs.decision.failure' on the step span, separate from acs.decision, or on the acs.session span for handshake_failure. It records a step whose decision did not arrive or was not usable, and the deployment's failure posture. The Observed Agent MUST record every decision failure, fail-open or fail-closed, in the deployment's own audit log, and SHOULD emit this event when it claims ACS-Trace. A Guardian claiming ACS-Trace SHOULD emit it for the failures it sees itself: an error it returned (guardian_error) and a decision it finished after the negotiated timeout (timeout). In v0.1 the Observed Agent reports this event about its own conduct, so a missing event does not show that no failure happened, and a count built from these events is a lower bound. acs.failure.reported_by, acs.failure.posture and acs.failure.payload_bytes are the emitter's own claims. Events from both parties for one request describe one failure, so a reader counts distinct acs.session.id and acs.request_id pairs. That counts failed attempts, not steps: a step the Observed Agent recovered by retrying still shows its failed attempts. A pair with a Guardian event and no Observed Agent event is still counted. A Guardian MUST NOT emit this event for a request it rejects as a replay (REPLAY_DETECTED), because that pair belongs to the earlier request. A reader cross-checking the two sides takes them from separately produced streams. acs.failure.detail is required when acs.failure.class is other. It MUST be text the emitter composes itself, and MUST NOT copy bytes from the request, the response, or an error's data, including parser messages that quote their input. acs.failure.payload_bytes SHOULD be emitted, because when reported honestly it helps separate an induced failure from an organic one.",
+      "properties": {
+        "event_name": { "type": "string", "const": "acs.decision.failure" },
+        "required_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.failure.class", "acs.failure.posture", "acs.failure.reported_by"]
+        },
+        "conditional_attributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.failure.detail", "acs.failure.error_code", "acs.failure.timeout_ms", "acs.failure.elapsed_ms", "acs.failure.payload_bytes"]
+        },
+        "attribute_values": {
+          "type": "object",
+          "description": "The values each enumerated attribute takes. timeout: the Guardian was reached and no decision arrived in time. unreachable: the request never reached the Guardian. malformed_response: an answer arrived and was not usable, for any reason other than its signature. signature_invalid: an answer arrived whose signature failed verification (Specification §10), kept apart so a tampered response does not blend into organic failures. handshake_failure: the session started without a completed handshake (Specification §4.1), so no step in it was governed; it is recorded on the acs.session span and counted under the handshake's own request_id and session_id. guardian_error: an error came back instead of a decision. observed_agent_error: the Observed Agent's own side failed before a decision could arrive. other: a failure that fits none of these. acs.failure.posture is fail_open for on_decision_failure proceed and fail_closed for deny. A response whose modifications break Specification §6.3, whether or not schema validation also rejects it, is not a decision failure, because §6.3 requires the Observed Agent to apply DENY. A MODIFY the client cannot apply is not a decision failure either, because §6.5 defines its outcome: DENY, or at postCompact the original summary. malformed_response covers a response that does not parse, or that fails schema validation for any other reason.",
+          "additionalProperties": { "type": "array", "items": { "type": "string" } },
+          "default": {
+            "acs.failure.class": ["timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error", "signature_invalid", "handshake_failure", "other"],
+            "acs.failure.posture": ["fail_open", "fail_closed"],
+            "acs.failure.reported_by": ["observed_agent", "guardian"]
+          }
+        }
+      }
+    },
+    "provenance_attributes": {
+      "type": "object",
+      "description": "When Provenance is attached to a hook payload, the resulting span MUST carry provenance facts as attributes. Lineage edges MAY be linked via OTel span links keyed by provenance_id. v0.1 emits the factual provenance fields (origin, source_id) on the wire and on the span. Both are string arrays, also for a single Provenance object. acs.provenance.source_id is emitted whenever at least one attached Provenance object has a source_id, and omitted otherwise. When emitted, it has the same length and order as acs.provenance.origin, with an empty string where an object has none. Trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see §7.1).",
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.provenance.origin"]
+        },
+        "optional": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs.provenance.source_id"]
+        }
+      }
+    }
+  }
+}

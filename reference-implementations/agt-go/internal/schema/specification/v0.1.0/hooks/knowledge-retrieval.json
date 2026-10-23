@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/knowledge-retrieval.json",
+  "title": "steps/knowledgeRetrieval payload",
+  "description": "Payload for the knowledgeRetrieval hook. Fires when the agent retrieves knowledge (RAG, vector DB, etc.).",
+  "type": "object",
+  "required": ["query", "results"],
+  "properties": {
+    "query": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "string" },
+        "provenance": {
+          "$ref": "../provenance.json",
+          "description": "OPTIONAL in the base schema; REQUIRED under provenance_producer: deterministic (ACS-Provenance). Validate against knowledge-retrieval.acs-provenance.json when the profile is claimed. See Specification section 7."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "Knowledge source descriptor",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["vector_db", "search_index", "knowledge_base", "web_search", "other"] },
+        "version": { "type": "string" }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {
+          "value": {},
+          "source_id": { "type": "string" },
+          "score": { "type": "number" },
+          "provenance": {
+            "$ref": "../provenance.json",
+            "description": "OPTIONAL in the base schema; REQUIRED on every result under provenance_producer: deterministic (ACS-Provenance). Validate against knowledge-retrieval.acs-provenance.json when the profile is claimed. See Specification section 7."
+          }
+        }
+      }
+    }
+  }
+}

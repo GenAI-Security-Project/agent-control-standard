@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-load.json",
+  "title": "steps/skillLoad payload",
+  "description": "Fires when a registered skill activates into a session, before its actions run. Where steps/skillRegister vets the artifact statically and once, steps/skillLoad governs each activation in live context. It carries the load path so a Guardian can see and contain inter-skill cascades (skill A loads B loads C, each clean alone), and it carries the digest of the artifact being loaded so the Guardian can bind this activation to an approved prior registration. A skillLoad MUST be correlatable to a prior approved steps/skillRegister for the same skill_id and digest. A load the Guardian cannot tie to an approved registration, or whose digest differs from the approved one, is unverifiable and SHOULD be denied. Without this binding the lifecycle gate is bypassable: a framework could emit skillLoad for an artifact that was never registered or whose registration was denied. The Guardian also SHOULD deny when load_path shows a skill loading another skill outside its declared composed_skills.",
+  "type": "object",
+  "required": ["skill_id", "load_trigger", "load_path", "digest"],
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "description": "Id of the skill being loaded. References the 'skill' component registered via steps/skillRegister."
+    },
+    "digest": {
+      "type": "object",
+      "description": "Integrity digest of the artifact actually being loaded, over the COMPLETE loadable artifact (the same scope as definition.digest at registration: text plus any bundled or fetched model files, adapters, or other binary assets). The Guardian compares it against the digest it approved at steps/skillRegister; a mismatch means the artifact changed between registration and load (tamper or swap). Carrying the digest here, rather than only a digest_verified boolean, lets the Guardian verify the binding itself instead of trusting the framework. The durable correlation key for an approved load is the pair (skill_id, digest), which a Guardian persists across sessions.",
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "type": "string", "enum": ["sha-256", "sha-512"] },
+        "value": { "type": "string" }
+      }
+    },
+    "registration_ref": {
+      "type": "string",
+      "description": "step_id of the steps/skillRegister whose approval authorizes this load, when that registration occurred in a session the Guardian can correlate. An in-session pointer for audit replay; the durable correlation key remains (skill_id, digest). A load with neither a resolvable registration_ref nor a matching persisted (skill_id, digest) approval is unverifiable."
+    },
+    "load_trigger": {
+      "type": "string",
+      "enum": ["user", "agent_decision", "skill_composition", "system"],
+      "description": "What caused the load. 'skill_composition' means another skill loaded this one, the cascade case; load_path MUST then have more than one element. 'user' and 'agent_decision' are direct loads. 'system' is framework-initiated."
+    },
+    "load_path": {
+      "type": "array",
+      "description": "Ordered chain of skills that led to this load, root first, this skill last. A direct load has a single element. A cascade A->B->C produces [A, B, C] when C loads. Lets the Guardian apply depth limits and containment policy on the composition surface, not just the single skill.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["skill_id"],
+        "properties": {
+          "skill_id": { "type": "string" },
+          "step_id": { "type": "string", "description": "step_id of the loading skill's hook that triggered the next load. Mirrors subagentStart.parent_step_id for audit replay." }
+        }
+      }
+    },
+    "parent_step_id": {
+      "type": "string",
+      "description": "step_id that triggered this load (a steps/toolCallRequest for a load tool, a steps/agentResponse the framework read as a load directive, or the prior steps/skillLoad in a cascade). Anchors the load in the session audit chain."
+    },
+    "digest_verified": {
+      "type": "boolean",
+      "description": "Optional framework-asserted hint that the loaded digest matches the registered one. A Guardian SHOULD NOT rely on it: it verifies the binding itself by comparing the 'digest' field against its record of the approved registration, since a compromised framework could assert digest_verified=true falsely."
+    },
+    "declared_capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The skill's declared capability manifest, echoed from registration so the Guardian can apply load-time policy without re-fetching the component."
+    }
+  }
+}

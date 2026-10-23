@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/request-envelope.json",
+  "title": "ACS Request Envelope",
+  "description": "JSON-RPC 2.0 envelope with ACS extensions. Sent by the Observed Agent to the Guardian Agent.",
+  "type": "object",
+  "required": ["jsonrpc", "method", "id", "params"],
+  "additionalProperties": false,
+  "properties": {
+    "jsonrpc": { "const": "2.0" },
+    "method": {
+      "type": "string",
+      "description": "Hook or wrapped-protocol method name. Reserved namespaces: steps/* (Instrument hooks), protocols/* (wrapped sub-protocols MCP and A2A), agbom/* (Inspect pillar AgBOM methods), trace/* (reserved for future ACS-native trace methods; v0.1 does not define any), system/* (low-level transport/control methods, including system/ping for liveness), handshake/* (capability negotiation, including handshake/hello), wrapped: (explicit-version wrapped form, e.g. wrapped:a2a-0.2/message/send).",
+      "pattern": "^(steps/|protocols/|agbom/|trace/|system/|handshake/|wrapped:).+"
+    },
+    "id": {
+      "oneOf": [{ "type": "string" }, { "type": "number" }],
+      "description": "JSON-RPC correlation id"
+    },
+    "params": { "$ref": "#/$defs/AcsParams" }
+  },
+  "$defs": {
+    "AcsParams": {
+      "type": "object",
+      "required": ["acs_version", "request_id", "timestamp", "metadata", "payload"],
+      "properties": {
+        "acs_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "ACS specification version (semver)"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this hook invocation"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the hook fired"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 64,
+          "description": "Cryptographic nonce for replay prevention"
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant identifier (multi-tenancy v0.1: reserved field, no isolation rules)"
+        },
+        "metadata": { "$ref": "#/$defs/Metadata" },
+        "payload": {
+          "type": "object",
+          "description": "Hook-specific payload. Schema depends on method."
+        },
+        "signature": { "$ref": "#/$defs/Signature" }
+      }
+    },
+    "Metadata": {
+      "type": "object",
+      "required": ["agent_id", "session_id"],
+      "properties": {
+        "agent_id": { "type": "string" },
+        "agent_name": { "type": "string" },
+        "session_id": { "type": "string", "format": "uuid" },
+        "turn_id": {
+          "type": "string",
+          "description": "Identifier of the agent turn this step belongs to. Set by the framework when the turn opens (steps/turnStart) and propagated onto every per-step ContextEntry until steps/turnEnd. Lets policies key on per-turn state ('limit tool calls per turn', 'no consequential action in N turns after taint') without inferring turn boundaries from userMessage/agentResponse pairing — the inference breaks under auto-continuation, planning loops, and multi-step ReAct cycles. Required on every step between a turnStart and the matching turnEnd; absent on session-level steps (sessionStart, sessionEnd, agentTrigger, agbom/* events outside a turn)."
+        },
+        "parent_turn_id": {
+          "type": "string",
+          "description": "Optional. Identifier of the enclosing turn when turns nest (e.g., a subagent turn inside a parent turn that is awaiting subagentStop). The parent–child turn relation is also captured in turnStart's payload; this field is the wire-level shortcut so per-step audit entries don't need to walk the chain to find the enclosing turn."
+        },
+        "session_state": {
+          "type": "object",
+          "description": "Optional session state hints from the Observed Agent. The Guardian holds the authoritative state.",
+          "properties": {
+            "chain_hash": { "type": "string", "description": "Latest known chain hash from the agent's perspective" }
+          }
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["development", "staging", "production"]
+        },
+        "platform": { "type": "string" },
+        "platform_version": { "type": "string" },
+        "user_context": {
+          "type": "object",
+          "properties": {
+            "user_id": { "type": "string" },
+            "roles": { "type": "array", "items": { "type": "string" } },
+            "authentication_method": { "type": "string" }
+          }
+        }
+      }
+    },
+    "Signature": {
+      "type": "object",
+      "required": ["algorithm", "value", "key_id"],
+      "description": "Cryptographic signature envelope. The registry is crypto-agile: HMAC-SHA256 is the v0.1 baseline RECOMMENDED default (sufficient for shared-secret deployments). Classical asymmetric (ECDSA-P256, RSA-PSS-SHA256) and PQC algorithms (ML-DSA-*, SLH-DSA-*, aligned to NIST FIPS 203-205) are available under the ACS-Crypto profile. ML-DSA-65 is the RECOMMENDED primary for ACS-Crypto deployments; SLH-DSA-128s is a SHOULD backup for algorithmic diversity. Hybrid composites combine PQC + classical for transitional deployments.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "HMAC-SHA256",
+            "ECDSA-P256",
+            "RSA-PSS-SHA256",
+            "ML-DSA-65",
+            "ML-DSA-44",
+            "ML-DSA-87",
+            "SLH-DSA-128s",
+            "SLH-DSA-128f",
+            "ML-DSA-65+ECDSA-P256",
+            "ML-DSA-65+RSA-PSS-SHA256"
+          ],
+          "description": "Signature algorithm. HMAC-SHA256 is symmetric MAC for shared-secret deployments (v0.1 RECOMMENDED). ECDSA-P256 and RSA-PSS-SHA256 are classical asymmetric. ML-DSA-* and SLH-DSA-* are pure PQC. The '<PQC>+<CLASSICAL>' forms are hybrid composites: the value field is the base64 of len(pqc_sig)||pqc_sig||len(classical_sig)||classical_sig where each len is a 4-byte big-endian unsigned integer; verifiers MUST verify both component signatures over the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed)."
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64-encoded signature. For hybrid algorithms, see the algorithm description for the composite encoding."
+        },
+        "key_id": {
+          "type": "string",
+          "description": "Identifier resolving to the public key (or the hybrid key descriptor that pins both component public keys for hybrid algorithms)."
+        }
+      }
+    }
+  }
+}
