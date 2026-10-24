@@ -72,6 +72,7 @@ type fileConfig struct {
 	Protocol struct {
 		OnDecisionFailure string        `koanf:"on_decision_failure"`
 		DecisionTimeout   time.Duration `koanf:"decision_timeout"`
+		AnswerMargin      time.Duration `koanf:"answer_margin"`
 		SkewWindow        time.Duration `koanf:"skew_window"`
 	} `koanf:"protocol"`
 	Limits struct {
@@ -116,6 +117,7 @@ type config struct {
 	maxBodyBytes      int64
 	maxDeferrals      int
 	decisionTimeout   time.Duration
+	answerMargin      time.Duration
 	skewWindow        time.Duration
 	sessionRetention  time.Duration
 	readHeaderTimeout time.Duration
@@ -244,7 +246,7 @@ func loadConfig(args, environ []string) (config, error) {
 		maxSessions:     raw.Limits.MaxSessions, maxEntries: raw.Limits.MaxEntries, maxReservations: raw.Limits.MaxReservations,
 		maxSkillApprovals: raw.Limits.MaxSkillApprovals, maxEngineCalls: raw.Limits.MaxEngineCalls,
 		maxStateBytes: raw.Limits.MaxPolicyStateBytes, maxBodyBytes: raw.Limits.MaxBodyBytes, maxDeferrals: raw.Limits.MaxDeferrals,
-		decisionTimeout: raw.Protocol.DecisionTimeout, skewWindow: raw.Protocol.SkewWindow,
+		decisionTimeout: raw.Protocol.DecisionTimeout, answerMargin: raw.Protocol.AnswerMargin, skewWindow: raw.Protocol.SkewWindow,
 		sessionRetention:  raw.Limits.SessionRetention,
 		readHeaderTimeout: raw.Server.ReadHeaderTimeout, readTimeout: raw.Server.ReadTimeout,
 		writeTimeout: raw.Server.WriteTimeout, idleTimeout: raw.Server.IdleTimeout, shutdownGrace: raw.Server.ShutdownGrace,
@@ -324,8 +326,8 @@ func (c config) validate() error {
 		if c.opaTimeout <= 0 {
 			errs = append(errs, errors.New("policy.opa_timeout must be positive for the agt evaluator"))
 		}
-		if c.opaTimeout >= c.decisionTimeout {
-			errs = append(errs, errors.New("policy.opa_timeout must be shorter than protocol.decision_timeout, or the agent stops waiting before AGT's deny for a slow opa arrives"))
+		if c.opaTimeout >= c.decisionTimeout-c.answerMargin {
+			errs = append(errs, errors.New("policy.opa_timeout must be shorter than protocol.decision_timeout minus protocol.answer_margin, or the Guardian's deadline ends the step before AGT's deny for a slow opa arrives"))
 		}
 	default:
 		errs = append(errs, fmt.Errorf("policy.evaluator must be %q", evaluatorAGT))
@@ -336,12 +338,18 @@ func (c config) validate() error {
 	if c.decisionTimeout <= 0 {
 		errs = append(errs, errors.New("protocol.decision_timeout must be positive"))
 	}
+	if c.answerMargin <= 0 || c.answerMargin >= c.decisionTimeout {
+		errs = append(errs, errors.New("protocol.answer_margin must be positive and shorter than protocol.decision_timeout"))
+	}
 	if c.skewWindow <= 0 {
 		errs = append(errs, errors.New("protocol.skew_window must be positive"))
 	}
 	minimumRetention := c.skewWindow + c.skewWindow
 	if minimumRetention < c.skewWindow || c.sessionRetention < minimumRetention {
 		errs = append(errs, errors.New("limits.session_retention must be at least twice protocol.skew_window"))
+	}
+	if c.readTimeout < c.decisionTimeout-c.answerMargin {
+		errs = append(errs, errors.New("server.read_timeout must be at least protocol.decision_timeout minus protocol.answer_margin, the time the Guardian gives each request body"))
 	}
 	if c.writeTimeout <= c.decisionTimeout {
 		errs = append(errs, errors.New("server.write_timeout must exceed protocol.decision_timeout, or a decision in time is cut off before it is sent"))
@@ -412,7 +420,7 @@ func run(args, environ []string) (err error) {
 		MaxEngineCalls: c.maxEngineCalls, MaxPolicyStateBytes: c.maxStateBytes,
 		MaxDeferrals:    c.maxDeferrals,
 		AskSubstitution: c.askSubstitution,
-		DecisionTimeout: c.decisionTimeout, SkewWindow: c.skewWindow,
+		DecisionTimeout: c.decisionTimeout, AnswerMargin: c.answerMargin, SkewWindow: c.skewWindow,
 		OnDecisionFailure: c.posture, MaxBodyBytes: c.maxBodyBytes,
 	})
 	if err != nil {

@@ -1301,6 +1301,8 @@ func TestNewRefusesIncompleteConfig(t *testing.T) {
 		"unknown_transport":         {Engine: engine, Signer: signer, Transport: "grpc"},
 		"unknown_ask_substitution":  {Engine: engine, Signer: signer, AskSubstitution: "ask"},
 		"negative_window":           {Engine: engine, Signer: signer, SkewWindow: -time.Second},
+		"negative_answer_margin":    {Engine: engine, Signer: signer, AnswerMargin: -time.Second},
+		"answer_margin_too_long":    {Engine: engine, Signer: signer, DecisionTimeout: time.Second, AnswerMargin: time.Second},
 		"retention_one_window":      {Engine: engine, Signer: signer, SkewWindow: time.Minute, SessionRetention: time.Minute},
 		"window_too_large":          {Engine: engine, Signer: signer, SkewWindow: time.Duration(1<<63 - 1), SessionRetention: time.Duration(1<<63 - 1)},
 		"invalid_policy_descriptor": {Engine: badPolicy, Signer: signer},

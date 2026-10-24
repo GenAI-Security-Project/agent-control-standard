@@ -121,14 +121,14 @@ func (g *Guardian) Handle(ctx context.Context, body []byte) []byte {
 		return g.shuttingDown(ctx)
 	}
 	defer g.inflight.Done()
-	return g.handle(ctx, body)
+	return g.handle(ctx, body, time.Now())
 }
 
-func (g *Guardian) handle(ctx context.Context, body []byte) []byte {
+func (g *Guardian) handle(ctx context.Context, body []byte, arrivedAt time.Time) []byte {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(g.stop, cancel)()
-	r, method := g.answer(ctx, body)
+	r, method := g.answer(ctx, body, arrivedAt)
 	return g.encode(ctx, r, method)
 }
 
@@ -193,6 +193,8 @@ var nullID = jsontext.Value("null")
 type call struct {
 	*envelope.Inbound
 	KeyID string
+	// ArrivedAt starts the step's deadline.
+	ArrivedAt time.Time
 }
 
 func errorReply(id jsontext.Value, code acs.ErrorCode, reason, message string) reply {
@@ -202,7 +204,7 @@ func errorReply(id jsontext.Value, code acs.ErrorCode, reason, message string) r
 // answer routes a request. The order is a security property: nothing is
 // decided before the request is authenticated, and nothing is read for a
 // decision before it is validated.
-func (g *Guardian) answer(ctx context.Context, body []byte) (r reply, methodName string) {
+func (g *Guardian) answer(ctx context.Context, body []byte, arrivedAt time.Time) (r reply, methodName string) {
 	responseID := nullID
 	authenticatedSessionID, authenticatedKeyID := "", ""
 	authenticatedStep := false
@@ -275,7 +277,7 @@ func (g *Guardian) answer(ctx context.Context, body []byte) (r reply, methodName
 	if err := jsonv2.Unmarshal(body, &req); err != nil {
 		return errorReply(in.ID, acs.InvalidRequest, "envelope_invalid", "the request cannot be read: "+err.Error()), in.Method
 	}
-	c := &call{Inbound: in, KeyID: sig.KeyID}
+	c := &call{Inbound: in, KeyID: sig.KeyID, ArrivedAt: arrivedAt}
 	if route == method.Hook || route == method.Wrapped {
 		authenticatedStep = true
 		authenticatedRequestID = in.RequestID

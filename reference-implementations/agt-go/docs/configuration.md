@@ -15,7 +15,7 @@ policy deployment, and choose limits for its workload.
 | `server.host` | Listener host or address. | Non-empty. |
 | `server.port` | Listener port or service name. `0` asks the operating system for a free port. | Non-empty. |
 | `server.read_header_timeout` | Maximum time to read HTTP headers. | Positive duration. |
-| `server.read_timeout` | Maximum time to read a complete request. | Positive duration. |
+| `server.read_timeout` | Maximum time to read a complete request. Once the headers have arrived, the Guardian sets its own deadline for the body: `protocol.decision_timeout` minus `protocol.answer_margin` from that moment, in place of this one. The headers stay bounded by `server.read_header_timeout`. | At least `protocol.decision_timeout` minus `protocol.answer_margin`. |
 | `server.write_timeout` | Maximum time to write an HTTP response. | Must exceed `protocol.decision_timeout`. |
 | `server.idle_timeout` | HTTP keep-alive idle limit. | Positive duration. |
 | `server.shutdown_grace` | Duration given to each shutdown phase: in-flight work, cancellation-answer delivery, and audit flush. | Positive duration. |
@@ -32,7 +32,7 @@ enabled only after the policy engine and Guardian are ready.
 | `policy.mapping` | ACS verdict mapping within `policy.deployment_dir`. | Same path rule as `policy.manifest`. |
 | `policy.evaluator` | `agt` uses AGT's runtime library. | Required: `agt`. The reference YAML selects `agt`. A build without the `agteval` tag refuses `agt` at startup. |
 | `policy.opa_path` | The OPA executable or its directory. | Required for `agt`: absolute or relative to the configuration file. Directory paths select `opa` on Unix and `opa.exe` on Windows. `make agt-native` copies the host executable to `.acs/agt/bin/`. |
-| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `4s`, positive, a whole number of milliseconds, and shorter than `protocol.decision_timeout`. AGT's timer starts after `opa` starts, so leave room for process start and signing; `guardian.yaml` leaves one second. |
+| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `4s`, positive, a whole number of milliseconds, and shorter than `protocol.decision_timeout` minus `protocol.answer_margin`. AGT's timer starts after `opa` starts, so leave room for process start and signing; `guardian.yaml` leaves one second. |
 | `policy.ask_substitution` | Endpoint behavior when ASK cannot be completed. | `none`, `deny` or `defer`. |
 | `policy.tool_aliases` | Optional map from an Observed Agent's tool name to the manifest's tool name. | Both names must be non-empty. |
 
@@ -114,7 +114,8 @@ endpoint therefore embed the library with a shared `SessionContextStore`.
 | Key | Meaning | Constraint |
 | --- | --- | --- |
 | `protocol.on_decision_failure` | Failure posture advertised in `ServerHello`. | `proceed` or `deny`. |
-| `protocol.decision_timeout` | Default deadline for a policy decision. | Positive duration and shorter than `server.write_timeout`. |
+| `protocol.decision_timeout` | The deadline the `ServerHello` declares to the agent as `timeout_config`. | Positive duration and shorter than `server.write_timeout`. |
+| `protocol.answer_margin` | Part of `decision_timeout` the Guardian keeps after the decision: half to record it, half to sign and send the answer, network time included. Reading a request and its policy decision end at `decision_timeout` minus `answer_margin` after the request arrives; a step still undecided then is answered DENY `evaluation_failed`, while the agent still waits. A session negotiated under another `decision_timeout` keeps the same proportion; its lock and load run under this Guardian's own deadline, since its terms are known only once it is loaded, and the rest of its step under its own timeout. Each Guardian that shares a store sets `server.write_timeout` above the longest `decision_timeout` among them. | Positive and shorter than `decision_timeout`; `policy.opa_timeout` is shorter than the difference. `guardian.yaml` ships 500ms. |
 | `protocol.skew_window` | Accepted timestamp distance in either direction. | Positive duration. |
 
 `on_decision_failure` tells the Observed Agent what to do when it cannot obtain

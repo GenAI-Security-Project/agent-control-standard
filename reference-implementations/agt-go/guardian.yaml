@@ -38,6 +38,7 @@ audit:
 protocol:
   on_decision_failure: deny
   decision_timeout: 5s
+  answer_margin: 500ms # of decision_timeout, kept to record, sign and send the answer
   skew_window: 5m
 
 limits:

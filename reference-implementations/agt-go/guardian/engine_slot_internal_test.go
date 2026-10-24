@@ -31,7 +31,7 @@ func TestEngineSlotIsFreeWhenTheOutcomeArrives(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			g := &Guardian{cfg: Config{Engine: engine}, engineCalls: make(chan struct{}, 1)}
 			for i := range 50000 {
-				_, err := g.callEngine(context.Background(), time.Second, PolicyInput{})
+				_, err := g.callEngine(context.Background(), time.Now().Add(time.Second), PolicyInput{})
 				if errors.Is(err, errEngineSaturated) {
 					t.Fatalf("call %d was refused with no call running", i)
 				}

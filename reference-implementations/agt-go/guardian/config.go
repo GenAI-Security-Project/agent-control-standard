@@ -75,10 +75,15 @@ type Config struct {
 	MaxReservations   int
 	MaxSkillApprovals int
 	SessionRetention  time.Duration
-	// DecisionTimeout bounds each engine call and is declared in the
-	// ServerHello as timeout_config.default_ms; zero means
-	// DefaultDecisionTimeout.
+	// DecisionTimeout is declared in the ServerHello as
+	// timeout_config.default_ms, and each step is answered within it,
+	// counted from the request's arrival; zero means DefaultDecisionTimeout.
 	DecisionTimeout time.Duration
+	// AnswerMargin is the part of DecisionTimeout kept after a step's
+	// decision, which ends DecisionTimeout minus AnswerMargin after the step
+	// arrives: half to record the decision, half to sign and send the answer.
+	// Zero means one tenth of DecisionTimeout.
+	AnswerMargin time.Duration
 	// SkewWindow is the §10.3 timestamp window, declared as skew_window_ms;
 	// zero means DefaultSkewWindow.
 	SkewWindow time.Duration
@@ -131,6 +136,8 @@ func (c Config) withDefaults() (Config, error) {
 		return c, fmt.Errorf("guardian: SessionRetention is %s, it cannot be negative", c.SessionRetention)
 	case c.DecisionTimeout < 0:
 		return c, fmt.Errorf("guardian: DecisionTimeout is %s, it cannot be negative", c.DecisionTimeout)
+	case c.AnswerMargin < 0:
+		return c, fmt.Errorf("guardian: AnswerMargin is %s, it cannot be negative", c.AnswerMargin)
 	case c.SkewWindow < 0:
 		return c, fmt.Errorf("guardian: SkewWindow is %s, it cannot be negative", c.SkewWindow)
 	case c.MaxDeferrals < 0:
@@ -180,6 +187,12 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if c.DecisionTimeout == 0 {
 		c.DecisionTimeout = DefaultDecisionTimeout
+	}
+	if c.AnswerMargin == 0 {
+		c.AnswerMargin = c.DecisionTimeout / 10
+	}
+	if c.AnswerMargin >= c.DecisionTimeout {
+		return c, fmt.Errorf("guardian: AnswerMargin is %s, it must be shorter than DecisionTimeout, %s", c.AnswerMargin, c.DecisionTimeout)
 	}
 	if c.SkewWindow == 0 {
 		c.SkewWindow = DefaultSkewWindow

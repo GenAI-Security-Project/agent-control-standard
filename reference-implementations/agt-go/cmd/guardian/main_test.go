@@ -279,6 +279,7 @@ func TestRefusesToStart(t *testing.T) {
 		{"configuration_required", "", "--config is required", nil, nil},
 		{"short_secret", base64.StdEncoding.EncodeToString([]byte("short")), "decodes to 5 bytes, fewer than 32", []string{"--config", referenceConfig(t)}, nil},
 		{"secret_not_base64", "not base64!", "is not standard base64", []string{"--config", referenceConfig(t)}, nil},
+		{"read_timeout_within_decision", base64.StdEncoding.EncodeToString([]byte(secret)), "server.read_timeout must be at least protocol.decision_timeout minus protocol.answer_margin", []string{"--config", referenceConfig(t)}, []string{"ACS__SERVER__READ_TIMEOUT=1s"}},
 		{"write_timeout_within_decision", base64.StdEncoding.EncodeToString([]byte(secret)), "server.write_timeout must exceed protocol.decision_timeout", []string{"--config", referenceConfig(t)}, []string{"ACS__SERVER__WRITE_TIMEOUT=5s"}},
 		{"non_positive_deferral_limit", base64.StdEncoding.EncodeToString([]byte(secret)), "limits.max_deferrals must be positive", []string{"--config", referenceConfig(t)}, []string{"ACS__LIMITS__MAX_DEFERRALS=0"}},
 		{"unknown_ask_substitution", base64.StdEncoding.EncodeToString([]byte(secret)), "policy.ask_substitution must be none, deny or defer", []string{"--config", referenceConfig(t)}, []string{"ACS__POLICY__ASK_SUBSTITUTION=ask"}},

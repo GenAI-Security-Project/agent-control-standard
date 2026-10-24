@@ -155,15 +155,19 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 			r = g.answerStep(ctx, in, denial(disposition.ReasonEvaluationFailed, "the Guardian failed while deciding the step"), chainHash)
 		}
 	}()
-
-	lockCtx, release, err := g.cfg.Store.Lock(ctx, in.SessionID)
+	// Lock and Load run under this Guardian's deadline, since the session's
+	// own terms are known only once it is loaded; the rest runs under them.
+	loaded := in.ArrivedAt.Add(g.cfg.DecisionTimeout - g.cfg.AnswerMargin)
+	lockCtx, release, err := g.lock(ctx, in.SessionID, loaded)
 	if err != nil {
 		return g.storeFailed(ctx, in, "store lock", err)
 	}
 	defer release()
 	ctx = lockCtx
 
-	sess, ok, err := g.cfg.Store.Load(ctx, in.SessionID)
+	loadCtx, cancelLoad := context.WithDeadline(lockCtx, loaded)
+	sess, ok, err := g.cfg.Store.Load(loadCtx, in.SessionID)
+	cancelLoad()
 	switch {
 	case err != nil:
 		return g.storeFailed(ctx, in, "store load", err)
@@ -178,6 +182,9 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 		return g.answerStep(ctx, in, denial(disposition.ReasonAgentIDNotBound, "the request names agent_id "+req.Params.Metadata.AgentID+", and the session was opened by another agent; a session answers only the agent that opened it"), "")
 	}
 	chainHash = sess.Head
+	decided, recorded := g.deadlines(in, sess.Handshake.Server, req.Method)
+	ctx, cancelDecision := context.WithDeadline(lockCtx, decided)
+	defer cancelDecision()
 	if outside := g.timestampOutsideWindow(in, sess.Handshake.Server.SkewWindowMS); outside != nil {
 		return *outside
 	}
@@ -233,6 +240,10 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	} else {
 		pd = g.decide(ctx, in, req, sess)
 	}
+	// The decision is made; recording it must not fail for the deadline the
+	// decision ran under, so it runs to a deadline of its own.
+	ctx, cancelAnswer := context.WithDeadline(lockCtx, recorded)
+	defer cancelAnswer()
 	if _, ok := g.decisionReply(in, pd.Decision, sess.Head); !ok {
 		err := errors.New("the policy engine returned a decision that fails response-envelope.json")
 		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "policy engine decision", err)
@@ -505,7 +516,8 @@ func (g *Guardian) decide(ctx context.Context, in *call, req acs.Request, sess S
 		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "policy input", err)
 		return PolicyDecision{Decision: denial(disposition.ReasonEvaluationFailed, "the Guardian could not isolate the policy input")}
 	}
-	pd, err := g.callEngine(ctx, negotiatedTimeout(sess.Handshake.Server, req.Method), input)
+	decided, _ := g.deadlines(in, sess.Handshake.Server, req.Method)
+	pd, err := g.callEngine(ctx, decided, input)
 	switch {
 	case errors.Is(err, errEngineSaturated):
 		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "policy engine", err)
@@ -595,20 +607,23 @@ func (g *Guardian) conclude(ctx context.Context, in *call, req acs.Request, pd P
 
 var errEngineSaturated = errors.New("every engine call place is taken")
 
-// callEngine runs the engine under the decision timeout and ctx, which
+// callEngine runs the engine until deadline and under ctx, which
 // Shutdown cancels, and turns a panic into an error. It stops waiting when
 // ctx ends even if the engine does not, so an engine that ignores
 // cancellation cannot hold the answer; the call keeps its place in
 // engineCalls until the engine returns, and gives it back before its
 // outcome is delivered, so the step that answer lets a client send next
 // never finds that place still taken.
-func (g *Guardian) callEngine(ctx context.Context, timeout time.Duration, in PolicyInput) (PolicyDecision, error) {
+func (g *Guardian) callEngine(ctx context.Context, deadline time.Time, in PolicyInput) (PolicyDecision, error) {
+	if !time.Now().Before(deadline) {
+		return PolicyDecision{}, context.DeadlineExceeded
+	}
 	select {
 	case g.engineCalls <- struct{}{}:
 	default:
 		return PolicyDecision{}, errEngineSaturated
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	type outcome struct {
 		pd  PolicyDecision
@@ -713,6 +728,40 @@ func (g *Guardian) grant(ctx context.Context, in *call, req acs.Request, sess Se
 		return "", err
 	}
 	return entry.EntryHash, nil
+}
+
+// deadlines returns when a step's decision and its recording end, counted
+// from arrival: the negotiated timeout less the answer margin, then less half
+// of it, which signing and sending keep. The margin scales with the
+// negotiated timeout, for a session negotiated under another DecisionTimeout.
+func (g *Guardian) deadlines(in *call, server acs.ServerHello, methodName string) (decided, recorded time.Time) {
+	timeout := negotiatedTimeout(server, methodName)
+	margin := time.Duration(float64(g.cfg.AnswerMargin) * float64(timeout) / float64(g.cfg.DecisionTimeout))
+	return in.ArrivedAt.Add(timeout - margin), in.ArrivedAt.Add(timeout - margin/2)
+}
+
+// lock waits for the session's lock until deadline. The deadline bounds only
+// the wait, since lockCtx derives from the context Lock receives: lockCtx
+// ends when ctx ends or the store loses the lock, and each later phase of the
+// step sets its own deadline on it.
+func (g *Guardian) lock(ctx context.Context, sessionID string, deadline time.Time) (context.Context, func(), error) {
+	wait, stopWaiting := context.WithCancelCause(ctx)
+	timer := time.AfterFunc(time.Until(deadline), func() { stopWaiting(context.DeadlineExceeded) })
+	lockCtx, release, err := g.cfg.Store.Lock(wait, sessionID)
+	if !timer.Stop() {
+		if err == nil {
+			release()
+		}
+		err = context.DeadlineExceeded
+	}
+	if err != nil {
+		stopWaiting(nil)
+		return nil, nil, err
+	}
+	return lockCtx, func() {
+		release()
+		stopWaiting(nil)
+	}, nil
 }
 
 func negotiatedTimeout(server acs.ServerHello, methodName string) time.Duration {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 )
@@ -28,6 +29,11 @@ func (g *Guardian) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer g.inflight.Done()
+	arrivedAt := time.Now()
+	if err := http.NewResponseController(w).SetReadDeadline(arrivedAt.Add(g.cfg.DecisionTimeout - g.cfg.AnswerMargin)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		writeJSON(w, http.StatusOK, g.encode(r.Context(), errorReply(nullID, acs.InternalError, "read_deadline", "the Guardian could not bound the request's read"), ""))
+		return
+	}
 	stopReading := context.AfterFunc(g.stop, func() { _ = r.Body.Close() })
 	defer stopReading()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, g.cfg.MaxBodyBytes))
@@ -41,7 +47,7 @@ func (g *Guardian) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, g.encode(r.Context(), errorReply(nullID, acs.InvalidRequest, "body_unreadable", "the request body cannot be read"), ""))
 		return
 	}
-	writeJSON(w, http.StatusOK, g.handle(r.Context(), body))
+	writeJSON(w, http.StatusOK, g.handle(r.Context(), body, arrivedAt))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body []byte) {

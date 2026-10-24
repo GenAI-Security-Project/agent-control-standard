@@ -35,12 +35,15 @@ func TestEvaluatorSelection(t *testing.T) {
 		overrides []string
 		want      string
 	}{
-		"missing":                          {[]string{"ACS__POLICY__EVALUATOR="}, `policy.evaluator must be "agt"`},
-		"unknown":                          {[]string{"ACS__POLICY__EVALUATOR=rego"}, `policy.evaluator must be "agt"`},
-		"agt_without_opa":                  {[]string{"ACS__POLICY__OPA_PATH="}, "policy.opa_path must name the opa executable"},
-		"agt_zero_timeout":                 {[]string{"ACS__POLICY__OPA_TIMEOUT=0s"}, "policy.opa_timeout must be positive"},
-		"agt_timeout_equal_to_decision":    {[]string{"ACS__POLICY__OPA_TIMEOUT=5s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
-		"agt_timeout_longer_than_decision": {[]string{"ACS__POLICY__OPA_TIMEOUT=6s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
+		"missing":                           {[]string{"ACS__POLICY__EVALUATOR="}, `policy.evaluator must be "agt"`},
+		"unknown":                           {[]string{"ACS__POLICY__EVALUATOR=rego"}, `policy.evaluator must be "agt"`},
+		"agt_without_opa":                   {[]string{"ACS__POLICY__OPA_PATH="}, "policy.opa_path must name the opa executable"},
+		"agt_zero_timeout":                  {[]string{"ACS__POLICY__OPA_TIMEOUT=0s"}, "policy.opa_timeout must be positive"},
+		"agt_timeout_equal_to_decision":     {[]string{"ACS__POLICY__OPA_TIMEOUT=5s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
+		"agt_timeout_longer_than_decision":  {[]string{"ACS__POLICY__OPA_TIMEOUT=6s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
+		"agt_timeout_inside_answer_margin":  {[]string{"ACS__POLICY__OPA_TIMEOUT=4600ms", "ACS__PROTOCOL__DECISION_TIMEOUT=5s", "ACS__PROTOCOL__ANSWER_MARGIN=500ms"}, "policy.opa_timeout must be shorter than protocol.decision_timeout minus protocol.answer_margin"},
+		"answer_margin_missing":             {[]string{"ACS__PROTOCOL__ANSWER_MARGIN=0s"}, "protocol.answer_margin must be positive and shorter than protocol.decision_timeout"},
+		"answer_margin_as_long_as_decision": {[]string{"ACS__PROTOCOL__ANSWER_MARGIN=5s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "protocol.answer_margin must be positive and shorter than protocol.decision_timeout"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadReferenceConfig(t, tt.overrides...); err == nil || !strings.Contains(err.Error(), tt.want) {

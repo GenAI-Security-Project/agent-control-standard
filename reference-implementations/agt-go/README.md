@@ -121,9 +121,9 @@ http.Handle("/acs", g)
 - `agtbridge/agteval` requires cgo and the `agteval` build tag.
   Build every evaluator before the Guardian serves.
   `agteval.New` temporarily sets OPA configuration in the process environment.
-  Keep `OPATimeout` shorter than the Guardian's `DecisionTimeout`, with room for the
-  `opa` process to start: the library does not compare the two, and an agent that
-  stops waiting first applies its failure posture before AGT's deny arrives.
+  Keep `OPATimeout` shorter than the Guardian's `DecisionTimeout` minus `AnswerMargin`,
+  with room for the `opa` process to start: the library does not compare them, and
+  a slower `opa` gets the Guardian's DENY `evaluation_failed` in place of AGT's own.
   Importing `guardian` or `agtbridge` alone adds no native dependency.
 - Under `agteval` each decision runs one `opa` process. Set `guardian.Config.MaxEngineCalls`
   for the host: the library default, 256, is sized for in-process engines;
@@ -131,7 +131,9 @@ http.Handle("/acs", g)
 - `guardian.Config` requires `Engine` and `Signer`. A nil `Store` selects
   `guardian.MemorySessionContextStore`, and a nil `AuditLog` records nothing.
 - Mount the Guardian as an `http.Handler` at your own route, or call
-  `Guardian.Handle(ctx, body)` from any transport.
+  `Guardian.Handle(ctx, body)` from any transport. The handler bounds each body's read
+  through `http.ResponseController`; a wrapping `ResponseWriter` without `Unwrap` leaves
+  the read to your server's own timeouts.
 - Put request, tenant, or endpoint context in `ctx`.
   The Guardian passes `ctx` to all four interfaces without reading its values.
 - To plug in your own engine, store, signer or audit log, see
