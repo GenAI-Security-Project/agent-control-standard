@@ -51,8 +51,12 @@ type fileConfig struct {
 		ToolAliases     map[string]string `koanf:"tool_aliases"`
 	} `koanf:"policy"`
 	Security struct {
-		HMACKeyID      string `koanf:"hmac_key_id"`
-		HMACSecretFile string `koanf:"hmac_secret_file"`
+		HMACKeyID        string `koanf:"hmac_key_id"`
+		HMACSecretFile   string `koanf:"hmac_secret_file"`
+		HMACPreviousKeys []struct {
+			KeyID      string `koanf:"key_id"`
+			SecretFile string `koanf:"secret_file"`
+		} `koanf:"hmac_previous_keys"`
 	} `koanf:"security"`
 	Storage struct {
 		Provider string `koanf:"provider"`
@@ -94,6 +98,7 @@ type config struct {
 	storageProvider   string
 	keyID             string
 	secret            []byte
+	previousKeys      []guardian.HMACKey
 	policyDir         string
 	manifest          string
 	mapping           string
@@ -202,6 +207,18 @@ func loadConfig(args, environ []string) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("security.hmac_secret_file %q: %w", secretPath, err)
 	}
+	var previousKeys []guardian.HMACKey
+	for i, k := range raw.Security.HMACPreviousKeys {
+		path, err := resolvePath(base, k.SecretFile)
+		if err != nil {
+			return config{}, fmt.Errorf("security.hmac_previous_keys[%d].secret_file: %w", i, err)
+		}
+		previous, err := guardian.ReadHMACSecretFile(path)
+		if err != nil {
+			return config{}, fmt.Errorf("security.hmac_previous_keys[%d].secret_file %q: %w", i, path, err)
+		}
+		previousKeys = append(previousKeys, guardian.HMACKey{ID: k.KeyID, Secret: previous})
+	}
 	envelopeLog, err := resolvePath(base, raw.Audit.EnvelopeLog)
 	if err != nil {
 		return config{}, fmt.Errorf("audit.envelope_log: %w", err)
@@ -219,7 +236,8 @@ func loadConfig(args, environ []string) (config, error) {
 		auditQueue:      guardian.JSONLQueue{MaxQueueRecords: raw.Audit.MaxQueueRecords, MaxQueueBytes: raw.Audit.MaxQueueBytes},
 		storageProvider: raw.Storage.Provider,
 		keyID:           raw.Security.HMACKeyID, secret: secret,
-		policyDir: policyDir, manifest: manifest, mapping: mapping,
+		previousKeys: previousKeys,
+		policyDir:    policyDir, manifest: manifest, mapping: mapping,
 		evaluator: raw.Policy.Evaluator, opaPath: opaPath, opaTimeout: raw.Policy.OPATimeout,
 		askSubstitution: guardian.AskSubstitution(raw.Policy.AskSubstitution),
 		toolAliases:     raw.Policy.ToolAliases,
@@ -272,6 +290,16 @@ func (c config) validate() error {
 	}
 	if c.keyID == "" {
 		errs = append(errs, errors.New("security.hmac_key_id must not be empty"))
+	}
+	seen := map[string]bool{c.keyID: true}
+	for i, k := range c.previousKeys {
+		switch {
+		case k.ID == "":
+			errs = append(errs, fmt.Errorf("security.hmac_previous_keys[%d].key_id must not be empty", i))
+		case seen[k.ID]:
+			errs = append(errs, fmt.Errorf("security.hmac_previous_keys[%d].key_id %q is already used by another key", i, k.ID))
+		}
+		seen[k.ID] = true
 	}
 	if c.storageProvider != storageMemory {
 		errs = append(errs, fmt.Errorf("storage.provider must be %q, the one provider this command ships; a host that embeds the guardian package passes its own SessionContextStore", storageMemory))
@@ -352,7 +380,7 @@ func run(args, environ []string) (err error) {
 	if err != nil {
 		return err
 	}
-	signer, err := guardian.NewHMACSigner(guardian.HMACKey{ID: c.keyID, Secret: c.secret})
+	signer, err := guardian.NewHMACSigner(append([]guardian.HMACKey{{ID: c.keyID, Secret: c.secret}}, c.previousKeys...)...)
 	if err != nil {
 		return err
 	}

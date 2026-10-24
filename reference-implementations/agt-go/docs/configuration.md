@@ -59,8 +59,9 @@ The Guardian refuses startup if the build record is missing or its checksum diff
 
 | Key | Meaning | Constraint |
 | --- | --- | --- |
-| `security.hmac_key_id` | The `key_id` the deployment gives its secret (§10): an opaque label, such as `2026-10`. A request signed under any other `key_id` is refused with `SIGNATURE_INVALID`. | Non-empty; no default. |
+| `security.hmac_key_id` | The `key_id` the deployment gives its secret (§10): an opaque label, such as `2026-10`. A request signed under a `key_id` this Guardian is not configured with is refused with `SIGNATURE_INVALID`. | Non-empty; no default. |
 | `security.hmac_secret_file` | File holding the shared HMAC secret, the HKDF input keying material. | Absolute path, or relative to the configuration file; standard base64 that decodes to at least 32 bytes, surrounding whitespace ignored; protect with operating-system permissions. |
+| `security.hmac_previous_keys` | Secrets being replaced, each a `key_id` and a `secret_file`. A request signed under one of them is verified and answered under it, beside `security.hmac_key_id`. | Optional list, set in the configuration file. Each `key_id` is non-empty and differs from every other; each `secret_file` follows the `security.hmac_secret_file` rules. |
 | `audit.envelope_log` | JSONL file for inbound and outbound ACS envelopes. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
 | `audit.event_log` | JSONL file for Guardian audit events. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
 | `audit.max_file_bytes` | Size at which each audit file rotates: it becomes `<file>.1`, older ones move up. `0` keeps every record, for a deployment that rotates the files with its own tooling. | Zero or positive. `guardian.yaml` ships 268435456 (256 MiB). |
@@ -71,6 +72,21 @@ The Guardian refuses startup if the build record is missing or its checksum diff
 
 Envelope records contain raw requests and answers, including tool arguments
 and results. Treat both audit files as sensitive.
+
+To replace the HMAC secret while agents move to it one at a time:
+
+1. Give the new secret its own `key_id`. Set it as `security.hmac_key_id` and
+   `security.hmac_secret_file`, move the old pair into
+   `security.hmac_previous_keys`, and restart the Guardian. It now accepts
+   both keys.
+2. Move each agent to the new `key_id` and secret between its sessions. A
+   session keeps the `key_id` that opened it: a step signed under another
+   `key_id` is answered DENY `key_not_bound`.
+3. When no agent uses the old key, remove it from `security.hmac_previous_keys`
+   and restart the Guardian.
+
+Each restart ends the sessions the `memory` provider holds, so agents open new
+ones.
 
 A background writer appends the records, so a slow disk never delays a
 decision. When a record would take its queue past `audit.max_queue_records`
