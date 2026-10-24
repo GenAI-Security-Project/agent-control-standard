@@ -10,7 +10,10 @@ in `tests/negative_controls_runner.py` a subject or a corpus it must refuse:
 - 4, the runner owns its process: every run is a child process, and a child that exits 0
   without a report is not read as a pass.
 - 5, a constant cannot be measured: a Guardian that skips signature checks fails exactly
-  the signature vectors, and a suite whose signatures never change is refused.
+  the signature vectors, and a suite whose signatures never change is refused. The same
+  holds across a sequence: a Guardian that answers a byte-identical resend with its first
+  decision, as an idempotent retry, fails exactly the resend vector, and a suite that never
+  resends a request is refused.
 - 7, codes, never prose: the right message with the wrong code fails, and the right code
   with other wording passes.
 - 9, a run that scores nothing does not exit 0.
@@ -52,6 +55,7 @@ VECTOR_IDS = [vector["id"] for vector in runner.VECTORS]
 NEGATIVE_IDS = {v["id"] for v in runner.VECTORS if v["kind"] == "negative"}
 POSITIVE_IDS = set(VECTOR_IDS) - NEGATIVE_IDS
 SIGNATURE_IDS = {"signature-invalid", "signature-missing"}
+RESEND_IDS = {"request-resent-after-lost-response"}
 
 
 # --- reading a run --------------------------------------------------------------------
@@ -119,11 +123,13 @@ def _allow(body: dict) -> dict:
 class Conformant:
     """Checks the three properties the vectors vary, the way sections 10 and 10.3 say."""
 
-    def __init__(self, check_signature: bool = True, codes: dict | None = None, wording: str = "plain"):
+    def __init__(self, check_signature: bool = True, codes: dict | None = None, wording: str = "plain",
+                 idempotent_resend: bool = False):
         self.check_signature = check_signature
         self.codes = codes or {}
         self.wording = wording
-        self.seen: set = set()
+        self.idempotent_resend = idempotent_resend
+        self.seen: dict = {}
         self.lock = threading.Lock()
 
     def refuse(self, body: dict, code: int, name: str) -> dict:
@@ -144,8 +150,10 @@ class Conformant:
         key = (params["metadata"]["session_id"], params["request_id"])
         with self.lock:
             if key in self.seen:
+                if self.idempotent_resend and self.seen[key] == body:
+                    return _allow(body)
                 return self.refuse(body, -32005, "REPLAY_DETECTED: duplicate request_id")
-            self.seen.add(key)
+            self.seen[key] = body
         return _allow(body)
 
 
@@ -245,6 +253,19 @@ def control_unchecked_signature_fails(script: Path, tmp_path: Path) -> None:
     assert {i for i, v in report.verdicts.items() if v == "FAIL"} == SIGNATURE_IDS, report.stdout
 
 
+def control_idempotent_resend_fails(script: Path, tmp_path: Path) -> None:
+    with Stub(Conformant(idempotent_resend=True)) as url:
+        report = run_runner(url, tmp_path, script=script)
+    assert {i for i, v in report.verdicts.items() if v == "FAIL"} == RESEND_IDS, report.stdout
+
+
+def control_no_resend_refused(script: Path, tmp_path: Path) -> None:
+    vectors = vectors_where(lambda v: v["id"] not in RESEND_IDS)
+    with Stub(Conformant()) as url:
+        report = run_runner(url, tmp_path, vectors, script=script)
+    assert report.returncode == 2 and "no vector changes resend" in report.stdout, report.stdout
+
+
 def control_wrong_code_fails(script: Path, tmp_path: Path) -> None:
     wrong = {code: -32603 for code in (-32004, -32005, -32006)}
     with Stub(Conformant(codes=wrong)) as url:
@@ -287,6 +308,9 @@ MUTANTS = [
      'counts["NOT-RUN"] += 1\n            print("NOT-RUN %s %s" % (vector["id"], type(exc).__name__))',
      'counts["PASS"] += 1\n            print("PASS " + vector["id"])',
      control_unanswered_scores_nothing),
+    ("a resend step sends a fresh request",
+     'if step.get("resend") == "identical" and sent is not None:', "if False:",
+     control_conformant_passes),
     ("every run exits 0",
      'return 1 if counts["FAIL"] or counts["NOT-RUN"] else 0', "return 0",
      control_allow_all_fails),
@@ -322,6 +346,14 @@ def test_a_guardian_that_skips_signatures_fails_the_signature_vectors(tmp_path):
 
 def test_a_suite_whose_signatures_never_change_is_refused(tmp_path):
     control_constant_signature_refused(RUNNER, tmp_path)
+
+
+def test_a_guardian_that_answers_a_resend_as_an_idempotent_retry_fails_it(tmp_path):
+    control_idempotent_resend_fails(RUNNER, tmp_path)
+
+
+def test_a_suite_that_never_resends_a_request_is_refused(tmp_path):
+    control_no_resend_refused(RUNNER, tmp_path)
 
 
 # --- requirement 7 ----------------------------------------------------------------------
@@ -393,6 +425,7 @@ REFERENCE_GAPS = {
     "signature-invalid": "a section 10 MUST the reference Guardian fails today: it does not verify signatures (#184)",
     "signature-missing": "a section 10 MUST the reference Guardian fails today: it accepts an unsigned request (#184)",
     "request-id-repeated": "a section 10.3 MUST the reference Guardian fails today: it does not track request_id (#184)",
+    "request-resent-after-lost-response": "a section 10.3 MUST the reference Guardian fails today: it does not track request_id (#184)",
     "timestamp-outside-window": "a section 10.3 MUST the reference Guardian fails today: it does not check the skew window (#184)",
 }
 

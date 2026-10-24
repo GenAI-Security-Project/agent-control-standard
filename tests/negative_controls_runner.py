@@ -92,6 +92,19 @@ VECTORS = [
         "expect": {"error": -32005},
     },
     {
+        # The retry an agent sends when the response to a non-idempotent call was lost:
+        # the same bytes, signature and timestamp included. A Guardian that treats it as
+        # an idempotent retry and returns its first decision lets the action run twice.
+        "id": "request-resent-after-lost-response",
+        "group": "replay",
+        "kind": "negative",
+        "requirement": {"spec_version": SPEC_VERSION, "anchor": SPEC + "#103-replay-protection",
+                        "quote": "MUST reject duplicate `request_id` values within the session with "
+                                 "`REPLAY_DETECTED` (`-32005`, §17.1)"},
+        "steps": [{}, {"resend": "identical"}],
+        "expect": {"error": -32005},
+    },
+    {
         "id": "timestamp-inside-window",
         "group": "window",
         "kind": "positive",
@@ -118,6 +131,7 @@ VECTORS = [
 VARIED = {
     "signature": ("invalid", "absent"),
     "request_id": ("repeat",),
+    "resend": ("identical",),
 }
 
 
@@ -216,11 +230,14 @@ def run(url: str, vectors: list, psk: str) -> int:
         return 2
     counts = {"PASS": 0, "FAIL": 0, "NOT-RUN": 0}
     for vector in vectors:
-        session_id, last, observations = str(uuid.uuid4()), None, []
+        session_id, last, sent, observations = str(uuid.uuid4()), None, None, []
         try:
             for step in vector["steps"]:
-                body = envelope(step, session_id, last, psk)
-                last = body["params"]["request_id"]
+                if step.get("resend") == "identical" and sent is not None:
+                    body = sent
+                else:
+                    body = envelope(step, session_id, last, psk)
+                sent, last = body, body["params"]["request_id"]
                 observations.append(observe(post(url, body)))
         except (OSError, ValueError, urllib.error.URLError) as exc:
             # A transport failure measured nothing, so it is never scored as a pass.
