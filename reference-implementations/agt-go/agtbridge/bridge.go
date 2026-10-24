@@ -2,18 +2,17 @@
 // Governance Toolkit (AGT), the engine of the TypeScript reference
 // implementation beside this module.
 //
-// The package holds one projection and evaluates through one of two
-// evaluators. The projection is what the TypeScript Guardian does around
+// The package holds one projection and evaluates through one
+// evaluator. The projection is what the TypeScript Guardian does around
 // AGT: it keeps the session's policy state, assembles AGT's snapshot at the
 // pre_tool_call and post_tool_call intervention points, dispatches the
 // egress annotator the reference's manifest declares, turns each verdict
 // into an ACS decision through the reference's mapping.yaml, and handles
 // Ask, tool aliases and wrapped MCP calls. The evaluator executes AGT's
 // policy for a snapshot: the AGT evaluator (package agteval) calls AGT's own
-// runtime library, and the Go evaluator (package goeval) reproduces that
-// runtime in Go for a build without cgo.
+// runtime library.
 //
-// agtbridge and its evaluators are the only packages that know AGT exists.
+// agtbridge and its evaluator are the only packages that know AGT exists.
 package agtbridge
 
 import (

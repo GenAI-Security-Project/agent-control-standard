@@ -35,7 +35,7 @@ func (e *cancellationEngine) Decide(ctx context.Context, _ guardian.PolicyInput)
 // The decision grace is short, so the engine's decision is cancelled; the
 // denial then has guardian.yaml's shutdown_grace to reach the agent.
 func TestShutdownDeliversCancellationDenial(t *testing.T) {
-	c, err := loadReferenceConfig(t, "ACS__POLICY__EVALUATOR=go", "ACS__POLICY__OPA_PATH=")
+	c, err := loadReferenceConfig(t)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,9 +2,13 @@ package guardian_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -71,6 +75,43 @@ func TestHMACSignerVectors(t *testing.T) {
 	}
 	if got != v.Response.Signed.Result.Signature {
 		t.Fatalf("signed %+v, want %+v", got, v.Response.Signed.Result.Signature)
+	}
+}
+
+// TestHMACSignerDerivesTheSection10Key signs with the secret and session_id
+// of §10's HKDF example, read from the specification, and requires the
+// HMAC that the example's key gives.
+func TestHMACSignerDerivesTheSection10Key(t *testing.T) {
+	spec, err := os.ReadFile("../../../docs/spec/instrument/specification.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	example := regexp.MustCompile("the `session_id` `([0-9a-f-]{36})` give the key `([0-9a-f]{64})`").FindSubmatch(spec)
+	if example == nil {
+		t.Fatal("§10 no longer carries the HKDF example in the expected form")
+	}
+	sessionID := string(example[1])
+	key, err := hex.DecodeString(string(example[2]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(i)
+	}
+	s, err := guardian.NewHMACSigner(guardian.HMACKey{ID: "2026-10", Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`{"jsonrpc":"2.0"}`)
+	got, err := s.Sign(context.Background(), sessionID, "2026-10", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := hmac.New(sha256.New, key)
+	h.Write(input)
+	if want := base64.StdEncoding.EncodeToString(h.Sum(nil)); got.Value != want {
+		t.Fatalf("signed %s, want %s from the §10 key", got.Value, want)
 	}
 }
 

@@ -122,7 +122,7 @@
         },
         "key_id": {
           "type": "string",
-          "description": "Identifier resolving to the public key (or the hybrid key descriptor that pins both component public keys for hybrid algorithms)."
+          "description": "For HMAC-SHA256, an opaque label chosen by the deployment that names one configured secret (Specification 10, key_id for HMAC). For asymmetric algorithms, the identifier resolving to the public key (or the hybrid key descriptor that pins both component public keys for hybrid algorithms)."
         }
       }
     }

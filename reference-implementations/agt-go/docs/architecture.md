@@ -52,24 +52,15 @@ snapshot. `policy.evaluator` selects it:
 | Evaluator | Package | What decides | Build |
 | --- | --- | --- | --- |
 | `agt` | [`agtbridge/agteval`](../agtbridge/agteval/) | AGT's runtime library at the commit [`agt-native.lock`](../agt-native.lock) pins, the same commit `../agt/agt.lock` pins for the policy bundle. At that commit AGT runs each Rego decision in the `opa` program. | cgo and the `agteval` build tag. `make agt-native` builds the library and fetches OPA. Platform toolchains are listed in [Build and package](building.md). |
-| `go` | [`agtbridge/goeval`](../agtbridge/goeval/) | A Go reproduction of the part of AGT's runtime the checked-in manifest uses, running the same Rego policies with OPA's Go library. A manifest feature outside that part stops startup. | Pure Go, any platform. |
 
 ```mermaid
 flowchart LR
     G[guardian.Guardian] --> E[agtbridge.Engine]
     E --> A[agteval.Evaluator]
-    E --> R[goeval.Evaluator]
     A -->|C ABI| L[AGT runtime library]
     L --> O[opa]
     L -->|annotator callback| X[agtbridge.AnnotateEgress]
-    R --> X
-    R --> Q[OPA Go library]
 ```
-
-`agtbridge.TestEvaluatorsAgree` runs every recorded case through both
-evaluators. A step they decide differently fails the test unless it is listed,
-with its reason, for that pair of AGT versions. [Differences](differences.md#agt)
-lists the boundary.
 
 A call into the library cannot be interrupted. When the decision timeout ends
 first, the Guardian answers DENY and keeps the call's place among
@@ -306,9 +297,8 @@ session gets at most `MaxDeferrals` DEFER answers, 3 by default; the next one is
    [`internal/disposition/`](../internal/disposition/) checks each decision and
    [`internal/mcp/`](../internal/mcp/) reads wrapped MCP messages.
    [`cmd/guardian/`](../cmd/guardian/) is the standalone program around the core.
-4. **The AGT engine.** [`agtbridge/`](../agtbridge/) with its two evaluators,
-   [`agtbridge/agteval/`](../agtbridge/agteval/) and
-   [`agtbridge/goeval/`](../agtbridge/goeval/), described in
+4. **The AGT engine.** [`agtbridge/`](../agtbridge/) with its evaluator,
+   [`agtbridge/agteval/`](../agtbridge/agteval/), described in
    [how AGT is used](#how-agt-is-used).
 5. **The Observed Agent side.** [`internal/observedagent/`](../internal/observedagent/) is the
    bundled Observed Agent client: it signs requests and checks answers, and the

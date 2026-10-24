@@ -1,7 +1,7 @@
 // Command guardian serves the ACS Guardian with AGT as its policy engine,
 // over HTTP: POST /acs, GET /healthz and GET /readyz. policy.evaluator
 // selects the AGT evaluator, which calls AGT's runtime library and needs
-// the agteval build tag, or the Go evaluator.
+// the agteval build tag.
 package main
 
 import (
@@ -289,7 +289,6 @@ func (c config) validate() error {
 		errs = append(errs, fmt.Errorf("protocol.on_decision_failure must be %q or %q", acs.FailureProceed, acs.FailureDeny))
 	}
 	switch c.evaluator {
-	case evaluatorGo:
 	case evaluatorAGT:
 		if c.opaPath == "" {
 			errs = append(errs, errors.New("policy.opa_path must name the opa executable the agt evaluator runs"))
@@ -301,7 +300,7 @@ func (c config) validate() error {
 			errs = append(errs, errors.New("policy.opa_timeout must be shorter than protocol.decision_timeout, or the agent stops waiting before AGT's deny for a slow opa arrives"))
 		}
 	default:
-		errs = append(errs, fmt.Errorf("policy.evaluator must be %q or %q", evaluatorAGT, evaluatorGo))
+		errs = append(errs, fmt.Errorf("policy.evaluator must be %q", evaluatorAGT))
 	}
 	if c.askSubstitution != guardian.AskSubstitutionNone && c.askSubstitution != guardian.AskSubstitutionDeny && c.askSubstitution != guardian.AskSubstitutionDefer {
 		errs = append(errs, errors.New("policy.ask_substitution must be none, deny or defer"))

@@ -11,9 +11,7 @@ IMAGE_PLATFORM ?= linux/$(shell $(GO) env GOHOSTARCH)
 IMAGE_OUTPUT ?= type=oci,dest=.acs/acs-guardian.oci.tar
 
 ifneq ($(EVALUATOR),agt)
-ifneq ($(EVALUATOR),go)
-$(error EVALUATOR must be agt or go)
-endif
+$(error EVALUATOR must be agt)
 endif
 export GOOS GOARCH
 EXE := $(if $(filter windows,$(GOOS)),.exe,)
@@ -57,19 +55,19 @@ help:
 		'setup             install dependencies required by the quality gate' \
 		'agt-native        build the AGT runtime library and fetch opa, as agt-native.lock pins' \
 		'build             compile every package and the Guardian with AGT' \
-		'run               build and run the selected evaluator on this host' \
-		'test              test the selected evaluator on this host' \
+		'run               build and run the Guardian on this host' \
+		'test              test the Guardian on this host' \
 		'image             build Linux images with Docker Buildx, without publishing' \
 		'image-check       run the local image through shared conformance probes' \
-		'EVALUATOR=agt|go   select the implementation; default: agt' \
+		'EVALUATOR=agt      select the implementation; default: agt' \
 		'GOOS, GOARCH      select the build target; default: this host' \
-		'test-race         run every test with the Go evaluator and the race detector' \
+		'test-race         run the tests that need no AGT runtime, with the race detector' \
 		'codex-example     start the Guardian and a governed Codex session' \
 		'opencode-example  start the Guardian and a governed OpenCode session' \
 		'example-check     test the custom engine and host adapters' \
 		'conformance       run the shared ACS harness against this Guardian' \
 		'docs-check        validate documentation links and named tests' \
-		'load              measure the selected evaluator under concurrent clients (docs/load.md)' \
+		'load              measure the Guardian under concurrent clients (docs/load.md)' \
 		'check             run the complete local quality gate'
 
 setup: host-target require-bun agt-native
@@ -224,9 +222,3 @@ check:
 	@bash scripts/check.sh '$(MAKE)'
 
 check-all: host-target files-check fmt-check tidy-check native-flags-check vet lint vulncheck build test-race test example-check conformance coverage docs-check
-	$(MAKE) build EVALUATOR=go
-	$(MAKE) test EVALUATOR=go
-ifneq ($(EVALUATOR),agt)
-	$(MAKE) build EVALUATOR=agt
-	$(MAKE) test EVALUATOR=agt
-endif

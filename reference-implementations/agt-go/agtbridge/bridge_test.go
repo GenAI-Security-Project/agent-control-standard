@@ -1,9 +1,10 @@
+//go:build agteval
+
 package agtbridge_test
 
 import (
 	"context"
 	"encoding/json"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,28 +16,15 @@ import (
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
-	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge/goeval"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge/agteval"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/observedagent"
 )
 
-// agtTree is the TypeScript reference tree, whose manifest, bundle and
-// mapping this engine reads unchanged.
-const agtTree = "../../agt"
-
 func newEngine(t *testing.T, opts agtbridge.Options) *agtbridge.Engine {
 	t.Helper()
-	e, err := goEngine(os.DirFS(agtTree), "policy/manifest.yaml", "mapping.yaml", opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e
-}
-
-func goEvaluator(t testing.TB) *goeval.Evaluator {
-	t.Helper()
-	e, err := goeval.New(context.Background(), os.DirFS(agtTree), "policy/manifest.yaml")
+	e, err := agtEngine(agtTree, "policy/manifest.yaml", "mapping.yaml", opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,13 +40,14 @@ func engineOver(t testing.TB, evaluator agtbridge.Evaluator) *agtbridge.Engine {
 	return e
 }
 
-// goEngine builds the engine over the Go evaluator.
-func goEngine(fsys fs.FS, manifestPath, mappingPath string, opts agtbridge.Options) (*agtbridge.Engine, error) {
-	evaluator, err := goeval.New(context.Background(), fsys, manifestPath)
+// agtEngine builds the engine over the AGT evaluator, from the manifest and
+// the mapping in dir.
+func agtEngine(dir, manifestPath, mappingPath string, opts agtbridge.Options) (*agtbridge.Engine, error) {
+	evaluator, err := agteval.New(agtConfig(dir + "/" + manifestPath))
 	if err != nil {
 		return nil, err
 	}
-	return agtbridge.New(fsys, mappingPath, evaluator, opts)
+	return agtbridge.New(os.DirFS(dir), mappingPath, evaluator, opts)
 }
 
 // testSigner is the one HMAC key every Guardian in these tests signs with.
@@ -323,23 +312,6 @@ func TestResultRedaction(t *testing.T) {
 	}
 }
 
-func TestNewRefusesAnUnsupportedManifest(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(dir+"/manifest.yaml", []byte("agent_control_specification_version: \"0.3.1-beta\"\nextends: [\"https://example.com/m.yaml\"]\nintervention_points: {}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mapping, err := os.ReadFile(agtTree + "/mapping.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dir+"/mapping.yaml", mapping, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := goEngine(os.DirFS(dir), "manifest.yaml", "mapping.yaml", agtbridge.Options{}); err == nil {
-		t.Fatal("accepted a manifest with extends")
-	}
-}
-
 // TestEscalate drives AGT's escalate verdict through a policy that answers
 // it, since the checked-in policy configuration never escalates.
 func TestEscalate(t *testing.T) {
@@ -373,7 +345,7 @@ tools:
 		{"approver", &acs.Approver{Type: acs.ApproverService, ID: "security-service", Endpoint: &endpoint, Auth: &acs.ApproverAuth{Method: &authMethod}}, acs.Ask},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			e, err := goEngine(os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{Approver: tt.approver})
+			e, err := agtEngine(dir, "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{Approver: tt.approver})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -459,7 +431,7 @@ verdict := {"decision": "warn", "reason": sprintf("labels_%d", [count(source)]),
 		t.Fatal(err)
 	}
 	mustWrite(t, dir, "mapping.yaml", string(mapping))
-	e, err := goEngine(os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	e, err := agtEngine(dir, "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +481,7 @@ verdict := {"decision": "allow", "result_labels": []}
 		t.Fatal(err)
 	}
 	mustWrite(t, dir, "mapping.yaml", string(mapping))
-	e, err := goEngine(os.DirFS(dir), "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	e, err := agtEngine(dir, "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,6 @@
 # Build and package the Guardian
 
-`make build` uses the AGT evaluator. Set `EVALUATOR=go` for the Go evaluator.
+`make build` uses the AGT evaluator.
 `GOOS` and `GOARCH` use Go's standard target names. Both default to the host.
 
 | Target | Native AGT library |
@@ -13,13 +13,9 @@
 
 ```bash
 make build
-make build EVALUATOR=go
 make build GOOS=windows GOARCH=amd64
-make build EVALUATOR=go GOOS=darwin GOARCH=arm64
 make run
-make run EVALUATOR=go
 make test
-make test EVALUATOR=go
 ```
 
 The binary is in `.acs/bin/<GOOS>-<GOARCH>/<EVALUATOR>/`.
@@ -33,7 +29,7 @@ On macOS, install the Xcode command line tools. Native macOS builds require the 
 On Windows, use the MSYS2 MinGW-w64 shell with GCC, Make, and the listed tools on PATH.
 The Rust target is `x86_64-pc-windows-gnu`. The build script installs the pinned Rust target.
 
-The Go evaluator cross-builds without a C compiler. AGT cross-builds also require the target C compiler and system libraries.
+AGT cross-builds require the target C compiler and system libraries.
 For Windows from Linux, install MinGW-w64. The Makefile selects `x86_64-w64-mingw32-gcc`.
 For a Linux architecture change, set `CC` to the target compiler.
 Cross-builds do not execute tests. `make run`, `make test`, and `make check` require the host target.
@@ -51,7 +47,6 @@ The image runs as user 65532. Audit files go to `/data`.
 
 ```bash
 make image
-make image EVALUATOR=go IMAGE=acs-guardian-go:local
 make image PLATFORMS=linux/amd64 IMAGE_OUTPUT=type=docker
 docker run --rm -p 8787:8787 --user "$(id -u):$(id -g)" \
   --tmpfs "/data:uid=$(id -u),gid=$(id -g),mode=0700" \

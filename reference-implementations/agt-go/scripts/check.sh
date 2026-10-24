@@ -7,7 +7,7 @@ log="$(mktemp ".acs/checks/check-$(date +%Y%m%d-%H%M%S).XXXXXX")"
 mv "$log" "$log.log"
 log="$log.log"
 log="$(pwd)/$log"
-printf 'Checking the Guardian with AGT and Go...\n'
+printf 'Checking the Guardian...\n'
 inline=0
 if [[ -t 1 && "${CI:-}" != true ]]; then inline=1; fi
 set +e
@@ -48,7 +48,7 @@ if [[ "$status" == 0 ]]; then
   status="${statuses[1]}"
 fi
 if [[ "$status" == 0 ]]; then
-  printf 'PASS: All checks passed for AGT and Go.\nDetails: %s\n' "$log"
+  printf 'PASS: All checks passed.\nDetails: %s\n' "$log"
 else
   printf 'FAIL: Checks stopped with exit code %s.\n' "$status" >&2
   tail -n 80 "$log" >&2

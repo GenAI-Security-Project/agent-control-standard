@@ -1,7 +1,7 @@
 // Package tscases holds the parity corpus: sessions of steps sent to the
 // TypeScript reference Guardian, whose answers are recorded once and replayed
 // against the Go implementation. The corpus exercises the two hooks the TypeScript
-// Guardian evaluates, through the reproduced AGT runtime's branches: the
+// Guardian evaluates, through the AGT runtime's branches: the
 // destructive-command patterns, the egress annotator and its URL parsing,
 // the tool registry, the policy target argument, the result redaction, and
 // the session's information-flow labels across steps.

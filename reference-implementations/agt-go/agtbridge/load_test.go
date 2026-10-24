@@ -1,4 +1,4 @@
-//go:build load
+//go:build agteval && load
 
 package agtbridge_test
 
@@ -26,10 +26,10 @@ import (
 )
 
 // TestLoad measures the Guardian over the evaluator ACS__POLICY__EVALUATOR
-// names (agt, the default, or go): decisions per second (engine_saturated
-// refusals not counted), latency of every step, the refusals, the opa
-// processes alive at once and their memory (agt runs one per decision; go
-// runs none), and the audit log's size on disk. It asserts only that the
+// names (agt, the default): decisions per second (engine_saturated refusals
+// not counted), latency of every step, the refusals, the opa processes alive
+// at once and their memory (agt runs one per decision), and the audit log's
+// size on disk. It asserts only that the
 // audit log lost, split and reordered no record it kept, and stayed within
 // its rotation bound; `make load` runs it with the Makefile's EVALUATOR, and
 // docs/load.md records the results the defaults rest on.

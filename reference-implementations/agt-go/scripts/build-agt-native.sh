@@ -41,7 +41,7 @@ case "$platform" in
   *) die "unsupported target $platform; supported: linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64" ;;
 esac
 if [ "$target_os" = darwin ] && [ "$host_os" != darwin ]; then
-  die "macOS native builds require a Mac and the Apple SDK; use EVALUATOR=go for a Go cross-build"
+  die "macOS native builds require a Mac and the Apple SDK"
 fi
 out="${AGT_OUT:-.acs/agt/$platform}"
 opa_sha256="$(pinned ".opa_sha256[\"$platform\"]")"

@@ -93,7 +93,7 @@ func TestAuditQueueConfiguration(t *testing.T) {
 		"one_byte_short":    {queueBytes: least - 1, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c, err := loadReferenceConfig(t, "ACS__POLICY__EVALUATOR=go", "ACS__POLICY__OPA_PATH=",
+			c, err := loadReferenceConfig(t,
 				"ACS__LIMITS__MAX_BODY_BYTES="+strconv.Itoa(body),
 				"ACS__AUDIT__MAX_QUEUE_RECORDS=7",
 				"ACS__AUDIT__MAX_QUEUE_BYTES="+strconv.FormatInt(tt.queueBytes, 10))

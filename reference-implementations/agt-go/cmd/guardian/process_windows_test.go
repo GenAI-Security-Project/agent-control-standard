@@ -1,3 +1,5 @@
+//go:build agteval
+
 package main_test
 
 import (

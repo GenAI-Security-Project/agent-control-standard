@@ -30,9 +30,9 @@ enabled only after the policy engine and Guardian are ready.
 | `policy.deployment_dir` | Root directory of one AGT policy deployment. | Existing absolute path, or relative to the configuration file. |
 | `policy.manifest` | AGT manifest within `policy.deployment_dir`. | Non-empty relative path that cannot escape the deployment directory. |
 | `policy.mapping` | ACS verdict mapping within `policy.deployment_dir`. | Same path rule as `policy.manifest`. |
-| `policy.evaluator` | `agt` uses AGT's runtime library. `go` uses the Go reproduction. | Required: `agt` or `go`. The reference YAML selects `agt`. `make build` includes AGT; `make build EVALUATOR=go` refuses `agt` at startup. |
-| `policy.opa_path` | The OPA executable or its directory. | Required for `agt`: absolute or relative to the configuration file. Directory paths select `opa` on Unix and `opa.exe` on Windows. `make agt-native` copies the host executable to `.acs/agt/bin/`. Not read by `go`. |
-| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `4s`, positive, a whole number of milliseconds, and shorter than `protocol.decision_timeout`. AGT's timer starts after `opa` starts, so leave room for process start and signing; `guardian.yaml` leaves one second. Not read by `go`. |
+| `policy.evaluator` | `agt` uses AGT's runtime library. | Required: `agt`. The reference YAML selects `agt`. A build without the `agteval` tag refuses `agt` at startup. |
+| `policy.opa_path` | The OPA executable or its directory. | Required for `agt`: absolute or relative to the configuration file. Directory paths select `opa` on Unix and `opa.exe` on Windows. `make agt-native` copies the host executable to `.acs/agt/bin/`. |
+| `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `4s`, positive, a whole number of milliseconds, and shorter than `protocol.decision_timeout`. AGT's timer starts after `opa` starts, so leave room for process start and signing; `guardian.yaml` leaves one second. |
 | `policy.ask_substitution` | Endpoint behavior when ASK cannot be completed. | `none`, `deny` or `defer`. |
 | `policy.tool_aliases` | Optional map from an Observed Agent's tool name to the manifest's tool name. | Both names must be non-empty. |
 
@@ -46,10 +46,7 @@ A tool alias changes only the policy input. The signed ACS request, the
 SessionContext chain and audit records keep the original tool name.
 
 Build selection and evaluator selection are separate. The `agteval` build tag
-includes AGT; `policy.evaluator` selects which evaluator runs.
-`ACS__POLICY__EVALUATOR=go` selects the Go evaluator in either build.
-An AGT build still links the library when the Go evaluator is selected.
-`make run EVALUATOR=go` builds without that dependency and selects the Go evaluator.
+includes AGT; `policy.evaluator` names the evaluator to run, and `agt` is the only one.
 
 The AGT build includes the library and `agt-native.json` beside the binary.
 Linux and macOS builds also embed the platform library directory under `.acs/agt/` for tests.

@@ -25,8 +25,8 @@ exactly one meaning.
 | `request_hash` | Lowercase-hex SHA-256 of the request's `params`, signature included. | §8.1 |
 | `entry_hash` | Lowercase-hex SHA-256 of the entry without `entry_hash` and `previous_hash`, then the raw 32 bytes of `previous_hash`, or nothing for a session's first entry. | §8.2 |
 
-The HMAC-SHA256 signer derives a separate key for each session with HKDF (RFC 5869); its
-inputs are listed in [conformance](conformance.md#behavior-that-acs-v010-leaves-undefined).
+The HMAC-SHA256 signer derives a separate key for each session with HKDF (RFC 5869) with
+the inputs §10 fixes.
 The signature value is standard base64 with padding.
 
 ## Tests

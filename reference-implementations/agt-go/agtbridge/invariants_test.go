@@ -17,8 +17,8 @@ var agtVocabulary = regexp.MustCompile(`\b(escalate|intervention_point|pre_tool_
 const module = "github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go"
 
 // dependencyRules say which packages may depend on what, in the build
-// without the agteval tag and in the build with it. OPA belongs to the Go
-// evaluator alone: the projection and the AGT evaluator, which calls AGT's
+// without the agteval tag and in the build with it. No package links OPA:
+// the projection and the AGT evaluator, which calls AGT's
 // own runtime library, never link it. The AGT evaluator reaches only the
 // command, so a program importing guardian or agtbridge links no native
 // library unless it imports agtbridge/agteval itself.
@@ -26,8 +26,8 @@ var dependencyRules = []struct {
 	dependency string
 	allowed    []string
 }{
-	{"github.com/open-policy-agent/", []string{module + "/agtbridge/goeval", module + "/cmd/guardian"}},
-	{module + "/agtbridge", []string{module + "/agtbridge/goeval", module + "/agtbridge/agteval", module + "/cmd/guardian"}},
+	{"github.com/open-policy-agent/", nil},
+	{module + "/agtbridge", []string{module + "/agtbridge/agteval", module + "/cmd/guardian"}},
 	{module + "/agtbridge/agteval", []string{module + "/cmd/guardian"}},
 }
 

@@ -11,7 +11,7 @@ import (
 
 // EgressAnnotator is the one annotator the checked-in manifest declares, and
 // the only one this bridge dispatches, as the TypeScript reference's Guardian
-// does (packages/guardian/src/annotate-egress.ts). Both evaluators hand it
+// does (packages/guardian/src/annotate-egress.ts). The AGT evaluator hands it
 // to AGT as the host's annotator dispatcher.
 const EgressAnnotator = "egress"
 

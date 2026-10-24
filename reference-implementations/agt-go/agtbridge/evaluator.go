@@ -9,9 +9,9 @@ const (
 	PointPostToolCall = "post_tool_call"
 )
 
-// Evaluator executes AGT's policy for the projection. Two exist: the Go
-// evaluator (package goeval) and the AGT evaluator, which calls AGT's own
-// runtime library (package agteval, build tag agteval).
+// Evaluator executes AGT's policy for the projection. One exists: the AGT
+// evaluator, which calls AGT's own runtime library (package agteval, build
+// tag agteval).
 type Evaluator interface {
 	// Governs reports whether the manifest configures the intervention
 	// point.

@@ -3,11 +3,9 @@
 This module implements an ACS v0.1.0 Guardian in Go. The default build uses the
 Agent Governance Toolkit (AGT) runtime in the Guardian process.
 Both reference implementations use the same checked-in [AGT policies](../agt/README.md).
-An optional build uses a Go reproduction of the runtime without cgo.
 
-Both evaluators match 49 sessions recorded from the TypeScript reference (`agtbridge.TestRecordedCases`).
+The AGT evaluator matches 49 sessions recorded from the TypeScript reference (`agtbridge.TestRecordedCases`).
 The comparison covers dispositions, reason codes, policy references, reasoning, and modifications.
-`agtbridge.TestEvaluatorsAgree` also compares the evaluators at each step.
 These tests establish parity for the recorded behavior.
 [Conformance](docs/conformance.md) maps each ACS-Core item to its tests.
 
@@ -46,7 +44,7 @@ The build requires Go 1.27.3 or newer and a C compiler.
 Install Make, OpenSSL, Git, curl, jq, and [rustup](https://rustup.rs).
 The quality gate also requires Bun 1.3.11 or newer.
 
-The AGT evaluator is the default. The first build compiles AGT's runtime library
+The Guardian evaluates policy with AGT. The first build compiles AGT's runtime library
 and downloads `opa` into `.acs/agt/`. [`agt-native.lock`](agt-native.lock) pins
 the source commit, Rust toolchain and OPA executable, and the hash of AGT's `ffi.rs`
 that `agtbridge/agteval/acs.h` is written from; a test requires the same AGT commit
@@ -83,34 +81,22 @@ make test
 `cmd/guardian.TestServesDecisions` starts the built command.
 The checked-in policy allows `ls -la` and denies `echo rm -rf /`.
 
-Without a C toolchain or Rust, run `make run EVALUATOR=go`.
-The target builds without cgo and selects `policy.evaluator: go`.
-The Go evaluator runs AGT's policies without the OPA executable.
-
 ### Select the build and evaluator
 
 | Command | Result |
 | --- | --- |
 | `make` or `make build` | Build every package with AGT and write the host binary. |
 | `make run` | Build with AGT and start the reference configuration. |
-| `make build EVALUATOR=go` | Build every package and the Guardian without cgo. |
-| `make run EVALUATOR=go` | Build without cgo and start with the Go evaluator. |
 | `make test` | Run every test with AGT and the race detector. |
-| `make test EVALUATOR=go` | Run every test without cgo. |
 | `make build GOOS=windows GOARCH=amd64` | Build a Windows binary with AGT and a compatible native toolchain. |
 | `make image` | Build Linux amd64 and arm64 images into a local OCI archive. |
 
 The build tag `agteval` includes the AGT evaluator. That build needs cgo and
-links AGT's runtime library. The Go build omits the tag and uses `CGO_ENABLED=0`.
+links AGT's runtime library.
 
-At startup, `policy.evaluator` selects `agt` or `go`. The environment variable
+At startup, `policy.evaluator` selects `agt`. The environment variable
 `ACS__POLICY__EVALUATOR` overrides that setting. The reference YAML selects `agt`.
-A build without AGT refuses `agt`; it never substitutes the Go evaluator.
-Selecting `go` in an AGT build still requires the linked AGT library.
-Use `make build EVALUATOR=go` to remove that dependency.
-`go` reproduces AGT's runtime in Go for builds without cgo. It is not the reference
-evaluator: the expectations for reference implementations ([#256](https://github.com/GenAI-Security-Project/agent-control-standard/pull/256)) ask for AGT's own
-runtime, which `agt` is.
+A build without AGT refuses `agt`.
 
 ## Use it as a Go library
 
@@ -138,7 +124,6 @@ http.Handle("/acs", g)
   Keep `OPATimeout` shorter than the Guardian's `DecisionTimeout`, with room for the
   `opa` process to start: the library does not compare the two, and an agent that
   stops waiting first applies its failure posture before AGT's deny arrives.
-  `goeval.New(ctx, os.DirFS("/opt/acs/policy"), "policy/manifest.yaml")` builds the Go evaluator.
   Importing `guardian` or `agtbridge` alone adds no native dependency.
 - Under `agteval` each decision runs one `opa` process. Set `guardian.Config.MaxEngineCalls`
   for the host: the library default, 256, is sized for in-process engines;
@@ -184,10 +169,8 @@ The ACS report in the log also describes standard limitations. Its cross symbols
 - Check Go's cgo flag rules for all five native targets.
 - Run `go vet` and Staticcheck with and without the `agteval` tag.
 - Run `govulncheck` with and without the `agteval` tag.
-- Build every package with AGT and without cgo.
-- Run every Go test without cgo.
+- Build every package with AGT.
 - Run every Go test with the race detector, with and without AGT.
-- Compare both evaluators on the recorded cases.
 - Check the custom-engine module and OpenCode plugin callbacks.
 - Run the shared ACS conformance checks against a live Guardian using AGT.
 - Enforce the coverage floor and check documentation.

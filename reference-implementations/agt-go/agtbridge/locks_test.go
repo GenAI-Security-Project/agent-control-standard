@@ -7,6 +7,10 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 )
 
+// agtTree is the TypeScript reference tree, whose manifest, bundle and
+// mapping this engine reads unchanged.
+const agtTree = "../../agt"
+
 // TestAGTLocksPinOneCommit: the agt evaluator links the AGT that
 // agt-native.lock pins, and runs the policy bundle agt.lock pins, so an AGT
 // bump that moves one lock fails here until it moves the other. The npm

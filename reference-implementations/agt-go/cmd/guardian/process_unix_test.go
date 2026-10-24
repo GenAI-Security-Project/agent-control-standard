@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build agteval && !windows
 
 package main_test
 

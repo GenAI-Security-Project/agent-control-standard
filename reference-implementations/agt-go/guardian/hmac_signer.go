@@ -21,7 +21,7 @@ const MinHMACSecretBytes = sha256.Size
 
 // DecodeHMACSecret decodes input keying material written as standard base64
 // (RFC 4648 §4), surrounding whitespace ignored, and requires at least
-// MinHMACSecretBytes decoded bytes, the format #256 proposes for every
+// MinHMACSecretBytes decoded bytes, the format #256 sets for every
 // reference implementation, so one secret file serves every
 // Guardian and host adapter in a deployment.
 func DecodeHMACSecret(encoded []byte) ([]byte, error) {
@@ -53,11 +53,9 @@ type HMACKey struct {
 
 // HMACSigner is the ACS-Core baseline Signer: HMAC-SHA256 under a
 // per-session key derived with HKDF-SHA256 (RFC 5869) from the input keying
-// material and the session identifier, as §10 prescribes.
-//
-// §10 leaves the HKDF parameters open. This signer uses no salt, the UTF-8
-// session_id as info and a 32-byte output; the signature value is standard
-// base64 with padding (RFC 4648 §4).
+// material and the session identifier, with the parameters §10's "HMAC key
+// derivation" fixes: no salt, the UTF-8 session_id as info and a 32-byte
+// output. The signature value is standard base64 with padding (RFC 4648 §4).
 type HMACSigner struct {
 	signing HMACKey // answers unsigned requests
 	byID    map[string][]byte

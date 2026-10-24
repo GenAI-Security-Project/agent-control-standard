@@ -1,3 +1,5 @@
+//go:build agteval
+
 package agtbridge_test
 
 import (
@@ -20,9 +22,7 @@ import (
 
 // recordedEvaluators are the evaluators this build has, by
 // policy.evaluator name; a build with the agteval tag adds agt.
-var recordedEvaluators = map[string]func(testing.TB) agtbridge.Evaluator{
-	"go": func(t testing.TB) agtbridge.Evaluator { return goEvaluator(t) },
-}
+var recordedEvaluators = map[string]func(testing.TB) agtbridge.Evaluator{}
 
 // TestRecordedCases replays the answers recorded from the TypeScript
 // reference Guardian (scripts/record-ts-cases.sh) through the Go Guardian
