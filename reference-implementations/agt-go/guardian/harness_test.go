@@ -3,6 +3,7 @@ package guardian_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,11 +65,13 @@ func (e *testEngine) last() guardian.PolicyInput {
 	return e.calls[len(e.calls)-1]
 }
 
-// auditRecorder is an AuditLog that keeps everything.
+// auditRecorder is an AuditLog that keeps everything, or, with
+// requiredFails set, fails every required event.
 type auditRecorder struct {
-	mu        sync.Mutex
-	envelopes []guardian.EnvelopeRecord
-	events    []guardian.AuditEvent
+	mu            sync.Mutex
+	envelopes     []guardian.EnvelopeRecord
+	events        []guardian.AuditEvent
+	requiredFails bool
 }
 
 func (a *auditRecorder) Envelope(_ context.Context, r guardian.EnvelopeRecord) {
@@ -81,6 +84,17 @@ func (a *auditRecorder) Event(_ context.Context, e guardian.AuditEvent) {
 	a.mu.Lock()
 	a.events = append(a.events, e)
 	a.mu.Unlock()
+}
+
+func (a *auditRecorder) RequiredEvent(ctx context.Context, e guardian.AuditEvent) error {
+	a.mu.Lock()
+	fails := a.requiredFails
+	a.mu.Unlock()
+	if fails {
+		return errors.New("the audit log is off")
+	}
+	a.Event(ctx, e)
+	return nil
 }
 
 func (a *auditRecorder) eventKinds() []guardian.AuditEventKind {

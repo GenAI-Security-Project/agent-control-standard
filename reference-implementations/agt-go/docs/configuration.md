@@ -64,8 +64,10 @@ The Guardian refuses startup if the build record is missing or its checksum diff
 | `security.hmac_previous_keys` | Secrets being replaced, each a `key_id` and a `secret_file`. A request signed under one of them is verified and answered under it, beside `security.hmac_key_id`. | Optional list, set in the configuration file. Each `key_id` is non-empty and differs from every other; each `secret_file` follows the `security.hmac_secret_file` rules. |
 | `audit.envelope_log` | JSONL file for inbound and outbound ACS envelopes. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
 | `audit.event_log` | JSONL file for Guardian audit events. | Absolute path, or relative to the configuration file. A symbolic link at the path is refused. On Unix, a file that group or other can access is refused; the Guardian does not change its mode. A missing directory is created with mode `0700`. |
-| `audit.max_file_bytes` | Size at which each audit file rotates: it becomes `<file>.1`, older ones move up. `0` keeps every record, for a deployment that rotates the files with its own tooling. | Zero or positive. `guardian.yaml` ships 268435456 (256 MiB). |
-| `audit.max_files` | Rotated files kept per audit file; the one past it is deleted. A log keeps at most `max_file_bytes × (max_files + 1)` bytes, plus one record larger than `max_file_bytes`. | Zero or positive; needs `max_file_bytes`, which in turn needs at least 1, so a rotation never deletes the live log. `guardian.yaml` ships 3, so at most 1 GiB per log. |
+| `audit.max_envelope_file_bytes` | Size at which the envelope log is renamed to `<file>.1`, older ones moving up. `0` keeps every record in one file, for a deployment that rotates it with its own tooling. | Zero or positive. `guardian.yaml` ships 268435456 (256 MiB). |
+| `audit.max_envelope_files` | Renamed envelope log files kept; the one past it is deleted. Each file holds at most `max_envelope_file_bytes`, or one record larger than that, so the envelope log keeps at most `max_envelope_file_bytes × (max_envelope_files + 1)` bytes when no record is larger. | Zero or positive; needs `max_envelope_file_bytes`, which in turn needs at least 1. `guardian.yaml` ships 3, so at most 1 GiB. |
+| `audit.max_event_file_bytes` | Size at which the event log is renamed to `<file>.<UTC time of the rotation>`. `0` keeps every record in one file, for a deployment that rotates it with its own tooling. | Zero or positive. `guardian.yaml` ships 268435456 (256 MiB). |
+| `audit.max_event_files` | Renamed event log files kept for the deployment to archive. None is deleted, since they hold the records §6.5, §9.2 and hooks.md require. While this many remain, every event is dropped and counted, every step that needs a required record is answered DENY `audit_unavailable`, and the first drop of each fill prints one line to stderr; moving the files away resumes logging. Every file named `<file>.<anything>` in that directory counts, so an archiver moves the files out rather than compressing them in place. | Zero or positive; needs `max_event_file_bytes`, which in turn needs at least 1. `guardian.yaml` ships 8, so at most 2.25 GiB: eight renamed files and the live one. |
 | `audit.max_queue_records` | Records waiting for the background writer, the one being written included. A record past it is dropped and counted. | Positive. `guardian.yaml` ships 4096. |
 | `audit.max_queue_bytes` | Bytes of records waiting for the writer, the one being written included, so a stalled disk holds at most this many bytes of records. A record past it is dropped and counted. | At least `2 × limits.max_body_bytes + 256`, so one request of the largest body fits. `guardian.yaml` ships 67108864 (64 MiB). |
 | `storage.provider` | Where sessions, replay history and policy state live. `memory`: in this process, lost when it stops, one process per endpoint. | `memory`, the one provider this command ships. A host that embeds the `guardian` package passes its own `SessionContextStore` for durability or replicas. |
@@ -89,11 +91,15 @@ Each restart ends the sessions the `memory` provider holds, so agents open new
 ones.
 
 A background writer appends the records, so a slow disk never delays a
-decision. When a record would take its queue past `audit.max_queue_records`
+decision. The exception is `modify_unsupported`, `ask_substituted` and
+`request_id_ref_unresolved`, which §6.5, §9.2 and hooks.md require: the step waits for that record to be written, until the recording deadline
+that `protocol.answer_margin` sets, and is answered DENY `audit_unavailable` when it is
+not. When a record would take its queue past `audit.max_queue_records`
 or `audit.max_queue_bytes`, it is dropped and counted; logging continues as
 space frees. A write failure turns
 the log off for the rest of the process, and every later record is dropped
-and counted. The first queue-full drop, the first write failure and the first
+and counted; until the Guardian restarts, every step that needs one of
+them is answered DENY `audit_unavailable`. The first queue-full drop, the first write failure and the first
 record offered after shutdown closed the log each print one line to stderr. A
 dropped record keeps its `seq`, so the numbers in a file skip it within one
 run. Shutdown gives the writer its own `server.shutdown_grace`. The command

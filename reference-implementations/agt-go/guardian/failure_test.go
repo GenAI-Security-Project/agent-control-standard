@@ -50,6 +50,9 @@ type panickingAuditLog struct{}
 
 func (panickingAuditLog) Envelope(context.Context, guardian.EnvelopeRecord) { panic("envelope") }
 func (panickingAuditLog) Event(context.Context, guardian.AuditEvent)        { panic("event") }
+func (panickingAuditLog) RequiredEvent(context.Context, guardian.AuditEvent) error {
+	panic("required event")
+}
 
 func (s *panickingStore) Load(ctx context.Context, sessionID string) (guardian.Session, bool, error) {
 	if s.panicOnLoad {
@@ -860,7 +863,6 @@ func TestCallerDeadlineStopsRecording(t *testing.T) {
 	}
 }
 
-// An engine state past the bound is not kept, and the step is denied.
 func TestPolicyStateIsBounded(t *testing.T) {
 	h := newHarness(t, func(c *guardian.Config) { c.MaxPolicyStateBytes = 16 })
 	c := h.session()

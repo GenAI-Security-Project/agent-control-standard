@@ -27,6 +27,7 @@ const (
 	ReasonIntentMismatch          = "intent_mismatch"
 	ReasonSessionClosed           = "session_closed"
 	ReasonStoreUnavailable        = "store_unavailable"
+	ReasonAuditUnavailable        = "audit_unavailable"
 	ReasonSessionContended        = "session_contended"
 	ReasonStoreFull               = "store_full"
 	ReasonSkillUnverifiable       = "skill_unverifiable"

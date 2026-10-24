@@ -1007,6 +1007,12 @@ func TestClientSubstitutions(t *testing.T) {
 	if r.Disposition != acs.Allow || !slices.Contains(r.ReasonCodes, disposition.ReasonModifyUnsupported) {
 		t.Fatalf("§6.5 postCompact exception got %+v", r)
 	}
+	h.audit.mu.Lock()
+	recorded := h.audit.events[len(h.audit.events)-1]
+	h.audit.mu.Unlock()
+	if recorded.Kind != guardian.EventModifyUnsupported || !strings.Contains(recorded.Message, "redact /summary/value") {
+		t.Fatalf("the postCompact record does not name the rewrite (§6.5): %+v", recorded)
+	}
 
 	ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Approver: acs.Approver{Type: acs.ApproverHuman, ID: "r"}, Question: "q", TimeoutSeconds: 30}}
 	for _, substitute := range []acs.Disposition{acs.Defer, acs.Deny} {
@@ -1024,6 +1030,54 @@ func TestClientSubstitutions(t *testing.T) {
 	kinds := h.audit.eventKinds()
 	if count(kinds, guardian.EventModifyUnsupported) != 2 || count(kinds, guardian.EventAskSubstituted) != 2 {
 		t.Fatalf("audit events %v", kinds)
+	}
+}
+
+// TestRequiredAuditEventFailureDenies: a substitution or an unresolved
+// request_id_ref whose audit event cannot be written, by a failing, a
+// panicking or a missing AuditLog, is answered DENY audit_unavailable, so the
+// record never misses a substitution the agent received or a reference
+// hooks.md requires it to keep.
+func TestRequiredAuditEventFailureDenies(t *testing.T) {
+	failing := &auditRecorder{requiredFails: true}
+	for logName, log := range map[string]guardian.AuditLog{"failing": failing, "panicking": panickingAuditLog{}, "missing": nil} {
+		t.Run(logName, func(t *testing.T) { requiredEventFailureDenies(t, log) })
+	}
+}
+
+func requiredEventFailureDenies(t *testing.T, log guardian.AuditLog) {
+	h := newHarness(t, func(c *guardian.Config) { c.AuditLog = log })
+	c := h.session()
+	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/summary/value"}}}}
+	ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Approver: acs.Approver{Type: acs.ApproverHuman, ID: "r"}, Question: "q", TimeoutSeconds: 30}}
+	for name, tt := range map[string]struct {
+		pd       guardian.PolicyDecision
+		required string
+	}{
+		"modify_unsupported": {guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}}, disposition.ReasonModifyUnsupported},
+		"ask_substituted":    {guardian.PolicyDecision{Decision: ask, Client: guardian.ClientCapability{CannotResolveAsk: true, AskSubstitute: acs.Deny}}, disposition.ReasonApproverUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) { return tt.pd, nil })
+			r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+			if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{tt.required, disposition.ReasonAuditUnavailable}) {
+				t.Fatalf("got %+v; §6.5 and §9.2 keep %s beside audit_unavailable", r, tt.required)
+			}
+		})
+	}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}}, nil
+	})
+	ref := "0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b"
+	unresolved := acs.ToolCallResultPayload{Tool: acs.Tool{Name: "Bash"}, RequestIDRef: &ref, ExitStatus: "success", Outputs: []acs.ToolOutput{{Value: json.RawMessage(`"ok"`)}}}
+	if r := h.decision(c, acs.StepToolCallResult, unresolved); r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonAuditUnavailable) {
+		t.Fatalf("an unresolved request_id_ref that cannot be recorded got %+v", r)
+	}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}}, nil
+	})
+	if r := h.decision(c, acs.StepPostCompact, hookPayloads[acs.StepPostCompact]); r.Disposition != acs.Allow || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonModifyUnsupported, disposition.ReasonAuditUnavailable}) {
+		t.Fatalf("postCompact, which permits no DENY, got %+v", r)
 	}
 }
 

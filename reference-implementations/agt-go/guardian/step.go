@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
@@ -226,10 +227,13 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	case err != nil:
 		return g.storeFailed(ctx, in, "store append", err)
 	}
-	g.recordUnresolvedReference(ctx, in, req, sess.Entries)
+	unresolvedErr := g.recordUnresolvedReference(ctx, in, req, sess.Entries)
 	sess.Entries = append(slices.Clip(sess.Entries), entry)
 	sess.Head = entry.EntryHash
 	chainHash = sess.Head
+	if unresolvedErr != nil {
+		return g.answerStep(ctx, in, g.auditUnavailable(ctx, in, req, unresolvedErr, acs.Decision{}), sess.Head)
+	}
 	if established != nil {
 		sess.Intent = established
 	}
@@ -445,20 +449,20 @@ func chainMismatch(req acs.Request, head string) bool {
 // names no toolCallRequest among entries, the session's entries before this
 // step (hooks.md). A store that archives entries holds fewer, and a
 // reference to an archived request is recorded too.
-func (g *Guardian) recordUnresolvedReference(ctx context.Context, in *call, req acs.Request, entries []acs.ContextEntry) {
+func (g *Guardian) recordUnresolvedReference(ctx context.Context, in *call, req acs.Request, entries []acs.ContextEntry) error {
 	if req.Method != acs.StepToolCallResult {
-		return
+		return nil
 	}
 	var p acs.ToolCallResultPayload
 	if jsonv2.Unmarshal(req.Params.Payload, &p) != nil || p.RequestIDRef == nil {
-		return
+		return nil
 	}
 	for _, e := range entries {
 		if e.StepType == acs.StepToolCallRequest && e.StepID == *p.RequestIDRef {
-			return
+			return nil
 		}
 	}
-	g.event(ctx, EventRequestIDRefUnresolved, req.Method, in.SessionID, in.RequestID,
+	return g.requiredEvent(ctx, EventRequestIDRefUnresolved, req.Method, in.SessionID, in.RequestID,
 		fmt.Sprintf("request_id_ref %q names no toolCallRequest this Guardian holds for the session", *p.RequestIDRef))
 }
 
@@ -555,11 +559,14 @@ func (g *Guardian) substitute(ctx context.Context, in *call, req acs.Request, se
 	d := pd.Decision
 	switch {
 	case d.Disposition == acs.Modify && pd.Client.CannotApplyModify:
-		g.event(ctx, EventModifyUnsupported, req.Method, in.SessionID, in.RequestID, "modification not delivered: "+d.Reasoning)
+		substituted := disposition.ModifyUnsupported(d)
 		if req.Method == acs.StepPostCompact {
-			return disposition.ModifyUnsupportedAtPostCompact(d)
+			substituted = disposition.ModifyUnsupportedAtPostCompact(d)
 		}
-		return disposition.ModifyUnsupported(d)
+		if err := g.requiredEvent(ctx, EventModifyUnsupported, req.Method, in.SessionID, in.RequestID, substituted.Reasoning); err != nil {
+			return g.auditUnavailable(ctx, in, req, err, substituted)
+		}
+		return substituted
 	case d.Disposition == acs.Ask:
 		substitution := g.cfg.AskSubstitution
 		if substitution == AskSubstitutionNone && pd.Client.CannotResolveAsk {
@@ -573,13 +580,33 @@ func (g *Guardian) substitute(ctx context.Context, in *call, req acs.Request, se
 			if substitution == AskSubstitutionDefer {
 				replacement = disposition.AskAsDefer(d)
 			}
-			g.event(ctx, EventAskSubstituted, req.Method, in.SessionID, in.RequestID, fmt.Sprintf("ask answered %s for a client that cannot route an approval", replacement.Disposition))
+			if err := g.requiredEvent(ctx, EventAskSubstituted, req.Method, in.SessionID, in.RequestID, fmt.Sprintf("ask answered %s for a client that cannot route an approval", replacement.Disposition)); err != nil {
+				return g.auditUnavailable(ctx, in, req, err, replacement)
+			}
 			d = replacement
 		}
 	}
 	if d.Disposition == acs.Defer && sess.Deferrals+1 > g.cfg.MaxDeferrals {
 		return denial(disposition.ReasonDeferralBoundExceeded, fmt.Sprintf("the session has deferred %d times, the most this Guardian allows (§6)", sess.Deferrals))
 	}
+	return d
+}
+
+// auditUnavailable answers a step whose required audit event could not be
+// written: DENY rather than a decision the record does not show, keeping the
+// substituted decision's reason codes and reasoning, which §6.5 and §9.2
+// require of the answer. Where the substitute is ALLOW, at postCompact, it
+// stands, since §6.5 permits no DENY there.
+func (g *Guardian) auditUnavailable(ctx context.Context, in *call, req acs.Request, err error, substituted acs.Decision) acs.Decision {
+	g.failure(ctx, req.Method, in.SessionID, in.RequestID, "required audit event", err)
+	d := substituted
+	if d.Disposition != acs.Allow {
+		d = denial(disposition.ReasonAuditUnavailable, strings.TrimSpace("The Guardian could not record the audit event this decision requires. "+substituted.Reasoning))
+		if substituted.PolicyReferences != nil {
+			d.PolicyReferences = substituted.PolicyReferences
+		}
+	}
+	d.ReasonCodes = append(slices.Clip(substituted.ReasonCodes), disposition.ReasonAuditUnavailable)
 	return d
 }
 

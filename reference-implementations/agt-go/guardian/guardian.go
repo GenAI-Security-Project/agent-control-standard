@@ -437,6 +437,17 @@ func (g *Guardian) event(ctx context.Context, kind AuditEventKind, methodName, s
 	g.cfg.AuditLog.Event(ctx, AuditEvent{Kind: kind, SessionID: sessionID, RequestID: requestID, Method: methodName, Message: message, RecordedAt: g.cfg.Now().UTC()})
 }
 
+// requiredEvent records an event the standard requires and reports whether
+// it was written; a panicking AuditLog has not written it.
+func (g *Guardian) requiredEvent(ctx context.Context, kind AuditEventKind, methodName, sessionID, requestID, message string) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("audit log panic: %v", p)
+		}
+	}()
+	return g.cfg.AuditLog.RequiredEvent(ctx, AuditEvent{Kind: kind, SessionID: sessionID, RequestID: requestID, Method: methodName, Message: message, RecordedAt: g.cfg.Now().UTC()})
+}
+
 // failure records what a provider or the Guardian itself reported. The
 // detail stays in the audit log: the wire carries a fixed message, since a
 // store, key service or engine error may name internals.

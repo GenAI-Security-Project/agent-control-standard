@@ -138,9 +138,16 @@ sequenceDiagram
     Note over G,PE: C. Record and decide
     Note over G: ACS rules that deny without the policy, see below
     G->>SC: Append
+    opt a toolCallResult names an unknown request_id_ref
+        G->>AL: RequiredEvent
+    end
     opt no ACS rule denied the step
         G->>PE: Decide
         PE-->>G: PolicyDecision
+    end
+    opt the Guardian substitutes a MODIFY (§6.5) or an ASK (§9.2)
+        G->>AL: RequiredEvent
+        Note over G: not written in time: DENY audit_unavailable
     end
     opt the decision leaves something to keep
         G->>SC: Conclude
@@ -255,7 +262,7 @@ session gets at most `MaxDeferrals` DEFER answers, 3 by default; the next one is
 | Method | `AuditLog` | `Signer` | `SessionContextStore` | `PolicyEngine` |
 | --- | --- | --- | --- | --- |
 | `handshake/hello` | both envelopes | `Verify`, `Sign` | `Lock`, `Load`, `Negotiate`; `Reserve` for a repeated handshake | `Policy()` only, read once at `guardian.New` |
-| a native hook, `protocols/MCP/*` | both envelopes, events | `Verify`, `Sign` | `Lock`, `Load`, `Append`; `Reserve` after sessionEnd; `Conclude`, `SkillApproved` as the step needs | `Decide` |
+| a native hook, `protocols/MCP/*` | both envelopes, events; `RequiredEvent` for a substitution or an unresolved `request_id_ref` | `Verify`, `Sign` | `Lock`, `Load`, `Append`; `Reserve` after sessionEnd; `Conclude`, `SkillApproved` as the step needs | `Decide` |
 | `system/ping` | both envelopes | `Verify` and `Sign` only when the ping is signed | none | none |
 
 - Sessions run in parallel. No interface calls another, and none calls the Guardian.

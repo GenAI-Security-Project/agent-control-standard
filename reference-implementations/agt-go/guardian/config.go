@@ -64,7 +64,8 @@ type Config struct {
 	// Store keeps session state; nil selects a MemorySessionContextStore
 	// bounded by MaxSessions.
 	Store SessionContextStore
-	// AuditLog receives envelopes and audit events; nil records nothing.
+	// AuditLog receives envelopes and audit events. nil records nothing, so
+	// a step that needs a required event (§6.5, §9.2) is answered DENY.
 	AuditLog AuditLog
 
 	// MaxSessions, MaxEntries, MaxReservations, MaxSkillApprovals and SessionRetention
@@ -240,3 +241,6 @@ type noAuditLog struct{}
 
 func (noAuditLog) Envelope(context.Context, EnvelopeRecord) {}
 func (noAuditLog) Event(context.Context, AuditEvent)        {}
+func (noAuditLog) RequiredEvent(context.Context, AuditEvent) error {
+	return errors.New("no AuditLog is configured to record a required event")
+}

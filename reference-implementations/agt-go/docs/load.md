@@ -5,8 +5,8 @@ the Guardian in process, over the evaluator `EVALUATOR` selects (`agt`), and rep
 processes alive at once and their memory, and the audit log's size on disk. The `agt`
 evaluator runs one `opa` process for each decision. It is not part of
 `make check`. `ACS_LOAD_CLIENTS`, `ACS_LOAD_STEPS` (steps per client, all in one
-session), `ACS_LOAD_MAX_ENGINE_CALLS`, `ACS_LOAD_AUDIT_MAX_FILE_BYTES` and
-`ACS_LOAD_AUDIT_MAX_FILES` select the run; `agtbridge/load_test.go` defines them. The test
+session), `ACS_LOAD_MAX_ENGINE_CALLS`, `ACS_LOAD_AUDIT_MAX_ENVELOPE_FILE_BYTES` and
+`ACS_LOAD_AUDIT_MAX_ENVELOPE_FILES` select the run; `agtbridge/load_test.go` defines them. The test
 fails if the audit log reports an error, splits or drops a record it keeps, or exceeds its
 rotation bound. The `opa` process count and memory are
 read from `/proc`, so they are measured on Linux only and read 0 elsewhere.
@@ -58,9 +58,9 @@ the point where the slowest decision nears the decision timeout.
 ## Audit log growth
 
 Each step writes about 1.6 KB to the two audit files. At the 130
-decisions per second `agt` sustains on this host, that is about 12 MiB a minute. `audit.max_file_bytes` and
-`audit.max_files` rotate each file and bound it: `guardian.yaml` keeps at most 1 GiB per
-log ([Configuration](configuration.md)). The writer's queue is bounded by
+decisions per second `agt` sustains on this host, that is about 12 MiB a minute. Each file
+has its own rotation: `guardian.yaml` keeps at most 1 GiB of envelopes, deleting the oldest
+file, and at most 2.25 GiB of events, which the deployment archives ([Configuration](configuration.md)). The writer's queue is bounded by
 `audit.max_queue_records` and `audit.max_queue_bytes`, 4096 records and 64 MiB in
 `guardian.yaml`, so a stalled disk does not grow it further; records past either limit
 are dropped and counted. At 1.6 KB per step, 4096 records take about 6.5 MiB. A write

@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAuditLogDirectoryIsPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit", "events.jsonl")
-	f, err := openRotatingFile(path, JSONLRotation{})
+	f, err := openRotatingFile(path, JSONLRotation{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,7 @@ func TestAuditLogRefusesASymbolicLink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	_, err := openRotatingFile(link, JSONLRotation{})
+	_, err := openRotatingFile(link, JSONLRotation{}, false)
 	if err == nil || !strings.Contains(err.Error(), "is a symbolic link") {
 		t.Fatalf("a symbolic link as the audit log: got %v", err)
 	}
@@ -58,7 +59,7 @@ func TestAuditLogRefusesAGroupOrOtherReadableFile(t *testing.T) {
 			if err := os.Chmod(path, tt.mode); err != nil {
 				t.Fatal(err)
 			}
-			f, err := openRotatingFile(path, JSONLRotation{})
+			f, err := openRotatingFile(path, JSONLRotation{}, false)
 			if tt.want == "" {
 				if err != nil {
 					t.Fatalf("a %04o log refused: %v", tt.mode, err)
@@ -70,5 +71,36 @@ func TestAuditLogRefusesAGroupOrOtherReadableFile(t *testing.T) {
 				t.Fatalf("got %v, want a refusal naming %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestEventRotationReportsAFilesystemError: a rotation that cannot check
+// the name it renames to fails instead of retrying it forever.
+func TestEventRotationReportsAFilesystemError(t *testing.T) {
+	dir := t.TempDir()
+	f, err := openRotatingFile(filepath.Join(dir, "events.jsonl"), JSONLRotation{MaxFileBytes: 8, MaxFiles: 10}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("first\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.Write([]byte("second\n"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a rotation in an unreadable directory succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the rotation kept retrying a filesystem error")
 	}
 }

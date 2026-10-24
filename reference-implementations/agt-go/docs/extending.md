@@ -131,15 +131,20 @@ who may write them.
 
 Declared in [`audit_log.go`](../guardian/audit_log.go).
 
-- Both methods return nothing and must not block or panic: a slow audit log must never turn
-  a governed step into an ungoverned one.
+- `Envelope` and `Event` return nothing and must not block or panic: a slow audit log must
+  never turn a governed step into an ungoverned one.
   - Calls may run concurrently. Queue, write in the background, and report your own
     failures.
 - **`Envelope`** receives its own copy of every request that parsed and every answer, as
   sent.
+- **`RequiredEvent`** receives `modify_unsupported` (§6.5), `ask_substituted` (§9.2) and
+  `request_id_ref_unresolved` (hooks.md, toolCallResult), the records the standard requires
+  the Guardian to keep. It returns once the event is
+  written, or an error when it cannot be written before its context ends; the step is then
+  answered DENY with the substitute's reason code and `audit_unavailable`.
 - **`Event`** receives
-  - the audit events the standard requires of the Guardian: `modify_unsupported`,
-    `ask_substituted`, `intent_mutation_rejected`, `chain_mismatch`;
+  - the audit events the standard recommends (SHOULD) of the Guardian:
+    `intent_mutation_rejected` (§8.4) and `chain_mismatch` (§8.5);
   - and `disposition_not_permitted`, `lineage_mismatch` and `failure`, which the Guardian
     records so no decision changes silently and no failure goes unrecorded.
 

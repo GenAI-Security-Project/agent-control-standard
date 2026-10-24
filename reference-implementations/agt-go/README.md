@@ -129,7 +129,8 @@ http.Handle("/acs", g)
   for the host: the library default, 256, is sized for in-process engines;
   `guardian.yaml` ships 32 ([Load](docs/load.md)).
 - `guardian.Config` requires `Engine` and `Signer`. A nil `Store` selects
-  `guardian.MemorySessionContextStore`, and a nil `AuditLog` records nothing.
+  `guardian.MemorySessionContextStore`, and a nil `AuditLog` records nothing: a step
+  that needs a required audit event is answered DENY `audit_unavailable`.
 - Mount the Guardian as an `http.Handler` at your own route, or call
   `Guardian.Handle(ctx, body)` from any transport. The handler bounds each body's read
   through `http.ResponseController`; a wrapping `ResponseWriter` without `Unwrap` leaves

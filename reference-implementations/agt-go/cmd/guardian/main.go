@@ -62,12 +62,14 @@ type fileConfig struct {
 		Provider string `koanf:"provider"`
 	} `koanf:"storage"`
 	Audit struct {
-		EnvelopeLog     string `koanf:"envelope_log"`
-		EventLog        string `koanf:"event_log"`
-		MaxFileBytes    int64  `koanf:"max_file_bytes"`
-		MaxFiles        int    `koanf:"max_files"`
-		MaxQueueRecords int    `koanf:"max_queue_records"`
-		MaxQueueBytes   int64  `koanf:"max_queue_bytes"`
+		EnvelopeLog          string `koanf:"envelope_log"`
+		EventLog             string `koanf:"event_log"`
+		MaxEnvelopeFileBytes int64  `koanf:"max_envelope_file_bytes"`
+		MaxEnvelopeFiles     int    `koanf:"max_envelope_files"`
+		MaxEventFileBytes    int64  `koanf:"max_event_file_bytes"`
+		MaxEventFiles        int    `koanf:"max_event_files"`
+		MaxQueueRecords      int    `koanf:"max_queue_records"`
+		MaxQueueBytes        int64  `koanf:"max_queue_bytes"`
 	} `koanf:"audit"`
 	Protocol struct {
 		OnDecisionFailure string        `koanf:"on_decision_failure"`
@@ -94,7 +96,8 @@ type config struct {
 	posture           acs.FailurePosture
 	envelopeLog       string
 	eventLog          string
-	auditRotation     guardian.JSONLRotation
+	envelopeRotation  guardian.JSONLRotation
+	eventRotation     guardian.JSONLRotation
 	auditQueue        guardian.JSONLQueue
 	storageProvider   string
 	keyID             string
@@ -234,10 +237,11 @@ func loadConfig(args, environ []string) (config, error) {
 		path: absConfigPath, host: raw.Server.Host, port: raw.Server.Port,
 		posture:     acs.FailurePosture(raw.Protocol.OnDecisionFailure),
 		envelopeLog: envelopeLog, eventLog: eventLog,
-		auditRotation:   guardian.JSONLRotation{MaxFileBytes: raw.Audit.MaxFileBytes, MaxFiles: raw.Audit.MaxFiles},
-		auditQueue:      guardian.JSONLQueue{MaxQueueRecords: raw.Audit.MaxQueueRecords, MaxQueueBytes: raw.Audit.MaxQueueBytes},
-		storageProvider: raw.Storage.Provider,
-		keyID:           raw.Security.HMACKeyID, secret: secret,
+		envelopeRotation: guardian.JSONLRotation{MaxFileBytes: raw.Audit.MaxEnvelopeFileBytes, MaxFiles: raw.Audit.MaxEnvelopeFiles},
+		eventRotation:    guardian.JSONLRotation{MaxFileBytes: raw.Audit.MaxEventFileBytes, MaxFiles: raw.Audit.MaxEventFiles},
+		auditQueue:       guardian.JSONLQueue{MaxQueueRecords: raw.Audit.MaxQueueRecords, MaxQueueBytes: raw.Audit.MaxQueueBytes},
+		storageProvider:  raw.Storage.Provider,
+		keyID:            raw.Security.HMACKeyID, secret: secret,
 		previousKeys: previousKeys,
 		policyDir:    policyDir, manifest: manifest, mapping: mapping,
 		evaluator: raw.Policy.Evaluator, opaPath: opaPath, opaTimeout: raw.Policy.OPATimeout,
@@ -306,8 +310,11 @@ func (c config) validate() error {
 	if c.storageProvider != storageMemory {
 		errs = append(errs, fmt.Errorf("storage.provider must be %q, the one provider this command ships; a host that embeds the guardian package passes its own SessionContextStore", storageMemory))
 	}
-	if err := c.auditRotation.Validate(); err != nil {
-		errs = append(errs, fmt.Errorf("audit: %w", err))
+	if err := c.envelopeRotation.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("audit.max_envelope_file_bytes and audit.max_envelope_files: %w", err))
+	}
+	if err := c.eventRotation.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("audit.max_event_file_bytes and audit.max_event_files: %w", err))
 	}
 	if c.auditQueue.MaxQueueRecords <= 0 {
 		errs = append(errs, errors.New("audit.max_queue_records must be positive"))
@@ -392,7 +399,7 @@ func run(args, environ []string) (err error) {
 	if err != nil {
 		return err
 	}
-	audit, err := guardian.NewJSONLAuditLog(c.envelopeLog, c.eventLog, c.auditRotation, c.auditQueue, func(err error) {
+	audit, err := guardian.NewJSONLAuditLog(c.envelopeLog, c.eventLog, c.envelopeRotation, c.eventRotation, c.auditQueue, func(err error) {
 		fmt.Fprintln(os.Stderr, "guardian: audit log:", err)
 	})
 	if err != nil {

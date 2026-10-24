@@ -7,16 +7,21 @@ import (
 )
 
 // AuditLog receives every envelope the Guardian reads or sends and every
-// audit event the standard requires of it (§6.5, §8.4, §8.5, §9.2), which
-// the standard leaves to "the deployment's own audit log".
+// audit event the standard requires or recommends of it (§6.5, §8.4, §8.5,
+// §9.2), which the standard leaves to "the deployment's own audit log".
 //
-// Its methods return nothing and must not block or panic: logging must never
-// be able to turn a governed step into an ungoverned one. An implementation
-// that cannot write reports its own failure. Calls may be concurrent. An
-// implementation that retains a record must copy it before returning.
+// Envelope and Event return nothing and must not block or panic: logging
+// must never be able to turn a governed step into an ungoverned one. An
+// implementation that cannot write reports its own failure. RequiredEvent
+// records an event the standard requires (§6.5, §9.2, hooks.md) and returns
+// once it is written, or with an error when it cannot be written before ctx
+// ends; the Guardian then answers DENY rather than lose the record. Calls may
+// be concurrent. An implementation that retains a record must copy it before
+// returning.
 type AuditLog interface {
 	Envelope(ctx context.Context, r EnvelopeRecord)
 	Event(ctx context.Context, e AuditEvent)
+	RequiredEvent(ctx context.Context, e AuditEvent) error
 }
 
 // Direction says which way an envelope crossed the wire.

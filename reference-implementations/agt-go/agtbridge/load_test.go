@@ -37,15 +37,16 @@ import (
 // ACS_LOAD_CLIENTS lists the concurrent clients per run (default
 // 1,8,32,64,128,256), ACS_LOAD_STEPS the steps each client sends (default
 // 20), ACS_LOAD_MAX_ENGINE_CALLS the Guardian's limit (default the library
-// default), and ACS_LOAD_AUDIT_MAX_FILE_BYTES and ACS_LOAD_AUDIT_MAX_FILES
-// the audit rotation (default none).
+// default), and ACS_LOAD_AUDIT_MAX_ENVELOPE_FILE_BYTES and
+// ACS_LOAD_AUDIT_MAX_ENVELOPE_FILES the envelope file's rotation (default
+// none); the event file does not rotate, so every event is counted.
 func TestLoad(t *testing.T) {
 	clients := envInts(t, "ACS_LOAD_CLIENTS", []int{1, 8, 32, 64, 128, 256})
 	steps := envInts(t, "ACS_LOAD_STEPS", []int{20})[0]
 	maxEngineCalls := envInts(t, "ACS_LOAD_MAX_ENGINE_CALLS", []int{guardian.DefaultMaxEngineCalls})[0]
 	rotation := guardian.JSONLRotation{
-		MaxFileBytes: int64(envInts(t, "ACS_LOAD_AUDIT_MAX_FILE_BYTES", []int{0})[0]),
-		MaxFiles:     envInts(t, "ACS_LOAD_AUDIT_MAX_FILES", []int{0})[0],
+		MaxFileBytes: int64(envInts(t, "ACS_LOAD_AUDIT_MAX_ENVELOPE_FILE_BYTES", []int{0})[0]),
+		MaxFiles:     envInts(t, "ACS_LOAD_AUDIT_MAX_ENVELOPE_FILES", []int{0})[0],
 	}
 	name := os.Getenv("ACS__POLICY__EVALUATOR")
 	if name == "" {
@@ -57,11 +58,11 @@ func TestLoad(t *testing.T) {
 	}
 	requests := loadRequests()
 	signer := testSigner(t)
-	t.Logf("evaluator=%s, max_engine_calls=%d, %d steps per client, audit rotation %d bytes x %d files", name, maxEngineCalls, steps, rotation.MaxFileBytes, rotation.MaxFiles)
+	t.Logf("evaluator=%s, max_engine_calls=%d, %d steps per client, envelope rotation %d bytes x %d files", name, maxEngineCalls, steps, rotation.MaxFileBytes, rotation.MaxFiles)
 	t.Logf("%8s %9s %8s %8s %8s %8s %10s %10s %12s", "clients", "decided/s", "p50", "p95", "p99", "max", "saturated", "opa_peak", "opa_rss_MiB")
 	for _, n := range clients {
 		dir := t.TempDir()
-		audit, err := guardian.NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), filepath.Join(dir, "events.jsonl"), rotation, guardian.JSONLQueue{}, nil)
+		audit, err := guardian.NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), filepath.Join(dir, "events.jsonl"), rotation, guardian.JSONLRotation{}, guardian.JSONLQueue{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,8 +98,8 @@ func TestLoad(t *testing.T) {
 		total := len(all)
 		t.Logf("%8d %9.0f %8s %8s %8s %8s %10d %10d %12.0f", n, float64(int64(total)-saturated.Load())/elapsed.Seconds(),
 			percentile(all, 50), percentile(all, 95), percentile(all, 99), all[total-1].Round(time.Millisecond), saturated.Load(), sample.processes, float64(sample.rssKiB)/1024)
-		for _, log := range []string{"envelopes.jsonl", "events.jsonl"} {
-			a := checkAuditLog(t, dir, log, rotation)
+		for log, r := range map[string]guardian.JSONLRotation{"envelopes.jsonl": rotation, "events.jsonl": {}} {
+			a := checkAuditLog(t, dir, log, r, log == "events.jsonl")
 			t.Logf("%8s %s: %d records written, %d kept in %d files, %d bytes", "", log, a.written, a.kept, a.files, a.bytes)
 		}
 	}
@@ -205,19 +206,32 @@ type auditLogSize struct {
 // no record is split, that the kept records are the newest ones with
 // consecutive seq numbers, and that the files stay within the rotation
 // bound: max_file_bytes × (max_files + 1), each file past max_file_bytes by
-// at most its one record. The writer numbers records from 1, so the last
-// seq is the number written.
-func checkAuditLog(t *testing.T, dir, name string, rotation guardian.JSONLRotation) auditLogSize {
+// at most its one record. A log that keeps its rotated files (keepsRotated,
+// the event log) is named by rotation time, has no file bound and keeps every
+// record. The writer numbers records from 1, so the last seq is the number
+// written.
+func checkAuditLog(t *testing.T, dir, name string, rotation guardian.JSONLRotation, keepsRotated bool) auditLogSize {
 	t.Helper()
-	paths := []string{filepath.Join(dir, name)}
-	for i := 1; ; i++ {
-		p := fmt.Sprintf("%s.%d", paths[0], i)
-		if _, err := os.Stat(p); err != nil {
-			break
+	live := filepath.Join(dir, name)
+	var paths []string
+	if keepsRotated {
+		archived, err := filepath.Glob(live + ".2*")
+		if err != nil {
+			t.Fatal(err)
 		}
-		paths = append(paths, p)
+		slices.Sort(archived)
+		paths = append(archived, live)
+	} else {
+		paths = []string{live}
+		for i := 1; ; i++ {
+			p := fmt.Sprintf("%s.%d", live, i)
+			if _, err := os.Stat(p); err != nil {
+				break
+			}
+			paths = append(paths, p)
+		}
+		slices.Reverse(paths)
 	}
-	slices.Reverse(paths)
 	var size auditLogSize
 	prev := 0
 	for _, p := range paths {
@@ -248,11 +262,11 @@ func checkAuditLog(t *testing.T, dir, name string, rotation guardian.JSONLRotati
 			size.kept++
 		}
 	}
-	if rotation.MaxFileBytes > 0 && len(paths) > rotation.MaxFiles+1 {
+	if !keepsRotated && rotation.MaxFileBytes > 0 && len(paths) > rotation.MaxFiles+1 {
 		t.Errorf("%s has %d files, past max_files %d", name, len(paths), rotation.MaxFiles)
 	}
 	size.written = prev
-	if rotation.MaxFileBytes == 0 && size.kept != size.written {
+	if (keepsRotated || rotation.MaxFileBytes == 0) && size.kept != size.written {
 		t.Errorf("%s kept %d of %d records without rotation", name, size.kept, size.written)
 	}
 	return size

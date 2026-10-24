@@ -108,8 +108,13 @@ type stderrAuditLog struct{}
 
 func (stderrAuditLog) Envelope(context.Context, guardian.EnvelopeRecord) {}
 
-func (stderrAuditLog) Event(_ context.Context, e guardian.AuditEvent) {
-	fmt.Fprintf(os.Stderr, "audit %s session=%s request=%s: %s\n", e.Kind, e.SessionID, e.RequestID, e.Message)
+func (l stderrAuditLog) Event(ctx context.Context, e guardian.AuditEvent) {
+	_ = l.RequiredEvent(ctx, e)
+}
+
+func (stderrAuditLog) RequiredEvent(_ context.Context, e guardian.AuditEvent) error {
+	_, err := fmt.Fprintf(os.Stderr, "audit %s session=%s request=%s: %s\n", e.Kind, e.SessionID, e.RequestID, e.Message)
+	return err
 }
 
 func newGuardian(keyID string, secret []byte) (*guardian.Guardian, *countingStore, error) {
