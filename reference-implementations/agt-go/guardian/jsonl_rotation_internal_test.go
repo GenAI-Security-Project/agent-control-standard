@@ -3,6 +3,7 @@ package guardian
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -124,6 +125,37 @@ func TestJSONLAuditLogRefusesPathsThatMeetThroughALink(t *testing.T) {
 	}
 	if _, err := NewJSONLAuditLog(filepath.Join(real, "audit"), filepath.Join(link, "audit.1"), JSONLRotation{MaxFileBytes: 1, MaxFiles: 1}, JSONLRotation{}, JSONLQueue{}, nil); err == nil {
 		t.Fatal("accepted an event file the envelope file rotates to")
+	}
+}
+
+// TestJSONLAuditLogEndsALineACrashLeftOpen: a record written after a
+// restart starts its own line when the file ends inside a record.
+func TestJSONLAuditLogEndsALineACrashLeftOpen(t *testing.T) {
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(events, []byte(`{"seq":1,"kind":"ask_subst`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := NewJSONLAuditLog(filepath.Join(dir, "envelopes.jsonl"), events, JSONLRotation{}, JSONLRotation{}, JSONLQueue{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RequiredEvent(context.Background(), AuditEvent{Kind: EventAskSubstituted, SessionID: "s", RequestID: "r", RecordedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	var record struct {
+		Kind string `json:"kind"`
+	}
+	if len(lines) != 2 || json.Unmarshal([]byte(lines[1]), &record) != nil || record.Kind != string(EventAskSubstituted) {
+		t.Fatalf("the record after the unfinished line is not a line of its own: %q", b)
 	}
 }
 

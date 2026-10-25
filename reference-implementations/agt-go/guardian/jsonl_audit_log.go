@@ -244,7 +244,7 @@ func openRotatingFile(path string, rotation JSONLRotation, keepRotated bool) (*r
 }
 
 func (r *rotatingFile) open() error {
-	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|auditOpenFlags, 0o600)
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_RDWR|os.O_APPEND|auditOpenFlags, 0o600)
 	if err != nil {
 		return auditOpenError(r.path, err)
 	}
@@ -258,6 +258,10 @@ func (r *rotatingFile) open() error {
 		return err
 	}
 	r.f, r.size = f, info.Size()
+	if err := r.endUnfinishedLine(); err != nil {
+		_ = f.Close()
+		return err
+	}
 	return nil
 }
 
@@ -327,6 +331,24 @@ func (r *rotatingFile) rotate() error {
 		}
 	}
 	return r.open()
+}
+
+// endUnfinishedLine ends a last line that a crash left without its newline,
+// so the next record starts a line of its own rather than joining that one.
+func (r *rotatingFile) endUnfinishedLine() error {
+	if r.size == 0 {
+		return nil
+	}
+	last := make([]byte, 1)
+	if _, err := r.f.ReadAt(last, r.size-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	n, err := r.f.Write([]byte{'\n'})
+	r.size += int64(n)
+	return err
 }
 
 // rotatedFiles counts the event files rotation renamed and the deployment

@@ -1131,6 +1131,37 @@ func TestDeferralBound(t *testing.T) {
 	}
 }
 
+func TestDeferralBoundKeepsTheAskSubstitution(t *testing.T) {
+	h := newHarness(t, func(c *guardian.Config) {
+		c.MaxDeferrals = 1
+		c.AskSubstitution = guardian.AskSubstitutionDefer
+	})
+	c := h.session()
+	h.engine.answer(acs.Decision{Disposition: acs.Ask, Reasoning: "approval required", AskDetails: &acs.AskDetails{Approver: acs.Approver{Type: acs.ApproverHuman, ID: "reviewer"}, Question: "allow?", TimeoutSeconds: 30}})
+	if r := h.decision(c, acs.StepToolCallRequest, toolCall("deploy")); r.Disposition != acs.Defer {
+		t.Fatalf("got %+v", r)
+	}
+	r := h.decision(c, acs.StepToolCallRequest, toolCall("deploy"))
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonApproverUnavailable, disposition.ReasonDeferralBoundExceeded}) || !strings.Contains(r.Reasoning, "cannot route an approval") {
+		t.Fatalf("the deferral over the bound got %+v", r)
+	}
+}
+
+func TestInvalidGrantKeepsTheAskSubstitution(t *testing.T) {
+	h := newHarness(t, func(c *guardian.Config) { c.AskSubstitution = guardian.AskSubstitutionDefer })
+	c := h.session()
+	approver := acs.Approver{Type: acs.ApproverHuman, ID: "reviewer"}
+	ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approval required", AskDetails: &acs.AskDetails{Approver: approver, Question: "allow?", TimeoutSeconds: 30}}
+	grant := guardian.IntentGrant{Approver: approver, Extension: acs.IntentExtension{Capabilities: []acs.Capability{{Tool: "curl"}}, Scope: acs.ScopeSession}, AskStepID: "never-asked"}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: ask, Grant: &grant}, nil
+	})
+	r := h.decision(c, acs.StepToolCallRequest, toolCall("deploy"))
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonApproverUnavailable, disposition.ReasonGrantInvalid}) || !strings.Contains(r.Reasoning, "cannot route an approval") {
+		t.Fatalf("an invalid grant with a substituted ASK got %+v", r)
+	}
+}
+
 func TestIntent(t *testing.T) {
 	h := newHarness(t)
 	c := h.session()

@@ -34,8 +34,8 @@ Declared in [`policy_engine.go`](../guardian/policy_engine.go).
 | `Client.CannotApplyModify` with a MODIFY | DENY `modify_unsupported`, or ALLOW at postCompact (§6.5) |
 | `Config.AskSubstitution` set to `deny` or `defer` with an ASK | the configured §9.2 substitute for this endpoint |
 | `Client.CannotResolveAsk` with an ASK | `Client.AskSubstitute`, DEFER or DENY (§9.2) |
-| a DEFER past the session's bound | DENY `deferral_bound_exceeded` |
-| a `Grant` for a step the session was not answered ASK for | DENY `grant_invalid` |
+| a DEFER past the session's bound | DENY `deferral_bound_exceeded`, keeping a §9.2 substitute's reason code and reasoning |
+| a `Grant` for a step the session was not answered ASK for | DENY `grant_invalid`, keeping a §6.5 or §9.2 substitute's reason code and reasoning |
 | a `Grant` scoped to the session | an `intent_extension` ContextEntry recording the approver, the capabilities and the extension's provenance, and the Intent grown by the capabilities (§9.1) |
 | valid JSON in `State` | kept with the session and given back as `SessionContext.PolicyState` on its later steps; invalid JSON is DENY `evaluation_failed`; larger than `MaxPolicyStateBytes` is DENY `policy_state_too_large` |
 

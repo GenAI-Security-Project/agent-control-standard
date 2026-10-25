@@ -596,12 +596,15 @@ func TestDenialArrivesBeforeTheDeclaredTimeout(t *testing.T) {
 // second for its context, as a store that cannot be reached does, and while
 // slowAppend or slowConclude is set, Append or Conclude does, and a stalled
 // Conclude closes concluding when it is set. While loseLockAfter is set, the
-// store loses the session's lock that long after granting it.
+// store loses the session's lock that long after granting it. Conclude
+// panics when concludePanics is set and returns concludeErr when it is set.
 type slowStore struct {
 	*guardian.MemorySessionContextStore
 	slow, slowAppend, slowConclude atomic.Bool
 	loseLockAfter                  atomic.Int64
 	concluding                     chan struct{}
+	concludeErr                    error
+	concludePanics                 bool
 	// holdAppend, when set, holds every Append, whatever its context, until
 	// it is closed; appending is closed when the first Append starts.
 	holdAppend, appending chan struct{}
@@ -620,6 +623,12 @@ func (s *slowStore) Lock(ctx context.Context, sessionID string) (context.Context
 }
 
 func (s *slowStore) Conclude(ctx context.Context, sessionID string, c guardian.Conclusion) error {
+	if s.concludePanics {
+		panic("the store failed")
+	}
+	if s.concludeErr != nil {
+		return s.concludeErr
+	}
 	if s.slowConclude.Load() && s.concluding != nil {
 		close(s.concluding)
 	}
@@ -863,6 +872,61 @@ func TestCallerDeadlineStopsRecording(t *testing.T) {
 	}
 }
 
+// TestStoreFailureKeepsTheSubstitutionCode: a store that fails to keep a
+// substituted decision's state answers DENY with the substitution's reason
+// code still in it (§6.5).
+func TestStoreFailureKeepsTheSubstitutionCode(t *testing.T) {
+	h := newHarness(t, func(c *guardian.Config) {
+		c.Store = &slowStore{MemorySessionContextStore: c.Store.(*guardian.MemorySessionContextStore), concludeErr: errors.New("disk failed")}
+	})
+	c := h.session()
+	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/command"}}}}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}, State: json.RawMessage(`{}`)}, nil
+	})
+	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonModifyUnsupported, disposition.ReasonStoreUnavailable}) || !strings.Contains(r.Reasoning, "redact /command") {
+		t.Fatalf("got %+v; §6.5 keeps the code and the reasoning that names the modification", r)
+	}
+}
+
+// TestStorePanicKeepsTheSubstitutionCode: a store that panics while it
+// keeps a substituted decision's state is answered with the substitution's
+// reason code and reasoning still in the answer (§6.5).
+func TestStorePanicKeepsTheSubstitutionCode(t *testing.T) {
+	h := newHarness(t, func(c *guardian.Config) {
+		c.Store = &slowStore{MemorySessionContextStore: c.Store.(*guardian.MemorySessionContextStore), concludePanics: true}
+	})
+	c := h.session()
+	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/command"}}}}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}, State: json.RawMessage(`{}`)}, nil
+	})
+	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonModifyUnsupported, disposition.ReasonEvaluationFailed}) || !strings.Contains(r.Reasoning, "redact /command") {
+		t.Fatalf("got %+v", r)
+	}
+}
+
+// TestStoreFailureKeepsAuditUnavailable: a store failure after a required
+// audit event failed keeps both the substitution code and audit_unavailable.
+func TestStoreFailureKeepsAuditUnavailable(t *testing.T) {
+	h := newHarness(t, func(c *guardian.Config) {
+		c.Store = &slowStore{MemorySessionContextStore: c.Store.(*guardian.MemorySessionContextStore), concludeErr: errors.New("disk failed")}
+		c.AuditLog = &auditRecorder{requiredFails: true}
+	})
+	c := h.session()
+	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/command"}}}}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}, State: json.RawMessage(`{}`)}, nil
+	})
+	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if want := []string{disposition.ReasonModifyUnsupported, disposition.ReasonAuditUnavailable, disposition.ReasonStoreUnavailable}; r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, want) || !strings.Contains(r.Reasoning, "redact /command") {
+		t.Fatalf("got %+v, want reason codes %v", r, want)
+	}
+}
+
+// An engine state past the bound is not kept, and the step is denied.
 func TestPolicyStateIsBounded(t *testing.T) {
 	h := newHarness(t, func(c *guardian.Config) { c.MaxPolicyStateBytes = 16 })
 	c := h.session()
