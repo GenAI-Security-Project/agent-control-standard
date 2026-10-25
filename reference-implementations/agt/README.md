@@ -491,9 +491,11 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 ## Session identity consistency
 
 The first validated handshake or supported tool step binds its session ID to
-the declared agent ID, tenant ID, user ID, authentication method, and role set.
-Later requests must carry the same identity fields. Role ordering does not
-matter. Adding or removing an identity field requires a new session ID.
+the declared agent ID and tenant ID. Later requests must carry the same agent
+and tenant. Adding, removing, or changing the tenant requires a new session ID.
+User ID, authentication method, and roles remain request-scoped and may change
+within a shared session. Policies must evaluate each request\'s user context;
+the session binding does not authorize a user or freeze their permissions.
 An identity mismatch returns an explicit deny for a tool step, before policy
 evaluation, label access, or an append to the session chain. A mismatched
 handshake returns an error and cannot replace the binding.

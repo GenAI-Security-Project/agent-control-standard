@@ -42,8 +42,8 @@ describe("session identity binding over loopback HTTP", () => {
         await send("agent-a", session, "user-a");
         await send(scenario === "different-agent" ? "agent-b" : "agent-a", otherSession,
           scenario === "changed-user" ? "user-b" : "user-a",
-          scenario === "same-agent" || scenario === "separate-session" ? "allow" : "deny");
-        const rejected = scenario !== "same-agent" && scenario !== "separate-session";
+          scenario === "different-agent" || scenario === "changed-tenant" ? "deny" : "allow");
+        const rejected = scenario === "different-agent" || scenario === "changed-tenant";
         expect(evaluations).toBe(rejected ? 1 : 2);
         const original = loadSessionContext(store, session).entries;
         expect(original.map(e => e.request_id)).toEqual(scenario === "separate-session" || rejected ? [ids[0]!] : ids);
@@ -77,12 +77,14 @@ describe("identity binding lifetime", () => {
     expect(() => store.bindIdentity("a", "identity-a")).toThrow("no identity binding");
   });
 
-  it("normalizes role sets while retaining identity absence", () => {
-    const params = { metadata: { agent_id: "a", session_id: "s", user_context: { roles: ["b", "a", "a"] } } } as AcsRequestParams;
+  it("keeps user context request-scoped and distinguishes tenant absence", () => {
+    const params = { metadata: { agent_id: "a", session_id: "s", user_context: { user_id: "alice", roles: ["reader"], authentication_method: "test" } } } as AcsRequestParams;
     const digest = sessionIdentityDigest(params);
-    params.metadata.user_context!.roles = ["a", "b"];
+    params.metadata.user_context = { user_id: "bob", roles: ["admin"], authentication_method: "other" };
     expect(sessionIdentityDigest(params)).toBe(digest);
-    params.metadata.user_context!.user_id = "";
+    delete params.metadata.user_context;
+    expect(sessionIdentityDigest(params)).toBe(digest);
+    params.tenant_id = "";
     expect(sessionIdentityDigest(params)).not.toBe(digest);
   });
 
