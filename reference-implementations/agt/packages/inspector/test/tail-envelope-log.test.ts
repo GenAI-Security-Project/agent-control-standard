@@ -6,7 +6,7 @@ import { tailEnvelopeLog, type EnvelopeLogEntry } from "../src/tail-envelope-log
 
 const POLL_MS = 10;
 
-function entryLine(seq: number, direction: "request" | "response"): string {
+function entryLine(seq: number, direction: "request" | "response" | "finding"): string {
   const entry: EnvelopeLogEntry = {
     seq,
     recorded_at: "2026-08-09T12:04:31.221Z",
@@ -68,6 +68,25 @@ describe("tailEnvelopeLog", () => {
 
       const entries = await collect(tail, 1, controller);
       expect(entries.map((e) => e.seq)).toEqual([2]);
+    });
+  });
+
+  it("yields a finding line, which the Guardian writes for an unresolved request_id_ref", async () => {
+    await withTempDir(async (_dir, path) => {
+      writeFileSync(path, entryLine(1, "request") + entryLine(2, "finding"));
+      const controller = new AbortController();
+      const malformed: string[] = [];
+      const tail = tailEnvelopeLog({
+        path,
+        fromStart: true,
+        pollMs: POLL_MS,
+        signal: controller.signal,
+        onMalformedLine: (line) => malformed.push(line),
+      });
+
+      const entries = await collect(tail, 2, controller);
+      expect(entries.map((e) => e.direction)).toEqual(["request", "finding"]);
+      expect(malformed).toEqual([]);
     });
   });
 
