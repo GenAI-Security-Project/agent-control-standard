@@ -56,6 +56,7 @@ flowchart TB
         CHAIN["OAuth Identity Chaining"]:::emerging
         TXTOK["Transaction Tokens"]:::emerging
         TXTOK_A["Transaction Tokens for Agents"]:::emerging
+        AAT["Attenuating Authorization Tokens"]:::emerging
     end
 
     subgraph Agents["Agent-Specific Drafts"]
@@ -209,6 +210,7 @@ The WIMSE working group's workload identity stack that AIMS composes onto. This 
 | **OAuth Identity and Authorization Chaining Across Domains** | How delegation chains propagate across trust boundaries and administrative domains. Referenced by AIMS §10.5. Addresses (in part) the multi-hop gap in RFC 8693. | [draft-ietf-oauth-identity-chaining](https://datatracker.ietf.org/doc/draft-ietf-oauth-identity-chaining/) |
 | **Transaction Tokens** | Downscopes access tokens to specific transactions; mitigates token replay between microservices. Referenced by AIMS §10.4. | [draft-ietf-oauth-transaction-tokens](https://datatracker.ietf.org/doc/draft-ietf-oauth-transaction-tokens/) |
 | **Transaction Tokens for Agents** | Extends Transaction Tokens with agent-specific delegation chains, actor transitions, hop metadata, and trust attenuation. | [draft-araut-oauth-transaction-tokens-for-agents](https://datatracker.ietf.org/doc/draft-araut-oauth-transaction-tokens-for-agents/) |
+| **Attenuating Authorization Tokens** | Profiles RAR (RFC 9396) for tool-level capabilities. Holders derive delegated tokens offline, each delegation can only drop tools or tighten argument constraints, and any enforcement point verifies the full chain without contacting the issuer. | [draft-niyikiza-oauth-attenuating-agent-tokens](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/) |
 
 ### What These Drafts Solve
 
