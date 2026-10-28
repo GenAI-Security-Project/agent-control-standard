@@ -76,6 +76,10 @@ export function publishOpaPath(): string {
   // the loud failure this file wants: an explicit hint that names nothing
   // stops here, before any setenv, and never falls back to another opa.
   const resolved = ensureOpaResolvable();
+  // On Windows a Bun `process.env` write calls SetEnvironmentVariableW, so it
+  // reaches the real environment and this platform needs no C library. Linux
+  // and macOS keep the JavaScript-side copy the header describes.
+  if (process.platform === "win32") process.env[OPA_PATH_ENV] = resolved;
 
   const libc = openLibc();
   if (libc === undefined) {

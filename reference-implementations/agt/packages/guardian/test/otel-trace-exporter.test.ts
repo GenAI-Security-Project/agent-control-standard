@@ -1400,7 +1400,7 @@ describe("the Guardian's exporter does not depend on its environment", () => {
       });
       await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
       const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
-      const source = new URL("../src/otel-trace-exporter.ts", import.meta.url).pathname;
+      const source = new URL("../src/otel-trace-exporter.ts", import.meta.url).href;
       const script = `
         const { createOtelTraceExporter, keepLoopbackOffProxy } = await import(${JSON.stringify(source)});
         let collected = 0;
@@ -1488,37 +1488,34 @@ describe("keepLoopbackOffProxy", () => {
   // Bar's finding on issue #274: Bun 1.3.14 reads a non-empty no_proxy in
   // preference to NO_PROXY, so creating the one the user did not set switches
   // off every exemption in the one they did.
+  // These tests pass a plain object, not process.env. On Windows process.env
+  // ignores case, so NO_PROXY and no_proxy are one variable there, and a test
+  // that one exists without the other could never pass.
   it("appends to NO_PROXY alone when only NO_PROXY is set, and does not create no_proxy", () => {
-    reset(undefined);
-    process.env.NO_PROXY = "corp.internal";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-    expect(process.env.NO_PROXY).toBe("corp.internal,127.0.0.1");
-    expect("no_proxy" in process.env).toBe(false);
+    const env: Record<string, string | undefined> = { NO_PROXY: "corp.internal" };
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+    expect(env.NO_PROXY).toBe("corp.internal,127.0.0.1");
+    expect("no_proxy" in env).toBe(false);
   });
 
   it("appends to no_proxy alone when only no_proxy is set, and does not create NO_PROXY", () => {
-    reset(undefined);
-    process.env.no_proxy = "corp.internal";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-    expect(process.env.no_proxy).toBe("corp.internal,127.0.0.1");
-    expect("NO_PROXY" in process.env).toBe(false);
+    const env: Record<string, string | undefined> = { no_proxy: "corp.internal" };
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+    expect(env.no_proxy).toBe("corp.internal,127.0.0.1");
+    expect("NO_PROXY" in env).toBe(false);
   });
 
   it("treats an empty no_proxy as unset, since Bun then falls back to NO_PROXY", () => {
-    reset(undefined);
-    process.env.NO_PROXY = "corp.internal";
-    process.env.no_proxy = "";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["corp.internal,127.0.0.1", ""]);
+    const env: Record<string, string | undefined> = { NO_PROXY: "corp.internal", no_proxy: "" };
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+    expect([env.NO_PROXY, env.no_proxy]).toEqual(["corp.internal,127.0.0.1", ""]);
   });
 
   it("fills a no_proxy that holds no entries, because Bun reads any non-empty value as the list", () => {
     for (const blank of [",", " ", " , "]) {
-      reset(undefined);
-      process.env.NO_PROXY = "corp.internal";
-      process.env.no_proxy = blank;
-      keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-      expect({ blank, NO_PROXY: process.env.NO_PROXY, no_proxy: process.env.no_proxy }).toEqual({
+      const env: Record<string, string | undefined> = { NO_PROXY: "corp.internal", no_proxy: blank };
+      keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+      expect({ blank, NO_PROXY: env.NO_PROXY, no_proxy: env.no_proxy }).toEqual({
         blank,
         NO_PROXY: "corp.internal,127.0.0.1",
         no_proxy: "127.0.0.1",
@@ -1527,14 +1524,14 @@ describe("keepLoopbackOffProxy", () => {
   });
 
   it("sets both when neither is set, and appends once to each when both are set", () => {
-    reset(undefined);
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["127.0.0.1", "127.0.0.1"]);
-    process.env.NO_PROXY = "a.internal";
-    process.env.no_proxy = "b.internal";
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
-    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["a.internal,127.0.0.1", "b.internal,127.0.0.1"]);
+    const env: Record<string, string | undefined> = {};
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+    expect([env.NO_PROXY, env.no_proxy]).toEqual(["127.0.0.1", "127.0.0.1"]);
+    env.NO_PROXY = "a.internal";
+    env.no_proxy = "b.internal";
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+    keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", env);
+    expect([env.NO_PROXY, env.no_proxy]).toEqual(["a.internal,127.0.0.1", "b.internal,127.0.0.1"]);
   });
 
   it("does not duplicate the entry when called twice", () => {
@@ -1608,7 +1605,7 @@ describe("keepLoopbackOffProxy, routed through a real proxy in a child process",
     });
     await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
     const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
-    const source = new URL("../src/otel-trace-exporter.ts", import.meta.url).pathname;
+    const source = new URL("../src/otel-trace-exporter.ts", import.meta.url).href;
     const script = `
       const { keepLoopbackOffProxy } = await import(${JSON.stringify(source)});
       const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
