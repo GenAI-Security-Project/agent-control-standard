@@ -209,6 +209,7 @@ export function toRepoRelativeMessage(error: unknown): string {
  * part of the reserved band, so every application-level failure stays inside
  * -32000..-32099.
  */
+const SESSION_REFUSED_CODE = -32000;
 const ENVELOPE_INVALID_CODE = -32010;
 /**
  * Exported, unlike its two neighbours, because the conformance harness posts
@@ -868,7 +869,10 @@ async function dispatch(
         }));
         if (denial) return denial;
       }
-      return errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { reason_code: error.reasonCode });
+      const code = error.reasonCode === "session_identity_mismatch"
+        ? SESSION_REFUSED_CODE
+        : ENVELOPE_INVALID_CODE;
+      return errorResponse(rpcId, code, error.message, { reason_code: error.reasonCode });
     }
   }
 
