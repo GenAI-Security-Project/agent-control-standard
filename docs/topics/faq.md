@@ -131,7 +131,7 @@ You are building ten things:
 - **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
-- **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default, which is fail-open) and record every fail-open proceed as an audit event.
+- **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default, which is fail-open) and record every decision failure as an audit event, fail-open or fail-closed.
 - **Liveness.** A way to notice that the Guardian has stopped answering.
 - **MCP coverage.** The `protocols/MCP/*` methods for MCP traffic.
 
@@ -191,7 +191,7 @@ JSON Schemas for every envelope and hook payload are under [`specification/v0.1.
 
 Four steps:
 
-1. **Pick or build a Guardian.** Options: in-house implementation, vendor product, or open-source reference implementation.
+1. **Pick or build a Guardian.** Options: in-house implementation, vendor product, or the open-source [reference implementations](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/reference-implementations).
 2. **Deploy the Guardian in your security perimeter** — the same place you put other policy enforcement infrastructure (VPC, behind your auth boundary).
 3. **Configure each agent platform to point its hook surface at the Guardian** — over HTTP(S) for SaaS, on-prem, and multi-tenant deployments; over stdio for IDE-embedded ones.
 4. **Populate the Guardian's policy library and declare your profiles in the handshake** — `acs-core` is mandatory; add `acs-trace`, `acs-inspect`, `acs-provenance`, `acs-crypto`, and `acs-audit` as your deployment needs.
@@ -210,7 +210,7 @@ Two costs are easy to miss when estimating. Where the adapter spawns a process p
 
 ### What happens when the Guardian fails?
 
-The default is fail-open with mandatory audit: if the Guardian times out, the transport fails, or the Guardian returns an error, the action proceeds and the bypass is recorded as an audit event. Deployments that prefer fail-closed set `on_decision_failure: deny` in the handshake. That field governs a session once the handshake succeeds. If the handshake itself fails (the Guardian is unreachable, silent past the connection timeout, or errors without a ServerHello), the out-of-band startup posture applies instead, and it also defaults to `proceed`, so a fail-closed deployment sets it to `refuse` too. A Guardian that explicitly refuses the session has decided, and the refusal is honored. One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. Silence fails open; expressed-but-unresolved concerns fail closed. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative) and [§4.1](../spec/instrument/specification.md#41-handshake-failure-normative).
+The default is fail-open with mandatory audit: if the Guardian times out, the transport fails, or the Guardian returns an error, the action proceeds and the bypass is recorded as an audit event. Deployments that prefer fail-closed set `on_decision_failure: deny` in the handshake, and the blocked step is recorded the same way. At session end, the agent should also report how many failures of each kind it recorded. A session that ends without that count reads as unmeasurable. That field governs a session once the handshake succeeds. If the handshake itself fails (the Guardian is unreachable, silent past the connection timeout, or errors without a ServerHello), the out-of-band startup posture applies instead, and it also defaults to `proceed`, so a fail-closed deployment sets it to `refuse` too. A Guardian that explicitly refuses the session has decided, and the refusal is honored. One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. Silence fails open; expressed-but-unresolved concerns fail closed. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative) and [§4.1](../spec/instrument/specification.md#41-handshake-failure-normative).
 
 ```
               ┌────────────────┐
@@ -232,6 +232,7 @@ The default is fail-open with mandatory audit: if the Guardian times out, the tr
    │  modify / ask /  │  │            + audit event     │
    │  defer           │  │                              │
    │                  │  │  opt-in:   deny  (blocked)   │
+   │                  │  │            + audit event     │
    └──────────────────┘  └──────────────────────────────┘
 ```
 
@@ -300,7 +301,7 @@ How each paradigm composes with ACS:
 - **FIDES** — uses ACS-Provenance lineage from each hook payload to run its integrity / confidentiality label arithmetic. ACS carries the `origin`, `source_id`, and `derived_from` facts; the FIDES Guardian computes the label joins and decides what the planner sees.
 - **CaMeL** — uses per-argument provenance to reconstruct the data-flow dependency graph, then applies its capability calculus against tool calls. ACS carries the dependency facts; the CaMeL Guardian runs the policy against them.
 - **IBAC** — uses SessionContext + Intent for authority binding, the ASK disposition for approver-driven extensions, and the authorize-before-action flow for enforcement. ACS carries the wire fields and enforces `Intent.parsed` immutability; the IBAC Guardian provides the intent parser, capability-matching logic, and approver UX.
-- **AARM** — maps to ACS-Core almost directly. AARM-style deployments declare ACS-Audit for the tamper-evident receipt chain and adopt AARM's receipt conventions on top.
+- **AARM** — maps to ACS-Core almost directly. AARM-style deployments declare ACS-Audit for the hash-chained receipt log, add ACS-Crypto when a third party must be able to verify which Guardian issued a receipt, and adopt AARM's receipt conventions on top.
 
 The pattern across all four: ACS contributes the wire format and runtime behavior; the paradigm contributes the policy substance. Together they make the paradigm portable across any conformant framework.
 
@@ -314,7 +315,7 @@ Beyond that layer difference, ACS specifies five things none of AARM, FIDES, CaM
 2. **A concrete hook taxonomy** — 22 named methods, being the 19 `steps/*` lifecycle hooks plus `agbom/snapshot`, `agbom/changed`, and `system/ping`, each with a JSON schema and a fixed firing context. The research frameworks describe abstract control points (`intent.parse`, `action.authorize`, `context.ingest`); ACS defines them as concrete wire methods with payloads.
 3. **Three-pillar coverage in one spec** — Instrument (runtime control), Trace (observability), Inspect (inventory). Each research framework addresses one slice.
 4. **Conformance profiles** — declarable tiers (`acs-core`, `acs-trace`, `acs-inspect`, `acs-inspect-dynamic`, `acs-provenance`, `acs-crypto`, `acs-audit`) letting deployments mix capabilities and Guardians negotiate compatibility at handshake time.
-5. **Runtime behavior contract** — the agent waits for the Guardian's decision, honors the disposition, records fail-open proceeds. AARM describes the architecture; ACS specifies the conformance behavior.
+5. **Runtime behavior contract** — the agent waits for the Guardian's decision, honors the disposition, records every decision failure. AARM describes the architecture; ACS specifies the conformance behavior.
 
 The composition story is the practical payoff: one Guardian can run FIDES, IBAC, and AARM-style enforcement against the same hook payloads at the same time, because the wire stays paradigm-neutral.
 
@@ -338,7 +339,7 @@ ACS-Core (mandatory), and six optional profiles: ACS-Trace, ACS-Inspect, ACS-Ins
 
 [Specification §16](../spec/instrument/specification.md#16-roadmap) and the [v0.2.0 milestone](https://github.com/GenAI-Security-Project/agent-control-standard/milestone/15) are the live list. The highlights: streaming and batching semantics, A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1), multi-tenant isolation, the sensitivity-tier timeout model, recursive ASK and quorum, a policy-author attestation profile, and a Cedar binding.
 
-Conformance work is already underway in the open milestones: bringing the reference Guardian to ACS-Core conformance, a one-page conformance claim template, and the AGT interoperability benchmark.
+Conformance work is already underway in the open milestones: bringing the reference Guardian to ACS-Core conformance and the AGT interoperability benchmark. The one-page [conformance claim template](../spec/conformance-claim-template.md) is available for implementers to fill in.
 
 ### How do I follow or contribute?
 
