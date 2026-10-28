@@ -186,6 +186,18 @@ field_synthesis:
       source: verdict.reason
     policy_id:
       literal: agt_stock
+  ask_details:
+    approver:
+      type:
+        literal: human
+      id:
+        literal: operator
+    question:
+      source: reasoning
+    timeout_seconds:
+      literal: 300
+    timeout_disposition:
+      literal: deny
 # modifications is NOT here: it lives under each intervention_points row above,
 # because it is the one field whose synthesis depends on which payload the gate
 # is editing. See the two rows there.
