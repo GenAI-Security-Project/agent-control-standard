@@ -52,3 +52,23 @@ def test_numbered_sections_run_without_gaps():
         if missing:
             gaps.append(f"{path.relative_to(DOCS.parent)} skips section(s) {missing}")
     assert not gaps, "Numbered section sequences with gaps:\n" + "\n".join(gaps)
+
+
+def test_signature_requirement_and_schema_optionality_are_consistent():
+    """Specification §10 and §10.1 must not call signatures 'field-optional' in
+    prose while requiring them in ACS-Core, and both envelope schemas must state
+    'Optional in the schema' and 'mandatory under ACS-Core' (#195)."""
+    import json
+
+    root = DOCS.parent
+    spec_text = (DOCS / "spec" / "instrument" / "specification.md").read_text(encoding="utf-8")
+    assert "signatures are already field-optional" not in spec_text
+    assert "Optional in the schema" in spec_text or "optional in the base JSON Schema" in spec_text
+
+    req_schema = json.loads((root / "specification" / "v0.1.0" / "request-envelope.json").read_text(encoding="utf-8"))
+    resp_schema = json.loads((root / "specification" / "v0.1.0" / "response-envelope.json").read_text(encoding="utf-8"))
+    req_desc = req_schema["$defs"]["AcsParams"]["properties"]["signature"].get("description", "")
+    resp_desc = resp_schema["$defs"]["AcsResult"]["properties"]["signature"].get("description", "")
+    assert "Optional in the schema" in req_desc and "mandatory under ACS-Core" in req_desc
+    assert "Optional in the schema" in resp_desc and "mandatory under ACS-Core" in resp_desc
+

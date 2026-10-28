@@ -54,7 +54,10 @@
           "type": "object",
           "description": "Hook-specific payload. Schema depends on method."
         },
-        "signature": { "$ref": "#/$defs/Signature" }
+        "signature": {
+          "$ref": "#/$defs/Signature",
+          "description": "Signature over this request envelope, computed on the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed). Optional in the schema (to accommodate system/ping, Specification 13); mandatory under ACS-Core."
+        }
       }
     },
     "Metadata": {
