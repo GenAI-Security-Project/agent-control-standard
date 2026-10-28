@@ -21,7 +21,7 @@
     },
     "intent": {
       "type": "object",
-      "description": "Optional Intent established at session start. Same shape as Intent inside agentTrigger. When present, the Guardian MUST treat this as the canonical session Intent: any later agentTrigger that attempts to establish a different Intent MUST be rejected, and Intent.parsed MUST NOT be mutable except via the intent_extension mechanism in ask-details.json.",
+      "description": "Optional Intent established at session start. Same shape as Intent inside agentTrigger. When present, the Guardian MUST treat this as the canonical session Intent: any later agentTrigger that attempts to establish a different Intent MUST be rejected, and Intent.parsed MUST NOT be mutable except via the intent_extension mechanism in ask-details.json. When omitted at sessionStart, the first agentTrigger for the session that carries an Intent establishes the canonical session Intent under the same immutability rule (Specification §8.4).",
       "properties": {
         "raw": { "type": "string" },
         "parsed": {

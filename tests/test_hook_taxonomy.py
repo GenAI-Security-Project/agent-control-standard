@@ -325,3 +325,15 @@ def test_every_docs_page_states_the_real_hook_count():
         + f"\nUpdate the count. To count a subset, write it as \"9 of the {expected} "
         "native hooks\" so the total stays checked."
     )
+
+
+def test_canonical_intent_first_wins_across_session_start_and_agent_trigger():
+    """session-start.json and agent-trigger.json must agree on what establishes
+    the canonical session Intent when sessionStart omits intent (#149)."""
+    session_start = json.loads((HOOK_SCHEMAS / "session-start.json").read_text(encoding="utf-8"))
+    agent_trigger = json.loads((HOOK_SCHEMAS / "agent-trigger.json").read_text(encoding="utf-8"))
+    ss_desc = session_start["properties"]["intent"]["description"]
+    at_desc = agent_trigger["properties"]["intent"]["description"]
+    assert "first agentTrigger" in ss_desc and "canonical session Intent" in ss_desc
+    assert "first agentTrigger" in at_desc and "canonical session Intent" in at_desc
+
