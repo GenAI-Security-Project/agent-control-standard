@@ -491,11 +491,13 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 ## Session identity consistency
 
 The first validated handshake or supported tool step binds its session ID to
-the declared agent ID and tenant ID. Later requests must carry the same agent
-and tenant. Adding, removing, or changing the tenant requires a new session ID.
-User ID, authentication method, and roles remain request-scoped and may change
-within a shared session. Policies must evaluate each request\'s user context;
-the session binding does not authorize a user or freeze their permissions.
+the declared agent ID and tenant ID. Later requests in the retained session
+must carry the same agent and tenant. Adding, removing, or changing the tenant
+requires a new session ID. User ID, authentication method, and roles remain
+request-scoped and may change within a shared session. The current policy
+bridge does not pass user context to policy rules, so rules cannot yet make
+authorization decisions from those fields. The session binding does not
+authenticate or authorize a user.
 An identity mismatch returns an explicit deny for a tool step, before policy
 evaluation, label access, or an append to the session chain. A mismatched
 handshake returns an error and cannot replace the binding.
@@ -506,13 +508,12 @@ these declarations to authenticated peers. Issue #166 remains broader than
 this check; session-start dispatch and authenticated-principal resolution are
 not implemented here.
 
-Bindings belong to the session store and survive its audit-chain eviction.
-The memory store retains at most 65,536 identity bindings, configurable through
-`maxIdentityBindings`. At capacity it refuses new sessions while retaining old
-bindings. Bindings do not survive process restart. There is no automatic expiry
-or rotation; durable storage and safe session retirement require lifecycle
-work. Custom `SessionContextStore` implementations must provide a synchronous,
-atomic `bindIdentity` method and preserve bindings for retained session state.
+Bindings share the memory store's bounded session lifecycle. When the store
+evicts a session, it removes that session's identity binding too. Do not reuse
+session IDs after eviction; a later request with an evicted ID is a new session.
+Bindings do not survive process restart. Custom `SessionContextStore`
+implementations must provide a synchronous, atomic `bindIdentity` method and
+remove bindings when their corresponding session state is retired.
 
 ## Operational debt
 
