@@ -141,9 +141,6 @@ export interface SessionProvenanceReader {
 const DEFAULT_MAX_SESSIONS = 1024;
 
 export type CreateMemorySessionContextStoreOptions = {
-  /** Identity bindings outlive chain eviction. At capacity, new sessions fail
-   * closed instead of evicting an identity and permitting session rebinding. */
-  maxIdentityBindings?: number;
   now?: () => Date;
   /** Called once per appended entry with its JSON line, no trailing newline. */
   appendLine?: (line: string) => void;
@@ -170,10 +167,6 @@ export function createMemorySessionContextStore(
   const now = options.now ?? (() => new Date());
   const appendLine = options.appendLine;
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
-  const maxIdentityBindings = options.maxIdentityBindings ?? 65_536;
-  if (!Number.isInteger(maxIdentityBindings) || maxIdentityBindings < 1) {
-    throw new Error("maxIdentityBindings must be a positive integer");
-  }
   const identities = new Map<string, string>();
   const onEvict = options.onEvict ?? warnEvictedSession;
   if (!Number.isInteger(maxSessions) || maxSessions < 1) {
@@ -211,6 +204,7 @@ export function createMemorySessionContextStore(
       const oldest = sessions.keys().next();
       if (oldest.done === true) return;
       sessions.delete(oldest.value);
+      identities.delete(oldest.value);
       reportEviction(onEvict, oldest.value);
     }
   };
@@ -244,10 +238,11 @@ export function createMemorySessionContextStore(
       if (sessions.has(sessionId)) {
         throw new SessionIdentityError("session_identity_unbound", "existing session state has no identity binding");
       }
-      if (identities.size >= maxIdentityBindings) {
-        throw new SessionIdentityError("session_identity_capacity", "session identity store is full; new sessions are refused");
-      }
       identities.set(sessionId, identityDigest);
+      // Count a handshake-only session against the same bounded lifecycle as
+      // sessions with steps. This prevents unauthenticated hello floods from
+      // growing the identity map independently of the session cap.
+      ensure(sessionId);
     },
     context(sessionId) {
       // Copied on the way out, like the labels below, and for one reason
