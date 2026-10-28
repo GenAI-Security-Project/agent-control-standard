@@ -73,4 +73,4 @@ The watch reports. It never fails a build. Nothing reaches this tree until a hum
 bun test packages/conformance
 ```
 
-Eighteen files. Five of them clean up fixture directories with `trash` and fail without it.
+Eighteen files. Five of them clean up fixture directories with `trash` when installed and otherwise fall back to `rmSync` scoped strictly to `os.tmpdir()`.

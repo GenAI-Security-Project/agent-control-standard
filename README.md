@@ -69,11 +69,9 @@ today.
 
 ### Two ways this breaks on the first try
 
-`bun install` does not install `trash`, because `trash` is a system command the test and
-verification scripts call, not an npm package. Running `bun test` without it on `PATH`
-fails 26 tests, all in the conformance and upstream-watch scripts that clean up scratch
-directories. Install `trash-cli` first, or expect those 26
-failures and ignore them.
+`bun install` does not install `trash`, because `trash` is a system command, not an npm
+package. `bun test` passes without it. `bun run conformance`, `bun run watch:upstream`,
+and `bun run verify:pin` stop with an error until you install `trash-cli`.
 
 The Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
 is unreachable stops governing, silently, and the host proceeds as if nothing asked.

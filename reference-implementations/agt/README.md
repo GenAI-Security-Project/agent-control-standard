@@ -544,7 +544,7 @@ The suite reads this repository's own schemas. It expects `specification/v0.1.0/
 
 `bun run verify:zero-diff` is also shipped. It measured, between two branches of the standalone repository, that adding the second host cost zero changed lines in the Guardian, the bridge or AGT. Its base branch does not exist in this repository, so here it exits 1 before it diffs anything.
 
-The scripts and five test files delete their scratch directories with `trash`, never with a recursive remove, and refuse to run without it.
+Three scripts delete their scratch directories with `trash` and refuse to run without it: `run-conformance.sh`, `run-upstream-watch.sh`, and `verify-pin.sh`. The five conformance test files use `trash` when it is on `PATH`. Otherwise they call `rmSync` on the path, but only if the path is under `os.tmpdir()`.
 
 ## Configuration
 
