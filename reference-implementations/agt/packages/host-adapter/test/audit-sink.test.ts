@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuditSink, NULL_AUDIT_SINK, type AuditEntry } from "../src/audit-sink.ts";
@@ -103,6 +103,36 @@ describe("createAuditSink", () => {
   it("reports whether the entry was recorded", () => {
     const path = join(scratch(), "audit.jsonl");
     expect(createAuditSink({ path }).write(EVENT)).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("creates the file 0600 and its directory 0700 (#71)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-audit-mode-"));
+    const nested = join(dir, "nested");
+    const path = join(nested, "audit.jsonl");
+    const previous = process.umask(0);
+    try {
+      expect(createAuditSink({ path }).write(EVENT)).toBe(true);
+      expect((statSync(nested).mode & 0o777).toString(8)).toBe("700");
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+      // A log an older version left behind, opened by a new sink.
+      chmodSync(path, 0o644);
+      expect(createAuditSink({ path }).write(EVENT)).toBe(true);
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+      expect(readFileSync(path, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      process.umask(previous);
+      try {
+        unlinkSync(path);
+        rmdirSync(nested);
+      } catch {
+        // ignore
+      }
+      rmdirSync(dir);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("writes to a device without changing its mode (#71)", () => {
+    expect(createAuditSink({ path: "/dev/null" }).write(EVENT)).toBe(true);
   });
 
   it("records a blocked step too, so the Inspector's posture badge can distinguish the two outcomes", () => {
