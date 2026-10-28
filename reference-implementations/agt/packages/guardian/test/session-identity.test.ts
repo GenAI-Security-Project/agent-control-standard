@@ -59,16 +59,19 @@ describe("session identity binding over loopback HTTP", () => {
 });
 
 describe("identity binding lifetime", () => {
-  it("survives audit-chain eviction and fails closed at identity capacity", () => {
-    const store = createMemorySessionContextStore({ maxSessions: 1, maxIdentityBindings: 2, onEvict() {} });
+  it("evicts identity bindings with session state so long-running stores keep accepting sessions", () => {
+    const store = createMemorySessionContextStore({ maxSessions: 1, onEvict() {} });
     store.bindIdentity("a", "identity-a");
     store.append("a", { method: "steps/toolCallRequest", request_id: "a", tool_name: "x" });
     store.bindIdentity("b", "identity-b");
     store.append("b", { method: "steps/toolCallRequest", request_id: "b", tool_name: "x" });
     expect(store.context("a").entries).toHaveLength(0);
-    expect(() => store.bindIdentity("a", "other")).toThrow("does not match");
-    expect(() => store.bindIdentity("c", "identity-c")).toThrow("store is full");
-    expect(() => store.bindIdentity("a", "identity-a")).not.toThrow();
+    // Once its state is evicted, the ID has a new session lifecycle.
+    expect(() => store.bindIdentity("a", "new-session-identity")).not.toThrow();
+    for (let i = 0; i < 65_540; i++) {
+      store.bindIdentity(`session-${i}`, `identity-${i}`);
+    }
+    expect(() => store.bindIdentity("fresh", "fresh-identity")).not.toThrow();
   });
 
   it("refuses to adopt pre-existing state with an unknown identity", () => {
@@ -113,7 +116,8 @@ describe("identity binding lifetime", () => {
       await started;
       const competing = await send("b");
       expect(competing.result.reason_codes).toEqual(["session_identity_mismatch"]);
-      expect((await send("b", "handshake/hello")).error).toBeDefined();
+      const refused = await send("b", "handshake/hello");
+      expect(refused.error.code).toBe(-32000);
       expect(evaluations).toBe(1);
       expect(store.context(session).entries).toHaveLength(1);
       release();
