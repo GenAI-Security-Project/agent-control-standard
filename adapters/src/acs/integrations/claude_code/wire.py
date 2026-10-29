@@ -16,37 +16,37 @@ Examples
 
 # 1. Preview what would be wired into the user's ~/.claude/settings.json
 #    (default dry-run; shows a diff against the current file).
-python3 wire.py \\
+acs-claude-code-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key
 
 # 2. Same, but actually write (with backup at ~/.claude/settings.json.bak.<ts>)
-python3 wire.py \\
+acs-claude-code-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
   --write
 
 # 3. Project-level settings: point at a different file
-python3 wire.py \\
+acs-claude-code-wire \\
   --guardian-url=https://guardian.internal/acs \\
   --secret-file=/etc/acs/hmac.key \\
   --settings=./.claude/settings.json \\
   --write
 
 # 4. Subset of hooks (default is the full mapped set (ACS_CORE_HOOKS))
-python3 wire.py \\
+acs-claude-code-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
   --hooks=PreToolUse,PostToolUse
 
 # 5. Fail-closed posture (default is fail-open per §6.4)
-python3 wire.py \\
+acs-claude-code-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
   --default-deny
 
 # 6. Remove ACS wiring (preserves any other hooks you have)
-python3 wire.py --unwire --settings=~/.claude/settings.json --write
+acs-claude-code-wire --unwire --settings=~/.claude/settings.json --write
 
 What this tool does NOT do
 ==========================
@@ -56,7 +56,7 @@ What this tool does NOT do
   - Start the Guardian. Run it yourself in a terminal, launchd, systemd,
     Docker, whatever fits your deployment.
   - Validate that the Guardian is reachable. Test that with
-    e2e_check.py after wiring.
+    tests/integrations/claude_code/e2e_check.py after wiring.
   - Choose any of the deployment-specific values (URL, secret path,
     fail posture). All explicit flags — no hidden defaults.
 """
@@ -67,15 +67,17 @@ import datetime
 import difflib
 import json
 import os
+import shlex
 import shutil
 import stat
 import sys
 from pathlib import Path
 from typing import Any
 
+from acs.integrations._hook_command import resolve_hook_command
 
-HERE = Path(__file__).resolve().parent
-DEFAULT_ADAPTER_PATH = HERE / "adapter.py"
+
+HOOK_SCRIPT = "acs-claude-code-hook"
 
 # ACS-Core minimum hook set per conformance.md:19, plus Stop
 # (steps/turnEnd). SubagentStop is not wired: steps/subagentStop requires
@@ -112,12 +114,11 @@ WIRE_MARKER = "# acs-adapter-wired"
 # Command-line construction
 # ──────────────────────────────────────────────────────────────────────
 
-def build_command(*, adapter_path: Path, guardian_url: str,
+def build_command(*, hook_command: str, guardian_url: str,
                    secret_file: str | None,
                    secret_env: str | None,
                    default_deny: bool,
                    host_allowlist: str | None,
-                   python_bin: str,
                    audit_file: str | None = None) -> str:
     """Compose the hook command string used inside settings.json.
 
@@ -142,7 +143,7 @@ def build_command(*, adapter_path: Path, guardian_url: str,
         # only exists if the events land somewhere collected.
         env_pairs.append(f"ACS_AUDIT_FILE={_expand(audit_file)}")
     env_prefix = " ".join(env_pairs)
-    return f"{env_prefix} {python_bin} {adapter_path} {WIRE_MARKER}"
+    return f"{env_prefix} {shlex.quote(hook_command)} {WIRE_MARKER}"
 
 
 def build_hook_entry(command: str) -> dict:
@@ -358,12 +359,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--settings",
                     default="~/.claude/settings.json",
                     help="Path to the Claude Code settings file (default: ~/.claude/settings.json).")
-    p.add_argument("--adapter",
-                    default=str(DEFAULT_ADAPTER_PATH),
-                    help=f"Absolute path to adapter.py (default: {DEFAULT_ADAPTER_PATH}).")
-    p.add_argument("--python-bin",
-                    default="python3",
-                    help="Python interpreter the hook command uses (default: python3 from PATH).")
+    p.add_argument("--hook-command", default=None,
+                    help=f"Command the hooks run (default: the absolute path of the installed "
+                         f"{HOOK_SCRIPT} console script).")
     p.add_argument("--hooks", default=",".join(ACS_CORE_HOOKS),
                     help=f"Comma-separated hook names to wire (default: the full mapped set: "
                          f"{','.join(ACS_CORE_HOOKS)}).")
@@ -398,9 +396,13 @@ def main(argv: list[str] | None = None) -> int:
         p.error("provide --secret-file OR --secret-env-inline, not both")
 
     settings_path = _expand(args.settings)
-    adapter_path = _expand(args.adapter)
-    if not args.unwire and not adapter_path.exists():
-        p.error(f"adapter not found at {adapter_path}; pass --adapter to override")
+    # A hook command that cannot run makes the host proceed with no audit record.
+    hook_command = ""
+    if not args.unwire:
+        try:
+            hook_command = resolve_hook_command(HOOK_SCRIPT, args.hook_command)
+        except ValueError as e:
+            p.error(str(e))
 
     hook_names = [h.strip() for h in args.hooks.split(",") if h.strip()]
     args.hooks = hook_names  # for the warning function
@@ -427,13 +429,12 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 hook_deny = hook in GATE_HOOKS
             commands_by_hook[hook] = build_command(
-                adapter_path=adapter_path,
+                hook_command=hook_command,
                 guardian_url=args.guardian_url,
                 secret_file=args.secret_file,
                 secret_env=args.secret_env_inline,
                 default_deny=hook_deny,
                 host_allowlist=args.host_allowlist,
-                python_bin=args.python_bin,
                 audit_file=args.audit_file,
             )
         new = merge_wire(existing, hook_names, commands_by_hook)
@@ -489,9 +490,8 @@ def main(argv: list[str] | None = None) -> int:
               f"{args.guardian_url}")
         print("  2. Restart any open Claude Code sessions — settings.json is "
               "read at session start, not live")
-        print("  3. Verify the wiring works:")
-        print(f"       cd {HERE}")
-        print("       python3 e2e_check.py")
+        print("  3. Verify the wiring from a repository checkout:")
+        print("       cd adapters && uv run python tests/integrations/claude_code/e2e_check.py")
     return 0
 
 

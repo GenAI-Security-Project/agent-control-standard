@@ -58,8 +58,9 @@ from dataclasses import is_dataclass, asdict
 from pathlib import Path
 from typing import Any, Optional
 
-# Carried in request metadata; bump on every behavior change to this file.
-ADAPTER_VERSION = "0.1.2"
+from acs import __version__
+
+ADAPTER_VERSION = __version__
 
 try:
     from acs._common import (  # noqa: E402

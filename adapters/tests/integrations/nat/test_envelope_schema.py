@@ -18,10 +18,9 @@ from jsonschema import Draft202012Validator
 from jsonschema.validators import RefResolver
 
 
-# In-repo schemas by default (repo root is three levels up from tests/);
-# override with ACS_SPEC_DIR to validate against an alternate checkout.
-SPEC_DIR_DEFAULT = Path(__file__).resolve().parents[4] / "specification" / "v0.1.0"
-SPEC_DIR = Path(os.environ.get("ACS_SPEC_DIR", str(SPEC_DIR_DEFAULT)))
+from acs.core import schemas_dir  # noqa: E402
+
+SPEC_DIR = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
 HERE = Path(__file__).resolve().parent
 ADAPTER_DIR = HERE.parents[2] / "src" / "acs" / "integrations" / "nat"

@@ -68,17 +68,10 @@ GUARDIAN_SCRIPT = ADAPTERS_DIR / "src" / "acs" / "guardian" / "example_guardian.
 INTEGRATIONS_DIR = ADAPTERS_DIR / "src" / "acs" / "integrations"
 
 from acs import _common as acs_common  # noqa: E402
+from acs.core import schemas_dir  # noqa: E402
 
-# Canonical schemas — REQUIRED for envelope/payload validation; the
-# suite FAILS loudly without them rather than silently skipping.
-# Default is the in-repo copy at the repository root so a fresh clone
-# validates against the schemas in this tree; ACS_SPEC_DIR overrides.
-SPEC_DIR = Path(
-    os.environ.get(
-        "ACS_SPEC_DIR",
-        str(Path(__file__).resolve().parents[3] / "specification" / "v0.1.0"),
-    )
-)
+# Required: the suite fails without the canonical schemas instead of skipping.
+SPEC_DIR = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
 # A fixed signing secret used only inside this test process. Real
 # deployments use ACS_HMAC_SECRET_FILE; we pass it via env.

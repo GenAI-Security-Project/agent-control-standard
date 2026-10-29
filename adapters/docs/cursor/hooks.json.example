@@ -4,62 +4,62 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py sessionStart"
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook sessionStart"
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py beforeSubmitPrompt",
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook beforeSubmitPrompt",
         "failClosed": true
       }
     ],
     "preToolUse": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py preToolUse",
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook preToolUse",
         "failClosed": true
       }
     ],
     "postToolUse": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py postToolUse"
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook postToolUse"
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py beforeShellExecution",
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook beforeShellExecution",
         "failClosed": true
       }
     ],
     "afterShellExecution": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py afterShellExecution"
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterShellExecution"
       }
     ],
     "beforeMCPExecution": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py beforeMCPExecution",
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook beforeMCPExecution",
         "failClosed": true
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py afterMCPExecution"
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterMCPExecution"
       }
     ],
     "subagentStart": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 python3 /path/to/acs_adapter.py subagentStart",
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook subagentStart",
         "failClosed": true
       }
     ],
     "afterAgentResponse": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py afterAgentResponse"
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterAgentResponse"
       }
     ],
     "sessionEnd": [
       {
-        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py sessionEnd"
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook sessionEnd"
       }
     ]
   }

@@ -54,6 +54,8 @@ HERE = Path(__file__).resolve().parent
 SHARED_SUITES = (
     ("guardian-conformance", HERE, ("module", "tests.conformance.test_acs_core_conformance")),
     ("_common",              HERE, ("discover", "tests/common")),
+    ("core",                 HERE, ("discover", "tests/core")),
+    ("package",              HERE, ("discover", "tests/package")),
 )
 
 PLATFORM_SUITES = {

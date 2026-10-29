@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from acs import _common as acs_common
+from acs.core import schemas_dir
 
 _HERE = Path(__file__).resolve().parent
 
@@ -173,14 +174,7 @@ def claude_code_event(hook_event_name: str, *, session_id: str | None = None,
 # ────────────────────────────────────────────────────────────────────
 
 def _default_spec_dir() -> Path:
-    """Resolve the canonical schema directory. Override with ACS_SPEC_DIR.
-
-    Defaults to the in-repo schemas at specification/v0.1.0/ at the
-    repository root, so a fresh clone validates its own schemas.
-    """
-    return Path(os.environ.get(
-        "ACS_SPEC_DIR",
-        str(Path(__file__).resolve().parents[4] / "specification" / "v0.1.0")))
+    return schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
 
 def build_local_resolver(schema_name: str, *, spec_dir: Path | None = None):

@@ -23,31 +23,31 @@ Examples
 ========
 
 # 1. Preview what would be wired into ~/.cursor/hooks.json
-python3 wire.py \\
+acs-cursor-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key
 
 # 2. Same, but actually write (with backup at ~/.cursor/hooks.json.bak.<ts>)
-python3 wire.py \\
+acs-cursor-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
   --write
 
 # 3. Project-level wiring
-python3 wire.py \\
+acs-cursor-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
   --settings=./.cursor/hooks.json \\
   --write
 
 # 4. Subset of hooks
-python3 wire.py \\
+acs-cursor-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
   --hooks=preToolUse,postToolUse
 
 # 5. Remove ACS wiring (preserves any other hooks you have)
-python3 wire.py --unwire --write
+acs-cursor-wire --unwire --write
 
 What this tool does NOT do
 ==========================
@@ -65,15 +65,17 @@ import datetime
 import difflib
 import json
 import os
+import shlex
 import shutil
 import stat
 import sys
 from pathlib import Path
 from typing import Any
 
+from acs.integrations._hook_command import resolve_hook_command
 
-HERE = Path(__file__).resolve().parent
-DEFAULT_ADAPTER_PATH = HERE / "adapter.py"
+
+HOOK_SCRIPT = "acs-cursor-hook"
 
 # The six unconditional ACS-Core minimum hooks in Cursor's vocabulary:
 #   sessionStart       — ACS sessionStart
@@ -118,17 +120,16 @@ WIRE_MARKER = "# acs-adapter-wired"
 # Command-line construction
 # ──────────────────────────────────────────────────────────────────────
 
-def build_command(*, adapter_path: Path, event_name: str,
+def build_command(*, hook_command: str, event_name: str,
                    guardian_url: str,
                    secret_file: str | None,
                    secret_env: str | None,
                    default_deny: bool,
-                   host_allowlist: str | None,
-                   python_bin: str) -> str:
+                   host_allowlist: str | None) -> str:
     """Compose the hook command string used inside hooks.json.
 
     Cursor passes the event name as argv[1], so the command line ends
-    with `python3 /path/to/acs_adapter.py <event_name>`.
+    with `acs-cursor-hook <event_name>`.
     """
     env_pairs: list[str] = [f"ACS_GUARDIAN_URL={guardian_url}"]
     if secret_file:
@@ -140,7 +141,7 @@ def build_command(*, adapter_path: Path, event_name: str,
     if host_allowlist:
         env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={host_allowlist}")
     env_prefix = " ".join(env_pairs)
-    return f"{env_prefix} {python_bin} {adapter_path} {event_name} {WIRE_MARKER}"
+    return f"{env_prefix} {shlex.quote(hook_command)} {event_name} {WIRE_MARKER}"
 
 
 def build_hook_entry(command: str, *, fail_closed: bool) -> dict:
@@ -341,12 +342,9 @@ def main(argv: list[str] | None = None) -> int:
                     default="~/.cursor/hooks.json",
                     help="Path to Cursor hooks.json (default: ~/.cursor/hooks.json — "
                          "user-level). Use ./.cursor/hooks.json for project-level.")
-    p.add_argument("--adapter",
-                    default=str(DEFAULT_ADAPTER_PATH),
-                    help=f"Absolute path to adapter.py (default: {DEFAULT_ADAPTER_PATH}).")
-    p.add_argument("--python-bin",
-                    default="python3",
-                    help="Python interpreter the hook command uses (default: python3 from PATH).")
+    p.add_argument("--hook-command", default=None,
+                    help=f"Command the hooks run (default: the absolute path of the installed "
+                         f"{HOOK_SCRIPT} console script).")
     p.add_argument("--hooks", default=",".join(DEFAULT_HOOKS),
                     help="Comma-separated hook names to wire (default: this "
                          "branch's ACS-Core minimum plus PR #21's proposed "
@@ -377,9 +375,13 @@ def main(argv: list[str] | None = None) -> int:
         p.error("provide --secret-file OR --secret-env-inline, not both")
 
     settings_path = _expand(args.settings)
-    adapter_path = _expand(args.adapter)
-    if not args.unwire and not adapter_path.exists():
-        p.error(f"adapter not found at {adapter_path}; pass --adapter to override")
+    # A hook command that cannot run makes the host proceed with no audit record.
+    hook_command = ""
+    if not args.unwire:
+        try:
+            hook_command = resolve_hook_command(HOOK_SCRIPT, args.hook_command)
+        except ValueError as e:
+            p.error(str(e))
 
     hook_names = [h.strip() for h in args.hooks.split(",") if h.strip()]
     args.hooks = hook_names  # for the warning function
@@ -410,14 +412,13 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 hook_deny = hook in GATE_HOOKS
             cmd = build_command(
-                adapter_path=adapter_path,
+                hook_command=hook_command,
                 event_name=hook,
                 guardian_url=args.guardian_url,
                 secret_file=args.secret_file,
                 secret_env=args.secret_env_inline,
                 default_deny=hook_deny,
                 host_allowlist=args.host_allowlist,
-                python_bin=args.python_bin,
             )
             entries_by_hook[hook] = build_hook_entry(cmd, fail_closed=hook_deny)
         new = merge_wire(existing, hook_names, entries_by_hook)
@@ -470,9 +471,8 @@ def main(argv: list[str] | None = None) -> int:
         print("  1. Make sure the Guardian is running and reachable at "
               f"{args.guardian_url}")
         print("  2. Restart Cursor — hooks.json is read at startup, not live")
-        print("  3. Verify the wiring works:")
-        print(f"       cd {HERE}")
-        print("       python3 e2e_check.py")
+        print("  3. Verify the wiring from a repository checkout:")
+        print("       cd adapters && uv run python tests/integrations/cursor/e2e_check.py")
     return 0
 
 

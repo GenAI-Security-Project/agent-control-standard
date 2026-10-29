@@ -90,12 +90,11 @@ _REQUEST_ENVELOPE_VALIDATOR = None
 try:
     from jsonschema import Draft202012Validator  # type: ignore[import-not-found]
     from jsonschema.validators import RefResolver  # type: ignore[import-not-found]
-    # In-repo schemas at the repository root by default; ACS_SPEC_DIR overrides.
-    _spec_dir_env = os.environ.get(
-        "ACS_SPEC_DIR",
-        str(Path(__file__).resolve().parents[4] / "specification" / "v0.1.0"),
-    )
-    _spec_dir = Path(_spec_dir_env)
+    from acs.core import schemas_dir
+    try:
+        _spec_dir = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
+    except FileNotFoundError:
+        _spec_dir = Path("<no bundled or in-repo schemas>")
     _envelope_schema_path = _spec_dir / "request-envelope.json"
     if _envelope_schema_path.exists():
         with open(_envelope_schema_path) as _f:

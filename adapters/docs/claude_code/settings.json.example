@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -80,7 +80,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -102,7 +102,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log python3 /path/to/acs_adapter.py # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }

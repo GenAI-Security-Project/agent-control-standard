@@ -66,6 +66,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+from acs import __version__
+
 try:
     from acs._common import (  # noqa: E402
         ACS_VERSION,
@@ -156,9 +158,8 @@ class GuardianHTTPRefusalError(Exception):
         super().__init__(f"HTTP {status}")
 
 
-# Carried in request metadata and printed by --version; bump on every
-# behavior change to this file.
-ADAPTER_VERSION = "0.1.2"
+# The acs-adapters package version; carried in request metadata and --version.
+ADAPTER_VERSION = __version__
 
 GUARDIAN_URL = os.environ.get("ACS_GUARDIAN_URL", "http://127.0.0.1:8787/acs")
 DEFAULT_DENY = os.environ.get("ACS_DEFAULT_DENY", "0") == "1"

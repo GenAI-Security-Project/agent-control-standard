@@ -23,7 +23,7 @@ class PlatformSelection(unittest.TestCase):
     def test_one_platform_runs_shared_checks_and_that_platform(self):
         labels = [suite[0] for suite in rc._select_suites(["cursor"])]
         self.assertEqual(
-            labels, ["guardian-conformance", "_common", "cursor"])
+            labels, ["guardian-conformance", "_common", "core", "package", "cursor"])
 
     def test_multiple_platforms_follow_requested_order(self):
         labels = [
@@ -32,7 +32,7 @@ class PlatformSelection(unittest.TestCase):
         ]
         self.assertEqual(
             labels,
-            ["guardian-conformance", "_common", "nat", "claude-code", "cursor"],
+            ["guardian-conformance", "_common", "core", "package", "nat", "claude-code", "cursor"],
         )
 
     def test_claude_code_alias_and_duplicates_run_once(self):
@@ -43,7 +43,7 @@ class PlatformSelection(unittest.TestCase):
             )
         ]
         self.assertEqual(
-            labels, ["guardian-conformance", "_common", "claude-code", "cursor"])
+            labels, ["guardian-conformance", "_common", "core", "package", "claude-code", "cursor"])
 
     def test_platform_is_required(self):
         with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:

@@ -47,10 +47,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ADAPTER = HERE.parents[2] / "src" / "acs" / "integrations" / "claude_code" / "adapter.py"
-SPEC_DIR_DEFAULT = Path(os.environ.get(
-    # In-repo schemas by default (repo root is two levels up); override
-    # with ACS_SPEC_DIR to validate against an alternate spec checkout.
-    "ACS_SPEC_DIR", str(HERE.parents[3] / "specification" / "v0.1.0")))
+from acs.core import schemas_dir  # noqa: E402
+
+SPEC_DIR_DEFAULT = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
 from acs import _common as acs_common  # noqa: E402
 from acs.testing.harness import (  # noqa: E402

@@ -21,17 +21,17 @@ still needs the middleware wired.
 Modes
 =====
 
-  python3 wire.py --workflow=path/to/workflow.yml
+  acs-nat-wire --workflow=path/to/workflow.yml
         Dry-run preview: show the unified diff that --write would apply.
 
-  python3 wire.py --workflow=path/to/workflow.yml --write
+  acs-nat-wire --workflow=path/to/workflow.yml --write
         Apply the wiring (backup at workflow.yml.bak.<timestamp>).
 
-  python3 wire.py --workflow=path/to/workflow.yml --check
+  acs-nat-wire --workflow=path/to/workflow.yml --check
         Lint-only. Print every attachment point that is not wired and
         exit non-zero if any gap is found. Suitable for CI.
 
-  python3 wire.py --workflow=path/to/workflow.yml --unwire --write
+  acs-nat-wire --workflow=path/to/workflow.yml --unwire --write
         Remove every line we previously added (carries the marker).
 
 Coverage caveat
@@ -64,7 +64,7 @@ try:
 except ImportError:
     sys.stderr.write(
         "wire.py needs `ruamel.yaml` for comment-preserving YAML round-trip.\n"
-        "Install: python3 -m pip install ruamel.yaml\n"
+        "Install the NAT extra: pip install 'acs-adapters[nat]'\n"
     )
     sys.exit(2)
 

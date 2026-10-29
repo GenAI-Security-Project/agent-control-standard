@@ -76,13 +76,12 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
         expected = {}
         for hook in wire.ACS_CORE_HOOKS:
             cmd = wire.build_command(
-                adapter_path=Path("/path/to/acs_adapter.py"),
+                hook_command="/path/to/acs-claude-code-hook",
                 guardian_url="http://127.0.0.1:8787/acs",
                 secret_file="/path/to/.acs/hmac.key",
                 secret_env=None,
                 default_deny=(hook in wire.GATE_HOOKS),
                 host_allowlist=None,
-                python_bin="python3",
                 audit_file="/path/to/.acs/audit.log",
             )
             expected[hook] = [wire.build_hook_entry(cmd)]
