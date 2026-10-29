@@ -19,7 +19,7 @@
 
 middleware:
   acs_guardian:
-    _type: acs_guardian              # registered name from acs_adapter.py
+    _type: acs_guardian              # registered by the acs-adapters[nat] package
     guardian_url: http://127.0.0.1:8787/acs
     default_deny: true
     timeout_s: 5.0

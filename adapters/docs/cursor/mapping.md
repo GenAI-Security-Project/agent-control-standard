@@ -2,7 +2,7 @@
 
 Schema sources: the official Cursor hooks documentation at docs.cursor.com (as of 2026-08-22) and Cursor's bundled `create-hook` skill (`~/.cursor/skills-cursor/create-hook/SKILL.md`). Every input field the adapter reads and every output field it emits appears in those documents — an earlier revision read fields Cursor never sends (`workspace_path`, `mcp_server`, `mcp_tool`, `exit_code`, `execution_id`, `response`, `thought`), so MCP/shell/agent envelopes reached the Guardian with empty identity and content (PR #22 host-contract audit).
 
-Each Cursor hook event maps to an ACS `steps/*` method. The adapter (`acs_adapter.py`) does the translation in both directions.
+Each Cursor hook event maps to an ACS `steps/*` method. The adapter (`src/acs/integrations/cursor/adapter.py`) does the translation in both directions.
 
 ## Hook event mapping
 

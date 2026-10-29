@@ -9,8 +9,9 @@ The procedure below has been run end-to-end and produced the expected outcomes (
 ## Procedure
 
 ```bash
-# 1. Start the example Guardian
-python3 ../../example-guardian/example_guardian.py --port 8787
+# 1. Generate a shared signing secret and start the example Guardian
+mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key
+ACS_HMAC_SECRET_FILE=~/.acs/hmac.key acs-example-guardian --port 8787
 
 # 2. In a new shell, set up a test project with the adapter wired in
 mkdir -p /tmp/acs-cursor-live/.cursor
@@ -19,19 +20,19 @@ cat > /tmp/acs-cursor-live/.cursor/hooks.json <<'EOF'
   "version": 1,
   "hooks": {
     "sessionStart": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs python3 /path/to/acs_adapter.py sessionStart" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook sessionStart" }
     ],
     "beforeSubmitPrompt": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs python3 /path/to/acs_adapter.py beforeSubmitPrompt" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook beforeSubmitPrompt" }
     ],
     "preToolUse": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs python3 /path/to/acs_adapter.py preToolUse" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook preToolUse" }
     ],
     "postToolUse": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs python3 /path/to/acs_adapter.py postToolUse" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook postToolUse" }
     ],
     "beforeShellExecution": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs python3 /path/to/acs_adapter.py beforeShellExecution" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook beforeShellExecution" }
     ]
   }
 }
@@ -73,4 +74,4 @@ While running the reproduction, the Cursor events sent to the adapter include se
 - For tools: `tool_use_id`, `duration`
 - For Shell: `command`, `cwd`, `sandbox`
 
-If your Guardian wants to incorporate any of these into policy decisions, extend `acs_adapter.py`'s `build_payload` to include the relevant fields.
+If your Guardian wants to incorporate any of these into policy decisions, extend `src/acs/integrations/cursor/adapter.py`'s `build_payload` to include the relevant fields.

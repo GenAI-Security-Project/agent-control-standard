@@ -24,13 +24,16 @@ ACS-Core §6.4 requires the framework to wait for the verdict and apply it befor
 
 ## Install — five steps
 
-You need three pieces co-located on the same machine: a running Guardian, a shared HMAC secret, and a `~/.claude/settings.json` that wires the adapter into Claude Code's hooks. `wire.py` does step 3 for you.
+You need three pieces co-located on the same machine: a running Guardian, a shared HMAC secret, and a `~/.claude/settings.json` that wires the adapter into Claude Code's hooks. `acs-claude-code-wire` does step 3 for you.
 
 Commands below assume `$ACS_REPO` points at your local clone of `GenAI-Security-Project/agent-control-standard` (or your fork). Export it once:
 
 ```bash
 export ACS_REPO=/path/to/your/clone   # e.g., $HOME/code/ACS
+uv tool install "$ACS_REPO/adapters"  # or: pipx install "$ACS_REPO/adapters"
 ```
+
+Installing the package puts `acs-claude-code-hook`, `acs-claude-code-wire` and `acs-example-guardian` on your PATH.
 
 ### 1. Generate the shared HMAC secret
 
@@ -48,8 +51,7 @@ Use the example Guardian for testing; a production Guardian is the same wire pro
 
 ```bash
 ACS_HMAC_SECRET_FILE=~/.acs/hmac.key \
-  python3 $ACS_REPO/adapters/example-guardian/example_guardian.py \
-  --port 8787
+  acs-example-guardian --port 8787
 ```
 
 Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`.
@@ -58,18 +60,16 @@ Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`
 
 ### 3. Wire `~/.claude/settings.json`
 
-The `wire.py` CLI does this safely — dry-run by default, atomic write with a timestamped backup when you pass `--write`.
+`acs-claude-code-wire` does this safely: dry-run by default, atomic write with a timestamped backup when you pass `--write`. It wires the absolute path of the installed `acs-claude-code-hook`, and stops if that command is not installed, or if a `--hook-command` you pass is not an absolute path to an executable file.
 
 ```bash
-cd "$ACS_REPO/adapters/claude-code"
-
 # Preview the change without touching the file
-python3 wire.py \
+acs-claude-code-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key
 
 # Apply it (creates ~/.claude/settings.json.bak.<timestamp>)
-python3 wire.py \
+acs-claude-code-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
   --write
@@ -88,7 +88,7 @@ What it wires by default:
 
 Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere).
 
-To remove the wiring later: `python3 wire.py --unwire --write`.
+To remove the wiring later: `acs-claude-code-wire --unwire --write`.
 
 ### 4. Restart any open Claude Code session
 
@@ -99,8 +99,9 @@ Claude Code reads `~/.claude/settings.json` at session start, not live. Existing
 Two complementary checks. The end-to-end check is the one to run if you only have time for one:
 
 ```bash
-cd "$ACS_REPO/adapters/claude-code"
-python3 e2e_check.py
+cd "$ACS_REPO/adapters"
+uv sync --locked --group test
+uv run python tests/integrations/claude_code/e2e_check.py
 ```
 
 Real Claude is driven through four scenarios — allow, deny, Read tool, multi-tool handshake-once — every envelope is printed verbatim, you read PASS/FAIL per scenario. Wall-clock ~60-90s because real Claude is in the loop. The final line is either `ACS-CORE SMOKE PASS (claude-code)` (exit 0) — a smoke verdict, not a conformance certification — or a per-scenario failure list (exit 1).
@@ -110,8 +111,8 @@ You can also do an in-session manual smoke test (see [Smoke tests](#smoke-tests)
 ## Prerequisites
 
 - **`claude` CLI** installed and authenticated — install guide: <https://docs.claude.com/claude-code>
-- **Python 3.10+** with `rfc8785` (the adapter's one runtime dependency) — `pip install -r requirements.txt`. For running the test suites you also need `jsonschema`: `pip install -r ../requirements-test.txt`
-- **Canonical ACS schemas** — the in-repo copy at `specification/v0.1.0/` is the default, so no setup is needed when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
+- **Python 3.11+** and the `acs-adapters` package (`uv tool install "$ACS_REPO/adapters"`). Its runtime dependencies are `rfc8785` and `jsonschema`. To run the test suites: `cd "$ACS_REPO/adapters" && uv sync --locked --group test`.
+- **Canonical ACS schemas**: bundled in the package, and read from `specification/v0.1.0/` when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
 
 ## Smoke tests
 
@@ -123,8 +124,8 @@ Run from `adapters/`:
 
 ```bash
 cd "$ACS_REPO/adapters"
-python3 run_conformance.py claude
-# Runs the shared Guardian and _common checks, then Claude Code's suite.
+uv run python run_conformance.py claude
+# Runs the shared Guardian, _common, core and package checks, then Claude Code's suite.
 ```
 
 The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip.
@@ -132,8 +133,9 @@ The command reports passes, skips, and failures separately. It fails on any test
 ### Smoke #2 — real Claude end-to-end (~60-90s)
 
 ```bash
-cd "$ACS_REPO/adapters/claude-code"
-python3 e2e_check.py
+cd "$ACS_REPO/adapters"
+uv sync --locked --group test
+uv run python tests/integrations/claude_code/e2e_check.py
 ```
 
 Drives real Claude through 4 scenarios with a recording Guardian. Prints every envelope on the wire plus per-scenario PASS/FAIL.
@@ -175,7 +177,7 @@ Unsigned envelope to a signing-required Guardian:
 ```bash
 ACS_GUARDIAN_URL="http://127.0.0.1:8787/acs" \
 ACS_HMAC_SECRET="" \
-python3 $ACS_REPO/adapters/claude-code/acs_adapter.py 2>&1 <<'EOF'
+acs-claude-code-hook 2>&1 <<'EOF'
 {"session_id":"11111111-1111-4111-8111-111111111111","transcript_path":"/tmp/t","cwd":"/tmp","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo test"}}
 EOF
 ```
@@ -199,7 +201,7 @@ Guardian unreachable (different cause, same disposition):
 
 ```bash
 ACS_GUARDIAN_URL="http://127.0.0.1:1/dead" \
-python3 $ACS_REPO/adapters/claude-code/acs_adapter.py 2>&1 <<'EOF'
+acs-claude-code-hook 2>&1 <<'EOF'
 {"session_id":"11111111-1111-4111-8111-111111111111","transcript_path":"/tmp/t","cwd":"/tmp","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo test"}}
 EOF
 ```
@@ -231,28 +233,27 @@ echo "=== Hooks wired? ==="
 python3 -c "import json, os; d=json.load(open(os.path.expanduser('~/.claude/settings.json'))); print(list(d.get('hooks',{}).keys()))"
 
 echo "=== Guardian responds to system/ping? ==="
-cd "$ACS_REPO/adapters" && python3 -c "
-import sys; sys.path.insert(0, '_common')
-from acs_common import ping; import json
+cd "$ACS_REPO/adapters" && uv run python -c "
+from acs._common import ping; import json
 r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r else 'no response')
 "
 ```
 
 ## Files
 
-- `acs_adapter.py` — the adapter itself. Stdlib + `rfc8785` for JCS canonicalization.
-- `wire.py` — settings.json wiring CLI (dry-run by default; `--write` to apply).
-- `e2e_check.py` — real-Claude end-to-end verifier (4 scenarios).
-- `settings.json.example` — reference wiring (`wire.py` produces a more comprehensive one).
-- `mapping.md` — Claude Code hook → ACS step method table, plus disposition translation.
-- `tests/` — round-trip + schema + live integration tests.
-- `tests/example_payloads.md` — masked real-world payload examples showing exactly what Claude Code emits.
+- `src/acs/integrations/claude_code/adapter.py`: the adapter itself, installed as `acs-claude-code-hook`. Stdlib + `rfc8785` for JCS canonicalization.
+- `src/acs/integrations/claude_code/wire.py`: the settings.json wiring CLI, installed as `acs-claude-code-wire` (dry-run by default; `--write` to apply).
+- `tests/integrations/claude_code/e2e_check.py`: real-Claude end-to-end verifier (4 scenarios).
+- `docs/claude_code/settings.json.example`: reference wiring (`acs-claude-code-wire` produces a more comprehensive one).
+- `docs/claude_code/mapping.md`: Claude Code hook → ACS step method table, plus disposition translation.
+- `tests/integrations/claude_code/`: round-trip, schema and live integration tests.
+- `docs/claude_code/example_payloads.md`: masked real-world payload examples showing exactly what Claude Code emits.
 
-The adapter shares `adapters/_common/` with the Cursor and NAT adapters (signing, handshake cache, audit events, URL allowlist).
+The adapter shares `src/acs/_common.py` with the Cursor and NAT adapters (signing, handshake cache, audit events, URL allowlist).
 
 ## Configuration
 
-The adapter is configured by environment variables, typically set per-hook by `wire.py`:
+The adapter is configured by environment variables, typically set per-hook by `acs-claude-code-wire`:
 
 | Variable | Default | Purpose |
 |---|---|---|

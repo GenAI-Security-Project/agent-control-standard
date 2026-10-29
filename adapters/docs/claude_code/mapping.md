@@ -1,6 +1,6 @@
 # Claude Code → ACS hook mapping
 
-Each Claude Code hook event maps to an ACS `steps/*` method. The adapter (`acs_adapter.py`) does the translation in both directions: Claude Code hook event → ACS JSON-RPC request, ACS decision → Claude Code response.
+Each Claude Code hook event maps to an ACS `steps/*` method. The adapter (`src/acs/integrations/claude_code/adapter.py`) does the translation in both directions: Claude Code hook event → ACS JSON-RPC request, ACS decision → Claude Code response.
 
 ## Hook event mapping
 
@@ -38,7 +38,7 @@ An arrived decision the host CANNOT apply is substituted to a block/deny (never 
 
 ## Conformance posture
 
-The Claude Code adapter implements ACS-Core's mandatory floor. Every row below describes what the code in `acs_adapter.py` actually does — this table drifted from the code once (PR #22 review caught six false claims in it), so treat the code as ground truth and this table as its description:
+The Claude Code adapter implements ACS-Core's mandatory floor. Every row below describes what the code in `adapter.py` actually does — this table drifted from the code once (PR #22 review caught six false claims in it), so treat the code as ground truth and this table as its description:
 
 - Handshake: `handshake/hello` is performed once per session (idempotent via disk cache, `~/.cache/acs-adapter-handshake/`) before the first hook event. The ServerHello's response envelope is signature-verified and bound to the ClientHello before caching; its `on_decision_failure` participates in the effective fail posture (most-restrictive-wins with `ACS_DEFAULT_DENY`). Its `methods_evaluated` bounds what is sent: a method the Guardian omits resolves as ALLOW-by-default without being sent (handshake.json) and is recorded as `method_not_evaluated`; the hook returns no output, so Claude Code's own permission flow still applies, and a result never cites a request that was not sent. With no negotiated list, every mapped hook is sent. Handshake failures are negative-cached for a short TTL so a dead Guardian costs one timeout, not one per event. `ACS_HANDSHAKE=0` disables.
 - Turns: a `UserPromptSubmit` opens a turn with an explicit `steps/turnStart` (decision-eligible) before the `steps/userMessage`; `Stop` closes it with `steps/turnEnd`. The `turn_id` is held in per-session state and stamped on `metadata.turn_id` of every in-turn step; session-level steps (`sessionStart`/`sessionEnd`) carry none.

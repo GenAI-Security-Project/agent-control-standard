@@ -1,14 +1,14 @@
 # Adapter security posture
 
 This document is the threat model for the three reference adapters
-(`claude-code/`, `cursor/`, `nat/`), the `example-guardian/`, and the
-shared helpers in `_common/`. It says what attacks the code defends
+(`src/acs/integrations/`), the example Guardian (`src/acs/guardian/`),
+and the shared helpers in `src/acs/_common.py`. It says what attacks the code defends
 against, how, and what is explicitly out of scope.
 
 ACS is a security project — the whole point of the standard is to
 police agent behavior. Adapter code that itself has security holes
 undermines the standard. This document and the tests under
-`_common/tests/test_security.py` are the falsifiers for every claim
+`tests/common/test_security.py` are the falsifiers for every claim
 below.
 
 ## In-scope components
@@ -17,7 +17,7 @@ below.
 |---|---|
 | Adapter process (`claude-code/`, `cursor/`) | Shell-spawned by the framework per hook event. Runs as the framework's user. Reads framework JSON from stdin. |
 | Adapter middleware (`nat/`) | In-process inside the agent's Python runtime. Same address space as the agent. |
-| Guardian process (`example-guardian/`) | HTTP server. Holds the HMAC secret. Computes the rolling audit chain. |
+| Guardian process (`src/acs/guardian/`) | HTTP server. Holds the HMAC secret. Computes the rolling audit chain. |
 | Wire transport | JSON-RPC over HTTP (deployments wrap with HTTPS / mTLS for production). |
 | HMAC shared secret | Loaded from `ACS_HMAC_SECRET_FILE` (preferred) or `ACS_HMAC_SECRET` (env-var fallback). |
 | Cache files | `~/.cache/acs-adapter-handshake/` (ServerHello cache), `~/.cache/acs-adapter-session/` (per-session step-id tracking). |
@@ -158,7 +158,7 @@ backslash escapes, locale-dependent commands, etc.
 defense-in-depth heuristic, NOT a security boundary. Production
 deployments wire a real policy engine (OPA/Rego, Cedar, or a vendor
 policy bundle) into the Guardian. Documented in
-`example-guardian/example_guardian.py` and `adapters/README.md`.
+`src/acs/guardian/example_guardian.py` and `adapters/README.md`.
 
 **O3 — Secret in env-var visible to child processes / `ps eauxw`.**
 `ACS_HMAC_SECRET` shows up in `/proc/PID/environ` and is inherited by

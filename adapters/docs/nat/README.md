@@ -24,13 +24,16 @@ ACS-Core §6.4 requires the framework to wait for the verdict and apply it befor
 
 ## Install — five steps
 
-You need: a running Guardian, a shared HMAC secret, and a NAT `workflow.yml` with `acs_guardian` wired at every attachment point. `wire.py` does step 3 for you and `--check` keeps it true forever after.
+You need: a running Guardian, a shared HMAC secret, and a NAT `workflow.yml` with `acs_guardian` wired at every attachment point. `acs-nat-wire` does step 3 for you and `--check` keeps it true forever after.
 
 Commands below assume `$ACS_REPO` points at your local clone of `GenAI-Security-Project/agent-control-standard`. Export it once:
 
 ```bash
 export ACS_REPO=/path/to/your/clone   # e.g., $HOME/code/ACS
+pip install "$ACS_REPO/adapters[nat]"   # into the environment your NAT workflow runs in
 ```
+
+The `nat` extra installs NAT itself, the middleware (NAT finds `_type: acs_guardian` through the package's `nat.components` entry point), `acs-nat-wire` and `acs-example-guardian`.
 
 ### 1. Generate the shared HMAC secret
 
@@ -48,8 +51,7 @@ The example Guardian is for testing; a production Guardian is the same wire prot
 
 ```bash
 ACS_HMAC_SECRET_FILE=~/.acs/hmac.key \
-  python3 "$ACS_REPO/adapters/example-guardian/example_guardian.py" \
-  --port 8787
+  acs-example-guardian --port 8787
 ```
 
 Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`.
@@ -58,25 +60,24 @@ Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`
 
 ```bash
 cd /path/to/your/project   # where your workflow.yml lives
-pip install nvidia-nat-core ruamel.yaml
 
 # Preview the change (dry-run, no file write)
-python3 "$ACS_REPO/adapters/nat/wire.py" \
+acs-nat-wire \
   --workflow=workflow.yml \
   --guardian-url=http://127.0.0.1:8787/acs \
   --default-deny
 
 # Apply (timestamped backup at workflow.yml.bak.<timestamp>)
-python3 "$ACS_REPO/adapters/nat/wire.py" \
+acs-nat-wire \
   --workflow=workflow.yml \
   --guardian-url=http://127.0.0.1:8787/acs \
   --default-deny \
   --write
 ```
 
-`wire.py` walks every attachment point in your YAML and inserts `acs_guardian`:
+`acs-nat-wire` walks every attachment point in your YAML and inserts `acs_guardian`:
 
-| YAML location | What `wire.py` does |
+| YAML location | What `acs-nat-wire` does |
 |---|---|
 | top-level `middleware:` block | adds the `acs_guardian:` definition with your guardian_url, default_deny, timeout_s |
 | `workflow.middleware` | prepends `acs_guardian` (policy gate runs before content filters) |
@@ -85,7 +86,7 @@ python3 "$ACS_REPO/adapters/nat/wire.py" \
 
 Every line we add carries a `# acs-adapter-wired` marker. Re-running is a no-op. `--unwire --write` removes exactly what we added and nothing else.
 
-To remove later: `python3 wire.py --workflow=workflow.yml --unwire --write`.
+To remove later: `acs-nat-wire --workflow=workflow.yml --unwire --write`.
 
 ### 4. Restart your NAT process
 
@@ -95,20 +96,21 @@ NAT loads `workflow.yml` at startup. Existing processes keep their pre-wiring co
 
 ```bash
 # Lint — exits non-zero if any attachment point is missing acs_guardian
-python3 "$ACS_REPO/adapters/nat/wire.py" --workflow=workflow.yml --check
+acs-nat-wire --workflow=workflow.yml --check
 
 # Run the live tests against your installed adapter + Guardian
-cd "$ACS_REPO/adapters/nat"
-python3 -m unittest tests.test_live -v
+cd "$ACS_REPO/adapters"
+uv sync --locked --extra nat --group test
+uv run python -m unittest tests.integrations.nat.test_live -v
 ```
 
-`wire.py --check` is the load-bearing CI gate — see [Coverage discipline](#coverage-discipline-the-yaml-only-rule) below.
+`acs-nat-wire --check` is the load-bearing CI gate — see [Coverage discipline](#coverage-discipline-the-yaml-only-rule) below.
 
 ## Prerequisites
 
-- **NAT installed** — `pip install nvidia-nat-core` (>=1.7.0)
-- **Python 3.10+** with `ruamel.yaml`, `jsonschema`, `rfc8785` — `pip install -r requirements.txt -r ../requirements-test.txt`
-- **Canonical ACS schemas** — the in-repo copy at `specification/v0.1.0/` is the default, so no setup is needed when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
+- **NAT**: `nvidia-nat-core` 1.7.x, installed with the `nat` extra (`pip install "$ACS_REPO/adapters[nat]"`).
+- **Python 3.11+**. The `nat` extra also brings `ruamel.yaml` for `acs-nat-wire`. To run the test suites: `cd "$ACS_REPO/adapters" && uv sync --locked --extra nat --group test`.
+- **Canonical ACS schemas**: bundled in the package, and read from `specification/v0.1.0/` when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
 
 ## Coverage discipline (the YAML-only rule)
 
@@ -116,9 +118,9 @@ NAT's middleware fires per-attachment-point: workflow, function_groups, and indi
 
 **The three rules for ACS-conformant NAT deployments:**
 
-1. **Define every tool in YAML.** Functions registered at runtime in Python code (not in `workflow.yml`) cannot be wired by `wire.py` and will not be gated by the middleware path. If you need full gating, every function lives in the YAML.
-2. **Run `wire.py --check` in CI** on every workflow YAML you ship. It exits non-zero if any attachment point is missing `acs_guardian`. Treat that as a build failure.
-3. **Re-run `wire.py --write` after any YAML edit** that adds or restructures `function_groups`, `workflow`, or individual `functions`. The marker comments make it idempotent.
+1. **Define every tool in YAML.** Functions registered at runtime in Python code (not in `workflow.yml`) cannot be wired by `acs-nat-wire` and will not be gated by the middleware path. If you need full gating, every function lives in the YAML.
+2. **Run `acs-nat-wire --check` in CI** on every workflow YAML you ship. It exits non-zero if any attachment point is missing `acs_guardian`. Treat that as a build failure.
+3. **Re-run `acs-nat-wire --write` after any YAML edit** that adds or restructures `function_groups`, `workflow`, or individual `functions`. The marker comments make it idempotent.
 
 What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` gives.** The middleware fires synchronously *before* the function executes; a Guardian deny raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP`) and NAT does not call the function.
 
@@ -132,16 +134,16 @@ Five tests, ordered from broadest to most specific. Run any/all.
 
 ```bash
 cd "$ACS_REPO/adapters"
-nat/.nat-venv/bin/python run_conformance.py nat
-# Runs the shared Guardian and _common checks, then NAT's suite.
+uv run python run_conformance.py nat
+# Runs the shared Guardian, _common, core and package checks, then NAT's suite.
 ```
 
-Use an interpreter with `nvidia-nat-core` installed. A missing NAT dependency produces an unexpected skip and fails the command.
+Sync with the `nat` extra first (`uv sync --locked --extra nat --group test`). A missing NAT dependency produces an unexpected skip and fails the command.
 
-### Smoke #2 — `wire.py --check` (CI gate)
+### Smoke #2 — `acs-nat-wire --check` (CI gate)
 
 ```bash
-python3 "$ACS_REPO/adapters/nat/wire.py" \
+acs-nat-wire \
   --workflow=/path/to/your/workflow.yml --check
 ```
 
@@ -150,8 +152,8 @@ Exit 0 → every attachment point in the YAML is wired with `acs_guardian`. Exit
 ### Smoke #3 — end-to-end conformance (e2e_check.py)
 
 ```bash
-cd "$ACS_REPO/adapters/nat"
-python3 e2e_check.py
+cd "$ACS_REPO/adapters"
+uv run python tests/integrations/nat/e2e_check.py
 ```
 
 Five fully-automated scenarios against the **real `example_guardian.evaluate_step` policy** (same one the production example Guardian uses), wired through a recording Guardian so the script can assert on every wire envelope:
@@ -171,8 +173,8 @@ Schema validation is against the canonical `request-envelope.json` from `ACS_SPE
 ### Smoke #4 — disposition matrix (test_dispositions_live.py)
 
 ```bash
-cd "$ACS_REPO/adapters/nat"
-python3 -m unittest tests.test_dispositions_live -v
+cd "$ACS_REPO/adapters"
+uv run python -m unittest tests.integrations.nat.test_dispositions_live -v
 ```
 
 End-to-end verification that EVERY ACS disposition (ALLOW, DENY, MODIFY, ASK, DEFER, post_invoke DENY) is honored on the LangChain-shaped input path NAT's runtime actually uses (input captured as `modified_args[0]` Pydantic model, not `modified_kwargs`). Catches the silent-bypass class of bug where MODIFY overrides drop or post_invoke redaction crashes on Pydantic strict-fields.
@@ -180,8 +182,8 @@ End-to-end verification that EVERY ACS disposition (ALLOW, DENY, MODIFY, ASK, DE
 ### Smoke #5 — alternate live tests (test_live.py)
 
 ```bash
-cd "$ACS_REPO/adapters/nat"
-python3 -m unittest tests.test_live -v
+cd "$ACS_REPO/adapters"
+uv run python -m unittest tests.integrations.nat.test_live -v
 ```
 
 Five tests spin up the example Guardian (subprocess, not in-process), construct a real NAT middleware invocation, and assert side-effect counters: a benign function executes, a destructive function is denied, write-to-protected-path is denied, fail-closed blocks on Guardian unreachable, fail-open lets the call through with an audit event. `e2e_check.py` (Smoke #3) is the broader assertion surface; `test_live.py` is the minimal unit-style guarantee that the enforcement contract holds.
@@ -194,7 +196,7 @@ Trigger an unreachable Guardian (with `default_deny: true` in the middleware con
 
 ```python
 # In a script with NAT installed
-from acs_adapter import ACSMiddleware, ACSMiddlewareConfig
+from acs.integrations.nat.adapter import ACSMiddleware, ACSMiddlewareConfig
 # Point at a dead port to force transport_failure
 cfg = ACSMiddlewareConfig(guardian_url="http://127.0.0.1:1/dead", default_deny=True)
 mw = ACSMiddleware(cfg)
@@ -216,25 +218,25 @@ Same `acs_audit_event`; the `cause` field is what operators grep on.
 
 ### Smoke #7 — coverage-gap detection
 
-Have your Guardian log every received envelope's `method` and the source (middleware-routed via `steps/toolCallRequest` vs lifecycle-routed via `steps/toolCallRequest` from `WORKFLOW_START`). After a typical workflow run, every tool call should appear in both streams. A call appearing in lifecycle but not middleware → that function is not wired (re-run `wire.py --check` to locate it).
+Have your Guardian log every received envelope's `method` and the source (middleware-routed via `steps/toolCallRequest` vs lifecycle-routed via `steps/toolCallRequest` from `WORKFLOW_START`). After a typical workflow run, every tool call should appear in both streams. A call appearing in lifecycle but not middleware → that function is not wired (re-run `acs-nat-wire --check` to locate it).
 
 ## Files
 
-- `acs_adapter.py` — the middleware class + config + NAT registration. Stdlib + nvidia-nat-core only.
-- `wire.py` — comment-preserving YAML installer + linter (`--check`, `--write`, `--unwire`). Requires `ruamel.yaml`.
-- `e2e_check.py` — automated end-to-end conformance check (5 scenarios, real `example_guardian` policy, canary-based assertions).
-- `workflow.yml.example` — drop-in NAT workflow YAML wiring the middleware.
-- `requirements.txt` — runtime deps (`nvidia-nat-core`, `ruamel.yaml`).
-- `mapping.md` — NAT lifecycle point → ACS step method table.
-- `tests/test_adapter.py` — integration tests against the real NAT API + the `_extract_arguments` regression set covering the LangChain-shape input bug.
-- `tests/test_live.py` — 5 live workflow tests exercising NAT's `function_middleware_invoke` orchestration end-to-end.
-- `tests/test_dispositions_live.py` — every ACS disposition (ALLOW, DENY, MODIFY, ASK, DEFER, post_invoke DENY) verified on the `modified_args[0]` Pydantic-model path the LangChain react_agent uses in production.
-- `tests/test_envelope_schema.py` — JSON-RPC envelope shape validation against canonical schemas.
-- `tests/test_lifecycle.py` — `IntermediateStepManager` subscription emits the 6-minimum hooks.
-- `tests/test_failure_modes.py` — transport failures, signature checks, replay, timestamp skew, JSON-RPC errors.
-- `tests/example_payloads.md` — masked real-world payload examples showing the in-process `InvocationContext` shape and what the adapter sends.
+- `src/acs/integrations/nat/adapter.py`: the middleware class, its config and the NAT registration. Stdlib + nvidia-nat-core only.
+- `src/acs/integrations/nat/wire.py`: comment-preserving YAML installer and linter, installed as `acs-nat-wire` (`--check`, `--write`, `--unwire`). Requires `ruamel.yaml`.
+- `tests/integrations/nat/e2e_check.py`: automated end-to-end conformance check (5 scenarios, real `example_guardian` policy, canary-based assertions).
+- `docs/nat/workflow.yml.example`: drop-in NAT workflow YAML wiring the middleware.
+- `pyproject.toml`'s `nat` extra: runtime deps (`nvidia-nat-core`, `ruamel.yaml`).
+- `docs/nat/mapping.md`: NAT lifecycle point → ACS step method table.
+- `tests/integrations/nat/test_adapter.py` — integration tests against the real NAT API + the `_extract_arguments` regression set covering the LangChain-shape input bug.
+- `tests/integrations/nat/test_live.py` — 5 live workflow tests exercising NAT's `function_middleware_invoke` orchestration end-to-end.
+- `tests/integrations/nat/test_dispositions_live.py` — every ACS disposition (ALLOW, DENY, MODIFY, ASK, DEFER, post_invoke DENY) verified on the `modified_args[0]` Pydantic-model path the LangChain react_agent uses in production.
+- `tests/integrations/nat/test_envelope_schema.py` — JSON-RPC envelope shape validation against canonical schemas.
+- `tests/integrations/nat/test_lifecycle.py` — `IntermediateStepManager` subscription emits the 6-minimum hooks.
+- `tests/integrations/nat/test_failure_modes.py` — transport failures, signature checks, replay, timestamp skew, JSON-RPC errors.
+- `docs/nat/example_payloads.md` — masked real-world payload examples showing the in-process `InvocationContext` shape and what the adapter sends.
 
-The adapter shares `adapters/_common/` with the Claude Code and Cursor adapters (signing, handshake cache, audit events, URL allowlist, JSON-RPC error code → cause mapping).
+The adapter shares `src/acs/_common.py` with the Claude Code and Cursor adapters (signing, handshake cache, audit events, URL allowlist, JSON-RPC error code → cause mapping).
 
 ## How it differs from the Claude Code / Cursor adapters
 
@@ -252,7 +254,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 
 ## Configuration
 
-### YAML config (the middleware block — `wire.py` populates this)
+### YAML config (the middleware block — `acs-nat-wire` populates this)
 
 | Field | Default | Purpose |
 |---|---|---|
@@ -297,11 +299,11 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | Wrapped MCP `protocols/MCP/*` | ✗ not implemented. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter emits no `protocols/MCP/*` traffic. The function middleware sees an MCP tool only as an ordinary NAT function, so a wired MCP tool call can reach the Guardian only as `steps/toolCallRequest` and `steps/toolCallResult`. This suite does not exercise that path. No other MCP surface is wrapped, so a NAT session that uses MCP falls short of ACS-Core there. Known limitation. |
 | `request_id_ref` correlation | ✓ `post_invoke` populates with a deterministic uuid5 derived from session + function + kwargs, linking result to request |
-| **Coverage of every tool call** | ⚠ **opt-in via YAML wiring** — see [Coverage discipline](#coverage-discipline-the-yaml-only-rule) above. `wire.py --check` is the CI gate that makes this enforceable. |
+| **Coverage of every tool call** | ⚠ **opt-in via YAML wiring** — see [Coverage discipline](#coverage-discipline-the-yaml-only-rule) above. `acs-nat-wire --check` is the CI gate that makes this enforceable. |
 
 ## How NAT's defense middleware composes with this
 
-NAT ships `defense_middleware` (in `nvidia-nat-security`) for prompt-injection and PII checks. The ACS adapter does not replace those — it composes with them. A NAT YAML can list multiple middlewares per group, and they execute in order. `wire.py` always prepends `acs_guardian` to the chain so the policy gate runs before content filters — denied calls short-circuit before expensive content analysis. Recommended composition: ACS first, then NAT defense middleware, then the function.
+NAT ships `defense_middleware` (in `nvidia-nat-security`) for prompt-injection and PII checks. The ACS adapter does not replace those — it composes with them. A NAT YAML can list multiple middlewares per group, and they execute in order. `acs-nat-wire` always prepends `acs_guardian` to the chain so the policy gate runs before content filters — denied calls short-circuit before expensive content analysis. Recommended composition: ACS first, then NAT defense middleware, then the function.
 
 ## Compatibility
 
@@ -314,10 +316,10 @@ The adapter works across multiple NAT releases by feature-detecting the block me
 
 | Symptom | Likely cause |
 |---|---|
-| `wire.py --check` reports gaps after wiring | YAML was edited after wire.py ran. Re-run `wire.py --write`. |
-| `wire.py --check` keeps reporting gaps for the same function | That function is defined in Python code, not YAML. wire.py can't reach it. Move the definition into YAML, or accept the coverage gap and rely on the lifecycle-stream backstop. |
-| `wire.py` errors out with "ruamel.yaml" missing | `pip install ruamel.yaml`. |
-| NAT runs functions as if no Guardian exists | NAT loaded the workflow before `wire.py --write` ran. **Restart your NAT process.** |
+| `acs-nat-wire --check` reports gaps after wiring | YAML was edited after acs-nat-wire ran. Re-run `acs-nat-wire --write`. |
+| `acs-nat-wire --check` keeps reporting gaps for the same function | That function is defined in Python code, not YAML. acs-nat-wire can't reach it. Move the definition into YAML, or accept the coverage gap and rely on the lifecycle-stream backstop. |
+| `acs-nat-wire` errors out with "ruamel.yaml" missing | Install the `nat` extra: `pip install "$ACS_REPO/adapters[nat]"`. |
+| NAT runs functions as if no Guardian exists | NAT loaded the workflow before `acs-nat-wire --write` ran. **Restart your NAT process.** |
 | Every call gets denied | Likely `default_deny: true` in middleware config + Guardian down. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. Audit log shows `cause=signature_invalid_response`. |
@@ -330,13 +332,9 @@ Everything the adapter does that's not policy decision-making is audited on stde
 ## Running the tests
 
 ```bash
-# Tests that don't need NAT (schema, wire format) run anywhere
-cd "$ACS_REPO/adapters/nat"
-python3 -m unittest discover tests
-
-# Tests that drive real NAT need it installed
-pip install -r requirements.txt
-python3 -m unittest tests.test_live -v
+cd "$ACS_REPO/adapters"
+uv sync --locked --extra nat --group test
+uv run python -m unittest discover -s tests/integrations/nat -t . -v
 ```
 
 If NAT is not installed, NAT-dependent test classes are skipped cleanly (`@unittest.skipUnless`).

@@ -22,7 +22,7 @@ Every response carries a `chain_hash` field derived from `session_id + method + 
 
 ## Why it's shared
 
-All three reference adapters (`adapters/claude-code/`, `adapters/cursor/`, `adapters/nat/`) speak the same ACS JSON-RPC wire format. Their integration tests all need a Guardian that:
+All three reference adapters (Claude Code, Cursor and NAT, under `src/acs/integrations/`) speak the same ACS JSON-RPC wire format. Their integration tests all need a Guardian that:
 
 - Accepts ACS JSON-RPC requests
 - Returns deterministic decisions (so tests can assert specific outcomes)
@@ -34,10 +34,10 @@ One shared Guardian satisfies all three. The previous arrangement (`adapters/cla
 
 ```bash
 # default: 127.0.0.1:8787
-python3 example_guardian.py
+acs-example-guardian
 
 # custom port
-python3 example_guardian.py --port 8788
+acs-example-guardian --port 8788
 ```
 
 The server logs every received request to stderr in one line:

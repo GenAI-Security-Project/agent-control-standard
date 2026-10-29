@@ -24,13 +24,16 @@ ACS-Core §6.4 requires the framework to wait for the verdict and apply it befor
 
 ## Install — five steps
 
-You need three pieces co-located on the same machine: a running Guardian, a shared HMAC secret, and a `hooks.json` that wires the adapter into Cursor's hooks. `wire.py` does step 3 for you.
+You need three pieces co-located on the same machine: a running Guardian, a shared HMAC secret, and a `hooks.json` that wires the adapter into Cursor's hooks. `acs-cursor-wire` does step 3 for you.
 
 Commands below assume `$ACS_REPO` points at your local clone of `GenAI-Security-Project/agent-control-standard` (or your fork). Export it once:
 
 ```bash
 export ACS_REPO=/path/to/your/clone   # e.g., $HOME/code/ACS
+uv tool install "$ACS_REPO/adapters"  # or: pipx install "$ACS_REPO/adapters"
 ```
+
+Installing the package puts `acs-cursor-hook`, `acs-cursor-wire` and `acs-example-guardian` on your PATH.
 
 ### 1. Generate the shared HMAC secret
 
@@ -48,8 +51,7 @@ Use the example Guardian for testing; a production Guardian is the same wire pro
 
 ```bash
 ACS_HMAC_SECRET_FILE=~/.acs/hmac.key \
-  python3 "$ACS_REPO/adapters/example-guardian/example_guardian.py" \
-  --port 8787
+  acs-example-guardian --port 8787
 ```
 
 Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`.
@@ -58,28 +60,26 @@ Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`
 
 ### 3. Wire `hooks.json`
 
-`wire.py` does this safely — dry-run by default, atomic write with a timestamped backup when you pass `--write`.
+`acs-cursor-wire` does this safely: dry-run by default, atomic write with a timestamped backup when you pass `--write`. It wires the absolute path of the installed `acs-cursor-hook`, and stops if that command is not installed, or if a `--hook-command` you pass is not an absolute path to an executable file.
 
 Cursor reads from two locations:
 - `~/.cursor/hooks.json` — **user-level** (every workspace)
 - `<workspace>/.cursor/hooks.json` — **project-level** (this workspace only; overrides user-level)
 
 ```bash
-cd "$ACS_REPO/adapters/cursor"
-
 # Preview wiring into ~/.cursor/hooks.json (default — user-level)
-python3 wire.py \
+acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key
 
 # Apply user-level wiring
-python3 wire.py \
+acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
   --write
 
 # OR — project-level wiring for a specific workspace
-python3 wire.py \
+acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
   --settings=./.cursor/hooks.json \
@@ -102,7 +102,7 @@ Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true
 
 Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere).
 
-To remove the wiring later: `python3 wire.py --unwire --write`.
+To remove the wiring later: `acs-cursor-wire --unwire --write`.
 
 ### 4. Restart Cursor
 
@@ -111,8 +111,9 @@ Cursor reads `hooks.json` at startup, not live. Existing windows keep their pre-
 ### 5. Verify the install
 
 ```bash
-cd "$ACS_REPO/adapters/cursor"
-python3 e2e_check.py
+cd "$ACS_REPO/adapters"
+uv sync --locked --group test
+uv run python tests/integrations/cursor/e2e_check.py
 ```
 
 Cursor is a GUI app — it has no headless CLI like `claude --print`. The e2e check is therefore **semi-automated**: the script does everything programmatic (Guardian setup, hooks wiring into a temp workspace, validation of envelopes) and prints precise instructions for actions you perform in Cursor. Wall-clock ~5-10 minutes total.
@@ -124,8 +125,8 @@ You can also do an in-session manual smoke test (see [Smoke tests](#smoke-tests)
 ## Prerequisites
 
 - **Cursor** installed — <https://cursor.com>
-- **Python 3.10+** with `rfc8785` (the adapter's one runtime dependency) — `pip install -r requirements.txt`. For running the test suites you also need `jsonschema`: `pip install -r ../requirements-test.txt`
-- **Canonical ACS schemas** — the in-repo copy at `specification/v0.1.0/` is the default, so no setup is needed when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
+- **Python 3.11+** and the `acs-adapters` package (`uv tool install "$ACS_REPO/adapters"`). Its runtime dependencies are `rfc8785` and `jsonschema`. To run the test suites: `cd "$ACS_REPO/adapters" && uv sync --locked --group test`.
+- **Canonical ACS schemas**: bundled in the package, and read from `specification/v0.1.0/` when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
 
 ## Smoke tests
 
@@ -137,8 +138,8 @@ Run from `adapters/`:
 
 ```bash
 cd "$ACS_REPO/adapters"
-python3 run_conformance.py cursor
-# Runs the shared Guardian and _common checks, then Cursor's suite.
+uv run python run_conformance.py cursor
+# Runs the shared Guardian, _common, core and package checks, then Cursor's suite.
 ```
 
 The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip. The manual Cursor procedure is an expected skip in headless runs.
@@ -146,8 +147,9 @@ The command reports passes, skips, and failures separately. It fails on any test
 ### Smoke #2 — semi-automated Cursor end-to-end (~5-10 minutes)
 
 ```bash
-cd "$ACS_REPO/adapters/cursor"
-python3 e2e_check.py
+cd "$ACS_REPO/adapters"
+uv sync --locked --group test
+uv run python tests/integrations/cursor/e2e_check.py
 ```
 
 Sets up a temp workspace with project-level `.cursor/hooks.json`, starts a recording Guardian wired to the real `example_guardian` policy, and walks you through 6 steps (SETUP, ALLOW, READ-TOOL, DESTRUCTIVE, USER-MESSAGE, HANDSHAKE-ONCE). The same shipping policy is active across every step — running `rm -rf` during any prompt gets the real destructive-Bash regex applied. At each step it tells you exactly what to do in Cursor, then validates the envelopes that arrived.
@@ -188,7 +190,7 @@ Unsigned envelope to a signing-required Guardian:
 ```bash
 ACS_GUARDIAN_URL="http://127.0.0.1:8787/acs" \
 ACS_HMAC_SECRET="" \
-python3 "$ACS_REPO/adapters/cursor/acs_adapter.py" preToolUse 2>&1 <<'EOF'
+acs-cursor-hook preToolUse 2>&1 <<'EOF'
 {"session_id":"11111111-1111-4111-8111-111111111111","tool_name":"Bash","tool_input":{"command":"echo test"}}
 EOF
 ```
@@ -207,7 +209,7 @@ follows the §6.4 posture, fail-open by default):
 
 ```bash
 ACS_GUARDIAN_URL="http://127.0.0.1:1/dead" \
-python3 "$ACS_REPO/adapters/cursor/acs_adapter.py" preToolUse 2>&1 <<'EOF'
+acs-cursor-hook preToolUse 2>&1 <<'EOF'
 {"session_id":"11111111-1111-4111-8111-111111111111","tool_name":"Bash","tool_input":{"command":"echo test"}}
 EOF
 ```
@@ -239,25 +241,24 @@ echo "=== Hooks wired? ==="
 python3 -c "import json, os; d=json.load(open(os.path.expanduser('~/.cursor/hooks.json'))); print(list(d.get('hooks',{}).keys()))"
 
 echo "=== Guardian responds to system/ping? ==="
-cd "$ACS_REPO/adapters" && python3 -c "
-import sys; sys.path.insert(0, '_common')
-from acs_common import ping; import json
+cd "$ACS_REPO/adapters" && uv run python -c "
+from acs._common import ping; import json
 r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r else 'no response')
 "
 ```
 
 ## Files
 
-- `acs_adapter.py` — the adapter itself. Stdlib + `rfc8785` for JCS canonicalization.
-- `wire.py` — `hooks.json` wiring CLI (dry-run by default; `--write` to apply).
-- `e2e_check.py` — semi-automated Cursor end-to-end verifier (6 steps, real `example_guardian` policy).
-- `hooks.json.example` — reference wiring (`wire.py` produces a more comprehensive one).
-- `mapping.md` — Cursor hook → ACS step method table, plus disposition translation.
-- `tests/` — round-trip + schema tests + manual-procedure placeholder.
-- `tests/example_payloads.md` — masked real-world payload examples showing exactly what Cursor emits.
-- `tests/live_verification.md` — manual reproduction procedure (Cursor has no headless mode).
+- `src/acs/integrations/cursor/adapter.py`: the adapter itself, installed as `acs-cursor-hook`. Stdlib + `rfc8785` for JCS canonicalization.
+- `src/acs/integrations/cursor/wire.py`: the `hooks.json` wiring CLI, installed as `acs-cursor-wire` (dry-run by default; `--write` to apply).
+- `tests/integrations/cursor/e2e_check.py`: semi-automated Cursor end-to-end verifier (6 steps, real `example_guardian` policy).
+- `docs/cursor/hooks.json.example`: reference wiring (`acs-cursor-wire` produces a more comprehensive one).
+- `docs/cursor/mapping.md`: Cursor hook → ACS step method table, plus disposition translation.
+- `tests/integrations/cursor/`: round-trip and schema tests, plus the manual-procedure placeholder.
+- `docs/cursor/example_payloads.md`: masked real-world payload examples showing exactly what Cursor emits.
+- `docs/cursor/live_verification.md`: manual reproduction procedure (Cursor has no headless mode).
 
-The adapter shares `adapters/_common/` with the Claude Code and NAT adapters (signing, handshake cache, audit events, URL allowlist).
+The adapter shares `src/acs/_common.py` with the Claude Code and NAT adapters (signing, handshake cache, audit events, URL allowlist).
 
 ## How it differs from the Claude Code adapter
 
@@ -277,7 +278,7 @@ The adapter handles all these protocol differences internally; the Guardian sees
 
 ## Configuration
 
-The adapter is configured by environment variables, typically set per-hook by `wire.py`:
+The adapter is configured by environment variables, typically set per-hook by `acs-cursor-wire`:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -294,7 +295,7 @@ The adapter is configured by environment variables, typically set per-hook by `w
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 
-The adapter is invoked as `python3 acs_adapter.py <event_name>`, where `<event_name>` is one of: `sessionStart`, `sessionEnd`, `stop`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`, `beforeSubmitPrompt`, `preCompact`, `afterAgentResponse`, `afterAgentThought`.
+The adapter is invoked as `acs-cursor-hook <event_name>`, where `<event_name>` is one of: `sessionStart`, `sessionEnd`, `stop`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`, `beforeSubmitPrompt`, `preCompact`, `afterAgentResponse`, `afterAgentThought`.
 
 ## On-disk state
 
@@ -337,7 +338,7 @@ These hooks are emitted only when Cursor's `hooks.json` wires them to the adapte
 
 | Symptom | Likely cause |
 |---|---|
-| Cursor's agent runs commands as if no Guardian exists | Cursor reads `hooks.json` at startup. **Restart Cursor** after `wire.py --write`. |
+| Cursor's agent runs commands as if no Guardian exists | Cursor reads `hooks.json` at startup. **Restart Cursor** after `acs-cursor-wire --write`. |
 | Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your hooks.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
 | Every tool call gets denied | Likely `ACS_DEFAULT_DENY=1` + Guardian down. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
