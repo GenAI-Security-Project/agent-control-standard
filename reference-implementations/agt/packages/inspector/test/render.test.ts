@@ -202,6 +202,21 @@ describe("renderDecisionBadge", () => {
 });
 
 describe("renderEnvelopeLogEntry", () => {
+  it("labels a finding so it reads apart from the request and response it concerns", () => {
+    const rendered = renderEnvelopeLogEntry(
+      entry({
+        direction: "finding",
+        seq: 2,
+        method: "steps/toolCallResult",
+        envelope: { finding: "request_id_ref_unresolved", request_id_ref: "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36" },
+      }),
+    );
+
+    expect(rendered.split("\n")[0]).toBe("── #2  12:04:31.221  ! FINDING   steps/toolCallResult  id=1");
+    expect(rendered).toContain('"finding": "request_id_ref_unresolved"');
+    expect(rendered).not.toContain("●");
+  });
+
   it("renders a request as a header line plus pretty JSON, with no badge", () => {
     const rendered = renderEnvelopeLogEntry(
       entry({
