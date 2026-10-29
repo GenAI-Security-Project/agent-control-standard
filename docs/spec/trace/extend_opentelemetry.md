@@ -238,7 +238,7 @@ The collector path, set with `ACS_OTEL_ENDPOINT`, sends the same spans over OTLP
 
 The two Guardian outputs fail independently. The first failed write or send disables that output for the rest of the process and prints one line on stderr. The other output keeps running, and the decision goes out unchanged, as the [failure isolation](#failure-isolation) rule below requires. The [Guardian README](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/packages/guardian/README.md#troubleshooting) lists the messages you may see.
 
-The committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl) holds both streams in one file: five spans from the Guardian and one from the converter. Every value in it is synthetic.
+The committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl) holds both streams in one file: nine spans from the Guardian and one from the converter. Every value in it is synthetic.
 
 ### What the labels don't prove
 

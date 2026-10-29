@@ -1,8 +1,11 @@
 /**
  * Writes the committed sample trace (issue #266): what the reference
  * Guardian's OTLP export actually looks like, from a fixed set of synthetic
- * requests through the two live hook methods, plus one host-side failure run
- * through the audit converter.
+ * requests through the two live hook methods and the four session and
+ * message steps (#322), plus one host-side failure run through the audit
+ * converter. The Guardian does not dispatch the session and message steps
+ * yet, so this script hands them to its exporter through methodsEvaluated,
+ * and each of their spans carries a guardian_error failure, not a decision.
  *
  *   bun run sample:trace
  *
@@ -55,13 +58,29 @@ export const SCENARIOS: readonly Scenario[] = [
   { name: "error", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b04" },
   { name: "late", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b05", decision: "allow" },
   { name: "unreachable", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b06" },
+  // The session and message steps (#322 slice 1). This Guardian does not
+  // dispatch them yet and answers each with an error, so none has a decision.
+  { name: "session-start", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b07" },
+  { name: "user-message", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b08" },
+  { name: "agent-response", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b09" },
+  { name: "session-end", requestId: "1b6f0c2a-3d4e-4f5a-8b6c-7d8e9f0a1b0a" },
 ];
+
+/** The session and message steps, which the sample's exporter spans although
+ * this Guardian does not evaluate them yet, so the sample shows their spans. */
+const SESSION_AND_MESSAGE_METHODS = ["steps/sessionStart", "steps/userMessage", "steps/agentResponse", "steps/sessionEnd"];
 
 function requestIdOf(name: string): string {
   return SCENARIOS.find((scenario) => scenario.name === name)!.requestId;
 }
 
-function envelope(method: string, requestId: string, payload: Record<string, unknown>, id: number | null): Record<string, unknown> {
+function envelope(
+  method: string,
+  requestId: string,
+  payload: Record<string, unknown>,
+  id: number | null,
+  extraParams: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     jsonrpc: "2.0",
     method,
@@ -72,6 +91,7 @@ function envelope(method: string, requestId: string, payload: Record<string, unk
       timestamp: new Date().toISOString(),
       metadata: { agent_id: "sample-agent", session_id: SESSION_ID },
       payload,
+      ...extraParams,
     },
   };
 }
@@ -83,6 +103,24 @@ function bash(command: string, extra: Record<string, unknown> = {}): Record<stri
 /** The envelopes the Guardian receives, in order. */
 function requests(): Record<string, unknown>[] {
   return [
+    envelope(
+      "steps/sessionStart",
+      requestIdOf("session-start"),
+      { user_identity: { user_id: "sample-user-1" }, policy_mode: "moderate" },
+      6,
+      { tenant_id: "sample-tenant" },
+    ),
+    envelope(
+      "steps/userMessage",
+      requestIdOf("user-message"),
+      {
+        content: [
+          { type: "text", value: "Tidy up this directory.", provenance: { provenance_id: "prov-sample-3", origin: "user_input", source_id: "sample-user-1" } },
+          { type: "file", value: "notes.txt", provenance: { provenance_id: "prov-sample-4", origin: "user_input" } },
+        ],
+      },
+      7,
+    ),
     envelope("steps/toolCallRequest", requestIdOf("allowed"), bash("ls -la", { capability: "process.exec" }), 1),
     envelope(
       "steps/toolCallResult",
@@ -117,6 +155,8 @@ function requests(): Record<string, unknown>[] {
     // No JSON-RPC id: the Guardian answers with an error, not a decision.
     envelope("steps/toolCallRequest", requestIdOf("error"), bash("pwd"), null),
     envelope("steps/toolCallRequest", requestIdOf("late"), bash(`echo ${SLOW_MARKER}`), 5),
+    envelope("steps/agentResponse", requestIdOf("agent-response"), { content: [{ type: "text", value: "Listed the directory; did not delete it." }] }, 8),
+    envelope("steps/sessionEnd", requestIdOf("session-end"), { reason: "completed" }, 9),
   ];
 }
 
@@ -157,7 +197,7 @@ export async function generateSampleTrace(outPath: string = SAMPLE_PATH): Promis
     };
     const traceExporter = createOtelTraceExporter({
       filePath: guardianTrace,
-      methodsEvaluated: buildServerHello().methods_evaluated,
+      methodsEvaluated: [...buildServerHello().methods_evaluated, ...SESSION_AND_MESSAGE_METHODS],
       timeoutConfig: { default_ms: TIMEOUT_MS },
       posture: "fail_open",
     });
