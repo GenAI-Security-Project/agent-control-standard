@@ -623,82 +623,102 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
   });
 });
 
-describe("createOtelTraceExporter -- the session and message steps (#322)", () => {
+// #322 slice 1: the session and message steps. This Guardian does not
+// evaluate them yet, so these tests hand them to the exporter through
+// methodsEvaluated, as the issue describes.
+describe("createOtelTraceExporter -- the session and message steps", () => {
   function sessionAndMessageExporter() {
     return memoryExporter({ methodsEvaluated: [...METHODS_EVALUATED, ...SESSION_AND_MESSAGE_METHODS] });
   }
 
-  /** `tenant_id` sits on AcsParams, beside `metadata`, so makeEnvelope has
-   * no option for it. */
-  function withTenant(envelope: Record<string, unknown>, tenantId: string): Record<string, unknown> {
-    return { ...envelope, params: { ...(envelope.params as Record<string, unknown>), tenant_id: tenantId } };
+  /** makeEnvelope fixes `agent_id` and has no option for `tenant_id`, which
+   * sits on AcsParams beside `metadata`. */
+  function stepEnvelope(
+    method: string,
+    payload: Record<string, unknown>,
+    { sessionId, requestId, agentId, tenantId }: { sessionId?: string; requestId?: string; agentId?: string; tenantId?: string } = {},
+  ): Record<string, unknown> {
+    const envelope = makeEnvelope(method, payload, { sessionId, requestId });
+    const params = envelope.params as Record<string, unknown>;
+    return {
+      ...envelope,
+      params: {
+        ...params,
+        ...(tenantId === undefined ? {} : { tenant_id: tenantId }),
+        metadata: { ...(params.metadata as Record<string, unknown>), ...(agentId === undefined ? {} : { agent_id: agentId }) },
+      },
+    };
   }
 
-  const cases: { method: string; envelope: (sessionId: string) => Record<string, unknown>; span: string; attributes: Record<string, string | string[]> }[] = [
+  /** The one span a single exchange produced, after checking that it is the
+   * only one and has the name the method maps to, so a test that looks for
+   * a missing attribute cannot pass because the span itself is missing. */
+  async function onlySpan(method: string, envelope: Record<string, unknown>, response: unknown = decisionResponse(1, { decision: "allow" })) {
+    const { exporter, spans } = sessionAndMessageExporter();
+    exporter.end(exporter.start(envelope, method), response);
+    await exporter.flush();
+    expect(spans()).toHaveLength(1);
+    const [span] = spans();
+    expect(span?.name).toBe(MAPPING.stepToSpan[method]!.span_name);
+    return span!;
+  }
+
+  const cases: { method: string; span: string; envelope: (ids: { sessionId: string; requestId: string }) => Record<string, unknown>; attributes: Record<string, string | string[]> }[] = [
     {
       method: "steps/sessionStart",
-      envelope: (sessionId) =>
-        withTenant(
-          makeEnvelope("steps/sessionStart", { user_identity: { user_id: "user-1" }, policy_mode: "strict" }, { sessionId }),
-          "tenant-1",
-        ),
       span: "acs.session",
+      envelope: (ids) =>
+        stepEnvelope("steps/sessionStart", { user_identity: { user_id: "user-1" }, policy_mode: "strict" }, { ...ids, tenantId: "tenant-1" }),
       attributes: { "acs.tenant_id": "tenant-1", "acs.user.id": "user-1", "acs.policy_mode": "strict" },
     },
     {
       method: "steps/sessionEnd",
-      envelope: (sessionId) => makeEnvelope("steps/sessionEnd", { reason: "completed" }, { sessionId }),
       span: "acs.session.end",
+      envelope: (ids) => stepEnvelope("steps/sessionEnd", { reason: "completed" }, ids),
       attributes: { "acs.session.reason": "completed" },
     },
     {
       method: "steps/userMessage",
-      envelope: (sessionId) =>
-        makeEnvelope(
+      span: "acs.message.user",
+      envelope: (ids) =>
+        stepEnvelope(
           "steps/userMessage",
           { content: [{ type: "text", value: "hi" }, { type: "image", value: "aGk=" }, { type: "text", value: "again" }] },
-          { sessionId },
+          ids,
         ),
-      span: "acs.message.user",
       attributes: { "acs.content.types": ["text", "image", "text"] },
     },
     {
       method: "steps/agentResponse",
-      envelope: (sessionId) => makeEnvelope("steps/agentResponse", { content: [{ type: "text", value: "done" }] }, { sessionId }),
       span: "acs.message.agent",
-      attributes: { "acs.agent.id": "agent-1" },
+      envelope: (ids) => stepEnvelope("steps/agentResponse", { content: [{ type: "text", value: "done" }] }, { ...ids, agentId: "responder-7" }),
+      attributes: { "acs.agent.id": "responder-7" },
     },
   ];
 
-  for (const { method, envelope, span: spanName, attributes } of cases) {
+  for (const { method, span: spanName, envelope, attributes } of cases) {
     it(`${method} becomes one ${spanName} span carrying every attribute the mapping lists and the wire supplied`, async () => {
-      const { exporter, spans } = sessionAndMessageExporter();
       const sessionId = crypto.randomUUID();
-      exporter.end(exporter.start(envelope(sessionId), method), decisionResponse(1, { decision: "allow" }));
-      await exporter.flush();
+      const requestId = crypto.randomUUID();
+      const span = await onlySpan(method, envelope({ sessionId, requestId }));
 
-      expect(spans()).toHaveLength(1);
-      const [span] = spans();
-      expect(span?.name).toBe(spanName);
-      expect(span?.attributes["acs.session.id"]).toBe(sessionId);
-      expect(typeof span?.attributes["acs.request_id"]).toBe("string");
+      expect(span.name).toBe(spanName);
+      expect(span.attributes["acs.session.id"]).toBe(sessionId);
+      expect(span.attributes["acs.request_id"]).toBe(requestId);
       for (const [name, value] of Object.entries(attributes)) {
-        expect({ name, value: span?.attributes[name] }).toEqual({ name, value });
+        expect({ name, value: span.attributes[name] }).toEqual({ name, value });
       }
       for (const name of MAPPING.stepToSpan[method]!.required_attributes) {
-        expect({ name, present: span?.attributes[name] !== undefined }).toEqual({ name, present: true });
+        expect({ name, present: span.attributes[name] !== undefined }).toEqual({ name, present: true });
       }
     });
   }
 
   it("leaves off the session span's optional attributes when the wire does not carry them", async () => {
-    const { exporter, spans } = sessionAndMessageExporter();
-    exporter.end(exporter.start(makeEnvelope("steps/sessionStart", {}), "steps/sessionStart"), decisionResponse(1, { decision: "allow" }));
-    await exporter.flush();
+    const span = await onlySpan("steps/sessionStart", stepEnvelope("steps/sessionStart", {}));
 
-    const attributes = spans()[0]?.attributes ?? {};
     for (const name of ["acs.tenant_id", "acs.user.id", "acs.policy_mode"]) {
-      expect({ name, present: name in attributes }).toEqual({ name, present: false });
+      expect({ name, present: name in span.attributes }).toEqual({ name, present: false });
     }
   });
 
@@ -715,42 +735,86 @@ describe("createOtelTraceExporter -- the session and message steps (#322)", () =
 
   for (const { label, content, want } of contentCases) {
     it(`sets acs.content.types for ${label} to ${JSON.stringify(want)}`, async () => {
-      const { exporter, spans } = sessionAndMessageExporter();
-      const payload = content === undefined ? {} : { content };
-      exporter.end(exporter.start(makeEnvelope("steps/userMessage", payload), "steps/userMessage"), decisionResponse(1, { decision: "allow" }));
-      await exporter.flush();
+      const span = await onlySpan("steps/userMessage", stepEnvelope("steps/userMessage", content === undefined ? {} : { content }));
 
-      expect(spans()[0]?.attributes["acs.content.types"]).toEqual(want);
+      expect(span.attributes["acs.content.types"]).toEqual(want);
     });
   }
 
-  it("records a decision on a session span the same way it does on a tool call span", async () => {
-    const { exporter, spans } = sessionAndMessageExporter();
-    exporter.end(
-      exporter.start(makeEnvelope("steps/sessionEnd", { reason: "completed" }), "steps/sessionEnd"),
-      decisionResponse(1, { decision: "allow", reason_codes: ["session_closed"] }),
-    );
-    await exporter.flush();
+  // The provenance rule is the tool gates' (one column per attribute, one
+  // element per Provenance object, source_id padded with ""), read from
+  // where these payloads attach Provenance: each content item, and the
+  // session Intent's parser_provenance.
+  it("carries the provenance of each message content item that has one, in content order", async () => {
+    for (const method of ["steps/userMessage", "steps/agentResponse"]) {
+      const span = await onlySpan(
+        method,
+        stepEnvelope(method, {
+          content: [
+            { type: "text", value: "a", provenance: provenance("user_input", { source_id: "user-1" }) },
+            // No provenance: contributes no element to any column.
+            { type: "text", value: "b" },
+            { type: "file", value: "c", provenance: provenance("retrieval") },
+          ],
+        }),
+      );
 
-    const [event] = spans()[0]?.events ?? [];
-    expect(event?.name).toBe("acs.decision");
-    expect(event?.attributes?.["acs.decision"]).toBe("allow");
-    expect(event?.attributes?.["acs.reason_codes"]).toEqual(["session_closed"]);
+      expect({ method, origin: span.attributes["acs.provenance.origin"] }).toEqual({ method, origin: ["user_input", "retrieval"] });
+      expect({ method, sourceId: span.attributes["acs.provenance.source_id"] }).toEqual({ method, sourceId: ["user-1", ""] });
+    }
   });
 
-  it("records a guardian_error failure on a message span answered with a JSON-RPC error", async () => {
-    const { exporter, spans } = sessionAndMessageExporter();
-    exporter.end(
-      exporter.start(makeEnvelope("steps/userMessage", { content: [{ type: "text", value: "hi" }] }, { id: 4 }), "steps/userMessage"),
-      { jsonrpc: "2.0", id: 4, error: { code: -32020, message: "evaluation failed" } },
+  it("carries the session Intent's parser_provenance on the session span", async () => {
+    const span = await onlySpan(
+      "steps/sessionStart",
+      stepEnvelope("steps/sessionStart", {
+        intent: { raw: "summarize the report", parser_provenance: provenance("system", { source_id: "intent-parser" }) },
+      }),
     );
-    await exporter.flush();
 
-    const [span] = spans();
-    expect(span?.status.code).toBe(SpanStatusCode.ERROR);
-    expect(span?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
-    expect(span?.events[0]?.attributes?.["acs.failure.class"]).toBe("guardian_error");
+    expect(span.attributes["acs.provenance.origin"]).toEqual(["system"]);
+    expect(span.attributes["acs.provenance.source_id"]).toEqual(["intent-parser"]);
   });
+
+  it("carries no provenance attribute on a session or message span whose payload attaches none", async () => {
+    for (const [method, payload] of [
+      ["steps/sessionStart", { intent: { raw: "summarize the report" } }],
+      ["steps/userMessage", { content: [{ type: "text", value: "hi" }] }],
+    ] as const) {
+      const span = await onlySpan(method, stepEnvelope(method, payload));
+
+      expect({ method, keys: Object.keys(span.attributes).filter((key) => key.startsWith("acs.provenance.")) }).toEqual({ method, keys: [] });
+    }
+  });
+
+  for (const method of SESSION_AND_MESSAGE_METHODS) {
+    it(`records the decision on a ${method} span the same way it does on a tool call span`, async () => {
+      const span = await onlySpan(
+        method,
+        stepEnvelope(method, { reason: "completed", content: [{ type: "text", value: "hi" }] }),
+        decisionResponse(1, { decision: "allow", reason_codes: ["session_closed"] }),
+      );
+
+      expect(span.events.map((event) => event.name)).toEqual(["acs.decision"]);
+      expect(span.events[0]?.attributes?.["acs.decision"]).toBe("allow");
+      expect(span.events[0]?.attributes?.["acs.reason_codes"]).toEqual(["session_closed"]);
+    });
+
+    it(`records a guardian_error failure on a ${method} span answered with a JSON-RPC error`, async () => {
+      const span = await onlySpan(
+        method,
+        makeEnvelope(method, { reason: "completed", content: [{ type: "text", value: "hi" }] }, { id: 4 }),
+        { jsonrpc: "2.0", id: 4, error: { code: -32020, message: "evaluation failed" } },
+      );
+
+      expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      expect(span.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
+      const failure = span.events[0]?.attributes;
+      expect(failure?.["acs.failure.class"]).toBe("guardian_error");
+      expect(failure?.["acs.failure.reported_by"]).toBe("guardian");
+      expect(failure?.["acs.failure.posture"]).toBe("fail_open");
+    });
+  }
 });
 
 describe("Guardian trace export wiring", () => {

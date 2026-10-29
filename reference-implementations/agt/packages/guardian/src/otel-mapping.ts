@@ -341,13 +341,17 @@ export const PROVENANCE_ATTRIBUTE_SOURCES: Record<string, (provenance: JsonObjec
  * bytes' order because `JSON.parse` has already hoisted integer-like
  * argument names ahead of the rest (envelope-log-sink.ts notes `{"0": ...}`
  * is a real shape), so this is the order every reader of the envelope log
- * sees too. The two never meet on one payload (the request gate carries
- * `arguments`, the result gate `outputs`), and an argument or output
- * without one contributes nothing. */
+ * sees too. The message hooks attach theirs to each `content` item, in
+ * array order, and `sessionStart` to its Intent as `parser_provenance`.
+ * Only one of these appears on any one payload (the request gate carries
+ * `arguments`, the result gate `outputs`, a message `content`), and a
+ * carrier without one contributes nothing. */
 export function provenanceObjects(payload: JsonObject): JsonObject[] {
   const carriers: unknown[] = [
     ...Object.values(asObject(payload.arguments) ?? {}),
     ...(Array.isArray(payload.outputs) ? payload.outputs : []),
+    ...(Array.isArray(payload.content) ? payload.content : []),
+    { provenance: asObject(payload.intent)?.parser_provenance },
   ];
   const found: JsonObject[] = [];
   for (const carrier of carriers) {
