@@ -160,17 +160,17 @@
     },
     "provenance_metadata": {
       "type": "object",
-      "description": "When Provenance is attached to the originating hook, the OCSF event MUST carry provenance facts in 'enrichments' (an OCSF-recognized extensibility field). Each enrichment carries name='acs_provenance_*' and value={origin, source_id, ...}. v0.1 carries factual provenance in enrichments; trust classification is computed by the Guardian against local policy and is not a v0.1 enrichment (see §7.1).",
+      "description": "When Provenance is attached to the originating hook, the OCSF event MUST carry each Provenance object under unmapped.acs.provenance as {provenance_id, origin, source_id when present}. Argument keys are visited in code-point order, outputs by index, and a Provenance object reached more than once is emitted once at its first occurrence (deduplicated by provenance_id). Trust classification is computed by the Guardian against local policy and is not a v0.1 field (see §7.1).",
       "properties": {
-        "required_enrichments": {
+        "required_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs_provenance_origin"]
+          "default": ["provenance_id", "origin"]
         },
-        "optional_enrichments": {
+        "optional_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs_provenance_source_id"]
+          "default": ["source_id"]
         }
       }
     }
