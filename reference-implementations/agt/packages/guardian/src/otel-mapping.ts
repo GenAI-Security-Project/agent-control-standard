@@ -1,7 +1,6 @@
 /**
  * The trace's vocabulary: what `specification/v0.1.0/trace/otel-mapping.json`
- * says, the `acs.decision.failure` event that is not in the mapping yet, and
- * the source tables that say where each attribute's value comes from.
+ * says, and the source tables that say where each attribute's value comes from.
  * Shared by the two writers of the same file shape: the Guardian's exporter
  * (otel-trace-exporter.ts) and the audit-log converter (audit-to-otlp.ts).
  *
@@ -37,16 +36,6 @@ export const TIMESTAMP_OUT_OF_WINDOW_CODE = -32006;
 const OTEL_MAPPING_PATH = fileURLToPath(
   new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url),
 );
-
-/**
- * `acs.decision.failure` is not in otel-mapping.json yet; #228 adds it next
- * to `decision_event`. Until then its names live here, in one place, the way
- * DECISION_DETAIL_SOURCES holds the decision extras: the event name, its
- * attribute keys, and the values the decision on #37 fixed for the class,
- * the posture and the reporter. When the mapping gains the event, read the
- * name from it the way `decision_event` is read.
- */
-export const DECISION_FAILURE_EVENT = "acs.decision.failure";
 
 /** The span status for a step answered with an error instead of a decision.
  * One sentence for both writers, the Guardian here and the audit converter,
@@ -106,7 +95,28 @@ export const FAILURE_ATTRIBUTES = {
   payloadBytes: "acs.failure.payload_bytes",
 } as const;
 
-export type FailureClass = "timeout" | "unreachable" | "malformed_response" | "guardian_error" | "observed_agent_error" | "other";
+export const FAILURE_CLASSES = [
+  "timeout",
+  "unreachable",
+  "malformed_response",
+  "guardian_error",
+  "observed_agent_error",
+  "signature_invalid",
+  "handshake_failure",
+  "other",
+] as const;
+export type FailureClass = (typeof FAILURE_CLASSES)[number];
+
+export const FAILURE_STATUS: Readonly<Record<FailureClass, string>> = {
+  timeout: "No decision arrived before the host's timeout.",
+  unreachable: "The host could not reach the Guardian.",
+  malformed_response: "An answer arrived that could not be used.",
+  guardian_error: GUARDIAN_ERROR_STATUS,
+  observed_agent_error: "The host could not build a request for this hook.",
+  signature_invalid: "A reply arrived that failed verification.",
+  handshake_failure: "The handshake did not complete.",
+  other: "The step ended without a usable decision.",
+};
 export type FailurePosture = "fail_open" | "fail_closed";
 export type FailureReporter = "guardian" | "observed_agent";
 
@@ -165,7 +175,19 @@ export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
 type OtelMappingSchema = {
   properties: {
     step_to_span: { default: Record<string, StepSpanEntry> };
+    step_span_attributes: {
+      properties: {
+        required_attributes: { default: string[] };
+      };
+    };
     decision_event: {
+      properties: {
+        event_name: { const: string };
+        required_attributes: { default: string[] };
+        conditional_attributes: { default: string[] };
+      };
+    };
+    decision_failure_event: {
       properties: {
         event_name: { const: string };
         required_attributes: { default: string[] };
@@ -183,11 +205,13 @@ type OtelMappingSchema = {
 
 export type OtelMapping = {
   stepToSpan: Record<string, StepSpanEntry>;
+  stepSpanAttributes: string[];
   decisionEventName: string;
   /** The event's required attributes first, then its conditional ones. Both
    * are read the same way (emitted when a value is present), so one list
    * serves. */
   decisionAttributes: string[];
+  failureEventName: string;
   /** Required first, then optional. Carried on a step span whose payload
    * has a Provenance object attached, as the mapping's own text says. */
   provenanceAttributes: string[];
@@ -195,12 +219,16 @@ export type OtelMapping = {
 
 export function loadOtelMapping(path: string = OTEL_MAPPING_PATH): OtelMapping {
   const schema = JSON.parse(readFileSync(path, "utf8")) as OtelMappingSchema;
+  const stepSpan = schema.properties.step_span_attributes.properties;
   const decision = schema.properties.decision_event.properties;
+  const failure = schema.properties.decision_failure_event.properties;
   const provenance = schema.properties.provenance_attributes.properties;
   return {
     stepToSpan: schema.properties.step_to_span.default,
+    stepSpanAttributes: stepSpan.required_attributes.default,
     decisionEventName: decision.event_name.const,
     decisionAttributes: [...decision.required_attributes.default, ...decision.conditional_attributes.default],
+    failureEventName: failure.event_name.const,
     provenanceAttributes: [...provenance.required.default, ...provenance.optional.default],
   };
 }
@@ -287,15 +315,6 @@ export const STEP_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<RequestParts
   "acs.request_id_ref": (r) => asString(r.payload.request_id_ref),
 };
 
-/**
- * Carried on every span, whatever the mapping lists for it, so a reader can
- * rebuild a session and pair each span with its two envelope-log lines.
- * `acs.session.id` is the mapping's own name for the session.
- * `acs.request_id` is this module's name for `params.request_id`, the ACS
- * correlation id the response echoes; the mapping has no attribute for the
- * step's own request id (its `acs.request_id_ref` names the request a
- * RESULT refers back to, which is a different fact).
- */
 export const CORRELATION_ATTRIBUTE_SOURCES: Record<string, Source<RequestParts>> = {
   "acs.session.id": (r) => asString(r.metadata.session_id),
   "acs.request_id": (r) => asString(r.params.request_id),
@@ -329,21 +348,10 @@ export const DECISION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<ResultPa
   "acs.chain_hash": (d) => asString(d.result.chain_hash),
 };
 
-/**
- * The decision facts emitted whether or not the mapping lists them yet.
- * Before #228 the mapping does not name them; after it, it does. Reading
- * this list beside the mapping's own makes the exporter correct under both,
- * so this PR and #228 can land in either order. Once #228 is in, the mapping
- * alone covers them and this list can go.
- */
-export const DECISION_DETAIL_NAMES = [
-  "acs.reason_codes",
-  "acs.policy.ids",
-  "acs.policy.versions",
-  "acs.policy.rule_ids",
-  "acs.cited_provenance_ids",
-  "acs.chain_hash",
-] as const;
+export function asClampedErrorCode(value: unknown): number | undefined {
+  if (typeof value !== "number" || Number.isNaN(value)) return undefined;
+  return Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, value));
+}
 
 /**
  * Attribute name -> which field of a Provenance object (`provenance.json`)

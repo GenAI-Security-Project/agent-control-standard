@@ -53,14 +53,14 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter, type SpanLimits } from "@opentelemetry/sdk-trace-base";
 import {
-  asNumber,
+  asClampedErrorCode,
   asObject,
   collect,
   CORRELATION_ATTRIBUTE_SOURCES,
   DECISION_ATTRIBUTE_SOURCES,
-  DECISION_DETAIL_NAMES,
-  DECISION_FAILURE_EVENT,
   decisionFailureAttributes,
+  FAILURE_CLASSES,
+  FAILURE_STATUS,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
   PROVENANCE_ATTRIBUTE_SOURCES,
@@ -86,10 +86,12 @@ import { createFileSpanExporter } from "./otlp-file-exporter.ts";
 // Every name this module exported before the split, so existing importers
 // keep working.
 export {
+  asClampedErrorCode,
   DECISION_ATTRIBUTE_SOURCES,
-  DECISION_FAILURE_EVENT,
   decisionFailureAttributes,
   FAILURE_ATTRIBUTES,
+  FAILURE_CLASSES,
+  FAILURE_STATUS,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
   METHODS_WITHOUT_SPAN,
@@ -339,6 +341,10 @@ function rejectedAttributes(claimed: Attributes, reason: RejectionReason, errorC
   return attributes;
 }
 
+function stepIds(stepSpan: StepSpan, stepAttributes: readonly string[]): Attributes {
+  return Object.fromEntries(Object.entries(stepSpan.claimed).filter(([name]) => stepAttributes.includes(name)));
+}
+
 export function createOtelTraceExporter({
   filePath,
   endpoint,
@@ -541,7 +547,10 @@ export function createOtelTraceExporter({
     span.setAttributes(rejectedAttributes(stepSpan.claimed, reason, errorCode));
     span.setStatus({ code: SpanStatusCode.ERROR, message: REJECTED_STATUS });
     if (reason === "guardian_fault") {
-      span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "guardian_error", { errorCode }));
+      span.addEvent(
+        mapping!.failureEventName,
+        failureAttributes(stepSpan, "guardian_error", { errorCode }),
+      );
     }
     span.end();
   }
@@ -549,7 +558,7 @@ export function createOtelTraceExporter({
   function finish(stepSpan: StepSpan, envelope: unknown, mapping: OtelMapping, rejection: RejectionReason | undefined): void {
     const { span } = stepSpan;
     const error = asObject(asObject(envelope)?.error);
-    const errorCode = asNumber(error?.code);
+    const errorCode = asClampedErrorCode(error?.code);
     // Rejected before the span opened, rejected by a check after it opened,
     // or answered with a code that only a rejection carries: each ends as a
     // rejected request, and no held attribute reaches it.
@@ -559,7 +568,7 @@ export function createOtelTraceExporter({
       finishRejected(stepSpan, reason, errorCode);
       return;
     }
-    span.setAttributes({ ...stepSpan.claimed, ...stepSpan.held });
+    span.setAttributes({ ...stepIds(stepSpan, mapping.stepSpanAttributes), ...stepSpan.held });
     const decision = resultParts(envelope);
     if (decision === undefined) {
       // A JSON-RPC error: the step was answered but not decided. The first
@@ -567,11 +576,11 @@ export function createOtelTraceExporter({
       // carried: the message can quote the request (a schema error names its
       // argument keys), and #228 forbids copying response or error bytes into
       // the trace, so the status message is a fixed sentence too.
-      span.setStatus({ code: SpanStatusCode.ERROR, message: GUARDIAN_ERROR_STATUS });
-      span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "guardian_error", { errorCode }));
+      span.setStatus({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS.guardian_error });
+      span.addEvent(mapping.failureEventName, failureAttributes(stepSpan, "guardian_error", { errorCode }));
     } else {
       const attributes: Attributes = {};
-      collect(attributes, new Set([...mapping.decisionAttributes, ...DECISION_DETAIL_NAMES]), DECISION_ATTRIBUTE_SOURCES, decision);
+      collect(attributes, mapping.decisionAttributes, DECISION_ATTRIBUTE_SOURCES, decision);
       if (attributes["acs.decision"] !== undefined) {
         span.addEvent(mapping.decisionEventName, attributes);
       }
@@ -580,7 +589,7 @@ export function createOtelTraceExporter({
       // probably never took effect, and a reader has to be told.
       const timeoutMs = timeoutConfig?.per_method_ms?.[stepSpan.method] ?? timeoutConfig?.default_ms;
       if (timeoutMs !== undefined && performance.now() - stepSpan.startedAt > timeoutMs) {
-        span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "timeout", { timeoutMs }));
+        span.addEvent(mapping.failureEventName, failureAttributes(stepSpan, "timeout", { timeoutMs }));
       }
     }
     span.end();
@@ -644,12 +653,12 @@ export function createOtelTraceExporter({
               finishRejected(stepSpan, stepSpan.rejected);
               continue;
             }
-            stepSpan.span.setAttributes({ ...stepSpan.claimed, ...stepSpan.held });
+            stepSpan.span.setAttributes({ ...stepIds(stepSpan, mapping!.stepSpanAttributes), ...stepSpan.held });
             stepSpan.span.addEvent(
-              DECISION_FAILURE_EVENT,
+              mapping!.failureEventName,
               failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
             );
-            stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: "no response before shutdown" });
+            stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS.other });
             stepSpan.span.end();
           } catch (error) {
             fail(error);

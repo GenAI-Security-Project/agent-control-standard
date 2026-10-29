@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { appendFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
 import {
   CONVERTER_SERVICE_NAME,
@@ -11,7 +12,7 @@ import {
   failureClassOf,
   sessionUuid as converterSessionUuid,
 } from "../packages/guardian/src/audit-to-otlp.ts";
-import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
+import { FAILURE_STATUS, loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
  * The converter's contract, measured with the Guardian down. The host
@@ -49,7 +50,7 @@ const payload = { session_id: "sess-1", tool_name: "Bash", tool_input: { command
 
 type OtlpAttribute = { key: string; value: { stringValue?: string } };
 type OtlpEvent = { name: string; attributes?: OtlpAttribute[] };
-type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[] };
+type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[]; status?: { code?: number; message?: string } };
 type OtlpRequest = { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] };
 
 function spansIn(path: string): OtlpSpan[] {
@@ -494,4 +495,152 @@ describe("audit-to-otlp: refuses an output that already exists", () => {
       expect(statSync(out).mode & 0o777).toBe(0o600);
       expect(statSync(join(dir, "new-dir")).mode & 0o777).toBe(0o700);
     }));
+});
+
+describe("audit-to-otlp: order checks, status sentences, and hardening (#284)", () => {
+  const CONVERTER_CLI = fileURLToPath(new URL("../packages/guardian/src/audit-to-otlp.ts", import.meta.url));
+
+  function makeLine(fields: Record<string, unknown>, omitSeq = false): string {
+    const record: Record<string, unknown> = {
+      seq: 1,
+      recorded_at: "2026-10-15T00:00:00.000Z",
+      session_id: "sess-1",
+      method: "steps/toolCallRequest",
+      rpc_id: crypto.randomUUID(),
+      outcome: "proceeded",
+      posture: "proceed",
+      posture_source: "negotiated",
+      failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+      ...fields,
+    };
+    if (omitSeq) delete record.seq;
+    return `${JSON.stringify(record)}\n`;
+  }
+
+  async function runCli(auditBody: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    let result: { exitCode: number; stdout: string; stderr: string } | undefined;
+    await withScratch(async (auditPath, otelPath) => {
+      writeFileSync(auditPath, auditBody);
+      const child = Bun.spawn([process.execPath, CONVERTER_CLI, auditPath, otelPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      result = { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+    });
+    return result!;
+  }
+
+  it("checks seq gaps, duplicates, backwards timestamps, and unnumbered lines from the CLI", async () => {
+    const seqLines = (seqs: number[]): string =>
+      seqs.map((seq, i) => makeLine({ seq, recorded_at: new Date(Date.UTC(2026, 9, 15, 0, 0, i)).toISOString() })).join("");
+
+    // [1, 2, 4, 5] -> 1 gap
+    const gapMiddle = await runCli(seqLines([1, 2, 4, 5]));
+    expect(gapMiddle.exitCode).toBe(1);
+    expect(gapMiddle.stderr).toBe(
+      "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // [2, 3, 4] -> 1 gap
+    const gapStart = await runCli(seqLines([2, 3, 4]));
+    expect(gapStart.exitCode).toBe(1);
+    expect(gapStart.stderr).toBe(
+      "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // [1, 2, 2, 3] -> 1 duplicate
+    const dup = await runCli(seqLines([1, 2, 2, 3]));
+    expect(dup.exitCode).toBe(1);
+    expect(dup.stderr).toBe(
+      "audit log order: 0 gap(s), 1 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // [1, 1, 3, 1, 1, 4, 6, 6] -> 0 gaps and 4 duplicates
+    const concurrent = await runCli(seqLines([1, 1, 3, 1, 1, 4, 6, 6]));
+    expect(concurrent.exitCode).toBe(1);
+    expect(concurrent.stderr).toBe(
+      "audit log order: 0 gap(s), 4 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // Missing seq, "1", and 2.5 count as no usable seq; backwards recorded_at counts in backwards
+    const unnumberedAndBackwards = await runCli(
+      makeLine({ recorded_at: "2026-10-15T00:00:05.000Z" }, true) +
+        makeLine({ seq: "1", recorded_at: "2026-10-15T00:00:01.000Z" }) +
+        makeLine({ seq: 2.5, recorded_at: "2026-10-15T00:00:06.000Z" }),
+    );
+    expect(unnumberedAndBackwards.exitCode).toBe(1);
+    expect(unnumberedAndBackwards.stderr).toBe(
+      "audit log order: 0 gap(s), 0 duplicate(s), 1 recorded_at going backwards, 3 line(s) with no usable seq",
+    );
+
+    // Half-written line between seq 1 and 3 exits 0
+    const halfWritten = await runCli(`${makeLine({ seq: 1 })}half-written-json\n${makeLine({ seq: 3 })}`);
+    expect(halfWritten.exitCode).toBe(0);
+    expect(halfWritten.stderr).toBe("");
+
+    // [1, 2, 3] exits 0
+    const clean = await runCli(seqLines([1, 2, 3]));
+    expect(clean.exitCode).toBe(0);
+    expect(clean.stderr).toBe("");
+  }, 30_000);
+
+  it("sets the converter span status to FAILURE_STATUS[failureClassOf(kind)] for every known kind and unknown", async () => {
+    const kinds = [...Object.keys(FAILURE_DETAIL_BY_KIND), "unknown"];
+    await withScratch(async (auditPath, otelPath) => {
+      const body = kinds.map((kind, i) => makeLine({ seq: i + 1, failure: { kind, message: "err" } })).join("");
+      writeFileSync(auditPath, body);
+      await convertAuditLog(auditPath, otelPath);
+      const spans = spansIn(otelPath);
+      expect(spans).toHaveLength(kinds.length);
+      for (let i = 0; i < kinds.length; i += 1) {
+        const kind = kinds[i]!;
+        expect({ kind, status: spans[i]?.status?.message }).toEqual({
+          kind,
+          status: FAILURE_STATUS[failureClassOf(kind)],
+        });
+      }
+    });
+  });
+
+  it("handles prototype-named failure kinds like toString with and without a method, and clamps 21-digit and 400-digit error codes", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const lines =
+        makeLine({
+          seq: 1,
+          method: "steps/toolCallRequest",
+          failure: { kind: "toString", message: `guardian refused the envelope with error -${"9".repeat(400)}: overflow` },
+        }) +
+        makeLine({
+          seq: 2,
+          method: "steps/toolCallRequest",
+          failure: { kind: "refused", message: `guardian refused the envelope with error ${"9".repeat(21)}: overflow` },
+        }) +
+        makeLine({
+          seq: 3,
+          method: null,
+          rpc_id: null,
+          outcome: "blocked",
+          posture: "deny",
+          failure: { kind: "toString", message: "no method" },
+        });
+      writeFileSync(auditPath, lines);
+      const summary = await convertAuditLog(auditPath, otelPath);
+      expect(summary.skippedNoMethod).toEqual({ other: 1 });
+      const spans = spansIn(otelPath);
+      expect(spans).toHaveLength(2);
+      const firstFailure = spans[0]?.events?.find((e) => e.name === "acs.decision.failure");
+      expect(attribute(firstFailure, "acs.failure.class")).toBe("other");
+      expect(attribute(firstFailure, "acs.failure.detail")).toBe("The host recorded a failure this converter does not classify.");
+      const firstCode = (firstFailure?.attributes?.find((a) => a.key === "acs.failure.error_code")?.value as { intValue?: string | number } | undefined)?.intValue;
+      const secondFailure = spans[1]?.events?.find((e) => e.name === "acs.decision.failure");
+      const secondCode = (secondFailure?.attributes?.find((a) => a.key === "acs.failure.error_code")?.value as { intValue?: string | number } | undefined)?.intValue;
+      expect(Number(firstCode)).toBe(Number.MIN_SAFE_INTEGER);
+      expect(Number(secondCode)).toBe(Number.MAX_SAFE_INTEGER);
+    });
+  });
 });

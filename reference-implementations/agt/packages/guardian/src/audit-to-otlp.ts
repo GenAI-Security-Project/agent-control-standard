@@ -38,6 +38,13 @@
  * that does not exist when it starts: it refuses an existing output path, so
  * it does not append into the audit log, the Guardian's trace file, or its
  * own earlier run.
+ *
+ * It also checks the log's order and exits non-zero when it finds a seq gap,
+ * a duplicate seq, a recorded_at timestamp going backwards, or a line with no
+ * usable seq. The output file is still complete for the lines that remain. A
+ * gap means a line is missing; duplicates or timestamps going backwards can
+ * come from hooks that ran at the same time; deleting the last lines cannot
+ * be detected, because nothing comes after them to compare.
  */
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -53,9 +60,10 @@ import {
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
 import {
+  asClampedErrorCode,
   asObject,
-  DECISION_FAILURE_EVENT,
   decisionFailureAttributes,
+  FAILURE_STATUS,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
   REPLAY_DETECTED_CODE,
@@ -88,7 +96,9 @@ export const FAILURE_CLASS_BY_KIND: Readonly<Record<string, FailureClass>> = {
 };
 
 export function failureClassOf(kind: unknown): FailureClass {
-  return (typeof kind === "string" ? FAILURE_CLASS_BY_KIND[kind] : undefined) ?? "other";
+  return typeof kind === "string" && Object.hasOwn(FAILURE_CLASS_BY_KIND, kind)
+    ? FAILURE_CLASS_BY_KIND[kind]!
+    : "other";
 }
 
 /**
@@ -154,6 +164,13 @@ export type ConversionSummary = {
   skippedUngoverned: number;
   /** Lines that were not JSON, not an audit entry, or had no posture. */
   skippedUnreadable: number;
+  /** Counts of seq gaps, duplicate seq values, recorded_at going backwards, and lines with no usable seq. */
+  sequence?: {
+    gaps: number;
+    duplicates: number;
+    backwards: number;
+    unnumbered: number;
+  };
 };
 
 function readString(value: unknown): string | undefined {
@@ -238,8 +255,16 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     skippedUnreadable: 0,
   };
 
+  const sequence = { gaps: 0, duplicates: 0, backwards: 0, unnumbered: 0 };
+  const seenSeq = new Set<number>();
+  let highestSeq = 0;
+  let lineCount = 0;
+  let lastInstantMs: number | undefined;
+
   for (const line of auditText.split("\n")) {
     if (line.trim() === "") continue;
+    const linesBefore = lineCount;
+    lineCount += 1;
     let entry: JsonObject | undefined;
     try {
       entry = asObject(JSON.parse(line));
@@ -249,6 +274,26 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     if (entry === undefined) {
       summary.skippedUnreadable += 1;
       continue;
+    }
+    const seq = entry.seq;
+    if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 1) {
+      sequence.unnumbered += 1;
+    } else {
+      if (seenSeq.has(seq)) {
+        sequence.duplicates += 1;
+      } else if (seq > Math.max(highestSeq, linesBefore) + 1) {
+        sequence.gaps += 1;
+      }
+      seenSeq.add(seq);
+      highestSeq = Math.max(highestSeq, seq);
+    }
+    const entryInstant = readInstant(entry.recorded_at);
+    if (entryInstant !== undefined) {
+      const ms = entryInstant.getTime();
+      if (lastInstantMs !== undefined && ms < lastInstantMs) {
+        sequence.backwards += 1;
+      }
+      lastInstantMs = ms;
     }
     const outcome = readString(entry.outcome);
     if (outcome === "ungoverned") {
@@ -267,7 +312,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     const kind = readString(failure.kind);
     const method = readString(entry.method);
     if (method === undefined) {
-      const key = kind !== undefined && kind in FAILURE_DETAIL_BY_KIND ? kind : "other";
+      const key = kind !== undefined && Object.hasOwn(FAILURE_DETAIL_BY_KIND, kind) ? kind : "other";
       summary.skippedNoMethod[key] = (summary.skippedNoMethod[key] ?? 0) + 1;
       continue;
     }
@@ -277,17 +322,20 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       continue;
     }
     const codeText = ERROR_CODE_IN_MESSAGE.exec(readString(failure.message) ?? "")?.[1];
-    const errorCode = codeText === undefined ? undefined : Number(codeText);
+    const errorCode = codeText === undefined ? undefined : asClampedErrorCode(Number(codeText));
     if (errorCode === REPLAY_DETECTED_CODE) {
       summary.skippedReplay += 1;
       continue;
     }
 
-    const instant = readInstant(entry.recorded_at);
-    const detail = (kind !== undefined ? FAILURE_DETAIL_BY_KIND[kind] : undefined) ?? GENERIC_DETAIL;
+    const instant = entryInstant;
+    const detail =
+      kind !== undefined && Object.hasOwn(FAILURE_DETAIL_BY_KIND, kind)
+        ? FAILURE_DETAIL_BY_KIND[kind]!
+        : GENERIC_DETAIL;
     const attributes: Attributes = {};
     const sessionId = readString(entry.session_id);
-    if (sessionId !== undefined) {
+    if (sessionId !== undefined && mapping.stepSpanAttributes.includes("acs.session.id")) {
       attributes["acs.session.id"] = sessionUuid(sessionId);
     }
     // The entry's request_id is the id the Guardian's span for the same
@@ -295,14 +343,14 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     // rpc_id, which equalled params.request_id whenever the host did not
     // derive the request id from its own call id.
     const requestId = readString(entry.request_id) ?? readString(entry.rpc_id);
-    if (requestId !== undefined) {
+    if (requestId !== undefined && mapping.stepSpanAttributes.includes("acs.request_id")) {
       attributes["acs.request_id"] = requestId;
     }
     // The entry is one instant, so the span is too: it opens and closes at
     // recorded_at. The host, not the Guardian, is the reporter.
     const span = tracer.startSpan(spanName, { attributes, root: true, startTime: instant });
     span.addEvent(
-      DECISION_FAILURE_EVENT,
+      mapping.failureEventName,
       decisionFailureAttributes({
         class: failureClassOf(kind),
         posture: posture === "deny" ? "fail_closed" : "fail_open",
@@ -312,7 +360,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       }),
       instant,
     );
-    span.setStatus({ code: SpanStatusCode.ERROR, message: detail });
+    span.setStatus({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS[failureClassOf(kind)] });
     span.end(instant);
     summary.converted += 1;
   }
@@ -321,6 +369,9 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
   // here; shutdown then releases the processor.
   await provider.forceFlush();
   summary.written = output.written();
+  if (sequence.gaps > 0 || sequence.duplicates > 0 || sequence.backwards > 0 || sequence.unnumbered > 0) {
+    summary.sequence = sequence;
+  }
   await provider.shutdown();
   return summary;
 }
@@ -346,8 +397,16 @@ if (import.meta.main) {
       `${noMethod === "" ? 0 : noMethod} with no method, ${summary.skippedReplay} replay, ` +
       `${summary.skippedUngoverned} ungoverned, ${summary.skippedUnreadable} unreadable`,
   );
+  if (summary.sequence !== undefined) {
+    const s = summary.sequence;
+    console.error(
+      `audit log order: ${s.gaps} gap(s), ${s.duplicates} duplicate(s), ${s.backwards} recorded_at going backwards, ${s.unnumbered} line(s) with no usable seq`,
+    );
+  }
   if (summary.written !== summary.converted) {
     console.error(`only ${summary.written} of ${summary.converted} span(s) reached ${otelPath}`);
+  }
+  if (summary.sequence !== undefined || summary.written !== summary.converted) {
     process.exit(1);
   }
 }

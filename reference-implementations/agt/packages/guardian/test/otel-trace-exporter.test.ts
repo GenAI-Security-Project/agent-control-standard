@@ -7,14 +7,17 @@ import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
-import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
+import { convertAuditLog, FAILURE_DETAIL_BY_KIND, failureClassOf } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
 import {
+  asClampedErrorCode,
   createFileSpanExporter,
   keepLoopbackOffProxy,
   createOtelTraceExporter,
   DECISION_ATTRIBUTE_SOURCES,
+  FAILURE_CLASSES,
+  FAILURE_STATUS,
   loadOtelMapping,
   loopbackProxyWarning,
   METHODS_WITHOUT_SPAN,
@@ -567,10 +570,22 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
               },
             },
           },
+          step_span_attributes: {
+            properties: {
+              required_attributes: { default: ["acs.request_id", "acs.session.id"] },
+            },
+          },
           decision_event: {
             properties: {
               event_name: { const: "acs.decision" },
               required_attributes: { default: ["acs.decision"] },
+              conditional_attributes: { default: [] },
+            },
+          },
+          decision_failure_event: {
+            properties: {
+              event_name: { const: "acs.decision.failure" },
+              required_attributes: { default: ["acs.failure.class", "acs.failure.posture", "acs.failure.reported_by"] },
               conditional_attributes: { default: [] },
             },
           },
@@ -1386,10 +1401,10 @@ describe("createOtelTraceExporter -- review fixes", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
-  // #228 moves the six decision extras into decision_event's own list. The
-  // exporter has to emit them under both mappings, so #244 and #228 can land
-  // in either order.
-  it("emits the decision extras whether the mapping lists them or not", async () => {
+  // #228 moved the six decision extras into decision_event's own list, and
+  // #284 removed DECISION_DETAIL_NAMES so the mapping alone controls which
+  // decision attributes are emitted.
+  it("stops emitting a decision extra when it is removed from the mapping", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acs-mapping-228-"));
     const path = join(dir, "otel-mapping.json");
     try {
@@ -1398,22 +1413,19 @@ describe("createOtelTraceExporter -- review fixes", () => {
       ) as { properties: { decision_event: { properties: { conditional_attributes: { default: string[] } } } } };
       const extras = ["acs.reason_codes", "acs.policy.ids", "acs.policy.versions", "acs.policy.rule_ids", "acs.cited_provenance_ids", "acs.chain_hash"];
       const listed = schema.properties.decision_event.properties.conditional_attributes;
-      listed.default = [...listed.default.filter((name) => !extras.includes(name)), ...extras];
+      listed.default = listed.default.filter((name) => !extras.includes(name));
       writeFileSync(path, JSON.stringify(schema));
 
-      for (const attribute of loadOtelMapping(path).decisionAttributes) {
-        expect({ attribute, known: attribute in DECISION_ATTRIBUTE_SOURCES }).toEqual({ attribute, known: true });
-      }
-      for (const mappingPath of [undefined, path]) {
-        const { exporter, spans } = memoryExporter({ mappingPath });
-        exporter.end(
-          exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest", TRUSTED),
-          decisionResponse(1, { ...DENY, reason_codes: ["blocked"], chain_hash: "a".repeat(64) }),
-        );
-        await exporter.flush();
-        const event = spans()[0]?.events.find((e) => e.name === MAPPING.decisionEventName);
-        expect(event?.attributes?.["acs.reason_codes"]).toEqual(["blocked"]);
-        expect(event?.attributes?.["acs.chain_hash"]).toBe("a".repeat(64));
+      const { exporter, spans } = memoryExporter({ mappingPath: path });
+      exporter.end(
+        exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest", TRUSTED),
+        decisionResponse(1, { ...DENY, reason_codes: ["blocked"], cited_provenance_ids: ["p-1"], chain_hash: "a".repeat(64) }),
+      );
+      await exporter.flush();
+      const event = spans()[0]?.events.find((e) => e.name === MAPPING.decisionEventName);
+      expect(event?.attributes?.["acs.decision"]).toBe("deny");
+      for (const extra of extras) {
+        expect(event?.attributes?.[extra]).toBeUndefined();
       }
     } finally {
       unlinkSync(path);
@@ -1826,3 +1838,203 @@ describe("keepLoopbackOffProxy, routed through a real proxy in a child process",
     }
   }, 15_000);
 });
+
+describe("otel-mapping and audit-to-otlp hardening (#284)", () => {
+  it("reads decision_failure_event and step_span_attributes from the mapping on all five failure paths while preserving claimed ids on rejected spans", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-mapping-284-"));
+    const mappingPath = join(dir, "otel-mapping.json");
+    const auditPath = join(dir, "audit.jsonl");
+    const otelPath = join(dir, "otel.jsonl");
+    const sessionId = "5a3c1e7e-0b1d-4c6a-9e2f-7d4b8c0a1f01";
+    try {
+      const schema = JSON.parse(
+        readFileSync(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url), "utf8"),
+      ) as {
+        properties: {
+          step_span_attributes: { properties: { required_attributes: { default: string[] } } };
+          decision_failure_event: { properties: { event_name: { const: string } } };
+        };
+      };
+      schema.properties.decision_failure_event.properties.event_name.const = "acs.renamed.failure";
+      schema.properties.step_span_attributes.properties.required_attributes.default = ["acs.session.id"];
+      writeFileSync(mappingPath, JSON.stringify(schema));
+
+      const recorded: ReadableSpan[] = [];
+      const exporter = createOtelTraceExporter({
+        spanExporter: {
+          export(batch, cb) {
+            recorded.push(...batch);
+            cb({ code: 0 });
+          },
+          async shutdown() {},
+        },
+        methodsEvaluated: METHODS_EVALUATED,
+        mappingPath,
+        timeoutConfig: { default_ms: 1 },
+      });
+
+      // 1. Error response
+      exporter.end(
+        exporter.start(toolCallEnvelope("ls", { id: 1, requestId: "req-error", sessionId }), "steps/toolCallRequest", TRUSTED),
+        { jsonrpc: "2.0", id: 1, error: { code: -32603, message: "internal error" } },
+      );
+
+      // 2. Late decision
+      exporter.end(
+        exporter.start(toolCallEnvelope("ls", { id: 2, requestId: "req-late", sessionId }), "steps/toolCallRequest", {
+          trusted: true,
+          receivedAt: performance.now() - 50,
+        }),
+        decisionResponse(2, { decision: "allow" }),
+      );
+
+      // 3. guardian_fault rejection
+      exporter.end(
+        exporter.start(toolCallEnvelope("ls", { id: 3, requestId: "req-fault", sessionId }), "steps/toolCallRequest", TRUSTED),
+        { jsonrpc: "2.0", id: 3, error: { code: -32603, message: "fault" } },
+        "guardian_fault",
+      );
+
+      // 4. Step still open at shutdown
+      exporter.start(toolCallEnvelope("ls", { id: 4, requestId: "req-open", sessionId }), "steps/toolCallRequest", TRUSTED);
+      await exporter.shutdown();
+
+      expect(recorded).toHaveLength(4);
+      for (const span of recorded) {
+        expect(span.events.some((e) => e.name === "acs.renamed.failure")).toBe(true);
+        expect(span.events.some((e) => e.name === "acs.decision.failure")).toBe(false);
+      }
+
+      const stepSpans = recorded.filter((s) => s.name !== REJECTED_SPAN_NAME);
+      expect(stepSpans).toHaveLength(3);
+      for (const span of stepSpans) {
+        expect(span.attributes["acs.session.id"]).toBe(sessionId);
+        expect(span.attributes["acs.request_id"]).toBeUndefined();
+      }
+
+      const faultSpan = recorded.find((s) => s.name === REJECTED_SPAN_NAME);
+      expect(faultSpan?.attributes["guardian.rejected.claimed_request_id"]).toBe("req-fault");
+      expect(faultSpan?.attributes["guardian.rejected.claimed_session_id"]).toBe(sessionId);
+
+      // 5. Converter
+      writeFileSync(
+        auditPath,
+        `${JSON.stringify({
+          seq: 1,
+          recorded_at: "2026-09-15T12:00:00.000Z",
+          session_id: sessionId,
+          method: "steps/toolCallRequest",
+          request_id: "req-conv",
+          outcome: "proceeded",
+          posture: "proceed",
+          posture_source: "negotiated",
+          failure: { kind: "timeout", message: "timed out" },
+        })}\n`,
+      );
+      await convertAuditLog(auditPath, otelPath, mappingPath);
+      const [converted] = otlpSpans(otlpFile(otelPath));
+      expect(converted?.events?.[0]?.name).toBe("acs.renamed.failure");
+      expect(otlpAttribute(converted, "acs.session.id")).toBe(sessionId);
+      expect(otlpAttribute(converted, "acs.request_id")).toBeUndefined();
+    } finally {
+      for (const p of [mappingPath, auditPath, otelPath]) {
+        if (existsSync(p)) unlinkSync(p);
+      }
+      rmdirSync(dir);
+    }
+  });
+
+  it("matches FAILURE_CLASSES to otel-mapping.json and uses FAILURE_STATUS across both writers", async () => {
+    const schema = JSON.parse(
+      readFileSync(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url), "utf8"),
+    ) as {
+      properties: {
+        decision_failure_event: { properties: { attribute_values: { default: Record<string, string[]> } } };
+      };
+    };
+    const mappedClasses = schema.properties.decision_failure_event.properties.attribute_values.default["acs.failure.class"]!;
+    expect<string[]>([...FAILURE_CLASSES].sort()).toEqual([...mappedClasses].sort());
+
+    const recorded: ReadableSpan[] = [];
+    const exporter = createOtelTraceExporter({
+      spanExporter: {
+        export(batch, cb) {
+          recorded.push(...batch);
+          cb({ code: 0 });
+        },
+        async shutdown() {},
+      },
+      methodsEvaluated: METHODS_EVALUATED,
+    });
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 1, requestId: "req-err" }), "steps/toolCallRequest", TRUSTED),
+      { jsonrpc: "2.0", id: 1, error: { code: -32603, message: "error" } },
+    );
+    exporter.start(toolCallEnvelope("ls", { id: 2, requestId: "req-shutdown" }), "steps/toolCallRequest", TRUSTED);
+    await exporter.shutdown();
+
+    const [errorSpan, shutdownSpan] = recorded;
+    expect(errorSpan?.status).toEqual({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS.guardian_error });
+    expect(shutdownSpan?.status).toEqual({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS.other });
+
+    const dir = mkdtempSync(join(tmpdir(), "acs-status-284-"));
+    const auditPath = join(dir, "audit.jsonl");
+    const otelPath = join(dir, "otel.jsonl");
+    const kinds = [...Object.keys(FAILURE_DETAIL_BY_KIND), "unknown"];
+    try {
+      const lines = kinds.map((kind, i) =>
+        JSON.stringify({
+          seq: i + 1,
+          recorded_at: "2026-09-15T12:00:00.000Z",
+          session_id: "5a3c1e7e-0b1d-4c6a-9e2f-7d4b8c0a1f01",
+          method: "steps/toolCallRequest",
+          rpc_id: `req-${i + 1}`,
+          outcome: "proceeded",
+          posture: "proceed",
+          posture_source: "negotiated",
+          failure: { kind, message: "err" },
+        }),
+      );
+      writeFileSync(auditPath, `${lines.join("\n")}\n`);
+      await convertAuditLog(auditPath, otelPath);
+      const converted = otlpSpans(otlpFile(otelPath));
+      expect(converted).toHaveLength(kinds.length);
+      for (let i = 0; i < kinds.length; i += 1) {
+        const kind = kinds[i]!;
+        expect((converted[i]?.status as { message?: string } | undefined)?.message).toBe(
+          FAILURE_STATUS[failureClassOf(kind)],
+        );
+      }
+    } finally {
+      for (const p of [auditPath, otelPath]) {
+        if (existsSync(p)) unlinkSync(p);
+      }
+      rmdirSync(dir);
+    }
+  });
+
+  it("clamps oversized error codes without truncating fractional codes", async () => {
+    expect(asClampedErrorCode(-1e21)).toBe(Number.MIN_SAFE_INTEGER);
+    expect(asClampedErrorCode(1e21)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(asClampedErrorCode(Number(`-${"9".repeat(400)}`))).toBe(Number.MIN_SAFE_INTEGER);
+    expect(asClampedErrorCode(Number("9".repeat(400)))).toBe(Number.MAX_SAFE_INTEGER);
+    expect(asClampedErrorCode(-32005.5)).toBe(-32005.5);
+
+    const { exporter, spans } = memoryExporter();
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest", TRUSTED),
+      { jsonrpc: "2.0", id: 1, error: { code: -1e21, message: "huge" } },
+    );
+    exporter.end(
+      exporter.start(toolCallEnvelope("ls", { id: 2 }), "steps/toolCallRequest", TRUSTED),
+      { jsonrpc: "2.0", id: 2, error: { code: -32005.5, message: "fractional" } },
+    );
+    await exporter.flush();
+
+    const [clampedSpan, fractionalSpan] = spans();
+    expect(clampedSpan?.events[0]?.attributes?.["acs.failure.error_code"]).toBe(Number.MIN_SAFE_INTEGER);
+    expect(fractionalSpan?.name).toBe(TOOL_CALL_SPAN.span_name);
+    expect(fractionalSpan?.events[0]?.attributes?.["acs.failure.error_code"]).toBe(-32005.5);
+  });
+});
+
