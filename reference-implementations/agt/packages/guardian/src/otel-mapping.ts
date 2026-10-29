@@ -38,14 +38,6 @@ const OTEL_MAPPING_PATH = fileURLToPath(
   new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url),
 );
 
-/**
- * `acs.decision.failure` is not in otel-mapping.json yet; #228 adds it next
- * to `decision_event`. Until then its names live here, in one place, the way
- * DECISION_DETAIL_SOURCES holds the decision extras: the event name, its
- * attribute keys, and the values the decision on #37 fixed for the class,
- * the posture and the reporter. When the mapping gains the event, read the
- * name from it the way `decision_event` is read.
- */
 export const DECISION_FAILURE_EVENT = "acs.decision.failure";
 
 /** The span status for a step answered with an error instead of a decision.
@@ -106,7 +98,15 @@ export const FAILURE_ATTRIBUTES = {
   payloadBytes: "acs.failure.payload_bytes",
 } as const;
 
-export type FailureClass = "timeout" | "unreachable" | "malformed_response" | "guardian_error" | "observed_agent_error" | "other";
+export type FailureClass =
+  | "timeout"
+  | "unreachable"
+  | "malformed_response"
+  | "guardian_error"
+  | "observed_agent_error"
+  | "signature_invalid"
+  | "handshake_failure"
+  | "other";
 export type FailurePosture = "fail_open" | "fail_closed";
 export type FailureReporter = "guardian" | "observed_agent";
 
@@ -165,11 +165,23 @@ export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
 type OtelMappingSchema = {
   properties: {
     step_to_span: { default: Record<string, StepSpanEntry> };
+    step_span_attributes?: {
+      properties?: {
+        required_attributes?: { default?: string[] };
+      };
+    };
     decision_event: {
       properties: {
         event_name: { const: string };
         required_attributes: { default: string[] };
         conditional_attributes: { default: string[] };
+      };
+    };
+    decision_failure_event?: {
+      properties?: {
+        event_name?: { const?: string };
+        required_attributes?: { default?: string[] };
+        conditional_attributes?: { default?: string[] };
       };
     };
     provenance_attributes: {
@@ -183,11 +195,13 @@ type OtelMappingSchema = {
 
 export type OtelMapping = {
   stepToSpan: Record<string, StepSpanEntry>;
+  stepSpanAttributes: string[];
   decisionEventName: string;
   /** The event's required attributes first, then its conditional ones. Both
    * are read the same way (emitted when a value is present), so one list
    * serves. */
   decisionAttributes: string[];
+  failureEventName: string;
   /** Required first, then optional. Carried on a step span whose payload
    * has a Provenance object attached, as the mapping's own text says. */
   provenanceAttributes: string[];
@@ -196,11 +210,18 @@ export type OtelMapping = {
 export function loadOtelMapping(path: string = OTEL_MAPPING_PATH): OtelMapping {
   const schema = JSON.parse(readFileSync(path, "utf8")) as OtelMappingSchema;
   const decision = schema.properties.decision_event.properties;
+  const failure = schema.properties.decision_failure_event?.properties;
   const provenance = schema.properties.provenance_attributes.properties;
   return {
     stepToSpan: schema.properties.step_to_span.default,
+    stepSpanAttributes:
+      schema.properties.step_span_attributes?.properties?.required_attributes?.default ?? [
+        "acs.request_id",
+        "acs.session.id",
+      ],
     decisionEventName: decision.event_name.const,
     decisionAttributes: [...decision.required_attributes.default, ...decision.conditional_attributes.default],
+    failureEventName: failure?.event_name?.const ?? DECISION_FAILURE_EVENT,
     provenanceAttributes: [...provenance.required.default, ...provenance.optional.default],
   };
 }
@@ -329,21 +350,12 @@ export const DECISION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<ResultPa
   "acs.chain_hash": (d) => asString(d.result.chain_hash),
 };
 
-/**
- * The decision facts emitted whether or not the mapping lists them yet.
- * Before #228 the mapping does not name them; after it, it does. Reading
- * this list beside the mapping's own makes the exporter correct under both,
- * so this PR and #228 can land in either order. Once #228 is in, the mapping
- * alone covers them and this list can go.
- */
-export const DECISION_DETAIL_NAMES = [
-  "acs.reason_codes",
-  "acs.policy.ids",
-  "acs.policy.versions",
-  "acs.policy.rule_ids",
-  "acs.cited_provenance_ids",
-  "acs.chain_hash",
-] as const;
+export function asClampedErrorCode(value: unknown): number | undefined {
+  const num = asNumber(value);
+  if (num === undefined) return undefined;
+  const truncated = Math.trunc(num);
+  return Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, truncated));
+}
 
 /**
  * Attribute name -> which field of a Provenance object (`provenance.json`)

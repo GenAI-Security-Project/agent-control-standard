@@ -7,7 +7,7 @@ import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
-import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
+import { convertAuditLog, FAILURE_DETAIL_BY_KIND, failureClassOf } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
 import {
@@ -1386,10 +1386,10 @@ describe("createOtelTraceExporter -- review fixes", () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
-  // #228 moves the six decision extras into decision_event's own list. The
-  // exporter has to emit them under both mappings, so #244 and #228 can land
-  // in either order.
-  it("emits the decision extras whether the mapping lists them or not", async () => {
+  // #228 moved the six decision extras into decision_event's own list, and
+  // #284 removed DECISION_DETAIL_NAMES so the mapping alone controls which
+  // decision attributes are emitted.
+  it("stops emitting a decision extra when it is removed from the mapping", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acs-mapping-228-"));
     const path = join(dir, "otel-mapping.json");
     try {
@@ -1398,23 +1398,18 @@ describe("createOtelTraceExporter -- review fixes", () => {
       ) as { properties: { decision_event: { properties: { conditional_attributes: { default: string[] } } } } };
       const extras = ["acs.reason_codes", "acs.policy.ids", "acs.policy.versions", "acs.policy.rule_ids", "acs.cited_provenance_ids", "acs.chain_hash"];
       const listed = schema.properties.decision_event.properties.conditional_attributes;
-      listed.default = [...listed.default.filter((name) => !extras.includes(name)), ...extras];
+      listed.default = listed.default.filter((name) => !extras.includes(name));
       writeFileSync(path, JSON.stringify(schema));
 
-      for (const attribute of loadOtelMapping(path).decisionAttributes) {
-        expect({ attribute, known: attribute in DECISION_ATTRIBUTE_SOURCES }).toEqual({ attribute, known: true });
-      }
-      for (const mappingPath of [undefined, path]) {
-        const { exporter, spans } = memoryExporter({ mappingPath });
-        exporter.end(
-          exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest", TRUSTED),
-          decisionResponse(1, { ...DENY, reason_codes: ["blocked"], chain_hash: "a".repeat(64) }),
-        );
-        await exporter.flush();
-        const event = spans()[0]?.events.find((e) => e.name === MAPPING.decisionEventName);
-        expect(event?.attributes?.["acs.reason_codes"]).toEqual(["blocked"]);
-        expect(event?.attributes?.["acs.chain_hash"]).toBe("a".repeat(64));
-      }
+      const { exporter, spans } = memoryExporter({ mappingPath: path });
+      exporter.end(
+        exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest", TRUSTED),
+        decisionResponse(1, { ...DENY, reason_codes: ["blocked"], chain_hash: "a".repeat(64) }),
+      );
+      await exporter.flush();
+      const event = spans()[0]?.events.find((e) => e.name === MAPPING.decisionEventName);
+      expect(event?.attributes?.["acs.reason_codes"]).toBeUndefined();
+      expect(event?.attributes?.["acs.chain_hash"]).toBeUndefined();
     } finally {
       unlinkSync(path);
       rmdirSync(dir);
@@ -1826,3 +1821,69 @@ describe("keepLoopbackOffProxy, routed through a real proxy in a child process",
     }
   }, 15_000);
 });
+
+describe("otel-mapping and audit-to-otlp hardening (#284)", () => {
+  it("reads failureEventName and stepSpanAttributes from otel-mapping.json", () => {
+    const loaded = loadOtelMapping();
+    expect(loaded.failureEventName).toBe("acs.decision.failure");
+    expect(loaded.stepSpanAttributes).toEqual(["acs.request_id", "acs.session.id"]);
+  });
+
+  it("treats prototype property names like toString as unknown failure kinds ('other')", () => {
+    expect(failureClassOf("toString")).toBe("other");
+    expect(failureClassOf("constructor")).toBe("other");
+    expect(failureClassOf("__proto__")).toBe("other");
+  });
+
+  it("clamps oversized error codes and detects seq gaps, duplicates, and backward timestamps", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-audit-284-"));
+    const auditPath = join(dir, "audit.jsonl");
+    const otelPath = join(dir, "otel.jsonl");
+    try {
+      const lines = [
+        JSON.stringify({
+          seq: 1,
+          recorded_at: "2026-09-15T12:00:05.000Z",
+          session_id: "5a3c1e7e-0b1d-4c6a-9e2f-7d4b8c0a1f01",
+          method: "steps/toolCallRequest",
+          rpc_id: "req-1",
+          outcome: "blocked",
+          posture: "proceed",
+          posture_source: "negotiated",
+          failure: { kind: "toString", message: "guardian refused the envelope with error -999999999999999999999: bad" },
+        }),
+        JSON.stringify({
+          seq: 3, // gap (skipped 2) and backward timestamp
+          recorded_at: "2026-09-15T12:00:01.000Z",
+          session_id: "5a3c1e7e-0b1d-4c6a-9e2f-7d4b8c0a1f01",
+          method: "steps/toolCallRequest",
+          rpc_id: "req-3",
+          outcome: "proceeded",
+          posture: "proceed",
+          posture_source: "negotiated",
+          failure: { kind: "timeout", message: "no response" },
+        }),
+      ];
+      writeFileSync(auditPath, `${lines.join("\n")}\n`);
+      const summary = await convertAuditLog(auditPath, otelPath);
+      expect(summary.converted).toBe(2);
+      expect(summary.written).toBe(2);
+      expect(summary.sequenceDiscrepancies).toBe(2);
+
+      const exported = otlpSpans(otlpFile(otelPath));
+      const firstFailure = exported[0]?.events?.[0]?.attributes?.find((a) => a.key === "acs.failure.class");
+      const firstCode = exported[0]?.events?.[0]?.attributes?.find((a) => a.key === "acs.failure.error_code");
+      expect(firstFailure?.value.stringValue).toBe("other");
+      expect(Number(firstCode?.value.intValue)).toBeGreaterThanOrEqual(Number.MIN_SAFE_INTEGER);
+    } finally {
+      try {
+        unlinkSync(auditPath);
+        unlinkSync(otelPath);
+      } catch {
+        // ignore
+      }
+      rmdirSync(dir);
+    }
+  });
+});
+
