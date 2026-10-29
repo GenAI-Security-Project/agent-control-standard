@@ -194,6 +194,15 @@ function policyColumn(references: unknown, field: string): string[] | undefined 
   return references.map((reference) => asString(asObject(reference)?.[field]) ?? "");
 }
 
+/** `content[].type` of a message payload, one entry per item in the wire's
+ * order and not deduplicated, so a reader can count the items of each type.
+ * An item without a string `type` adds nothing. Absent when no item has one. */
+function contentTypes(content: unknown): string[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const types = content.flatMap((item) => asString(asObject(item)?.type) ?? []);
+  return types.length === 0 ? undefined : types;
+}
+
 /** The parts of a request envelope the source tables read. Read off the
  * parsed JSON rather than the validated envelope, because the span starts
  * before validation runs and an envelope that fails the schema is still a
@@ -226,12 +235,18 @@ export type Source<Parts> = (parts: Parts) => AttributeValue | undefined;
  * attribute `step_to_span` can name on a span this Guardian emits. The
  * mapping decides WHICH of these a span carries; this table only says HOW
  * each one is read. Paths follow the hook payload schemas
- * (`hooks/tool-call-request.json`, `hooks/tool-call-result.json`) and
- * `request-envelope.json`'s `AcsParams.metadata`.
+ * (`hooks/tool-call-request.json`, `hooks/tool-call-result.json`,
+ * `hooks/session-start.json`, `hooks/session-end.json`,
+ * `hooks/user-message.json`) and `request-envelope.json`'s `AcsParams`.
  */
 export const STEP_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<RequestParts>>> = {
   "acs.session.id": (r) => asString(r.metadata.session_id),
   "acs.agent.id": (r) => asString(r.metadata.agent_id),
+  "acs.tenant_id": (r) => asString(r.params.tenant_id),
+  "acs.user.id": (r) => asString(asObject(r.payload.user_identity)?.user_id),
+  "acs.policy_mode": (r) => asString(r.payload.policy_mode),
+  "acs.session.reason": (r) => asString(r.payload.reason),
+  "acs.content.types": (r) => contentTypes(r.payload.content),
   "gen_ai.tool.name": (r) => asString(r.tool.name),
   "acs.tool.provider": (r) => asString(r.tool.provider),
   "acs.tool.version": (r) => asString(r.tool.version),

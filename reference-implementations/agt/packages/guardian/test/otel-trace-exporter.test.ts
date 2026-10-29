@@ -33,6 +33,9 @@ const MAPPING = loadOtelMapping();
  * the same source server.ts builds the exporter from. */
 const METHODS_EVALUATED = buildServerHello().methods_evaluated;
 const TOOL_CALL_SPAN = MAPPING.stepToSpan["steps/toolCallRequest"]!;
+/** The session and message steps (#322 slice 1). This Guardian does not
+ * evaluate them yet, so the tests pass them in methodsEvaluated themselves. */
+const SESSION_AND_MESSAGE_METHODS = ["steps/sessionStart", "steps/sessionEnd", "steps/userMessage", "steps/agentResponse"];
 
 /** A Provenance object as provenance.json defines it: `provenance_id` and
  * `origin` required, everything else optional. */
@@ -589,7 +592,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
   // or that attribute quietly stops appearing when the mapping changes --
   // which is what #227's conditional_attributes would have done.
   it("has a source for every attribute the real mapping lists on an evaluated method, and for every decision attribute", () => {
-    for (const method of METHODS_EVALUATED) {
+    for (const method of [...METHODS_EVALUATED, ...SESSION_AND_MESSAGE_METHODS]) {
       const entry = MAPPING.stepToSpan[method];
       if (entry === undefined) {
         continue;
@@ -617,6 +620,136 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(() => NULL_OTEL_TRACE_EXPORTER.end(null, decisionResponse(1, DENY))).not.toThrow();
     await NULL_OTEL_TRACE_EXPORTER.flush();
     await NULL_OTEL_TRACE_EXPORTER.shutdown();
+  });
+});
+
+describe("createOtelTraceExporter -- the session and message steps (#322)", () => {
+  function sessionAndMessageExporter() {
+    return memoryExporter({ methodsEvaluated: [...METHODS_EVALUATED, ...SESSION_AND_MESSAGE_METHODS] });
+  }
+
+  /** `tenant_id` sits on AcsParams, beside `metadata`, so makeEnvelope has
+   * no option for it. */
+  function withTenant(envelope: Record<string, unknown>, tenantId: string): Record<string, unknown> {
+    return { ...envelope, params: { ...(envelope.params as Record<string, unknown>), tenant_id: tenantId } };
+  }
+
+  const cases: { method: string; envelope: (sessionId: string) => Record<string, unknown>; span: string; attributes: Record<string, string | string[]> }[] = [
+    {
+      method: "steps/sessionStart",
+      envelope: (sessionId) =>
+        withTenant(
+          makeEnvelope("steps/sessionStart", { user_identity: { user_id: "user-1" }, policy_mode: "strict" }, { sessionId }),
+          "tenant-1",
+        ),
+      span: "acs.session",
+      attributes: { "acs.tenant_id": "tenant-1", "acs.user.id": "user-1", "acs.policy_mode": "strict" },
+    },
+    {
+      method: "steps/sessionEnd",
+      envelope: (sessionId) => makeEnvelope("steps/sessionEnd", { reason: "completed" }, { sessionId }),
+      span: "acs.session.end",
+      attributes: { "acs.session.reason": "completed" },
+    },
+    {
+      method: "steps/userMessage",
+      envelope: (sessionId) =>
+        makeEnvelope(
+          "steps/userMessage",
+          { content: [{ type: "text", value: "hi" }, { type: "image", value: "aGk=" }, { type: "text", value: "again" }] },
+          { sessionId },
+        ),
+      span: "acs.message.user",
+      attributes: { "acs.content.types": ["text", "image", "text"] },
+    },
+    {
+      method: "steps/agentResponse",
+      envelope: (sessionId) => makeEnvelope("steps/agentResponse", { content: [{ type: "text", value: "done" }] }, { sessionId }),
+      span: "acs.message.agent",
+      attributes: { "acs.agent.id": "agent-1" },
+    },
+  ];
+
+  for (const { method, envelope, span: spanName, attributes } of cases) {
+    it(`${method} becomes one ${spanName} span carrying every attribute the mapping lists and the wire supplied`, async () => {
+      const { exporter, spans } = sessionAndMessageExporter();
+      const sessionId = crypto.randomUUID();
+      exporter.end(exporter.start(envelope(sessionId), method), decisionResponse(1, { decision: "allow" }));
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(1);
+      const [span] = spans();
+      expect(span?.name).toBe(spanName);
+      expect(span?.attributes["acs.session.id"]).toBe(sessionId);
+      expect(typeof span?.attributes["acs.request_id"]).toBe("string");
+      for (const [name, value] of Object.entries(attributes)) {
+        expect({ name, value: span?.attributes[name] }).toEqual({ name, value });
+      }
+      for (const name of MAPPING.stepToSpan[method]!.required_attributes) {
+        expect({ name, present: span?.attributes[name] !== undefined }).toEqual({ name, present: true });
+      }
+    });
+  }
+
+  it("leaves off the session span's optional attributes when the wire does not carry them", async () => {
+    const { exporter, spans } = sessionAndMessageExporter();
+    exporter.end(exporter.start(makeEnvelope("steps/sessionStart", {}), "steps/sessionStart"), decisionResponse(1, { decision: "allow" }));
+    await exporter.flush();
+
+    const attributes = spans()[0]?.attributes ?? {};
+    for (const name of ["acs.tenant_id", "acs.user.id", "acs.policy_mode"]) {
+      expect({ name, present: name in attributes }).toEqual({ name, present: false });
+    }
+  });
+
+  // One entry per content item, in wire order, so a reader can count the
+  // images in a message. An item without a string type adds nothing, and a
+  // message that leaves no type at all gets no attribute.
+  const contentCases: { label: string; content: unknown; want: string[] | undefined }[] = [
+    { label: "no content field", content: undefined, want: undefined },
+    { label: "an empty content array", content: [], want: undefined },
+    { label: "content that is not an array", content: "hi", want: undefined },
+    { label: "only items without a string type", content: [{ value: "hi" }, { type: 7, value: "x" }], want: undefined },
+    { label: "a mix of typed and untyped items", content: [{ type: "file", value: "a" }, { value: "b" }, { type: "audio", value: "c" }], want: ["file", "audio"] },
+  ];
+
+  for (const { label, content, want } of contentCases) {
+    it(`sets acs.content.types for ${label} to ${JSON.stringify(want)}`, async () => {
+      const { exporter, spans } = sessionAndMessageExporter();
+      const payload = content === undefined ? {} : { content };
+      exporter.end(exporter.start(makeEnvelope("steps/userMessage", payload), "steps/userMessage"), decisionResponse(1, { decision: "allow" }));
+      await exporter.flush();
+
+      expect(spans()[0]?.attributes["acs.content.types"]).toEqual(want);
+    });
+  }
+
+  it("records a decision on a session span the same way it does on a tool call span", async () => {
+    const { exporter, spans } = sessionAndMessageExporter();
+    exporter.end(
+      exporter.start(makeEnvelope("steps/sessionEnd", { reason: "completed" }), "steps/sessionEnd"),
+      decisionResponse(1, { decision: "allow", reason_codes: ["session_closed"] }),
+    );
+    await exporter.flush();
+
+    const [event] = spans()[0]?.events ?? [];
+    expect(event?.name).toBe("acs.decision");
+    expect(event?.attributes?.["acs.decision"]).toBe("allow");
+    expect(event?.attributes?.["acs.reason_codes"]).toEqual(["session_closed"]);
+  });
+
+  it("records a guardian_error failure on a message span answered with a JSON-RPC error", async () => {
+    const { exporter, spans } = sessionAndMessageExporter();
+    exporter.end(
+      exporter.start(makeEnvelope("steps/userMessage", { content: [{ type: "text", value: "hi" }] }, { id: 4 }), "steps/userMessage"),
+      { jsonrpc: "2.0", id: 4, error: { code: -32020, message: "evaluation failed" } },
+    );
+    await exporter.flush();
+
+    const [span] = spans();
+    expect(span?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
+    expect(span?.events[0]?.attributes?.["acs.failure.class"]).toBe("guardian_error");
   });
 });
 
