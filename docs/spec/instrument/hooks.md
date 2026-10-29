@@ -201,9 +201,9 @@ Schema: [`hooks/tool-call-result.json`](https://genai-security-project.github.io
 
 Fires after tool execution, before the result is ingested into the agent's reasoning context. Provenance: `origin: tool_output`, with `derived_from` set to the originating `toolCallRequest`'s provenance ids when the tool's output is data-derived.
 
-**Payload:** `request_id_ref` (the originating request), outputs, exit status, duration.
+**Payload:** `request_id_ref` (the request whose decision the host applied), outputs, exit status, duration.
 
-`request_id_ref`, when present, is the `request_id` of the originating `toolCallRequest`. A Guardian SHOULD resolve it against the `toolCallRequest` records it holds for the session, and MUST record the reference in its audit record when it cannot resolve it. Whether an unresolvable reference is grounds to deny is the deployment's policy. The record is required because an unresolvable reference is evidence, so it has to survive even when the result is allowed.
+`request_id_ref`, when present, is the `request_id` of the `toolCallRequest` whose decision the host applied to this call. A host that asked about one call more than once, for example after a `REPLAY_DETECTED` retry ([§17.1](specification.md#171-acs-error-code-registry)), names the request it acted on, never an earlier one. A Guardian SHOULD resolve it against the `toolCallRequest` records it holds for the session, and MUST record the reference in its audit record when it cannot resolve it. Whether an unresolvable reference is grounds to deny is the deployment's policy. The record is required because an unresolvable reference is evidence, so it has to survive even when the result is allowed.
 
 **Decision:** ALLOW / DENY / MODIFY.
 

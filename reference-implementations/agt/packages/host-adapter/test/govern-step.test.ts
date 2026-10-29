@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AuditEvent, AuditSink } from "../src/audit-sink.ts";
+import { createMemoryAppliedRequestStore, type AppliedRequestStore } from "../src/applied-request-store.ts";
+import type { AcsRequestEnvelope } from "../src/build-envelope.ts";
 import type { Hookmap, HookmapRequestHookEntry, HookmapResultHookEntry } from "../src/build-envelope.ts";
 import { governStep, governsTool, type GovernedStep } from "../src/govern-step.ts";
 import { GuardianTimeoutError, type DecisionOrFailure, type GuardianClient } from "../src/guardian-client.ts";
@@ -129,6 +131,7 @@ type Overrides = {
   hookEventName?: string;
   payload?: Record<string, unknown>;
   scopedTool?: string;
+  appliedRequests?: AppliedRequestStore;
 };
 
 /** `governStep`, with this suite's fixtures as the defaults. */
@@ -147,6 +150,7 @@ function governRaw(
     sessionId: "sess-1",
     audit,
     scopedTool: overrides.scopedTool,
+    appliedRequests: overrides.appliedRequests,
   });
 }
 
@@ -1262,5 +1266,85 @@ describe("governStep: a request id derived from the host's call id", () => {
     });
 
     expect(sent).toHaveLength(1);
+  });
+
+  // Issue #351. The result hook runs on its own, on one host in a process
+  // that never saw the retry, so which request it names is a property of
+  // the record the request gate leaves, not of anything the result gate
+  // can work out. These pin that record and what the result does with it.
+  const resultHookmap: Hookmap = { host: "test-host", hooks: { OnResult: { ...ON_RESULT, call_id: "$.call" } } };
+
+  /** Every envelope that went out, whole -- `scripted` keeps only the request id. */
+  function capturing(answers: DecisionOrFailure[]): { guardian: GuardianClient; sent: AcsRequestEnvelope[] } {
+    const sent: AcsRequestEnvelope[] = [];
+    return {
+      sent,
+      guardian: {
+        requestDecision: (envelope) => {
+          sent.push(envelope);
+          return Promise.resolve(answers.shift() ?? REPLAY);
+        },
+        post: () => Promise.reject(new Error("governStep must not use the wire primitive")),
+      },
+    };
+  }
+
+  async function governResult(store: AppliedRequestStore | undefined): Promise<AcsRequestEnvelope> {
+    const { sink } = recordingSink();
+    const { guardian, sent } = capturing([ALLOW]);
+    await governRaw(guardian, sink, undefined, {
+      hookmap: resultHookmap,
+      hookEventName: "OnResult",
+      payload: { ...resultPayload, call: "call-1" },
+      appliedRequests: store,
+    });
+    return sent[0]!;
+  }
+
+  it("records the retry's id as the request the host acted on, so the result names it", async () => {
+    const { sink } = recordingSink();
+    const store = createMemoryAppliedRequestStore();
+    const { guardian, sent } = scripted([REPLAY, ALLOW]);
+
+    await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload, appliedRequests: store });
+    const result = await governResult(store);
+
+    expect(store.get(sent[0]!)).toBe(sent[1]!);
+    expect(result.params.payload.request_id_ref).toBe(sent[1]!);
+    expect(result.params.payload.request_id_ref).not.toBe(sent[0]!);
+  });
+
+  it("records the retry even when the posture answered it, since that is still the request the host acted on", async () => {
+    const { sink } = recordingSink();
+    const store = createMemoryAppliedRequestStore();
+    const { guardian, sent } = scripted([REPLAY, REPLAY]);
+
+    await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload, appliedRequests: store });
+
+    expect(store.get(sent[0]!)).toBe(sent[1]!);
+  });
+
+  it("records nothing when the first ask is decided, so the result names the derived id", async () => {
+    const { sink } = recordingSink();
+    const store = createMemoryAppliedRequestStore();
+    const { guardian, sent } = scripted([ALLOW]);
+
+    await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload, appliedRequests: store });
+    const result = await governResult(store);
+
+    expect(store.get(sent[0]!)).toBeUndefined();
+    expect(result.params.payload.request_id_ref).toBe(sent[0]!);
+  });
+
+  it("names the derived id at a result gate with no store wired, as before", async () => {
+    const result = await governResult(undefined);
+    const request = (await (async () => {
+      const { sink } = recordingSink();
+      const { guardian, sent } = scripted([ALLOW]);
+      await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload });
+      return sent[0]!;
+    })());
+
+    expect(result.params.payload.request_id_ref).toBe(request);
   });
 });
