@@ -1,23 +1,45 @@
-"""The adapter side's I/O: the configured secret, signing with it, the handshake, transport, session state and audit records."""
-from acs.client._audit import audit_event
-from acs.client._handshake import ensure_session_handshake
-from acs.client._secrets import SecretFilePermissionsError, SecretFileUnreadableError, load_hmac_secret
-from acs.client._signing import sign_envelope, verify_signature
-from acs.client._store import load_session_state, record_step, save_session_state
-from acs.client._transport import ping
-from acs.client._urls import validate_guardian_url
+"""The adapter side's I/O: configuration, secrets, the handshake, the round trip, session state and audit."""
+from importlib import import_module
+from typing import Any
 
-__all__ = [
-    "SecretFilePermissionsError",
-    "SecretFileUnreadableError",
-    "audit_event",
-    "ensure_session_handshake",
-    "load_hmac_secret",
-    "load_session_state",
-    "ping",
-    "record_step",
-    "save_session_state",
-    "sign_envelope",
-    "validate_guardian_url",
-    "verify_signature",
-]
+# Exports load on first use, so _config, _outcome and _audit import without the signing dependency.
+_EXPORTS = {
+    "Config": "_config",
+    "Decided": "_outcome",
+    "FailPosture": "_config",
+    "GuardianHTTPError": "_exchange",
+    "Refused": "_outcome",
+    "RequestTooLargeError": "_exchange",
+    "Resolution": "_config",
+    "SecretFilePermissionsError": "_secrets",
+    "SecretFileUnreadableError": "_secrets",
+    "Undecided": "_outcome",
+    "audit_event": "_audit",
+    "classify_response": "_exchange",
+    "ensure_session_handshake": "_handshake",
+    "exchange": "_exchange",
+    "load_hmac_secret": "_secrets",
+    "load_session_state": "_store",
+    "ping": "_transport",
+    "post": "_exchange",
+    "record_step": "_store",
+    "save_session_state": "_store",
+    "sign_envelope": "_signing",
+    "validate_guardian_url": "_urls",
+    "verify_signature": "_signing",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module 'acs.client' has no attribute {name!r}")
+    value = getattr(import_module(f"acs.client.{module}"), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return __all__

@@ -10,9 +10,9 @@ from pathlib import Path
 import acs
 
 SCRIPTS = {
-    "acs-claude-code-hook": "acs.integrations.claude_code.adapter:main",
+    "acs-claude-code-hook": "acs.integrations.claude_code.hook:main",
     "acs-claude-code-wire": "acs.integrations.claude_code.wire:main",
-    "acs-cursor-hook": "acs.integrations.cursor.adapter:main",
+    "acs-cursor-hook": "acs.integrations.cursor.hook:main",
     "acs-cursor-wire": "acs.integrations.cursor.wire:main",
     "acs-nat-wire": "acs.integrations.nat.wire:main",
     "acs-example-guardian": "acs.guardian.example_guardian:main",

@@ -109,8 +109,9 @@ class LifecycleObserver(unittest.TestCase):
             guardian_url=self.url, default_deny=False,
             session_id="lifecycle-non-trigger-test",
         )
-        mw = ACSMiddleware(cfg)
+        # The middleware reads ACS_HANDSHAKE when it is built.
         os.environ["ACS_HANDSHAKE"] = "0"
+        mw = ACSMiddleware(cfg)
         ctx_state = ContextState.get()
         mgr = IntermediateStepManager(ctx_state)
         sub = mgr.subscribe(on_next=mw._on_intermediate_step)

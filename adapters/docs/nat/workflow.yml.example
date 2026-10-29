@@ -15,7 +15,7 @@
 #       to stderr.
 #   ACS_DISABLED=1
 #       Incident kill switch: the middleware passes everything through
-#       with no Guardian traffic.
+#       with no Guardian traffic. Read when the workflow starts.
 
 middleware:
   acs_guardian:

@@ -38,7 +38,7 @@ uv run python run_conformance.py claude cursor
 uv run python run_conformance.py claude cursor nat
 ```
 
-`claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core` and `package` checks run once for every command, regardless of the platform selection.
+`claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client` and `package` checks run once for every command, regardless of the platform selection.
 
 It prints every skip by name + reason and fails on any failure **or any _unexpected_ skip** — a skip not on the exact allowlist. The allowlist tolerates only the manual Cursor GUI procedure and the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`; a dependency-gated test (NAT when `nvidia-nat-core` is installed) that silently skips is a failure, never green. `--strict` additionally fails on the allowlisted skips too, for a fully-provisioned gate.
 
@@ -227,13 +227,14 @@ adapters/
 ├── uv.lock                         # exact dependency versions, with hashes
 ├── src/acs/
 │   ├── core/                       # no I/O: envelopes, signing, decisions, error codes, bundled schemas
-│   ├── client/                     # I/O: the secret, the handshake, transport, session state, audit
+│   ├── client/                     # I/O: settings and fail posture, the secret, the handshake, the round trip, session state, audit
 │   ├── integrations/<framework>/
+│   │   ├── hook.py                 # the installed hook command (Claude Code, Cursor)
 │   │   ├── adapter.py              # the hook, or the NAT middleware
 │   │   └── wire.py                 # writes the framework's own config
 │   ├── guardian/example_guardian.py
 │   └── testing/                    # CaptureGuardian and the shared test harness
-├── tests/                          # common/, core/, package/, conformance/, integrations/<framework>/
+├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/
 ├── docs/<framework>/               # README, mapping.md, example config, example payloads
 └── scripts/check_wheel.py          # installs a built wheel outside the repo and checks it
 ```
@@ -246,8 +247,11 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 
 1. Add `docs/<framework>/` with a README and a `mapping.md` documenting how the framework's hook events map to ACS `steps/*` methods, and how the framework's response shape relates to ACS dispositions.
 2. (Optional but encouraged) Write the adapter in `src/acs/integrations/<framework>/`, with tests in `tests/integrations/<framework>/`. The Claude Code adapter is the template.
-3. Register it in `pyproject.toml`: an entry in the `acs.integrations` entry-point group, and its commands under `[project.scripts]`. An integration in another distribution registers in the same group.
-4. Add a row to the status table above.
-5. Open a PR against `GenAI-Security-Project/agent-control-standard`.
+3. For a hook command, add a standard-library-only `hook.py` that calls `acs.integrations._bootstrap.run_hook` (see `claude_code/hook.py`), and install that as the command, so an adapter whose dependencies fail to import still writes an audit record and applies `ACS_DEFAULT_DENY`.
+4. Register it in `pyproject.toml`: an entry in the `acs.integrations` entry-point group, and its commands under `[project.scripts]`. An integration in another distribution registers in the same group.
+5. Add a row to the status table above.
+6. Open a PR against `GenAI-Security-Project/agent-control-standard`.
+
+Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, take each round trip's outcome from `acs.client.exchange`, and settle every step without a usable decision through `FailPosture.resolve`.
 
 The bar for "reference implementation" status is: round-trip tests pass against the example Guardian, documented configuration for users, and an explicit conformance posture statement matching the format in the Claude Code adapter's README.

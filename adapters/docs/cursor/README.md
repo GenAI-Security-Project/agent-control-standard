@@ -139,7 +139,7 @@ Run from `adapters/`:
 ```bash
 cd "$ACS_REPO/adapters"
 uv run python run_conformance.py cursor
-# Runs the shared Guardian, _common, core and package checks, then Cursor's suite.
+# Runs the shared Guardian, _common, core, client and package checks, then Cursor's suite.
 ```
 
 The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip. The manual Cursor procedure is an expected skip in headless runs.
@@ -249,7 +249,8 @@ r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r 
 
 ## Files
 
-- `src/acs/integrations/cursor/adapter.py`: the adapter itself, installed as `acs-cursor-hook`. Stdlib + `rfc8785` for JCS canonicalization.
+- `src/acs/integrations/cursor/hook.py`: the entry point installed as `acs-cursor-hook`. Stdlib only, so it can still audit and apply the configured posture when the adapter's dependencies are missing.
+- `src/acs/integrations/cursor/adapter.py`: the adapter itself, which `hook.py` loads. Stdlib + `rfc8785` for JCS canonicalization.
 - `src/acs/integrations/cursor/wire.py`: the `hooks.json` wiring CLI, installed as `acs-cursor-wire` (dry-run by default; `--write` to apply).
 - `tests/integrations/cursor/e2e_check.py`: semi-automated Cursor end-to-end verifier (6 steps, real `example_guardian` policy).
 - `docs/cursor/hooks.json.example`: reference wiring (`acs-cursor-wire` produces a more comprehensive one).

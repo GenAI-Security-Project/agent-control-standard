@@ -78,6 +78,20 @@ def base_checks(env_dir: Path, wheel_version: str, cwd: Path) -> None:
     check("the kill switch runs and leaves an audit line",
           p.returncode == 0 and "acs_disabled_bypass" in p.stderr, p.stdout + p.stderr)
 
+    # Hide rfc8785: the hooks must still audit and apply ACS_DEFAULT_DENY=1.
+    shadow = cwd / "without-rfc8785"
+    shadow.mkdir(exist_ok=True)
+    (shadow / "rfc8785.py").write_text("raise ImportError('rfc8785 hidden by check_wheel')\n")
+    degraded = {"PYTHONPATH": str(shadow), "ACS_DEFAULT_DENY": "1"}
+    p = run([str(bindir / "acs-claude-code-hook")], cwd, input=event, env=degraded)
+    check("acs-claude-code-hook without rfc8785 audits and denies",
+          p.returncode == 0 and '"permissionDecision": "deny"' in p.stdout
+          and "adapter_unavailable" in p.stderr, p.stdout + p.stderr[-300:])
+    p = run([str(bindir / "acs-cursor-hook"), "preToolUse"], cwd, input=event, env=degraded)
+    check("acs-cursor-hook without rfc8785 audits and denies",
+          p.returncode == 0 and '"permission": "deny"' in p.stdout
+          and "adapter_unavailable" in p.stderr, p.stdout + p.stderr[-300:])
+
     p = run([str(bindir / "acs-example-guardian"), "--port", "0"], cwd)
     check("acs-example-guardian refuses to start without a signing secret",
           p.returncode != 0 and "REFUSING TO START" in p.stderr, p.stderr[-300:])

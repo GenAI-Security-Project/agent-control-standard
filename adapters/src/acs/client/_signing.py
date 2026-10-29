@@ -52,12 +52,14 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     response). Returns True if valid (or if no signature present and no
     key material configured — local-dev mode)."""
     container = envelope.get(container_key(envelope)) or {}
+    if not isinstance(container, dict):
+        return False
     sig = container.get("signature")
     if sig is None:
         # No signature on the wire; valid only if local-dev (no key configured)
         return not bool(load_hmac_secret())
 
-    if sig.get("algorithm") != "HMAC-SHA256":
+    if not isinstance(sig, dict) or sig.get("algorithm") != "HMAC-SHA256":
         return False
     if not sig.get("value"):
         return False

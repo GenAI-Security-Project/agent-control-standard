@@ -59,125 +59,40 @@ import hashlib
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 import uuid
-from pathlib import Path
 from typing import Any, Callable
 
 
 from acs import __version__
 
-try:
-    from acs.client import (
-        audit_event,
-        ensure_session_handshake,
-        load_session_state,
-        record_step,
-        save_session_state,
-        sign_envelope,
-        validate_guardian_url,
-        verify_signature,
-    )
-    from acs.core import (
-        ACS_VERSION,
-        MAX_REQUEST_BODY_BYTES,
-        coerce_uuid,
-        guardian_error_cause,
-        is_guardian_refusal,
-        iso8601_now,
-        method_evaluated,
-        modify_composition_violation,
-        normalize_decision,
-        response_matches_request,
-    )
-except ImportError as _bootstrap_error:
-    # acs.core hard-requires rfc8785 (§10 permits no alternative
-    # canonicalization), so the import can fail before main() runs; a bare
-    # exit 1 would skip the §6.4:158 audit and ignore ACS_DEFAULT_DENY,
-    # so both are handled here with the standard library only.
-    def _degraded_exit() -> int:
-        if os.environ.get("ACS_DISABLED") == "1":
-            # The documented kill switch is read in main(), which never runs
-            # on this path. An operator who set it must still get a bypass.
-            sys.stderr.write("acs-adapter: ACS_DISABLED=1, hook bypassed\n")
-            return 0
-        _hook = sys.argv[1] if len(sys.argv) > 1 else ""
-        _deny = os.environ.get("ACS_DEFAULT_DENY", "0") == "1"
-        _line = "ACS_AUDIT " + json.dumps({
-            "acs_audit_event": "adapter_unavailable",
-            "event": _hook,
-            "posture": "deny" if _deny else "proceed",
-            "error": str(_bootstrap_error).split("\n")[0],
-            "detail": "adapter could not load; no envelope was sent",
-        })
-        sys.stderr.write(_line + "\n")
-        _sink = os.environ.get("ACS_AUDIT_FILE", "").strip()
-        if _sink:
-            try:
-                _fd = os.open(_sink, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                with os.fdopen(_fd, "a") as _f:
-                    _f.write(_line + "\n")
-            except OSError:
-                pass
-        if not _deny:
-            return 0
-        _reason = ("ACS adapter unavailable (dependency missing); "
-                   "failing closed per the deployment posture")
-        # Gate events with a {"permission": ...} deny shape.
-        if _hook in ("preToolUse", "subagentStart",
-                     "beforeShellExecution", "beforeMCPExecution"):
-            print(json.dumps({"permission": "deny",
-                              "user_message": _reason,
-                              "agent_message": _reason}))
-            return 0
-        if _hook == "beforeSubmitPrompt":
-            # Documented native block + exit code 2 belt-and-braces.
-            sys.stderr.write(f"acs-adapter: {_reason}\n")
-            print(json.dumps({"continue": False, "user_message": _reason}))
-            return 2
-        return 0
-
-    if __name__ == "__main__":
-        raise SystemExit(_degraded_exit())
-    raise
-
-
-class RequestTooLargeError(Exception):
-    """Serialized envelope exceeds the Guardian's body cap; checked before
-    the POST so an attacker-sized envelope cannot ride the
-    transport-failure fail-open path."""
-
-
-class GuardianHTTPRefusalError(Exception):
-    """Guardian answered non-2xx — alive and refusing at the HTTP layer,
-    distinct from a transport failure; carries the parsed JSON-RPC error
-    body when present."""
-
-    def __init__(self, status: int, jsonrpc_error: dict | None):
-        self.status = status
-        self.jsonrpc_error = jsonrpc_error or {}
-        super().__init__(f"HTTP {status}")
-
+from acs.client import (
+    Config,
+    Decided,
+    FailPosture,
+    Refused,
+    Resolution,
+    Undecided,
+    audit_event,
+    ensure_session_handshake,
+    exchange,
+    load_session_state,
+    record_step,
+    save_session_state,
+    sign_envelope,
+)
+from acs.core import (
+    ACS_VERSION,
+    KNOWN_DECISIONS,
+    coerce_uuid,
+    iso8601_now,
+    method_evaluated,
+    modify_composition_violation,
+    normalize_decision,
+)
+from acs.integrations.cursor.hook import PERMISSION_EVENTS
 
 # The acs-adapters package version; carried in request metadata and --version.
 ADAPTER_VERSION = __version__
-
-GUARDIAN_URL = os.environ.get("ACS_GUARDIAN_URL", "http://127.0.0.1:8787/acs")
-DEFAULT_DENY = os.environ.get("ACS_DEFAULT_DENY", "0") == "1"
-HANDSHAKE_ENABLED = os.environ.get("ACS_HANDSHAKE", "1") == "1"
-
-# Effective fail posture = most-restrictive of ACS_DEFAULT_DENY and the
-# ServerHello's `on_decision_failure` (§6.4); set once per invocation in main().
-_SERVER_DENY = False
-
-# §6.4:154: wait up to the NEGOTIATED timeout — seeded from the
-# ServerHello's timeout_config.default_ms in main(); 5s floor with no handshake.
-_DECISION_TIMEOUT_S = 5.0
-
-
-def _effective_default_deny() -> bool:
-    return DEFAULT_DENY or _SERVER_DENY
 
 
 # ─── Hook taxonomy ──────────────────────────────────────────────────────────
@@ -223,13 +138,6 @@ KNOWN_UNMAPPED: dict[str, str] = {
     "workspaceOpen": "app-lifecycle event outside any agent session",
 }
 
-# Cursor events whose deny shape is `{"permission": "deny", ...}`
-# (vs `beforeSubmitPrompt` which uses exit code 2, and post-tool events
-# which only carry `additional_context`).
-PERMISSION_EVENTS = frozenset({
-    "preToolUse", "subagentStart", "beforeShellExecution", "beforeMCPExecution",
-})
-
 POST_TOOL_EVENTS = frozenset({
     "postToolUse", "postToolUseFailure", "afterMCPExecution",
     "afterShellExecution", "afterFileEdit", "afterTabFileEdit",
@@ -242,8 +150,6 @@ POST_TOOL_EVENTS = frozenset({
 PERMISSION_MAP: dict[str, str] = {
     "allow": "allow", "deny": "deny", "ask": "ask", "defer": "ask",  # no native defer
 }
-
-KNOWN_DECISIONS = frozenset({"allow", "deny", "modify", "ask", "defer"})
 
 SESSION_END_REASONS = frozenset({"completed", "cancelled", "error", "timeout", "abandoned"})
 
@@ -314,9 +220,7 @@ def _session_id(event: dict[str, Any]) -> str:
 
 
 def _workspace(event: dict[str, Any]) -> str | None:
-    """Workspace identifier folded into the session-state file key so
-    two Cursor windows on different projects can't collide on a shared
-    non-UUID conversation_id."""
+    """Folded into the state key, so two windows sharing a non-UUID conversation_id stay apart."""
     return _first_workspace_root(event) or event.get("cwd") or None
 
 
@@ -788,12 +692,12 @@ def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, A
     return envelope
 
 
-def _maybe_handshake(event: dict[str, Any]) -> dict | None:
+def _maybe_handshake(event: dict[str, Any], config: Config) -> dict | None:
     """Called on every hook event. Idempotent per session via disk
     cache — only the first event of a session actually POSTs
     handshake/hello. Returns the negotiated ServerHello (cached or
     fresh) or None. See ensure_session_handshake's docstring."""
-    if not HANDSHAKE_ENABLED:
+    if not config.handshake_enabled:
         # ACS_HANDSHAKE=0 skips the §4-REQUIRED handshake (dev/test
         # only); record the non-conformance rather than skip silently (§4.1:77).
         audit_event("handshake_disabled_nonconformant",
@@ -805,7 +709,7 @@ def _maybe_handshake(event: dict[str, Any]) -> dict | None:
     if not sid:
         return None
     return ensure_session_handshake(
-        guardian_url=GUARDIAN_URL,
+        guardian_url=config.guardian_url,
         session_id=sid,
         agent_id=_agent_id(event),
         platform="cursor",
@@ -813,27 +717,6 @@ def _maybe_handshake(event: dict[str, Any]) -> dict | None:
         # HOOK_MAP value; advertise it so advertised == emitted.
         methods_implemented=list(HOOK_MAP.values()) + ["steps/turnStart"],
     )
-
-
-def call_guardian(request: dict[str, Any]) -> dict[str, Any]:
-    validate_guardian_url(GUARDIAN_URL)  # SSRF: refuse file://, ftp://, etc.
-    body = json.dumps(request).encode("utf-8")
-    if len(body) > MAX_REQUEST_BODY_BYTES:
-        raise RequestTooLargeError(len(body))
-    req = urllib.request.Request(
-        GUARDIAN_URL, data=body,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_DECISION_TIMEOUT_S) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        parsed = None
-        try:
-            parsed = json.loads(e.read().decode("utf-8")).get("error")
-        except Exception:  # noqa: BLE001
-            pass
-        raise GuardianHTTPRefusalError(e.code, parsed) from e
 
 
 # ─── Response translation — dispatch table by event category ──────────────
@@ -979,88 +862,26 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
 
 # ─── Main flow ──────────────────────────────────────────────────────────────
 
-def _guardian_roundtrip(request: dict[str, Any], event_name: str,
-                        event: dict[str, Any]) -> tuple[dict | None, int | None]:
-    """POST one request and validate the response. Returns
-    (result_dict, None) for a good, bound, signed result, or
-    (None, exit_code) when a terminal fail/force_deny was already emitted
-    in the event's shape; shared by the turnStart pre-step and the main step."""
+def _guardian_roundtrip(request: dict[str, Any], event_name: str, event: dict[str, Any],
+                        guardian_url: str, posture: FailPosture) -> tuple[dict | None, int | None]:
+    """POST one request. Returns (response, None) for a usable decision, or
+    (None, exit_code) once a failure has been settled in the event's shape;
+    shared by the turnStart pre-step and the main step."""
     session_id = _session_id(event)
-    try:
-        response = call_guardian(request)
-    except RequestTooLargeError as e:
-        sys.stderr.write(f"acs-adapter: envelope exceeds body cap: {e}\n")
-        return None, _force_deny(event_name, session_id,
-                                 cause="request_exceeds_max_payload",
-                                 body_bytes=e.args[0], method=request.get("method"))
-    except GuardianHTTPRefusalError as e:
-        code = e.jsonrpc_error.get("code")
-        cause = (guardian_error_cause(code) if code is not None
-                 else f"http_{e.status}_refusal")
-        sys.stderr.write(
-            f"acs-adapter: Guardian refused at HTTP layer ({e.status}, {cause})\n")
-        return None, _force_deny(event_name, session_id, cause=cause,
-                                 http_status=e.status, error_code=code,
-                                 error_message=e.jsonrpc_error.get("message"),
-                                 method=request.get("method"))
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        reason = getattr(e, "reason", None)
-        is_timeout = isinstance(e, TimeoutError) or isinstance(reason, TimeoutError)
-        if is_timeout:
-            cause = "decision_timeout"
-            sys.stderr.write(
-                f"acs-adapter: decision timed out after {_DECISION_TIMEOUT_S:g}s: {e}\n")
-        else:
-            cause = "transport_failure"
-            sys.stderr.write(f"acs-adapter: Guardian unreachable: {e}\n")
-        return None, _fail(event_name, session_id, cause=cause,
-                           request_id=request.get("params", {}).get("request_id"),
-                           method=request.get("method"), error=str(e))
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
-        return None, _fail(event_name, session_id,
-                           cause="adapter_exception", error=str(e))
-
-    if not response_matches_request(request, response):
-        sys.stderr.write("acs-adapter: response not bound to request\n")
-        return None, _force_deny(event_name, session_id,
-                                 cause="response_binding_mismatch")
-
-    if "error" in response:
-        if not verify_signature(response, session_id=session_id):
-            sys.stderr.write("acs-adapter: error response signature invalid\n")
-            claimed = response.get("error") or {}
-            return None, _force_deny(
-                event_name, session_id, cause="error_signature_invalid",
-                claimed_error_code=claimed.get("code"),
-                claimed_cause=guardian_error_cause(claimed.get("code")))
-        err = response.get("error") or {}
-        code = err.get("code")
-        cause = guardian_error_cause(code)
-        sys.stderr.write(
-            f"acs-adapter: Guardian returned JSON-RPC error {code} ({cause}): "
-            f"{err.get('message','')}\n")
-        common = dict(cause=cause, error_code=code,
-                      error_message=err.get("message"),
-                      request_id=request.get("params", {}).get("request_id"),
-                      method=request.get("method"))
-        if is_guardian_refusal(code):
-            return None, _force_deny(event_name, session_id, **common)
-        return None, _fail(event_name, session_id, **common)
-
-    if not verify_signature(response, session_id=session_id):
-        sys.stderr.write("acs-adapter: response signature invalid\n")
-        return None, _force_deny(event_name, session_id,
-                                 cause="response_signature_invalid")
-    return response, None
+    outcome = exchange(request, guardian_url=guardian_url, timeout_s=posture.timeout_s,
+                       session_id=session_id)
+    if isinstance(outcome, Decided):
+        return outcome.response, None
+    sys.stderr.write(f"acs-adapter: {outcome.message or outcome.cause}\n")
+    return None, _settle(posture.resolve(outcome), event_name, session_id)
 
 
 def main() -> int:
-    global _SERVER_DENY, _DECISION_TIMEOUT_S
+    config = Config.from_env(os.environ)
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
         print(f"acs-adapter (cursor) {ADAPTER_VERSION}")
         return 0
-    if os.environ.get("ACS_DISABLED") == "1":
+    if config.disabled:
         # Incident kill switch — a structured audit event so the bypass
         # reaches the durable sink (§6.4:158).
         audit_event("acs_disabled_bypass",
@@ -1080,7 +901,7 @@ def main() -> int:
         event = json.loads(raw)
     except json.JSONDecodeError as e:
         sys.stderr.write(f"acs-adapter: invalid JSON on stdin: {e}\n")
-        return _fail(event_name, cause="invalid_stdin_json")
+        return _settle(config.posture.resolve(Undecided("invalid_stdin_json")), event_name, None)
 
     if event_name not in HOOK_MAP:
         if event_name not in KNOWN_UNMAPPED:
@@ -1090,14 +911,9 @@ def main() -> int:
                         session_id=_session_id(event))
         return 0
 
-    server_hello = _maybe_handshake(event)
-    if server_hello and server_hello.get("on_decision_failure") == "deny":
-        _SERVER_DENY = True
-    # §6.4:154 — honor the negotiated round-trip timeout.
-    if server_hello:
-        default_ms = (server_hello.get("timeout_config") or {}).get("default_ms")
-        if isinstance(default_ms, (int, float)) and default_ms > 0:
-            _DECISION_TIMEOUT_S = default_ms / 1000.0
+    server_hello = _maybe_handshake(event, config)
+    # §6.4:154: the negotiated posture and default timeout govern every round trip below.
+    posture = config.posture.negotiated(server_hello)
 
     session_id = _session_id(event)
 
@@ -1108,7 +924,8 @@ def main() -> int:
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
             ts_response, terminal = _guardian_roundtrip(
-                build_turn_start_request(event, turn_id), "beforeSubmitPrompt", event)
+                build_turn_start_request(event, turn_id), "beforeSubmitPrompt", event,
+                config.guardian_url, posture)
             if terminal is not None:
                 return terminal
             ts_decision, ts_reason, _ = normalize_decision(ts_response.get("result"))
@@ -1133,14 +950,15 @@ def main() -> int:
         request = build_request(event_name, event)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
-        return _fail(event_name, session_id, cause="adapter_exception", error=str(e))
+        return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
+                       event_name, session_id)
     if not request:
         if event_name == "stop":
             # turnEnd with no open turn: nothing to close honestly.
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {event_name}\n")
-        return _fail(event_name, session_id, cause="adapter_build_failed")
+        return _settle(posture.resolve(Undecided("adapter_build_failed")), event_name, session_id)
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
@@ -1166,7 +984,8 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         pass
 
-    response, terminal = _guardian_roundtrip(request, event_name, event)
+    response, terminal = _guardian_roundtrip(request, event_name, event,
+                                             config.guardian_url, posture)
     if terminal is not None:
         return terminal
 
@@ -1177,8 +996,8 @@ def main() -> int:
                                  original_input=event.get("tool_input") or {})
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
-        return _force_deny(event_name, session_id,
-                           cause="adapter_translate_exception", error=str(e))
+        return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
+                       event_name, session_id)
 
     # Close the turn after the turnEnd has been emitted/recorded.
     if event_name == "stop":
@@ -1216,27 +1035,14 @@ def _unevaluated_proceed(event_name: str) -> int:
     return 0
 
 
-def _fail(event_name: str = "", session_id: str | None = None, *,
-          cause: str = "unknown", **audit_extras) -> int:
-    """Apply the deployment's fail posture and record an audit event per
-    §6.4; `cause` names what actually went wrong independently of the
-    posture (which ACS_DEFAULT_DENY / the ServerHello determine)."""
-    if _effective_default_deny():
-        return _deny_with_audit("decision_failure_fail_closed",
-                                event_name, session_id, cause, audit_extras)
-
-    audit_event("fail_open_bypass",
-                cause=cause, event=event_name, session_id=session_id, **audit_extras)
-    return 0
-
-
-def _force_deny(event_name: str = "", session_id: str | None = None, *,
-                cause: str = "unknown", **audit_extras) -> int:
-    """Fail closed REGARDLESS of posture — for conditions where 'proceed'
-    is a bypass primitive: Guardian refusals, response↔request binding
-    mismatches, and invalid response signatures."""
-    return _deny_with_audit("guardian_refusal_fail_closed",
-                            event_name, session_id, cause, audit_extras)
+def _settle(resolution: Resolution, event_name: str, session_id: str | None) -> int:
+    """Carry out a resolution: deny in the event's native shape unless it proceeds, and record why per §6.4."""
+    if resolution.proceed:
+        audit_event(resolution.audit_type, cause=resolution.cause, event=event_name,
+                    session_id=session_id, **resolution.fields)
+        return 0
+    return _deny_with_audit(resolution.audit_type, event_name, session_id,
+                            resolution.cause, dict(resolution.fields))
 
 
 def _deny_with_audit(audit_type: str, event_name: str,

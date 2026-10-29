@@ -135,7 +135,7 @@ Five tests, ordered from broadest to most specific. Run any/all.
 ```bash
 cd "$ACS_REPO/adapters"
 uv run python run_conformance.py nat
-# Runs the shared Guardian, _common, core and package checks, then NAT's suite.
+# Runs the shared Guardian, _common, core, client and package checks, then NAT's suite.
 ```
 
 Sync with the `nat` extra first (`uv sync --locked --extra nat --group test`). A missing NAT dependency produces an unexpected skip and fails the command.
@@ -261,7 +261,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `_type` | `acs_guardian` (required) | Registers the middleware via NAT's `register_middleware` decorator. |
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
 | `default_deny` | `false` | Fail-open with audit (§6.4 default). Set `true` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
-| `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. |
+| `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config.default_ms` replaces it for the session. |
 | `session_id` | (auto, per-process) | UUID; auto-generated and stable for the process lifetime. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
@@ -274,6 +274,9 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `ACS_AGENT_ID` | derived from `target_function_or_group` | Stable agent identifier sent in `metadata.agent_id`. |
 | `ACS_SESSION_ID` | derived | Overrides the auto-generated session_id. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
+| `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
+| `ACS_DISABLED` | (unset) | `1` = incident kill switch: every call passes through with no Guardian traffic and an `acs_disabled_bypass` audit event. Read when NAT builds the middleware, so set it before the workflow starts. |
+| `ACS_HANDSHAKE` | `1` | Set to `0` to disable the handshake/hello call on first use. Read when NAT builds the middleware. |
 
 ## On-disk state
 
@@ -295,7 +298,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006); audit cause distinguishes both |
 | Baseline integrity (HMAC-SHA256) | ✓ when `ACS_HMAC_SECRET[_FILE]` is set; signed responses verified by adapter (pre_invoke + post_invoke reject SIGNATURE_INVALID) |
 | Decision honoring (§6.4) | ✓ NAT's middleware contract guarantees the function will not execute if `pre_invoke` raises or sets SKIP — verified in `test_live.py` (deny tests assert `executed["count"] == 0`); fail-open emits `ACS_AUDIT` events |
-| `cause` field on every audit event | ✓ `transport_failure`, `adapter_exception`, `response_signature_invalid`, plus 7 JSON-RPC error code → cause mappings (`unsupported_version_response`, `provenance_required_response`, `signature_invalid_response`, `replay_detected_response`, `timestamp_out_of_window_response`, `malformed_envelope_response`, `parse_error_response`) with `guardian_error_response` as the catch-all fallback for unknown codes |
+| `cause` field on every audit event | ✓ `transport_failure`, `adapter_exception`, `response_signature_invalid`, plus a cause for every §17 JSON-RPC error code (for example `session_refused_response`, `signature_invalid_response`, `replay_detected_response`, `internal_error_response`) with `guardian_error_response` as the catch-all fallback for unknown codes |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | Wrapped MCP `protocols/MCP/*` | ✗ not implemented. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter emits no `protocols/MCP/*` traffic. The function middleware sees an MCP tool only as an ordinary NAT function, so a wired MCP tool call can reach the Guardian only as `steps/toolCallRequest` and `steps/toolCallResult`. This suite does not exercise that path. No other MCP surface is wrapped, so a NAT session that uses MCP falls short of ACS-Core there. Known limitation. |
 | `request_id_ref` correlation | ✓ `post_invoke` populates with a deterministic uuid5 derived from session + function + kwargs, linking result to request |

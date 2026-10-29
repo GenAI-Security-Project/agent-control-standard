@@ -60,22 +60,23 @@ def verify_with_key(envelope: dict, key: bytes) -> bool:
     """True when the envelope carries an HMAC-SHA256 signature that `key` reproduces."""
     ckey = container_key(envelope)
     container = envelope.get(ckey) or {}
-    sig = container.get("signature")
-    if sig is None:
+    if not isinstance(container, dict):
         return False
-    if sig.get("algorithm") != "HMAC-SHA256":
+    sig = container.get("signature")
+    if not isinstance(sig, dict) or sig.get("algorithm") != "HMAC-SHA256":
         return False
     expected_b64 = sig.get("value")
     if not expected_b64:
         return False
     unsigned_container = {k: v for k, v in container.items() if k != "signature"}
     unsigned_envelope = {**envelope, ckey: unsigned_container}
-    expected_bytes = hmac.new(key, jcs_canonicalize(unsigned_envelope), hashlib.sha256).digest()
-    # Malformed base64 (truncation, garbage chars, non-string) must NOT
-    # crash the request path — that turns a bad signature into a 500 /
-    # uncaught exception instead of the spec's SIGNATURE_INVALID
-    # (-32004) response. Return False so the caller emits the right
-    # error code and the audit event carries cause=signature_invalid_*.
+    try:
+        canonical = jcs_canonicalize(unsigned_envelope)
+    except Exception:  # noqa: BLE001
+        # RFC 8785 has no form for this envelope (an integer beyond 2**53, NaN, deep nesting), so no signature covers it.
+        return False
+    expected_bytes = hmac.new(key, canonical, hashlib.sha256).digest()
+    # Malformed base64 is a failed verification, not an exception.
     try:
         provided_bytes = base64.b64decode(expected_b64, validate=True)
     except (binascii.Error, ValueError, TypeError):

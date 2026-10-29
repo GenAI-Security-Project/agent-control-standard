@@ -64,8 +64,8 @@ window (default ±5 min) with `TIMESTAMP_OUT_OF_WINDOW` (-32006, §10.3).
 Attacker controls the env var; sets it to `file:///etc/passwd` to
 read arbitrary files, or to `data://` to feed a crafted response.
 *Mitigation:* `validate_guardian_url()` rejects any scheme that is
-not `http` or `https`. Called from every adapter's `call_guardian`
-and from `do_handshake` / `ping` in `_common`.
+not `http` or `https`. Called from `acs.client.exchange` (every
+step's round trip), `ensure_session_handshake` and `ping`.
 *Test:* `GuardianUrlSchemeAllowlist::test_file_scheme_rejected` and
 five other scheme rejections.
 

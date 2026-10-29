@@ -590,109 +590,159 @@ class Item20_HandshakeNegativeCache(unittest.TestCase):
                 importlib.reload(client_handshake)
 
 
-# ----- 21. Degraded bootstrap: missing rfc8785 -----
+BIN = Path(sys.executable).parent
 
-CLAUDE_ADAPTER = HERE.parent.parent / "src" / "acs" / "integrations" / "claude_code" / "adapter.py"
+
+def _audit_records(text: str) -> list[dict]:
+    return [json.loads(line[len("ACS_AUDIT "):]) for line in text.splitlines()
+            if line.startswith("ACS_AUDIT ")]
 
 
 class Item21_AdapterDegradedBootstrap(unittest.TestCase):
     """§10 makes rfc8785 mandatory, so its absence is not a degraded mode
-    the adapter may take silently. Claude Code proceeds on any nonzero exit
-    except 2, so a bare ImportError is an ungoverned step. §6.4:158 requires
-    an audit event for it, and §6.4:156 puts it under the deployment's
-    posture."""
+    the adapter may take silently. Claude Code and Cursor proceed on any
+    nonzero exit except 2, so a bare ImportError is an ungoverned step.
+    §6.4:158 requires an audit event for it, and §6.4:156 puts it under the
+    deployment's posture. Users run the installed console scripts, so those
+    are tested alongside the module form."""
 
-    def test_adapter_that_cannot_load_audits_and_honors_the_posture(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shadow = Path(tmpdir) / "shadow"
-            shadow.mkdir()
-            (shadow / "rfc8785.py").write_text(
-                "raise ImportError('simulating an environment without rfc8785')\n")
-            event = json.dumps({"session_id": "s-1", "cwd": "/tmp",
-                                "hook_event_name": "PreToolUse",
-                                "tool_name": "Bash",
-                                "tool_input": {"command": "rm -rf /home/u"}})
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.shadow = self.tmp / "shadow"
+        self.shadow.mkdir()
+        (self.shadow / "rfc8785.py").write_text(
+            "raise ImportError('simulating an environment without rfc8785')\n")
 
-            for posture, expect_deny in (("1", True), ("0", False)):
-                with self.subTest(ACS_DEFAULT_DENY=posture):
-                    env = os.environ.copy()
-                    env["PYTHONPATH"] = str(shadow)
-                    env["ACS_DEFAULT_DENY"] = posture
-                    env.pop("ACS_DISABLED", None)
-                    p = subprocess.run([sys.executable, str(CLAUDE_ADAPTER)],
-                                       input=event, capture_output=True,
-                                       text=True, env=env, timeout=15)
-                    self.assertIn("adapter_unavailable", p.stderr,
-                        "§6.4:158 requires every step that proceeds without a "
-                        "decision to be recorded; this path must not be silent")
-                    if expect_deny:
-                        self.assertIn('"permissionDecision": "deny"', p.stdout,
-                            "the deployment set the posture to deny per §6.4:156, "
-                            "so an unloadable adapter must not let the tool run")
-                    else:
-                        self.assertEqual(p.stdout.strip(), "",
-                            "fail-open is the §6.4 default, so proceeding is "
-                            "correct here as long as it is audited")
+    def _commands(self, script: str, module: str) -> list[tuple[str, list[str]]]:
+        installed = BIN / script
+        self.assertTrue(installed.exists(),
+            f"{installed} is missing; install the package (uv sync) so the "
+            f"console script users run is the one under test")
+        return [("installed", [str(installed)]), ("module", [sys.executable, "-m", module])]
 
-    def test_cursor_adapter_that_cannot_load_audits_and_honors_the_posture(self) -> None:
-        """Same degraded-bootstrap contract for the Cursor adapter: gate
-        events deny via {"permission": "deny"}; beforeSubmitPrompt blocks
-        via exit code 2."""
-        cursor_adapter = HERE.parent.parent / "src" / "acs" / "integrations" / "cursor" / "adapter.py"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shadow = Path(tmpdir) / "shadow"
-            shadow.mkdir()
-            (shadow / "rfc8785.py").write_text(
-                "raise ImportError('simulating an environment without rfc8785')\n")
-            event = json.dumps({"conversation_id": "c-1",
-                                "workspace_roots": ["/tmp"],
-                                "tool_name": "Bash",
-                                "tool_input": {"command": "rm -rf /home/u"}})
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(shadow)
-            env["ACS_DEFAULT_DENY"] = "1"
-            env.pop("ACS_DISABLED", None)
+    def _run(self, argv: list[str], stdin: str, **env_overrides: str):
+        audit_file = self.tmp / f"audit-{uuid.uuid4().hex}.log"
+        env = os.environ.copy()
+        for name in ("ACS_DISABLED", "ACS_DEFAULT_DENY"):
+            env.pop(name, None)
+        # Shadow first so the broken rfc8785 wins over the installed one.
+        env["PYTHONPATH"] = str(self.shadow)
+        env["ACS_AUDIT_FILE"] = str(audit_file)
+        env.update(env_overrides)
+        p = subprocess.run(argv, input=stdin, capture_output=True, text=True,
+                           env=env, timeout=15)
+        records = _audit_records(p.stderr)
+        file_records = _audit_records(audit_file.read_text()) if audit_file.exists() else []
+        self.assertEqual(file_records, records,
+            "every ACS_AUDIT record must also reach ACS_AUDIT_FILE, the durable "
+            "sink §6.4:158 relies on")
+        return p, records
 
-            p = subprocess.run([sys.executable, str(cursor_adapter), "preToolUse"],
-                               input=event, capture_output=True,
-                               text=True, env=env, timeout=15)
-            self.assertIn("adapter_unavailable", p.stderr)
-            self.assertIn('"permission": "deny"', p.stdout,
-                "an unloadable Cursor adapter under deny posture must deny "
-                "the gate event, not exit 1 with no JSON (which proceeds)")
+    def _unavailable_record(self, records: list[dict], key: str, event: str,
+                            posture: str) -> None:
+        self.assertEqual([r["acs_audit_event"] for r in records], ["adapter_unavailable"],
+            "§6.4:158 requires every step that proceeds without a decision to "
+            "be recorded; this path must not be silent")
+        record = records[0]
+        self.assertEqual(record[key], event)
+        self.assertEqual(record["posture"], posture)
+        self.assertIn("rfc8785", record["error"])
+        self.assertIn("timestamp", record)
 
-            p = subprocess.run([sys.executable, str(cursor_adapter),
-                                "beforeSubmitPrompt"],
-                               input=event, capture_output=True,
-                               text=True, env=env, timeout=15)
-            self.assertIn("adapter_unavailable", p.stderr)
-            self.assertEqual(p.returncode, 2,
-                "beforeSubmitPrompt blocks via exit code 2; anything else "
-                "lets the prompt through on adapter load failure")
+    def test_claude_code_hook_that_cannot_load_audits_and_honors_the_posture(self) -> None:
+        def event(name: str) -> str:
+            return json.dumps({"session_id": "s-1", "cwd": "/tmp", "hook_event_name": name,
+                               "tool_name": "Bash", "tool_input": {"command": "rm -rf /home/u"},
+                               "prompt": "hello"})
+
+        for form, argv in self._commands("acs-claude-code-hook",
+                                         "acs.integrations.claude_code.hook"):
+            with self.subTest(form=form, ACS_DEFAULT_DENY="1", hook="PreToolUse"):
+                p, records = self._run(argv, event("PreToolUse"), ACS_DEFAULT_DENY="1")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                decision = json.loads(p.stdout)["hookSpecificOutput"]
+                self.assertEqual(decision["permissionDecision"], "deny",
+                    "the deployment set the posture to deny per §6.4:156, so an "
+                    "unloadable adapter must not let the tool run")
+                self._unavailable_record(records, "hook", "PreToolUse", "deny")
+
+            with self.subTest(form=form, ACS_DEFAULT_DENY="1", hook="UserPromptSubmit"):
+                p, records = self._run(argv, event("UserPromptSubmit"), ACS_DEFAULT_DENY="1")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(json.loads(p.stdout)["decision"], "block")
+                self._unavailable_record(records, "hook", "UserPromptSubmit", "deny")
+
+            with self.subTest(form=form, ACS_DEFAULT_DENY="0", hook="PreToolUse"):
+                p, records = self._run(argv, event("PreToolUse"), ACS_DEFAULT_DENY="0")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(p.stdout.strip(), "",
+                    "fail-open is the §6.4 default, so proceeding is correct "
+                    "here as long as it is audited")
+                self._unavailable_record(records, "hook", "PreToolUse", "proceed")
+
+            with self.subTest(form=form, ACS_DISABLED="1"):
+                p, records = self._run(argv, event("PreToolUse"),
+                                       ACS_DEFAULT_DENY="1", ACS_DISABLED="1")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(p.stdout.strip(), "",
+                    "the kill switch bypasses the hook even when the adapter cannot load")
+                self.assertEqual([r["acs_audit_event"] for r in records], ["acs_disabled_bypass"])
+                self.assertEqual(records[0]["hook"], "PreToolUse")
+
+    def test_cursor_hook_that_cannot_load_audits_and_honors_the_posture(self) -> None:
+        """Gate events deny via {"permission": "deny"}; beforeSubmitPrompt
+        blocks via {"continue": false} and exit code 2."""
+        event = json.dumps({"conversation_id": "c-1", "workspace_roots": ["/tmp"],
+                            "tool_name": "Bash", "tool_input": {"command": "rm -rf /home/u"}})
+
+        for form, argv in self._commands("acs-cursor-hook", "acs.integrations.cursor.hook"):
+            for gate in ("preToolUse", "subagentStart"):
+                with self.subTest(form=form, ACS_DEFAULT_DENY="1", event=gate):
+                    p, records = self._run(argv + [gate], event, ACS_DEFAULT_DENY="1")
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    self.assertEqual(json.loads(p.stdout)["permission"], "deny",
+                        "an unloadable Cursor adapter under deny posture must deny "
+                        "the gate event, not exit 1 with no JSON (which proceeds)")
+                    self._unavailable_record(records, "event", gate, "deny")
+
+            with self.subTest(form=form, ACS_DEFAULT_DENY="1", event="beforeSubmitPrompt"):
+                p, records = self._run(argv + ["beforeSubmitPrompt"], event, ACS_DEFAULT_DENY="1")
+                self.assertEqual(p.returncode, 2,
+                    "beforeSubmitPrompt blocks via exit code 2; anything else "
+                    "lets the prompt through on adapter load failure")
+                self.assertIs(json.loads(p.stdout)["continue"], False)
+                self._unavailable_record(records, "event", "beforeSubmitPrompt", "deny")
+
+            with self.subTest(form=form, ACS_DEFAULT_DENY="0", event="preToolUse"):
+                p, records = self._run(argv + ["preToolUse"], event, ACS_DEFAULT_DENY="0")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(p.stdout.strip(), "")
+                self._unavailable_record(records, "event", "preToolUse", "proceed")
+
+            with self.subTest(form=form, ACS_DISABLED="1"):
+                p, records = self._run(argv + ["preToolUse"], event,
+                                       ACS_DEFAULT_DENY="1", ACS_DISABLED="1")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(p.stdout.strip(), "")
+                self.assertEqual([r["acs_audit_event"] for r in records], ["acs_disabled_bypass"])
+                self.assertEqual(records[0]["event"], "preToolUse")
 
     def test_nat_middleware_import_failure_is_loud_not_silent(self) -> None:
-        """If acs.core (hence rfc8785) can't import, the NAT module
-        must emit an 'UNGOVERNED' banner AND re-raise — never load
-        cleanly while ungoverned."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shadow = Path(tmpdir) / "shadow"
-            shadow.mkdir()
-            (shadow / "rfc8785.py").write_text(
-                "raise ImportError('simulating an environment without rfc8785')\n")
-            env = os.environ.copy()
-            # Shadow first so the broken rfc8785 wins over the installed one.
-            env["PYTHONPATH"] = str(shadow)
-            p = subprocess.run([sys.executable, "-c", "import acs.integrations.nat.adapter"],
-                               capture_output=True,
-                               text=True, env=env, timeout=30)
-            self.assertNotEqual(p.returncode, 0,
-                "a NAT middleware that can't load its signing dependency must "
-                "NOT import cleanly — that would look governed while it isn't")
-            self.assertIn("UNGOVERNED", p.stderr,
-                f"the import-failure banner must be loud and name the "
-                f"ungoverned state; stderr={p.stderr[:400]}")
-            self.assertIn("rfc8785", p.stderr,
-                "the banner must name the missing dependency and the fix")
+        """Without acs.core the NAT module prints an UNGOVERNED banner and re-raises."""
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(self.shadow)
+        p = subprocess.run([sys.executable, "-c", "import acs.integrations.nat.adapter"],
+                           capture_output=True, text=True, env=env, timeout=30)
+        self.assertNotEqual(p.returncode, 0,
+            "a NAT middleware that can't load its signing dependency must "
+            "NOT import cleanly — that would look governed while it isn't")
+        self.assertIn("UNGOVERNED", p.stderr,
+            f"the import-failure banner must be loud and name the "
+            f"ungoverned state; stderr={p.stderr[:400]}")
+        self.assertIn("rfc8785", p.stderr,
+            "the banner must name the missing dependency and the fix")
 
 
 # ----- 22. Cached ServerHello re-verification -----
@@ -746,7 +796,7 @@ class Item22_CachedServerHelloReverified(unittest.TestCase):
         env.pop("ACS_HMAC_SECRET_FILE", None)
         env.pop("ACS_DEFAULT_DENY", None)
         proc = subprocess.run(
-            [sys.executable, str(CLAUDE_ADAPTER)],
+            [str(BIN / "acs-claude-code-hook")],
             input=json.dumps({
                 "session_id": self.SESSION, "cwd": "/tmp",
                 "hook_event_name": "PreToolUse", "tool_name": "Bash",

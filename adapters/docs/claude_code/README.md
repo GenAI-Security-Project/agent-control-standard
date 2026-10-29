@@ -125,7 +125,7 @@ Run from `adapters/`:
 ```bash
 cd "$ACS_REPO/adapters"
 uv run python run_conformance.py claude
-# Runs the shared Guardian, _common, core and package checks, then Claude Code's suite.
+# Runs the shared Guardian, _common, core, client and package checks, then Claude Code's suite.
 ```
 
 The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip. The live tests, which drive the real `claude` CLI on your account, run only with `ACS_LIVE_CLAUDE=1`:
@@ -245,7 +245,8 @@ r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r 
 
 ## Files
 
-- `src/acs/integrations/claude_code/adapter.py`: the adapter itself, installed as `acs-claude-code-hook`. Stdlib + `rfc8785` for JCS canonicalization.
+- `src/acs/integrations/claude_code/hook.py`: the entry point installed as `acs-claude-code-hook`. Stdlib only, so it can still audit and apply the configured posture when the adapter's dependencies are missing.
+- `src/acs/integrations/claude_code/adapter.py`: the adapter itself, which `hook.py` loads. Stdlib + `rfc8785` for JCS canonicalization.
 - `src/acs/integrations/claude_code/wire.py`: the settings.json wiring CLI, installed as `acs-claude-code-wire` (dry-run by default; `--write` to apply).
 - `tests/integrations/claude_code/e2e_check.py`: real-Claude end-to-end verifier (4 scenarios).
 - `docs/claude_code/settings.json.example`: reference wiring (`acs-claude-code-wire` produces a more comprehensive one).

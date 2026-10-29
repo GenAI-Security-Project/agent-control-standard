@@ -8,8 +8,9 @@ scope note and milestone #33).
 
 Runs, in order, and reports passed / skipped / failed SEPARATELY:
   1. Guardian conformance suite (test_acs_core_conformance).
-  2. Shared-library tests (_common) — signing, protocol invariants,
-     the capture-oracle self-checks.
+  2. Shared-library tests (_common, core, client, package) — signing,
+     protocol invariants, outcome classification and fail posture,
+     packaging, the capture-oracle self-checks.
   3. The selected adapter suites — including the emission matrix that
      captures real adapter bytes against the canonical schemas.
 
@@ -55,6 +56,7 @@ SHARED_SUITES = (
     ("guardian-conformance", HERE, ("module", "tests.conformance.test_acs_core_conformance")),
     ("_common",              HERE, ("discover", "tests/common")),
     ("core",                 HERE, ("discover", "tests/core")),
+    ("client",               HERE, ("discover", "tests/client")),
     ("package",              HERE, ("discover", "tests/package")),
 )
 
