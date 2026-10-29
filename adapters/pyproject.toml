@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acs-adapters"
+version = "0.1.0"
+description = "ACS reference adapters for Claude Code, Cursor and NVIDIA NeMo Agent Toolkit"
+requires-python = ">=3.11"
+dependencies = ["rfc8785>=0.1.4,<0.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs"]

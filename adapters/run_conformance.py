@@ -52,14 +52,14 @@ HERE = Path(__file__).resolve().parent
 
 # (label, cwd, discover-or-module)
 SHARED_SUITES = (
-    ("guardian-conformance", HERE, ("module", "test_acs_core_conformance")),
-    ("_common",              HERE / "_common", ("discover", "tests")),
+    ("guardian-conformance", HERE, ("module", "tests.conformance.test_acs_core_conformance")),
+    ("_common",              HERE, ("discover", "tests/common")),
 )
 
 PLATFORM_SUITES = {
-    "claude": ("claude-code", HERE / "claude-code", ("discover", "tests")),
-    "cursor": ("cursor", HERE / "cursor", ("discover", "tests")),
-    "nat": ("nat", HERE / "nat", ("discover", "tests")),
+    "claude": ("claude-code", HERE, ("discover", "tests/integrations/claude_code")),
+    "cursor": ("cursor", HERE, ("discover", "tests/integrations/cursor")),
+    "nat": ("nat", HERE, ("discover", "tests/integrations/nat")),
 }
 
 PLATFORM_ALIASES = {
@@ -87,13 +87,13 @@ class _CountingResult(unittest.TextTestRunner.resultclass):
 # compared for exact equality; any other skip fails the build.
 EXPECTED_SKIPS = frozenset({
     ("cursor",
-     "tests.test_live.LiveCursorPlaceholder.test_run_manual_procedure",
+     "tests.integrations.cursor.test_live.LiveCursorPlaceholder.test_run_manual_procedure",
      "Cursor live verification is a manual procedure; see live_verification.md"),
     ("claude-code",
-     "tests.test_live.LiveClaudeCodeRoundTrip.test_benign_bash_runs",
+     "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_benign_bash_runs",
      "`claude` CLI not on PATH"),
     ("claude-code",
-     "tests.test_live.LiveClaudeCodeRoundTrip.test_destructive_bash_blocked",
+     "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_destructive_bash_blocked",
      "`claude` CLI not on PATH"),
 })
 
