@@ -236,7 +236,7 @@ Have your Guardian log every received envelope's `method` and the source (middle
 - `tests/integrations/nat/test_failure_modes.py` — transport failures, signature checks, replay, timestamp skew, JSON-RPC errors.
 - `docs/nat/example_payloads.md` — masked real-world payload examples showing the in-process `InvocationContext` shape and what the adapter sends.
 
-The adapter shares `src/acs/_common.py` with the Claude Code and Cursor adapters (signing, handshake cache, audit events, URL allowlist, JSON-RPC error code → cause mapping).
+The adapter shares `acs.core` (signing, decision rules, JSON-RPC error code → cause mapping) and `acs.client` (handshake cache, audit events, URL allowlist) with the Claude Code and Cursor adapters.
 
 ## How it differs from the Claude Code / Cursor adapters
 

@@ -18,7 +18,8 @@ import unittest
 import uuid
 from pathlib import Path
 
-from acs import _common as acs_common  # noqa: E402
+from acs import client  # noqa: E402
+from acs import core  # noqa: E402
 from acs.testing.harness import ProgrammableGuardian  # noqa: E402
 
 ADAPTERS = Path(__file__).resolve().parents[2]
@@ -59,9 +60,9 @@ class SubsetGuardian(ProgrammableGuardian):
             def _reply(self_h, resp: dict) -> None:
                 if "error" in resp and guardian.received:
                     sid = guardian.received[-1]["params"]["metadata"]["session_id"]
-                    key = acs_common.derive_session_key(
+                    key = core.derive_session_key(
                         guardian.hmac_secret.encode(), sid)
-                    acs_common.sign_envelope(resp, key=key, session_id=sid)
+                    client.sign_envelope(resp, key=key, session_id=sid)
                 super()._reply(resp)
 
         return SigningHandler

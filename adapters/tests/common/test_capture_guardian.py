@@ -13,7 +13,8 @@ import uuid
 from pathlib import Path
 
 
-from acs import _common as acs_common  # noqa: E402
+from acs import client  # noqa: E402
+from acs import core  # noqa: E402
 from acs.testing.capture_guardian import CaptureGuardian  # noqa: E402
 
 SESSION = "11111111-1111-4111-8111-111111111111"
@@ -26,7 +27,7 @@ def _signed_tool_call(secret: str, **overrides) -> dict:
         "params": {
             "acs_version": "0.1.0",
             "request_id": str(uuid.uuid4()),
-            "timestamp": acs_common.iso8601_now(),
+            "timestamp": core.iso8601_now(),
             "metadata": {"agent_id": "a", "session_id": SESSION,
                          "platform": "test"},
             "payload": {"tool": {"name": "Bash"},
@@ -38,16 +39,16 @@ def _signed_tool_call(secret: str, **overrides) -> dict:
         env["params"]["payload"] = overrides["payload"]
     if overrides.get("metadata") is not None:
         env["params"]["metadata"] = overrides["metadata"]
-    key = acs_common.derive_session_key(secret.encode(),
+    key = core.derive_session_key(secret.encode(),
                                         env["params"]["metadata"].get("session_id", ""))
-    acs_common.sign_envelope(env, key=key,
+    client.sign_envelope(env, key=key,
                              session_id=env["params"]["metadata"].get("session_id", ""))
     return env
 
 
 class IndependentVerifierKnownAnswer(unittest.TestCase):
     """A frozen known-answer vector pins the oracle's independent
-    HKDF+HMAC+JCS implementation (it must not share acs_common's code,
+    HKDF+HMAC+JCS implementation (it must not share acs.core's code,
     where a shared bug would pass both sides)."""
 
     SECRET = b"known-answer-test-secret"
@@ -94,18 +95,19 @@ class IndependentVerifierKnownAnswer(unittest.TestCase):
                                       "value": self.SIG_B64, "key_id": "default"}
         self.assertFalse(independent_verify(env, b"wrong-secret", self.SID))
 
-    def test_independent_of_acs_common(self):
-        """The verifier must not delegate to acs_common — that's the
-        whole point. Cross-check: it AGREES with acs_common on a valid
+    def test_independent_of_acs_core(self):
+        """The verifier must not delegate to acs.core — that's the
+        whole point. Cross-check: it AGREES with acs.core on a valid
         envelope (two implementations, same answer) but is a distinct
         code path."""
-        from acs import _common as acs_common
+        from acs import client
+        from acs import core
         from acs.testing.capture_guardian import independent_verify
         env = self._envelope()
-        key = acs_common.derive_session_key(self.SECRET, self.SID)
-        acs_common.sign_envelope(env, key=key, session_id=self.SID)
+        key = core.derive_session_key(self.SECRET, self.SID)
+        client.sign_envelope(env, key=key, session_id=self.SID)
         self.assertTrue(independent_verify(env, self.SECRET, self.SID),
-            "independent verifier and acs_common disagree on a valid envelope")
+            "independent verifier and acs.core disagree on a valid envelope")
 
 
 class OracleIsNotVacuous(unittest.TestCase):

@@ -2,7 +2,7 @@
 
 This document is the threat model for the three reference adapters
 (`src/acs/integrations/`), the example Guardian (`src/acs/guardian/`),
-and the shared helpers in `src/acs/_common.py`. It says what attacks the code defends
+and the shared helpers in `src/acs/core/` and `src/acs/client/`. It says what attacks the code defends
 against, how, and what is explicitly out of scope.
 
 ACS is a security project — the whole point of the standard is to

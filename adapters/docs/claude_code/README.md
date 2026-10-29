@@ -234,7 +234,7 @@ python3 -c "import json, os; d=json.load(open(os.path.expanduser('~/.claude/sett
 
 echo "=== Guardian responds to system/ping? ==="
 cd "$ACS_REPO/adapters" && uv run python -c "
-from acs._common import ping; import json
+from acs.client import ping; import json
 r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r else 'no response')
 "
 ```
@@ -249,7 +249,7 @@ r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r 
 - `tests/integrations/claude_code/`: round-trip, schema and live integration tests.
 - `docs/claude_code/example_payloads.md`: masked real-world payload examples showing exactly what Claude Code emits.
 
-The adapter shares `src/acs/_common.py` with the Cursor and NAT adapters (signing, handshake cache, audit events, URL allowlist).
+The adapter shares `acs.core` (signing, decision rules, error codes) and `acs.client` (handshake cache, session state, audit events, URL allowlist) with the Cursor and NAT adapters.
 
 ## Configuration
 

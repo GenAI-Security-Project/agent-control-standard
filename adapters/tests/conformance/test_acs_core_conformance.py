@@ -67,7 +67,8 @@ ADAPTERS_DIR = HERE.parents[1]
 GUARDIAN_SCRIPT = ADAPTERS_DIR / "src" / "acs" / "guardian" / "example_guardian.py"
 INTEGRATIONS_DIR = ADAPTERS_DIR / "src" / "acs" / "integrations"
 
-from acs import _common as acs_common  # noqa: E402
+from acs import client  # noqa: E402
+from acs import core  # noqa: E402
 from acs.core import schemas_dir  # noqa: E402
 
 # Required: the suite fails without the canonical schemas instead of skipping.
@@ -80,7 +81,7 @@ TEST_HMAC_SECRET = "acs-core-conformance-test-secret-not-for-production"
 
 # =============================================================================
 # Test harness — spawns the Guardian, exchanges signed envelopes.
-# Helpers come from adapters/_common/test_harness.py — see that file for
+# Helpers come from src/acs/testing/harness.py — see that file for
 # the canonical implementations of launch_guardian, schema validators,
 # and ProgrammableGuardian.
 # =============================================================================
@@ -163,7 +164,7 @@ class CoreHarness(unittest.TestCase):
             "params": {
                 "acs_version": "0.1.0",
                 "request_id": request_id or str(uuid.uuid4()),
-                "timestamp": timestamp or acs_common.iso8601_now(),
+                "timestamp": timestamp or core.iso8601_now(),
                 "metadata": {
                     "agent_id": "conformance-test",
                     "session_id": sid,
@@ -173,8 +174,8 @@ class CoreHarness(unittest.TestCase):
             },
         }
         if sign and self.HMAC_SECRET:
-            key = acs_common.derive_session_key(self.HMAC_SECRET.encode(), sid)
-            acs_common.sign_envelope(env, key=key, session_id=sid)
+            key = core.derive_session_key(self.HMAC_SECRET.encode(), sid)
+            client.sign_envelope(env, key=key, session_id=sid)
         return env
 
     def _post(self, envelope: dict) -> dict:
@@ -1096,7 +1097,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
         from jsonschema import Draft202012Validator
         schema = json.loads((SPEC_DIR / "modifications.json").read_text())
         Draft202012Validator(schema).validate(mods)
-        self.assertIsNone(acs_common.modify_composition_violation(mods),
+        self.assertIsNone(core.modify_composition_violation(mods),
             "disjoint structured edits are valid; the overlap guard must not "
             "turn every combined MODIFY into DENY")
 
@@ -1213,10 +1214,10 @@ class Core05_SessionContext(CoreHarness):
                 "step_id": params["request_id"],
                 "step_type": req["method"],
                 "request_hash": hashlib.sha256(
-                    acs_common.jcs_canonicalize(params)).hexdigest(),
+                    core.jcs_canonicalize(params)).hexdigest(),
                 "timestamp": params["timestamp"],
             }
-            content_bytes = acs_common.jcs_canonicalize(entry)
+            content_bytes = core.jcs_canonicalize(entry)
             prev_bytes = bytes.fromhex(prev_hash) if prev_hash else b""
             return hashlib.sha256(content_bytes + prev_bytes).hexdigest()
 
@@ -1385,8 +1386,8 @@ class Core07_BaselineIntegrity(CoreHarness):
         sig = resp["result"].get("signature")
         self.assertIsNotNone(sig,
             "Guardian response missing `signature` field per §10")
-        key = acs_common.derive_session_key(self.HMAC_SECRET.encode(), sid)
-        self.assertTrue(acs_common.verify_signature(resp, key=key),
+        key = core.derive_session_key(self.HMAC_SECRET.encode(), sid)
+        self.assertTrue(client.verify_signature(resp, key=key),
             "Guardian's response signature must verify with the "
             "HKDF-derived per-session key")
 
@@ -1412,13 +1413,13 @@ class Core07_BaselineIntegrity(CoreHarness):
         self.assertIsNotNone(sig,
             "error response missing `signature` — errors are responses "
             "too; conformance.md, ACS-Core / Baseline integrity exempts only system/ping")
-        key = acs_common.derive_session_key(self.HMAC_SECRET.encode(), sid)
-        self.assertTrue(acs_common.verify_signature(resp, key=key),
+        key = core.derive_session_key(self.HMAC_SECRET.encode(), sid)
+        self.assertTrue(client.verify_signature(resp, key=key),
             "error-response signature must verify with the per-session key")
         # And a tampered error must NOT verify (the check is real).
         tampered = json.loads(json.dumps(resp))
         tampered["error"]["message"] = "REPLAY_DETECTED but for a different action"
-        self.assertFalse(acs_common.verify_signature(tampered, key=key),
+        self.assertFalse(client.verify_signature(tampered, key=key),
             "tampered error envelope must fail verification")
 
     def test_per_session_key_derivation(self) -> None:
@@ -1426,12 +1427,12 @@ class Core07_BaselineIntegrity(CoreHarness):
         key material'. The derived key MUST differ between sessions
         with the same secret."""
         secret = self.HMAC_SECRET.encode()
-        k1 = acs_common.derive_session_key(secret, "session-A")
-        k2 = acs_common.derive_session_key(secret, "session-B")
+        k1 = core.derive_session_key(secret, "session-A")
+        k2 = core.derive_session_key(secret, "session-B")
         self.assertNotEqual(k1, k2,
             "per-session HKDF MUST produce distinct keys for distinct sessions")
         # Same session_id → same key
-        k1b = acs_common.derive_session_key(secret, "session-A")
+        k1b = core.derive_session_key(secret, "session-A")
         self.assertEqual(k1, k1b,
             "HKDF must be deterministic for the same (secret, session_id)")
 

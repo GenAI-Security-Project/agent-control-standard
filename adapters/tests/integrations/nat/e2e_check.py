@@ -39,7 +39,6 @@ from acs.core import schemas_dir  # noqa: E402
 SPEC_DIR_DEFAULT = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
 
-from acs import _common as acs_common  # noqa: E402
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     validate_request_envelope,

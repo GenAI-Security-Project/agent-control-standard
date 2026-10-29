@@ -46,7 +46,7 @@ except ImportError:  # pragma: no cover
 
 # ---- INDEPENDENT signature verification ----
 #
-# Deliberately NOT acs_common's implementation — a shared bug would
+# Deliberately NOT acs.core's implementation — a shared bug would
 # pass both sides. From-scratch HKDF-SHA256 + HMAC-SHA256 over RFC 8785,
 # pinned by a known-answer vector in tests/test_capture_guardian.py.
 
@@ -237,7 +237,7 @@ class CaptureGuardian(ProgrammableGuardian):
 
         # signature: INDEPENDENTLY recompute (system/ping exempt, §13).
         # Uses independent_verify() — a from-scratch HMAC/HKDF/JCS
-        # implementation, NOT the adapter's own acs_common code, so a
+        # implementation, NOT the adapter's own acs.core code, so a
         # shared signing+verifying bug cannot pass both sides.
         if rec.method != "system/ping":
             sid = meta.get("session_id") or ""

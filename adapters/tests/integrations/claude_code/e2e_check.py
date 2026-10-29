@@ -51,7 +51,7 @@ from acs.core import schemas_dir  # noqa: E402
 
 SPEC_DIR_DEFAULT = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
-from acs import _common as acs_common  # noqa: E402
+
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     validate_request_envelope,
@@ -64,7 +64,7 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 PER_CALL_TIMEOUT_S = 120.0
 
 
-# Shared pretty-printer + helpers; see adapters/_common/e2e_report.py.
+# Shared pretty-printer + helpers; see src/acs/testing/e2e_report.py.
 from acs.testing.e2e_report import (  # noqa: E402
     Report,
     assert_envelopes_signed_and_valid as _assert_envelopes_signed_and_valid,

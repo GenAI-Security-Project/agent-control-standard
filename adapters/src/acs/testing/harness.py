@@ -38,7 +38,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from acs import _common as acs_common
+from acs import client
+from acs import core
 from acs.core import schemas_dir
 
 _HERE = Path(__file__).resolve().parent
@@ -134,7 +135,7 @@ def make_envelope(
         "params": {
             "acs_version": "0.1.0",
             "request_id": request_id or str(uuid.uuid4()),
-            "timestamp": timestamp or acs_common.iso8601_now(),
+            "timestamp": timestamp or core.iso8601_now(),
             "metadata": {
                 "agent_id": agent_id,
                 "session_id": sid,
@@ -145,8 +146,8 @@ def make_envelope(
     }
     if sign_with_secret is not None:
         secret = sign_with_secret.encode() if isinstance(sign_with_secret, str) else sign_with_secret
-        key = acs_common.derive_session_key(secret, sid)
-        acs_common.sign_envelope(env, key=key, session_id=sid)
+        key = core.derive_session_key(secret, sid)
+        client.sign_envelope(env, key=key, session_id=sid)
     return env
 
 
@@ -414,9 +415,9 @@ class ProgrammableGuardian:
                 # known pre-handshake.
                 if method != "system/ping":
                     sid = req.get("params", {}).get("metadata", {}).get("session_id", "")
-                    key = acs_common.derive_session_key(
+                    key = core.derive_session_key(
                         guardian.hmac_secret.encode(), sid)
-                    if not acs_common.verify_signature(req, key=key, session_id=sid):
+                    if not client.verify_signature(req, key=key, session_id=sid):
                         self_h._reply({
                             "jsonrpc": "2.0", "id": req.get("id"),
                             "error": {"code": -32004, "message": "SIGNATURE_INVALID"},
@@ -433,9 +434,9 @@ class ProgrammableGuardian:
                             "result": result_or_error}
                     if guardian.sign_responses:
                         sid = req["params"]["metadata"]["session_id"]
-                        key = acs_common.derive_session_key(
+                        key = core.derive_session_key(
                             guardian.hmac_secret.encode(), sid)
-                        acs_common.sign_envelope(resp, key=key, session_id=sid)
+                        client.sign_envelope(resp, key=key, session_id=sid)
                 self_h._reply(resp)
 
             def _reply(self_h, resp: dict):

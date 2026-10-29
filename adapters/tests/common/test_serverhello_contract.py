@@ -20,7 +20,9 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from acs import _common as acs_common
+from acs import client
+from acs import core
+from acs.client import _handshake as client_handshake
 from acs.testing.harness import (
     ProgrammableGuardian,
     build_local_resolver,
@@ -50,11 +52,10 @@ class ServerHelloContract(unittest.TestCase):
         }
         clean_environment["ACS_HMAC_SECRET"] = self.SECRET
         self._stack.enter_context(mock.patch.dict(os.environ, clean_environment, clear=True))
-        self._stack.enter_context(mock.patch.object(
-            acs_common, "_HANDSHAKE_CACHE_DIR", self.cache_directory))
-        self._stack.enter_context(mock.patch.object(acs_common, "_HANDSHAKE_CACHE_TTL_S", 3600))
-        self._stack.enter_context(mock.patch.object(acs_common, "_HANDSHAKE_FAILURE_TTL_S", 30))
-        self.audit = self._stack.enter_context(mock.patch.object(acs_common, "audit_event"))
+        self._stack.enter_context(mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.cache_directory))
+        self._stack.enter_context(mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_TTL_S", 3600))
+        self._stack.enter_context(mock.patch.object(client_handshake, "_HANDSHAKE_FAILURE_TTL_S", 30))
+        self.audit = self._stack.enter_context(mock.patch.object(client_handshake, "audit_event"))
         self.requests: list[dict] = []
         self.responses: list[dict] = []
         self.hello = {
@@ -66,7 +67,7 @@ class ServerHelloContract(unittest.TestCase):
         }
 
     def _run(self, url: str | None = None) -> dict | None:
-        return acs_common.ensure_session_handshake(
+        return client.ensure_session_handshake(
             guardian_url=url or self.URL, session_id=self.SESSION,
             agent_id="serverhello-regression", platform="test",
             methods_implemented=["steps/toolCallRequest"],
@@ -74,9 +75,9 @@ class ServerHelloContract(unittest.TestCase):
         )
 
     def _sign(self, response: dict) -> dict:
-        return acs_common.sign_envelope(
+        return client.sign_envelope(
             response, session_id=self.SESSION,
-            key=acs_common.derive_session_key(self.SECRET.encode(), self.SESSION),
+            key=core.derive_session_key(self.SECRET.encode(), self.SESSION),
         )
 
     def _respond(self, request, timeout=None):
@@ -90,7 +91,7 @@ class ServerHelloContract(unittest.TestCase):
         return io.BytesIO(json.dumps(response).encode())
 
     def _cache(self, url: str | None = None) -> Path:
-        return acs_common._handshake_cache_path(self.SESSION, url or self.URL)
+        return client_handshake._handshake_cache_path(self.SESSION, url or self.URL)
 
     def _seed(self, result: dict) -> dict:
         response = self._sign({
@@ -115,7 +116,7 @@ class ServerHelloContract(unittest.TestCase):
         self.assertTrue(matches, self.audit.call_args_list)
 
     def test_fresh_direct_result_is_cached_as_the_whole_signed_envelope(self):
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
             result = self._run()
         self.assertIsInstance(result, dict)
         self._assert_hello_schema(result)
@@ -125,26 +126,26 @@ class ServerHelloContract(unittest.TestCase):
         self.assertEqual(cached, self.responses[0])
         self.assertEqual(cached["result"], result)
         self.assertIn("signature", cached["result"])
-        self.assertTrue(acs_common.verify_signature(cached, session_id=self.SESSION))
+        self.assertTrue(client.verify_signature(cached, session_id=self.SESSION))
         self.assertEqual(stat.S_IMODE(self._cache().stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.cache_directory.stat().st_mode), 0o700)
         self.assertEqual(validate_response_envelope(cached), [])
 
     def test_preseeded_direct_cache_is_reverified_without_network(self):
         response = self._seed(self.hello)
-        with mock.patch.object(acs_common.urllib.request, "urlopen") as network, \
-                mock.patch.object(acs_common, "verify_signature",
-                                  wraps=acs_common.verify_signature) as verify:
+        with mock.patch.object(client_handshake.urllib.request, "urlopen") as network, \
+                mock.patch.object(client_handshake, "verify_signature",
+                                  wraps=client.verify_signature) as verify:
             result = self._run()
         self.assertEqual(result, response["result"])
         network.assert_not_called()
         verify.assert_called_once_with(response, session_id=self.SESSION)
 
     def test_two_calls_perform_one_handshake_and_verify_both_reads(self):
-        with mock.patch.object(acs_common.urllib.request, "urlopen",
+        with mock.patch.object(client_handshake.urllib.request, "urlopen",
                                side_effect=self._respond) as network, \
-                mock.patch.object(acs_common, "verify_signature",
-                                  wraps=acs_common.verify_signature) as verify:
+                mock.patch.object(client_handshake, "verify_signature",
+                                  wraps=client.verify_signature) as verify:
             first = self._run()
             second = self._run()
         self.assertIsNotNone(first)
@@ -156,7 +157,7 @@ class ServerHelloContract(unittest.TestCase):
         response = self._seed(self.hello)
         response["result"]["on_decision_failure"] = "proceed"
         self._cache().write_text(json.dumps(response))
-        with mock.patch.object(acs_common.urllib.request, "urlopen",
+        with mock.patch.object(client_handshake.urllib.request, "urlopen",
                                side_effect=self._respond) as network:
             result = self._run()
         self.assertEqual(network.call_count, 1)
@@ -168,7 +169,7 @@ class ServerHelloContract(unittest.TestCase):
             response = json.loads(self._respond(request).read())
             response["result"]["on_decision_failure"] = "proceed"
             return io.BytesIO(json.dumps(response).encode())
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
             self.assertIsNone(self._run())
         self.assertFalse(self._cache().exists())
         self._assert_audit("handshake_failed", "server_hello_signature_invalid")
@@ -178,7 +179,7 @@ class ServerHelloContract(unittest.TestCase):
             response = json.loads(self._respond(request).read())
             response["result"].pop("signature")
             return io.BytesIO(json.dumps(response).encode())
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
             self.assertIsNone(self._run())
         self.assertFalse(self._cache().exists())
         self._assert_audit("handshake_failed", "server_hello_signature_invalid")
@@ -189,7 +190,7 @@ class ServerHelloContract(unittest.TestCase):
             response["id"] = "a-different-request"
             self._sign(response)
             return io.BytesIO(json.dumps(response).encode())
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
             self.assertIsNone(self._run())
         self.assertFalse(self._cache().exists())
         self._assert_audit("handshake_failed", "response_id_mismatch")
@@ -200,7 +201,7 @@ class ServerHelloContract(unittest.TestCase):
             "request_id": str(uuid.uuid4()), "decision": "allow",
             "payload": copy.deepcopy(self.hello),
         }
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
             self.assertIsNone(self._run())
         self.assertFalse(self._cache().exists())
         self._assert_audit("handshake_failed", "invalid_server_hello")
@@ -211,7 +212,7 @@ class ServerHelloContract(unittest.TestCase):
             "request_id": str(uuid.uuid4()), "decision": "allow",
             "payload": copy.deepcopy(self.hello),
         })
-        with mock.patch.object(acs_common.urllib.request, "urlopen",
+        with mock.patch.object(client_handshake.urllib.request, "urlopen",
                                side_effect=self._respond) as network:
             result = self._run()
         self.assertEqual(network.call_count, 1)
@@ -223,7 +224,7 @@ class ServerHelloContract(unittest.TestCase):
         # is not a reason to unwrap a valid direct ServerHello.
         self.hello["payload"] = {"future_extension": True}
         self.hello["another_extension"] = "preserve"
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
             result = self._run()
         self._assert_hello_schema(result)
         self.assertEqual(result["payload"], {"future_extension": True})
@@ -231,7 +232,7 @@ class ServerHelloContract(unittest.TestCase):
 
     def test_empty_result_is_not_cached(self):
         self.hello = {}
-        with mock.patch.object(acs_common.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
             self.assertIsNone(self._run())
         self.assertFalse(self._cache().exists())
 
@@ -258,7 +259,7 @@ class ServerHelloContract(unittest.TestCase):
             cached = json.loads(self._cache(url).read_text())
             self.assertEqual(result, cached["result"])
             self.assertEqual(validate_response_envelope(cached), [])
-            self.assertTrue(acs_common.verify_signature(cached, session_id=self.SESSION))
+            self.assertTrue(client.verify_signature(cached, session_id=self.SESSION))
         finally:
             proc.terminate()
             try:

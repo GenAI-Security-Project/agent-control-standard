@@ -34,6 +34,7 @@ except ImportError:
     _NAT_OK = False
 
 # Import adapter (it tolerates NAT missing)
+from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied  # noqa: E402
 
 if _NAT_OK:
@@ -43,7 +44,7 @@ if _NAT_OK:
 HERE = Path(__file__).resolve().parent
 
 
-from acs import _common as acs_common  # noqa: E402
+
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     launch_guardian,
@@ -133,7 +134,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
             os.environ["ACS_HMAC_SECRET"] = g.hmac_secret
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
             with tempfile.TemporaryDirectory() as d, \
-                    mock.patch.object(acs_common, "_HANDSHAKE_CACHE_DIR",
+                    mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
                                       Path(d)), g:
                 mw = ACSMiddleware(ACSMiddlewareConfig(
                     guardian_url=g.url(), default_deny=False,
@@ -174,7 +175,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
             os.environ["ACS_HMAC_SECRET"] = g.hmac_secret
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
             with tempfile.TemporaryDirectory() as d, \
-                    mock.patch.object(acs_common, "_HANDSHAKE_CACHE_DIR",
+                    mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
                                       Path(d)), g:
                 mw = ACSMiddleware(ACSMiddlewareConfig(
                     guardian_url=g.url(), default_deny=True,

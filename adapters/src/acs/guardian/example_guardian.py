@@ -66,18 +66,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from acs._common import (  # noqa: E402
+from acs.client import audit_event, load_hmac_secret, sign_envelope, verify_signature  # noqa: E402
+from acs.core import (  # noqa: E402
     ACS_VERSION,
     DEFAULT_SKEW_WINDOW_MS,
-    DESTRUCTIVE_SCAN_MAX_LEN,
     MAX_REQUEST_BODY_BYTES,
     derive_session_key,
     iso8601_now,
     jcs_canonicalize,
-    load_hmac_secret,
     parse_iso8601,
-    sign_envelope,
-    verify_signature,
 )
 
 import datetime
@@ -163,6 +160,35 @@ DESTRUCTIVE_BASH_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"\bfind\s+(/|~|\$HOME)\S*\s.*-exec\s+rm\b", re.IGNORECASE),
     re.compile(r"\bchmod\s+(-R\s+)?[0-7]*7{2,}[0-7]*\s+(/etc|/usr|/bin|/sbin)", re.IGNORECASE),
 )
+
+
+# Maximum command string length to scan with destructive-pattern regexes.
+# Real shell commands are tiny; longer inputs are either non-shell data
+# routed through the wrong tool or a regex-DoS attempt.
+DESTRUCTIVE_SCAN_MAX_LEN = 8 * 1024  # 8 KiB
+
+# ----- Bounded regex scanning (defends against regex DoS / input bombing) -----
+
+def scan_destructive_bash_safely(cmd: str, *, max_len: int = DESTRUCTIVE_SCAN_MAX_LEN):
+    """Run destructive-pattern regex scanning ONLY if cmd is below max_len.
+
+    Returns:
+      None — command is short and matched no destructive pattern
+      a re.Pattern — command matched (caller decides what to do)
+      "input_too_large" — command exceeds max_len; caller MUST treat as
+        suspicious and MUST NOT silently allow (skipping the scan is
+        not the same as the scan returning "safe").
+
+    Scans with DESTRUCTIVE_BASH_PATTERNS above, the one canonical pattern set.
+    """
+    if len(cmd) > max_len:
+        audit_event("destructive_scan_skipped_oversized",
+                    cmd_length=len(cmd), max_len=max_len)
+        return "input_too_large"
+    for pat in DESTRUCTIVE_BASH_PATTERNS:
+        if pat.search(cmd):
+            return pat
+    return None
 
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/")
 

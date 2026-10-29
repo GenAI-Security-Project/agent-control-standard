@@ -69,28 +69,30 @@ from typing import Any, Callable
 from acs import __version__
 
 try:
-    from acs._common import (  # noqa: E402
-        ACS_VERSION,
-        MAX_REQUEST_BODY_BYTES,
+    from acs.client import (
         audit_event,
-        coerce_uuid,
         ensure_session_handshake,
-        guardian_error_cause,
-        is_guardian_refusal,
-        iso8601_now,
         load_session_state,
-        method_evaluated,
-        modify_composition_violation,
-        normalize_decision,
         record_step,
-        response_matches_request,
         save_session_state,
         sign_envelope,
         validate_guardian_url,
         verify_signature,
     )
+    from acs.core import (
+        ACS_VERSION,
+        MAX_REQUEST_BODY_BYTES,
+        coerce_uuid,
+        guardian_error_cause,
+        is_guardian_refusal,
+        iso8601_now,
+        method_evaluated,
+        modify_composition_violation,
+        normalize_decision,
+        response_matches_request,
+    )
 except ImportError as _bootstrap_error:
-    # acs_common hard-requires rfc8785 (§10 permits no alternative
+    # acs.core hard-requires rfc8785 (§10 permits no alternative
     # canonicalization), so the import can fail before main() runs; a bare
     # exit 1 would skip the §6.4:158 audit and ignore ACS_DEFAULT_DENY,
     # so both are handled here with the standard library only.

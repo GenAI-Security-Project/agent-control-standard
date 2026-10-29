@@ -1,5 +1,5 @@
 """
-Security tests for the shared `acs_common` helpers and the Guardian
+Security tests for the shared `acs.core` and `acs.client` helpers and the Guardian
 HTTP path. Each test names a specific attack and asserts the
 mitigation that defeats it.
 
@@ -27,7 +27,11 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from acs import _common as acs_common  # noqa: E402
+from acs import client  # noqa: E402
+from acs import core  # noqa: E402
+from acs.client import _handshake as client_handshake  # noqa: E402
+from acs.client import _store as client_store  # noqa: E402
+from acs.guardian import example_guardian  # noqa: E402
 from acs.testing.harness import launch_guardian  # noqa: E402
 
 
@@ -44,26 +48,26 @@ class GuardianUrlSchemeAllowlist(unittest.TestCase):
 
     def test_file_scheme_rejected(self) -> None:
         with self.assertRaises(ValueError) as cm:
-            acs_common.validate_guardian_url("file:///etc/passwd")
+            client.validate_guardian_url("file:///etc/passwd")
         self.assertIn("scheme", str(cm.exception).lower())
 
     def test_ftp_scheme_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            acs_common.validate_guardian_url("ftp://example.com/x")
+            client.validate_guardian_url("ftp://example.com/x")
 
     def test_data_scheme_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            acs_common.validate_guardian_url("data:text/plain,evil")
+            client.validate_guardian_url("data:text/plain,evil")
 
     def test_javascript_scheme_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            acs_common.validate_guardian_url("javascript:alert(1)")
+            client.validate_guardian_url("javascript:alert(1)")
 
     def test_http_accepted(self) -> None:
-        acs_common.validate_guardian_url("http://127.0.0.1:8787/acs")  # no raise
+        client.validate_guardian_url("http://127.0.0.1:8787/acs")  # no raise
 
     def test_https_accepted(self) -> None:
-        acs_common.validate_guardian_url("https://guardian.internal/acs")
+        client.validate_guardian_url("https://guardian.internal/acs")
 
 
 # ----- 2. World-readable secret file -----
@@ -96,17 +100,17 @@ class HmacSecretFilePermissions(unittest.TestCase):
     def test_mode_0600_accepted(self) -> None:
         os.chmod(self.secret_path, 0o600)
         # Returns secret bytes; no raise
-        self.assertTrue(acs_common.load_hmac_secret().startswith(b"super-secret"))
+        self.assertTrue(client.load_hmac_secret().startswith(b"super-secret"))
 
     def test_world_readable_rejected(self) -> None:
         os.chmod(self.secret_path, 0o644)
-        with self.assertRaises(acs_common.SecretFilePermissionsError):
-            acs_common.load_hmac_secret()
+        with self.assertRaises(client.SecretFilePermissionsError):
+            client.load_hmac_secret()
 
     def test_group_readable_rejected(self) -> None:
         os.chmod(self.secret_path, 0o640)
-        with self.assertRaises(acs_common.SecretFilePermissionsError):
-            acs_common.load_hmac_secret()
+        with self.assertRaises(client.SecretFilePermissionsError):
+            client.load_hmac_secret()
 
     def test_symlink_rejected(self) -> None:
         real = Path(self.tmpdir) / "real.key"
@@ -114,8 +118,8 @@ class HmacSecretFilePermissions(unittest.TestCase):
         os.chmod(real, 0o600)
         self.secret_path.unlink()
         os.symlink(real, self.secret_path)
-        with self.assertRaises(acs_common.SecretFilePermissionsError):
-            acs_common.load_hmac_secret()
+        with self.assertRaises(client.SecretFilePermissionsError):
+            client.load_hmac_secret()
 
 
 # ----- 3. Guardian HTTP DoS via oversized body -----
@@ -182,7 +186,7 @@ class CacheDirPermissions(unittest.TestCase):
         os.environ["ACS_SESSION_STATE_DIR"] = str(self.tmpdir / "state")
         # Re-evaluate module-level dir
         import importlib
-        importlib.reload(acs_common)
+        importlib.reload(client_store)
 
     def tearDown(self) -> None:
         import shutil
@@ -193,16 +197,16 @@ class CacheDirPermissions(unittest.TestCase):
             os.environ["ACS_SESSION_STATE_DIR"] = self._old
 
     def test_session_state_file_is_0600(self) -> None:
-        acs_common.save_session_state("test-session", {"x": 1})
-        path = acs_common._session_state_path("test-session")
+        client.save_session_state("test-session", {"x": 1})
+        path = client_store._session_state_path("test-session")
         self.assertTrue(path.exists())
         mode = stat.S_IMODE(os.stat(path).st_mode)
         self.assertEqual(mode, 0o600,
             f"session-state file mode is {oct(mode)}, want 0o600")
 
     def test_session_state_dir_is_0700(self) -> None:
-        acs_common.save_session_state("test-session", {"x": 1})
-        d = acs_common._SESSION_STATE_DIR
+        client.save_session_state("test-session", {"x": 1})
+        d = client_store._SESSION_STATE_DIR
         mode = stat.S_IMODE(os.stat(d).st_mode)
         self.assertEqual(mode, 0o700,
             f"session-state dir mode is {oct(mode)}, want 0o700")
@@ -221,7 +225,7 @@ class RegexInputSizeCap(unittest.TestCase):
         # The destructive matcher should refuse to scan and return a
         # sentinel that the caller treats as "do not allow without
         # external review", not a False that allows the command.
-        result = acs_common.scan_destructive_bash_safely(large_cmd, max_len=8192)
+        result = example_guardian.scan_destructive_bash_safely(large_cmd, max_len=8192)
         self.assertEqual(result, "input_too_large",
             "oversized command MUST be flagged, not scanned, not silently allowed")
 
@@ -235,7 +239,7 @@ class RegexInputSizeCap(unittest.TestCase):
 
     def test_small_safe_command_returns_none(self) -> None:
         self.assertIsNone(
-            acs_common.scan_destructive_bash_safely("ls -la", max_len=8192))
+            example_guardian.scan_destructive_bash_safely("ls -la", max_len=8192))
 
 
 class Item13_DestructiveRmFlagVariants(unittest.TestCase):
@@ -424,7 +428,7 @@ class Item15_VerifySignatureRobustToMalformedBase64(unittest.TestCase):
                 with self.subTest(signature=bad[:30]):
                     env = self._make_envelope(bad)
                     try:
-                        result = acs_common.verify_signature(env)
+                        result = client.verify_signature(env)
                     except (binascii.Error, ValueError, TypeError) as e:
                         self.fail(
                             f"REGRESSION: malformed signature {bad[:30]!r} "
@@ -449,27 +453,27 @@ class Item16_ResponseRequestBinding(unittest.TestCase):
         resp = {"jsonrpc": "2.0", "id": "rpc-1",
                 "result": {"request_id": "11111111-1111-4111-8111-111111111111",
                            "decision": "allow"}}
-        self.assertTrue(acs_common.response_matches_request(self.REQ, resp))
+        self.assertTrue(core.response_matches_request(self.REQ, resp))
 
     def test_wrong_jsonrpc_id_rejected(self) -> None:
         """A replayed response carries the OLD exchange's id."""
         resp = {"jsonrpc": "2.0", "id": "rpc-OTHER",
                 "result": {"request_id": "11111111-1111-4111-8111-111111111111",
                            "decision": "allow"}}
-        self.assertFalse(acs_common.response_matches_request(self.REQ, resp))
+        self.assertFalse(core.response_matches_request(self.REQ, resp))
 
     def test_wrong_request_id_rejected(self) -> None:
         resp = {"jsonrpc": "2.0", "id": "rpc-1",
                 "result": {"request_id": "99999999-9999-4999-8999-999999999999",
                            "decision": "allow"}}
-        self.assertFalse(acs_common.response_matches_request(self.REQ, resp))
+        self.assertFalse(core.response_matches_request(self.REQ, resp))
 
     def test_result_missing_request_id_rejected(self) -> None:
         """response-envelope.json requires request_id on every result;
         a result without one cannot be bound and must not be trusted."""
         resp = {"jsonrpc": "2.0", "id": "rpc-1",
                 "result": {"decision": "allow"}}
-        self.assertFalse(acs_common.response_matches_request(self.REQ, resp))
+        self.assertFalse(core.response_matches_request(self.REQ, resp))
 
     def test_error_response_binds_by_id_alone(self) -> None:
         """Error responses carry no result — the JSON-RPC id is the
@@ -478,8 +482,8 @@ class Item16_ResponseRequestBinding(unittest.TestCase):
               "error": {"code": -32005, "message": "replay"}}
         bad = {"jsonrpc": "2.0", "id": "rpc-2",
                "error": {"code": -32005, "message": "replay"}}
-        self.assertTrue(acs_common.response_matches_request(self.REQ, ok))
-        self.assertFalse(acs_common.response_matches_request(self.REQ, bad))
+        self.assertTrue(core.response_matches_request(self.REQ, ok))
+        self.assertFalse(core.response_matches_request(self.REQ, bad))
 
 
 class Item17_GuardianRefusalClassification(unittest.TestCase):
@@ -491,14 +495,14 @@ class Item17_GuardianRefusalClassification(unittest.TestCase):
     def test_refusal_codes(self) -> None:
         for code in (-32000, -32004, -32005, -32006, -32600, -32700):
             with self.subTest(code=code):
-                self.assertTrue(acs_common.is_guardian_refusal(code))
+                self.assertTrue(core.is_guardian_refusal(code))
 
     def test_non_refusal_codes_follow_posture(self) -> None:
         """Version/negotiation errors and unknowns are decision
         failures, not refusals — they follow the §6.4 posture."""
         for code in (None, -32001, -32002, -32003, -32099, 500):
             with self.subTest(code=code):
-                self.assertFalse(acs_common.is_guardian_refusal(code))
+                self.assertFalse(core.is_guardian_refusal(code))
 
 
 class Item18_AuditFileSink(unittest.TestCase):
@@ -510,8 +514,8 @@ class Item18_AuditFileSink(unittest.TestCase):
             audit_path = os.path.join(d, "audit.log")
             os.environ["ACS_AUDIT_FILE"] = audit_path
             try:
-                acs_common.audit_event("test_sink", foo="bar")
-                acs_common.audit_event("test_sink_2", baz=1)
+                client.audit_event("test_sink", foo="bar")
+                client.audit_event("test_sink_2", baz=1)
             finally:
                 os.environ.pop("ACS_AUDIT_FILE", None)
             content = open(audit_path).read()
@@ -526,7 +530,7 @@ class Item18_AuditFileSink(unittest.TestCase):
     def test_unwritable_audit_file_does_not_crash_hook_path(self) -> None:
         os.environ["ACS_AUDIT_FILE"] = "/nonexistent-dir/audit.log"
         try:
-            acs_common.audit_event("still_works")  # must not raise
+            client.audit_event("still_works")  # must not raise
         finally:
             os.environ.pop("ACS_AUDIT_FILE", None)
 
@@ -538,8 +542,8 @@ class Item19_SecretFileUnreadableRaises(unittest.TestCase):
     def test_missing_secret_file_raises(self) -> None:
         os.environ["ACS_HMAC_SECRET_FILE"] = "/nonexistent-secret-file"
         try:
-            with self.assertRaises(acs_common.SecretFileUnreadableError):
-                acs_common.load_hmac_secret()
+            with self.assertRaises(client.SecretFileUnreadableError):
+                client.load_hmac_secret()
         finally:
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
 
@@ -549,7 +553,7 @@ class Item19_SecretFileUnreadableRaises(unittest.TestCase):
         os.environ.pop("ACS_HMAC_SECRET_FILE", None)
         old = os.environ.pop("ACS_HMAC_SECRET", None)
         try:
-            self.assertEqual(acs_common.load_hmac_secret(), b"")
+            self.assertEqual(client.load_hmac_secret(), b"")
         finally:
             if old is not None:
                 os.environ["ACS_HMAC_SECRET"] = old
@@ -565,7 +569,7 @@ class Item20_HandshakeNegativeCache(unittest.TestCase):
             os.environ["ACS_HANDSHAKE_CACHE"] = d
             # Force module to re-read the cache dir env
             import importlib
-            importlib.reload(acs_common)
+            importlib.reload(client_handshake)
             try:
                 kw = dict(guardian_url="http://127.0.0.1:1/acs",
                           session_id="cache-test", agent_id="a",
@@ -573,17 +577,17 @@ class Item20_HandshakeNegativeCache(unittest.TestCase):
                           methods_implemented=["steps/toolCallRequest"],
                           timeout=2.0)
                 t0 = _time.time()
-                self.assertIsNone(acs_common.ensure_session_handshake(**kw))
+                self.assertIsNone(client.ensure_session_handshake(**kw))
                 first = _time.time() - t0
                 t1 = _time.time()
-                self.assertIsNone(acs_common.ensure_session_handshake(**kw))
+                self.assertIsNone(client.ensure_session_handshake(**kw))
                 second = _time.time() - t1
                 self.assertLess(second, 0.1,
                     f"second handshake attempt took {second:.3f}s — the "
                     f"failure was not negative-cached (first: {first:.3f}s)")
             finally:
                 os.environ.pop("ACS_HANDSHAKE_CACHE", None)
-                importlib.reload(acs_common)
+                importlib.reload(client_handshake)
 
 
 # ----- 21. Degraded bootstrap: missing rfc8785 -----
@@ -667,7 +671,7 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
                 "lets the prompt through on adapter load failure")
 
     def test_nat_middleware_import_failure_is_loud_not_silent(self) -> None:
-        """If acs_common (hence rfc8785) can't import, the NAT module
+        """If acs.core (hence rfc8785) can't import, the NAT module
         must emit an 'UNGOVERNED' banner AND re-raise — never load
         cleanly while ungoverned."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -828,11 +832,11 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
                 raise urllib.error.URLError("capture complete")
 
             with tempfile.TemporaryDirectory() as d, \
-                    mock.patch.object(acs_common, "_HANDSHAKE_CACHE_DIR",
+                    mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
                                       Path(d)), \
-                    mock.patch.object(acs_common.urllib.request, "urlopen",
+                    mock.patch.object(client_handshake.urllib.request, "urlopen",
                                       side_effect=refuse_after_capture):
-                result = acs_common.ensure_session_handshake(
+                result = client.ensure_session_handshake(
                     guardian_url="http://127.0.0.1:8787/acs",
                     session_id=str(uuid.uuid4()),
                     agent_id="capability-test",

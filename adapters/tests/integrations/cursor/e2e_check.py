@@ -65,7 +65,7 @@ from acs.core import schemas_dir  # noqa: E402
 
 SPEC_DIR_DEFAULT = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
-from acs import _common as acs_common  # noqa: E402
+
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     validate_request_envelope,
@@ -78,7 +78,7 @@ from acs.guardian.example_guardian import evaluate_step  # noqa: E402
 HMAC_SECRET = "e2e-test-shared-secret-not-for-production"
 
 
-# Shared pretty-printer + helpers; see adapters/_common/e2e_report.py.
+# Shared pretty-printer + helpers; see src/acs/testing/e2e_report.py.
 from acs.testing.e2e_report import (  # noqa: E402
     Report, real_policy_handler as _shared_real_policy_handler,
     assert_envelopes_signed_and_valid as _assert_envelopes_signed_and_valid,

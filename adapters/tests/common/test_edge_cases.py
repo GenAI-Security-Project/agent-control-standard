@@ -21,7 +21,10 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from acs import _common as acs_common  # noqa: E402
+from acs import client  # noqa: E402
+from acs import core  # noqa: E402
+from acs.client import _handshake as client_handshake  # noqa: E402
+from acs.client import _store as client_store  # noqa: E402
 
 from acs.testing.harness import launch_guardian  # noqa: E402
 
@@ -49,18 +52,18 @@ class Item01_JcsConsistency(unittest.TestCase):
     def test_rfc8785_canonical_output_on_divergent_shapes(self) -> None:
         """Pin RFC 8785 §3 number serialization on the shapes that the
         deleted fallback mis-canonicalized."""
-        from acs import _common as acs_common
+        from acs import core
         for sample, expected in self.DIVERGENT:
             with self.subTest(sample=sample):
-                self.assertEqual(acs_common.jcs_canonicalize(sample), expected)
+                self.assertEqual(core.jcs_canonicalize(sample), expected)
 
     def test_non_bmp_key_ordering_matches_utf16_rule(self) -> None:
         """RFC 8785 §3.2.3 sorts keys by UTF-16 code units: a non-BMP
         key (U+10000, surrogate pair starting 0xD800) sorts BEFORE
         U+FFFF. json.dumps sorts by code point and gets this backwards."""
-        from acs import _common as acs_common
+        from acs import core
         sample = {"￿": 1, "\U00010000": 2}
-        out = acs_common.jcs_canonicalize(sample).decode("utf-8")
+        out = core.jcs_canonicalize(sample).decode("utf-8")
         self.assertLess(out.index("\U00010000"), out.index("￿"),
             f"UTF-16 ordering violated in {out!r}")
 
@@ -105,7 +108,7 @@ class Item02_GuardianRegexInputCap(unittest.TestCase):
             "params": {
                 "acs_version": "0.1.0",
                 "request_id": str(uuid.uuid4()),
-                "timestamp": acs_common.iso8601_now(),
+                "timestamp": core.iso8601_now(),
                 "metadata": {"agent_id": "t", "session_id": str(uuid.uuid4())},
                 "payload": {"tool": {"name": "Bash"},
                             "arguments": {"command": {"value": huge}}},
@@ -182,18 +185,18 @@ class Item05_HandshakeCacheTtl(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 os.environ["ACS_HANDSHAKE_CACHE"] = tmp
                 import importlib
-                importlib.reload(acs_common)
+                importlib.reload(client_handshake)
                 url = "http://127.0.0.1:1/dead"
                 fake_payload = {"negotiated_version": "0.1.0", "_synthetic": True,
                                 "methods_evaluated": [], "selected_transport": "http",
                                 "timeout_config": {"default_ms": 5000}}
                 envelope = {"jsonrpc": "2.0", "id": "cache-test",
                             "result": fake_payload}
-                cache_path = acs_common._handshake_cache_path("sess1", url)
+                cache_path = client_handshake._handshake_cache_path("sess1", url)
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(json.dumps(envelope))
                 # Recently-mtimed cache must be honored
-                result = acs_common.do_handshake(
+                result = client.ensure_session_handshake(
                     guardian_url=url, session_id="sess1",
                     agent_id="x", platform="t", methods_implemented=[],
                 )
@@ -211,13 +214,13 @@ class Item05_HandshakeCacheTtl(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["ACS_HANDSHAKE_CACHE"] = tmp
             import importlib
-            importlib.reload(acs_common)
+            importlib.reload(client_handshake)
             url = "http://127.0.0.1:1/dead"
-            cache_path = acs_common._handshake_cache_path("sess-legacy", url)
+            cache_path = client_handshake._handshake_cache_path("sess-legacy", url)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(json.dumps(
                 {"negotiated_version": "0.1.0", "on_decision_failure": "proceed"}))
-            result = acs_common.do_handshake(
+            result = client.ensure_session_handshake(
                 guardian_url=url, session_id="sess-legacy",
                 agent_id="x", platform="t", methods_implemented=[],
             )
@@ -230,15 +233,15 @@ class Item05_HandshakeCacheTtl(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["ACS_HANDSHAKE_CACHE"] = tmp
             import importlib
-            importlib.reload(acs_common)
+            importlib.reload(client_handshake)
             url = "http://127.0.0.1:1/dead"
-            cache_path = acs_common._handshake_cache_path("sess2", url)
+            cache_path = client_handshake._handshake_cache_path("sess2", url)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(json.dumps({"_synthetic": True}))
             # Backdate the cache file 2 hours
             two_hours_ago = time.time() - 2 * 3600
             os.utime(cache_path, (two_hours_ago, two_hours_ago))
-            result = acs_common.do_handshake(
+            result = client.ensure_session_handshake(
                 guardian_url=url, session_id="sess2",
                 agent_id="x", platform="t", methods_implemented=[],
             )
@@ -315,22 +318,22 @@ class Item07_UnicodeRoundTrip(unittest.TestCase):
 
     def test_emoji_round_trip(self) -> None:
         env = self._make_envelope("🚀 from agent — ✨")
-        key = acs_common.derive_session_key(b"test-secret", "sess")
-        acs_common.sign_envelope(env, key=key, session_id="sess")
-        self.assertTrue(acs_common.verify_signature(env, key=key, session_id="sess"))
+        key = core.derive_session_key(b"test-secret", "sess")
+        client.sign_envelope(env, key=key, session_id="sess")
+        self.assertTrue(client.verify_signature(env, key=key, session_id="sess"))
 
     def test_null_byte_round_trip(self) -> None:
         env = self._make_envelope("before\x00after")
-        key = acs_common.derive_session_key(b"test-secret", "sess")
-        acs_common.sign_envelope(env, key=key, session_id="sess")
-        self.assertTrue(acs_common.verify_signature(env, key=key, session_id="sess"))
+        key = core.derive_session_key(b"test-secret", "sess")
+        client.sign_envelope(env, key=key, session_id="sess")
+        self.assertTrue(client.verify_signature(env, key=key, session_id="sess"))
 
     def test_bmp_and_supplementary_planes_round_trip(self) -> None:
         # Hebrew (BMP) + emoji (supplementary plane)
         env = self._make_envelope("שלום 🌍 こんにちは")
-        key = acs_common.derive_session_key(b"test-secret", "sess")
-        acs_common.sign_envelope(env, key=key, session_id="sess")
-        self.assertTrue(acs_common.verify_signature(env, key=key, session_id="sess"))
+        key = core.derive_session_key(b"test-secret", "sess")
+        client.sign_envelope(env, key=key, session_id="sess")
+        self.assertTrue(client.verify_signature(env, key=key, session_id="sess"))
 
 
 # ===== #8: ISO 8601 parse resilience =====
@@ -357,7 +360,7 @@ class Item08_Iso8601Parse(unittest.TestCase):
     def test_good_timestamps_parse(self) -> None:
         for ts in self.GOOD:
             try:
-                acs_common.parse_iso8601(ts)
+                core.parse_iso8601(ts)
             except Exception as e:
                 self.fail(f"valid timestamp {ts!r} failed to parse: {e}")
 
@@ -365,7 +368,7 @@ class Item08_Iso8601Parse(unittest.TestCase):
         for ts in self.BAD:
             with self.assertRaises((ValueError, AttributeError),
                                    msg=f"{ts!r} should be rejected"):
-                acs_common.parse_iso8601(ts)
+                core.parse_iso8601(ts)
 
 
 # ===== #9: ACS_GUARDIAN_HOST_ALLOWLIST =====
@@ -386,15 +389,15 @@ class Item09_HostAllowlist(unittest.TestCase):
 
     def test_allowlist_unset_accepts_any_http(self) -> None:
         os.environ.pop("ACS_GUARDIAN_HOST_ALLOWLIST", None)
-        acs_common.validate_guardian_url("http://127.0.0.1:8787/acs")
-        acs_common.validate_guardian_url("http://anything.example.com/acs")
+        client.validate_guardian_url("http://127.0.0.1:8787/acs")
+        client.validate_guardian_url("http://anything.example.com/acs")
 
     def test_allowlist_restricts_to_listed_hosts(self) -> None:
         os.environ["ACS_GUARDIAN_HOST_ALLOWLIST"] = "127.0.0.1,guardian.internal"
-        acs_common.validate_guardian_url("http://127.0.0.1:8787/acs")
-        acs_common.validate_guardian_url("https://guardian.internal/acs")
+        client.validate_guardian_url("http://127.0.0.1:8787/acs")
+        client.validate_guardian_url("https://guardian.internal/acs")
         with self.assertRaises(ValueError):
-            acs_common.validate_guardian_url("http://attacker.example.com/acs")
+            client.validate_guardian_url("http://attacker.example.com/acs")
 
 
 # ===== #10: Cursor session-state file collision across workspaces =====
@@ -407,8 +410,8 @@ class Item10_CursorStateCollision(unittest.TestCase):
 
     def test_same_session_id_different_workspace_distinct_paths(self) -> None:
         # Two distinct workspaces, same session_id
-        p1 = acs_common._session_state_path("conv-default", workspace="/a/work1")
-        p2 = acs_common._session_state_path("conv-default", workspace="/b/work2")
+        p1 = client_store._session_state_path("conv-default", workspace="/a/work1")
+        p2 = client_store._session_state_path("conv-default", workspace="/b/work2")
         self.assertNotEqual(p1, p2,
             f"FIX REQUIRED: session-state path collides across workspaces: {p1}")
 
@@ -420,7 +423,7 @@ class Item12_StatePathHashLength(unittest.TestCase):
     birthday collisions become possible. Use full SHA-256 (64 chars)."""
 
     def test_state_path_uses_full_sha256(self) -> None:
-        p = acs_common._session_state_path("any-session-id")
+        p = client_store._session_state_path("any-session-id")
         # Path stem (filename without extension) must be 64 hex chars
         self.assertRegex(p.stem, r"^[0-9a-f]{64}$",
             f"session-state filename {p.name!r} uses short hash; "
@@ -457,7 +460,7 @@ class Item03_HaGuardianFileLock(unittest.TestCase):
                 "method": "steps/sessionStart",
                 "params": {
                     "acs_version": "0.1.0", "request_id": rid,
-                    "timestamp": acs_common.iso8601_now(),
+                    "timestamp": core.iso8601_now(),
                     "metadata": {"agent_id": "ha", "session_id": sid, "platform": "t"},
                     "payload": {},
                 }}
@@ -517,11 +520,11 @@ class Item13_LaunchGuardianOwnsThePort(unittest.TestCase):
             self._stop(proc)
             time.sleep(0.2)
             self.assertIsNone(
-                acs_common.ping(f"http://127.0.0.1:{port}/acs", timeout=1.0),
+                client.ping(f"http://127.0.0.1:{port}/acs", timeout=1.0),
                 "port still answers after its owner was killed — the "
                 "returned port was not bound by the returned process")
             self.assertIsNotNone(
-                acs_common.ping(f"http://127.0.0.1:{decoy_port}/acs", timeout=2.0))
+                client.ping(f"http://127.0.0.1:{decoy_port}/acs", timeout=2.0))
         finally:
             self._stop(decoy)
             self._stop(proc)
@@ -542,7 +545,7 @@ class Item13_LaunchGuardianOwnsThePort(unittest.TestCase):
         proc, port = launch_guardian(env=self._dev_env())
         try:
             self.assertIsNone(proc.poll(), "returned process must be alive")
-            result = acs_common.ping(f"http://127.0.0.1:{port}/acs", timeout=2.0)
+            result = client.ping(f"http://127.0.0.1:{port}/acs", timeout=2.0)
             self.assertIsNotNone(result, "returned port must answer system/ping")
         finally:
             self._stop(proc)

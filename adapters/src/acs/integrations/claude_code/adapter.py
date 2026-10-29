@@ -62,27 +62,29 @@ from typing import Any, Callable
 from acs import __version__
 
 try:
-    from acs._common import (  # noqa: E402
-        ACS_VERSION,
-        MAX_REQUEST_BODY_BYTES,
+    from acs.client import (
         audit_event,
-        coerce_uuid,
         ensure_session_handshake,
-        guardian_error_cause,
-        is_guardian_refusal,
-        iso8601_now,
         load_session_state,
-        method_evaluated,
-        modify_composition_violation,
-        normalize_decision,
-        response_matches_request,
         save_session_state,
         sign_envelope,
         validate_guardian_url,
         verify_signature,
     )
+    from acs.core import (
+        ACS_VERSION,
+        MAX_REQUEST_BODY_BYTES,
+        coerce_uuid,
+        guardian_error_cause,
+        is_guardian_refusal,
+        iso8601_now,
+        method_evaluated,
+        modify_composition_violation,
+        normalize_decision,
+        response_matches_request,
+    )
 except ImportError as _bootstrap_error:
-    # acs_common hard-requires rfc8785 (§10 permits no alternative
+    # acs.core hard-requires rfc8785 (§10 permits no alternative
     # canonicalization), so a missing dependency kills this module before
     # main() runs. Claude Code proceeds on any nonzero exit except 2, so
     # dying here is an ungoverned step with no audit event (against

@@ -63,10 +63,15 @@ from acs import __version__
 ADAPTER_VERSION = __version__
 
 try:
-    from acs._common import (  # noqa: E402
-        MAX_REQUEST_BODY_BYTES,
+    from acs.client import (
         audit_event,
         ensure_session_handshake,
+        sign_envelope,
+        validate_guardian_url,
+        verify_signature,
+    )
+    from acs.core import (
+        MAX_REQUEST_BODY_BYTES,
         guardian_error_cause,
         is_guardian_refusal,
         iso8601_now as _common_iso8601_now,
@@ -74,12 +79,9 @@ try:
         modify_composition_violation,
         normalize_decision,
         response_matches_request,
-        sign_envelope,
-        validate_guardian_url,
-        verify_signature,
     )
 except ImportError as _acs_import_error:
-    # acs_common hard-requires rfc8785 (§10 permits no alternative
+    # acs.core hard-requires rfc8785 (§10 permits no alternative
     # canonicalization); a failed import would leave NAT running ungoverned,
     # so fail loudly and re-raise to abort middleware registration.
     _banner = (

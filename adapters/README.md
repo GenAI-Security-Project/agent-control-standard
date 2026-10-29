@@ -50,7 +50,7 @@ Under the hood it drives two complementary layers:
 
 **2. Emission conformance** — each adapter's `tests/integrations/<framework>/test_emission.py` runs the **production adapter** (the real subprocess for Claude Code / Cursor; the real `pre_invoke` / `post_invoke` / lifecycle-observer middleware for NAT) against a validating **CaptureGuardian** and asserts the *exact bytes it sends* pass the canonical schemas. Two layers of checks:
 
-- *Per-event:* each Core method is emitted exactly once, envelope + payload validate against the canonical schemas, and per-envelope invariants hold — UUID `request_id`, RFC 3339 `timestamp`, `agent_id`/`session_id`/`platform` metadata, the `{value: …}` argument wrapper, and an **independently-recomputed** HMAC-SHA256 signature (a from-scratch HKDF+HMAC+JCS verifier in `acs/testing/capture_guardian.py`, *not* the adapters' own `acs._common` code, so a shared signing+verifying bug can't pass both sides; pinned by a frozen known-answer vector).
+- *Per-event:* each Core method is emitted exactly once, envelope + payload validate against the canonical schemas, and per-envelope invariants hold — UUID `request_id`, RFC 3339 `timestamp`, `agent_id`/`session_id`/`platform` metadata, the `{value: …}` argument wrapper, and an **independently-recomputed** HMAC-SHA256 signature (a from-scratch HKDF+HMAC+JCS verifier in `acs/testing/capture_guardian.py`, *not* the adapters' own `acs.core` signing code, so a shared signing+verifying bug can't pass both sides; pinned by a frozen known-answer vector).
 - *Per-session* (`*SequentialSession`, one Guardian + one handshake cache across an ordered sequence): the handshake fires exactly once, all `request_id`s are unique, `toolCallResult.request_id_ref` links back to its `toolCallRequest`, and — the real honesty check — the handshake's advertised `methods_implemented` **equals** the set of methods **actually emitted in the run** (equality, not just subset: catches over- *and* under-advertising), not merely methods that happen to have a schema.
 
 Breaking any adapter's method mapping, envelope/payload field, or signing turns the suite red against the schema files themselves. The oracle is proven non-vacuous by `tests/common/test_capture_guardian.py` (feed it broken envelopes, assert it flags each defect class + the signature KAT). Schemas load from the copy bundled in the package, or from `specification/v0.1.0/` in a source checkout (`ACS_SPEC_DIR` overrides); missing schemas are a hard FAIL. Format checking (`uuid`, `date-time`) is enforced via `rfc3339-validator`.
@@ -226,8 +226,8 @@ adapters/
 ├── pyproject.toml                  # distribution, extras, console scripts, entry points
 ├── uv.lock                         # exact dependency versions, with hashes
 ├── src/acs/
-│   ├── core/                       # the ACS v0.1.0 schemas, bundled into the wheel
-│   ├── _common.py                  # shared signing, handshake, session and audit code
+│   ├── core/                       # no I/O: envelopes, signing, decisions, error codes, bundled schemas
+│   ├── client/                     # I/O: the secret, the handshake, transport, session state, audit
 │   ├── integrations/<framework>/
 │   │   ├── adapter.py              # the hook, or the NAT middleware
 │   │   └── wire.py                 # writes the framework's own config
