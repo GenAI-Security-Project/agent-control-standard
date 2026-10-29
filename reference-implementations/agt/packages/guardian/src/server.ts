@@ -93,7 +93,13 @@ import {
   type ToolCallResultEnvelope,
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
-import { buildServerHello, type ServerHello } from "./handshake.ts";
+import {
+  buildServerHello,
+  NEGOTIATED_VERSION,
+  negotiateHandshake,
+  UNSUPPORTED_VERSION_CODE,
+  type ServerHello,
+} from "./handshake.ts";
 import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
 import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
 import type { RejectionReason } from "./otel-mapping.ts";
@@ -459,6 +465,8 @@ export async function startGuardian({
         })
       : NULL_OTEL_TRACE_EXPORTER);
 
+  const negotiatedVersions = new Map<string, string>();
+
   const server = Bun.serve({
     hostname: hostname ?? LOOPBACK_ONLY,
     port,
@@ -467,7 +475,7 @@ export async function startGuardian({
       if (req.method !== "POST" || pathname !== ACS_PATH) {
         return new Response("Not Found", { status: 404 });
       }
-      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter);
+      const response = await handleAcsRequest(req, bridge, mapping, envelopeLog, onDecisionFailure, sessionContextStore, traceExporter, negotiatedVersions);
       return Response.json(response);
     },
   });
@@ -537,6 +545,7 @@ async function handleAcsRequest(
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
   traceExporter: OtelTraceExporter,
+  negotiatedVersions: Map<string, string>,
 ): Promise<JsonRpcSuccess | JsonRpcFailure> {
   const body = await readCappedBody(req);
   if (body.withinLimit === false) {
@@ -595,7 +604,7 @@ async function handleAcsRequest(
   let response: JsonRpcSuccess | JsonRpcFailure;
   let rejection: RejectionReason | undefined;
   try {
-    ({ response, rejection } = await dispatch(raw, validation, bridge, mapping, onDecisionFailure, sessionContextStore, envelopeLog));
+    ({ response, rejection } = await dispatch(raw, validation, bridge, mapping, onDecisionFailure, sessionContextStore, envelopeLog, negotiatedVersions));
   } catch (error) {
     // The outer net. Deliberately a bare JSON-RPC error, not an ACS `deny`:
     // this route is `dispatch` rethrowing entirely past denyOnInvalidEnvelope
@@ -873,6 +882,7 @@ async function dispatch(
   onDecisionFailure: "proceed" | "deny" | undefined,
   sessionContextStore: SessionContextStore,
   envelopeLog: EnvelopeLogSink,
+  negotiatedVersions: Map<string, string>,
 ): Promise<Dispatched> {
   const rpcId = extractId(raw);
 
@@ -901,7 +911,23 @@ async function dispatch(
 
   if (envelope.method === HANDSHAKE_METHOD) {
     const env = onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure };
-    return { response: successResponse(envelope.id, buildServerHello(env)) };
+    const negotiated = negotiateHandshake(envelope.params, env);
+    if (!negotiated.ok) {
+      return { response: errorResponse(envelope.id, negotiated.code, negotiated.message) };
+    }
+    negotiatedVersions.set(envelope.params.metadata.session_id, negotiated.serverHello.negotiated_version);
+    return { response: successResponse(envelope.id, negotiated.serverHello) };
+  }
+
+  const expectedVersion = negotiatedVersions.get(envelope.params.metadata.session_id) ?? NEGOTIATED_VERSION;
+  if (envelope.params.acs_version !== expectedVersion) {
+    return {
+      response: errorResponse(
+        envelope.id,
+        UNSUPPORTED_VERSION_CODE,
+        `UNSUPPORTED_VERSION: step acs_version ${JSON.stringify(envelope.params.acs_version)} does not match negotiated_version ${JSON.stringify(expectedVersion)}`,
+      ),
+    };
   }
 
   // Two gated branches, one per ACS method this Guardian assembles a snapshot
