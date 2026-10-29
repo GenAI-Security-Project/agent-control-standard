@@ -36,8 +36,62 @@ export type ServerHello = {
   on_decision_failure: "proceed" | "deny";
 };
 
+export const UNSUPPORTED_VERSION_CODE = -32001;
+export const CAPABILITY_NOT_NEGOTIATED_CODE = -32003;
+
 /** The ACS spec version every schema and mapping in this repo is pinned to. */
 const NEGOTIATED_VERSION = "0.1.0";
+const SUPPORTED_TRANSPORT = "http" as const;
+
+export function isSupportedAcsVersion(version: unknown): version is string {
+  return typeof version === "string" && /^0\.1\.\d+$/.test(version);
+}
+
+export type HandshakeNegotiationResult =
+  | { ok: true; serverHello: ServerHello }
+  | { ok: false; code: number; message: string };
+
+export function negotiateHandshake(
+  envelopeParams: { acs_version: string; payload?: Record<string, unknown> },
+  env?: { ACS_ON_DECISION_FAILURE?: string },
+): HandshakeNegotiationResult {
+  if (!isSupportedAcsVersion(envelopeParams.acs_version)) {
+    return {
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: `UNSUPPORTED_VERSION: unsupported acs_version ${JSON.stringify(envelopeParams.acs_version)}`,
+    };
+  }
+  const payload = envelopeParams.payload ?? {};
+  if ("acs_version" in payload && !isSupportedAcsVersion(payload.acs_version)) {
+    return {
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: `UNSUPPORTED_VERSION: unsupported client acs_version ${JSON.stringify(payload.acs_version)}`,
+    };
+  }
+  if ("acs_versions_supported" in payload) {
+    const versions = payload.acs_versions_supported;
+    if (!Array.isArray(versions) || !versions.some((v) => isSupportedAcsVersion(v))) {
+      return {
+        ok: false,
+        code: UNSUPPORTED_VERSION_CODE,
+        message: `UNSUPPORTED_VERSION: no compatible version in acs_versions_supported ${JSON.stringify(versions)}`,
+      };
+    }
+  }
+  if ("transports_supported" in payload) {
+    const transports = payload.transports_supported;
+    if (!Array.isArray(transports) || !transports.includes(SUPPORTED_TRANSPORT)) {
+      return {
+        ok: false,
+        code: CAPABILITY_NOT_NEGOTIATED_CODE,
+        message: `CAPABILITY_NOT_NEGOTIATED: Guardian supports transport "${SUPPORTED_TRANSPORT}", client advertised ${JSON.stringify(transports)}`,
+      };
+    }
+  }
+  return { ok: true, serverHello: buildServerHello(env) };
+}
 
 /**
  * The methods this Guardian actually dispatches -- exactly the two gated
