@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONVERTER_SERVICE_NAME } from "../packages/guardian/src/audit-to-otlp.ts";
 import { OTEL_SERVICE_NAME } from "../packages/guardian/src/otel-trace-exporter.ts";
-import { generateSampleTrace, SAMPLE_PATH, SCENARIOS } from "../scripts/make-sample-trace.ts";
+import { generateSampleTrace, REJECTED, SAMPLE_PATH, SCENARIOS } from "../scripts/make-sample-trace.ts";
 
 /**
  * The committed sample trace (issue #266), held to the mapping it claims to
@@ -100,6 +100,10 @@ const CONVERTER_EXEMPT: Readonly<Record<string, string>> = {
 };
 
 const SPANS = spansIn(SAMPLE_PATH);
+/** The spans for steps the Guardian governed. A rejected request is recorded
+ * under a name outside step_to_span (issue #283), so the mapping's step
+ * rules do not apply to it; its own test is below. */
+const STEP_SPANS = SPANS.filter((span) => span.name !== "guardian.rejected_request");
 
 function spanFor(requestId: string): OtlpSpan | undefined {
   return SPANS.find((span) => attributes(span)["acs.request_id"] === requestId);
@@ -111,9 +115,9 @@ function failureOf(span: OtlpSpan | undefined): Record<string, unknown> | undefi
 }
 
 describe("the committed sample trace matches the mapping", () => {
-  it("names every span with a step_to_span value", () => {
-    expect(SPANS.length).toBeGreaterThan(0);
-    for (const span of SPANS) {
+  it("names every step span with a step_to_span value", () => {
+    expect(STEP_SPANS.length).toBeGreaterThan(0);
+    for (const span of STEP_SPANS) {
       expect({ name: span.name, mapped: span.name in STEP_BY_SPAN_NAME }).toEqual({ name: span.name, mapped: true });
     }
   });
@@ -128,7 +132,7 @@ describe("the committed sample trace matches the mapping", () => {
 
   it("carries every required attribute, apart from the named converter exemptions", () => {
     const always = MAPPING.properties.step_span_attributes.properties.required_attributes.default;
-    for (const span of SPANS) {
+    for (const span of STEP_SPANS) {
       const present = attributes(span);
       const fromConverter = failureOf(span)?.["acs.failure.reported_by"] === "observed_agent";
       for (const attribute of [...always, ...STEP_BY_SPAN_NAME[span.name]!.required_attributes]) {
@@ -208,7 +212,7 @@ describe("the committed sample trace matches the mapping", () => {
     expect(denied["acs.provenance.source_id"]).toContain("");
   });
 
-  it("uses only failure classes, postures and reporters the mapping lists, and covers the four failures", () => {
+  it("uses only failure classes, postures and reporters the mapping lists, and covers the failures it holds", () => {
     const allowed = MAPPING.properties.decision_failure_event.properties.attribute_values.default;
     const seen = new Set<string>();
     for (const span of SPANS) {
@@ -223,7 +227,23 @@ describe("the committed sample trace matches the mapping", () => {
       }
       seen.add(`${failure["acs.failure.class"]}/${failure["acs.failure.reported_by"]}`);
     }
+    // The only steps the Guardian answers with an error are the session and
+    // message steps, which it does not dispatch yet.
     expect([...seen].sort()).toEqual(["guardian_error/guardian", "timeout/guardian", "unreachable/observed_agent"]);
+  });
+
+  it("holds one span per step, and keeps the forged request apart from the call whose ids it claimed", () => {
+    for (const scenario of SCENARIOS) {
+      const underPair = SPANS.filter((span) => attributes(span)["acs.request_id"] === scenario.requestId);
+      expect({ scenario: scenario.name, spans: underPair.length }).toEqual({ scenario: scenario.name, spans: 1 });
+    }
+    const rejected = SPANS.filter((span) => span.name === "guardian.rejected_request");
+    expect(rejected).toHaveLength(1);
+    const claimed = attributes(rejected[0]);
+    expect(claimed["guardian.rejected.claimed_request_id"]).toBe(REJECTED.claimedRequestId);
+    expect(claimed["guardian.rejected.reason"]).toBe(REJECTED.reason);
+    expect(claimed["acs.request_id"]).toBeUndefined();
+    expect(rejected[0]?.events ?? []).toEqual([]);
   });
 });
 
