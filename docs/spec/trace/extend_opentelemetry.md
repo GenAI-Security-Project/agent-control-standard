@@ -24,12 +24,12 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
 
 ```json
 {
-  "traceId": "13717f291e2368066d2fa3f2434ed2f6",
-  "spanId": "2a7efedbb7ee3881",
+  "traceId": "c2acc4146b81cc5da2ba5834c7288338",
+  "spanId": "f2089643999ef380",
   "name": "gen_ai.tool.call",
   "kind": 1,
-  "startTimeUnixNano": "1792534253716796645",
-  "endTimeUnixNano": "1792534253780000000",
+  "startTimeUnixNano": "1793284944009343913",
+  "endTimeUnixNano": "1793284944199000000",
   "attributes": [
     {
       "key": "acs.session.id",
@@ -143,10 +143,16 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
               ]
             }
           }
+        },
+        {
+          "key": "acs.chain_hash",
+          "value": {
+            "stringValue": "f1cca2858a1b56bd44939bfd32e5a4838b50e021a84d9327022cec2bbb16c48a"
+          }
         }
       ],
       "name": "acs.decision",
-      "timeUnixNano": "1792534253780000000",
+      "timeUnixNano": "1793284944199000000",
       "droppedAttributesCount": 0
     }
   ],
