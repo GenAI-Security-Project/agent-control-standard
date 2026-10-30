@@ -26,6 +26,7 @@ from __future__ import annotations
 import difflib
 import http.client
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -143,7 +144,11 @@ def _write_summary(outcome: Outcome) -> None:
             got = [repr(row) for row in outcome.rows[name]]
             diff = list(difflib.unified_diff(want, got, "landing", name, lineterm=""))
             if diff:
-                lines += ["", "```diff", *diff, "```"]
+                # A tilde fence, longer than any tilde run in the rows, so a row label
+                # carrying backticks or tildes cannot close the block early.
+                longest = max((len(run) for line in diff for run in re.findall(r"~+", line)), default=0)
+                fence = "~" * max(3, longest + 1)
+                lines += ["", f"{fence}diff", *diff, fence]
     with open(path, "a", encoding="utf-8") as summary:
         summary.write("\n".join(lines) + "\n")
 

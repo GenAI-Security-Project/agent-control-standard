@@ -274,6 +274,17 @@ def test_main_stops_retrying_inside_the_budget_and_writes_the_summary(monkeypatc
     assert "docs/other/" in summary.read_text(encoding="utf-8")
 
 
+def test_summary_fence_survives_backticks_and_tildes_in_a_row_label(tmp_path, monkeypatch):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    landing = [("a", "```", "~~~~")]
+    outcome = verify_site_nav.Outcome(["rows differ"], rows={"landing": landing, "docs": []})
+    verify_site_nav._write_summary(outcome)
+    text = summary.read_text(encoding="utf-8")
+    assert "```diff" not in text
+    assert "\n~~~~~diff\n" in text and text.rstrip().endswith("~~~~~")
+
+
 def test_nonce_falls_back_to_the_clock_outside_actions(monkeypatch):
     monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
