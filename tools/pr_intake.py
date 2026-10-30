@@ -50,10 +50,11 @@ LEGACY_KEYWORD_MARKER = "<!-- acs-closing-keyword"
 _KEYWORD_MARKER = re.compile(r"<!-- acs-closing-keyword:[0-9,]{1,400} -->")
 KNOWN_BOTS = frozenset({"dependabot[bot]", "github-actions[bot]"})
 
-# Pull requests opened before this date are never held. The rollout commit sets the real
-# value, the same pattern as roadmap_model.RULES_VERSION. This placeholder keeps the gate
-# inert until then.
-RULE_LANDED = date(2026, 11, 1)
+# The day enforcement started, from the PR_INTAKE_LANDED repository variable, which a lead
+# sets in the same sitting as PR_INTAKE_TOOL_SHA and PR_INTAKE_ENFORCED. A queue comment on
+# a pull request opened before it says the rule is new. It changes wording only, so it is
+# not in the facts hash and does not arm anything.
+_LANDED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 # Budgets that bound API work per run. The reserve keeps room for the writes at the end.
 MAX_REFERENCES = 20
@@ -156,6 +157,8 @@ class Facts:
     # The keyword warning markers already on the bot's own comments. The bot owns them, so,
     # like the queue label, they stay out of the hash. Only legacy mode reads them.
     keyword_markers: frozenset[str] = frozenset()
+    # PR_INTAKE_LANDED, or None when it is unset or unreadable. Wording only, so not hashed.
+    rule_landed: date | None = None
 
 
 @dataclass(frozen=True)
@@ -244,7 +247,8 @@ def facts_hash(facts: Facts, today: date) -> str:
     freshness, already carried by the derived boolean. `sweep` and `event_action`, which
     describe why the run started, not the pull request. `title` and `body`, which enter
     only through `editorial_ticked`, so an edit that changes no fact keeps the comment.
-    `keyword_markers`, which the bot writes and only legacy mode reads.
+    `keyword_markers`, which the bot writes and only legacy mode reads. `rule_landed`, a
+    repository variable that changes one sentence and no decision.
     """
     parts = {
         "number": facts.number,
@@ -835,7 +839,7 @@ def render_comment(facts: Facts, decision: Decision, today: date) -> str:
                 "The queue label was removed by someone other than a lead, so the bot set it again."
                 " A lead's removal clears the queue."
             )
-        if facts.created_at.date() < RULE_LANDED:
+        if facts.rule_landed is not None and facts.created_at.date() < facts.rule_landed:
             since = data.get("since", today.isoformat())
             paragraphs.append(
                 "This pull request was opened before the intake rule took effect."
@@ -1168,6 +1172,7 @@ def _held_use(number: int, author: str, refs: tuple[Reference, ...], listings: L
 def collect_facts(
     run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, sweep: bool,
     event_action: str | None, counter: CallCounter, pull: dict | None = None, comments: list | None = None,
+    landed: date | None = None,
 ) -> Facts:
     """Read one pull request's facts: five reads, at most five claim reads, and the record.
 
@@ -1186,7 +1191,7 @@ def collect_facts(
     timeline = paginate(run, f"{_API}/issues/{number}/timeline?per_page=100")
     try:
         return _assemble(run, number, pull, files, raw_reviews, comments, timeline, listings=listings, roster=roster,
-                         mode=mode, sweep=sweep, event_action=event_action)
+                         mode=mode, sweep=sweep, event_action=event_action, landed=landed)
     except (KeyError, TypeError, ValueError) as exc:
         raise RunnerError(f"pull request {number} had a response in an unexpected shape: {type(exc).__name__}") from None
 
@@ -1194,6 +1199,7 @@ def collect_facts(
 def _assemble(
     run: Runner, number: int, pull: dict, files: list, raw_reviews: list, comments: list, timeline: list, *,
     listings: Listings, roster: frozenset[str], mode: str, sweep: bool, event_action: str | None,
+    landed: date | None,
 ) -> Facts:
     author = _login(pull.get("user"))
     if author is None:
@@ -1258,6 +1264,7 @@ def _assemble(
         mode=mode,
         sweep=sweep,
         event_action=event_action,
+        rule_landed=landed,
     )
 
 
@@ -1409,6 +1416,24 @@ def tool_sha(repo: Path) -> str:
     return hashlib.sha256(blobs.encode("ascii")).hexdigest()[:40]
 
 
+def rule_landed(env) -> date | None:
+    """PR_INTAKE_LANDED as a date. Unset or unreadable means no pull request predates the rule.
+
+    An unreadable value prints one warning and never its own text, which a repository
+    variable could make arbitrary.
+    """
+    raw = (env.get("PR_INTAKE_LANDED") or "").strip()
+    if not raw:
+        return None
+    if _LANDED.fullmatch(raw):
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            pass
+    print("::warning::PR_INTAKE_LANDED is not a YYYY-MM-DD date, so no pull request is treated as opened before the rule.")
+    return None
+
+
 def arming(env, repo: Path) -> str:
     """"enforced" when both variables arm this exact code, "mismatched" when only the switch is
     on, and "legacy" otherwise."""
@@ -1525,7 +1550,7 @@ class _Assessment:
 
 def _assess(
     run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, today: date, sweep: bool,
-    event_action: str | None, counter: CallCounter, short_circuit: bool,
+    event_action: str | None, counter: CallCounter, short_circuit: bool, landed: date | None = None,
 ) -> _Assessment:
     counted = counter.wrap(run)
     comments = paginate(counted, f"{_API}/issues/{number}/comments?per_page=100")
@@ -1538,7 +1563,7 @@ def _assess(
             return _Assessment(number, None, None, pull.get("updated_at"), stored["reason"], issues)
     facts = collect_facts(
         run, number, listings=listings, roster=roster, mode=mode, sweep=sweep, event_action=event_action,
-        counter=counter, pull=pull, comments=comments,
+        counter=counter, pull=pull, comments=comments, landed=landed,
     )
     return _Assessment(number, facts, decide(facts, today), pull.get("updated_at"), None, issues)
 
@@ -1583,12 +1608,12 @@ def _write(
 
 def evaluate_one(
     run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, today: date, sweep: bool,
-    event_action: str | None, counter: CallCounter, write: bool,
+    event_action: str | None, counter: CallCounter, write: bool, landed: date | None = None,
 ) -> tuple[Decision, list[str]]:
     """Read, decide, and, when `write`, apply one pull request. Returns the writes made."""
     assessment = _assess(
         run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=sweep,
-        event_action=event_action, counter=counter, short_circuit=False,
+        event_action=event_action, counter=counter, short_circuit=False, landed=landed,
     )
     facts, decision = assessment.facts, assessment.decision
     if not write or not _has_writes(facts, decision):
@@ -1644,6 +1669,7 @@ def _count(summary: Summary, facts: Facts, decision: Decision) -> None:
 def run_sweep(
     run: Runner, numbers: list[int] | None, *, mode: str, write: bool, listings: Listings, roster: frozenset[str],
     today: date, counter: CallCounter | None = None, arming_mode: str | None = None, sha: str = "", log=print,
+    landed: date | None = None,
 ) -> Summary:
     """Evaluate every open pull request, or `numbers`, then make the writes in a second pass.
 
@@ -1677,7 +1703,7 @@ def run_sweep(
                 run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=True,
                 # A dry run decides every pull request, so it shows what enforcement would do
                 # today rather than what a data line recorded.
-                event_action=None, counter=counter, short_circuit=mode == "enforced" and write,
+                event_action=None, counter=counter, short_circuit=mode == "enforced" and write, landed=landed,
             ))
         except BudgetStop:
             summary.stopped = True
@@ -1835,6 +1861,7 @@ def _collector() -> tuple[list[str], object]:
 
 def _main_event(
     run: Runner, number: int, *, state: str, action: str | None, roster: frozenset[str], today: date,
+    landed: date | None = None,
 ) -> int:
     """One pull request on its own event. Green on anything but a failed auto-merge disable."""
     if state == "mismatched":
@@ -1853,7 +1880,7 @@ def _main_event(
         listings = load_listings(counted)
         decision, done = evaluate_one(
             run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=False,
-            event_action=action, counter=counter, write=True,
+            event_action=action, counter=counter, write=True, landed=landed,
         )
     except WriteError as exc:
         if _is_auto_merge_failure(exc):
@@ -1872,6 +1899,7 @@ def _main_event(
 
 def _main_sweep(
     run: Runner, number: int | None, *, state: str, intake: str, roster: frozenset[str], today: date, sha: str,
+    landed: date | None = None,
 ) -> int:
     """Every open pull request, or the one dispatched. Red on any error or an early stop."""
     dry = intake == "dryrun"
@@ -1887,6 +1915,7 @@ def _main_sweep(
     summary = run_sweep(
         run, None if number is None else [number], mode=mode, write=not dry and mode == "enforced",
         listings=listings, roster=roster, today=today, counter=counter, arming_mode=state, sha=sha, log=log,
+        landed=landed,
     )
     red = bool(summary.errors) or summary.stopped
     if state == "mismatched" and not dry:
@@ -1951,9 +1980,11 @@ def main(argv: list[str] | None = None) -> int:
         # Without the roster every lead reads as an outsider, so nothing is decided at all.
         print(f"::warning::The roster did not parse ({type(exc).__name__}), so nothing was evaluated or written.")
         return 0 if event in EVENT_NAMES else 1
+    landed = rule_landed(env)
     if event in EVENT_NAMES and intake == "evaluate":
-        return _main_event(run, number, state=state, action=env.get("EVENT_ACTION") or None, roster=roster, today=today)
-    return _main_sweep(run, number, state=state, intake=intake, roster=roster, today=today, sha=sha)
+        return _main_event(run, number, state=state, action=env.get("EVENT_ACTION") or None, roster=roster, today=today,
+                           landed=landed)
+    return _main_sweep(run, number, state=state, intake=intake, roster=roster, today=today, sha=sha, landed=landed)
 
 
 if __name__ == "__main__":

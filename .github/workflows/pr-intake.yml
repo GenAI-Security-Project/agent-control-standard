@@ -7,15 +7,18 @@
 # base repository's token, so the job checks out the pull request's base ref, never the
 # head. main, integration, and release/* are ruleset-protected, and the job's if: admits
 # no other base, so only code a lead approved runs beside the token. The tool reads
-# titles, bodies, and comments through the API as data. Its env carries the number, the
-# event name and action, the dispatch inputs, and two repository variables, nothing else.
+# titles, bodies, and comments through the API as data. Its env carries GH_TOKEN, the
+# number, the event name and action, the dispatch inputs, and three repository variables,
+# nothing else.
 #
 # The nightly sweep runs at 03:10 UTC so the 04:10 roadmap sweep can report the same
 # night's pass. That ordering is best effort: roadmap-refresh.yml records scheduler start
 # delays of up to two hours on this repository.
 #
 # PR_INTAKE_ENFORCED and PR_INTAKE_TOOL_SHA arm enforcement. Unsetting PR_INTAKE_ENFORCED
-# is the kill switch, and the tool then runs only the legacy pass.
+# is the kill switch, and the tool then runs only the legacy pass. PR_INTAKE_LANDED is the
+# day enforcement started, set in the same sitting. It changes one sentence of the comment
+# on older pull requests and arms nothing.
 # tests/test_pr_intake_workflow.py pins this file.
 name: PR intake
 
@@ -86,4 +89,5 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           PR_INTAKE_ENFORCED: ${{ vars.PR_INTAKE_ENFORCED }}
           PR_INTAKE_TOOL_SHA: ${{ vars.PR_INTAKE_TOOL_SHA }}
+          PR_INTAKE_LANDED: ${{ vars.PR_INTAKE_LANDED }}
         run: python3 -I -S tools/pr_intake.py

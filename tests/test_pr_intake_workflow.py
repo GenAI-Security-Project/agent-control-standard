@@ -48,6 +48,7 @@ STEP_ENV = {
     "EVENT_ACTION": "${{ github.event.action }}",
     "PR_INTAKE_ENFORCED": "${{ vars.PR_INTAKE_ENFORCED }}",
     "PR_INTAKE_TOOL_SHA": "${{ vars.PR_INTAKE_TOOL_SHA }}",
+    "PR_INTAKE_LANDED": "${{ vars.PR_INTAKE_LANDED }}",
 }
 
 # The fake gh. A shell wrapper starts it, because gh_runner hands the process an
@@ -119,6 +120,7 @@ def event(number: int, action: str = "opened", name: str = "pull_request_target"
         "github.event.action": action,
         "vars.PR_INTAKE_ENFORCED": "",
         "vars.PR_INTAKE_TOOL_SHA": "",
+        "vars.PR_INTAKE_LANDED": "",
     }
 
 

@@ -520,9 +520,12 @@ def test_legacy_queues_a_pull_request_whose_only_bot_comment_is_the_keyword_warn
 
 
 def test_pre_rule_pull_request_comment_says_the_rule_is_new():
-    old = decide(facts(created_at=datetime(2026, 10, 1, tzinfo=timezone.utc)), TODAY)
+    landed = date(2026, 11, 1)
+    old = decide(facts(created_at=datetime(2026, 10, 1, tzinfo=timezone.utc), rule_landed=landed), TODAY)
     assert "The rule is new, and its 30-day clock starts on 2026-11-10." in old.comment
-    assert "The rule is new" not in decide(facts(), TODAY).comment
+    assert "The rule is new" not in decide(facts(rule_landed=landed), TODAY).comment
+    # With no landing date set, no pull request is treated as opened before the rule.
+    assert "The rule is new" not in decide(facts(created_at=datetime(2026, 10, 1, tzinfo=timezone.utc)), TODAY).comment
 
 
 def test_keyword_warning_present_when_a_closing_keyword_names_a_milestoned_issue():
@@ -650,6 +653,7 @@ def _mutations(base: Facts) -> dict:
         "sweep": True,
         "event_action": "edited",
         "keyword_markers": frozenset({"<!-- acs-closing-keyword:92 -->"}),
+        "rule_landed": date(2027, 1, 1),
     }
 
 
@@ -1337,7 +1341,7 @@ WRITE_TIME = "2026-11-10T03:00:00Z"
 BUMPED = "2026-11-10T03:00:05Z"
 ENV_KEYS = (
     "PR_NUMBER", "INTAKE_MODE", "INTAKE_AUTHORS", "EVENT_NAME", "EVENT_ACTION", "GITHUB_STEP_SUMMARY",
-    "PR_INTAKE_ENFORCED", "PR_INTAKE_TOOL_SHA", "GH_TOKEN",
+    "PR_INTAKE_ENFORCED", "PR_INTAKE_TOOL_SHA", "PR_INTAKE_LANDED", "GH_TOKEN",
 )
 OPEN_PULLS = f"{API}/pulls?state=open&per_page=100"
 MISMATCH = (
@@ -2002,3 +2006,22 @@ def test_legacy_event_run_on_a_milestoned_close_writes_what_todays_workflow_writ
     code, _, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="edited",
                           PR_NUMBER="961")
     assert code == 0 and fake.writes() == []
+
+
+@pytest.mark.parametrize("landed, said, warned", [
+    ("2026-11-05", True, False),
+    ("", False, False),
+    ("2026-13-01", False, True),
+    ("soon", False, True),
+])
+def test_the_landing_date_comes_from_the_repository_variable(monkeypatch, capsys, landed, said, warned):
+    fake = FakeGitHub([gh_pull(971)])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="opened",
+                            PR_NUMBER="971", PR_INTAKE_LANDED=landed, **armed_env())
+    assert code == 0, out
+    (body,) = fake.bodies(971)
+    assert ("This pull request was opened before the intake rule took effect." in body) is said
+    assert ("::warning::PR_INTAKE_LANDED" in out) is warned
+    assert out.count("::warning::") == int(warned)
+    if warned:
+        assert landed not in out
