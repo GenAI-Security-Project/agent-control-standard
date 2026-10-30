@@ -6,6 +6,7 @@ build job.
 """
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -81,55 +82,35 @@ def test_repo_url_and_the_three_resources_are_the_literals():
     }
 
 
-PYTHON_NAME = "tag:yaml.org,2002:python/name:"
-# (tag, depth, key the tagged value sits under). Depth 1 is a top-level key.
-ALLOWED_TAGS = {
-    ("!ENV", 1, "site_url"),
-    (PYTHON_NAME + "material.extensions.emoji.twemoji", 4, "emoji_index"),
-    (PYTHON_NAME + "material.extensions.emoji.to_svg", 4, "emoji_generator"),
-    (PYTHON_NAME + "pymdownx.superfences.fence_code_format", 6, "format"),
-}
+# Position never decides whether a tag is allowed, only which tags exist at all. A
+# tagged key, a tag behind an alias, or a tag in a list all count the same way.
+ALLOWED_TAGS = Counter({
+    "!ENV": 1,
+    "tag:yaml.org,2002:python/name:material.extensions.emoji.twemoji": 1,
+    "tag:yaml.org,2002:python/name:material.extensions.emoji.to_svg": 1,
+    "tag:yaml.org,2002:python/name:pymdownx.superfences.fence_code_format": 1,
+})
+TAGGED_EVENTS = (yaml.ScalarEvent, yaml.SequenceStartEvent, yaml.MappingStartEvent)
 
 
-def explicit_tags(text: str) -> set[tuple[str, int, str | None]]:
-    """Return every explicit tag in the YAML text as (tag, depth, owning key).
+def explicit_tags(text: str) -> Counter:
+    """Count every explicit tag in the YAML text, in keys and values alike.
 
     This reads parser events, not raw text, so it sees exactly the tags the loader would
     act on. Comments and prose never reach it, and a tag spelled any way (!!, !, or
     !<uri>) arrives as one resolved string.
     """
-    found = set()
-    stack: list[list] = []  # per open container: [is_mapping, next_is_key, last_key]
+    return Counter(event.tag for event in yaml.parse(text, Loader=yaml.SafeLoader)
+                   if isinstance(event, TAGGED_EVENTS) and event.tag is not None)
 
-    def settle() -> str | None:
-        # A finished node is a key or a value of the container that holds it.
-        if not stack:
-            return None
-        top = stack[-1]
-        key = top[2]
-        if top[0]:
-            top[1] = not top[1]
-        return key
 
-    for event in yaml.parse(text, Loader=yaml.SafeLoader):
-        if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
-            key = stack[-1][2] if stack else None
-            if event.tag is not None:
-                found.add((event.tag, len(stack), key))
-            settle()
-            stack.append([isinstance(event, yaml.MappingStartEvent), True, key])
-        elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
-            stack.pop()
-        elif isinstance(event, yaml.ScalarEvent):
-            top = stack[-1] if stack else None
-            if top is not None and top[0] and top[1]:
-                top[2] = event.value
-                settle()
-                continue
-            if event.tag is not None:
-                found.add((event.tag, len(stack), top[2] if top else None))
-            settle()
-    return found
+def site_url_tag(text: str) -> str | None:
+    """Return the tag on the root mapping's site_url value node, or None."""
+    root = yaml.compose(text, Loader=yaml.SafeLoader)
+    for key, value in root.value:
+        if key.value == "site_url":
+            return value.tag
+    return None
 
 
 def test_yaml_tags_are_allowlisted():
@@ -137,19 +118,32 @@ def test_yaml_tags_are_allowlisted():
     # !relative, and the mkdocs version pinned in uv.lock decides which tags it
     # resolves at all. Every tag is code or environment access in the build job,
     # so only the four the file needs today are allowed.
-    assert explicit_tags(MKDOCS.read_text()) == ALLOWED_TAGS
+    text = MKDOCS.read_text()
+    assert explicit_tags(text) == ALLOWED_TAGS
+    assert site_url_tag(text) == "!ENV"
 
 
-@pytest.mark.parametrize("line", [
-    "extra_x: !!python/object/apply:os.system [x]",
-    "extra_x: !!map {a: b}",
-    "extra_x: !<tag:example.com,2000:x> y",
-    "extra_x: !ENV OTHER",
-    "extra_x: !relative $docs_dir",
-    "extra_x: ! plain",
+@pytest.mark.parametrize("line, tag", [
+    ("extra_x: !!python/object/apply:os.system [x]", "tag:yaml.org,2002:python/object/apply:os.system"),
+    ("extra_x: !!map {a: b}", "tag:yaml.org,2002:map"),
+    ("extra_x: !<tag:example.com,2000:x> y", "tag:example.com,2000:x"),
+    ("extra_x: !ENV OTHER", "!ENV"),
+    ("extra_x: !relative $docs_dir", "!relative"),
+    ("extra_x: ! plain", "!"),
+    ("a: &x 1\nb: *x\nc: !!python/name:os.system z", "tag:yaml.org,2002:python/name:os.system"),
+    ("!!python/name:os.system x: y", "tag:yaml.org,2002:python/name:os.system"),
+    ("extra_x: [!!python/name:os.system z]", "tag:yaml.org,2002:python/name:os.system"),
 ])
-def test_yaml_tag_scan_rejects_unlisted_tags(line):
-    assert explicit_tags(MKDOCS.read_text() + "\n" + line + "\n") != ALLOWED_TAGS
+def test_yaml_tag_scan_rejects_unlisted_tags(line, tag):
+    found = explicit_tags(MKDOCS.read_text() + "\n" + line + "\n")
+    assert found[tag] > ALLOWED_TAGS[tag]
+    assert found != ALLOWED_TAGS
+
+
+def test_yaml_tag_scan_rejects_env_moved_off_site_url():
+    text = MKDOCS.read_text().replace("site_url: !ENV GITHUB_PAGES_URL", "site_url: x\nother: !ENV GITHUB_PAGES_URL")
+    assert explicit_tags(text) == ALLOWED_TAGS
+    assert site_url_tag(text) != "!ENV"
 
 
 def test_yaml_tag_scan_ignores_comments():
