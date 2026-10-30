@@ -131,18 +131,66 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
   text-decoration: none;
 }
 .wordmark img { width: 28px; height: 28px; border-radius: 6px; }
-.sidebar nav { display: flex; flex-direction: column; gap: 0.6rem; }
-.sidebar nav a { text-decoration: none; color: var(--acs-text-soft); }
-.sidebar nav a:hover { color: var(--acs-text); }
-/* This one navigates to the documentation while its neighbours are in-page anchors. */
-.sidebar nav a.nav-primary {
+/* The pane holds 20 rows with Home open. A tighter line keeps the theme toggle below
+   it on screen at 1366x768, and the column scrolls when a taller pane pushes it off. */
+#site-nav { font-size: 0.95rem; line-height: 1.45; }
+#site-nav ul { list-style: none; margin: 0; padding: 0; }
+#site-nav li { margin-block: 0.2rem; }
+/* The rule on the left shows nesting by position, so depth does not rely on color. */
+#site-nav ul ul {
+  margin: 0.2rem 0 0.35rem 0.35rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--acs-border);
+}
+#site-nav a { text-decoration: none; color: var(--acs-text-soft); }
+#site-nav a:hover,
+#site-nav summary:hover { color: var(--acs-text); }
+#site-nav summary { cursor: pointer; color: var(--acs-text-soft); }
+#site-nav summary:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
+/* Weight marks the current page as well as color, so the state survives without color. */
+#site-nav a[aria-current="page"] { font-weight: 600; color: var(--acs-text); }
+/* A section never collapses, so it reads as a heading with a divider rather than a
+   disclosure. Its list sits flush because nothing above it nests. */
+#site-nav .nav-section { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--acs-border); }
+#site-nav .nav-section h2 {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--acs-text-muted);
+}
+#site-nav .nav-section ul { margin: 0; padding-left: 0; border-left: 0; }
+
+/* Off screen until focused, so it costs sighted mouse users nothing and still comes
+   first for a keyboard. */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 1rem;
+  z-index: 30;
+  padding: 0.6rem 1rem;
   font-weight: 600;
   color: var(--acs-text);
-  padding-bottom: 0.6rem;
-  margin-bottom: 0.2rem;
-  border-bottom: 1px solid var(--acs-border);
+  background-color: var(--acs-page);
+  border: 1px solid var(--acs-border-strong);
+  border-radius: 8px;
 }
-.sidebar h2 { font-size: 0.75rem; text-transform: uppercase; color: var(--acs-text-muted); }
+.skip-link:focus { top: 1rem; }
+
+/* The strip exists only below the layout breakpoint. Above it the sidebar is the pane. */
+.topbar { display: none; }
+#menu-toggle {
+  min-height: 40px;
+  padding: 0.4rem 1rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--acs-text);
+  background-color: transparent;
+  border: 1px solid var(--acs-border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+}
+#menu-toggle:hover { background-color: var(--acs-surface); }
 
 main { padding: 4rem 3rem; max-width: 1100px; }
 section { padding-block: 3.5rem; border-top: 1px solid var(--acs-border); }
@@ -282,6 +330,40 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
   .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--acs-border); }
   .hero { grid-template-columns: 1fr; }
   main { padding: 2rem 1.25rem; }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--acs-border);
+    background-color: var(--acs-page);
+  }
+  /* The strip carries the wordmark at this width, so the pane drops its copy. */
+  .sidebar .wordmark { display: none; }
+  /* Without the drawer script the button would do nothing, and the pane is already
+     showing as a block below the strip. The script adds has-drawer to the root. */
+  #menu-toggle { display: none; }
+  .has-drawer #menu-toggle { display: inline-flex; align-items: center; }
+  /* Hidden as well as moved, so a closed panel's links leave the tab order. */
+  .has-drawer .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: min(20rem, 85vw);
+    height: 100vh;
+    overflow-y: auto;
+    background-color: var(--acs-page);
+    border-right: 1px solid var(--acs-border);
+    border-bottom: 0;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0.2s;
+  }
+  .has-drawer .nav-open .sidebar { transform: none; visibility: visible; }
 }
 
 /* Continuous motion is a vestibular trigger and a battery cost. CSS animation is

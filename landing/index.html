@@ -10,8 +10,16 @@
 <link rel="stylesheet" href="assets/acs.css">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="wordmark" href=".">
+    <img src="assets/icon.svg" alt="" width="28" height="28">
+    <span>ACS</span>
+  </a>
+  <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+</header>
 <div class="layout">
-  <aside class="sidebar">
+  <div class="sidebar">
     <a class="wordmark" href=".">
       <img src="assets/icon.svg" alt="" width="28" height="28">
       <span>ACS</span>
@@ -27,9 +35,9 @@
       </svg>
       <span class="visually-hidden">Switch theme</span>
     </button>
-  </aside>
+  </div>
 
-  <main>
+  <main id="main">
     <section class="hero">
       <div>
         <h1>The runtime control plane for AI agents.</h1>
@@ -251,6 +259,39 @@
       root.setAttribute("data-theme", next);
       try { localStorage.setItem("acs-theme", next); } catch (e) { /* ignore */ }
       label();
+    });
+  })();
+
+  // Phone drawer. Without this script the pane renders as a static block below the
+  // header strip, so the class on the root is what lets the stylesheet hide it.
+  (function () {
+    var root = document.documentElement;
+    var body = document.body;
+    var button = document.getElementById("menu-toggle");
+    var sidebar = document.querySelector(".sidebar");
+    if (!button || !sidebar) return;
+    root.classList.add("has-drawer");
+
+    function setOpen(open) {
+      body.classList.toggle("nav-open", open);
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    button.addEventListener("click", function () {
+      setOpen(button.getAttribute("aria-expanded") !== "true");
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && body.classList.contains("nav-open")) {
+        setOpen(false);
+        button.focus();
+      }
+    });
+
+    // Most pane links are anchors on this page. Left open, the panel would cover the
+    // section the reader just asked for.
+    sidebar.addEventListener("click", function (event) {
+      if (event.target.closest("a")) setOpen(false);
     });
   })();
 </script>

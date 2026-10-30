@@ -21,6 +21,20 @@ REPO = Path(__file__).resolve().parents[1]
 MKDOCS = REPO / "mkdocs.yml"
 LANDING = REPO / "landing" / "index.html"
 
+# Each failure message names the file to edit, so a red test is repairable by the author
+# of the pull request that broke it.
+REPAIR = {
+    "ceiling": (
+        "The landing pane shows {n} rows. Re-run the fold check at 1366x768 and raise the "
+        "ceiling in `tests/test_site_nav.py` in the same pull request."
+    ),
+}
+
+# Row ceilings for the landing pane, enforced in tests/test_landing_page.py. They live
+# here because the repair message sends the author here to raise them.
+CEILING_WITH_PAGE_OPEN_SET = 20
+CEILING_WITH_EVERY_GROUP_CLOSED = 12
+
 
 def load_mkdocs() -> dict:
     with MKDOCS.open() as handle:

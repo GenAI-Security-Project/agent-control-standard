@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from render_landing import read_nav_config, render
-from site_nav import walk_landing
+from render_landing import _inline_bodies, read_nav_config, render
+from site_nav import ancestor_labels, landing_open_labels, walk_landing
 
 REPO = Path(__file__).resolve().parents[1]
 LANDING = REPO / "landing"
@@ -65,6 +65,8 @@ def test_no_inline_event_handlers(page):
     attribute value while being entirely inert, so a regex reports a false positive."""
     from html.parser import HTMLParser
 
+    from conftest import _NOISE
+
     class Collector(HTMLParser):
         def __init__(self) -> None:
             super().__init__()
@@ -75,8 +77,12 @@ def test_no_inline_event_handlers(page):
             for name, value in attrs:
                 if name.startswith("on"):
                     self.handlers.append(f"<{tag} {name}>")
-                if name in ("href", "src") and value and value.lower().startswith("javascript:"):
-                    self.schemes.append(f"<{tag} {name}={value[:40]}>")
+                # A browser drops tabs and newlines inside a URL before reading its
+                # scheme, so "java\tscript:" runs unless the check strips them first.
+                if name in ("href", "src") and value:
+                    scheme = _NOISE.sub("", value).strip().lower()
+                    if scheme.startswith(("javascript:", "data:", "vbscript:")):
+                        self.schemes.append(f"<{tag} {name}={value[:40]}>")
 
     collector = Collector()
     collector.feed(page)
@@ -235,3 +241,167 @@ def test_the_specification_is_not_listed_as_an_external_resource(page):
     assert hosts == {"github.com", "owasp.slack.com"}, external
     docs_root = [row for row in rows[:start] if row[2] == LANDING_ROOT + "docs/"]
     assert [row[0] for row in docs_root] == [1], "the docs root sits at the top of the pane"
+
+
+class _Tags:
+    """Every start tag on the page, in order, with the stack of elements enclosing it."""
+
+    def __init__(self, markup: str) -> None:
+        from html.parser import HTMLParser
+
+        void = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+                "source", "track", "wbr"}
+        self.tags: list[tuple[str, dict[str, str | None], tuple[str, ...]]] = []
+        stack: list[str] = []
+        tags = self.tags
+
+        class Parser(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                attributes = dict(attrs)
+                tags.append((tag, attributes, tuple(stack)))
+                if tag not in void:
+                    # The pane's id rides on the stack so a test can ask what is inside it.
+                    stack.append(f"{tag}#{attributes['id']}" if attributes.get("id") else tag)
+
+            def handle_startendtag(self, tag, attrs):
+                tags.append((tag, dict(attrs), tuple(stack)))
+
+            def handle_endtag(self, tag):
+                for index in range(len(stack) - 1, -1, -1):
+                    if stack[index].split("#")[0] == tag:
+                        del stack[index:]
+                        break
+
+        Parser().feed(markup)
+
+
+def test_the_pane_is_the_only_primary_navigation(page):
+    """One navigation landmark labeled Navigation. The footer's document links stay a
+    separate, differently labeled landmark, and no aside wraps the pane, because a
+    complementary landmark around it would announce the pane twice."""
+    tags = _Tags(page).tags
+    navs = [attrs.get("aria-label") for tag, attrs, _ in tags if tag == "nav"]
+    assert navs == ["Navigation", "Project documents"], navs
+    assert [attrs.get("id") for tag, attrs, _ in tags if tag == "nav"][0] == "site-nav"
+    assert not [tag for tag, attrs, _ in tags if attrs.get("role") == "navigation"]
+    assert not [tag for tag, _attrs, _ in tags if tag == "aside"]
+
+
+def test_csp_meta_precedes_every_link_and_script(page):
+    """A policy delivered by meta covers only what the parser reaches after it."""
+    metas = [m.start() for m in re.finditer(r'<meta http-equiv="Content-Security-Policy"', page)]
+    assert len(metas) == 1, metas
+    assert metas[0] < page.index("</head>")
+    later = [m.group(0) for m in re.finditer(r"<(link|script|style)\b", page, re.I) if m.start() < metas[0]]
+    assert not later, f"loaded before the policy: {later}"
+
+
+def test_csp_hashes_match_the_page_and_nothing_else_is_inline(page):
+    import base64
+    import hashlib
+
+    from conftest import _NOISE, _element_bodies
+
+    def digest(body: str) -> str:
+        return base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+
+    bodies = _element_bodies(page)
+    assert _inline_bodies(page) == bodies
+    scripts = [body for tag, body in bodies if tag == "script"]
+    styles = [body for tag, body in bodies if tag == "style"]
+    assert len(scripts) == 1 and len(styles) == 1, [tag for tag, _ in bodies]
+    policy = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]*)">', page).group(1)
+    directives = {part.split()[0]: part.split()[1:] for part in policy.split(";") if part.strip()}
+    assert directives["script-src"] == [f"'sha256-{digest(scripts[0])}'"]
+    assert directives["style-src"] == ["'self'", f"'sha256-{digest(styles[0])}'"]
+
+    tags = _Tags(page).tags
+    assert not [tag for tag, attrs, _ in tags if "style" in attrs], "a style attribute needs unsafe-inline"
+    data_uris = [f"<{tag} {name}>" for tag, attrs, _ in tags for name, value in attrs.items()
+                 if value and _NOISE.sub("", value).strip().lower().startswith("data:")]
+    assert not data_uris, data_uris
+    assert not re.search(r"url\(\s*['\"]?\s*data:", styles[0], re.I)
+
+
+def test_rendered_element_bodies_equal_the_starburst_plus_the_template(page):
+    """The only inline bodies are the diagram's style and the template's script, in
+    document order. Anything else came from an injected section."""
+    from conftest import _element_bodies
+
+    starburst = (LANDING / "assets" / "starburst.svg").read_text(encoding="utf-8")
+    template = (LANDING / "index.html").read_text(encoding="utf-8")
+    assert [tag for tag, _ in _element_bodies(starburst)] == ["style"]
+    assert [tag for tag, _ in _element_bodies(template)] == ["script"]
+    assert _element_bodies(page) == _element_bodies(starburst) + _element_bodies(template)
+
+
+def test_menu_button_contract(page):
+    """The phone strip carries a real button wired by listeners, and the skip link is
+    the first thing a keyboard reaches."""
+    from conftest import _element_bodies
+
+    assert re.search(r"<body>\s*<a class=\"skip-link\" href=\"#main\">", page)
+    assert '<main id="main">' in page
+    assert re.search(
+        r'<header class="topbar">\s*<a class="wordmark" href="\.">.*?</a>\s*'
+        r'<button id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">'
+        r"Menu</button>\s*</header>",
+        page,
+        re.S,
+    )
+    assert page.count('id="site-nav"') == 1
+    scripts = [body for tag, body in _element_bodies(page) if tag == "script"]
+    assert len(scripts) == 1
+    script = scripts[0]
+    for needle in ('getElementById("menu-toggle")', '"aria-expanded"', '"nav-open"', '"Escape"',
+                   ".focus()", 'addEventListener("click"', 'addEventListener("keydown"'):
+        assert needle in script, needle
+
+
+def test_pane_row_ceilings(page):
+    """A row is visible when every group above it is open. A section never closes."""
+    from test_site_nav import CEILING_WITH_EVERY_GROUP_CLOSED, CEILING_WITH_PAGE_OPEN_SET, REPAIR
+
+    rows = walk_landing(page, LANDING_ROOT)
+    assert rows
+    sections = {label for _depth, label, _url, _group, is_section in rows if is_section}
+
+    def visible(opened: frozenset[str]) -> int:
+        always = opened | sections
+        return sum(all(label in always for label in ancestor_labels(rows, index))
+                   for index in range(len(rows)))
+
+    shown = visible(landing_open_labels(page))
+    assert shown <= CEILING_WITH_PAGE_OPEN_SET, REPAIR["ceiling"].format(n=shown)
+    closed = visible(frozenset())
+    assert closed <= CEILING_WITH_EVERY_GROUP_CLOSED, REPAIR["ceiling"].format(n=closed)
+
+
+def test_sidebar_keeps_its_own_scroll(page):
+    """The column scrolls by itself, so the theme toggle below the pane stays reachable
+    when the open pane is taller than the viewport."""
+    css = re.sub(r"/\*.*?\*/", "", (LANDING / "assets" / "acs.css").read_text(encoding="utf-8"), flags=re.S)
+    top_level, depth, start = [], 0, 0
+    for index, char in enumerate(css):
+        if char == "{":
+            if depth == 0:
+                selector, start = css[start:index].strip(), index + 1
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                top_level.append((selector, css[start:index]))
+                start = index + 1
+    rules = [" ".join(body.split()) for selector, body in top_level if selector == ".sidebar"]
+    assert len(rules) == 1, rules
+    assert "height: 100vh;" in rules[0] and "overflow-y: auto;" in rules[0], rules[0]
+    sidebar = page[page.index('<div class="sidebar">'):page.index("<main")]
+    assert sidebar.index('id="site-nav"') < sidebar.index('id="theme-toggle"')
+
+
+def test_no_pane_link_has_target_or_rel(page):
+    """Every pane link navigates in place. A target opens a window the policy does not
+    govern, and a rel can make a link prefetch."""
+    links = [attrs for tag, attrs, stack in _Tags(page).tags if tag == "a" and "nav#site-nav" in stack]
+    assert len(links) >= 12
+    assert not [attrs for attrs in links if "target" in attrs or "rel" in attrs]
