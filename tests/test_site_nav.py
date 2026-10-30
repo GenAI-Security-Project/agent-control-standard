@@ -49,7 +49,7 @@ REPAIR = {
         "`mkdocs.yml`."
     ),
     "rows_differ": (
-        "The landing pane and `{page}` show different rows. Both read `mkdocs.yml`; the diff below "
+        "The landing pane and `{page}` show different rows. Both read `mkdocs.yml`. The diff below "
         "says where. If the docs side is wrong, the override is `overrides/partials/nav.html`."
     ),
     "faq_keyword": (
@@ -92,10 +92,10 @@ REPAIR = {
         "owasp.slack.com. The hero's links in `landing/index.html` go only where the pane goes."
     ),
     "section_rules": (
-        "The theme stylesheet no longer {problems} inside its `min-width:76.25em` block, so the "
-        "External resources section in `overrides/partials/nav.html` would collapse or turn into "
-        "a link. Re-derive the override against the new theme as `overrides/README.md` describes, "
-        "on a branch from `integration`."
+        "The theme stylesheet lost a rule the External resources section in "
+        "`overrides/partials/nav.html` needs, so the section would collapse or turn into a link. "
+        "Re-derive the override against the new theme as `overrides/README.md` describes, on a "
+        "branch from `integration`. Inside its `min-width:76.25em` block it no longer:\n{problems}"
     ),
     "not_found_base": (
         "`404.html` resolves against {base!r}, not the pinned docs base. Build with "
@@ -107,6 +107,12 @@ REPAIR = {
         "`{page}` carries {found}. Remove the handler or the script URL from its source page, "
         "from `mkdocs.yml`, or from `overrides/partials/nav.html`."
     ),
+    "not_found_href": (
+        "`404.html` carries the pane href {href!r}, which is neither absolute nor path-absolute. "
+        "The page is served at whatever address missed, so a relative href breaks below the docs "
+        "root. Emit it from a rooted base in `overrides/partials/nav.html`. The build fix targets "
+        "`integration`."
+    ),
     "bookkeeping": (
         "`{path}` is override bookkeeping published into the site. Keep the recorded copies, "
         "diffs, and deltas for `overrides/partials/nav.html` under `overrides/.upstream/`, which "
@@ -115,7 +121,7 @@ REPAIR = {
 }
 # These repairs change how the site is built rather than what a page says, so they
 # target `integration`.
-BUILD_SIDE = frozenset({"page_not_in_nav", "section_rules", "not_found_base", "bookkeeping"})
+BUILD_SIDE = frozenset({"page_not_in_nav", "section_rules", "not_found_base", "not_found_href", "bookkeeping"})
 
 # Row ceilings for the landing pane, enforced in tests/test_landing_page.py. They live
 # here because the repair message sends the author here to raise them.
@@ -305,6 +311,7 @@ REVIEWED_HOSTS = frozenset({"github.com", "owasp.slack.com"})
 WIDE = "@media screen and (min-width:76.25em)"
 CANONICAL = re.compile(r'<link rel="canonical" href="([^"]+)"')
 CONFIG = re.compile(r'<script id="__config" type="application/json">(.*?)</script>', re.S)
+NOT_FOUND_URL = DOCS_BASE + "x/y/missing/"
 SECTION_ID = re.compile(r'<section[^>]*\bid="([^"]+)"')
 # These states have no current row, so the pane opens nothing and marks nothing.
 UNPLACED = ("not_found", "out_of_nav_")
@@ -353,10 +360,11 @@ def samples(built_docs, landing_rows) -> dict[str, Path]:
 
 
 def _base(path: Path, markup: str) -> str:
-    # 404.html carries no canonical link. It resolves against the address it is served
-    # at, which makes the fixture's GITHUB_PAGES_URL load-bearing for this page.
+    # 404.html carries no canonical link. GitHub Pages serves it at whatever address
+    # missed, so it resolves against a deep one, where a relative href would break. That
+    # makes the fixture's GITHUB_PAGES_URL load-bearing for this page.
     if path.name == "404.html":
-        return DOCS_BASE + "404.html"
+        return NOT_FOUND_URL
     match = CANONICAL.search(markup)
     assert match, REPAIR["rows_differ"].format(page=path) + "\nThe page has no canonical link."
     return match.group(1)
@@ -724,11 +732,11 @@ def test_section_rules_hold_inside_the_wide_media_block(built_docs):
     for container in (".md-nav__container>.md-nav__link", ".md-nav__container>.md-nav__link:first-child"):
         if container not in top:
             problems.append(f"styles {container} at the top level")
-    assert not problems, REPAIR["section_rules"].format(problems="; ".join(problems))
+    assert not problems, REPAIR["section_rules"].format(problems="\n".join(problems))
     # The same assertions hold on the next theme release, which reorders declarations
     # and merges the pointer-events rule into a selector list.
     problems = _wide_rule_problems(_css_rules(MATERIAL_980_WIDE_BLOCK))
-    assert not problems, REPAIR["section_rules"].format(problems="; ".join(problems))
+    assert not problems, REPAIR["section_rules"].format(problems="\n".join(problems))
 
 
 def test_404_sample_resolves_against_the_pinned_base(samples):
@@ -737,9 +745,13 @@ def test_404_sample_resolves_against_the_pinned_base(samples):
     assert config, REPAIR["not_found_base"].format(base="no #__config script")
     base = json.loads(config.group(1)).get("base")
     assert base == urlparse(DOCS_BASE).path, REPAIR["not_found_base"].format(base=base)
-    rows = walk_docs(markup, DOCS_BASE + "404.html")
+    rows = walk_docs(markup, NOT_FOUND_URL)
     home = [row for row in rows if row[0] == 1 and row[1] == "Home"]
     assert [row[2] for row in home] == [LANDING_ROOT], REPAIR["not_found_base"].format(base=home)
+    # An empty base leaves each href as written, so this reads the raw pane hrefs.
+    for _depth, _label, href, _group, _section in walk_docs(markup, ""):
+        rooted = href is None or href.startswith("https://") or (href.startswith("/") and not href.startswith("//"))
+        assert rooted, REPAIR["not_found_href"].format(href=href)
 
 
 def _handlers_and_schemes(markup: str) -> list[str]:
@@ -785,10 +797,11 @@ def test_faq_is_non_normative_by_banner_and_vocabulary():
 
 
 def test_every_repair_message_names_its_file():
-    # The ceiling's repair edits this module, so its own path counts as a named file.
-    files = ("mkdocs.yml", "docs/topics/faq.md", "overrides/partials/nav.html", "tests/test_site_nav.py")
+    files = ("mkdocs.yml", "docs/topics/faq.md", "overrides/partials/nav.html")
     for key, message in REPAIR.items():
-        assert any(name in message for name in files), key
+        # The ceiling's repair edits this module, so only it may name this file instead.
+        allowed = files + (("tests/test_site_nav.py",) if key == "ceiling" else ())
+        assert any(name in message for name in allowed), key
     assert BUILD_SIDE <= REPAIR.keys()
     for key in BUILD_SIDE:
         assert "integration" in REPAIR[key], key
