@@ -119,7 +119,8 @@ def test_the_theme_still_styles_the_override():
     css = "".join(p.read_text(encoding="utf-8") for p in stylesheets.glob("main.*.css"))
     if not css:
         pytest.skip("installed Material layout differs, nothing to compare")
-    for klass in [".md-source", ".md-source__repository"]:
+    for klass in [".md-source", ".md-source__repository", ".md-nav__container", ".md-nav__toggle",
+                  ".md-nav__item--section"]:
         assert klass in css, f"{klass} is gone from the installed theme"
 
 
