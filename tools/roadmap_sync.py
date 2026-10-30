@@ -31,7 +31,7 @@ from dataclasses import dataclass  # noqa: E402
 import closing_choice  # noqa: E402
 import fetch_roadmap  # noqa: E402
 import roadmap_model as model  # noqa: E402
-from pr_intake import CLEAR_ROUTES, MARKER, REASONS, parse_data_line  # noqa: E402
+from pr_intake import CLEAR_ROUTES, KNOWN_BOTS, LEGACY_KEYWORD_MARKER, LEGACY_PREFIX, MARKER, REASONS, parse_data_line  # noqa: E402
 
 
 GH_TIMEOUT_SECONDS = 30
@@ -432,6 +432,10 @@ INTAKE_WINDOW_DAYS = 60
 CLAIM_FLAG_DAYS = 14
 QUEUED_LONG_DAYS = 30
 INTAKE_RUNS = "actions/workflows/pr-intake.yml/runs?event=schedule&status=completed&per_page=1"
+CLOSED_PULLS = "pulls?state=closed&sort=updated&direction=desc&per_page=100&page="
+# Ten pages is 1,000 pull requests updated in 120 days, several times this repository's pace,
+# and keeps a runaway listing inside the sweep's fifteen-minute job limit.
+CLOSED_PAGE_CAP = 10
 QUEUED_SEARCH = "pulls?q=is%3Apr+is%3Aopen+label%3Astatus%3Aneeds-triage"
 _CLAIM = re.compile(r"^([0-9]{1,9}):([0-9]{4}-[0-9]{2}-[0-9]{2})$")
 _CONCLUSION = re.compile(r"^[a-z_]{1,32}$")
@@ -470,19 +474,23 @@ def _readable_queue(reason: object, since: object, claimed: object) -> bool:
     return reason in REASONS and _iso_day(since) is not None and _parse_claims(claimed) is not None
 
 
-def _intake_data(comments: list) -> tuple[bool, dict[str, str] | None]:
-    """Whether the bot left its intake comment, and that comment's data line.
+def _intake_data(comments: list) -> tuple[str | None, dict[str, str] | None]:
+    """Which intake comment the bot left ("marked", "legacy", or None), and its data line.
 
-    Mirrors pr_intake's choice: the first comment by the bot's exact login that carries the
-    marker. A data line in anyone else's comment carries no authority.
+    A data line in anyone else's comment carries no authority.
     """
-    for comment in comments:
-        if not isinstance(comment, dict) or (comment.get("user") or {}).get("login") != model.BOT_LOGIN:
-            continue
-        body = comment.get("body")
-        if isinstance(body, str) and MARKER in body:
-            return True, parse_data_line(body)
-    return False, None
+    mine = [
+        comment["body"] for comment in comments
+        if isinstance(comment, dict) and (comment.get("user") or {}).get("login") == model.BOT_LOGIN
+        and isinstance(comment.get("body"), str)
+    ]
+    # Mirrors pr_intake._bot_comment: the first marked comment by the bot login wins, then a legacy one.
+    for body in mine:
+        if MARKER in body:
+            return "marked", parse_data_line(body)
+    if any(body.startswith(LEGACY_PREFIX) or LEGACY_KEYWORD_MARKER in body for body in mine):
+        return "legacy", None
+    return None, None
 
 
 def _when(value: object) -> datetime | None:
@@ -501,6 +509,7 @@ def intake_snapshot(gh, today: date, trusted: frozenset[str]) -> dict:
     """
     base = f"repos/{model.REPO}"
     queued: list[list] = []
+    legacy: list[int] = []
     claims: dict[tuple[str, int], list[int]] = {}
     label = urllib.parse.quote(model.NEEDS_TRIAGE, safe="")
     for item in gh.paginate(f"{base}/issues?state=open&labels={label}&per_page=100"):
@@ -508,8 +517,12 @@ def intake_snapshot(gh, today: date, trusted: frozenset[str]) -> dict:
             continue
         number = int(item["number"])
         created = item.get("created_at")
-        found, data = _intake_data(gh.paginate(f"{base}/issues/{number}/comments?per_page=100"))
-        if not found:
+        kind, data = _intake_data(gh.paginate(f"{base}/issues/{number}/comments?per_page=100"))
+        if kind == "legacy":
+            # Queued by the comment the gate replaced, so it has a record, only an older one.
+            legacy.append(number)
+            continue
+        if kind is None:
             queued.append([number, None, None, "", created])
             continue
         # A marked comment whose line 1 does not parse is stored with an empty reason, which
@@ -537,26 +550,52 @@ def intake_snapshot(gh, today: date, trusted: frozenset[str]) -> dict:
             int(latest["id"]),
             created if _when(created) is not None else None,
         ]
-    cutoff = datetime.combine(today - timedelta(days=INTAKE_RECENT_DAYS), datetime.min.time(), timezone.utc)
-    recent: list[list] = []
-    for pull in gh.paginate(f"{base}/pulls?state=closed&sort=updated&direction=desc&per_page=100"):
-        closed = _when(pull.get("closed_at"))
-        if closed is None or closed < cutoff:
-            continue
-        number = int(pull["number"])
-        _found, data = _intake_data(gh.paginate(f"{base}/issues/{number}/comments?per_page=100"))
-        route = (data or {}).get("route")
-        merged = pull.get("merged_at")
-        author = str((pull.get("user") or {}).get("login") or "").casefold()
-        recent.append([
-            number, author in trusted, route if route in CLEAR_ROUTES else None, merged if _when(merged) is not None else None,
-        ])
     return {
         "queued_pulls": queued,
+        "queued_legacy": legacy,
         "intake_claims": sorted(claims.values(), key=lambda row: (-row[1], row[0], row[2])),
         "intake_sweep": sweep,
-        "intake_recent": recent,
+        "intake_recent": _intake_recent(gh, today, trusted),
     }
+
+
+def _intake_recent(gh, today: date, trusted: frozenset[str]) -> list[list]:
+    """Pull requests closed in the last 120 days, read page by page, newest update first.
+
+    GitHub.paginate fetches every page before it returns, so the listing is read through
+    get, which lets the loop stop at the first page that reaches past the window.
+    """
+    base = f"repos/{model.REPO}"
+    cutoff = datetime.combine(today - timedelta(days=INTAKE_RECENT_DAYS), datetime.min.time(), timezone.utc)
+    recent: list[list] = []
+    for page in range(1, CLOSED_PAGE_CAP + 1):
+        pulls = gh.get(f"{base}/{CLOSED_PULLS}{page}")
+        if not isinstance(pulls, list) or not pulls:
+            return recent
+        for pull in pulls:
+            closed = _when(pull.get("closed_at"))
+            author = str((pull.get("user") or {}).get("login") or "").casefold()
+            if closed is None or closed < cutoff or author in KNOWN_BOTS:
+                continue
+            number = int(pull["number"])
+            merged = pull.get("merged_at") if _when(pull.get("merged_at")) is not None else None
+            route = None
+            # The route feeds only hand_cleared_60d, so comments are read only for merges in
+            # that window. They are the one read per pull request that dominates the cost.
+            if merged is not None and 0 <= (today - _when(merged).date()).days < INTAKE_WINDOW_DAYS:
+                _kind, data = _intake_data(gh.paginate(f"{base}/issues/{number}/comments?per_page=100"))
+                route = (data or {}).get("route")
+            # Counts follow today's roster, so promoting a contributor rewrites past merge
+            # counts in both windows.
+            trusted_author = author in trusted
+            recent.append([number, trusted_author, route if route in CLEAR_ROUTES else None, merged])
+        # closed_at is never later than updated_at, so once a page reaches an update older
+        # than the window, no later page can hold a close inside it.
+        updated = [_when(pull.get("updated_at")) for pull in pulls if isinstance(pull, dict)]
+        if len(pulls) < 100 or any(when is None or when < cutoff for when in updated):
+            return recent
+    # Reporting a partial count as the full one would mislead the review, so the section degrades.
+    raise SyncError(f"closed pull request listing ran past {CLOSED_PAGE_CAP} pages")
 
 
 def _intake_report(snapshot: dict, today: date) -> dict:
@@ -583,6 +622,7 @@ def _intake_report(snapshot: dict, today: date) -> dict:
     return {
         "queued_pulls": queued,
         "queued_unrecorded": unrecorded,
+        "queued_legacy": [int(number) for number in snapshot.get("queued_legacy") or []],
         "queued_unreadable": unreadable,
         "queued_meta": list(snapshot.get("intake_sweep") or []),
         "queued_claims": claims,
@@ -623,10 +663,14 @@ def _render_queued(report: dict) -> list[str]:
     ])]
     baseline = _BASELINE.fullmatch(os.environ.get("PR_INTAKE_BASELINES", "").strip())
     recorded = _iso_day(baseline.group(1)) if baseline else None
-    if recorded is None:
+    try:
+        due = recorded + timedelta(days=INTAKE_WINDOW_DAYS) if recorded is not None else None
+    except OverflowError:
+        # A far-future date must not stop the health issue from being written.
+        due = None
+    if due is None:
         lines += ["", "Baseline not recorded. A project lead sets PR_INTAKE_BASELINES."]
     else:
-        due = recorded + timedelta(days=INTAKE_WINDOW_DAYS)
         lines += [
             "",
             f"Baseline recorded {recorded.isoformat()}: median age {int(baseline.group(2))} days, "
@@ -661,6 +705,7 @@ def _render_queued(report: dict) -> list[str]:
         ("Queued more than 30 days", rows([row for row in queued if row[2] > QUEUED_LONG_DAYS])),
         ("Awaiting re-review", rows([row for row in queued if row[1] == "awaiting_rereview"])),
         ("Sent back, no response", rows([row for row in queued if row[1] == "sent_back"])),
+        ("Queued under the earlier intake comment", [f"- #{int(number)}" for number in report.get("queued_legacy") or []]),
         ("Labeled without a gate record", [f"- #{int(number)}" for number in unrecorded]),
     ):
         if selected:
@@ -753,7 +798,7 @@ def build_report(
     for key in report:
         if key not in (
             "accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses", "queued_pulls",
-            "intake_recent", "queued_meta", "queued_claims", "queued_unreadable", "intake_counts",
+            "queued_meta", "queued_claims", "queued_unreadable", "intake_counts",
         ):
             report[key] = sorted(set(report[key]))
     return report
@@ -844,7 +889,7 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
     snapshot = {
         "milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": [], "promotion": [],
-        "bypasses": [], "queued_pulls": [], "intake_claims": [], "intake_sweep": [], "intake_recent": [],
+        "bypasses": [], "queued_pulls": [], "queued_legacy": [], "intake_claims": [], "intake_sweep": [], "intake_recent": [],
     }
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]

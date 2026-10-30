@@ -361,21 +361,25 @@ def labeled_pull(number, author="outsider", created="2026-10-01T00:00:00Z"):
     }
 
 
+CLOSED_PAGE = f"repos/{REPO}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page="
+
+
 class IntakeGitHub:
-    def __init__(self, labeled=(), comments=None, closed=(), runs=None):
+    """Serves the intake reads. `closed` is page 1 of the closed listing, `pages` every page."""
+
+    def __init__(self, labeled=(), comments=None, closed=(), runs=None, pages=None):
         self.labeled = list(labeled)
         self.comments = comments or {}
-        self.closed = list(closed)
+        self.pages = pages if pages is not None else [list(closed)]
         self.runs = runs if runs is not None else {"workflow_runs": []}
         self.paths = []
 
     def paginate(self, path):
         self.paths.append(("paginate", path))
         assert "actions/" not in path, "the runs path returns an object, never a list of pages"
+        assert "/pulls?" not in path, "the closed listing is read page by page so it can stop early"
         if "/comments" in path:
             return self.comments.get(int(path.split("/issues/")[1].split("/")[0]), [])
-        if "/pulls?" in path:
-            return self.closed
         if "/issues?" in path:
             return self.labeled
         raise AssertionError(path)
@@ -384,7 +388,20 @@ class IntakeGitHub:
         self.paths.append(("get", path))
         if path.endswith("actions/workflows/pr-intake.yml/runs?event=schedule&status=completed&per_page=1"):
             return self.runs
+        if path.startswith(CLOSED_PAGE):
+            page = int(path[len(CLOSED_PAGE):])
+            return self.pages[page - 1] if page <= len(self.pages) else []
         raise AssertionError(path)
+
+    def requested(self, kind):
+        return [path for how, path in self.paths if kind in path]
+
+
+def closed_pull(number, closed, merged=None, login="outsider", updated=None):
+    return {
+        "number": number, "user": {"login": login}, "closed_at": closed, "merged_at": merged,
+        "updated_at": updated or closed,
+    }
 
 
 def intake_body(gh, today=date(2026, 11, 1), trusted=TRUSTED, failed=()):
@@ -486,6 +503,9 @@ def test_hand_cleared_counts_the_route_not_the_merge():
             {"number": 403, "user": {"login": "outsider"}, "closed_at": "2026-08-15T00:00:00Z", "merged_at": "2026-08-15T00:00:00Z"},
             {"number": 404, "user": {"login": "outsider"}, "closed_at": "2026-10-22T00:00:00Z", "merged_at": None},
             {"number": 405, "user": {"login": "outsider"}, "closed_at": "2026-05-01T00:00:00Z", "merged_at": "2026-05-01T00:00:00Z"},
+            # Bot merges are not outside contributions, in either window.
+            closed_pull(406, "2026-10-23T00:00:00Z", "2026-10-23T00:00:00Z", login="dependabot[bot]"),
+            closed_pull(407, "2026-08-10T00:00:00Z", "2026-08-10T00:00:00Z", login="Dependabot[bot]"),
         ],
         comments={
             401: [intake_comment(cleared.format("hand"))],
@@ -494,6 +514,8 @@ def test_hand_cleared_counts_the_route_not_the_merge():
         },
     )
     r, body = intake_body(gh)
+    from roadmap_sync import intake_snapshot
+    assert [row[0] for row in intake_snapshot(gh, date(2026, 11, 1), TRUSTED)["intake_recent"]] == [401, 402, 403, 404]
     assert r["intake_counts"]["hand_cleared_60d"] == 1
     assert r["intake_counts"]["non_roster_merges_60d"] == 1
     assert r["intake_counts"]["non_roster_merges_prior_60d"] == 1
@@ -544,3 +566,72 @@ def test_intake_read_failure_degrades_one_section():
     body = render_health(r, "degraded", "t", "1", failed)
     section = body.split("## Queued pull requests", 1)[1].split("\n## ", 1)[0]
     assert "Could not be read on this run." in section
+
+
+def test_closed_listing_stops_at_the_window_start():
+    # The window starts 2026-07-04. Page 1 ends on a pull request updated before it, and
+    # closed_at is never later than updated_at, so page 2 cannot hold anything in the window.
+    first = [closed_pull(500 + n, "2026-10-01T00:00:00Z") for n in range(99)]
+    first.append(closed_pull(599, "2026-06-01T00:00:00Z"))
+    second = [closed_pull(600, "2026-10-02T00:00:00Z")]
+    gh = IntakeGitHub(pages=[first, second])
+    from roadmap_sync import intake_snapshot
+    snapshot = intake_snapshot(gh, date(2026, 11, 1), TRUSTED)
+    assert gh.requested("&page=") == [CLOSED_PAGE + "1"]
+    assert len(snapshot["intake_recent"]) == 99
+
+
+def test_closed_listing_reads_the_next_page_while_inside_the_window():
+    first = [closed_pull(500 + n, "2026-10-01T00:00:00Z") for n in range(100)]
+    second = [closed_pull(700, "2026-09-01T00:00:00Z")]
+    gh = IntakeGitHub(pages=[first, second])
+    from roadmap_sync import intake_snapshot
+    snapshot = intake_snapshot(gh, date(2026, 11, 1), TRUSTED)
+    assert gh.requested("&page=") == [CLOSED_PAGE + "1", CLOSED_PAGE + "2"]
+    assert len(snapshot["intake_recent"]) == 101
+
+
+def test_closed_listing_past_the_page_cap_degrades_rather_than_undercounts():
+    from roadmap_sync import CLOSED_PAGE_CAP, intake_snapshot
+    full = [closed_pull(500 + n, "2026-10-01T00:00:00Z") for n in range(100)]
+    gh = IntakeGitHub(pages=[full] * (CLOSED_PAGE_CAP + 1))
+    with pytest.raises(SyncError, match="page"):
+        intake_snapshot(gh, date(2026, 11, 1), TRUSTED)
+    assert len(gh.requested("&page=")) == CLOSED_PAGE_CAP
+
+
+def test_comments_are_read_only_for_merges_in_the_last_sixty_days():
+    hand = "<!-- acs-intake-data reason=cleared route=hand cleared=2026-08-01 -->"
+    gh = IntakeGitHub(
+        closed=[
+            closed_pull(801, "2026-10-20T00:00:00Z", "2026-10-20T00:00:00Z"),
+            closed_pull(802, "2026-08-03T00:00:00Z", "2026-08-03T00:00:00Z"),
+            closed_pull(803, "2026-10-21T00:00:00Z", None),
+        ],
+        comments={801: [intake_comment(hand)], 802: [intake_comment(hand)], 803: [intake_comment(hand)]},
+    )
+    from roadmap_sync import intake_snapshot
+    snapshot = intake_snapshot(gh, date(2026, 11, 1), TRUSTED)
+    assert gh.requested("/comments") == [f"repos/{REPO}/issues/801/comments?per_page=100"]
+    assert snapshot["intake_recent"] == [
+        [801, False, "hand", "2026-10-20T00:00:00Z"], [802, False, None, "2026-08-03T00:00:00Z"], [803, False, None, None],
+    ]
+
+
+def test_a_far_future_baseline_reads_as_not_recorded(monkeypatch):
+    monkeypatch.setenv("PR_INTAKE_BASELINES", "recorded=9999-12-01 median_age=1 hand_cleared_60d=1 non_roster_merges_60d=1")
+    body = render_health(report(), "ok", "t", "1", [])
+    assert "Baseline not recorded. A project lead sets PR_INTAKE_BASELINES." in body
+    assert "9999" not in body
+
+
+def test_a_legacy_intake_comment_is_not_called_a_missing_record():
+    legacy = {"user": {"login": "github-actions[bot]"}, "body": "Thanks for this. It is queued rather than ignored. More text."}
+    forged = {"user": {"login": "outsider"}, "body": "Thanks for this. It is queued rather than ignored."}
+    gh = IntakeGitHub(labeled=[labeled_pull(321), labeled_pull(322)], comments={321: [legacy], 322: [forged]})
+    r, body = intake_body(gh)
+    assert r["queued_legacy"] == [321] and r["queued_unrecorded"] == [322]
+    section = body.split("## Queued pull requests", 1)[1].split("\n## ", 1)[0]
+    assert section.split("Queued under the earlier intake comment:", 1)[1].split("\n\n", 2)[1].splitlines() == ["- #321"]
+    assert section.split("Labeled without a gate record:", 1)[1].split("\n\n", 2)[1].splitlines() == ["- #322"]
+    assert "More text" not in body
