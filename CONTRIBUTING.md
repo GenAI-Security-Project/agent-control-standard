@@ -122,6 +122,9 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 6. **Open a pull request against `integration`**
 7. **Address review feedback** to land your change
 
+A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
+targets `integration`. A page outside `nav` and outside the declared prefixes fails the build.
+
 `integration` is the default branch, so a pull request opened from the GitHub interface
 already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
 it takes only two kinds of change: a promotion from `integration`, and an editorial
@@ -132,7 +135,8 @@ Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.m
 `README.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`,
 `SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`. Everything else goes to
 `integration`, including `docs/spec/`, `docs/concepts/`, `docs/identity/`, `mkdocs.yml`,
-`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`.
+`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`. A pull request that adds a
+page is the exception: it also adds a `nav` entry to `mkdocs.yml`, so it targets `integration`.
 
 For changes to the spec itself (`acs_schema.json`, hooks, events), open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
