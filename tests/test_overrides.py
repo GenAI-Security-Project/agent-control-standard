@@ -174,6 +174,41 @@ def test_rederive_record_writes_the_copies_and_diffs(tmp_path):
         assert (root / UPSTREAM / f"{name}.diff").read_bytes() == (REPO / UPSTREAM / f"{name}.diff").read_bytes()
 
 
+def test_record_refuses_to_rebaseline_a_changed_upstream(tmp_path):
+    root = _scratch_root(tmp_path)
+    installed = _fake_installed(tmp_path)
+    nav = installed / "nav.html"
+    nav.write_text(nav.read_text(encoding="utf-8") + "{#- an upstream change -#}\n", encoding="utf-8")
+    # A hand edit too, so a write of either the copy or the diff would show.
+    override = root / "overrides" / "partials" / "nav-item.html"
+    override.write_text(override.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    before = _snapshot(root)
+
+    result = _run(root, "--record", installed=installed)
+    assert result.returncode == 1
+    assert "nav.html" in result.stderr
+    assert "--accept-delta" in result.stderr
+    assert _snapshot(root) == before
+
+
+def test_record_rerecords_the_diff_from_the_committed_copy(tmp_path):
+    root = _scratch_root(tmp_path)
+    installed = _fake_installed(tmp_path)
+    override = root / "overrides" / "partials" / "nav-item.html"
+    edited = override.read_text(encoding="utf-8") + "{#- a hand edit -#}\n"
+    override.write_text(edited, encoding="utf-8")
+    copies = {name: (root / UPSTREAM / name).read_bytes() for name in PARTIALS}
+
+    result = _run(root, "--record", installed=installed)
+    assert result.returncode == 0, result.stderr
+    for name in PARTIALS:
+        assert (root / UPSTREAM / name).read_bytes() == copies[name]
+    upstream = (root / UPSTREAM / "nav-item.html").read_text(encoding="utf-8")
+    assert (root / UPSTREAM / "nav-item.html.diff").read_text(encoding="utf-8") == record_diff(
+        upstream, edited, "nav-item.html")
+    assert "+{#- a hand edit -#}" in (root / UPSTREAM / "nav-item.html.diff").read_text(encoding="utf-8")
+
+
 def test_rederive_reproduces_the_override(tmp_path):
     assert not tmp_path.resolve().is_relative_to(REPO)
     for name in PARTIALS:

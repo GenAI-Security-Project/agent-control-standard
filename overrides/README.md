@@ -10,7 +10,7 @@ MkDocs Material renders any template in this directory in place of its own. Thre
 
 Each Material override is an installed partial plus a small change. `.upstream/partials/` holds a byte copy of the installed partial and the unified diff from that copy to the override. MkDocs skips dot directories, so none of these files is published.
 
-`tools/rederive_overrides.py` keeps the three in step. After a hand edit of an override, record the change:
+`tools/rederive_overrides.py` keeps the three in step. After a hand edit of an override, record the change. `--record` only re-records the diff from the committed copy and never re-baselines the upstream copy. It refuses when the installed partial differs from the committed copy, because that is a bump and goes through the bump flow below.
 
 ```bash
 uv run python tools/rederive_overrides.py --record

@@ -8,8 +8,10 @@ dot directories, so none of this is published.
 Two modes:
 
     uv run python tools/rederive_overrides.py --record
-        First use, and after a hand edit of an override. Copies each installed partial
-        to the upstream copy and records the diff from it to the current override.
+        First use, and after a hand edit of an override. Records the diff from the
+        committed upstream copy to the current override. It copies the installed partial
+        only when no committed copy exists, and refuses when the committed copy differs
+        from the installed partial, because that change belongs to the bump flow.
 
     uv run python tools/rederive_overrides.py [--accept-delta <hex>]
         The bump flow, run after relocking to a new mkdocs-material. Prints how the
@@ -96,14 +98,29 @@ def apply_diff(upstream: Path, diff: Path, out: Path) -> None:
 
 
 def _record(root: Path, installed: Path | None) -> int:
+    # --record re-baselines nothing. A committed copy that differs from the installed
+    # partial means upstream moved, and only the bump flow shows that delta to a person
+    # before adopting it. Every partial is checked before anything is written.
+    stale = [name for name in PARTIALS
+             if (root / UPSTREAM / name).exists()
+             and (root / UPSTREAM / name).read_bytes() != installed_partial(name, installed).read_bytes()]
+    if stale:
+        for name in stale:
+            print(f"{UPSTREAM / name} differs from the installed partial. --record will not adopt an "
+                  f"upstream change. Run `uv run python tools/rederive_overrides.py`, read the delta, then "
+                  f"run it again with `--accept-delta <hex>`.", file=sys.stderr)
+        return 1
     (root / UPSTREAM).mkdir(parents=True, exist_ok=True)
     for name in PARTIALS:
         copy = root / UPSTREAM / name
-        shutil.copyfile(installed_partial(name, installed), copy)
+        if not copy.exists():
+            # First use only: there is no committed baseline to protect yet.
+            shutil.copyfile(installed_partial(name, installed), copy)
+            print(f"copied the installed partial to {UPSTREAM / name}")
         override = (root / OVERRIDES / name).read_text(encoding="utf-8")
         diff = record_diff(copy.read_text(encoding="utf-8"), override, name)
         (root / UPSTREAM / f"{name}.diff").write_text(diff, encoding="utf-8")
-        print(f"recorded {UPSTREAM / name} and {UPSTREAM / name}.diff")
+        print(f"recorded {UPSTREAM / name}.diff")
     return 0
 
 
