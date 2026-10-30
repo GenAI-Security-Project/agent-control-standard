@@ -11,10 +11,12 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from render_landing import render
+from render_landing import read_nav_config, render
+from site_nav import walk_landing
 
 REPO = Path(__file__).resolve().parents[1]
 LANDING = REPO / "landing"
+LANDING_ROOT = "https://example.org/agent-control-standard/"
 
 
 @pytest.fixture(scope="module")
@@ -25,6 +27,7 @@ def page() -> str:
         (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
         (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         (LANDING / "assets" / "starburst.svg").read_text(encoding="utf-8"),
+        read_nav_config(REPO / "mkdocs.yml"),
     )
 
 
@@ -219,10 +222,16 @@ def test_the_starburst_sets_its_font_on_the_root_element():
 def test_the_specification_is_not_listed_as_an_external_resource(page):
     """It is served from this site, so it belongs with the sections rather than beside
     GitHub and Slack."""
-    # "External resources" names both the <h2> and the nav's aria-label, so the nav
-    # content follows the last occurrence, not the first.
-    external = page.split("External resources")[-1].split("</nav>")[0]
-    assert "docs/" not in external
-    assert "github.com" in external and "owasp.slack.com" in external
-    sections = page.split('aria-label="Sections"')[1].split("</nav>")[0]
-    assert 'href="docs/"' in sections
+    rows = walk_landing(page, LANDING_ROOT)
+    start = next(i for i, row in enumerate(rows) if row[1] == "External resources")
+    assert rows[start][4], "External resources is a section row"
+    external = []
+    for depth, _label, url, _group, _section in rows[start + 1 :]:
+        if depth <= rows[start][0]:
+            break
+        external.append(url)
+    assert not [url for url in external if url.startswith(LANDING_ROOT + "docs/")], external
+    hosts = {url.split("/")[2] for url in external}
+    assert hosts == {"github.com", "owasp.slack.com"}, external
+    docs_root = [row for row in rows[:start] if row[2] == LANDING_ROOT + "docs/"]
+    assert [row[0] for row in docs_root] == [1], "the docs root sits at the top of the pane"
