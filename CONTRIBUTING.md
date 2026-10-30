@@ -58,20 +58,23 @@ quarter is not a finding without value.
 
 Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
-A pull request that changes behavior, alters normative text, or adds code references an
-accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
-fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
-issue.
+If you are a project lead, a workstream lead, or a code owner, your pull requests are not
+queued. A lead's approval, or a lead's request for changes within the last 30 days, clears
+the queue. If a lead has approved and merged a pull request of yours before, your pull
+requests are not queued. An editorial fix to a page under `docs/topics/` or `design/` (a
+typo, a link, formatting, no change in meaning) needs no issue: tick the editorial box in
+the pull request template, and keep every changed file on that lane. Otherwise the pull
+request needs an accepted issue that a lead assigned to you. Comment on the issue to claim
+it before opening the pull request. The comment is the claim, and a lead assigns you. An
+issue labeled `help wanted` is open to anyone who commented on it before opening the pull
+request, two open pull requests per person per issue. A pull request that meets none of
+these waits with the `status:needs-triage` label and a bot comment naming the missing
+step. It is not closed. If a form, a template, or a bot comment disagrees with this
+section, this section wins.
 
 In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` before an issue
 the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
 advances, because the roadmap counts a closed issue as delivered.
-
-If you open a pull request against an issue that is not accepted yet, it will not be
-reviewed and nothing about it is rejected. It waits, and a comment will say so. A pull
-request that sits untriaged for a long time may be closed with an invitation to reopen
-once its issue is accepted. Start from an issue labeled `help wanted` if you want work
-that is already accepted.
 
 [Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who applies
 `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue form can apply them,
@@ -161,8 +164,8 @@ what an agent did to its own commits.
 ## What We Need
 
 Start with [issues labeled `help wanted`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
-Every one of them is already accepted, which means you can open a pull request against it
-without waiting on triage.
+Every one of them is already accepted. Comment on one to claim it, then open the pull
+request. The comment is the claim.
 
 The highest-value contribution right now is running ACS against a real harness and
 documenting where it fails. Install the reference implementation, wire it to a coding

@@ -32,3 +32,19 @@ def test_unmodified_template_references_nothing_and_passes():
 def test_contributing_explains_the_choice():
     text = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     assert "`Contributes to` before one it only" in text
+
+
+def test_template_checkbox_matches_both_editorial_checks_when_ticked():
+    import pr_intake
+    from closing_choice import EDITORIAL
+
+    line = next(line for line in TEMPLATE.splitlines() if "This is an editorial correction" in line)
+    assert line == (
+        "- [ ] This is an editorial correction on the documentation lane (typo, grammar, link,"
+        " formatting) with no change in meaning, so it needs no issue"
+    )
+    ticked = line.replace("- [ ]", "- [x]", 1)
+    assert EDITORIAL.search(normalize(ticked))
+    assert pr_intake.editorial_ticked(ticked)
+    assert not EDITORIAL.search(normalize(line))
+    assert not pr_intake.editorial_ticked(line)

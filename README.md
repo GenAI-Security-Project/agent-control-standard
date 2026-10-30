@@ -346,16 +346,19 @@ flowchart LR
 Every issue starts from one of six forms. There are no blank issues. A form applies a
 `type:` label and `status:needs-triage` automatically, and nothing else.
 [Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who can move an
-issue to `status:accepted`, and only an accepted issue enters the backlog. A pull request that changes behavior, alters normative text, or adds code
-references an accepted issue. An editorial correction, a typo or a broken link, needs
-none.
+issue to `status:accepted`, and only an accepted issue enters the backlog. A pull request
+that changes behavior, alters normative text, or adds code needs an accepted issue that a
+lead assigned to you, or a `help wanted` issue. Comment on the issue to claim it before
+opening the pull request. The comment is the claim. An editorial correction to a page
+under `docs/topics/` or `design/`, a typo or a broken link, needs none.
 
 ```mermaid
 flowchart LR
     F["Issue form"] --> T["Maintainer triage"]
     T -->|"deferred"| D["scope:deferred<br/>tracked for the next spec release"]
     T -->|"accepted"| A["status:accepted<br/>enters the backlog"]
-    A --> P["Pull request<br/>references the issue"]
+    A --> C["Claim<br/>comment on the issue"]
+    C --> P["Pull request<br/>references the issue"]
     E["Editorial fix<br/>typo, broken link"] --> P2["Pull request<br/>needs no issue"]
 ```
 

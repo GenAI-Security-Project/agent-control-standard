@@ -24,9 +24,7 @@ declares. That catches drift from a rename or move as readily as it catches a ty
 The scan originally covered `docs/` only, which is exactly why the 44 dead links above
 lived undetected: root files ship straight to readers too, README.md most of all, and
 carried zero coverage. `ROOT_MARKDOWN_FILES` below adds the front-door files this repo
-actually renders for humans. `CONTRIBUTING.md` is deliberately absent from that list: a
-pull request open at the time this guard was extended rewrites it, and adding it here
-would race that rewrite rather than protect it.
+actually renders for humans, `CONTRIBUTING.md` included.
 """
 import json
 import re
@@ -37,10 +35,10 @@ DOCS = ROOT / "docs"
 SPECIFICATION = ROOT / "specification"
 
 # Repository-root markdown files that ship to readers the same way docs/ does, so they
-# get the same two guards. CONTRIBUTING.md is excluded on purpose; see the module
-# docstring.
+# get the same two guards.
 ROOT_MARKDOWN_FILES = (
     "README.md",
+    "CONTRIBUTING.md",
     "GOVERNANCE.md",
     "SECURITY.md",
     "LICENSING.md",

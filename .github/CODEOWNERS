@@ -13,6 +13,9 @@
 # invitations to @evabenn, @RbBuiltWrong, and @aruneeshsalhotra
 # lapsed and are not being re-sent, so their entries stay inert. The other
 # owners on their lines still apply, so review coverage holds.
+#
+# An owner login here is also exempt from pull request intake and can clear
+# another contributor's by approval.
 
 # Default owners for anything not matched below.
 *                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @evabenn @RbBuiltWrong @aruneeshsalhotra @artmaro @Lrd0036
