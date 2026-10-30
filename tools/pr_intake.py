@@ -1070,12 +1070,13 @@ def _held_use(number: int, author: str, refs: tuple[Reference, ...], listings: L
     """For each open accepted issue this pull request names, the author's open pulls naming it.
 
     This pull request counts from its own fresh title and body, the others from the listing.
+    A draft is out of the gate's scope, so another draft never takes a slot.
     """
     wanted = {ref.number for ref in refs if _open_accepted(ref)}
     uses: dict[int, set[int]] = {issue_number: {number} for issue_number in wanted}
     for pull in listings.open_pulls:
         other = int(pull["number"])
-        if other == number or _login(pull.get("user")) != author:
+        if other == number or pull.get("draft") or _login(pull.get("user")) != author:
             continue
         named, _dropped = referenced(pull.get("title"), pull.get("body"))
         for issue_number, _kind in named:

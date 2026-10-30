@@ -934,6 +934,25 @@ def test_held_use_counts_the_authors_open_pulls_naming_the_issue():
     assert got.held_use == {92: (24, 229)}
 
 
+def test_held_use_ignores_drafts():
+    accepted = fixture("accepted_all.json")
+    for issue_obj in accepted:
+        if issue_obj["number"] == 282:
+            issue_obj["assignees"] = [{"login": "login-1", "type": "User"}]
+    open_pulls = fixture("pulls_open.json")
+    template = next(p for p in open_pulls if p["number"] == 24)
+    drafts = []
+    for draft_number in (24, 25):
+        draft = copy.deepcopy(template)
+        draft.update(number=draft_number, draft=True, body="Refs #282")
+        drafts.append(draft)
+    open_pulls = [p for p in open_pulls if p["number"] != 24] + drafts
+    listings = load_listings(runner_from_fixtures(listing_mapping(accepted=accepted, open_pulls=open_pulls)))
+    got, _ = collect(pull_mapping(pull=with_body("Refs #282"), reviews=[], timeline=[]), listings=listings)
+    assert got.held_use == {282: (229,)}
+    assert outcome(decide(got, TODAY)) == ("pass", "assignment", ())
+
+
 def test_collect_skips_null_review_users_and_bot_reviewers():
     got, _ = collect(pull_mapping())
     assert len(got.reviews) == 11
