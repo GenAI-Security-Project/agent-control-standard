@@ -83,18 +83,15 @@ class FetchFailure(Exception):
 
 
 def _split_http(stdout: str) -> tuple[int, dict[str, str], str]:
-    normalized = stdout.replace("\r\n", "\n")
-    head, _, body = normalized.partition("\n\n")
-    lines = head.split("\n")
+    # One parser for every `gh -i` caller, so the fetch and the intake tool cannot drift
+    # apart. Imported here for the same reason `_runner` imports it: tools/ joins the import
+    # path only inside main's try.
+    import gh_runner
+
     try:
-        status = int(lines[0].split()[1])
-    except (IndexError, ValueError):
+        return gh_runner.split_http(stdout)
+    except gh_runner.RunnerError:
         raise FetchFailure("data", "response had no HTTP status line") from None
-    headers = {}
-    for line in lines[1:]:
-        name, _, value = line.partition(":")
-        headers[name.strip().lower()] = value.strip()
-    return status, headers, body
 
 
 def classify_response(returncode: int, stdout: str, stderr: str) -> dict:

@@ -117,6 +117,13 @@ def test_empty_output_is_transport():
     assert caught.value.cls == "transport"
 
 
+def test_output_without_a_status_line_is_data():
+    # The parser lives in gh_runner. Its error must still reach the record as a fetch class.
+    with pytest.raises(FetchFailure) as caught:
+        classify_response(0, "not an HTTP response", "")
+    assert (caught.value.cls, caught.value.detail) == ("data", "response had no HTTP status line")
+
+
 def test_permission_is_not_retried():
     run, calls = fake_run({"milestones": http(403, {"message": "nope"}), "issues": ""})
     result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
