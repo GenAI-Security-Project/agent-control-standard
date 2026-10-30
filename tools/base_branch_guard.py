@@ -84,7 +84,10 @@ def paths_requiring_integration(paths: Iterable[str]) -> list[str]:
 NEW_PAGE_PREFIX = "docs/"
 
 # Statuses from `git diff --name-status` that put a path into the tree. A rename or copy
-# carries a similarity score after its letter, as in R100.
+# carries a similarity score after its letter, as in R100. The workflow passes
+# --no-renames, so a rename reaches this script as a delete plus an add and the old
+# path stays visible to the path rule. R and C stay here so a listing produced without
+# that flag still counts the new path as an addition.
 ADDING_STATUSES = ("A", "R", "C")
 
 

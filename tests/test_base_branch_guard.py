@@ -195,6 +195,20 @@ def test_name_status_accepts_a_bare_path_as_changed():
     assert parse_name_status(["CONTRIBUTING.md\n"]) == (["CONTRIBUTING.md"], [])
 
 
+def test_workflow_lists_a_rename_as_a_delete_plus_an_add():
+    """With rename detection on, moving specification/x to docs/x lists only docs/x, so
+    the protected path would never reach the path rule. The workflow turns it off."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows"
+                / "pr-base-guard.yml").read_text(encoding="utf-8")
+    diff_lines = [line for line in workflow.splitlines() if "git diff --name-status" in line]
+    assert len(diff_lines) == 1
+    assert "--no-renames" in diff_lines[0]
+    changed, added = parse_name_status(["D\tspecification/v0.1.0/x.json\n",
+                                        "A\tdocs/topics/x.md\n"])
+    assert "specification/v0.1.0/x.json" in changed
+    assert added == ["docs/topics/x.md"]
+
+
 def test_main_reads_a_name_status_listing(tmp_path, monkeypatch, capsys):
     """The workflow writes `git diff --name-status`, so the script must read it."""
     listing = tmp_path / "changed.txt"
