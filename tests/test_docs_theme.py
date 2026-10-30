@@ -3,30 +3,13 @@
 The canonical bug these cover was invisible to every earlier test, because none of them
 compared the URL a page declares against the path it is published at.
 """
-import os
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
+from _docs_build import DOCS_BASE
 
 REPO = Path(__file__).resolve().parents[1]
-DOCS_BASE = "https://example.org/agent-control-standard/docs/"
-
-
-@pytest.fixture(scope="module")
-def built_docs(tmp_path_factory) -> Path:
-    out = tmp_path_factory.mktemp("docs")
-    env = dict(os.environ)
-    env.pop("GOOGLE_ANALYTICS_KEY", None)
-    env["GITHUB_PAGES_URL"] = DOCS_BASE
-    result = subprocess.run(
-        ["uv", "run", "mkdocs", "build", "--strict", "-d", str(out)],
-        cwd=REPO, env=env, capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"mkdocs build failed:\n{result.stdout}\n{result.stderr}")
-    return out
 
 
 def test_every_canonical_matches_the_page_path(built_docs):

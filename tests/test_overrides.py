@@ -9,7 +9,6 @@ The two rows the nav override emits by hand must equal the byte contract in
 tests/test_site_nav_walk.py, because the pane walkers were written against it.
 """
 import hashlib
-import os
 import re
 import shutil
 import subprocess
@@ -25,28 +24,13 @@ sys.path.insert(0, str(REPO / "tests"))
 import rederive_overrides  # noqa: E402
 import site_nav  # noqa: E402
 from rederive_overrides import PARTIALS, UPSTREAM, apply_diff, installed_partial, record_diff  # noqa: E402
+from _docs_build import DOCS_BASE  # noqa: E402
 from render_landing import read_nav_config  # noqa: E402
 from test_site_nav_walk import EXTERNAL_SECTION_ROW, HOME_CONTAINER_ROW  # noqa: E402
 
-DOCS_BASE = "https://example.org/agent-control-standard/docs/"
 FIXTURE_ROOT = "https://example.org/agent-control-standard/"
 OVERRIDES = REPO / "overrides" / "partials"
 NAV = read_nav_config(REPO / "mkdocs.yml")
-
-
-@pytest.fixture(scope="module")
-def built_docs(tmp_path_factory) -> Path:
-    out = tmp_path_factory.mktemp("docs")
-    env = dict(os.environ)
-    env.pop("GOOGLE_ANALYTICS_KEY", None)
-    env["GITHUB_PAGES_URL"] = DOCS_BASE
-    result = subprocess.run(
-        ["uv", "run", "mkdocs", "build", "--strict", "-d", str(out)],
-        cwd=REPO, env=env, capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        pytest.fail(f"mkdocs build failed:\n{result.stdout}\n{result.stderr}")
-    return out
 
 
 def _collapse(markup: str) -> str:

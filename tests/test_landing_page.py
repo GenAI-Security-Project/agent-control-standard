@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from render_landing import _inline_bodies, read_nav_config, render
+import _docs_build
+from render_landing import _inline_bodies
 from site_nav import ancestor_labels, landing_open_labels, walk_landing
 
 REPO = Path(__file__).resolve().parents[1]
@@ -21,14 +22,7 @@ LANDING_ROOT = "https://example.org/agent-control-standard/"
 
 @pytest.fixture(scope="module")
 def page() -> str:
-    return render(
-        (LANDING / "index.html").read_text(encoding="utf-8"),
-        REPO / "specification",
-        (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
-        (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
-        (LANDING / "assets" / "starburst.svg").read_text(encoding="utf-8"),
-        read_nav_config(REPO / "mkdocs.yml"),
-    )
+    return _docs_build.render_landing_page()
 
 
 def test_the_hero_diagram_is_present(page):
