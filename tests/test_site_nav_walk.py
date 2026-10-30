@@ -386,13 +386,15 @@ def test_expanded_mismatch_reports_indeterminate_and_a_missing_attribute():
 def test_patterns_accept_the_pane_and_reject_markup_and_lookalike_hosts():
     labels = [row[1] for row in walk_docs(pane(IDENTITY_ROWS + HOME_CONTAINER_ROW + EXTERNAL_SECTION_ROW), IDENTITY_BASE)]
     labels += [row[1] for row in walk_landing(LANDING_PANE, LANDING_ROOT)]
-    assert all(TITLE.match(label) for label in labels)
-    for bad in ("Trace & Inspect", "<code>hooks</code>", "a > b", ""):
+    assert all(TITLE.fullmatch(label) for label in labels)
+    for bad in ("Trace & Inspect", "<code>hooks</code>", "a > b", "", "Title\n", "a\nb"):
+        assert not TITLE.fullmatch(bad)
         assert not TITLE.match(bad)
 
     for good in ("problem", "how-it-works", "v0_1"):
-        assert ANCHOR.match(good)
-    for bad in ("1st", "-x", "a b", "a#b", '"x', ""):
+        assert ANCHOR.fullmatch(good)
+    for bad in ("1st", "-x", "a b", "a#b", '"x', "", "problem\n"):
+        assert not ANCHOR.fullmatch(bad)
         assert not ANCHOR.match(bad)
 
     for external in ("https://github.com", "mailto:x@example.com", "javascript:alert(1)", "/docs/", "//evil.example"):
@@ -404,12 +406,14 @@ def test_patterns_accept_the_pane_and_reject_markup_and_lookalike_hosts():
         assert EXTERNAL_URL.match(good)
     for bad in ("http://github.com/x", "https://github.com.evil.example/", "https://evilgithub.com/",
                 "https://github.com@evil.example/", "https://owasp.slack.com.evil.example",
-                "https://GITHUB.com/x", "https://example.org/"):
+                "https://GITHUB.com/x", "https://example.org/", "https://github.com\n"):
+        # A prefix pattern, so match() is the call. The \Z tail still refuses a newline.
         assert not EXTERNAL_URL.match(bad)
 
     for good in ("README.md", "concepts/README.md", "spec/trace/OCSF/implementation_examples.md", "topics/faq.md"):
-        assert DOC_PATH.match(good)
-    for bad in ("/README.md", "../README.md", "a/../b.md", "a/..", "x.html", "a b.md", "a\\b.md"):
+        assert DOC_PATH.fullmatch(good)
+    for bad in ("/README.md", "../README.md", "a/../b.md", "a/..", "x.html", "a b.md", "a\\b.md", "x.md\n"):
+        assert not DOC_PATH.fullmatch(bad)
         assert not DOC_PATH.match(bad)
     assert REPO_URL == "https://github.com/GenAI-Security-Project/agent-control-standard"
 

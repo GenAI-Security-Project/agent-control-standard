@@ -23,12 +23,17 @@ from urllib.parse import urljoin
 
 Row = tuple[int, str, str | None, bool, bool]
 
-TITLE = re.compile(r"^[^<>&]+$")
-ANCHOR = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+# These gate pull-request-writable values from mkdocs.yml on their way into HTML, so
+# they anchor with \A and \Z. A `$` also matches before a final newline, which would let
+# "problem\n" pass under match(). Anchoring here keeps them safe under match() or
+# fullmatch() alike, so no caller has to remember which one is safe.
+TITLE = re.compile(r"\A[^<>&\n]+\Z")
+ANCHOR = re.compile(r"\A[A-Za-z][A-Za-z0-9_-]*\Z")
 # A value is external when it matches: any scheme, or a path rooted at the host.
 EXTERNAL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:|^/")
-EXTERNAL_URL = re.compile(r"^https://(github\.com|owasp\.slack\.com)(/|$)")
-DOC_PATH = re.compile(r"^(?!/)(?!.*(^|/)\.\.(/|$))[A-Za-z0-9_./-]+\.md$")
+# A prefix check by design: the host is fixed and any path under it is allowed.
+EXTERNAL_URL = re.compile(r"\Ahttps://(github\.com|owasp\.slack\.com)(/|\Z)")
+DOC_PATH = re.compile(r"\A(?!/)(?!.*(^|/)\.\.(/|$))[A-Za-z0-9_./-]+\.md\Z")
 REPO_URL = "https://github.com/GenAI-Security-Project/agent-control-standard"
 
 PANE_LABEL = "Navigation"
