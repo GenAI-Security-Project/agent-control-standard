@@ -293,6 +293,18 @@
     sidebar.addEventListener("click", function (event) {
       if (event.target.closest("a")) setOpen(false);
     });
+
+    // A phone has no Escape key, so a tap or a focus move outside the panel and the
+    // button closes it.
+    function outside(node) {
+      return !!node && !sidebar.contains(node) && !button.contains(node);
+    }
+    document.addEventListener("click", function (event) {
+      if (body.classList.contains("nav-open") && outside(event.target)) setOpen(false);
+    });
+    sidebar.addEventListener("focusout", function (event) {
+      if (body.classList.contains("nav-open") && outside(event.relatedTarget)) setOpen(false);
+    });
   })();
 </script>
 </body>

@@ -339,6 +339,10 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
     padding: 0.75rem 1.25rem;
     border-bottom: 1px solid var(--acs-border);
     background-color: var(--acs-page);
+    /* Paints above the open panel, so the Menu button that closes it stays on top
+       on a phone, where the panel is wider than the space left of the button. */
+    position: relative;
+    z-index: 30;
   }
   /* The strip carries the wordmark at this width, so the pane drops its copy. */
   .sidebar .wordmark { display: none; }
@@ -356,6 +360,9 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
     width: min(20rem, 85vw);
     height: 100vh;
     overflow-y: auto;
+    /* The strip paints over the panel's top, so the first row starts below it: the
+       40px button, the strip's 1.5rem of padding, and the panel's own 1.5rem. */
+    padding-top: calc(40px + 3rem);
     background-color: var(--acs-page);
     border-right: 1px solid var(--acs-border);
     border-bottom: 0;

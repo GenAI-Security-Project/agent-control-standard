@@ -348,8 +348,24 @@ def test_menu_button_contract(page):
     assert len(scripts) == 1
     script = scripts[0]
     for needle in ('getElementById("menu-toggle")', '"aria-expanded"', '"nav-open"', '"Escape"',
-                   ".focus()", 'addEventListener("click"', 'addEventListener("keydown"'):
+                   ".focus()", 'addEventListener("click"', 'addEventListener("keydown"',
+                   'document.addEventListener("click"', 'addEventListener("focusout"'):
         assert needle in script, needle
+
+
+def test_phone_strip_paints_above_the_open_panel():
+    """The open panel overlaps the Menu button on a phone, so the strip must stack
+    above the panel or the button that closes it is unreachable."""
+    css = re.sub(r"/\*.*?\*/", "", (LANDING / "assets" / "acs.css").read_text(encoding="utf-8"), flags=re.S)
+    phone = css[css.index("@media (max-width: 1024px)"):]
+    strip = " ".join(re.search(r"\.topbar\s*\{(.*?)\}", phone, re.S).group(1).split())
+    panel = " ".join(re.search(r"\.has-drawer \.sidebar\s*\{(.*?)\}", phone, re.S).group(1).split())
+    assert "position: relative;" in strip, strip
+    strip_z = int(re.search(r"z-index: (\d+);", strip).group(1))
+    panel_z = int(re.search(r"z-index: (\d+);", panel).group(1))
+    assert strip_z > panel_z, (strip_z, panel_z)
+    # The strip now covers the panel's top, so the first row must start below it.
+    assert "padding-top: calc(40px + 3rem);" in panel, panel
 
 
 def test_pane_row_ceilings(page):
