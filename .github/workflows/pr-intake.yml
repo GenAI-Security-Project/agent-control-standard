@@ -64,14 +64,16 @@ concurrency:
 jobs:
   intake:
     name: PR intake
-    # Pull request events run only against a protected base, and an edit runs only when
-    # it changed the body, the title, or the base.
+    # Pull request events run only against a protected base, an edit runs only when it
+    # changed the body, the title, or the base, and a label removal runs only for the queue
+    # label, the one removal the gate reads.
     if: >-
       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
       ((github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'integration' ||
       startsWith(github.event.pull_request.base.ref, 'release/')) &&
       (github.event.action != 'edited' || github.event.changes.body || github.event.changes.title ||
-      github.event.changes.base))
+      github.event.changes.base) &&
+      (github.event.action != 'unlabeled' || github.event.label.name == 'status:needs-triage'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -82,7 +84,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The base ref on pull request events. The default branch on schedule and dispatch.
+          # The base ref on pull request events. integration on schedule and dispatch, the ref
+          # whose tool a lead dry-runs to produce PR_INTAKE_TOOL_SHA, so the sweep enforces
+          # exactly the code that was armed.
           ref: ${{ github.event.pull_request.base.ref || 'integration' }}
       - name: Run the intake gate
         env:

@@ -37,7 +37,8 @@ IF = (
     "((github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'integration' || "
     "startsWith(github.event.pull_request.base.ref, 'release/')) && "
     "(github.event.action != 'edited' || github.event.changes.body || github.event.changes.title || "
-    "github.event.changes.base))"
+    "github.event.changes.base) && "
+    "(github.event.action != 'unlabeled' || github.event.label.name == 'status:needs-triage'))"
 )
 STEP_ENV = {
     "GH_TOKEN": "${{ github.token }}",
@@ -278,6 +279,17 @@ def test_edited_guard_covers_body_title_and_base():
     guard = job()["if"]
     assert "(github.event.action != 'edited' || github.event.changes.body || github.event.changes.title || " \
         "github.event.changes.base)" in guard
+
+
+def test_unlabeled_runs_only_for_the_queue_label():
+    # Every other label removal would spend about twenty calls deciding nothing new.
+    assert "(github.event.action != 'unlabeled' || github.event.label.name == 'status:needs-triage')" in job()["if"]
+
+
+def test_checkout_comment_names_integration_for_schedule_and_dispatch():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "The base ref on pull request events. integration on schedule and dispatch" in text
+    assert "default branch on schedule" not in text
 
 
 def test_step_env_is_exactly_this():
