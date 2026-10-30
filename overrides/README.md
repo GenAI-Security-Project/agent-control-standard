@@ -20,7 +20,7 @@ The test suite fails when an override and its recorded diff disagree, and when t
 
 ## Bumping mkdocs-material
 
-Do the bump by hand on its own branch, never on Dependabot's branch. Dependabot's pull request changes the lock file only, and the override test fails on it by design.
+When Dependabot's checks are green, the partials did not change and its pull request merges as is. The hand flow below is for a red `test_upstream_copies_equal_the_installed_partials`. Do that bump by hand on its own branch, never on Dependabot's branch, because Dependabot's pull request changes the lock file only.
 
 1. `git switch -c chore/mkdocs-material-<ver> origin/integration`
 2. `uv lock --upgrade-package mkdocs-material==<ver>`

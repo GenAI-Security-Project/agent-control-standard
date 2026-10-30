@@ -134,7 +134,7 @@ def _bump(root: Path, installed: Path | None, accepted: str | None) -> int:
         current = installed_partial(name, installed).read_text(encoding="utf-8")
         deltas[name] = record_diff(committed, current, name)
     if not any(deltas.values()):
-        print("installed partials equal the upstream copies; relock first")
+        print("installed partials equal the committed copies, nothing to re-derive")
         return 1
 
     text = render_deltas(deltas)

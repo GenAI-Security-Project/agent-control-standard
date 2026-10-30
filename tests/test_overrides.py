@@ -276,5 +276,5 @@ def test_rederive_exits_one_when_nothing_changed(tmp_path):
     before = _snapshot(root)
     result = _run(root, installed=_fake_installed(tmp_path))
     assert result.returncode == 1
-    assert "installed partials equal the upstream copies; relock first" in result.stdout + result.stderr
+    assert "installed partials equal the committed copies, nothing to re-derive" in result.stdout + result.stderr
     assert _snapshot(root) == before
