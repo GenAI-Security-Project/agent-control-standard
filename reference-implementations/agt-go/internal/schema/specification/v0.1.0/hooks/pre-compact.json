@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/pre-compact.json",
+  "title": "steps/preCompact payload",
+  "description": "Fires before the runtime LLM compresses its context window into a summary. Decision-eligible — Guardians MAY return 'deny' to block compaction (e.g., because deployment policy forbids compacting after data the Guardian classifies as untrusted has entered until a re-grounding from a policy-trusted origin occurs). Compaction is the chokepoint where provenance can be laundered: the summary that comes out is new agent_generated content whose lineage spans every entry in the pre-compaction context. Without this hook, AARM cumulative-context tracking breaks across compaction, FIDES's monotonicity claim is unverifiable, and 'don't compact across a trust boundary' policies have nowhere to attach. (Trust classification is computed by the Guardian against local policy in v0.1 — see §7.1.)",
+  "type": "object",
+  "required": ["entries_to_compact", "triggered_by"],
+  "properties": {
+    "entries_to_compact": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Array of step_ids that the framework intends to summarize. Lets the Guardian see exactly which prior steps will be folded into the summary, which is what its provenance lineage will reference after compaction."
+    },
+    "pre_compact_provenance_summary": {
+      "$ref": "../provenance-summary.json",
+      "description": "Optional condensed view of the provenance facts in the to-be-compacted region (origins observed, entry counts, max lineage depth, earliest step per origin, etc.). RECOMMENDED — without it the Guardian must derive these facts itself by walking the listed entries. Lets a policy decide quickly whether the compaction is safe; the Guardian projects the origin facts onto its own trust classification in policy."
+    },
+    "triggered_by": {
+      "type": "string",
+      "enum": ["size_threshold", "manual", "agent_initiated", "framework_initiated"],
+      "description": "What caused the framework to compact now. 'size_threshold' = the runtime hit a configured token/step limit. 'manual' = the user requested it. 'agent_initiated' = the runtime LLM emitted a compaction tool call (NOT RECOMMENDED but observed in some agents). 'framework_initiated' = scheduled or policy-driven by the framework itself."
+    },
+    "estimated_input_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. Rough token count of the region about to be compacted. Useful for policies that key on compaction magnitude."
+    },
+    "target_summary_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. Target size of the resulting summary. Lets the Guardian reason about how aggressive the compression is."
+    }
+  }
+}

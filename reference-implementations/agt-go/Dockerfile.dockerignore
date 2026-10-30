@@ -1,0 +1,11 @@
+**
+!reference-implementations/
+!reference-implementations/agt-go/
+!reference-implementations/agt-go/**
+!reference-implementations/agt/
+!reference-implementations/agt/policy/
+!reference-implementations/agt/policy/**
+!reference-implementations/agt/mapping.yaml
+reference-implementations/agt-go/.acs/
+reference-implementations/agt-go/.git/
+reference-implementations/agt-go/**/node_modules/
