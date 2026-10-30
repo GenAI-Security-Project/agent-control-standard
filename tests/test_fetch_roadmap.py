@@ -52,9 +52,11 @@ ISSUES = {"data": {"repository": {"milestone": {"issues": {
 def fake_run(responses):
     calls = []
 
-    def run(args):
-        calls.append(args)
-        query = next(a for a in args if a.startswith("query="))
+    def run(args, stdin=None):
+        assert args == ["api", "-i", "graphql", "--input", "-"]
+        request = json.loads(stdin)
+        calls.append(request)
+        query = request["query"]
         key = "issues" if "milestone(number" in query else "milestones"
         out = responses[key].pop(0) if isinstance(responses[key], list) else responses[key]
         return 0, out, ""
@@ -178,9 +180,8 @@ def make_history(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 
 STUB = """#!/usr/bin/env python3
 import json, sys
-args = sys.argv[1:]
 data = json.load(open({path!r}))
-query = next(a for a in args if a.startswith("query="))
+query = json.load(sys.stdin)["query"]
 key = "issues" if "milestone(number" in query else "milestones"
 sys.stdout.write(data[key])
 """
@@ -223,9 +224,9 @@ def test_empty_token_is_permission_and_not_retried(monkeypatch):
     calls = []
     inner = fetch_roadmap._runner("/nonexistent/gh")
 
-    def run(args):
+    def run(args, stdin=None):
         calls.append(args)
-        return inner(args)
+        return inner(args, stdin)
 
     result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
     assert result["class"] == "permission" and len(calls) == 1
@@ -235,7 +236,7 @@ ENV_STUB = """#!/usr/bin/env python3
 import json, os, sys
 open({dump!r}, "w").write(json.dumps(sorted(os.environ)))
 data = json.load(open({path!r}))
-query = next(a for a in sys.argv[1:] if a.startswith("query="))
+query = json.load(sys.stdin)["query"]
 sys.stdout.write(data["issues" if "milestone(number" in query else "milestones"])
 """
 
@@ -256,7 +257,7 @@ def test_gh_environment_is_exactly_the_minimal_set(tmp_path):
                     "--gh", str(stub)], capture_output=True, text=True, timeout=60, env=poisoned)
     # CPython (locale coercion) and macOS add these two themselves, whatever the caller passes.
     keys = set(json.loads(dump.read_text())) - {"__CF_USER_TEXT_ENCODING", "LC_CTYPE"}
-    assert keys == {"PATH", "HOME", "GH_TOKEN", "GH_HOST"}
+    assert keys == {"PATH", "HOME", "GH_TOKEN", "GH_HOST", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER"}
 
 
 def page(nodes, more, cursor):
@@ -275,8 +276,8 @@ def test_issue_pages_carry_cursor_and_dedupe():
     run, calls = fake_run({"milestones": http(200, MILESTONES), "issues": pages})
     result = fetch(run, "o/n", 240, sleep=lambda s: None, clock=lambda: 0.0)
     assert result["status"] == "ok" and len(result["milestones"][0]["issues"]) == 1
-    assert "cursor=c1" in calls[2]
-    assert "cursor=c1" not in calls[1]
+    assert calls[2]["variables"]["cursor"] == "c1"
+    assert "cursor" not in calls[1]["variables"]
 
 
 def test_max_pages_overflow_is_code_defect(monkeypatch):

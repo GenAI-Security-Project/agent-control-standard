@@ -81,18 +81,20 @@ class GitHub:
     def __init__(self, repo: str = model.REPO) -> None:
         self.repo = repo
 
-    def call(self, *args: str) -> tuple[int, str, str]:
+    def call(self, *args: str, stdin: str | None = None) -> tuple[int, str, str]:
         # Thirty seconds per call keeps the sweep inside its fifteen-minute job limit. A
         # timeout reads as a failed call, so the section that made it degrades.
         try:
-            done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS)
+            done = subprocess.run(
+                ["gh", *args], input=stdin, capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+            )
         except subprocess.TimeoutExpired:
             return 124, "", f"gh timed out after {GH_TIMEOUT_SECONDS} seconds"
         return done.returncode, done.stdout, done.stderr
 
-    def call_list(self, args: list[str]) -> tuple[int, str, str]:
+    def call_list(self, args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
         """The runner signature fetch_roadmap.fetch expects."""
-        return self.call(*args)
+        return self.call(*args, stdin=stdin)
 
     def _check(self, result: tuple[int, str, str], what: str) -> str:
         code, out, err = result

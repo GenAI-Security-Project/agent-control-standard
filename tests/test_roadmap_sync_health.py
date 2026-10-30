@@ -276,7 +276,7 @@ class FactsGitHub:
     def paginate(self, path):
         return []
 
-    def call_list(self, args):
+    def call_list(self, args, stdin=None):
         import json as _json
         empty = {"data": {"repository": {"milestones": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}}}
         return 0, "HTTP/2.0 200 OK\r\n\r\n" + _json.dumps(empty), ""
