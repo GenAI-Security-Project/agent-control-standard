@@ -104,9 +104,16 @@ def check_health(configured: str, issue: dict | None, now: datetime) -> list[str
 
 
 def check_intake(runs: list | None, now: datetime) -> list[str]:
-    """Problems with the latest completed nightly intake sweep. An unfinished run is skipped."""
+    """Problems with the latest completed nightly intake sweep. An unfinished run is skipped.
+
+    None means the run list could not be read, a 401 or a 403 for instance, which is its
+    own problem. Reading it as no run at all would send the leads looking for a missing
+    schedule when the token is what failed.
+    """
+    if runs is None:
+        return ["the intake run list could not be read"]
     finished = [
-        run for run in (runs or [])
+        run for run in runs
         if isinstance(run, dict) and run.get("status") == "completed"
     ]
     if not finished:

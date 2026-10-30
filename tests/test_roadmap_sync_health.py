@@ -422,7 +422,7 @@ def test_queued_section_renders_numbers_reasons_days_only():
     assert r["queued_pulls"] == [[301, "no_accepted", 31, "62:2026-10-02"]]
     assert "## Queued pull requests" in body
     assert "- #301: no_accepted, 31 days" in body
-    assert "the nightly intake sweep run 777 concluded success" in body
+    assert f"the nightly intake sweep run [777](https://github.com/{REPO}/actions/runs/777) concluded success" in body
     assert "- #62: commented 30 days ago by the author of PR #301 (14 days or more)" in body
     assert "Any comment by the author before the pull request counts, so read the issue before acting." in body
     assert (f"[All queued pull requests with authors](https://github.com/{REPO}/pulls?q="
@@ -584,6 +584,18 @@ def test_closed_listing_stops_at_the_window_start():
 
 def test_closed_listing_reads_the_next_page_while_inside_the_window():
     first = [closed_pull(500 + n, "2026-10-01T00:00:00Z") for n in range(100)]
+    second = [closed_pull(700, "2026-09-01T00:00:00Z")]
+    gh = IntakeGitHub(pages=[first, second])
+    from roadmap_sync import intake_snapshot
+    snapshot = intake_snapshot(gh, date(2026, 11, 1), TRUSTED)
+    assert gh.requested("&page=") == [CLOSED_PAGE + "1", CLOSED_PAGE + "2"]
+    assert len(snapshot["intake_recent"]) == 101
+
+
+def test_closed_listing_reads_on_past_a_pull_request_with_no_update_time():
+    # A missing updated_at says nothing about the window, so it cannot end the listing.
+    first = [closed_pull(500 + n, "2026-10-01T00:00:00Z") for n in range(100)]
+    del first[50]["updated_at"]
     second = [closed_pull(700, "2026-09-01T00:00:00Z")]
     gh = IntakeGitHub(pages=[first, second])
     from roadmap_sync import intake_snapshot

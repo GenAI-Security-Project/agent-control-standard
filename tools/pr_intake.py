@@ -159,6 +159,8 @@ class Facts:
     keyword_markers: frozenset[str] = frozenset()
     # PR_INTAKE_LANDED, or None when it is unset or unreadable. Wording only, so not hashed.
     rule_landed: date | None = None
+    # Open accepted issues the author does not hold whose comments the claim-read cap left unread.
+    claims_dropped: int = 0
 
 
 @dataclass(frozen=True)
@@ -219,7 +221,7 @@ def facts_hash(facts: Facts, today: date) -> str:
     """Twelve hex characters that change when anything the gate reads changes.
 
     Included: number, state, draft, author, author_is_bot, base, head_sha, labels, paths,
-    paths_truncated, references_dropped, reviews (login, state, association, commit_id),
+    paths_truncated, references_dropped, claims_dropped, reviews (login, state, association, commit_id),
     last_unlabel, last_author_comment_at, auto_merge, author_record, held_use, roster,
     mode, and every reference in full. The closing set enters through `references[].kind`,
     which `closing_choice.parse_references` sets from the keyword, so `Closes #5` becoming
@@ -268,6 +270,7 @@ def facts_hash(facts: Facts, today: date) -> str:
             key=repr,
         ),
         "references_dropped": facts.references_dropped,
+        "claims_dropped": facts.claims_dropped,
         "reviews": sorted(((r.login, r.state, r.association, r.commit_id) for r in facts.reviews), key=repr),
         "cleared_head": (facts.bot_comment.data or {}).get("cleared_head") if facts.bot_comment else None,
         "last_unlabel": None if _by_bot(facts.last_unlabel) else facts.last_unlabel,
@@ -846,6 +849,11 @@ def render_comment(facts: Facts, decision: Decision, today: date) -> str:
                 f"The bot read the first {MAX_REFERENCES} issues this pull request names, and"
                 f" {facts.references_dropped} more were not read."
             )
+        if facts.claims_dropped:
+            paragraphs.append(
+                f"The bot checked your comments on the first {MAX_CLAIM_READS} accepted issues this pull request"
+                f" names, and {facts.claims_dropped} more were not checked."
+            )
         if _reversed_unlabel(facts):
             paragraphs.append(
                 "The queue label was removed by someone other than a lead, so the bot set it again."
@@ -1234,11 +1242,13 @@ def _assemble(
     pulls = {int(p["number"]): p for p in listings.open_pulls + listings.merged_pulls}
     named, dropped = referenced(title, body)
     refs = [_resolve(n, kind, listings, pulls) for n, kind in named]
-    claim_reads = 0
+    claim_reads = claims_dropped = 0
     for index, ref in enumerate(refs):
-        if claim_reads >= MAX_CLAIM_READS:
-            break
         if not _open_accepted(ref) or author in ref.assignees:
+            continue
+        if claim_reads >= MAX_CLAIM_READS:
+            # Counted, not read, so the comment can say the list was cut.
+            claims_dropped += 1
             continue
         claim_reads += 1
         issue_comments = paginate(run, f"{_API}/issues/{ref.number}/comments?per_page=100")
@@ -1285,6 +1295,7 @@ def _assemble(
         sweep=sweep,
         event_action=event_action,
         rule_landed=landed,
+        claims_dropped=claims_dropped,
     )
 
 
@@ -1410,11 +1421,11 @@ EVENT_NAMES = frozenset({"pull_request_target", "pull_request_review"})
 SWEEP_NAMES = frozenset({"schedule", "workflow_dispatch"})
 INTAKE_MODES = frozenset({"evaluate", "dryrun", "retract"})
 AUTHOR_SCOPES = frozenset({"all", "bots"})
-QUEUED_ELSEWHERE = "Queued for the reason given on PR #{number}."
+QUEUED_ELSEWHERE = "Queued with reason `{reason}`. PR #{number} carries the bot's full comment."
 RETRACTED_LINE = "Retracted. This pull request is not queued."
 MISMATCH_ERROR = (
-    "::error::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref; dry-sweep and re-arm,"
-    " or unset PR_INTAKE_ENFORCED"
+    "::error::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref. Dry-sweep and re-arm,"
+    " or unset PR_INTAKE_ENFORCED."
 )
 _QUEUE_REASONS = frozenset(REASONS) - {"retracted"}
 _DIGITS = re.compile(r"[0-9]{1,9}")
@@ -1658,7 +1669,12 @@ def _newly_queued(facts: Facts, decision: Decision) -> bool:
 
 
 def _batch(assessed: list[_Assessment]) -> None:
-    """Give an author with many new queues one full comment, on the newest, and a pointer on the rest."""
+    """Give an author with many new queues one full comment, on the newest, and a pointer on the rest.
+
+    The pointer names its own first reason, since the newest may be queued for another, and
+    keeps the auto-merge line and the merger's keyword warning, which are about this pull
+    request alone.
+    """
     by_author: dict[str, list[_Assessment]] = {}
     for item in assessed:
         if item.decision is not None and item.decision.comment is not None and _newly_queued(item.facts, item.decision):
@@ -1670,8 +1686,14 @@ def _batch(assessed: list[_Assessment]) -> None:
         for item in group:
             if item.number != newest:
                 line = item.decision.comment.split("\n", 1)[0]
-                text = f"{line}\n{MARKER}\n\n{QUEUED_ELSEWHERE.format(number=newest)}"
-                item.decision = replace(item.decision, comment=text)
+                paragraphs = [QUEUED_ELSEWHERE.format(reason=item.decision.reasons[0], number=newest)]
+                if item.decision.disable_auto_merge:
+                    paragraphs.append(_auto_merge_line(item.facts))
+                closes = _roadmap_closes(item.facts)
+                if closes:
+                    paragraphs.append(_keyword_warning(closes))
+                text = f"{line}\n{MARKER}\n\n" + "\n\n".join(paragraphs)
+                item.decision = replace(item.decision, comment=text[:MAX_COMMENT])
 
 
 def _count(summary: Summary, facts: Facts, decision: Decision) -> None:
@@ -1839,7 +1861,8 @@ def retract(
         except _PER_PULL_ERRORS as exc:
             _error(summary, number, exc, log)
             continue
-        if done is None:
+        # An empty list means nothing needed undoing, which is unchanged, not cleared.
+        if not done:
             summary.unchanged += 1
             summary.queued_total += roadmap_model.NEEDS_TRIAGE in _label_names(pull.get("labels"))
             continue

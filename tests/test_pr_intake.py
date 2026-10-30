@@ -465,6 +465,13 @@ def test_body_failing_two_routes_renders_both_paragraphs():
     assert decision.data["issues"] == "10,11,12"
 
 
+def test_comment_says_when_the_claim_reads_were_cut():
+    decision = decide(facts(references=(issue(47),), held_use={47: (354,)}, claims_dropped=3), TODAY)
+    assert (f"The bot checked your comments on the first {pr_intake.MAX_CLAIM_READS} accepted issues this pull"
+            " request names, and 3 more were not checked.") in decision.comment
+    assert "were not checked" not in decide(facts(references=(issue(47),), held_use={47: (354,)}), TODAY).comment
+
+
 def test_prior_comment_is_named_as_possibly_waiting():
     asked = issue(47, commented=OPENED - timedelta(days=4))
     decision = decide(facts(references=(asked, issue(48)), held_use={47: (354,), 48: (354,)}), TODAY)
@@ -679,6 +686,7 @@ def _mutations(base: Facts) -> dict:
         "event_action": "edited",
         "keyword_markers": frozenset({"<!-- acs-closing-keyword:92 -->"}),
         "rule_landed": date(2027, 1, 1),
+        "claims_dropped": 2,
     }
 
 
@@ -930,11 +938,14 @@ def test_changelog_anchor_is_not_a_reference():
 
 
 def test_sixty_four_kilobyte_anchor_body_parses_under_one_second():
+    foreign = '<a href="https://example.com/x">#92</a>'
+    # Every body carries a #92 inside a foreign anchor, so the assertion below has something
+    # to drop, and every body is near the parse limit.
     bodies = (
-        ("<a " * 22_000)[: closing_choice.MAX_CHARS],
+        ("<a " * 22_000)[: closing_choice.MAX_CHARS - len(foreign)] + foreign,
         ('<a href="https://example.com/x">#92 ' * 2_000)[: closing_choice.MAX_CHARS],
-        ("<a href=" + "a" * 2_040 + ">#5 </a  >") * 30,
-        ("</a" + " " * 60) * 1_000,
+        ("<a href=" + "a" * 2_040 + ">#5 </a  >") * 30 + foreign,
+        '<a href="https://example.com/y">#92 ' + ("</a" + " " * 60) * 1_000,
     )
     for body in bodies:
         started = time.monotonic()
@@ -964,13 +975,19 @@ def test_closed_accepted_issue_is_collected_as_closed_not_as_a_pull_request():
 
 
 def test_collect_makes_at_most_twelve_calls_whatever_the_body():
-    body = " ".join(f"Refs #{n}" for n in range(1, 1_001)) + " Refs #92 #362 #361 #351 #322 #284 #283 #282"
+    # The open accepted numbers come first, so the claim reads happen inside the twenty.
     accepted_open = (92, 362, 361, 351, 322, 284, 283, 282)
+    body = " ".join(f"Refs #{n}" for n in accepted_open) + " " + " ".join(f"Refs #{n}" for n in range(1, 1_001))
     got, calls = collect({**pull_mapping(pull=with_body(body)), **claim_mapping(*accepted_open)})
     assert len(calls) <= 12
+    claim_reads = [path for path in read_paths(calls) if re.search(r"/issues/[0-9]+/comments", path) and "/229/" not in path]
+    assert claim_reads == [f"{API}/issues/{n}/comments?per_page=100" for n in accepted_open[:pr_intake.MAX_CLAIM_READS]]
+    assert got.claims_dropped == len(accepted_open) - pr_intake.MAX_CLAIM_READS
     assert len(got.references) == pr_intake.MAX_REFERENCES
     assert got.references_dropped == 1_000 - pr_intake.MAX_REFERENCES
-    assert [ref.number for ref in got.references] == list(range(1, pr_intake.MAX_REFERENCES + 1))
+    named = [ref.number for ref in got.references]
+    assert named[:len(accepted_open)] == list(accepted_open)
+    assert named[len(accepted_open):] == [n for n in range(1, 1_001) if n not in accepted_open][:12]
 
     with pytest.raises(BudgetStop):
         collect({**pull_mapping(pull=with_body(body)), **claim_mapping(*accepted_open)}, counter=CallCounter(limit=3))
@@ -1360,6 +1377,13 @@ def test_apply_falls_back_to_draft_when_auto_merge_survives_the_disable():
         apply_with(run, facts(auto_merge=True), decision(disable_auto_merge=True))
     assert str(error.value) == "auto_merge_off exited 1"
 
+    # A disable that exits 0 is not trusted when the read-back fails: no confirmation, no success.
+    run = write_runner((0, "", ""), (1, "", "gh: read failure text"))
+    with pytest.raises(WriteError) as error:
+        apply_with(run, facts(auto_merge=True), decision(disable_auto_merge=True))
+    assert str(error.value) == "auto_merge_off re-read failed"
+    assert [args[0] for args, _ in run.calls] == ["pr", "api"]
+
 
 # --- Modes, arming, the sweep, retract, and main -----------------------------------------
 # The fake below is a small stateful GitHub: reads serve the pull requests, comments, and
@@ -1382,8 +1406,8 @@ ENV_KEYS = (
 )
 OPEN_PULLS = f"{API}/pulls?state=open&per_page=100"
 MISMATCH = (
-    "::error::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref; dry-sweep and re-arm,"
-    " or unset PR_INTAKE_ENFORCED"
+    "::error::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref. Dry-sweep and re-arm,"
+    " or unset PR_INTAKE_ENFORCED."
 )
 
 
@@ -1945,14 +1969,17 @@ def test_retract_scoped_to_bots_touches_only_known_bots():
             gh_pull(801, author="dependabot[bot]", labels=(NEEDS_TRIAGE,)),
             gh_pull(802, labels=(NEEDS_TRIAGE,)),
             gh_pull(803, author="github-actions[bot]", labels=(NEEDS_TRIAGE,)),
+            gh_pull(804, author="dependabot[bot]"),
         ])
         fake.comments[801] = [bot_said(pr_intake.LEGACY_COMMENT, 1)]
         fake.comments[802] = [bot_said(COMMENT, 2)]
         return fake
 
     fake = population()
-    summary = retract(fake, [801, 802, 803], authors="bots", today=SWEEP_TODAY, log=lambda line: None)
-    assert (summary.cleared, summary.unchanged, summary.errors) == (2, 1, []) and balanced(summary)
+    summary = retract(fake, [801, 802, 803, 804], authors="bots", today=SWEEP_TODAY, log=lambda line: None)
+    # 804 is a bot's pull request with no label and no comment: nothing to undo, so unchanged.
+    assert (summary.cleared, summary.unchanged, summary.errors) == (2, 2, []) and balanced(summary)
+    assert fake.bodies(804) == [] and not any("/804/" in args[4] for args, _ in fake.writes() if args[0] == "api")
     assert not fake.labeled(801) and not fake.labeled(803) and fake.labeled(802)
     assert parse_data_line(fake.bodies(801)[0])["reason"] == "retracted"
     assert fake.bodies(802) == [COMMENT] and fake.bodies(803) == []
@@ -1967,18 +1994,27 @@ def test_retract_scoped_to_bots_touches_only_known_bots():
 
 def test_any_sweep_batches_an_author_with_many_queues():
     busy = [gh_pull(900 + n, author="busy") for n in range(1, 6)]
+    busy[1] = gh_pull(902, author="busy", auto_merge={"merge_method": "squash"})
+    busy[2] = gh_pull(903, author="busy", body="Fixes #60")
     calm = [gh_pull(910 + n, author="calm") for n in range(1, 4)]
-    fake = FakeGitHub(busy + calm)
+    roadmap = {**gh_issue(60), "labels": [], "milestone": {"number": 1}}
+    fake = FakeGitHub(busy + calm, accepted=[roadmap])
     summary, _ = sweep(fake)
     assert summary.newly_queued == 8
     (newest,) = fake.bodies(905)
     assert pr_intake.QUEUED_LINE in newest
+    short = "Queued with reason `no_accepted`. PR #905 carries the bot's full comment."
+    extra = {
+        902: ["", "Auto-merge is off while this pull request is queued."],
+        903: ["", pr_intake._keyword_warning((60,))],
+    }
     for number in range(901, 905):
         (body,) = fake.bodies(number)
         lines = body.split("\n")
         assert parse_data_line(lines[0])["reason"] == "no_accepted" and lines[1] == pr_intake.MARKER
-        assert lines[2:] == ["", "Queued for the reason given on PR #905."]
+        assert lines[2:] == ["", short] + extra.get(number, [])
         assert fake.labeled(number)
+    assert fake.pulls[902]["auto_merge"] is None
     for number in range(911, 914):
         assert pr_intake.QUEUED_LINE in fake.bodies(number)[0]
 

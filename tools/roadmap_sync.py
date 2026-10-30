@@ -590,9 +590,10 @@ def _intake_recent(gh, today: date, trusted: frozenset[str]) -> list[list]:
             trusted_author = author in trusted
             recent.append([number, trusted_author, route if route in CLEAR_ROUTES else None, merged])
         # closed_at is never later than updated_at, so once a page reaches an update older
-        # than the window, no later page can hold a close inside it.
+        # than the window, no later page can hold a close inside it. A missing update time
+        # says nothing about the window, so it is read as inside it and the listing goes on.
         updated = [_when(pull.get("updated_at")) for pull in pulls if isinstance(pull, dict)]
-        if len(pulls) < 100 or any(when is None or when < cutoff for when in updated):
+        if len(pulls) < 100 or any(when is not None and when < cutoff for when in updated):
             return recent
     # Reporting a partial count as the full one would mislead the review, so the section degrades.
     raise SyncError(f"closed pull request listing ran past {CLOSED_PAGE_CAP} pages")
@@ -651,7 +652,7 @@ def _render_queued(report: dict) -> list[str]:
         conclusion, run_id, created = meta
         day = f" on {created[:10]}" if created else ""
         lines.append(
-            f"Last scheduled run: the nightly intake sweep run {int(run_id)} "
+            f"Last scheduled run: the nightly intake sweep run [{int(run_id)}]({repo_url}/actions/runs/{int(run_id)}) "
             f"concluded {conclusion or 'with no readable conclusion'}{day}."
         )
     else:

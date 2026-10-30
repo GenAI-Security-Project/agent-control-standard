@@ -119,7 +119,7 @@ def sweep(conclusion="success", hours=5, status="completed", run_id=77):
 
 
 @pytest.mark.parametrize("runs, expected", [
-    (None, ["no completed nightly intake sweep run exists"]),
+    (None, ["the intake run list could not be read"]),
     ([], ["no completed nightly intake sweep run exists"]),
     ([sweep(hours=31)], ["the nightly intake sweep run 77 is older than 30 hours"]),
     ([sweep("failure")], ["the nightly intake sweep run 77 concluded failure"]),
@@ -141,7 +141,34 @@ def test_evaluate_runs_intake_only_when_enforced():
     on = evaluate({"PR_INTAKE_ENFORCED": "true"}, read_json=lambda url: None,
                   read_issue=lambda n: None, now=NOW, read_runs=lambda: None)
     assert off == []
-    assert on == ["no completed nightly intake sweep run exists"]
+    assert on == ["the intake run list could not be read"]
+
+
+@pytest.mark.parametrize("served, expected", [
+    ((1, "HTTP/2.0 401 Unauthorized\r\n\r\n{\"message\": \"Bad credentials\"}", ""), None),
+    ((1, "HTTP/2.0 403 Forbidden\r\n\r\n{\"message\": \"Resource not accessible\"}", ""), None),
+    ((0, "HTTP/2.0 200 OK\r\n\r\n{\"workflow_runs\": []}", ""), []),
+    ((0, "HTTP/2.0 200 OK\r\n\r\n{\"workflow_runs\": [{\"id\": 7}]}", ""), [{"id": 7}]),
+])
+def test_read_runs_tells_an_unreadable_list_from_an_empty_one(monkeypatch, served, expected):
+    import gh_runner
+    import monitor_roadmap
+    calls = []
+
+    def run(args, stdin=None):
+        gh_runner._check_allowlist(args)
+        calls.append(args)
+        return served
+
+    monkeypatch.setattr(monitor_roadmap, "make_runner", lambda *a, **k: run)
+    assert monitor_roadmap._read_runs() == expected
+    assert calls == [["api", "-i", "repos/GenAI-Security-Project/agent-control-standard/actions/workflows/"
+                      "pr-intake.yml/runs?event=schedule&status=completed&per_page=1"]]
+    problems = monitor_roadmap.check_intake(monitor_roadmap._read_runs(), NOW)
+    if expected is None:
+        assert problems == ["the intake run list could not be read"]
+    elif expected == []:
+        assert problems == ["no completed nightly intake sweep run exists"]
 
 
 def test_evaluate_reads_enforced_from_env():
