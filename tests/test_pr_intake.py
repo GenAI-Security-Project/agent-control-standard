@@ -1376,11 +1376,12 @@ MISMATCH = (
 
 
 def gh_pull(number, *, author="outsider", body="b", draft=False, labels=(), updated="2026-11-09T01:00:00Z",
-            auto_merge=None) -> dict:
+            auto_merge=None, head_repo=roadmap_model.REPO) -> dict:
     return {
         "number": number, "state": "open", "draft": draft, "title": "Add a thing", "body": body,
         "user": {"login": author, "type": "Bot" if author.endswith("[bot]") else "User"},
-        "base": {"ref": "integration"}, "head": {"sha": f"{number:040d}"},
+        "base": {"ref": "integration"},
+        "head": {"sha": f"{number:040d}", "repo": {"full_name": head_repo} if head_repo else None},
         "created_at": "2026-11-02T12:00:00Z", "updated_at": updated, "changed_files": 1,
         "labels": [{"name": name} for name in labels], "auto_merge": auto_merge,
     }
@@ -2057,3 +2058,24 @@ def test_the_landing_date_comes_from_the_repository_variable(monkeypatch, capsys
     assert out.count("::warning::") == int(warned)
     if warned:
         assert landed not in out
+
+
+@pytest.mark.parametrize("head_repo", ["someone/agent-control-standard", None])
+def test_review_run_on_a_fork_writes_nothing_and_leaves_it_to_the_sweep(monkeypatch, capsys, head_repo):
+    # A fork's review run holds a read-only token, so the disable would fail and turn the run red.
+    fake = FakeGitHub([gh_pull(981, auto_merge={"merge_method": "squash"}, head_repo=head_repo)])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_review", EVENT_ACTION="submitted",
+                            PR_NUMBER="981", **armed_env())
+    assert code == 0, out
+    assert fake.writes() == []
+    assert "#981 queue no_accepted" in out
+    assert "::notice::#981: a review run on a fork's pull request has a read-only token, so the nightly sweep applies this decision." in out
+    assert "::error::" not in out
+
+
+def test_review_run_on_a_same_repository_pull_request_writes(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(982, auto_merge={"merge_method": "squash"})])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_review", EVENT_ACTION="submitted",
+                            PR_NUMBER="982", **armed_env())
+    assert code == 0, out
+    assert fake.labeled(982) and fake.bodies(982) and fake.pulls[982]["auto_merge"] is None

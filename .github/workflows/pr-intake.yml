@@ -11,6 +11,11 @@
 # number, the event name and action, the dispatch inputs, and three repository variables,
 # nothing else.
 #
+# pull_request_review gets a read-only token when the pull request comes from a fork, so
+# on a fork's pull request the tool decides, writes nothing, prints a notice, and exits 0,
+# and the nightly sweep applies the decision. A same-repository pull
+# request is cleared on the review itself.
+#
 # The nightly sweep runs at 03:10 UTC so the 04:10 roadmap sweep can report the same
 # night's pass. That ordering is best effort: roadmap-refresh.yml records scheduler start
 # delays of up to two hours on this repository.

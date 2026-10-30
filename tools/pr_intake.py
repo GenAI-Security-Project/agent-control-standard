@@ -1871,9 +1871,17 @@ def _collector() -> tuple[list[str], object]:
     return lines, log
 
 
+def _same_repository(pull: dict) -> bool:
+    """Whether the pull request's head lives in this repository. A deleted fork reads as a fork."""
+    head = pull.get("head")
+    repo = head.get("repo") if isinstance(head, dict) else None
+    name = repo.get("full_name") if isinstance(repo, dict) else None
+    return isinstance(name, str) and name.casefold() == roadmap_model.REPO.casefold()
+
+
 def _main_event(
     run: Runner, number: int, *, state: str, action: str | None, roster: frozenset[str], today: date,
-    landed: date | None = None,
+    landed: date | None = None, event: str = "pull_request_target",
 ) -> int:
     """One pull request on its own event. Green on anything but a failed auto-merge disable."""
     if state == "mismatched":
@@ -1881,7 +1889,12 @@ def _main_event(
     mode = "enforced" if state == "enforced" else "legacy"
     counter = CallCounter()
     counted = counter.wrap(run)
+    write = True
     try:
+        if event == "pull_request_review" and not _same_repository(_read_pull(counted, number)):
+            # GitHub gives a review run on a fork's pull request a read-only token, so every
+            # write would fail, the auto-merge disable red. The sweep makes the same decision.
+            write = False
         if action == "synchronize":
             # A push changes no fact the gate reads except the paths, which only the
             # editorial route reads. The nightly sweep catches the head change.
@@ -1892,7 +1905,7 @@ def _main_event(
         listings = load_listings(counted)
         decision, done = evaluate_one(
             run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=False,
-            event_action=action, counter=counter, write=True, landed=landed,
+            event_action=action, counter=counter, write=write, landed=landed,
         )
     except WriteError as exc:
         if _is_auto_merge_failure(exc):
@@ -1904,6 +1917,9 @@ def _main_event(
         print(f"::notice::#{number}: {type(exc).__name__}, so nothing was written")
         return 0
     print(_decision_line(number, decision))
+    if not write:
+        print(f"::notice::#{number}: a review run on a fork's pull request has a read-only token, so the nightly"
+              " sweep applies this decision.")
     if done:
         print(f"#{number} wrote {','.join(done)}")
     return 0
@@ -1995,7 +2011,7 @@ def main(argv: list[str] | None = None) -> int:
     landed = rule_landed(env)
     if event in EVENT_NAMES and intake == "evaluate":
         return _main_event(run, number, state=state, action=env.get("EVENT_ACTION") or None, roster=roster, today=today,
-                           landed=landed)
+                           landed=landed, event=event)
     return _main_sweep(run, number, state=state, intake=intake, roster=roster, today=today, sha=sha, landed=landed)
 
 
