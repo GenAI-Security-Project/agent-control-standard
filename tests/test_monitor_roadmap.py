@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -63,9 +63,10 @@ EXPECTED = {
     }}}},
     "permissions": {},
     "jobs": {"check": {
-        "if": "vars.ROADMAP_RENDER_ENABLED == 'true' || vars.ROADMAP_SYNC_ENABLED == 'true'",
+        "if": ("vars.ROADMAP_RENDER_ENABLED == 'true' || vars.ROADMAP_SYNC_ENABLED == 'true'"
+               " || vars.PR_INTAKE_ENFORCED == 'true'"),
         "runs-on": "ubuntu-latest", "timeout-minutes": 5,
-        "permissions": {"contents": "read", "issues": "write"},
+        "permissions": {"actions": "read", "contents": "read", "issues": "write"},
         "steps": [
             {"uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
              "with": {"persist-credentials": False, "ref": "main"}},
@@ -76,6 +77,8 @@ EXPECTED = {
                  "ROADMAP_RENDER_ENABLED": "${{ vars.ROADMAP_RENDER_ENABLED }}",
                  "ROADMAP_SYNC_ENABLED": "${{ vars.ROADMAP_SYNC_ENABLED }}",
                  "ROADMAP_HEALTH_ISSUE": "${{ vars.ROADMAP_HEALTH_ISSUE }}",
+                 "PR_INTAKE_ENFORCED": "${{ vars.PR_INTAKE_ENFORCED }}",
+                 "PR_INTAKE_TOOL_SHA": "${{ vars.PR_INTAKE_TOOL_SHA }}",
                  "TEST_ALARM": "${{ inputs.test_alarm }}",
              },
              "run": "python3 -I -S tools/monitor_roadmap.py"},
@@ -100,6 +103,53 @@ def test_evaluate_runs_only_switched_on_checks(render, sync, expected):
     env = {"ROADMAP_RENDER_ENABLED": render, "ROADMAP_SYNC_ENABLED": sync, "ROADMAP_HEALTH_ISSUE": "12"}
     problems = evaluate(env, read_json=lambda url: None, read_issue=lambda n: None, now=NOW)
     assert len(problems) == expected
+
+
+def test_monitor_workflow_passes_the_intake_switch():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "PR_INTAKE_ENFORCED: ${{ vars.PR_INTAKE_ENFORCED }}" in text
+    assert "|| vars.PR_INTAKE_ENFORCED == 'true'" in text
+    assert "actions: read" in text
+
+
+def sweep(conclusion="success", hours=5, status="completed", run_id=77):
+    updated = NOW - timedelta(hours=hours)
+    return {"id": run_id, "status": status, "conclusion": conclusion, "event": "schedule",
+            "updated_at": updated.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+@pytest.mark.parametrize("runs, expected", [
+    (None, ["no completed nightly intake sweep run exists"]),
+    ([], ["no completed nightly intake sweep run exists"]),
+    ([sweep(hours=31)], ["the nightly intake sweep run 77 is older than 30 hours"]),
+    ([sweep("failure")], ["the nightly intake sweep run 77 concluded failure"]),
+    ([sweep("cancelled")], ["the nightly intake sweep run 77 concluded cancelled"]),
+    ([sweep("skipped")], ["the nightly intake sweep run 77 concluded skipped"]),
+    ([sweep()], []),
+    ([sweep(status="in_progress", conclusion=None, run_id=78), sweep()], []),
+    ([sweep(status="in_progress", conclusion=None, run_id=78)], ["no completed nightly intake sweep run exists"]),
+])
+def test_check_intake(runs, expected):
+    from monitor_roadmap import check_intake
+    assert check_intake(runs, NOW) == expected
+
+
+def test_evaluate_runs_intake_only_when_enforced():
+    from monitor_roadmap import evaluate
+    off = evaluate({"PR_INTAKE_ENFORCED": "false"}, read_json=lambda url: None,
+                   read_issue=lambda n: None, now=NOW, read_runs=lambda: None)
+    on = evaluate({"PR_INTAKE_ENFORCED": "true"}, read_json=lambda url: None,
+                  read_issue=lambda n: None, now=NOW, read_runs=lambda: None)
+    assert off == []
+    assert on == ["no completed nightly intake sweep run exists"]
+
+
+def test_evaluate_reads_enforced_from_env():
+    from monitor_roadmap import evaluate
+    calls = []
+    evaluate({"PR_INTAKE_ENFORCED": "true"}, read_json=lambda url: None, read_issue=lambda n: None,
+             now=NOW, read_runs=lambda: calls.append(1) or [sweep()])
+    assert calls == [1]
 
 
 def test_check_page_never_echoes_fetched_status():
