@@ -30,7 +30,6 @@ updates:
       prefix: "ci"
     labels:
       - "dependencies"
-      - "github-actions"
 
   # Python dependencies resolved through uv.lock. The only runtime surface is
   # the documentation build and the version-sync script.
@@ -46,7 +45,6 @@ updates:
       prefix: "deps"
     labels:
       - "dependencies"
-      - "python"
     groups:
       # Patch and minor bumps for the docs toolchain land as one PR. Majors
       # stay separate, since mkdocs-material majors have broken builds before.

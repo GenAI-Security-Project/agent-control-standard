@@ -134,3 +134,87 @@ def test_no_unreviewed_package_cdn_reference_in_built_javascript(built_site):
         "Confirm the new reference cannot fire, or remove it, then update "
         "REVIEWED_CDN_OCCURRENCES with the reason."
     )
+
+
+# Any scheme a script can open a connection with. A host a script names is not proof
+# that it fetches, so each one below was read in place and recorded per file.
+_SCRIPT_URL = re.compile(r"""\b(?:https?|wss?)://([^\s/?#'"),<>]+)""", re.I)
+_HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
+
+# Licence banners, documentation links, and comments name most of these. The lunr
+# language packs all carry the same four.
+_LUNR_LANGUAGE_HOSTS = frozenset({"code.google.com", "github.com", "snowball.tartarus.org", "www.mozilla.org"})
+REVIEWED_SCRIPT_HOSTS = {
+    "assets/javascripts/bundle.d7400e89.min.js": {"api.github.com", "clipboardjs.com", "unpkg.com"},
+    **{
+        f"assets/javascripts/lunr/min/lunr.{language}.min.js": _LUNR_LANGUAGE_HOSTS
+        for language in ("da", "de", "du", "es", "fi", "fr", "hu", "it", "nl", "no", "pt", "ro", "ru", "sv", "tr")
+    },
+    "assets/javascripts/lunr/tinyseg.js": {"chasen.org", "github.com"},
+    "assets/javascripts/lunr/wordcut.js": {
+        "developer.mozilla.org", "docs.python.org", "en.wikipedia.org", "github.com",
+        "msdn.microsoft.com", "narwhaljs.org", "people.mozilla.org", "underscorejs.org",
+        "wiki.commonjs.org", "wiki.ecmascript.org",
+    },
+    "assets/javascripts/mermaid-init.js": {"unpkg.com"},
+    "assets/javascripts/mermaid.min.js": {
+        "chevrotain.io", "en.wikipedia.org", "engelschall.com", "github.com", "jquery.org",
+        "langium.org", "lodash.com", "openjsf.org", "opensource.org", "tldrlegal.com",
+        "underscorejs.org", "www.w3.org",
+    },
+    "assets/javascripts/workers/search.2c215733.min.js": {"bit.ly", "lunrjs.com", "tartarus.org"},
+}
+# A URL built at runtime, such as `https://${e}`, names no host this scan can read. The
+# count pins how many the bundle carries, so a new one is read before it ships.
+RUNTIME_HOSTS = {"bundle.d7400e89.min.js": 1}
+
+
+def test_built_javascript_names_only_reviewed_hosts(built_site):
+    """Fail when a built script names a host nobody recorded for that file.
+
+    This catches literal hosts only. A script that assembles a host from pieces, or
+    reads one from the page, passes this scan, which is why RUNTIME_HOSTS counts the
+    template-literal URLs it can see.
+    """
+    found: dict[str, set[str]] = {}
+    runtime: dict[str, int] = {}
+    for path in sorted(built_site.rglob("*.js")):
+        rel = path.relative_to(built_site).as_posix()
+        for match in _SCRIPT_URL.finditer(path.read_text(encoding="utf-8", errors="replace")):
+            host = match.group(1)
+            if _HOSTNAME.match(host):
+                found.setdefault(rel, set()).add(host)
+            else:
+                runtime[path.name] = runtime.get(path.name, 0) + 1
+    added = {rel: sorted(hosts - REVIEWED_SCRIPT_HOSTS.get(rel, set())) for rel, hosts in found.items()}
+    removed = {rel: sorted(hosts - found.get(rel, set())) for rel, hosts in REVIEWED_SCRIPT_HOSTS.items()}
+    assert found == REVIEWED_SCRIPT_HOSTS, (
+        "hosts named in built JavaScript changed. Read each new one where the script uses "
+        "it before recording it in REVIEWED_SCRIPT_HOSTS.\n"
+        f"  added:   { {rel: hosts for rel, hosts in added.items() if hosts} }\n"
+        f"  removed: { {rel: hosts for rel, hosts in removed.items() if hosts} }"
+    )
+    assert runtime == RUNTIME_HOSTS, f"runtime-built URLs in built JavaScript changed: {runtime}"
+
+
+# Each value names a bundle component the theme wires to the page. Recorded from the
+# build on 2026-10-29.
+RECORDED_MD_COMPONENTS = frozenset({
+    "announce", "container", "content", "dialog", "header", "header-title", "header-topic",
+    "logo", "main", "palette", "search", "search-query", "search-result", "search-suggest",
+    "sidebar", "skip", "toc",
+})
+_MD_COMPONENT = re.compile(r"""data-md-component=["']?([^"'\s>]+)""")
+
+
+def test_built_pages_use_only_recorded_md_components(built_site):
+    components: set[str] = set()
+    for page in built_site.rglob("*.html"):
+        components |= set(_MD_COMPONENT.findall(page.read_text(encoding="utf-8")))
+    assert components == RECORDED_MD_COMPONENTS, (
+        "a theme partial started binding a new bundle component. Read what the bundle does "
+        "with it before recording it here. `overrides/partials/source.html` exists because "
+        "`source` fetches api.github.com.\n"
+        f"  added:   {sorted(components - RECORDED_MD_COMPONENTS)}\n"
+        f"  removed: {sorted(RECORDED_MD_COMPONENTS - components)}"
+    )

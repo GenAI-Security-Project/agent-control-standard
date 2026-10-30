@@ -1,5 +1,6 @@
-# The published $id URIs are a machine-consumed contract. Between merges nothing else
-# checks that they still resolve, so this does.
+# The published $id URIs are a machine-consumed contract, and every surface of the site
+# shares one navigation pane. Between merges nothing else checks either, so this does.
+# Each check is its own job, so each reports its own conclusion.
 name: Monitor Pages
 
 on:
@@ -37,3 +38,25 @@ jobs:
           PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
         run: |
           python3 tools/verify_published.py "${PAGE_URL%/}/schema" --from specification
+
+  navigation:
+    runs-on: ubuntu-latest
+    # The verifier polls up to thirteen minutes because the Pages CDN caches for ten.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          # The site publishes from main, so the verifier must be main's copy. The check
+          # job above explains why the default branch is the wrong choice.
+          ref: main
+
+      - name: Verify the published navigation still matches
+        env:
+          PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
+        run: python3 tools/verify_site_nav.py "$PAGE_URL"
