@@ -17,6 +17,8 @@ from base_branch_guard import (  # noqa: E402
     decide,
     in_docs_lane,
     is_promotion,
+    main,
+    parse_name_status,
     paths_requiring_integration,
 )
 
@@ -133,3 +135,74 @@ def test_any_other_base_passes_without_consulting_the_allowlist():
 def test_an_empty_diff_passes():
     status, _ = decide([], PUBLISHING_BRANCH, "empty", FORK, REPO)
     assert status == 0
+
+
+def test_a_new_docs_page_to_main_fails_and_names_the_nav_entry():
+    """The deploy runs the guards before it builds, and a page with no nav entry fails
+    them. The nav entry lives in mkdocs.yml, which only reaches main by promotion."""
+    status, message = decide(
+        ["docs/topics/anything.md"], PUBLISHING_BRANCH, "docs/new", FORK, REPO,
+        added=["docs/topics/anything.md"],
+    )
+    assert status == 1
+    assert "docs/topics/anything.md" in message
+    assert "`nav` entry" in message and "mkdocs.yml" in message
+    assert "integration" in message
+
+
+def test_an_edited_docs_page_to_main_still_passes():
+    status, _ = decide(
+        ["docs/topics/faq.md"], PUBLISHING_BRANCH, "docs/faq", FORK, REPO, added=[]
+    )
+    assert status == 0
+
+
+def test_an_added_file_outside_docs_keeps_the_path_rule():
+    status, _ = decide(
+        ["design/new-note.md"], PUBLISHING_BRANCH, "docs/note", FORK, REPO,
+        added=["design/new-note.md"],
+    )
+    assert status == 0
+
+
+def test_a_new_page_on_a_promotion_or_other_base_passes():
+    page = ["docs/topics/anything.md"]
+    assert decide(page, PUBLISHING_BRANCH, "integration", REPO, REPO, added=page)[0] == 0
+    assert decide(page, "integration", "docs/new", FORK, REPO, added=page)[0] == 0
+
+
+def test_name_status_marks_adds_renames_and_copies_as_added():
+    lines = [
+        "M\tdocs/topics/faq.md\n",
+        "A\tdocs/topics/new.md\n",
+        "R100\tdocs/topics/old.md\tdocs/topics/moved.md\n",
+        "C075\tdesign/a.md\tdesign/b.md\n",
+        "D\tdocs/topics/gone.md\n",
+        "\n",
+    ]
+    changed, added = parse_name_status(lines)
+    assert changed == [
+        "docs/topics/faq.md",
+        "docs/topics/new.md",
+        "docs/topics/moved.md",
+        "design/b.md",
+        "docs/topics/gone.md",
+    ]
+    assert added == ["docs/topics/new.md", "docs/topics/moved.md", "design/b.md"]
+
+
+def test_name_status_accepts_a_bare_path_as_changed():
+    assert parse_name_status(["CONTRIBUTING.md\n"]) == (["CONTRIBUTING.md"], [])
+
+
+def test_main_reads_a_name_status_listing(tmp_path, monkeypatch, capsys):
+    """The workflow writes `git diff --name-status`, so the script must read it."""
+    listing = tmp_path / "changed.txt"
+    listing.write_text("A\tdocs/topics/anything.md\nM\tREADME.md\n", encoding="utf-8")
+    for name, value in {"BASE_REF": PUBLISHING_BRANCH, "HEAD_REF": "docs/new",
+                        "HEAD_REPO": FORK, "BASE_REPO": REPO}.items():
+        monkeypatch.setenv(name, value)
+    assert main(["base_branch_guard.py", str(listing)]) == 1
+    assert "docs/topics/anything.md" in capsys.readouterr().err
+    listing.write_text("M\tdocs/topics/anything.md\nM\tREADME.md\n", encoding="utf-8")
+    assert main(["base_branch_guard.py", str(listing)]) == 0

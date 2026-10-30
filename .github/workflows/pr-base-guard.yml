@@ -38,7 +38,8 @@ jobs:
           set -euo pipefail
           # Three-dot compares against the merge base, so commits that landed on the
           # base branch after this pull request opened do not count as its changes.
-          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > changed.txt
+          # Name and status, so the guard can tell a new page from an edited one.
+          git diff --name-status "${BASE_SHA}...${HEAD_SHA}" > changed.txt
           cat changed.txt
 
       - name: Enforce the documentation lane

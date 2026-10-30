@@ -123,7 +123,8 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 7. **Address review feedback** to land your change
 
 A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
-targets `integration`. A page outside `nav` and outside the declared prefixes fails the build.
+targets `integration`, and the guard rejects a new page aimed at `main`. A page outside
+`nav` and outside the declared prefixes fails the guards, which the deploy runs before it builds.
 
 `integration` is the default branch, so a pull request opened from the GitHub interface
 already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
