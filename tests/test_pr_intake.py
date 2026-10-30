@@ -1276,6 +1276,10 @@ import subprocess  # noqa: E402
 from pr_intake import Summary, arming, retract, run_sweep, tool_sha  # noqa: E402
 
 SWEEP_TODAY = date(2026, 11, 10)
+WRITE_TIME = "2026-11-10T03:00:00Z"
+# Where the fake moves `updated_at` on every write, a few seconds after the bot's write time,
+# as GitHub does for the bot's own comment, label, and auto-merge writes.
+BUMPED = "2026-11-10T03:00:05Z"
 ENV_KEYS = (
     "PR_NUMBER", "INTAKE_MODE", "INTAKE_AUTHORS", "EVENT_NAME", "EVENT_ACTION", "GITHUB_STEP_SUMMARY",
     "PR_INTAKE_ENFORCED", "PR_INTAKE_TOOL_SHA", "GH_TOKEN",
@@ -1313,6 +1317,7 @@ def bot_said(body: str, comment_id: int) -> dict:
 
 class FakeGitHub:
     def __init__(self, pulls, *, accepted=(), rate=5000):
+        self.clock = BUMPED
         self.pulls = {pull["number"]: pull for pull in pulls}
         self.accepted = list(accepted)
         self.comments: dict[int, list] = {}
@@ -1342,6 +1347,7 @@ class FakeGitHub:
             return 0, json.dumps({"resources": {"core": {"remaining": value}}}), ""
         if args[0] == "pr":
             pull = self.pulls[int(args[2])]
+            pull["updated_at"] = self.clock
             if args[1] == "merge":
                 pull["auto_merge"] = None
             else:
@@ -1370,12 +1376,14 @@ class FakeGitHub:
     def _write(self, method: str, tail: str, payload) -> str:
         parts = tail.split("/")
         if method == "PATCH":
-            for comments in self.comments.values():
+            for number, comments in self.comments.items():
                 for comment in comments:
                     if comment["id"] == int(parts[2]):
                         comment["body"] = payload["body"]
+                        self.pulls[number]["updated_at"] = self.clock
             return OK
         number = int(parts[1])
+        self.pulls[number]["updated_at"] = self.clock
         if parts[2] == "comments":
             self.comments.setdefault(number, []).append(bot_said(payload["body"], next(self._ids)))
             return http({"id": 1}, 201)
@@ -1399,6 +1407,7 @@ class FakeGitHub:
 @pytest.fixture(autouse=True)
 def _no_pacing(monkeypatch):
     monkeypatch.setattr(pr_intake, "PACE_SECONDS", 0)
+    monkeypatch.setattr(pr_intake, "_now", lambda: WRITE_TIME)
 
 
 def sweep(fake, *, mode="enforced", write=True, numbers=None, counter=None, today=SWEEP_TODAY):
@@ -1604,7 +1613,9 @@ def test_sweep_reads_only_the_comment_and_the_pull_for_an_unchanged_pull_request
     first, _ = sweep(fake)
     assert first.newly_queued == 1
     data = parse_data_line(fake.bodies(501)[0])
-    assert data["reason"] == "not_held" and data["seen"] == "2026-11-09T01:00:00Z,2026-11-01T00:00:00Z"
+    assert data["reason"] == "not_held" and data["seen"] == f"{WRITE_TIME},2026-11-01T00:00:00Z"
+    # The bot's own writes moved updated_at, as they do on GitHub.
+    assert fake.pulls[501]["updated_at"] == BUMPED
 
     fake.calls.clear()
     second, lines = sweep(fake)
@@ -1613,17 +1624,112 @@ def test_sweep_reads_only_the_comment_and_the_pull_for_an_unchanged_pull_request
     assert second.unchanged == 2 and second.queued_total == 1 and second.writes == 0 and balanced(second)
     assert "#501 unchanged not_held" in lines
 
+    def full_read(fake_) -> bool:
+        fake_.calls.clear()
+        sweep(fake_)
+        return f"{API}/issues/501/timeline?per_page=100" in [args[-1] for args, _ in fake_.calls]
+
     # A change on the referenced issue moves `seen`, so the pull request is read in full.
     fake.accepted[0]["updated_at"] = "2026-11-09T05:00:00Z"
-    fake.calls.clear()
-    sweep(fake)
-    assert f"{API}/issues/501/timeline?per_page=100" in [args[-1] for args, _ in fake.calls]
+    assert full_read(fake)
+    fake.accepted[0]["updated_at"] = "2026-11-01T00:00:00Z"
+    assert not full_read(fake)
+
+    # Anything on the pull request later than the grace after the bot's write is someone else.
+    fake.pulls[501]["updated_at"] = "2026-11-10T03:02:00Z"
+    assert not full_read(fake)
+    fake.pulls[501]["updated_at"] = "2026-11-10T03:02:01Z"
+    assert full_read(fake)
+    fake.pulls[501]["updated_at"] = BUMPED
 
     # And a label that no longer matches the reason is read in full and repaired.
-    fake.accepted[0]["updated_at"] = "2026-11-01T00:00:00Z"
     fake.pulls[501]["labels"] = []
     third, _ = sweep(fake)
     assert fake.labeled(501) and third.newly_queued == 1
+
+
+def test_review_pass_expires_and_the_short_circuit_stops_on_that_day():
+    stale_review = review(state="CHANGES_REQUESTED", days=5)
+    approved = review(state="APPROVED", days=2)
+    passed = decide(facts(reviews=(approved, stale_review)), TODAY)
+    assert outcome(passed) == ("pass", "review", ())
+    assert passed.data["expires"] == (TODAY - timedelta(days=5) + timedelta(days=30)).isoformat()
+
+    stored = {"reason": "cleared", "route": "review", "seen": f"{WRITE_TIME},none", "expires": "2026-11-20"}
+    pull = {"updated_at": BUMPED, "labels": []}
+    assert pr_intake._seen_holds(stored, pull, "none", date(2026, 11, 19))
+    assert not pr_intake._seen_holds(stored, pull, "none", date(2026, 11, 20))
+    assert not pr_intake._seen_holds({**stored, "expires": "not-a-date"}, pull, "none", date(2026, 11, 1))
+    assert not pr_intake._seen_holds({**stored, "seen": "garbage,none"}, pull, "none", date(2026, 11, 1))
+
+
+def test_requeue_after_retract_restarts_the_clock():
+    body = render_data_line({"reason": "retracted", "since": "2026-11-01"}) + "\n" + pr_intake.MARKER + "\n\nRetracted."
+    retracted = BotComment(id=5, body=body, data=parse_data_line(body), legacy=False)
+    requeued = decide(facts(bot_comment=retracted), TODAY)
+    assert requeued.outcome == "queue" and requeued.data["since"] == TODAY.isoformat()
+
+
+def test_dry_sweep_decides_every_pull_request_without_the_short_circuit(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(521)])
+    first, _ = sweep(fake)
+    assert first.newly_queued == 1
+    fake.calls.clear()
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="workflow_dispatch", INTAKE_MODE="dryrun",
+                            **armed_env())
+    assert code == 0 and "#521 queue no_accepted" in out.splitlines() and "#521 unchanged" not in out
+    assert f"{API}/issues/521/timeline?per_page=100" in [args[-1] for args, _ in fake.calls]
+    assert fake.writes() == []
+
+
+def test_auto_merge_write_lands_when_the_budget_runs_out_after_the_label(monkeypatch):
+    on = {"merge_method": "squash"}
+    queued = decision(comment=COMMENT, label="set", disable_auto_merge=True)
+    fake = FakeGitHub([gh_pull(354, auto_merge=on)])
+    counter = CallCounter(limit=2)
+    done = pr_intake._write(fake, facts(auto_merge=True), queued, counter)
+    assert done == ["comment_post", "label_set", "auto_merge_off"]
+    assert counter.calls == 2 and fake.pulls[354]["auto_merge"] is None
+
+    fake = FakeGitHub([gh_pull(354, auto_merge=on)])
+    with pytest.raises(BudgetStop):
+        pr_intake._write(fake, facts(auto_merge=True), queued, CallCounter(limit=1))
+    assert fake.bodies(354) and not fake.labeled(354) and fake.pulls[354]["auto_merge"] is None
+
+    # Through a sweep, with no reserve, so the budget runs out on the label write itself.
+    monkeypatch.setattr(pr_intake, "BUDGET_RESERVE", 0)
+    fake = FakeGitHub([gh_pull(355, auto_merge=on)])
+    reads = 1 + 5 + 1  # rate_limit, the five pull request reads, the staleness re-read
+    summary, _ = sweep(fake, counter=CallCounter(limit=reads + 1))
+    assert fake.bodies(355) and not fake.labeled(355) and fake.pulls[355]["auto_merge"] is None
+    assert summary.stopped and summary.skipped == 1 and balanced(summary)
+
+
+def test_apply_refuses_a_retry_after_over_the_cap():
+    refused = raw(429, "Too Many Requests", '{"message":"slow down"}', Retry_After=str(pr_intake.MAX_RETRY_AFTER + 1))
+    run = write_runner(refused, OK)
+    with pytest.raises(WriteError) as error:
+        apply_with(run, facts(), decision(comment=COMMENT))
+    assert str(error.value) == "comment_post retry_after_too_long"
+    assert len(run.calls) == 1
+
+    at_cap = raw(429, "Too Many Requests", '{"message":"slow down"}', Retry_After=str(pr_intake.MAX_RETRY_AFTER))
+    done, sleeps = apply_with(write_runner(at_cap, http({"id": 1}, 201)), facts(), decision(comment=COMMENT))
+    assert done == ["comment_post"] and sleeps == [pr_intake.MAX_RETRY_AFTER]
+
+
+def test_primary_rate_limit_stops_the_write_phase_red(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(531), gh_pull(532), gh_pull(533)])
+    primary = raw(403, "Forbidden", '{"message":"API rate limit exceeded for installation ID 1."}')
+    fake.fail[f"POST {API}/issues/531/comments"] = primary
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", **armed_env())
+    assert code == 1 and "::error::#531: WriteError" in out
+    assert " skipped=2 " in summary_line(out) and " errors=1 " in summary_line(out)
+    assert not fake.bodies(532) and not fake.bodies(533)
+    # No stale re-read and no failed write is spent on the pull requests after the stop.
+    assert [args[-1] for args, _ in fake.calls].count(f"{API}/pulls/532") == 1
+    written = [args for args, _ in fake.writes()]
+    assert len(written) == 1
 
 
 def test_sweep_stops_at_the_budget_reserve_and_is_red(monkeypatch, capsys):

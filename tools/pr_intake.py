@@ -73,7 +73,7 @@ REASONS = (
 CLEAR_ROUTES = ("roster", "review", "hand", "record", "editorial", "assignment", "help_wanted")
 
 DATA_KEYS = frozenset(
-    {"reason", "route", "issues", "since", "cleared", "head", "cleared_head", "cleared_at", "facts", "claimed", "seen"}
+    {"reason", "route", "issues", "since", "cleared", "head", "cleared_head", "cleared_at", "facts", "claimed", "seen", "expires"}
 )
 # Linear: one bounded group repeated at most 12 times, each repeat anchored by a literal
 # `=` and an optional single space, with no quantified group inside another.
@@ -535,6 +535,20 @@ def _hash_as_read_next(facts: Facts, cleared_head: str | None, today: date) -> s
     return facts_hash(replace(facts, bot_comment=comment), today)
 
 
+def _review_expires(facts: Facts, today: date) -> str | None:
+    """The day a review pass may stop holding: the earliest qualifying lead review plus 30 days.
+
+    The earliest is the conservative choice. A sweep that re-reads early costs reads, and
+    one that re-reads late could miss a changes-requested review going stale.
+    """
+    dates = [
+        review.submitted_at.date() for review in _lead_reviews(facts)
+        if review.submitted_at is not None
+        and (review.state == "APPROVED" or (review.state == "CHANGES_REQUESTED" and _fresh(review, today)))
+    ]
+    return (min(dates) + timedelta(days=FRESH_REVIEW_DAYS)).isoformat() if dates else None
+
+
 def _data(
     facts: Facts, today: date, route: str | None, reasons: tuple[str, ...], cleared_head: str | None,
     cleared_at: str | None,
@@ -546,6 +560,10 @@ def _data(
         data["route"] = route
         same = stored.get("reason") == "cleared" and stored.get("route") == route
         data["cleared"] = stored["cleared"] if same and "cleared" in stored else today.isoformat()
+        if route == "review":
+            expires = _review_expires(facts, today)
+            if expires is not None:
+                data["expires"] = expires
     else:
         data["reason"] = reasons[0]
         issues = sorted({ref.number for ref in _accepted_issues(facts)})
@@ -553,7 +571,8 @@ def _data(
             data["issues"] = ",".join(str(number) for number in issues[:MAX_DATA_ISSUES])
         # The queue clock runs from the first queue and survives re-renders, so the health
         # issue's day count is the time waited, not the time since the last edit.
-        queued_before = stored.get("reason") not in (None, "cleared") and "since" in stored
+        # A retraction ends the queue, so a later queue starts a new clock.
+        queued_before = stored.get("reason") not in (None, "cleared", "retracted") and "since" in stored
         data["since"] = stored["since"] if queued_before else today.isoformat()
         claims = _claims(facts)
         if claims:
@@ -1200,6 +1219,9 @@ def _assemble(
 _PRIMARY_LIMIT = "API rate limit exceeded"
 _RETRY_STATUSES = frozenset({403, 429})
 _RETRY_AFTER = re.compile(r"[0-9]{1,6}")
+# The longest Retry-After honored. A sweep writes to many pull requests, so a longer wait
+# would hold the job far past its timeout. The write fails instead and the next run retries.
+MAX_RETRY_AFTER = 60
 
 
 class WriteError(RuntimeError):
@@ -1280,6 +1302,8 @@ def _api_write(run: Runner, name: str, args: list[str], stdin: str | None, sleep
             raise WriteError("rate_limit_primary")
         wait = headers.get("retry-after", "")
         if attempt == 0 and status in _RETRY_STATUSES and _RETRY_AFTER.fullmatch(wait):
+            if int(wait) > MAX_RETRY_AFTER:
+                raise WriteError(f"{name} retry_after_too_long")
             sleep(int(wait))
             continue
         raise WriteError(f"{name} returned HTTP {status}")
@@ -1317,6 +1341,7 @@ _DIGITS = re.compile(r"[0-9]{1,9}")
 # is printed, never the message, which may carry response text.
 _PER_PULL_ERRORS = (RunnerError, WriteError, KeyError, TypeError, ValueError)
 _AUTO_MERGE_WRITES = frozenset({"auto_merge_off", "converted_to_draft"})
+SEEN_GRACE_SECONDS = 120
 
 
 def _blob_sha(data: bytes) -> str:
@@ -1368,23 +1393,22 @@ class Summary:
         )
 
 
-def seen_value(pull: dict, listings: Listings) -> str | None:
-    """The pull request's `updated_at` and the newest `updated_at` of the accepted issues it names.
+def _issues_seen(pull: dict, listings: Listings) -> str:
+    """The newest `updated_at` of the accepted issues the pull request names, or `none`.
 
-    A sweep compares this with the data line's `seen` and reads nothing more when they
-    match. A comment, push, review, or label moves the first half. A label, assignment, or
-    comment on a referenced issue moves the second.
+    A label, assignment, or comment on a referenced issue moves it.
     """
-    updated = pull.get("updated_at")
-    if not isinstance(updated, str):
-        return None
     title, body = pull.get("title"), pull.get("body")
     named, _dropped = referenced(
         title if isinstance(title, str) else "", body[: closing_choice.MAX_CHARS] if isinstance(body, str) else ""
     )
     times = [listings.accepted[number].get("updated_at") for number, _kind in named if number in listings.accepted]
-    newest = max((when for when in times if isinstance(when, str)), default="none")
-    return f"{updated},{newest}"
+    return max((when for when in times if isinstance(when, str)), default="none")
+
+
+def _now() -> str:
+    """The bot's write time in the data line's form. Tests replace it."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _with_seen(decision: Decision, seen: str | None) -> Decision:
@@ -1395,11 +1419,36 @@ def _with_seen(decision: Decision, seen: str | None) -> Decision:
     try:
         line = render_data_line(data)
     except ValueError:
-        # A timestamp this line cannot carry. The comment goes out without `seen`, and the
-        # next sweep reads the pull request in full, which is the safe direction.
+        # A value this line cannot carry. The comment goes out without `seen`, and the next
+        # sweep reads the pull request in full, which is the safe direction.
         return decision
     rest = decision.comment.split("\n", 1)[1]
     return replace(decision, data=data, comment=(line + "\n" + rest)[:MAX_COMMENT])
+
+
+def _seen_holds(stored: dict[str, str], pull: dict, issues: str, today: date) -> bool:
+    """Whether nothing the gate reads can have moved since the bot last wrote its comment.
+
+    `seen` is the bot's write time and the referenced issues' newest `updated_at`. The
+    bot's own label and auto-merge writes land seconds after the comment and move the pull
+    request's `updated_at`, so a grace of SEEN_GRACE_SECONDS absorbs them. Anything later is
+    someone else, and the pull request is read in full. A review pass carries `expires`,
+    the day the review can go stale with no change on the pull request.
+    """
+    written, _, recorded_issues = stored.get("seen", "").partition(",")
+    if recorded_issues != issues:
+        return False
+    try:
+        written_at = datetime.strptime(written, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        updated = _when(pull.get("updated_at"))
+        expires = stored.get("expires")
+        if expires is not None and today >= date.fromisoformat(expires):
+            return False
+    except ValueError:
+        return False
+    if updated is None or updated > written_at + timedelta(seconds=SEEN_GRACE_SECONDS):
+        return False
+    return _label_agrees(stored.get("reason"), _label_names(pull.get("labels")))
 
 
 def _label_agrees(reason: str | None, labels: frozenset[str]) -> bool:
@@ -1417,6 +1466,7 @@ class _Assessment:
     decision: Decision | None
     updated_at: object
     stored_reason: str | None = None
+    issues: str | None = None
 
 
 def _assess(
@@ -1426,17 +1476,17 @@ def _assess(
     counted = counter.wrap(run)
     comments = paginate(counted, f"{_API}/issues/{number}/comments?per_page=100")
     pull = _read_pull(counted, number)
-    seen = seen_value(pull, listings)
-    if short_circuit and seen is not None:
+    issues = _issues_seen(pull, listings)
+    if short_circuit:
         bot = _bot_comment(comments)
         stored = bot.data if bot is not None and bot.data is not None else {}
-        if stored.get("seen") == seen and _label_agrees(stored.get("reason"), _label_names(pull.get("labels"))):
-            return _Assessment(number, None, None, pull.get("updated_at"), stored["reason"])
+        if _seen_holds(stored, pull, issues, today):
+            return _Assessment(number, None, None, pull.get("updated_at"), stored["reason"], issues)
     facts = collect_facts(
         run, number, listings=listings, roster=roster, mode=mode, sweep=sweep, event_action=event_action,
         counter=counter, pull=pull, comments=comments,
     )
-    return _Assessment(number, facts, _with_seen(decide(facts, today), seen), pull.get("updated_at"))
+    return _Assessment(number, facts, decide(facts, today), pull.get("updated_at"), None, issues)
 
 
 def _has_writes(facts: Facts, decision: Decision) -> bool:
@@ -1447,16 +1497,31 @@ def _is_auto_merge_failure(exc: WriteError) -> bool:
     return str(exc).split(" ", 1)[0] in _AUTO_MERGE_WRITES
 
 
-def _write(run: Runner, facts: Facts, decision: Decision, counter: CallCounter) -> list[str]:
-    counted = counter.wrap(run)
+def _write(
+    run: Runner, facts: Facts, decision: Decision, counter: CallCounter, issues: str | None = None,
+) -> list[str]:
+    """Stamp `seen` with this write's time, then make the decision's writes.
+
+    The comment and label writes count against the run's budget. The auto-merge write,
+    its re-read, and the draft fallback do not, and they run even when an earlier write
+    failed or the budget ran out, because auto-merge left on is the harm the gate exists
+    to prevent.
+    """
+    if issues is not None:
+        decision = _with_seen(decision, f"{_now()},{issues}")
+    merge_off = decision.disable_auto_merge and facts.auto_merge
+    merge_only = replace(decision, comment=None, label="keep")
     try:
-        return apply(counted, facts, decision, pace=PACE_SECONDS)
-    except WriteError as exc:
-        # A failed comment or label write stops `apply` before the auto-merge write, and
-        # auto-merge left on is the harm the gate exists to prevent, so it is still tried.
-        if decision.disable_auto_merge and facts.auto_merge and not _is_auto_merge_failure(exc):
-            apply(counted, facts, replace(decision, comment=None, label="keep"), pace=PACE_SECONDS)
+        done = apply(counter.wrap(run), facts, replace(decision, disable_auto_merge=False), pace=PACE_SECONDS)
+    except (WriteError, BudgetStop):
+        if merge_off:
+            apply(run, facts, merge_only, pace=PACE_SECONDS)
         raise
+    if merge_off:
+        if done:
+            time.sleep(PACE_SECONDS)
+        done += apply(run, facts, merge_only, pace=PACE_SECONDS)
+    return done
 
 
 def evaluate_one(
@@ -1471,7 +1536,7 @@ def evaluate_one(
     facts, decision = assessment.facts, assessment.decision
     if not write or not _has_writes(facts, decision):
         return decision, []
-    return decision, _write(run, facts, decision, counter)
+    return decision, _write(run, facts, decision, counter, assessment.issues)
 
 
 def _decision_line(number: int, decision: Decision) -> str:
@@ -1553,7 +1618,9 @@ def run_sweep(
                 raise BudgetStop("read budget reached")
             assessed.append(_assess(
                 run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=True,
-                event_action=None, counter=counter, short_circuit=mode == "enforced",
+                # A dry run decides every pull request, so it shows what enforcement would do
+                # today rather than what a data line recorded.
+                event_action=None, counter=counter, short_circuit=mode == "enforced" and write,
             ))
         except BudgetStop:
             summary.stopped = True
@@ -1566,7 +1633,7 @@ def run_sweep(
     if mode == "enforced":
         _batch(assessed)
 
-    for item in assessed:
+    for position, item in enumerate(assessed):
         if item.decision is None:
             summary.unchanged += 1
             summary.queued_total += item.stored_reason in _QUEUE_REASONS
@@ -1585,7 +1652,7 @@ def run_sweep(
                     summary.skipped += 1
                     log(f"#{item.number} skipped, changed during the sweep")
                     continue
-                summary.writes += len(_write(run, facts, decision, counter))
+                summary.writes += len(_write(run, facts, decision, counter, item.issues))
             except BudgetStop:
                 if not summary.stopped:
                     log("::error::The call budget ran out before every write was made.")
@@ -1594,6 +1661,14 @@ def run_sweep(
                 continue
             except _PER_PULL_ERRORS as exc:
                 _error(summary, item.number, exc, log)
+                if isinstance(exc, WriteError) and str(exc) == "rate_limit_primary":
+                    # The primary limit resets on a window far longer than this job, so
+                    # every later write would fail too. The rest wait for the next run.
+                    rest = len(assessed) - position - 1
+                    summary.stopped = True
+                    summary.skipped += rest
+                    log(f"::error::The primary rate limit stopped the writes before {rest} pull requests.")
+                    break
                 continue
         _count(summary, facts, decision)
     summary.calls = counter.calls
