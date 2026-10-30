@@ -68,6 +68,21 @@ SNAPSHOT = {
     "unmilestoned_open": [issue(60, ["scope:in-focus"], milestone=None), issue(61, ["status:accepted"], milestone=None)],
     "facts": {10: landed("rocklambros"), 30: landed("outsider"), 41: landed("rocklambros"), 50: {"closedBy": "outsider"}},
     "bot_accepted": [[20, "rocklambros"]],
+    # Created dates give 42, 22, 7, and 2 days on 2026-11-01. Pull request 104 carries the
+    # label and no data line.
+    "queued_pulls": [
+        [101, "no_accepted", "2026-09-21", "62:2026-10-02", "2026-09-20T09:00:00Z"],
+        [102, "awaiting_rereview", "2026-10-25", "", "2026-10-25T09:00:00Z"],
+        [103, "sent_back", "2026-10-10", "", "2026-10-10T09:00:00Z"],
+        [104, None, None, "", "2026-10-30T09:00:00Z"],
+    ],
+    "intake_claims": [[62, 30, 101]],
+    "intake_sweep": ["success", 555, "2026-11-01T03:00:00Z"],
+    "intake_recent": [
+        [201, False, None, "2026-10-20T00:00:00Z"],
+        [202, True, "hand", "2026-10-21T00:00:00Z"],
+        [203, False, "review", "2026-08-01T00:00:00Z"],
+    ],
 }
 SWITCHES = {"ROADMAP_RENDER_ENABLED": "true", "ROADMAP_REFRESH_ENABLED": "yes", "ROADMAP_SYNC_ENABLED": "true"}
 
@@ -104,6 +119,16 @@ def test_sections():
         ["ROADMAP_SYNC_ENABLED", "true", False],
     ]
     assert r["closed_nothing_done"] == [5]
+    assert r["queued_pulls"] == [
+        [101, "no_accepted", 42, "62:2026-10-02"], [103, "sent_back", 22, ""], [102, "awaiting_rereview", 7, ""],
+    ]
+    assert r["queued_unrecorded"] == [104]
+    assert r["queued_meta"] == ["success", 555, "2026-11-01T03:00:00Z"]
+    assert r["queued_unreadable"] == 0
+    assert r["intake_counts"] == {
+        "median_age_days": 22, "hand_cleared_60d": 1, "non_roster_merges_60d": 1,
+        "non_roster_merges_prior_60d": 1, "claims_waiting": 1,
+    }
 
 
 def test_render_never_leaks_titles_or_mentions():
@@ -320,3 +345,202 @@ def test_switches_heading_says_every_value_is_listed():
     import roadmap_sync
     note = dict((key, note) for key, _title, note in roadmap_sync.SECTION_TITLES)["switches"]
     assert note == "The current value of each roadmap variable, flagged when it is neither true nor false."
+
+
+# The queued pull requests section. The intake gate's state is read from the bot's data
+# line, and the section renders numbers, reason codes, dates, and days only.
+
+def intake_comment(line, login="github-actions[bot]"):
+    return {"user": {"login": login}, "body": f"{line}\n<!-- acs-intake -->\nQueued text that must never render."}
+
+
+def labeled_pull(number, author="outsider", created="2026-10-01T00:00:00Z"):
+    return {
+        "number": number, "state": "open", "pull_request": {}, "title": "SECRET TITLE", "user": {"login": author},
+        "labels": [{"name": "status:needs-triage"}], "created_at": created,
+    }
+
+
+class IntakeGitHub:
+    def __init__(self, labeled=(), comments=None, closed=(), runs=None):
+        self.labeled = list(labeled)
+        self.comments = comments or {}
+        self.closed = list(closed)
+        self.runs = runs if runs is not None else {"workflow_runs": []}
+        self.paths = []
+
+    def paginate(self, path):
+        self.paths.append(("paginate", path))
+        assert "actions/" not in path, "the runs path returns an object, never a list of pages"
+        if "/comments" in path:
+            return self.comments.get(int(path.split("/issues/")[1].split("/")[0]), [])
+        if "/pulls?" in path:
+            return self.closed
+        if "/issues?" in path:
+            return self.labeled
+        raise AssertionError(path)
+
+    def get(self, path):
+        self.paths.append(("get", path))
+        if path.endswith("actions/workflows/pr-intake.yml/runs?event=schedule&status=completed&per_page=1"):
+            return self.runs
+        raise AssertionError(path)
+
+
+def intake_body(gh, today=date(2026, 11, 1), trusted=TRUSTED, failed=()):
+    from roadmap_sync import intake_snapshot
+    snapshot = dict(SNAPSHOT, **intake_snapshot(gh, today, trusted))
+    r = build_report(snapshot, TRUSTED, LEADS, {"Spec"}, today, SWITCHES)
+    return r, render_health(r, "ok", "t", "1", list(failed))
+
+
+def test_queued_section_renders_numbers_reasons_days_only():
+    gh = IntakeGitHub(
+        labeled=[labeled_pull(301)],
+        comments={301: [intake_comment("<!-- acs-intake-data reason=no_accepted since=2026-10-01 claimed=62:2026-10-02 head=abc -->")]},
+        runs={"workflow_runs": [{"id": 777, "conclusion": "success", "created_at": "2026-11-01T03:00:00Z"}]},
+    )
+    r, body = intake_body(gh)
+    assert r["queued_pulls"] == [[301, "no_accepted", 31, "62:2026-10-02"]]
+    assert "## Queued pull requests" in body
+    assert "- #301: no_accepted, 31 days" in body
+    assert "the nightly intake sweep run 777 concluded success" in body
+    assert "- #62: commented 30 days ago by the author of PR #301 (14 days or more)" in body
+    assert "Any comment by the author before the pull request counts, so read the issue before acting." in body
+    assert (f"[All queued pull requests with authors](https://github.com/{REPO}/pulls?q="
+            "is%3Apr+is%3Aopen+label%3Astatus%3Aneeds-triage)") in body
+    assert "outsider" not in body and "SECRET TITLE" not in body and "Queued text" not in body
+    assert ("get", f"repos/{REPO}/actions/workflows/pr-intake.yml/runs?event=schedule&status=completed&per_page=1") in gh.paths
+
+
+def test_queued_section_says_when_no_scheduled_run_completed():
+    _r, body = intake_body(IntakeGitHub())
+    assert "No completed scheduled run of the nightly intake sweep." in body
+
+
+def test_queued_section_ignores_a_data_line_from_anyone_but_the_bot():
+    forged = intake_comment("<!-- acs-intake-data reason=no_accepted since=2020-01-01 claimed=62:2020-01-01 -->", login="outsider")
+    r, body = intake_body(IntakeGitHub(labeled=[labeled_pull(302)], comments={302: [forged]}))
+    assert r["queued_pulls"] == [] and r["queued_unrecorded"] == [302]
+    assert r["intake_counts"]["claims_waiting"] == 0
+    assert "Labeled without a gate record" in body and "- #302" in body
+
+
+@pytest.mark.parametrize("line", [
+    "<!-- acs-intake-data reason=bogus since=2026-10-01 -->",
+    "<!-- acs-intake-data reason=no_accepted since=yesterday -->",
+    "<!-- acs-intake-data reason=no_accepted since=2026-13-40 -->",
+    "<!-- acs-intake-data reason=no_accepted since=2026-10-01 claimed=62:soon -->",
+    "<!-- acs-intake-data reason=no_accepted since=2026-10-01 since=2026-10-02 -->",
+    "not a data line",
+])
+def test_queued_section_drops_a_malformed_data_line(line):
+    r, body = intake_body(IntakeGitHub(labeled=[labeled_pull(303)], comments={303: [intake_comment(line)]}))
+    assert r["queued_pulls"] == [] and r["queued_unrecorded"] == []
+    assert r["queued_unreadable"] == 1
+    assert "bogus" not in body and "yesterday" not in body and "soon" not in body
+    assert "Data lines that could not be read: 1." in body
+
+
+def test_queued_headings_for_thirty_days_awaiting_sent_back_and_unrecorded():
+    body = render_health(report(), "ok", "t", "1", [])
+    section = body.split("## Queued pull requests", 1)[1].split("\n## ", 1)[0]
+    for heading in ("Queued more than 30 days", "Awaiting re-review", "Sent back, no response", "Labeled without a gate record"):
+        assert heading in section
+    after = lambda heading: section.split(heading, 1)[1].split("\n\n", 2)[1]  # noqa: E731
+    assert after("Queued more than 30 days").splitlines() == ["- #101: no_accepted, 42 days"]
+    assert after("Awaiting re-review").splitlines() == ["- #102: awaiting_rereview, 7 days"]
+    assert after("Sent back, no response").splitlines() == ["- #103: sent_back, 22 days"]
+    assert after("Labeled without a gate record").splitlines() == ["- #104"]
+    # Grouped by reason, in the gate's reason order.
+    assert section.index("- #101: no_accepted") < section.index("- #103: sent_back") < section.index("- #102: awaiting_rereview")
+
+
+def test_claims_counted_once_per_author_and_issue():
+    line = "<!-- acs-intake-data reason=no_accepted since=2026-10-01 claimed={} -->"
+    gh = IntakeGitHub(
+        labeled=[labeled_pull(311, "alice"), labeled_pull(312, "Alice"), labeled_pull(313, "bob")],
+        comments={
+            311: [intake_comment(line.format("62:2026-10-20,63:2026-10-30"))],
+            312: [intake_comment(line.format("62:2026-10-10"))],
+            313: [intake_comment(line.format("62:2026-10-25"))],
+        },
+    )
+    r, body = intake_body(gh)
+    assert r["intake_counts"]["claims_waiting"] == 3
+    claims = body.split("Claims waiting on a lead", 1)[1].split("Any comment", 1)[0]
+    assert [row for row in claims.splitlines() if row.startswith("- ")] == [
+        "- #62: commented 22 days ago by the author of PR #312 (14 days or more)",
+        "- #62: commented 7 days ago by the author of PR #313",
+        "- #63: commented 2 days ago by the author of PR #311",
+    ]
+    assert "alice" not in body.lower() and "bob" not in body
+
+
+def test_hand_cleared_counts_the_route_not_the_merge():
+    cleared = "<!-- acs-intake-data reason=cleared route={} cleared=2026-10-01 -->"
+    gh = IntakeGitHub(
+        closed=[
+            {"number": 401, "user": {"login": "rocklambros"}, "closed_at": "2026-10-20T00:00:00Z", "merged_at": "2026-10-20T00:00:00Z"},
+            {"number": 402, "user": {"login": "outsider"}, "closed_at": "2026-10-21T00:00:00Z", "merged_at": "2026-10-21T00:00:00Z"},
+            {"number": 403, "user": {"login": "outsider"}, "closed_at": "2026-08-15T00:00:00Z", "merged_at": "2026-08-15T00:00:00Z"},
+            {"number": 404, "user": {"login": "outsider"}, "closed_at": "2026-10-22T00:00:00Z", "merged_at": None},
+            {"number": 405, "user": {"login": "outsider"}, "closed_at": "2026-05-01T00:00:00Z", "merged_at": "2026-05-01T00:00:00Z"},
+        ],
+        comments={
+            401: [intake_comment(cleared.format("hand"))],
+            402: [intake_comment(cleared.format("review"))],
+            403: [intake_comment(cleared.format("hand"))],
+        },
+    )
+    r, body = intake_body(gh)
+    assert r["intake_counts"]["hand_cleared_60d"] == 1
+    assert r["intake_counts"]["non_roster_merges_60d"] == 1
+    assert r["intake_counts"]["non_roster_merges_prior_60d"] == 1
+    assert "Hand-cleared in the last 60 days: 1." in body
+    assert "Non-roster merges in the last 60 days: 1, against 1 in the 60 days before." in body
+
+
+def test_intake_recent_keeps_no_login():
+    from roadmap_sync import intake_snapshot
+    gh = IntakeGitHub(closed=[{"number": 401, "user": {"login": "outsider"}, "closed_at": "2026-10-20T00:00:00Z", "merged_at": None}])
+    snapshot = intake_snapshot(gh, date(2026, 11, 1), TRUSTED)
+    assert snapshot["intake_recent"] == [[401, False, None, None]]
+    assert "outsider" not in repr(snapshot)
+
+
+def test_baseline_line_when_unset_and_when_set(monkeypatch):
+    monkeypatch.delenv("PR_INTAKE_BASELINES", raising=False)
+    body = render_health(report(), "ok", "t", "1", [])
+    assert "Baseline not recorded. A project lead sets PR_INTAKE_BASELINES." in body
+    assert "Review due" not in body
+    monkeypatch.setenv("PR_INTAKE_BASELINES", "recorded=2026-11-01 median_age=12 hand_cleared_60d=3 non_roster_merges_60d=4")
+    body = render_health(report(), "ok", "t", "1", [])
+    assert "Baseline recorded 2026-11-01: median age 12 days, 3 hand-cleared, 4 non-roster merges in 60 days." in body
+    assert ("Review due 2026-12-31: if claims waiting rose or non-roster merges fell against the prior 60 days, "
+            "a project lead sets PR_INTAKE_ENFORCED=false.") in body
+    monkeypatch.setenv("PR_INTAKE_BASELINES", "recorded=soon <b>x</b>")
+    body = render_health(report(), "ok", "t", "1", [])
+    assert "Baseline not recorded." in body and "<b>" not in body
+
+
+class FailingIntakeGitHub(FactsGitHub):
+    def get(self, path):
+        raise SyncError("boom")
+
+
+def test_intake_read_failure_degrades_one_section():
+    import roadmap_sync
+
+    def git(args):
+        return 0, "false\n"
+
+    failed = []
+    snapshot = roadmap_sync._snapshot(FailingIntakeGitHub(), git, date(2026, 11, 1), failed)
+    assert "queued_pulls" in failed
+    assert "in_focus_without_milestone" not in failed and "accepted_this_week" not in failed
+    assert snapshot["queued_pulls"] == [] and snapshot["intake_recent"] == [] and snapshot["intake_sweep"] == []
+    r = build_report(snapshot, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)
+    body = render_health(r, "degraded", "t", "1", failed)
+    section = body.split("## Queued pull requests", 1)[1].split("\n## ", 1)[0]
+    assert "Could not be read on this run." in section

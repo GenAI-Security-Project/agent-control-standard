@@ -31,6 +31,7 @@ from dataclasses import dataclass  # noqa: E402
 import closing_choice  # noqa: E402
 import fetch_roadmap  # noqa: E402
 import roadmap_model as model  # noqa: E402
+from pr_intake import CLEAR_ROUTES, MARKER, REASONS, parse_data_line  # noqa: E402
 
 
 GH_TIMEOUT_SECONDS = 30
@@ -285,6 +286,7 @@ def cmd_migrate(args) -> int:
 
 
 import os  # noqa: E402
+import statistics  # noqa: E402
 from datetime import date, datetime, timedelta, timezone  # noqa: E402
 
 SECTION_TITLES = (
@@ -301,6 +303,7 @@ SECTION_TITLES = (
     ("unknown_close_reasons", "Unknown close reasons", "Closed with a reason this version does not know."),
     ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
     ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
+    ("queued_pulls", "Queued pull requests", "Open pull requests the intake gate holds, by reason, with how long each has waited. Numbers only. The search link lists authors. This tool runs from main and reports nothing until promotion."),
     ("promotion", "Promotion", "Work on integration that main lacks. A project lead opens and merges the promotion."),
     ("bypasses", "Bypasses", "Merges into integration or main in the last seven days with no approving review, and direct pushes. Admins can bypass the rulesets, so this is where a bypass shows."),
     ("switches", "Switches", "The current value of each roadmap variable, flagged when it is neither true nor false."),
@@ -421,6 +424,251 @@ REMEDIES = {
 }
 
 
+# The intake gate's queue. Everything here is read from the bot's data line, which only the
+# bot writes, and from GitHub-set numbers and dates. Logins are used to dedupe claims and to
+# test roster membership, and are dropped before anything is stored.
+INTAKE_RECENT_DAYS = 120
+INTAKE_WINDOW_DAYS = 60
+CLAIM_FLAG_DAYS = 14
+QUEUED_LONG_DAYS = 30
+INTAKE_RUNS = "actions/workflows/pr-intake.yml/runs?event=schedule&status=completed&per_page=1"
+QUEUED_SEARCH = "pulls?q=is%3Apr+is%3Aopen+label%3Astatus%3Aneeds-triage"
+_CLAIM = re.compile(r"^([0-9]{1,9}):([0-9]{4}-[0-9]{2}-[0-9]{2})$")
+_CONCLUSION = re.compile(r"^[a-z_]{1,32}$")
+_BASELINE = re.compile(
+    r"^recorded=([0-9]{4}-[0-9]{2}-[0-9]{2}) median_age=([0-9]{1,6}) "
+    r"hand_cleared_60d=([0-9]{1,6}) non_roster_merges_60d=([0-9]{1,6})$"
+)
+
+
+def _iso_day(value: object) -> date | None:
+    if not isinstance(value, str) or not _DAY.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_claims(value: object) -> list[tuple[int, date]] | None:
+    """The `claimed` list as (issue, day) pairs, or None when any entry does not read."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, str):
+        return None
+    claims = []
+    for entry in value.split(","):
+        match = _CLAIM.fullmatch(entry)
+        day = _iso_day(match.group(2)) if match else None
+        if day is None:
+            return None
+        claims.append((int(match.group(1)), day))
+    return claims
+
+
+def _readable_queue(reason: object, since: object, claimed: object) -> bool:
+    return reason in REASONS and _iso_day(since) is not None and _parse_claims(claimed) is not None
+
+
+def _intake_data(comments: list) -> tuple[bool, dict[str, str] | None]:
+    """Whether the bot left its intake comment, and that comment's data line.
+
+    Mirrors pr_intake's choice: the first comment by the bot's exact login that carries the
+    marker. A data line in anyone else's comment carries no authority.
+    """
+    for comment in comments:
+        if not isinstance(comment, dict) or (comment.get("user") or {}).get("login") != model.BOT_LOGIN:
+            continue
+        body = comment.get("body")
+        if isinstance(body, str) and MARKER in body:
+            return True, parse_data_line(body)
+    return False, None
+
+
+def _when(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def intake_snapshot(gh, today: date, trusted: frozenset[str]) -> dict:
+    """The intake gate's queue, the last scheduled sweep, and recent closes.
+
+    Claims are deduped by author and issue here, so no login reaches the snapshot.
+    """
+    base = f"repos/{model.REPO}"
+    queued: list[list] = []
+    claims: dict[tuple[str, int], list[int]] = {}
+    label = urllib.parse.quote(model.NEEDS_TRIAGE, safe="")
+    for item in gh.paginate(f"{base}/issues?state=open&labels={label}&per_page=100"):
+        if "pull_request" not in item or item.get("state") != "open" or model.NEEDS_TRIAGE not in _labels(item):
+            continue
+        number = int(item["number"])
+        created = item.get("created_at")
+        found, data = _intake_data(gh.paginate(f"{base}/issues/{number}/comments?per_page=100"))
+        if not found:
+            queued.append([number, None, None, "", created])
+            continue
+        # A marked comment whose line 1 does not parse is stored with an empty reason, which
+        # build_report counts as unreadable rather than as a pull request with no record.
+        data = data or {}
+        reason, since, claimed = data.get("reason", ""), data.get("since", ""), data.get("claimed", "")
+        queued.append([number, reason, since, claimed, created])
+        if not _readable_queue(reason, since, claimed):
+            continue
+        author = str((item.get("user") or {}).get("login") or "").casefold()
+        for issue, day in _parse_claims(claimed):
+            row = [issue, (today - day).days, number]
+            best = claims.get((author, issue))
+            # The earliest comment stands for the author, the lower pull request on a tie.
+            if best is None or (row[1], -row[2]) > (best[1], -best[2]):
+                claims[(author, issue)] = row
+    runs = gh.get(f"{base}/{INTAKE_RUNS}")
+    latest = (runs.get("workflow_runs") or [None])[0] if isinstance(runs, dict) else None
+    sweep: list = []
+    if isinstance(latest, dict):
+        conclusion = latest.get("conclusion")
+        created = latest.get("created_at")
+        sweep = [
+            conclusion if isinstance(conclusion, str) and _CONCLUSION.fullmatch(conclusion) else None,
+            int(latest["id"]),
+            created if _when(created) is not None else None,
+        ]
+    cutoff = datetime.combine(today - timedelta(days=INTAKE_RECENT_DAYS), datetime.min.time(), timezone.utc)
+    recent: list[list] = []
+    for pull in gh.paginate(f"{base}/pulls?state=closed&sort=updated&direction=desc&per_page=100"):
+        closed = _when(pull.get("closed_at"))
+        if closed is None or closed < cutoff:
+            continue
+        number = int(pull["number"])
+        _found, data = _intake_data(gh.paginate(f"{base}/issues/{number}/comments?per_page=100"))
+        route = (data or {}).get("route")
+        merged = pull.get("merged_at")
+        author = str((pull.get("user") or {}).get("login") or "").casefold()
+        recent.append([
+            number, author in trusted, route if route in CLEAR_ROUTES else None, merged if _when(merged) is not None else None,
+        ])
+    return {
+        "queued_pulls": queued,
+        "intake_claims": sorted(claims.values(), key=lambda row: (-row[1], row[0], row[2])),
+        "intake_sweep": sweep,
+        "intake_recent": recent,
+    }
+
+
+def _intake_report(snapshot: dict, today: date) -> dict:
+    queued: list[list] = []
+    unrecorded: list[int] = []
+    unreadable = 0
+    for number, reason, since, claimed, created in snapshot.get("queued_pulls") or []:
+        opened = _when(created)
+        if reason is None and opened is not None:
+            unrecorded.append(int(number))
+        elif opened is None or not _readable_queue(reason, since, claimed):
+            unreadable += 1
+        else:
+            queued.append([int(number), reason, (today - opened.date()).days, claimed])
+    queued.sort(key=lambda row: (-row[2], row[0]))
+
+    def merged_age(row: list) -> int | None:
+        merged = _when(row[3])
+        return (today - merged.date()).days if merged is not None else None
+
+    recent = [(row, merged_age(row)) for row in snapshot.get("intake_recent") or []]
+    window = INTAKE_WINDOW_DAYS
+    claims = [list(row) for row in snapshot.get("intake_claims") or []]
+    return {
+        "queued_pulls": queued,
+        "queued_unrecorded": unrecorded,
+        "queued_unreadable": unreadable,
+        "queued_meta": list(snapshot.get("intake_sweep") or []),
+        "queued_claims": claims,
+        "intake_counts": {
+            "median_age_days": statistics.median_low([row[2] for row in queued]) if queued else None,
+            "hand_cleared_60d": sum(1 for row, age in recent if row[2] == "hand" and age is not None and 0 <= age < window),
+            "non_roster_merges_60d": sum(1 for row, age in recent if not row[1] and age is not None and 0 <= age < window),
+            "non_roster_merges_prior_60d": sum(
+                1 for row, age in recent if not row[1] and age is not None and window <= age < 2 * window
+            ),
+            "claims_waiting": len(claims),
+        },
+    }
+
+
+def _render_queued(report: dict) -> list[str]:
+    """Numbers, reason codes, dates, and days only. No login and no fetched text."""
+    repo_url = f"https://github.com/{model.REPO}"
+    lines: list[str] = []
+    meta = report.get("queued_meta") or []
+    if meta:
+        conclusion, run_id, created = meta
+        day = f" on {created[:10]}" if created else ""
+        lines.append(
+            f"Last scheduled run: the nightly intake sweep run {int(run_id)} "
+            f"concluded {conclusion or 'with no readable conclusion'}{day}."
+        )
+    else:
+        lines.append("No completed scheduled run of the nightly intake sweep.")
+    counts = report.get("intake_counts") or {}
+    median = counts.get("median_age_days")
+    lines += ["", " ".join([
+        f"Median age {median} days." if median is not None else "Median age: nothing queued.",
+        f"Hand-cleared in the last 60 days: {counts.get('hand_cleared_60d', 0)}.",
+        f"Non-roster merges in the last 60 days: {counts.get('non_roster_merges_60d', 0)}, "
+        f"against {counts.get('non_roster_merges_prior_60d', 0)} in the 60 days before.",
+        f"Claims waiting on a lead: {counts.get('claims_waiting', 0)}.",
+    ])]
+    baseline = _BASELINE.fullmatch(os.environ.get("PR_INTAKE_BASELINES", "").strip())
+    recorded = _iso_day(baseline.group(1)) if baseline else None
+    if recorded is None:
+        lines += ["", "Baseline not recorded. A project lead sets PR_INTAKE_BASELINES."]
+    else:
+        due = recorded + timedelta(days=INTAKE_WINDOW_DAYS)
+        lines += [
+            "",
+            f"Baseline recorded {recorded.isoformat()}: median age {int(baseline.group(2))} days, "
+            f"{int(baseline.group(3))} hand-cleared, {int(baseline.group(4))} non-roster merges in 60 days.",
+            "",
+            f"Review due {due.isoformat()}: if claims waiting rose or non-roster merges fell against the prior "
+            "60 days, a project lead sets PR_INTAKE_ENFORCED=false.",
+        ]
+    unreadable = int(report.get("queued_unreadable") or 0)
+    if unreadable:
+        lines += ["", f"Data lines that could not be read: {unreadable}."]
+    claims = report.get("queued_claims") or []
+    if claims:
+        lines += ["", "Claims waiting on a lead:", ""]
+        for issue, days, number in claims:
+            flag = " (14 days or more)" if days >= CLAIM_FLAG_DAYS else ""
+            lines.append(f"- #{int(issue)}: commented {int(days)} days ago by the author of PR #{int(number)}{flag}")
+        lines += ["", "Any comment by the author before the pull request counts, so read the issue before acting."]
+    queued = report.get("queued_pulls") or []
+
+    def rows(selected: list[list]) -> list[str]:
+        return [f"- #{int(number)}: {reason}, {int(days)} days" for number, reason, days, _claimed in selected]
+
+    lines.append("")
+    if queued:
+        # Grouped by reason in the gate's own reason order, longest wait first in each group.
+        lines += rows(sorted(queued, key=lambda row: REASONS.index(row[1])))
+    else:
+        lines.append("None queued with a gate record.")
+    unrecorded = report.get("queued_unrecorded") or []
+    for heading, selected in (
+        ("Queued more than 30 days", rows([row for row in queued if row[2] > QUEUED_LONG_DAYS])),
+        ("Awaiting re-review", rows([row for row in queued if row[1] == "awaiting_rereview"])),
+        ("Sent back, no response", rows([row for row in queued if row[1] == "sent_back"])),
+        ("Labeled without a gate record", [f"- #{int(number)}" for number in unrecorded]),
+    ):
+        if selected:
+            lines += ["", f"{heading}:", "", *selected]
+    lines += ["", f"[All queued pull requests with authors]({repo_url}/{QUEUED_SEARCH})"]
+    return lines
+
+
 def record_from_rest(issue: dict, facts: dict | None) -> model.IssueRecord:
     """A REST issue plus the close facts the fetch wrote for it.
 
@@ -500,9 +748,13 @@ def build_report(
     # Every switch is listed, so the weekly call sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
+    report.update(_intake_report(snapshot, today))
     report["unverified_closes"].sort()
     for key in report:
-        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses"):
+        if key not in (
+            "accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses", "queued_pulls",
+            "intake_recent", "queued_meta", "queued_claims", "queued_unreadable", "intake_counts",
+        ):
             report[key] = sorted(set(report[key]))
     return report
 
@@ -529,7 +781,9 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
             lines.append("Could not be read on this run.")
             continue
         items = report.get(key) or []
-        if not items:
+        if key == "queued_pulls":
+            lines += _render_queued(report)
+        elif not items:
             lines.append("None.")
         elif key == "accepted_this_week":
             lines += [f"- #{number}, milestone set by `{login}`" for number, login in items]
@@ -590,7 +844,7 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
     snapshot = {
         "milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": [], "promotion": [],
-        "bypasses": [],
+        "bypasses": [], "queued_pulls": [], "intake_claims": [], "intake_sweep": [], "intake_recent": [],
     }
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
@@ -628,6 +882,12 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
         snapshot["bypasses"] = bypasses(gh, git, today)
     except (SyncError, KeyError, ValueError, TypeError, AttributeError):
         failed.append("bypasses")
+    try:
+        # Read here, not in _sweep, so _snapshot keeps its signature. Only booleans are kept.
+        trusted = model.trusted_logins(Path(__file__).resolve().parents[1])
+        snapshot.update(intake_snapshot(gh, today, trusted))
+    except (SyncError, KeyError, ValueError, TypeError, AttributeError):
+        failed.append("queued_pulls")
     cutoff = datetime.combine(today - timedelta(days=8), datetime.min.time(), timezone.utc)
     try:
         for raw in snapshot["milestoned"]:
