@@ -64,8 +64,11 @@ the last 30 days, clears the queue. If a lead has approved and merged a pull req
 yours before, your pull requests are not queued. An editorial fix on the documentation
 lane, a page under `docs/topics/` or `design/` or one of the root notice files (a typo, a
 link, formatting, no change in meaning), needs no issue: tick the editorial box in the
-pull request template, and keep every changed file on that lane. Otherwise the pull
-request needs an accepted issue that a lead assigned to you. Comment on the issue to claim
+pull request template, and keep every changed file on that lane. The root notice files are
+`README.md`, `CONTRIBUTING.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `GOVERNANCE.md`,
+`SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`, and `docs/README.md` counts with
+them. `DOCS_LANE_FILES` in `tools/base_branch_guard.py` is the list the bot reads. Otherwise
+the pull request needs an accepted issue that a lead assigned to you. Comment on the issue to claim
 it before opening the pull request. The comment is the claim, and a lead assigns you. An
 issue labeled `help wanted` is open to anyone who commented on it before opening the pull
 request, two open pull requests per person per issue. A pull request that meets none of

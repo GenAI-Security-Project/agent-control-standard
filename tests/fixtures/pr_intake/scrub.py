@@ -17,6 +17,17 @@ Structure survives: `type`, ids of non-person objects, states, label names, file
 SHAs, and timestamps. A label's `name` is kept because the gate reads label names. Any
 string that is a URL becomes a fixed API URL, and any string that still contains a
 recorded login is replaced whole. The run fails if an email or a non-API URL remains.
+
+The committed fixtures are this script's output plus hand edits made afterwards, so a
+re-run reproduces the scrub and not the edits. Re-apply them after any re-recording:
+in reviews.json, review 900001 has a null `user` (a deleted account) and review 900002 has
+a `type: Bot` reviewer. In comments.json, the bot's legacy queue comment keeps its opening
+sentence, the bot's keyword warning keeps its `<!-- acs-closing-keyword:108 -->` marker,
+and three comments are added: 910001, a contributor copying the marker and the data line,
+910002, a contributor copying the legacy opening sentence, and 910003, the bot's own
+marked comment. In timeline.json, three `unlabeled` events are added: 920001, the bot
+removing the queue label, 920002, a lead removing it, and 920003, a lead removing another
+label.
 """
 from __future__ import annotations
 

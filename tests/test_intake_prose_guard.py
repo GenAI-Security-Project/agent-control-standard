@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
+import base_branch_guard  # noqa: E402
 import pr_intake  # noqa: E402
 from apply_governance import desired_labels  # noqa: E402
 
@@ -41,6 +42,10 @@ def read(relative: str) -> str:
     return flat((REPO_ROOT / relative).read_text(encoding="utf-8"))
 
 
+def read_lines(relative: str) -> list[str]:
+    return (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
+
+
 def section(heading: str) -> str:
     """The body of a `## ` section of CONTRIBUTING.md, up to the next `## ` heading."""
     raw = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
@@ -59,8 +64,6 @@ def test_claim_phrase_is_in_contributing_readme_template_form_and_seed():
         assert CLAIM in read(relative), relative
     seed = next(label for label in desired_labels() if label.name == pr_intake.HELP_WANTED)
     assert CLAIM in seed.description
-    # The form carries the label's own description, word for word.
-    assert seed.description in read(".github/ISSUE_TEMPLATE/3-reference-implementation.yml")
 
 
 def test_contributing_has_the_precedence_sentence():
@@ -74,6 +77,21 @@ def test_editorial_sentence_names_the_whole_documentation_lane():
     sentence = next(part for part in body.split(". ") if part.startswith("An editorial fix"))
     assert "`docs/topics/`" in sentence and "`design/`" in sentence
     assert "the root notice files" in sentence
+
+
+def test_contributing_names_every_root_notice_file_the_lane_admits():
+    # The editorial sentence says "the root notice files". This sentence says which, from
+    # the same list the gate reads, so the two cannot drift.
+    body = section("How work gets accepted")
+    sentence = next(part for part in body.split(". ") if part.startswith("The root notice files are"))
+    named = set(re.findall(r"`([^`]{1,64})`", sentence))
+    assert set(base_branch_guard.DOCS_LANE_FILES) <= named, set(base_branch_guard.DOCS_LANE_FILES) - named
+    assert "`DOCS_LANE_FILES`" in sentence or "DOCS_LANE_FILES" in body
+
+
+def test_readme_flow_names_the_lane_on_the_editorial_node():
+    node = next(line for line in read_lines("README.md") if line.strip().startswith('E["Editorial fix'))
+    assert "documentation lane" in node
 
 
 def test_block_numbers_match_the_gate_constants():

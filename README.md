@@ -360,7 +360,7 @@ flowchart LR
     T -->|"accepted"| A["status:accepted<br/>enters the backlog"]
     A --> C["Claim<br/>comment on the issue"]
     C --> P["Pull request<br/>references the issue"]
-    E["Editorial fix<br/>typo, broken link"] --> P2["Pull request<br/>needs no issue"]
+    E["Editorial fix<br/>documentation lane<br/>typo, broken link"] --> P2["Pull request<br/>needs no issue"]
 ```
 
 `CONTRIBUTING.md` is the authority on the full scope list, the branch names, the label
