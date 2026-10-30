@@ -39,6 +39,10 @@ from site_nav import PANE_LABEL, Row, WalkError, walk_docs, walk_landing  # noqa
 
 ATTEMPTS = 13
 DELAY_SECONDS = 60
+# Thirteen passes of three 20-second fetches plus twelve sleeps can outrun the step's
+# fifteen-minute cap, and a killed step never writes its summary. Retrying stops once the
+# next sleep would carry the run past this budget, which leaves one pass of headroom.
+BUDGET_SECONDS = 13 * 60
 # A 200 page with no landmark may be the edge's stale copy from before the pane existed,
 # so it gets the full window like a row mismatch. The 404 address carries a nonce, so no
 # cache can hold an old copy of it. A 404 with no landmark is GitHub's own page, and
@@ -144,11 +148,16 @@ def _write_summary(outcome: Outcome) -> None:
         summary.write("\n".join(lines) + "\n")
 
 
-def main(argv: list[str], sleep: Callable[[float], None] = time.sleep) -> int:
+def main(
+    argv: list[str],
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> int:
     if len(argv) != 2:
         print("usage: verify_site_nav.py <site-base-url>", file=sys.stderr)
         return 2
     base, run_nonce = argv[1], nonce()
+    started = clock()
     outcome = Outcome()
     for attempt in range(1, ATTEMPTS + 1):
         try:
@@ -167,6 +176,9 @@ def main(argv: list[str], sleep: Callable[[float], None] = time.sleep) -> int:
         else:
             retry = outcome.retryable
         if not retry or attempt == ATTEMPTS:
+            break
+        if clock() - started + DELAY_SECONDS > BUDGET_SECONDS:
+            print(f"stopping after attempt {attempt}: the {BUDGET_SECONDS // 60}-minute budget is spent")
             break
         sleep(DELAY_SECONDS)
     for problem in outcome.problems:

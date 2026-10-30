@@ -249,6 +249,31 @@ def test_main_gives_up_after_thirteen_attempts_and_writes_the_row_diff(monkeypat
     assert "docs/other/" in text and "@@" in text
 
 
+def test_main_stops_retrying_inside_the_budget_and_writes_the_summary(monkeypatch, tmp_path, capsys):
+    """Each pass here costs a full minute, three fetches at their 20-second timeout, so
+    thirteen passes would outrun the step cap. The loop stops before the budget and still
+    writes the summary a killed step would lose."""
+    now = [0.0]
+    pages = _site(front=(200, _landing("docs/other/")))
+
+    def slow(url: str) -> tuple[int, str]:
+        now[0] += 20
+        return pages[url]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    monkeypatch.setattr(verify_site_nav, "fetch_text", slow)
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert verify_site_nav.main(["verify_site_nav.py", BASE], sleep=sleep, clock=lambda: now[0]) == 1
+    assert now[0] <= verify_site_nav.BUDGET_SECONDS
+    assert "budget is spent" in capsys.readouterr().out
+    assert "docs/other/" in summary.read_text(encoding="utf-8")
+
+
 def test_nonce_falls_back_to_the_clock_outside_actions(monkeypatch):
     monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
     monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
