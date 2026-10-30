@@ -349,8 +349,9 @@ Every issue starts from one of six forms. There are no blank issues. A form appl
 issue to `status:accepted`, and only an accepted issue enters the backlog. A pull request
 that changes behavior, alters normative text, or adds code needs an accepted issue that a
 lead assigned to you, or a `help wanted` issue. Comment on the issue to claim it before
-opening the pull request. The comment is the claim. An editorial correction to a page
-under `docs/topics/` or `design/`, a typo or a broken link, needs none.
+opening the pull request. The comment is the claim. An editorial correction on the
+documentation lane, a typo or a broken link in a page under `docs/topics/` or `design/` or
+in one of the root notice files, needs none.
 
 ```mermaid
 flowchart LR

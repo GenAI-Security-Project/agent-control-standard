@@ -58,12 +58,13 @@ quarter is not a finding without value.
 
 Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
-If you are a project lead, a workstream lead, or a code owner, your pull requests are not
-queued. A lead's approval, or a lead's request for changes within the last 30 days, clears
-the queue. If a lead has approved and merged a pull request of yours before, your pull
-requests are not queued. An editorial fix to a page under `docs/topics/` or `design/` (a
-typo, a link, formatting, no change in meaning) needs no issue: tick the editorial box in
-the pull request template, and keep every changed file on that lane. Otherwise the pull
+If you are a project lead, a workstream lead, a triage volunteer, or a code owner, your
+pull requests are not queued. A lead's approval, or a lead's request for changes within
+the last 30 days, clears the queue. If a lead has approved and merged a pull request of
+yours before, your pull requests are not queued. An editorial fix on the documentation
+lane, a page under `docs/topics/` or `design/` or one of the root notice files (a typo, a
+link, formatting, no change in meaning), needs no issue: tick the editorial box in the
+pull request template, and keep every changed file on that lane. Otherwise the pull
 request needs an accepted issue that a lead assigned to you. Comment on the issue to claim
 it before opening the pull request. The comment is the claim, and a lead assigns you. An
 issue labeled `help wanted` is open to anyone who commented on it before opening the pull
