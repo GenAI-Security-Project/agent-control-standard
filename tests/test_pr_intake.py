@@ -276,7 +276,32 @@ def test_push_after_changes_requested_is_awaiting_rereview_not_sent_back():
     assert decision.reasons[0] == "awaiting_rereview"
     assert "sent_back" not in decision.reasons
     assert decision.data["reason"] == "awaiting_rereview"
-    assert "re-review" in decision.comment or "second review" in decision.comment
+    assert ("A lead requested changes more than 30 days ago, and this pull request has changed since. It is"
+            " waiting on the lead's re-review.") in decision.comment
+
+
+def test_a_leads_latest_verdict_stands_over_their_earlier_one():
+    approved, asked = review(state="APPROVED", days=60), review(state="CHANGES_REQUESTED", days=40)
+    sent_back = decide(facts(reviews=(approved, asked)), TODAY)
+    assert outcome(sent_back) == ("queue", None, ("sent_back", "no_accepted"))
+    # Listing order does not matter, the submitted time does.
+    assert outcome(decide(facts(reviews=(asked, approved)), TODAY)) == outcome(sent_back)
+    # Another lead's approval still stands beside it.
+    other = review(login="lrd0036", state="APPROVED", days=50)
+    assert outcome(decide(facts(reviews=(approved, asked, other)), TODAY)) == ("pass", "review", ())
+    # A COMMENTED review is a thread reply. It neither grants nor takes back a verdict.
+    replied = review(state="COMMENTED", days=10)
+    assert outcome(decide(facts(reviews=(approved, replied)), TODAY)) == ("pass", "review", ())
+
+
+def test_engaged_by_fresh_review_reads_only_lead_reviews():
+    fresh = review(state="CHANGES_REQUESTED", days=3)
+    assert pr_intake.engaged_by_fresh_review(facts(reviews=(fresh,)), TODAY)
+    for outsider in (review(login="someone", state="CHANGES_REQUESTED", days=3),
+                     review(state="CHANGES_REQUESTED", days=3, association="CONTRIBUTOR")):
+        assert not pr_intake.engaged_by_fresh_review(facts(reviews=(outsider,)), TODAY)
+    # Superseded by the same lead's approval, the request no longer keeps anything fresh.
+    assert not pr_intake.engaged_by_fresh_review(facts(reviews=(fresh, review(days=1))), TODAY)
 
 
 def test_hand_clear_records_the_head_and_holds_while_it_matches():
@@ -1708,11 +1733,18 @@ def test_sweep_reads_only_the_comment_and_the_pull_for_an_unchanged_pull_request
 
 
 def test_review_pass_expires_and_the_short_circuit_stops_on_that_day():
-    stale_review = review(state="CHANGES_REQUESTED", days=5)
+    stale_review = review(login="lrd0036", state="CHANGES_REQUESTED", days=5)
     approved = review(state="APPROVED", days=2)
     passed = decide(facts(reviews=(approved, stale_review)), TODAY)
     assert outcome(passed) == ("pass", "review", ())
     assert passed.data["expires"] == (TODAY - timedelta(days=5) + timedelta(days=30)).isoformat()
+    # An approval never goes stale, so a pass on approvals alone carries no expiry and the
+    # short circuit holds on it night after night.
+    approval_only = decide(facts(reviews=(approved,)), TODAY)
+    assert outcome(approval_only) == ("pass", "review", ()) and "expires" not in approval_only.data
+    # The same lead approving after their own request for changes leaves only the approval.
+    superseded = decide(facts(reviews=(review(state="CHANGES_REQUESTED", days=5), approved)), TODAY)
+    assert outcome(superseded) == ("pass", "review", ()) and "expires" not in superseded.data
 
     stored = {"reason": "cleared", "route": "review", "seen": f"{WRITE_TIME},none", "expires": "2026-11-20"}
     pull = {"updated_at": BUMPED, "labels": []}

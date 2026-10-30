@@ -207,14 +207,8 @@ def editorial_ticked(body: str) -> bool:
 
 
 def engaged_by_fresh_review(facts: Facts, today: date) -> bool:
-    """Whether a CHANGES_REQUESTED review is recent enough to keep the pull request engaged."""
-    cutoff = today - timedelta(days=FRESH_REVIEW_DAYS)
-    return any(
-        review.state == "CHANGES_REQUESTED"
-        and review.submitted_at is not None
-        and review.submitted_at.date() >= cutoff
-        for review in facts.reviews
-    )
+    """Whether a lead's standing CHANGES_REQUESTED review is recent enough to keep it engaged."""
+    return any(review.state == "CHANGES_REQUESTED" and _fresh(review, today) for review in _lead_reviews(facts))
 
 
 def _by_bot(unlabel: tuple[str, datetime] | None) -> bool:
@@ -331,9 +325,27 @@ def _on_roster(login: str, facts: Facts) -> bool:
     return login.casefold() in facts.roster
 
 
+VERDICTS = frozenset({"APPROVED", "CHANGES_REQUESTED"})
+_NEVER = datetime.min.replace(tzinfo=timezone.utc)
+
+
 def _lead_reviews(facts: Facts) -> list[Review]:
-    """Reviews that speak for the project: a roster login that also holds a repository role."""
-    return [r for r in facts.reviews if _on_roster(r.login, facts) and r.association in LEAD_ASSOCIATIONS]
+    """Reviews that speak for the project: a roster login that also holds a repository role.
+
+    Each lead's latest verdict stands and their earlier ones drop, so an approval followed by
+    a request for changes reads as the request. A COMMENTED review is a thread reply. It is
+    kept, because the staleness check reads it as the lead looking again, but it neither
+    grants nor takes back a verdict. Ties on the submitted time go to the later listing.
+    """
+    lead = [r for r in facts.reviews if _on_roster(r.login, facts) and r.association in LEAD_ASSOCIATIONS]
+    latest: dict[str, Review] = {}
+    for review in lead:
+        if review.state not in VERDICTS:
+            continue
+        held = latest.get(review.login)
+        if held is None or (review.submitted_at or _NEVER) >= (held.submitted_at or _NEVER):
+            latest[review.login] = review
+    return [r for r in lead if r.state not in VERDICTS or latest[r.login] is r]
 
 
 def _fresh(review: Review, today: date) -> bool:
@@ -548,15 +560,15 @@ def _hash_as_read_next(facts: Facts, cleared_head: str | None, today: date) -> s
 
 
 def _review_expires(facts: Facts, today: date) -> str | None:
-    """The day a review pass may stop holding: the earliest qualifying lead review plus 30 days.
+    """The day a review pass may stop holding: the earliest fresh changes request plus 30 days.
 
-    The earliest is the conservative choice. A sweep that re-reads early costs reads, and
-    one that re-reads late could miss a changes-requested review going stale.
+    An approval never goes stale, so it sets no expiry. The earliest request is the
+    conservative choice. A sweep that re-reads early costs reads, and one that re-reads late
+    could miss a changes-requested review going stale.
     """
     dates = [
         review.submitted_at.date() for review in _lead_reviews(facts)
-        if review.submitted_at is not None
-        and (review.state == "APPROVED" or (review.state == "CHANGES_REQUESTED" and _fresh(review, today)))
+        if review.submitted_at is not None and review.state == "CHANGES_REQUESTED" and _fresh(review, today)
     ]
     return (min(dates) + timedelta(days=FRESH_REVIEW_DAYS)).isoformat() if dates else None
 
