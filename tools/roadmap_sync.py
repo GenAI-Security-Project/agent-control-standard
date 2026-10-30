@@ -603,13 +603,17 @@ def _intake_report(snapshot: dict, today: date) -> dict:
     unrecorded: list[int] = []
     unreadable = 0
     for number, reason, since, claimed, created in snapshot.get("queued_pulls") or []:
-        opened = _when(created)
-        if reason is None and opened is not None:
-            unrecorded.append(int(number))
-        elif opened is None or not _readable_queue(reason, since, claimed):
+        if reason is None:
+            if _when(created) is not None:
+                unrecorded.append(int(number))
+            else:
+                unreadable += 1
+        elif not _readable_queue(reason, since, claimed):
             unreadable += 1
         else:
-            queued.append([int(number), reason, (today - opened.date()).days, claimed])
+            # The queue clock is the data line's `since`, the first queue, not the pull
+            # request's age. A pull request opened before the rule starts at its first sweep.
+            queued.append([int(number), reason, (today - _iso_day(since)).days, claimed])
     queued.sort(key=lambda row: (-row[2], row[0]))
 
     def merged_age(row: list) -> int | None:

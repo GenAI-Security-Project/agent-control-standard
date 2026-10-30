@@ -68,12 +68,13 @@ SNAPSHOT = {
     "unmilestoned_open": [issue(60, ["scope:in-focus"], milestone=None), issue(61, ["status:accepted"], milestone=None)],
     "facts": {10: landed("rocklambros"), 30: landed("outsider"), 41: landed("rocklambros"), 50: {"closedBy": "outsider"}},
     "bot_accepted": [[20, "rocklambros"]],
-    # Created dates give 42, 22, 7, and 2 days on 2026-11-01. Pull request 104 carries the
-    # label and no data line.
+    # The queue clock is `since`, which gives 37, 20, and 7 days on 2026-11-01. The created
+    # dates are older, as for a pull request opened before the rule, and must not be read.
+    # Pull request 104 carries the label and no data line.
     "queued_pulls": [
-        [101, "no_accepted", "2026-09-21", "62:2026-10-02", "2026-09-20T09:00:00Z"],
-        [102, "awaiting_rereview", "2026-10-25", "", "2026-10-25T09:00:00Z"],
-        [103, "sent_back", "2026-10-10", "", "2026-10-10T09:00:00Z"],
+        [101, "no_accepted", "2026-09-25", "62:2026-10-02", "2026-08-20T09:00:00Z"],
+        [102, "awaiting_rereview", "2026-10-25", "", "2026-09-25T09:00:00Z"],
+        [103, "sent_back", "2026-10-12", "", "2026-10-10T09:00:00Z"],
         [104, None, None, "", "2026-10-30T09:00:00Z"],
     ],
     "intake_claims": [[62, 30, 101]],
@@ -120,13 +121,13 @@ def test_sections():
     ]
     assert r["closed_nothing_done"] == [5]
     assert r["queued_pulls"] == [
-        [101, "no_accepted", 42, "62:2026-10-02"], [103, "sent_back", 22, ""], [102, "awaiting_rereview", 7, ""],
+        [101, "no_accepted", 37, "62:2026-10-02"], [103, "sent_back", 20, ""], [102, "awaiting_rereview", 7, ""],
     ]
     assert r["queued_unrecorded"] == [104]
     assert r["queued_meta"] == ["success", 555, "2026-11-01T03:00:00Z"]
     assert r["queued_unreadable"] == 0
     assert r["intake_counts"] == {
-        "median_age_days": 22, "hand_cleared_60d": 1, "non_roster_merges_60d": 1,
+        "median_age_days": 20, "hand_cleared_60d": 1, "non_roster_merges_60d": 1,
         "non_roster_merges_prior_60d": 1, "claims_waiting": 1,
     }
 
@@ -413,7 +414,7 @@ def intake_body(gh, today=date(2026, 11, 1), trusted=TRUSTED, failed=()):
 
 def test_queued_section_renders_numbers_reasons_days_only():
     gh = IntakeGitHub(
-        labeled=[labeled_pull(301)],
+        labeled=[labeled_pull(301, created="2026-08-01T00:00:00Z")],
         comments={301: [intake_comment("<!-- acs-intake-data reason=no_accepted since=2026-10-01 claimed=62:2026-10-02 head=abc -->")]},
         runs={"workflow_runs": [{"id": 777, "conclusion": "success", "created_at": "2026-11-01T03:00:00Z"}]},
     )
@@ -465,9 +466,9 @@ def test_queued_headings_for_thirty_days_awaiting_sent_back_and_unrecorded():
     for heading in ("Queued more than 30 days", "Awaiting re-review", "Sent back, no response", "Labeled without a gate record"):
         assert heading in section
     after = lambda heading: section.split(heading, 1)[1].split("\n\n", 2)[1]  # noqa: E731
-    assert after("Queued more than 30 days").splitlines() == ["- #101: no_accepted, 42 days"]
+    assert after("Queued more than 30 days").splitlines() == ["- #101: no_accepted, 37 days"]
     assert after("Awaiting re-review").splitlines() == ["- #102: awaiting_rereview, 7 days"]
-    assert after("Sent back, no response").splitlines() == ["- #103: sent_back, 22 days"]
+    assert after("Sent back, no response").splitlines() == ["- #103: sent_back, 20 days"]
     assert after("Labeled without a gate record").splitlines() == ["- #104"]
     # Grouped by reason, in the gate's reason order.
     assert section.index("- #101: no_accepted") < section.index("- #103: sent_back") < section.index("- #102: awaiting_rereview")
