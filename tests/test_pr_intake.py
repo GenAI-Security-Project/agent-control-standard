@@ -560,6 +560,16 @@ def test_pre_rule_pull_request_comment_says_the_rule_is_new():
     assert "The rule is new" not in decide(facts(created_at=datetime(2026, 10, 1, tzinfo=timezone.utc)), TODAY).comment
 
 
+def test_enforced_warning_carries_the_marker_legacy_mode_reads():
+    # An intake comment that carries the warning also carries today's marker, so a later
+    # legacy run (enforcement switched off without a retract) finds it in keyword_markers
+    # and does not post the warning a second time as its own comment.
+    text = pr_intake._keyword_warning((60, 7))
+    assert text.startswith("<!-- acs-closing-keyword:60,7 -->\n")
+    assert pr_intake._KEYWORD_MARKER.findall(text) == ["<!-- acs-closing-keyword:60,7 -->"]
+    assert pr_intake._keyword_marker((60, 7)) == pr_intake._keyword_marker((7, 60))
+
+
 def test_keyword_warning_present_when_a_closing_keyword_names_a_milestoned_issue():
     roadmap = issue(60, kind="close", labels=(), milestoned=True)
     decision = decide(facts(references=(roadmap,)), TODAY)
@@ -2006,7 +2016,7 @@ def test_any_sweep_batches_an_author_with_many_queues():
     short = "Queued with reason `no_accepted`. PR #905 carries the bot's full comment."
     extra = {
         902: ["", "Auto-merge is off while this pull request is queued."],
-        903: ["", pr_intake._keyword_warning((60,))],
+        903: ["", *pr_intake._keyword_warning((60,)).split("\n")],
     }
     for number in range(901, 905):
         (body,) = fake.bodies(number)

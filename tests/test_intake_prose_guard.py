@@ -85,7 +85,7 @@ def test_contributing_names_every_root_notice_file_the_lane_admits():
     body = section("How work gets accepted")
     sentence = next(part for part in body.split(". ") if part.startswith("The root notice files are"))
     named = set(re.findall(r"`([^`]{1,64})`", sentence))
-    assert set(base_branch_guard.DOCS_LANE_FILES) <= named, set(base_branch_guard.DOCS_LANE_FILES) - named
+    assert set(base_branch_guard.DOCS_LANE_FILES) == named, set(base_branch_guard.DOCS_LANE_FILES) ^ named
     assert "`DOCS_LANE_FILES`" in sentence or "DOCS_LANE_FILES" in body
 
 

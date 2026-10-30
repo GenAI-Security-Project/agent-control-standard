@@ -624,7 +624,7 @@ def _legacy_warning(facts: Facts) -> str | None:
     if facts.sweep or not closes:
         return None
     names = sorted(str(number) for number in closes)
-    marker = f"{LEGACY_KEYWORD_MARKER}:{','.join(names)} -->"
+    marker = _keyword_marker(closes)
     if marker in facts.keyword_markers:
         return None
     return (
@@ -815,10 +815,19 @@ def _auto_merge_line(facts: Facts) -> str:
     return "Auto-merge is off while this pull request is queued."
 
 
+def _keyword_marker(closes: tuple[int, ...]) -> str:
+    """Today's workflow's marker for a set of roadmap closes, numbers in `sort -u` (string) order."""
+    return f"{LEGACY_KEYWORD_MARKER}:{','.join(sorted(str(number) for number in closes))} -->"
+
+
 def _keyword_warning(closes: tuple[int, ...]) -> str:
+    # The marker rides inside the intake comment so that `keyword_markers` sees the warning
+    # as posted. Without it, turning enforcement off without the retract step would let
+    # legacy mode post the same warning again as a standalone comment.
     verb = "is" if len(closes) == 1 else "are"
     issue_word = "that issue" if len(closes) == 1 else "those issues"
     return (
+        f"{_keyword_marker(closes)}\n"
         f"This pull request's description says it closes {_numbers(closes)}, which {verb} on the project"
         f" roadmap. When it merges, GitHub closes {issue_word} and the roadmap counts it as delivered."
         " Please confirm the change delivers the whole issue before merging."
