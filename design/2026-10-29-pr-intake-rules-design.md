@@ -395,9 +395,11 @@ step: unset `PR_INTAKE_ENFORCED`, then dispatch `mode=retract`.
 - Claims on issues have no responder today (one in four answered, measured). The comment
   no longer promises one. The health issue lists claims older than 14 days as a lead
   agenda item. Issue #145's first-response target is the real fix and stays open.
-- A runner image update changes a `gh` shape. The recorded fixtures do not catch it. The
-  weekly legacy-mode sweep's "facts read empty for a pull request the listing says has
-  data" check does, red.
+- A runner image update changes a `gh` shape. The recorded fixtures do not catch it. On
+  the nightly sweep, a shared listing that fails to arrive, a per-pull read that fails, or
+  a response in a shape the tool cannot read is red. A comments listing in which no entry
+  has a `user` object and a `body` string is such a response, and `paths_truncated`
+  catches a files listing shorter than the pull request's changed-file count.
 - The base-ref checkout trusts the ruleset of the base it runs from. `main`,
   `integration`, and `release/*` are ruleset-protected. Other branches in this repository
   are not (26 when the plan premortem counted), and a pull request can target any of
@@ -562,6 +564,13 @@ gate admits the root files and the section's precedence sentence would otherwise
 narrower rule. The roster sentence names triage volunteers with the leads and code owners.
 The key phrase is "assigned to you". The CODEOWNERS exemption sentence spans two comment
 lines to stay inside the header's width.
+
+Shape checks in Risks. The Risks bullet on a changed `gh` shape names the checks the tool
+has: a failed shared listing, a failed per-pull read, or an unreadable response is red on
+the nightly sweep, a comments listing with no entry in the REST shape raises rather than
+reading as no bot comment, and `paths_truncated` catches a short files listing. The earlier
+text named a weekly legacy-mode check for facts read empty, which no code performs, and the
+sweep is nightly.
 
 Draft until the owner's line. The implementing pull request opens as a draft and is marked
 ready for review once the owner writes the line in "Where the logic lives". This replaces

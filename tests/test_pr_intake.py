@@ -1095,6 +1095,18 @@ def test_collect_reads_the_keyword_markers_only_the_bot_posted():
     assert forged.keyword_markers == frozenset({"<!-- acs-closing-keyword:108 -->"})
 
 
+def test_a_comments_listing_in_an_unreadable_shape_is_an_error_not_an_empty_record():
+    # The GraphQL form, `author` and `text`, would otherwise read as a pull request the bot
+    # never commented on, and the bot would post a second comment.
+    reshaped = [{"id": c["id"], "author": c["user"], "text": c["body"]} for c in fixture("comments.json")]
+    with pytest.raises(gh_runner.RunnerError):
+        collect(pull_mapping(comments=reshaped))
+    # An empty listing and a deleted account beside readable comments are both real shapes.
+    assert collect(pull_mapping(comments=[]))[0].bot_comment is None
+    ghost = [{"id": 1, "user": None, "body": "x"}] + fixture("comments.json")
+    assert collect(pull_mapping(comments=ghost))[0].bot_comment.id == 910003
+
+
 def test_listing_failure_raises_ListingError():
     for path in listing_mapping():
         mapping = listing_mapping()

@@ -1104,7 +1104,15 @@ def _bot_comment(comments: list) -> BotComment | None:
 
     A marked comment wins, then a legacy queue comment, then a legacy keyword warning, so
     a pull request carrying both legacy comments adopts the one that queued it.
+
+    A non-empty listing in which no entry has a `user` object and a `body` string is a
+    response in a shape this cannot read, a changed `gh` output for instance. Read as no
+    bot comment, it would post a second comment, so it raises RunnerError instead.
     """
+    if comments and not any(
+        isinstance(c, dict) and isinstance(c.get("user"), dict) and isinstance(c.get("body"), str) for c in comments
+    ):
+        raise RunnerError("the comments listing has no entry in the REST shape")
     mine = _bot_bodies(comments)
     for comment_id, body in mine:
         if MARKER in body:
