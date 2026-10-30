@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from mkdocs.utils.yaml import yaml_load
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -80,24 +81,80 @@ def test_repo_url_and_the_three_resources_are_the_literals():
     }
 
 
+PYTHON_NAME = "tag:yaml.org,2002:python/name:"
+# (tag, depth, key the tagged value sits under). Depth 1 is a top-level key.
+ALLOWED_TAGS = {
+    ("!ENV", 1, "site_url"),
+    (PYTHON_NAME + "material.extensions.emoji.twemoji", 4, "emoji_index"),
+    (PYTHON_NAME + "material.extensions.emoji.to_svg", 4, "emoji_generator"),
+    (PYTHON_NAME + "pymdownx.superfences.fence_code_format", 6, "format"),
+}
+
+
+def explicit_tags(text: str) -> set[tuple[str, int, str | None]]:
+    """Return every explicit tag in the YAML text as (tag, depth, owning key).
+
+    This reads parser events, not raw text, so it sees exactly the tags the loader would
+    act on. Comments and prose never reach it, and a tag spelled any way (!!, !, or
+    !<uri>) arrives as one resolved string.
+    """
+    found = set()
+    stack: list[list] = []  # per open container: [is_mapping, next_is_key, last_key]
+
+    def settle() -> str | None:
+        # A finished node is a key or a value of the container that holds it.
+        if not stack:
+            return None
+        top = stack[-1]
+        key = top[2]
+        if top[0]:
+            top[1] = not top[1]
+        return key
+
+    for event in yaml.parse(text, Loader=yaml.SafeLoader):
+        if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+            key = stack[-1][2] if stack else None
+            if event.tag is not None:
+                found.add((event.tag, len(stack), key))
+            settle()
+            stack.append([isinstance(event, yaml.MappingStartEvent), True, key])
+        elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+            stack.pop()
+        elif isinstance(event, yaml.ScalarEvent):
+            top = stack[-1] if stack else None
+            if top is not None and top[0] and top[1]:
+                top[2] = event.value
+                settle()
+                continue
+            if event.tag is not None:
+                found.add((event.tag, len(stack), top[2] if top else None))
+            settle()
+    return found
+
+
 def test_yaml_tags_are_allowlisted():
-    text = MKDOCS.read_text()
     # tools/render_landing.py reads this file with a loader that cannot resolve
     # !relative, and the mkdocs version pinned in uv.lock decides which tags it
     # resolves at all. Every tag is code or environment access in the build job,
-    # so only the ones the file needs today are allowed.
-    for line in text.splitlines():
-        if "!ENV" in line:
-            assert line.startswith("site_url:"), line
-    python_tags = [line.split("!!python/name:")[1].strip() for line in text.splitlines() if "!!python/name:" in line]
-    assert sorted(python_tags) == [
-        "material.extensions.emoji.to_svg",
-        "material.extensions.emoji.twemoji",
-        "pymdownx.superfences.fence_code_format",
-    ]
-    remaining = text.replace("!!python/name:", "").replace("!ENV", "")
-    assert not re.search(r"(?<![\w!])!\w", remaining), "an unlisted YAML tag appears"
-    assert "!relative" not in text
+    # so only the four the file needs today are allowed.
+    assert explicit_tags(MKDOCS.read_text()) == ALLOWED_TAGS
+
+
+@pytest.mark.parametrize("line", [
+    "extra_x: !!python/object/apply:os.system [x]",
+    "extra_x: !!map {a: b}",
+    "extra_x: !<tag:example.com,2000:x> y",
+    "extra_x: !ENV OTHER",
+    "extra_x: !relative $docs_dir",
+    "extra_x: ! plain",
+])
+def test_yaml_tag_scan_rejects_unlisted_tags(line):
+    assert explicit_tags(MKDOCS.read_text() + "\n" + line + "\n") != ALLOWED_TAGS
+
+
+def test_yaml_tag_scan_ignores_comments():
+    text = "# !ENV reads the environment, !!python/name:x too\n" + MKDOCS.read_text()
+    assert explicit_tags(text) == ALLOWED_TAGS
 
 
 def test_landing_sections_anchors_match_the_landing_sections_in_order():
