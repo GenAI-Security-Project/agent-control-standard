@@ -192,11 +192,20 @@ def engaged_by_fresh_review(facts: Facts, today: date) -> bool:
 def facts_hash(facts: Facts, today: date) -> str:
     """Twelve hex characters that change when anything the gate reads changes.
 
-    `updated_at` is left out because any comment moves it, which would make the hash
-    change on the bot's own writes. Review timestamps are left out for the same reason,
-    and their one effect, freshness, enters through the derived boolean so a review that
-    ages past thirty days still changes the hash. Title and body enter only through
-    `editorial_ticked`, the one thing the gate reads from them.
+    Included: number, state, draft, author, author_is_bot, base, head_sha, labels, paths,
+    paths_truncated, references_dropped, reviews (login, state, association, commit_id),
+    last_unlabel, last_author_comment_at, auto_merge, author_record, held_use, roster,
+    mode, and every reference in full. The closing set enters through `references[].kind`,
+    which `closing_choice.parse_references` sets from the keyword, so `Closes #5` becoming
+    `Refs #5` changes the hash. `cleared_head` from the bot comment's data line enters
+    too, because the gate compares it with `head_sha`. Two derived booleans enter as well:
+    `engaged_by_fresh_review`, which carries review freshness, and `editorial_ticked`.
+
+    Excluded: `updated_at` and `created_at`, because any comment moves `updated_at` and
+    the bot's own writes would change the hash. Raw review timestamps, whose one effect is
+    freshness, already carried by the derived boolean. `sweep` and `event_action`, which
+    describe why the run started, not the pull request. `title` and `body`, which enter
+    only through `editorial_ticked`, so an edit that changes no fact keeps the comment.
     """
     parts = {
         "number": facts.number,
@@ -209,15 +218,20 @@ def facts_hash(facts: Facts, today: date) -> str:
         "labels": sorted(facts.labels),
         "paths": list(facts.paths),
         "paths_truncated": facts.paths_truncated,
+        # Sorted by repr so a None beside a datetime or a string never raises TypeError.
         "references": sorted(
             (
-                ref.number, ref.kind, ref.is_pull, ref.state, sorted(ref.labels), sorted(ref.assignees),
-                ref.milestoned, ref.author_commented_at, ref.unresolved,
-            )
-            for ref in facts.references
+                (
+                    ref.number, ref.kind, ref.is_pull, ref.state, sorted(ref.labels), sorted(ref.assignees),
+                    ref.milestoned, ref.author_commented_at, ref.unresolved,
+                )
+                for ref in facts.references
+            ),
+            key=repr,
         ),
         "references_dropped": facts.references_dropped,
-        "reviews": sorted((r.login, r.state, r.association, r.commit_id) for r in facts.reviews),
+        "reviews": sorted(((r.login, r.state, r.association, r.commit_id) for r in facts.reviews), key=repr),
+        "cleared_head": (facts.bot_comment.data or {}).get("cleared_head") if facts.bot_comment else None,
         "last_unlabel": facts.last_unlabel,
         "last_author_comment_at": facts.last_author_comment_at,
         "auto_merge": facts.auto_merge,

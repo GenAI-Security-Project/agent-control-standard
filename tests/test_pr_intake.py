@@ -109,3 +109,35 @@ def test_safe_path_replaces_backtick_marker_and_at():
     assert cleaned.startswith("a?b?") and cleaned.endswith("?c?d.md")
     assert safe_path("docs/ok-1_2.md") == "docs/ok-1_2.md"
     assert len(safe_path("a" * 500)) == 200
+
+
+def test_facts_hash_changes_with_cleared_head_and_with_reference_kind():
+    base = make_facts()
+    digest = facts_hash(base, TODAY)
+
+    def with_cleared(value):
+        comment = pr_intake.BotComment(id=1, body="", data={"cleared_head": value}, legacy=False)
+        return facts_hash(dataclasses.replace(base, bot_comment=comment), TODAY)
+
+    assert with_cleared("a" * 12) != digest
+    assert with_cleared("a" * 12) != with_cleared("b" * 12)
+
+    closing = dataclasses.replace(reference(), kind="close")
+    mention = dataclasses.replace(reference(), kind="mention")
+    assert facts_hash(dataclasses.replace(base, references=(closing,)), TODAY) != facts_hash(
+        dataclasses.replace(base, references=(mention,)), TODAY
+    )
+
+
+def test_facts_hash_survives_none_beside_a_value_in_sort_ties():
+    base = make_facts()
+    reviews = tuple(
+        Review(login="bob", state="APPROVED", association="MEMBER", submitted_at=None, commit_id=commit)
+        for commit in (None, "c" * 40)
+    )
+    refs = tuple(
+        dataclasses.replace(reference(), author_commented_at=when) for when in (None, NOW)
+    )
+    forward = dataclasses.replace(base, reviews=reviews, references=refs)
+    backward = dataclasses.replace(base, reviews=reviews[::-1], references=refs[::-1])
+    assert facts_hash(forward, TODAY) == facts_hash(backward, TODAY)
