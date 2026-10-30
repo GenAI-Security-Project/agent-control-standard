@@ -46,6 +46,8 @@ MARKER = "<!-- acs-intake -->"
 DATA_PREFIX = "<!-- acs-intake-data "
 LEGACY_PREFIX = "Thanks for this. It is queued rather than ignored."
 LEGACY_KEYWORD_MARKER = "<!-- acs-closing-keyword"
+# Today's keyword warning marker, whole. Bounded and linear: one character class, one repeat.
+_KEYWORD_MARKER = re.compile(r"<!-- acs-closing-keyword:[0-9,]{1,400} -->")
 KNOWN_BOTS = frozenset({"dependabot[bot]", "github-actions[bot]"})
 
 # Pull requests opened before this date are never held. The rollout commit sets the real
@@ -151,6 +153,9 @@ class Facts:
     mode: str  # "legacy" or "enforced"
     sweep: bool
     event_action: str | None
+    # The keyword warning markers already on the bot's own comments. The bot owns them, so,
+    # like the queue label, they stay out of the hash. Only legacy mode reads them.
+    keyword_markers: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -163,6 +168,8 @@ class Decision:
     data: dict[str, str] | None
     disable_auto_merge: bool
     notices: tuple[str, ...]
+    # Legacy mode only: today's keyword warning, posted as a comment of its own.
+    warning: str | None = None
 
 
 def parse_data_line(body: str) -> dict[str, str] | None:
@@ -237,6 +244,7 @@ def facts_hash(facts: Facts, today: date) -> str:
     freshness, already carried by the derived boolean. `sweep` and `event_action`, which
     describe why the run started, not the pull request. `title` and `body`, which enter
     only through `editorial_ticked`, so an edit that changes no fact keeps the comment.
+    `keyword_markers`, which the bot writes and only legacy mode reads.
     """
     parts = {
         "number": facts.number,
@@ -586,8 +594,29 @@ def _data(
     return data
 
 
+def _legacy_warning(facts: Facts) -> str | None:
+    """Today's keyword warning comment, or None when it is not due or already posted.
+
+    The text and the marker are today's workflow step's, character for character, so a
+    comment posted here reads the same as one posted before the gate, and enforced mode
+    adopts either. Today's step lists the numbers in `sort -u` order, which is string order.
+    """
+    closes = _roadmap_closes(facts)
+    if facts.sweep or not closes:
+        return None
+    names = sorted(str(number) for number in closes)
+    marker = f"{LEGACY_KEYWORD_MARKER}:{','.join(names)} -->"
+    if marker in facts.keyword_markers:
+        return None
+    return (
+        f"{marker}\nThis pull request's description says it closes{''.join(' #' + name for name in names)},"
+        " which is on the project roadmap. When it merges, GitHub closes that issue and the roadmap counts it"
+        " as delivered. Please confirm the change delivers the whole issue before merging."
+    )
+
+
 def _legacy(facts: Facts, today: date) -> Decision:
-    """Today's behavior: queue a human's pull request once, and only on an event run."""
+    """Today's behavior: queue a human's pull request once, and warn the merger, on event runs only."""
     would = _enforced(facts, today)
     notices = (
         f"Would {would.outcome} once enforced: route={would.route or 'none'}"
@@ -596,16 +625,21 @@ def _legacy(facts: Facts, today: date) -> Decision:
     any_accepted = any(
         roadmap_model.ACCEPTED in ref.labels for ref in facts.references if not ref.is_pull
     )
+    # Today's "already commented" test skips the keyword warning, so a pull request that
+    # carries only the warning is still queued.
+    bot = facts.bot_comment
+    commented = bot is not None and (bot.body.startswith(LEGACY_PREFIX) or MARKER in bot.body)
     writes = (
         not facts.sweep
         and not any_accepted
         and not editorial_ticked(facts.body)
-        and facts.bot_comment is None
+        and not commented
         and facts.author not in KNOWN_BOTS
     )
+    warning = _legacy_warning(facts)
     if writes:
-        return Decision("queue", None, ("no_accepted",), "set", LEGACY_COMMENT, None, False, notices)
-    return Decision("skip", None, (), "keep", None, None, False, notices)
+        return Decision("queue", None, ("no_accepted",), "set", LEGACY_COMMENT, None, False, notices, warning)
+    return Decision("skip", None, (), "keep", None, None, False, notices, warning)
 
 
 def _enforced(facts: Facts, today: date) -> Decision:
@@ -1040,21 +1074,35 @@ def _latest_by(comments: list, author: str) -> datetime | None:
     return max((t for t in times if t is not None), default=None)
 
 
-def _bot_comment(comments: list) -> BotComment | None:
-    """The bot's own comment. Only the bot's exact login counts, whatever another comment says."""
-    mine = [
-        c for c in comments
+def _bot_bodies(comments: list) -> list[tuple[int, str]]:
+    """The id and body of every comment by the bot's exact login, in listing order."""
+    return [
+        (int(c["id"]), c["body"]) for c in comments
         if isinstance(c, dict) and isinstance(c.get("user"), dict) and c["user"].get("login") == roadmap_model.BOT_LOGIN
         and isinstance(c.get("body"), str)
     ]
-    for comment in mine:
-        if MARKER in comment["body"]:
-            return BotComment(int(comment["id"]), comment["body"], parse_data_line(comment["body"]), False)
-    for comment in mine:
-        body = comment["body"]
-        if body.startswith(LEGACY_PREFIX) or LEGACY_KEYWORD_MARKER in body:
-            return BotComment(int(comment["id"]), body, None, True)
+
+
+def _bot_comment(comments: list) -> BotComment | None:
+    """The bot's own comment. Only the bot's exact login counts, whatever another comment says.
+
+    A marked comment wins, then a legacy queue comment, then a legacy keyword warning, so
+    a pull request carrying both legacy comments adopts the one that queued it.
+    """
+    mine = _bot_bodies(comments)
+    for comment_id, body in mine:
+        if MARKER in body:
+            return BotComment(comment_id, body, parse_data_line(body), False)
+    for test in (lambda body: body.startswith(LEGACY_PREFIX), lambda body: LEGACY_KEYWORD_MARKER in body):
+        for comment_id, body in mine:
+            if test(body):
+                return BotComment(comment_id, body, None, True)
     return None
+
+
+def _keyword_markers(comments: list) -> frozenset[str]:
+    """Every whole keyword warning marker on the bot's own comments."""
+    return frozenset(marker for _id, body in _bot_bodies(comments) for marker in _KEYWORD_MARKER.findall(body))
 
 
 def _last_unlabel(timeline: list) -> tuple[str, datetime] | None:
@@ -1202,6 +1250,7 @@ def _assemble(
         last_unlabel=_last_unlabel(timeline),
         last_author_comment_at=_latest_by(comments, author),
         bot_comment=_bot_comment(comments),
+        keyword_markers=_keyword_markers(comments),
         auto_merge=pull.get("auto_merge") is not None,
         author_record=author_record,
         held_use=_held_use(number, author, references, listings),
@@ -1255,6 +1304,11 @@ def apply(run: Runner, facts: Facts, decision: Decision, *, pace: float = 1.0, s
         else:
             path = f"{_API}/issues/{number}/comments"
             write("comment_post", ["api", "-i", "-X", "POST", path, "--input", "-"], {"body": decision.comment})
+
+    if decision.warning is not None:
+        # Today's workflow posts the keyword warning as a comment of its own, so legacy mode does too.
+        path = f"{_API}/issues/{number}/comments"
+        write("keyword_post", ["api", "-i", "-X", "POST", path, "--input", "-"], {"body": decision.warning})
 
     if decision.label == "set":
         path = f"{_API}/issues/{number}/labels"
@@ -1490,7 +1544,10 @@ def _assess(
 
 
 def _has_writes(facts: Facts, decision: Decision) -> bool:
-    return decision.comment is not None or decision.label != "keep" or (decision.disable_auto_merge and facts.auto_merge)
+    return (
+        decision.comment is not None or decision.warning is not None or decision.label != "keep"
+        or (decision.disable_auto_merge and facts.auto_merge)
+    )
 
 
 def _is_auto_merge_failure(exc: WriteError) -> bool:
@@ -1510,7 +1567,7 @@ def _write(
     if issues is not None:
         decision = _with_seen(decision, f"{_now()},{issues}")
     merge_off = decision.disable_auto_merge and facts.auto_merge
-    merge_only = replace(decision, comment=None, label="keep")
+    merge_only = replace(decision, comment=None, warning=None, label="keep")
     try:
         done = apply(counter.wrap(run), facts, replace(decision, disable_auto_merge=False), pace=PACE_SECONDS)
     except (WriteError, BudgetStop):

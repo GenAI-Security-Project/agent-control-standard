@@ -476,6 +476,49 @@ def test_legacy_sweep_writes_nothing():
     assert any("queue" in notice for notice in decision.notices)
 
 
+# Today's keyword step, word for word: the marker on line 1, the warning on line 2. It
+# lists the numbers in `sort -u` order, which is string order.
+def todays_keyword_comment(*numbers: int) -> str:
+    names = sorted(str(number) for number in numbers)
+    return (
+        f"<!-- acs-closing-keyword:{','.join(names)} -->\n"
+        f"This pull request's description says it closes{''.join(' #' + name for name in names)}, which is on"
+        " the project roadmap. When it merges, GitHub closes that issue and the roadmap counts it as delivered."
+        " Please confirm the change delivers the whole issue before merging."
+    )
+
+
+def test_legacy_event_run_posts_todays_keyword_warning_once():
+    roadmap = issue(60, kind="close", labels=(), milestoned=True)
+    first = decide(facts(mode="legacy", references=(roadmap,)), TODAY)
+    assert first.comment == pr_intake.LEGACY_COMMENT and first.label == "set"
+    assert first.warning == todays_keyword_comment(60)
+    # Two roadmap issues: one marker naming both, in today's order.
+    both = decide(facts(mode="legacy", references=(roadmap, issue(9, kind="close", labels=(), milestoned=True))), TODAY)
+    assert both.warning == todays_keyword_comment(9, 60)
+    assert both.warning.startswith("<!-- acs-closing-keyword:60,9 -->")
+    # An accepted roadmap issue skips the queue but still warns, as today's second step does.
+    accepted = decide(facts(mode="legacy", references=(issue(60, kind="close", milestoned=True),)), TODAY)
+    assert accepted.comment is None and accepted.label == "keep" and accepted.warning == todays_keyword_comment(60)
+    # Posted once: a bot comment already carrying the exact marker stops it.
+    marked = facts(mode="legacy", references=(roadmap,), keyword_markers=frozenset({"<!-- acs-closing-keyword:60 -->"}))
+    assert decide(marked, TODAY).warning is None
+    # A marker naming a different set is a different warning, as it is today.
+    other = facts(mode="legacy", references=(roadmap,), keyword_markers=frozenset({"<!-- acs-closing-keyword:61 -->"}))
+    assert decide(other, TODAY).warning == todays_keyword_comment(60)
+    assert decide(facts(mode="legacy", sweep=True, references=(roadmap,)), TODAY).warning is None
+    assert decide(facts(mode="legacy", references=(issue(60, labels=(), milestoned=True),)), TODAY).warning is None
+    assert decide(facts(references=(roadmap,)), TODAY).warning is None
+
+
+def test_legacy_queues_a_pull_request_whose_only_bot_comment_is_the_keyword_warning():
+    keyword_only = BotComment(id=9, body=todays_keyword_comment(60), data=None, legacy=True)
+    decision = decide(facts(mode="legacy", bot_comment=keyword_only), TODAY)
+    assert decision.comment == pr_intake.LEGACY_COMMENT and decision.label == "set"
+    marked = BotComment(id=9, body=COMMENT, data=parse_data_line(COMMENT), legacy=False)
+    assert decide(facts(mode="legacy", bot_comment=marked), TODAY).comment is None
+
+
 def test_pre_rule_pull_request_comment_says_the_rule_is_new():
     old = decide(facts(created_at=datetime(2026, 10, 1, tzinfo=timezone.utc)), TODAY)
     assert "The rule is new, and its 30-day clock starts on 2026-11-10." in old.comment
@@ -606,6 +649,7 @@ def _mutations(base: Facts) -> dict:
         "mode": "legacy",
         "sweep": True,
         "event_action": "edited",
+        "keyword_markers": frozenset({"<!-- acs-closing-keyword:92 -->"}),
     }
 
 
@@ -1009,6 +1053,17 @@ def test_legacy_bot_comment_is_adopted():
     keyword_only, _ = collect(pull_mapping(comments=_comments_without(910003, *legacy_ids)))
     assert keyword_only.bot_comment.legacy is True
     assert pr_intake.LEGACY_KEYWORD_MARKER in keyword_only.bot_comment.body
+
+
+def test_collect_reads_the_keyword_markers_only_the_bot_posted():
+    got, _ = collect(pull_mapping())
+    assert got.keyword_markers == frozenset({"<!-- acs-closing-keyword:108 -->"})
+    comments = fixture("comments.json")
+    for comment in comments:
+        if comment["user"] and comment["user"]["login"] == "login-16":
+            comment["body"] = "<!-- acs-closing-keyword:92 --> copied"
+    forged, _ = collect(pull_mapping(comments=comments))
+    assert forged.keyword_markers == frozenset({"<!-- acs-closing-keyword:108 -->"})
 
 
 def test_listing_failure_raises_ListingError():
@@ -1930,3 +1985,20 @@ def test_sweep_over_the_population_reports_the_expected_summary(monkeypatch):
     assert summary.evaluated == len(rows) == 56 and summary.writes == 0 and not summary.errors and balanced(summary)
     assert fake.writes() == []
     assert len([line for line in lines if re.fullmatch(r"#[0-9]+ (queue|pass|out_of_scope)( [a-z_,]+)?", line)]) == 56
+
+
+def test_legacy_event_run_on_a_milestoned_close_writes_what_todays_workflow_writes(monkeypatch, capsys):
+    roadmap = {**gh_issue(60), "labels": [], "milestone": {"number": 1}}
+    fake = FakeGitHub([gh_pull(961, body="Fixes #60")], accepted=[roadmap])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="opened",
+                            PR_NUMBER="961")
+    assert code == 0, out
+    # Today's two steps: the queue label and comment, then the merger's warning.
+    assert fake.bodies(961) == [pr_intake.LEGACY_COMMENT, todays_keyword_comment(60)]
+    assert fake.labeled(961)
+    assert [args[0] if args[0] == "pr" else args[3] for args, _ in fake.writes()] == ["POST", "POST", "POST"]
+    # A later edit finds both comments and writes nothing.
+    fake.calls.clear()
+    code, _, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="edited",
+                          PR_NUMBER="961")
+    assert code == 0 and fake.writes() == []
