@@ -706,11 +706,11 @@ def _from_json(row: dict) -> Facts:
     return facts(**raw)
 
 
-@pytest.mark.skipif(not POPULATION.exists(), reason="recorded by Task 4")
 def test_decide_matches_the_recorded_population():
     """Every recorded open pull request decides as recorded.
 
-    The fixture is a JSON list. Each row is an object:
+    The fixture is a JSON object: `{"generated_by": <the recording script's path>,
+    "recorded": "YYYY-MM-DD", "rows": [<row>, ...]}`. Each row is an object:
     `{"facts": {<Facts field>: <value>, ...}, "today": "YYYY-MM-DD", "expected":
     {"outcome": "pass"|"queue"|"skip", "route": <str or null>, "reasons": [<reason>, ...]}}`.
     `facts` holds overrides on this module's `facts()` defaults in JSON form: datetimes as
@@ -719,10 +719,339 @@ def test_decide_matches_the_recorded_population():
     with string keys, and `bot_comment` as an object with the `BotComment` fields. `today`
     is optional and defaults to TODAY.
     """
-    rows = json.loads(POPULATION.read_text())
-    assert rows
+    document = json.loads(POPULATION.read_text())
+    assert (Path(__file__).resolve().parents[1] / document["generated_by"]).exists()
+    rows = document["rows"]
+    assert len(rows) == 56
     for row in rows:
         today = date.fromisoformat(row.get("today", TODAY.isoformat()))
         decision = decide(_from_json(row["facts"]), today)
         expected = row["expected"]
         assert outcome(decision) == (expected["outcome"], expected["route"], tuple(expected["reasons"])), row["facts"].get("number")
+
+
+# --- Collecting facts -------------------------------------------------------------------
+
+import copy  # noqa: E402
+import re  # noqa: E402
+import time  # noqa: E402
+
+import gh_runner  # noqa: E402
+from pr_intake import BudgetStop, CallCounter, ListingError, Listings, collect_facts, load_listings  # noqa: E402
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pr_intake"
+API = f"repos/{roadmap_model.REPO}"
+COLLECT_ROSTER = frozenset({"login-13", "login-4"})
+OWN_ISSUE_URL = f"https://github.com/{roadmap_model.REPO}/issues"
+
+
+def fixture(name: str):
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def http(obj, status: int = 200) -> str:
+    return f"HTTP/2.0 {status} OK\r\nContent-Type: application/json\r\n\r\n" + json.dumps(obj)
+
+
+def slurp(*pages) -> str:
+    return json.dumps(list(pages))
+
+
+def runner_from_fixtures(mapping: dict):
+    """A runner that serves `mapping[path]` and counts every call.
+
+    A value is the stdout string, or a `(code, stdout, stderr)` tuple. Every argv must
+    pass the real allowlist, so a test cannot pass on a shape the runner would refuse.
+    A path the mapping does not name fails the test.
+    """
+    calls: list[list[str]] = []
+
+    def run(args, stdin=None):
+        gh_runner._check_allowlist(args)
+        calls.append(list(args))
+        path = args[-1]
+        assert path in mapping, f"unexpected read {path}"
+        value = mapping[path]
+        return value if isinstance(value, tuple) else (0, value, "")
+
+    run.calls = calls
+    return run
+
+
+def listing_mapping(*, accepted=None, open_pulls=None, closed_pulls=None) -> dict:
+    accepted = fixture("accepted_all.json") if accepted is None else accepted
+    return {
+        f"{API}/issues?labels=status%3Aaccepted&state=all&per_page=100": slurp(accepted),
+        f"{API}/issues?milestone=%2A&state=all&per_page=100": slurp([i for i in accepted if i["milestone"]]),
+        f"{API}/pulls?state=open&per_page=100": slurp(fixture("pulls_open.json") if open_pulls is None else open_pulls),
+        f"{API}/pulls?state=closed&sort=updated&direction=desc&per_page=100": slurp(
+            fixture("pulls_closed.json") if closed_pulls is None else closed_pulls
+        ),
+    }
+
+
+def pull_mapping(number: int = 229, *, pull=None, files=None, reviews=None, comments=None, timeline=None) -> dict:
+    pull = fixture("pull.json") if pull is None else pull
+    files = [fixture("files_page1.json"), fixture("files_page2.json")] if files is None else files
+    return {
+        f"{API}/pulls/{number}": http(pull),
+        f"{API}/pulls/{number}/files?per_page=100": slurp(*files),
+        f"{API}/pulls/{number}/reviews?per_page=100": slurp(fixture("reviews.json") if reviews is None else reviews),
+        f"{API}/issues/{number}/comments?per_page=100": slurp(fixture("comments.json") if comments is None else comments),
+        f"{API}/issues/{number}/timeline?per_page=100": slurp(fixture("timeline.json") if timeline is None else timeline),
+    }
+
+
+def claim_mapping(*numbers: int, served: dict | None = None) -> dict:
+    served = served or {}
+    return {f"{API}/issues/{n}/comments?per_page=100": slurp(served.get(n, [])) for n in numbers}
+
+
+def with_body(body: str, **changes) -> dict:
+    pull = fixture("pull.json")
+    pull["body"] = body
+    pull.update(changes)
+    return pull
+
+
+def collect(mapping: dict, *, listings: Listings | None = None, number: int = 229, counter=None, roster=COLLECT_ROSTER):
+    run = runner_from_fixtures(mapping)
+    if listings is None:
+        listings = load_listings(runner_from_fixtures(listing_mapping()))
+    got = collect_facts(
+        run, number, listings=listings, roster=roster, mode="enforced", sweep=False, event_action="opened",
+        counter=counter or CallCounter(),
+    )
+    return got, run.calls
+
+
+def read_paths(calls) -> list[str]:
+    return [call[-1] for call in calls]
+
+
+def test_collect_paginates_files_and_flags_truncation():
+    got, calls = collect(pull_mapping())
+    assert len(got.paths) == 56 and got.paths_truncated is False
+    assert ["api", "--paginate", "--slurp", f"{API}/pulls/229/files?per_page=100"] in calls
+    assert got.paths[0] == fixture("files_page1.json")[0]["filename"]
+    assert got.paths[-1] == fixture("files_page2.json")[-1]["filename"]
+
+    short, _ = collect(pull_mapping(pull=with_body("scrubbed", changed_files=57)))
+    assert short.paths_truncated is True
+
+    page = [{"filename": f"docs/topics/f{i}.md"} for i in range(100)]
+    full, _ = collect(pull_mapping(pull=with_body("scrubbed", changed_files=3000), files=[page] * 30))
+    assert len(full.paths) == 3000 and full.paths_truncated is True
+
+
+def test_changelog_anchor_is_not_a_reference():
+    body = (
+        "Bumps the thing.\n<details><summary>Changelog</summary>\n"
+        '<ul><li><a href="https://github.com/other/repo/issues/92">#92</a> Closes <a href="https://github.com/other/repo/pull/361">#361</a></li>\n'
+        f'<li><a href="{OWN_ISSUE_URL}/362">#362</a></li></ul></details>\nRefs #351'
+    )
+    got, calls = collect({**pull_mapping(pull=with_body(body)), **claim_mapping(351, 362)})
+    numbers = [ref.number for ref in got.references]
+    assert 92 not in numbers and 361 not in numbers
+    assert set(numbers) == {351, 362}
+
+
+def test_sixty_four_kilobyte_anchor_body_parses_under_one_second():
+    bodies = (
+        ("<a " * 22_000)[: closing_choice.MAX_CHARS],
+        ('<a href="https://example.com/x">#92 ' * 2_000)[: closing_choice.MAX_CHARS],
+        ("<a href=" + "a" * 2_040 + ">#5 </a  >") * 30,
+        ("</a" + " " * 60) * 1_000,
+    )
+    for body in bodies:
+        started = time.monotonic()
+        got, _ = collect({**pull_mapping(pull=with_body(body)), **claim_mapping(92)})
+        assert time.monotonic() - started < 1.0
+        assert 92 not in {ref.number for ref in got.references}
+
+
+def test_pull_request_numbers_are_marked_is_pull_from_the_pulls_listings_never_by_keyword():
+    got, calls = collect({**pull_mapping(pull=with_body("Closes #354\nCloses #358\nRefs #92")), **claim_mapping(92)})
+    refs = {ref.number: ref for ref in got.references}
+    assert refs[354].is_pull and refs[358].is_pull and not refs[92].is_pull
+    assert refs[354].kind == "close" and refs[92].kind == "contribute"
+    assert not refs[354].unresolved and not refs[358].unresolved
+    paths = read_paths(calls)
+    assert not any(re.search(r"/issues/(354|358|92)$", path) for path in paths)
+    assert not any("/issues/354" in path or "/issues/358" in path for path in paths)
+
+
+def test_closed_accepted_issue_is_collected_as_closed_not_as_a_pull_request():
+    got, calls = collect(pull_mapping(pull=with_body("Refs #276 and Refs #9999")))
+    refs = {ref.number: ref for ref in got.references}
+    assert refs[276].state == "closed" and refs[276].is_pull is False and refs[276].unresolved is False
+    assert roadmap_model.ACCEPTED in refs[276].labels and refs[276].milestoned is True
+    assert refs[9999].unresolved is True and refs[9999].state is None and refs[9999].labels == frozenset()
+    assert not any("/issues/276" in path or "/issues/9999" in path for path in read_paths(calls))
+
+
+def test_collect_makes_at_most_twelve_calls_whatever_the_body():
+    body = " ".join(f"Refs #{n}" for n in range(1, 1_001)) + " Refs #92 #362 #361 #351 #322 #284 #283 #282"
+    accepted_open = (92, 362, 361, 351, 322, 284, 283, 282)
+    got, calls = collect({**pull_mapping(pull=with_body(body)), **claim_mapping(*accepted_open)})
+    assert len(calls) <= 12
+    assert len(got.references) == pr_intake.MAX_REFERENCES
+    assert got.references_dropped == 1_000 - pr_intake.MAX_REFERENCES
+    assert [ref.number for ref in got.references] == list(range(1, pr_intake.MAX_REFERENCES + 1))
+
+    with pytest.raises(BudgetStop):
+        collect({**pull_mapping(pull=with_body(body)), **claim_mapping(*accepted_open)}, counter=CallCounter(limit=3))
+
+
+def test_collect_reads_claim_comments_only_for_open_accepted_unassigned_references_and_at_most_five():
+    accepted = fixture("accepted_all.json")
+    for issue_obj in accepted:
+        if issue_obj["number"] == 282:
+            issue_obj["assignees"] = [{"login": "Login-1", "type": "User"}]
+    listings = load_listings(runner_from_fixtures(listing_mapping(accepted=accepted)))
+    body = "Refs #276, #282, #92, #362, #361, #351, #322, #284, #283"
+    served = {92: fixture("issue_comments.json")}
+    got, calls = collect(
+        {**pull_mapping(pull=with_body(body)), **claim_mapping(92, 362, 361, 351, 322, served=served)}, listings=listings
+    )
+    claims = [path for path in read_paths(calls) if re.search(r"/issues/[0-9]+/comments", path) and "/229/" not in path]
+    assert claims == [f"{API}/issues/{n}/comments?per_page=100" for n in (92, 362, 361, 351, 322)]
+    refs = {ref.number: ref for ref in got.references}
+    assert refs[92].author_commented_at == datetime(2026, 9, 14, 8, 35, 42, tzinfo=timezone.utc)
+    assert refs[282].assignees == frozenset({"login-1"}) and refs[282].author_commented_at is None
+    assert refs[284].author_commented_at is None
+
+
+def test_held_use_counts_the_authors_open_pulls_naming_the_issue():
+    open_pulls = fixture("pulls_open.json")
+    for pull_obj in open_pulls:
+        if pull_obj["number"] == 24:
+            pull_obj["body"] = "Part of #92"
+        if pull_obj["number"] == 354:
+            pull_obj["body"] = "Refs #92"
+    listings = load_listings(runner_from_fixtures(listing_mapping(open_pulls=open_pulls)))
+    got, _ = collect({**pull_mapping(pull=with_body("Refs #92")), **claim_mapping(92)}, listings=listings)
+    assert got.held_use == {92: (24, 229)}
+
+
+def test_collect_skips_null_review_users_and_bot_reviewers():
+    got, _ = collect(pull_mapping())
+    assert len(got.reviews) == 11
+    assert all(review.login and not review.login.endswith("[bot]") for review in got.reviews)
+    assert "DISMISSED" not in {review.state for review in got.reviews}
+    lead = [review for review in got.reviews if review.login == "login-13"]
+    assert lead[-1].state == "CHANGES_REQUESTED" and lead[-1].association == "MEMBER"
+    assert lead[-1].commit_id == fixture("pull.json")["head"]["sha"]
+    assert got.last_author_comment_at == datetime(2026, 10, 28, 19, 30, 7, tzinfo=timezone.utc)
+
+
+def test_timeline_facts_read_the_roster_unlabel_and_never_commit_dates():
+    timeline = fixture("timeline.json")
+    committed = [event for event in timeline if event["event"] == "committed"]
+    assert committed and all("created_at" not in event for event in committed)
+    assert any(event["event"] == "head_ref_force_pushed" for event in timeline)
+    for event in committed:
+        event["author"]["date"] = event["committer"]["date"] = "not a date"
+    got, _ = collect(pull_mapping(timeline=timeline))
+    assert got.last_unlabel == ("login-13", datetime(2026, 10, 25, tzinfo=timezone.utc))
+
+
+def _comments_without(*ids: int) -> list:
+    return [comment for comment in fixture("comments.json") if comment["id"] not in ids]
+
+
+def test_bot_comment_found_by_exact_login_and_marker_only():
+    got, _ = collect(pull_mapping())
+    assert got.bot_comment.id == 910003 and got.bot_comment.legacy is False
+    assert got.bot_comment.data == {"reason": "no_accepted", "since": "2026-11-02", "head": "9d3efa31a6ac", "facts": "0123456789ab"}
+
+    comments = fixture("comments.json")
+    for comment in comments:
+        if comment["id"] == 910003:
+            comment["user"]["login"] = "GitHub-Actions[bot]"
+    near_miss, _ = collect(pull_mapping(comments=comments))
+    assert near_miss.bot_comment.id != 910003 and near_miss.bot_comment.legacy is True
+
+
+def test_legacy_prefix_in_a_contributor_comment_is_not_adopted():
+    bot_ids = [c["id"] for c in fixture("comments.json") if c["user"]["login"] == roadmap_model.BOT_LOGIN]
+    got, _ = collect(pull_mapping(comments=_comments_without(*bot_ids)))
+    assert got.bot_comment is None
+
+
+def test_legacy_bot_comment_is_adopted():
+    legacy_ids = [
+        c["id"] for c in fixture("comments.json")
+        if c["user"]["login"] == roadmap_model.BOT_LOGIN and c["body"].startswith(pr_intake.LEGACY_PREFIX)
+    ]
+    got, _ = collect(pull_mapping(comments=_comments_without(910003)))
+    assert got.bot_comment.id == legacy_ids[0] and got.bot_comment.legacy is True and got.bot_comment.data is None
+
+    keyword_only, _ = collect(pull_mapping(comments=_comments_without(910003, *legacy_ids)))
+    assert keyword_only.bot_comment.legacy is True
+    assert pr_intake.LEGACY_KEYWORD_MARKER in keyword_only.bot_comment.body
+
+
+def test_listing_failure_raises_ListingError():
+    for path in listing_mapping():
+        mapping = listing_mapping()
+        mapping[path] = (1, "", "boom")
+        with pytest.raises(ListingError):
+            load_listings(runner_from_fixtures(mapping))
+
+
+def test_author_record_reads_reviews_once_per_merged_pull():
+    closed = fixture("pulls_closed.json")
+    mine = []
+    for pull_obj in closed:
+        if pull_obj["number"] in (357, 356):
+            pull_obj["user"]["login"] = "login-1"
+            mine.append(pull_obj["number"])
+    approved = {"user": {"login": "Login-13", "type": "User"}, "state": "APPROVED", "author_association": "MEMBER",
+                "submitted_at": "2026-10-29T14:00:00Z", "commit_id": "c" * 40}
+    reviews = {357: [approved], 356: [{**approved, "author_association": "NONE"}]}
+    listings = load_listings(runner_from_fixtures(listing_mapping(closed_pulls=closed)))
+    mapping = {
+        **pull_mapping(), **pull_mapping(24),
+        **{f"{API}/pulls/{n}/reviews?per_page=100": slurp(reviews[n]) for n in mine},
+    }
+    run = runner_from_fixtures(mapping)
+    for number in (229, 24):
+        got = collect_facts(
+            run, number, listings=listings, roster=COLLECT_ROSTER, mode="enforced", sweep=True,
+            event_action=None, counter=CallCounter(),
+        )
+        assert got.author_record is True
+    record_reads = [path for path in read_paths(run.calls) if re.search(r"/pulls/35[67]/reviews", path)]
+    assert sorted(record_reads) == sorted(f"{API}/pulls/{n}/reviews?per_page=100" for n in mine)
+    assert listings.approved_merged["login-1"] == frozenset({357})
+
+
+def test_logins_are_casefolded_on_collection():
+    pull = with_body("scrubbed")
+    pull["user"]["login"] = "Login-1"
+    reviews = fixture("reviews.json")
+    for review_obj in reviews:
+        if review_obj["user"] and review_obj["user"]["login"] == "login-13":
+            review_obj["user"]["login"] = "LOGIN-13"
+    timeline = fixture("timeline.json")
+    for event in timeline:
+        if event["event"] == "unlabeled" and event["actor"]["login"] == "login-13":
+            event["actor"]["login"] = "Login-13"
+    got, _ = collect(pull_mapping(pull=pull, reviews=reviews, timeline=timeline))
+    assert got.author == "login-1"
+    assert "login-13" in {review.login for review in got.reviews}
+    assert got.last_unlabel[0] == "login-13"
+    assert got.last_author_comment_at is not None
+
+
+def test_fixtures_carry_no_email_or_url():
+    email = re.compile(r"@[A-Za-z0-9-]{1,63}\.[A-Za-z]{2,24}")
+    foreign = re.compile(r"https://(?!api\.github\.com/)")
+    files = sorted(FIXTURES.glob("*.json"))
+    assert len(files) >= 11
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        assert not email.search(text), path.name
+        assert not foreign.search(text), path.name
+        assert "http://" not in text, path.name

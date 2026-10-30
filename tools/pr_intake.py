@@ -2,8 +2,9 @@
 """Decide whether a pull request has an accepted issue behind it, and say so once.
 
 Version 1.0. Owner: ACS project leads. This module holds the data model, the parsing
-helpers, and the gate: `decide` is a pure function of `Facts` and the date, with no I/O.
-The collectors and the writers join it in later tasks of the same plan.
+helpers, the gate, and the collector. `decide` is a pure function of `Facts` and the date,
+with no I/O. `collect_facts` does every read, through `gh_runner`'s allowlisted shapes,
+inside a call budget. The writers join them in a later task of the same plan.
 
 The workflow runs this under `python3 -I -S` from a checkout of `main`, never the pull
 request's head, with the standard library and the sibling modules under `tools/` only.
@@ -17,13 +18,15 @@ and no nested quantifiers, so a hostile body cannot stall the job.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 
 import base_branch_guard
 import closing_choice
 import roadmap_model
+from gh_runner import Runner, RunnerError, paginate, split_http
 
 # The marker sits on line 2 of the bot comment. The data line sits on line 1, ahead of it.
 MARKER = "<!-- acs-intake -->"
@@ -781,3 +784,392 @@ def render_comment(facts: Facts, decision: Decision, today: date) -> str:
         paragraphs.append(_keyword_warning(closes))
     text = render_data_line(data) + "\n" + MARKER + "\n\n" + "\n\n".join(paragraphs)
     return text[:MAX_COMMENT]
+
+
+# --- Collecting facts -------------------------------------------------------------------
+
+_API = f"repos/{roadmap_model.REPO}"
+# GitHub caps a pull request's files listing at 3,000 entries.
+MAX_FILES = 3_000
+_OWN_LINK = f"https://github.com/{roadmap_model.REPO}".casefold()
+# Bounded and linear. An opening tag scan stops at the next `<` or `>`, and the closing
+# tag allows a bounded run of spaces. Neither crosses a line any differently, since no
+# pattern here needs DOTALL.
+_ANCHOR_OPEN = re.compile(r"<a\s[^<>]{0,2048}>", re.IGNORECASE)
+_ANCHOR_CLOSE = re.compile(r"</a\s{0,2048}>", re.IGNORECASE)
+_HREF = re.compile(r"""(?<![A-Za-z0-9_-])href[ \t]{0,8}=[ \t]{0,8}["']?([^"'\s<>]{0,2048})""", re.IGNORECASE)
+_KIND_RANK = {"none": 0, "contribute": 1, "close": 2}
+
+
+class ListingError(RuntimeError):
+    """A shared listing failed to arrive, so no pull request can be evaluated this run."""
+
+
+class BudgetStop(RuntimeError):
+    """The run spent its call budget. The caller stops and counts the rest as skipped."""
+
+
+class CallCounter:
+    """Counts runner calls across a run and stops the run past its limit.
+
+    The check runs before the call, so the call that would exceed the limit never starts.
+    """
+
+    def __init__(self, limit: int = MAX_CALLS) -> None:
+        self.limit = limit
+        self.calls = 0
+
+    def wrap(self, run: Runner) -> Runner:
+        def counted(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
+            if self.calls >= self.limit:
+                raise BudgetStop(f"call budget of {self.limit} spent")
+            self.calls += 1
+            return run(args, stdin)
+
+        return counted
+
+
+def _login(user: object) -> str | None:
+    """A casefolded login, or None for a deleted account or a malformed user."""
+    if not isinstance(user, dict) or not isinstance(user.get("login"), str):
+        return None
+    return user["login"].casefold()
+
+
+def _when(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _label_names(labels: object) -> frozenset[str]:
+    return frozenset(label["name"] for label in labels or () if isinstance(label, dict) and isinstance(label.get("name"), str))
+
+
+@dataclass
+class Listings:
+    """The shared listings one run reads once and every pull request's facts resolve against.
+
+    `approved_merged` maps a casefolded author to the merged pull requests of theirs that a
+    lead approved. It fills lazily, one author at a time, and is cached for the run.
+    """
+
+    accepted: dict[int, dict]
+    milestoned: dict[int, dict]
+    open_pulls: list[dict]
+    merged_pulls: list[dict]
+    approved_merged: dict[str, frozenset[int]] = field(default_factory=dict)
+
+    def approved_for(self, run: Runner, author: str, roster: frozenset[str]) -> frozenset[int]:
+        """The author's merged pull requests with an approval by a lead, read once per author."""
+        if author not in self.approved_merged:
+            approved: set[int] = set()
+            for pull in self.merged_pulls:
+                if _login(pull.get("user")) != author:
+                    continue
+                for review in paginate(run, f"{_API}/pulls/{int(pull['number'])}/reviews?per_page=100"):
+                    user = review.get("user") if isinstance(review, dict) else None
+                    if (
+                        isinstance(user, dict) and user.get("type") != "Bot" and _login(user) in roster
+                        and review.get("state") == "APPROVED" and review.get("author_association") in LEAD_ASSOCIATIONS
+                    ):
+                        approved.add(int(pull["number"]))
+                        break
+            # Cached only once every read succeeded, so a failed read is retried, never remembered.
+            self.approved_merged[author] = frozenset(approved)
+        return self.approved_merged[author]
+
+
+def _issues_by_number(items: list) -> dict[int, dict]:
+    # The issues endpoint lists pull requests too. They are never issues here.
+    return {
+        int(item["number"]): item for item in items
+        if isinstance(item, dict) and "pull_request" not in item and isinstance(item.get("number"), int)
+    }
+
+
+def _pulls(items: list) -> list[dict]:
+    return [item for item in items if isinstance(item, dict) and isinstance(item.get("number"), int)]
+
+
+def load_listings(run: Runner) -> Listings:
+    """Read the four shared listings. Any failure is a ListingError, never an empty listing."""
+    try:
+        accepted = paginate(run, f"{_API}/issues?labels=status%3Aaccepted&state=all&per_page=100")
+        milestoned = paginate(run, f"{_API}/issues?milestone=%2A&state=all&per_page=100")
+        open_pulls = paginate(run, f"{_API}/pulls?state=open&per_page=100")
+        closed_pulls = paginate(run, f"{_API}/pulls?state=closed&sort=updated&direction=desc&per_page=100")
+    except RunnerError as exc:
+        raise ListingError(f"a shared listing failed: {exc}") from exc
+    return Listings(
+        accepted=_issues_by_number(accepted),
+        milestoned=_issues_by_number(milestoned),
+        open_pulls=_pulls(open_pulls),
+        merged_pulls=[pull for pull in _pulls(closed_pulls) if pull.get("merged_at") is not None],
+    )
+
+
+def _ours(href: str) -> bool:
+    folded = href.casefold()
+    return folded == _OWN_LINK or folded.startswith(_OWN_LINK + "/")
+
+
+def strip_foreign_anchors(text: str) -> str:
+    """Drop every HTML anchor that links outside this repository, with its text.
+
+    A Dependabot changelog links other projects' issues as `<a href="...">#92</a>`, and
+    the `#92` would otherwise read as this repository's issue. An anchor with no closing
+    tag drops the rest of the text, so nothing inside a foreign anchor is ever adopted.
+    """
+    out: list[str] = []
+    pos = 0
+    while True:
+        opening = _ANCHOR_OPEN.search(text, pos)
+        if opening is None:
+            out.append(text[pos:])
+            break
+        href = _HREF.search(opening.group(0))
+        if href is not None and _ours(href.group(1)):
+            out.append(text[pos:opening.end()])
+            pos = opening.end()
+            continue
+        out.append(text[pos:opening.start()])
+        closing = _ANCHOR_CLOSE.search(text, opening.end())
+        if closing is None:
+            break
+        out.append(" ")
+        pos = closing.end()
+    return "".join(out)
+
+
+def referenced(title: str | None, body: str | None) -> tuple[list[tuple[int, str]], int]:
+    """The distinct numbers a pull request names, title first, and how many were dropped.
+
+    A number named twice keeps its first position and its strongest spelling, so a
+    `Refs #5` before a `Closes #5` still reads as a close, which is what merging does.
+    """
+    kinds: dict[int, str] = {}
+    for text in (title or "", body or ""):
+        cleaned = strip_foreign_anchors(text[: closing_choice.MAX_CHARS])
+        for ref in closing_choice.parse_references(closing_choice.normalize(cleaned)):
+            previous = kinds.get(ref.number)
+            if previous is None or _KIND_RANK[ref.kind] > _KIND_RANK[previous]:
+                kinds[ref.number] = ref.kind
+    numbers = list(kinds)
+    return [(number, kinds[number]) for number in numbers[:MAX_REFERENCES]], max(0, len(numbers) - MAX_REFERENCES)
+
+
+def _read_pull(run: Runner, number: int) -> dict:
+    code, stdout, _stderr = run(["api", "-i", f"{_API}/pulls/{number}"], None)
+    if not stdout:
+        raise RunnerError(f"pull request read exited {code}")
+    status, _headers, body = split_http(stdout)
+    if status != 200:
+        raise RunnerError(f"pull request read returned HTTP {status}")
+    try:
+        pull = json.loads(body)
+    except ValueError:
+        raise RunnerError("pull request read returned non-JSON output") from None
+    if not isinstance(pull, dict):
+        raise RunnerError("pull request read returned something other than an object")
+    return pull
+
+
+def _resolve(number: int, kind: str, listings: Listings, pulls: dict[int, dict]) -> Reference:
+    """A reference resolved from the listings alone. Nothing here reads `issues/{m}`."""
+    if number in pulls:
+        pull = pulls[number]
+        return Reference(number, kind, True, pull.get("state"), _label_names(pull.get("labels")), frozenset(), False,
+                         None, False)
+    issue = listings.accepted.get(number) or listings.milestoned.get(number)
+    if issue is None:
+        return Reference(number, kind, False, None, frozenset(), frozenset(), False, None, True)
+    assignees = frozenset(login for login in map(_login, issue.get("assignees") or ()) if login)
+    return Reference(
+        number, kind, False, issue.get("state"), _label_names(issue.get("labels")), assignees,
+        issue.get("milestone") is not None, None, False,
+    )
+
+
+def _open_accepted(ref: Reference) -> bool:
+    return (
+        not ref.is_pull and not ref.unresolved and (ref.state or "").casefold() == "open"
+        and roadmap_model.ACCEPTED in ref.labels
+    )
+
+
+def _earliest_by(comments: list, author: str) -> datetime | None:
+    times = [_when(c.get("created_at")) for c in comments if isinstance(c, dict) and _login(c.get("user")) == author]
+    return min((t for t in times if t is not None), default=None)
+
+
+def _latest_by(comments: list, author: str) -> datetime | None:
+    times = [_when(c.get("created_at")) for c in comments if isinstance(c, dict) and _login(c.get("user")) == author]
+    return max((t for t in times if t is not None), default=None)
+
+
+def _bot_comment(comments: list) -> BotComment | None:
+    """The bot's own comment. Only the bot's exact login counts, whatever another comment says."""
+    mine = [
+        c for c in comments
+        if isinstance(c, dict) and isinstance(c.get("user"), dict) and c["user"].get("login") == roadmap_model.BOT_LOGIN
+        and isinstance(c.get("body"), str)
+    ]
+    for comment in mine:
+        if MARKER in comment["body"]:
+            return BotComment(int(comment["id"]), comment["body"], parse_data_line(comment["body"]), False)
+    for comment in mine:
+        body = comment["body"]
+        if body.startswith(LEGACY_PREFIX) or LEGACY_KEYWORD_MARKER in body:
+            return BotComment(int(comment["id"]), body, None, True)
+    return None
+
+
+def _last_unlabel(timeline: list) -> tuple[str, datetime] | None:
+    """The newest removal of the queue label and who made it.
+
+    Only `unlabeled` events are read, and only their `actor` and `created_at`, which GitHub
+    sets. A `committed` event's author and committer dates are set by whoever pushed, so
+    they are never read.
+    """
+    found: list[tuple[datetime, str]] = []
+    for event in timeline:
+        if not isinstance(event, dict) or event.get("event") != "unlabeled":
+            continue
+        label = event.get("label")
+        if not isinstance(label, dict) or label.get("name") != roadmap_model.NEEDS_TRIAGE:
+            continue
+        actor, when = _login(event.get("actor")), _when(event.get("created_at"))
+        if actor is not None and when is not None:
+            found.append((when, actor))
+    if not found:
+        return None
+    when, actor = max(found)
+    return actor, when
+
+
+def _reviews(raw: list) -> tuple[Review, ...]:
+    """Reviews by people. A deleted account, a bot, and a dismissed review count for nothing."""
+    reviews = []
+    for review in raw:
+        if not isinstance(review, dict):
+            continue
+        user = review.get("user")
+        login = _login(user)
+        if login is None or user.get("type") == "Bot" or review.get("state") == "DISMISSED":
+            continue
+        commit = review.get("commit_id")
+        reviews.append(Review(
+            login=login, state=str(review.get("state") or ""), association=str(review.get("author_association") or ""),
+            submitted_at=_when(review.get("submitted_at")), commit_id=commit if isinstance(commit, str) else None,
+        ))
+    return tuple(reviews)
+
+
+def _held_use(number: int, author: str, refs: tuple[Reference, ...], listings: Listings) -> dict[int, tuple[int, ...]]:
+    """For each open accepted issue this pull request names, the author's open pulls naming it.
+
+    This pull request counts from its own fresh title and body, the others from the listing.
+    """
+    wanted = {ref.number for ref in refs if _open_accepted(ref)}
+    uses: dict[int, set[int]] = {issue_number: {number} for issue_number in wanted}
+    for pull in listings.open_pulls:
+        other = int(pull["number"])
+        if other == number or _login(pull.get("user")) != author:
+            continue
+        named, _dropped = referenced(pull.get("title"), pull.get("body"))
+        for issue_number, _kind in named:
+            if issue_number in uses:
+                uses[issue_number].add(other)
+    return {issue_number: tuple(sorted(pulls)) for issue_number, pulls in uses.items()}
+
+
+def collect_facts(
+    run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, sweep: bool,
+    event_action: str | None, counter: CallCounter,
+) -> Facts:
+    """Read one pull request's facts: five reads, at most five claim reads, and the record.
+
+    A failed read raises RunnerError. A response in a shape this cannot read raises
+    RunnerError too, so the caller counts an evaluation error instead of a default fact.
+    """
+    run = counter.wrap(run)
+    pull = _read_pull(run, number)
+    files = paginate(run, f"{_API}/pulls/{number}/files?per_page=100")
+    raw_reviews = paginate(run, f"{_API}/pulls/{number}/reviews?per_page=100")
+    comments = paginate(run, f"{_API}/issues/{number}/comments?per_page=100")
+    timeline = paginate(run, f"{_API}/issues/{number}/timeline?per_page=100")
+    try:
+        return _assemble(run, number, pull, files, raw_reviews, comments, timeline, listings=listings, roster=roster,
+                         mode=mode, sweep=sweep, event_action=event_action)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RunnerError(f"pull request {number} had a response in an unexpected shape: {type(exc).__name__}") from None
+
+
+def _assemble(
+    run: Runner, number: int, pull: dict, files: list, raw_reviews: list, comments: list, timeline: list, *,
+    listings: Listings, roster: frozenset[str], mode: str, sweep: bool, event_action: str | None,
+) -> Facts:
+    author = _login(pull.get("user"))
+    if author is None:
+        raise ValueError("pull request has no author")
+    draft = bool(pull.get("draft"))
+    title = pull.get("title") or ""
+    body = (pull.get("body") or "")[: closing_choice.MAX_CHARS]
+    paths = tuple(f["filename"] for f in files if isinstance(f, dict) and isinstance(f.get("filename"), str))
+    changed = pull.get("changed_files")
+    truncated = len(files) >= MAX_FILES or (isinstance(changed, int) and len(files) < changed)
+
+    pulls = {int(p["number"]): p for p in listings.open_pulls + listings.merged_pulls}
+    named, dropped = referenced(title, body)
+    refs = [_resolve(n, kind, listings, pulls) for n, kind in named]
+    claim_reads = 0
+    for index, ref in enumerate(refs):
+        if claim_reads >= MAX_CLAIM_READS:
+            break
+        if not _open_accepted(ref) or author in ref.assignees:
+            continue
+        claim_reads += 1
+        issue_comments = paginate(run, f"{_API}/issues/{ref.number}/comments?per_page=100")
+        refs[index] = replace(ref, author_commented_at=_earliest_by(issue_comments, author))
+    references = tuple(refs)
+
+    # The record route sits behind the roster in the gate, and bots and drafts never reach
+    # it, so their merged history is not read.
+    if author in roster or author in KNOWN_BOTS or draft:
+        author_record = False
+    else:
+        author_record = bool(listings.approved_for(run, author, roster))
+
+    created_at, updated_at = _when(pull.get("created_at")), _when(pull.get("updated_at"))
+    if created_at is None or updated_at is None:
+        raise ValueError("pull request has no timestamps")
+    return Facts(
+        number=number,
+        state=str(pull["state"]),
+        draft=draft,
+        author=author,
+        author_is_bot=pull["user"].get("type") == "Bot",
+        title=title,
+        body=body,
+        base=str(pull["base"]["ref"]),
+        head_sha=str(pull["head"]["sha"]),
+        created_at=created_at,
+        updated_at=updated_at,
+        labels=_label_names(pull.get("labels")),
+        paths=paths,
+        paths_truncated=truncated,
+        references=references,
+        references_dropped=dropped,
+        reviews=_reviews(raw_reviews),
+        last_unlabel=_last_unlabel(timeline),
+        last_author_comment_at=_latest_by(comments, author),
+        bot_comment=_bot_comment(comments),
+        auto_merge=pull.get("auto_merge") is not None,
+        author_record=author_record,
+        held_use=_held_use(number, author, references, listings),
+        roster=roster,
+        mode=mode,
+        sweep=sweep,
+        event_action=event_action,
+    )
