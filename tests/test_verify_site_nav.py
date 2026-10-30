@@ -6,6 +6,7 @@ fake fetch, so the suite never reaches the published site.
 from __future__ import annotations
 
 import email.message
+import http.client
 import io
 import subprocess
 import sys
@@ -160,6 +161,57 @@ def test_main_fails_a_missing_landmark_after_the_second_attempt(monkeypatch):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     sleeps: list[float] = []
     assert verify_site_nav.main(["verify_site_nav.py", BASE], sleep=sleeps.append) == 1
+    assert sleeps == [verify_site_nav.DELAY_SECONDS]
+
+
+def test_main_gives_a_landing_page_without_the_landmark_the_full_window(monkeypatch):
+    # A 200 page with no landmark may be the edge's copy from before the pane existed,
+    # which the ten-minute cache can hold, so it must not fail fast like the 404.
+    _serve(monkeypatch, _site(front=(200, "<html><body>old landing</body></html>")))
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    sleeps: list[float] = []
+    assert verify_site_nav.main(["verify_site_nav.py", BASE], sleep=sleeps.append) == 1
+    assert len(sleeps) == verify_site_nav.ATTEMPTS - 1
+
+
+def test_main_passes_once_a_stale_landing_page_expires(monkeypatch):
+    stale = _site(front=(200, "<html><body>old landing</body></html>"))
+    served = iter([stale, stale, stale, _site()])
+    current: dict[str, tuple[int, str]] = {}
+
+    def fake(url: str) -> tuple[int, str]:
+        if url == BASE:
+            current.clear()
+            current.update(next(served))
+        return current[url]
+
+    monkeypatch.setattr(verify_site_nav, "fetch_text", fake)
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    sleeps: list[float] = []
+    assert verify_site_nav.main(["verify_site_nav.py", BASE], sleep=sleeps.append) == 0
+    assert len(sleeps) == 3
+
+
+@pytest.mark.parametrize("error", [TimeoutError("read timed out"), http.client.RemoteDisconnected("closed")])
+def test_main_retries_a_raw_socket_error(monkeypatch, error):
+    outcomes = iter([error, None])
+    pages = _site()
+
+    def fake(url: str) -> tuple[int, str]:
+        if url == BASE:
+            raised = next(outcomes)
+            if raised is not None:
+                raise raised
+        return pages[url]
+
+    monkeypatch.setattr(verify_site_nav, "fetch_text", fake)
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    sleeps: list[float] = []
+    assert verify_site_nav.main(["verify_site_nav.py", BASE], sleep=sleeps.append) == 0
     assert sleeps == [verify_site_nav.DELAY_SECONDS]
 
 

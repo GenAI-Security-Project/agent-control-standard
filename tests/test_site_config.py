@@ -145,7 +145,7 @@ _HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
 # language packs all carry the same four.
 _LUNR_LANGUAGE_HOSTS = frozenset({"code.google.com", "github.com", "snowball.tartarus.org", "www.mozilla.org"})
 REVIEWED_SCRIPT_HOSTS = {
-    "assets/javascripts/bundle.d7400e89.min.js": {"api.github.com", "clipboardjs.com", "unpkg.com"},
+    "assets/javascripts/bundle.min.js": {"api.github.com", "clipboardjs.com", "unpkg.com"},
     **{
         f"assets/javascripts/lunr/min/lunr.{language}.min.js": _LUNR_LANGUAGE_HOSTS
         for language in ("da", "de", "du", "es", "fi", "fr", "hu", "it", "nl", "no", "pt", "ro", "ru", "sv", "tr")
@@ -162,11 +162,15 @@ REVIEWED_SCRIPT_HOSTS = {
         "langium.org", "lodash.com", "openjsf.org", "opensource.org", "tldrlegal.com",
         "underscorejs.org", "www.w3.org",
     },
-    "assets/javascripts/workers/search.2c215733.min.js": {"bit.ly", "lunrjs.com", "tartarus.org"},
+    "assets/javascripts/workers/search.min.js": {"bit.ly", "lunrjs.com", "tartarus.org"},
 }
 # A URL built at runtime, such as `https://${e}`, names no host this scan can read. The
 # count pins how many the bundle carries, so a new one is read before it ships.
-RUNTIME_HOSTS = {"bundle.d7400e89.min.js": 1}
+RUNTIME_HOSTS = {"assets/javascripts/bundle.min.js": 1}
+# The theme names its bundles by content hash, so every release renames them. Dropping
+# the hash keys both maps on the file's role, and a theme bump fails this test only
+# when a host or the runtime count changes.
+_CONTENT_HASH = re.compile(r"\.[0-9a-f]{8}(?=\.min\.js$)")
 
 
 def test_built_javascript_names_only_reviewed_hosts(built_site):
@@ -179,13 +183,13 @@ def test_built_javascript_names_only_reviewed_hosts(built_site):
     found: dict[str, set[str]] = {}
     runtime: dict[str, int] = {}
     for path in sorted(built_site.rglob("*.js")):
-        rel = path.relative_to(built_site).as_posix()
+        rel = _CONTENT_HASH.sub("", path.relative_to(built_site).as_posix())
         for match in _SCRIPT_URL.finditer(path.read_text(encoding="utf-8", errors="replace")):
             host = match.group(1)
             if _HOSTNAME.match(host):
                 found.setdefault(rel, set()).add(host)
             else:
-                runtime[path.name] = runtime.get(path.name, 0) + 1
+                runtime[rel] = runtime.get(rel, 0) + 1
     added = {rel: sorted(hosts - REVIEWED_SCRIPT_HOSTS.get(rel, set())) for rel, hosts in found.items()}
     removed = {rel: sorted(hosts - found.get(rel, set())) for rel, hosts in REVIEWED_SCRIPT_HOSTS.items()}
     assert found == REVIEWED_SCRIPT_HOSTS, (

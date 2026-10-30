@@ -24,6 +24,7 @@ and the sibling site_nav module only. It reads no secret and sends nothing but G
 from __future__ import annotations
 
 import difflib
+import http.client
 import os
 import sys
 import time
@@ -38,10 +39,12 @@ from site_nav import PANE_LABEL, Row, WalkError, walk_docs, walk_landing  # noqa
 
 ATTEMPTS = 13
 DELAY_SECONDS = 60
-# A page with no landmark is either a stale edge copy from before the pane existed or
-# GitHub's own 404 page. One retry covers the first. Waiting thirteen minutes on the
-# second only delays a failure that a repair has to fix.
-LANDMARK_ATTEMPTS = 2
+# A 200 page with no landmark may be the edge's stale copy from before the pane existed,
+# so it gets the full window like a row mismatch. The 404 address carries a nonce, so no
+# cache can hold an old copy of it. A 404 with no landmark is GitHub's own page, and
+# waiting thirteen minutes would only delay a failure that a repair has to fix. One
+# retry covers a slow deploy.
+DEFAULT_404_ATTEMPTS = 2
 LANDMARK = f'aria-label="{PANE_LABEL}"'
 MAX_BYTES = 5_000_000
 USER_AGENT = "acs-verify-site-nav"
@@ -49,7 +52,7 @@ USER_AGENT = "acs-verify-site-nav"
 
 def fetch_text(url: str) -> tuple[int, str]:
     """Return the status and body. An HTTP error status is a result here, not a failure,
-    because the third page is a 404 by design. Any other URLError propagates."""
+    because the third page is a 404 by design. Any other error propagates."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -64,7 +67,7 @@ class Outcome:
 
     problems: list[str] = field(default_factory=list)
     retryable: bool = False
-    landmark_missing: bool = False
+    default_404: bool = False
     rows: dict[str, list[Row]] = field(default_factory=dict)
 
 
@@ -86,13 +89,14 @@ def inspect(base: str, nonce: str) -> Outcome:
             outcome.problems.append(f"{url} returned {status}, expected {expected}")
             continue
         if LANDMARK not in markup:
-            outcome.landmark_missing = True
             if expected == 404:
+                outcome.default_404 = True
                 outcome.problems.append(
                     f"{url} returned {status} with no {LANDMARK} landmark. This is GitHub's "
                     "default 404 page, so _site/404.html did not reach the artifact."
                 )
             else:
+                outcome.retryable = True
                 outcome.problems.append(f"{url} returned {status} with no {LANDMARK} landmark")
             continue
         try:
@@ -149,14 +153,17 @@ def main(argv: list[str], sleep: Callable[[float], None] = time.sleep) -> int:
     for attempt in range(1, ATTEMPTS + 1):
         try:
             outcome = inspect(base, run_nonce)
-        except urllib.error.URLError as error:
-            outcome = Outcome([f"network error: {error.reason}"], retryable=True)
+        # A read timeout or a dropped connection can surface from http.client below
+        # urllib's wrapper, so the raw exceptions are caught here too. URLError is an
+        # OSError, and TimeoutError is one as well.
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+            outcome = Outcome([f"network error: {error!r}"], retryable=True)
         if not outcome.problems:
             print(f"ok: the landing, docs, and 404 panes under {base} match")
             return 0
         print(f"attempt {attempt}/{ATTEMPTS}: " + "; ".join(p.splitlines()[0] for p in outcome.problems))
-        if outcome.landmark_missing:
-            retry = attempt < LANDMARK_ATTEMPTS
+        if outcome.default_404:
+            retry = attempt < DEFAULT_404_ATTEMPTS
         else:
             retry = outcome.retryable
         if not retry or attempt == ATTEMPTS:

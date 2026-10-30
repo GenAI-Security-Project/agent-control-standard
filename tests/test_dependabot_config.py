@@ -12,7 +12,7 @@ import yaml
 
 CONFIG = Path(__file__).resolve().parents[1] / ".github" / "dependabot.yml"
 
-# Verified against `gh label list` on 2026-10-29; `python:uv` exists and is unused.
+# Verified against `gh label list` on 2026-10-29. `python:uv` exists and is unused.
 EXISTING_LABELS = {"dependencies"}
 
 
