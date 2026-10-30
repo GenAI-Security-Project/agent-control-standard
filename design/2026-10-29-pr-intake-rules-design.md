@@ -32,10 +32,11 @@ that from facts, in this order, and passes on the first that holds.
    evaluated as a non-roster author.
 1. The author is on the trusted roster (`roadmap_model.trusted_logins`: project leads,
    workstream leads, triage volunteers, CODEOWNERS logins).
-2. A lead has engaged this pull request. Any one of: an `APPROVED` review that is not
-   dismissed, by a roster login whose `author_association` is `OWNER`, `MEMBER`, or
-   `COLLABORATOR`, a `CHANGES_REQUESTED` review by such a login within the last 30 days
-   (after 30 days of silence the pull request is "sent back, no response", a state the
+2. A lead has engaged this pull request. A lead is a roster login whose
+   `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`, and a lead's verdict is
+   their latest `APPROVED` or `CHANGES_REQUESTED` review that is not dismissed. Any one of:
+   a lead's verdict is `APPROVED`, a lead's verdict is `CHANGES_REQUESTED` within the last
+   30 days (after 30 days of silence the pull request is "sent back, no response", a state the
    health issue lists), or the queue label was removed by a roster login and the pull
    request's head has not moved since (a hand clear, recorded on the data line). `COMMENTED` and
    `DISMISSED` reviews do not count: a thread reply is not a request for the work.
@@ -72,9 +73,9 @@ is one the bot can undo.
 The comment. One per pull request. The bot finds it by two facts, never by text alone: the
 comment's `user.login` equals `roadmap_model.BOT_LOGIN` exactly, and the body carries the
 marker `<!-- acs-intake -->`. A legacy queue comment (a bot-authored comment beginning
-"Thanks for this. It is queued rather than ignored.", or carrying `<!-- acs-closing-keyword`)
-is adopted and rewritten on first contact, so a pull request never carries two bot
-comments. A data line, bot-written, carries the facts the health renderer reads:
+"Thanks for this. It is queued rather than ignored.", or failing that one carrying
+`<!-- acs-closing-keyword`) is adopted and rewritten on first contact, so an enforced pull
+request never gains a second bot comment. A data line, bot-written, carries the facts the health renderer reads:
 `<!-- acs-intake-data reason=<enum> issues=<n,m> since=<date> head=<sha> facts=<hash> -->`.
 
 The comment reports every unmet route, in gate order, in the contributor's terms:
@@ -97,7 +98,8 @@ The comment reports every unmet route, in gate order, in the contributor's terms
 Every comment carries "This pull request is queued rather than ignored. Nothing here is
 rejected." Where a closing keyword names an open milestoned issue, the merger's warning
 that exists today is in the same comment. On a pull request opened before the rule landed,
-the comment says the rule is new and that the 30-day clock starts today.
+the day `PR_INTAKE_LANDED` names, the comment says the rule is new and that the 30-day
+clock starts today.
 
 Paths in the comment are wrapped in code spans (which suppress autolinks), truncated at
 200 characters, at most twenty of them, and the whole comment is capped at 8,000
@@ -120,7 +122,8 @@ the fallback and the rehearsal records which path works.
 ## Where the gate runs
 
 Triggers: `pull_request_target` on `opened`, `edited` (skipped only when none of body,
-title, or base changed), `reopened`, `ready_for_review`, `unlabeled`, `auto_merge_enabled`,
+title, or base changed), `reopened`, `ready_for_review`, `unlabeled` (skipped unless the
+label removed is `status:needs-triage`), `auto_merge_enabled`,
 and `synchronize` (on which the tool re-evaluates at once only when the editorial box is
 ticked. A push also lapses a hand clear, which the nightly sweep picks up).
 `pull_request_review` on `submitted` and `dismissed`. It also runs on `schedule` at 03:10
@@ -128,8 +131,8 @@ UTC, before the 04:10 roadmap sweep so the health issue reports the same night's
 on `workflow_dispatch` with inputs `pr_number` (optional), `mode` (`evaluate`, the default,
 `dryrun`, or `retract`), and `authors` (`all`, the default, or `bots`).
 
-Checkout. The job checks out the pull request's base ref on pull request events and the
-default branch on schedule and dispatch, with `persist-credentials: false`. The job's `if`
+Checkout. The job checks out the pull request's base ref on pull request events and
+`integration` on schedule and dispatch, with `persist-credentials: false`. The job's `if`
 admits pull request events only against `main`, `integration`, or `release/*`, the
 ruleset-protected bases. The
 pull request head never reaches the checkout. Version 2 checked out `main` and the
@@ -141,11 +144,16 @@ Modes. Two repository variables arm enforcement: `PR_INTAKE_ENFORCED=true` and
 `PR_INTAKE_TOOL_SHA` equal to the tool SHA, a digest over the git blob SHAs of the five
 modules the gate runs, at the checked-out ref. When either is missing or mismatched the
 tool runs in legacy mode: on event runs only, it queues a human author's pull request
-that references no accepted issue, carries no editorial tick, and has no bot comment yet,
-which are today's exits, and it prints what the gate would do for everything else. A
-legacy sweep writes nothing. Every tool change produces a new SHA, so a changed tool runs
+that references no accepted issue, carries no editorial tick, and has no bot queue comment
+yet (a keyword warning alone is not one), which are today's exits. On the same runs it
+posts today's keyword warning as a comment of its own, with today's marker, when a closing
+keyword names an open milestoned issue and no bot comment already carries that marker. It
+prints what the gate would do for everything else. A legacy sweep writes nothing. Every tool change produces a new SHA, so a changed tool runs
 in legacy mode until a lead dry-runs it and re-arms, and a sweep that finds enforcement
-requested but the SHA mismatched is red.
+requested but the SHA mismatched is red. A third variable, `PR_INTAKE_LANDED`, holds the
+day enforcement started. It changes one sentence of the comment, arms nothing, and is not
+in the facts hash. Unset, no pull request counts as opened before the rule. Malformed, the
+same, with one warning.
 
 Retract. `mode=retract` removes the queue label from every open pull request whose bot
 comment carries the marker (or, with `authors=bots`, from every open pull request by
@@ -180,8 +188,9 @@ inputs.pr_number) || 'pr-intake-sweep' }}`, `cancel-in-progress` only on pull re
 events.
 
 Batching. On any sweep, an author with more than three newly queued pull
-requests gets the full comment on the newest and a one-line comment on the rest ("Queued
-for the reason given on PR #n."), each still carrying its data line.
+requests gets the full comment on the newest and a short comment on the rest ("Queued
+with reason `<code>`. PR #n carries the bot's full comment.", then the auto-merge line and
+the merger's warning where they apply), each still carrying its data line.
 
 ## Where the logic lives
 
@@ -239,7 +248,8 @@ Under it: "Claims waiting on a lead" (an open accepted issue referenced by a que
 request on which that author has commented, with the claim's age), "Queued more than 30
 days" (the clock starts at the first sweep for pull requests opened before the rule),
 "Awaiting re-review", "Sent back, no response" (changes requested, 30 days silent), and
-"Labeled without a gate record", and three counts: median age of queued pull requests,
+"Labeled without a gate record", and three counts: median age of queued pull requests
+(every day count here runs from the data line's `since`, the first queue),
 pull requests a lead cleared by hand that merged in the last 60 days, and non-roster pull
 requests merged in the last 60 days against the 60 days before. A project lead records
 the baselines in the `PR_INTAKE_BASELINES` repository variable the morning after
@@ -329,8 +339,8 @@ here. A GOVERNANCE/CODEOWNERS follow-up reconciles the roster with repository ac
   one queues. Closed accepted reference gets its own reason. Several unheld references
   render as a list. A body failing two routes renders both. Drafts and bots produce no
   action. Truncated files listing queues. Legacy comment adopted (one edit, no post).
-  Unchanged facts produce zero writes. Legacy mode writes only today's queue on an event
-  run, and a legacy sweep writes nothing. A tool SHA mismatch means legacy mode. Retract removes and edits. Auto-merge
+  Unchanged facts produce zero writes. Legacy mode writes only today's queue and keyword
+  warning on an event run, and a legacy sweep writes nothing. A tool SHA mismatch means legacy mode. Retract removes and edits. Auto-merge
   disabled on queue and on the state case. A null review user and a `Bot` reviewer are
   skipped. A reference to a pull request number is not an issue. A changelog anchor is
   dropped.
@@ -364,7 +374,9 @@ here. A GOVERNANCE/CODEOWNERS follow-up reconciles the roster with repository ac
    project lead writes on issue #362 why the three roster entries without repository access
    stay.
 3. Dispatch `mode=dryrun` with the variables unset and read the would-queue list and the
-   tool SHA it prints.
+   tool SHA it prints. Before promotion, select the `integration` ref in the dispatch form,
+   because the default branch still carries the old workflow file, which has no `mode`
+   input.
 4. Leads clear the collateral by the gate's own facts, using that list: approve, request
    changes afresh, or assign, on every pull request a lead has already engaged (PR #24,
    PR #112, PR #113, PR #297, PR #253, PR #255, and PR #259) and on any first-time
@@ -375,8 +387,9 @@ here. A GOVERNANCE/CODEOWNERS follow-up reconciles the roster with repository ac
 6. Promote, so pull requests against `main` run the same workflow and the health issue and
    the monitor report on it.
 7. Edit the live `help wanted` label description, retract the queue label from the bots'
-   pull requests, then set `PR_INTAKE_TOOL_SHA` and `PR_INTAKE_ENFORCED=true` and dispatch
-   the live sweep outside the 03:00 to 04:30 UTC window.
+   pull requests, then set `PR_INTAKE_TOOL_SHA`, `PR_INTAKE_LANDED` (today's date), and
+   `PR_INTAKE_ENFORCED=true` in one sitting and dispatch the live sweep outside the 03:00
+   to 04:30 UTC window.
 8. The next morning, record `PR_INTAKE_BASELINES` from the health issue.
 9. A project lead closes issue #362 by hand.
 
@@ -410,8 +423,9 @@ step: unset `PR_INTAKE_ENFORCED`, then dispatch `mode=retract`.
 
 These amend version 3.0. The first group comes from the plan premortem
 (`2026-10-29-pr-intake-rules-premortem.md`, "Plan premortem"). The second group records
-rulings made during implementation. Where a body sentence above contradicted one of them,
-the sentence was changed to match.
+rulings made during implementation. The third records the fixes from the whole-branch
+review. Where a body sentence above contradicted one of them, the sentence was changed to
+match.
 
 ### From the plan premortem
 
@@ -565,6 +579,57 @@ narrower rule. The roster sentence names triage volunteers with the leads and co
 The key phrase is "assigned to you". The CODEOWNERS exemption sentence spans two comment
 lines to stay inside the header's width.
 
+Draft until the owner's line. The implementing pull request opens as a draft and is marked
+ready for review once the owner writes the line in "Where the logic lives". This replaces
+"before the implementing pull request opens" in that paragraph, which is left as the owner
+wrote it. The live `help wanted` label description changes at rollout, not at merge,
+because the label is repository state the merge does not touch.
+
+### From the whole-branch review
+
+Legacy keyword warning. Legacy mode posts today's keyword warning on event runs, as a
+comment of its own carrying today's exact marker, `<!-- acs-closing-keyword:<numbers> -->`
+with the numbers in today's string order, when no bot comment already carries that marker.
+Legacy's "already commented" test counts a bot comment that opens with today's queue
+sentence or carries the intake marker, and not one that carries only the keyword marker.
+Adoption prefers the queue comment over the warning. The earlier legacy sentence named
+the queue write alone, so between merge and arming a non-roster pull request closing a
+roadmap issue got no merger warning, and a pull request carrying only the warning was
+never queued. The markers the bot posted are collected as a bot-owned fact outside the
+hash.
+
+Queue clock. Every day count in the health section, the rows, the 30-day heading, and the
+median, runs from the data line's `since`. The section earlier computed them from the pull
+request's creation time, which contradicted the 30-day clock that starts at the first sweep
+for a pull request opened before the rule, and the bot's own comment that says so.
+
+Sweep ref. Schedule and dispatch check out `integration`, not the default branch. The dry
+run that produces `PR_INTAKE_TOOL_SHA` and the sweep that enforces it must run the same
+ref. The earlier text and the workflow comment said the default branch. A dispatch before
+promotion selects `integration` in the form, since the default branch's workflow file is
+the old one.
+
+Landing date. `PR_INTAKE_LANDED`, a repository variable set with the SHA and the switch,
+holds the day enforcement started, and the "rule is new" sentence reads it. Unset or
+malformed means no pull request predates the rule, and malformed also prints one warning.
+It is outside the hash and outside arming. The earlier code held a placeholder constant no
+step could set.
+
+Latest verdict. A lead's latest `APPROVED` or `CHANGES_REQUESTED` review stands and their
+earlier ones drop, so an approval followed by the same lead's request for changes reads as
+the request and goes stale after 30 days. A `COMMENTED` review neither grants nor takes back
+a verdict, and still counts as the lead looking again for the sent-back test. The earlier
+sentence, "an `APPROVED` review that is not dismissed", let such an approval pass forever.
+
+Review expiry. Only a fresh changes request sets a review pass's expiry. An approval never
+goes stale, so an approval-only pass carries none and the nightly short circuit holds on
+it. The earlier expiry included approvals and re-read those pull requests every night.
+
+Fork review runs. A `pull_request_review` run on a pull request whose head repository is
+not this one decides with writes off, prints the decision and a notice that the nightly
+sweep applies it, and exits 0. The earlier run tried the writes on the read-only token,
+and a failed auto-merge disable turned it red.
+
 Shape checks in Risks. The Risks bullet on a changed `gh` shape names the checks the tool
 has: a failed shared listing, a failed per-pull read, or an unreadable response is red on
 the nightly sweep, a comments listing with no entry in the REST shape raises rather than
@@ -572,8 +637,12 @@ reading as no bot comment, and `paths_truncated` catches a short files listing. 
 text named a weekly legacy-mode check for facts read empty, which no code performs, and the
 sweep is nightly.
 
-Draft until the owner's line. The implementing pull request opens as a draft and is marked
-ready for review once the owner writes the line in "Where the logic lives". This replaces
-"before the implementing pull request opens" in that paragraph, which is left as the owner
-wrote it. The live `help wanted` label description changes at rollout, not at merge,
-because the label is repository state the merge does not touch.
+Queue label trigger. The `unlabeled` trigger runs the job only when the label removed is
+`status:needs-triage`, the one removal the gate reads. Every other removal spent about
+twenty calls to decide nothing new. The concurrency group is unchanged, so a run for another
+label's removal still joins the pull request's group and can cancel an event run in
+flight before its own job is skipped. The nightly sweep makes the cancelled run's writes.
+
+Batched comment. The short comment on an author's other new queues names its own first
+reason code and keeps the auto-merge line and the merger's keyword warning. The earlier
+one-liner dropped both and assumed the newest pull request was queued for the same reason.
