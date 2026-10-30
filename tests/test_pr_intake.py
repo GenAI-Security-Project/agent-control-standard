@@ -1074,3 +1074,192 @@ def test_fixtures_carry_no_email_or_url():
         assert not email.search(text), path.name
         assert not foreign.search(text), path.name
         assert "http://" not in text, path.name
+
+
+# Applying a decision. The fake below serves scripted `-i` responses in order and records
+# every argv with its stdin. It enforces the production allowlist the same way
+# `runner_from_fixtures` does, so a test cannot pass on a write shape gh_runner refuses.
+
+from pr_intake import Decision, WriteError, apply  # noqa: E402
+
+OK = "HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n{}"
+COMMENT = pr_intake.render_data_line({"reason": "no_accepted"}) + "\n" + pr_intake.MARKER + "\n\nQueued."
+
+
+def write_runner(*responses):
+    calls: list[tuple[list[str], str | None]] = []
+    queue = list(responses)
+
+    def run(args, stdin=None):
+        gh_runner._check_allowlist(args)
+        calls.append((list(args), stdin))
+        value = queue.pop(0) if queue else OK
+        return value if isinstance(value, tuple) else (0, value, "")
+
+    run.calls = calls
+    return run
+
+
+def decision(**overrides) -> Decision:
+    base = dict(
+        outcome="queue", route=None, reasons=("no_accepted",), label="keep", comment=None, data=None,
+        disable_auto_merge=False, notices=(),
+    )
+    base.update(overrides)
+    return Decision(**base)
+
+
+def raw(status: int, reason: str, body: str, **headers) -> tuple[int, str, str]:
+    lines = [f"HTTP/2.0 {status} {reason}"] + [f"{name.replace('_', '-')}: {value}" for name, value in headers.items()]
+    return 1, "\r\n".join(lines) + "\r\n\r\n" + body, "gh: request failed"
+
+
+def bot_comment(comment_id: int = 910003) -> BotComment:
+    return BotComment(id=comment_id, body=COMMENT, data=parse_data_line(COMMENT), legacy=False)
+
+
+def apply_with(run, f: Facts, d: Decision, **kwargs):
+    sleeps: list[float] = []
+    done = apply(run, f, d, sleep=sleeps.append, **kwargs)
+    return done, sleeps
+
+
+def test_apply_edits_existing_bot_comment_and_never_posts_twice():
+    run = write_runner()
+    done, _ = apply_with(run, facts(bot_comment=bot_comment()), decision(comment=COMMENT))
+    assert done == ["comment_edit"]
+    assert run.calls == [
+        (["api", "-i", "-X", "PATCH", f"{API}/issues/comments/910003", "--input", "-"], json.dumps({"body": COMMENT}))
+    ]
+
+
+def test_apply_posts_when_no_bot_comment():
+    run = write_runner(http({"id": 1}, 201))
+    done, _ = apply_with(run, facts(), decision(comment=COMMENT))
+    assert done == ["comment_post"]
+    (args, stdin), = run.calls
+    assert args == ["api", "-i", "-X", "POST", f"{API}/issues/354/comments", "--input", "-"]
+    assert json.loads(stdin) == {"body": COMMENT}
+
+
+def test_apply_writes_nothing_on_keep():
+    for f, d in (
+        (facts(), decision()),
+        (facts(auto_merge=False), decision(disable_auto_merge=True)),
+        (facts(auto_merge=True), decision(disable_auto_merge=False)),
+    ):
+        run = write_runner()
+        assert apply_with(run, f, d) == ([], [])
+        assert run.calls == []
+
+
+def test_apply_order_is_comment_label_auto_merge():
+    run = write_runner(OK, OK, (0, "", ""), http({"auto_merge": None}))
+    f = facts(auto_merge=True, bot_comment=bot_comment())
+    done, _ = apply_with(run, f, decision(comment=COMMENT, label="set", disable_auto_merge=True), pace=0)
+    assert done == ["comment_edit", "label_set", "auto_merge_off"]
+    assert [args for args, _ in run.calls] == [
+        ["api", "-i", "-X", "PATCH", f"{API}/issues/comments/910003", "--input", "-"],
+        ["api", "-i", "-X", "POST", f"{API}/issues/354/labels", "--input", "-"],
+        ["pr", "merge", "354", "--disable-auto", "--repo", roadmap_model.REPO],
+        ["api", "-i", f"{API}/pulls/354"],
+    ]
+    assert json.loads(run.calls[1][1]) == {"labels": [NEEDS_TRIAGE]}
+    assert run.calls[2][1] is None and run.calls[3][1] is None
+
+
+def test_apply_treats_404_on_label_delete_as_done():
+    run = write_runner(raw(404, "Not Found", '{"message":"Label does not exist"}'))
+    done, _ = apply_with(run, facts(labels=frozenset({NEEDS_TRIAGE})), decision(label="clear"))
+    assert done == ["label_clear"]
+    assert run.calls == [(["api", "-i", "-X", "DELETE", f"{API}/issues/354/labels/status%3Aneeds-triage"], None)]
+
+    # A 404 anywhere else is a failure, and the error carries no response text.
+    run = write_runner(raw(404, "Not Found", '{"message":"secret-ish text"}'))
+    with pytest.raises(WriteError) as error:
+        apply_with(run, facts(), decision(label="set"))
+    assert str(error.value) == "label_set returned HTTP 404"
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_apply_honors_retry_after_once_from_the_headers(status):
+    refused = raw(status, "Forbidden", '{"message":"You have exceeded a secondary rate limit"}', Retry_After="7")
+    run = write_runner(refused, http({"id": 1}, 201))
+    done, sleeps = apply_with(run, facts(), decision(comment=COMMENT))
+    assert done == ["comment_post"]
+    assert sleeps == [7]
+    assert len(run.calls) == 2 and run.calls[0] == run.calls[1]
+
+    # The retry happens once. A second refusal raises, naming the write and the status only.
+    run = write_runner(refused, refused, OK)
+    with pytest.raises(WriteError) as error:
+        apply_with(run, facts(), decision(comment=COMMENT))
+    assert str(error.value) == f"comment_post returned HTTP {status}"
+    assert len(run.calls) == 2
+
+    # Without the header there is no retry at all.
+    run = write_runner(raw(status, "Forbidden", '{"message":"nope"}'), OK)
+    with pytest.raises(WriteError):
+        apply_with(run, facts(), decision(comment=COMMENT))
+    assert len(run.calls) == 1
+
+
+def test_apply_raises_without_sleeping_on_a_primary_rate_limit():
+    primary = raw(403, "Forbidden", '{"message":"API rate limit exceeded for installation ID 1."}', Retry_After="60")
+    run = write_runner(primary, OK)
+    with pytest.raises(WriteError) as error:
+        apply_with(run, facts(), decision(comment=COMMENT, label="set"))
+    assert str(error.value) == "rate_limit_primary"
+    assert len(run.calls) == 1
+
+
+def test_apply_paces_writes():
+    run = write_runner(OK, OK, (0, "", ""), http({"auto_merge": {"merge_method": "squash"}}), (0, "", ""))
+    f = facts(auto_merge=True)
+    sleeps: list[float] = []
+    done = apply(run, f, decision(comment=COMMENT, label="set", disable_auto_merge=True), pace=2.5, sleep=sleeps.append)
+    assert done == ["comment_post", "label_set", "auto_merge_off", "converted_to_draft"]
+    # Four writes, three gaps. The re-read between the last two is not a write.
+    assert sleeps == [2.5, 2.5, 2.5]
+
+    _, single = apply_with(write_runner(), facts(), decision(comment=COMMENT), pace=2.5)
+    assert single == []
+
+
+def test_apply_never_edits_a_contributor_comment_carrying_the_marker_or_the_legacy_prefix():
+    contributor_ids = {910001, 910002}
+    bot_ids = [c["id"] for c in fixture("comments.json") if c["user"]["login"] == roadmap_model.BOT_LOGIN]
+    renamed = _comments_without(*[i for i in bot_ids if i != 910003])
+    for comment in renamed:
+        if comment["id"] == 910003:
+            comment["user"]["login"] = "GitHub-Actions[bot]"
+
+    for comments in (_comments_without(*bot_ids), renamed):
+        got, _ = collect(pull_mapping(comments=comments))
+        assert got.bot_comment is None
+        run = write_runner(http({"id": 1}, 201))
+        done, _ = apply_with(run, got, decision(comment=COMMENT))
+        assert done == ["comment_post"]
+        (args, _stdin), = run.calls
+        assert args[3] == "POST" and args[4] == f"{API}/issues/229/comments"
+        assert not any(str(i) in arg for arg in args for i in contributor_ids | {910003})
+
+
+def test_apply_falls_back_to_draft_when_auto_merge_survives_the_disable():
+    run = write_runner((0, "", ""), http({"auto_merge": {"merge_method": "squash"}}), (0, "", ""))
+    done, _ = apply_with(run, facts(auto_merge=True), decision(disable_auto_merge=True))
+    assert done == ["auto_merge_off", "converted_to_draft"]
+    assert [args for args, _ in run.calls] == [
+        ["pr", "merge", "354", "--disable-auto", "--repo", roadmap_model.REPO],
+        ["api", "-i", f"{API}/pulls/354"],
+        ["pr", "ready", "354", "--undo", "--repo", roadmap_model.REPO],
+    ]
+
+    run = write_runner((0, "", ""), http({"auto_merge": None}))
+    done, _ = apply_with(run, facts(auto_merge=True), decision(disable_auto_merge=True))
+    assert done == ["auto_merge_off"] and len(run.calls) == 2
+
+    run = write_runner((1, "", "gh: some failure text"))
+    with pytest.raises(WriteError) as error:
+        apply_with(run, facts(auto_merge=True), decision(disable_auto_merge=True))
+    assert str(error.value) == "auto_merge_off exited 1"

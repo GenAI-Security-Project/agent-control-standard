@@ -4,7 +4,8 @@
 Version 1.0. Owner: ACS project leads. This module holds the data model, the parsing
 helpers, the gate, and the collector. `decide` is a pure function of `Facts` and the date,
 with no I/O. `collect_facts` does every read, through `gh_runner`'s allowlisted shapes,
-inside a call budget. The writers join them in a later task of the same plan.
+inside a call budget. `apply` makes the writes a decision calls for, in a fixed order
+and paced, and reports which ones it made.
 
 The workflow runs this under `python3 -I -S` from a checkout of `main`, never the pull
 request's head, with the standard library and the sibling modules under `tools/` only.
@@ -20,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 
@@ -1174,3 +1176,95 @@ def _assemble(
         sweep=sweep,
         event_action=event_action,
     )
+
+
+# Writing a decision. Comment first, then label, then auto-merge, so a run that stops part
+# way leaves the explanation in place before the state it explains. Every API write carries
+# `-i`, so its status line is read from stdout rather than from gh's exit code or stderr.
+
+_PRIMARY_LIMIT = "API rate limit exceeded"
+_RETRY_STATUSES = frozenset({403, 429})
+_RETRY_AFTER = re.compile(r"[0-9]{1,6}")
+
+
+class WriteError(RuntimeError):
+    """A write GitHub refused. The message names the write and the status, never the response."""
+
+
+def apply(run: Runner, facts: Facts, decision: Decision, *, pace: float = 1.0, sleep=time.sleep) -> list[str]:
+    """Make the writes `decision` calls for and return their names in the order made.
+
+    The only argv values taken from GitHub are the pull request number and the bot comment
+    id, both integers. Comment text travels on stdin as JSON. The comment edited is always
+    `facts.bot_comment`, which collection sets only for a comment whose author is exactly
+    `BOT_LOGIN`, so a contributor comment that copies the marker is never touched.
+    """
+    number = int(facts.number)
+    done: list[str] = []
+
+    def write(name: str, args: list[str], payload: dict | None = None) -> None:
+        if done:
+            sleep(pace)
+        if args[0] == "pr":
+            _command(run, name, args)
+        else:
+            _api_write(run, name, args, None if payload is None else json.dumps(payload), sleep)
+        done.append(name)
+
+    if decision.comment is not None:
+        if facts.bot_comment is not None:
+            path = f"{_API}/issues/comments/{int(facts.bot_comment.id)}"
+            write("comment_edit", ["api", "-i", "-X", "PATCH", path, "--input", "-"], {"body": decision.comment})
+        else:
+            path = f"{_API}/issues/{number}/comments"
+            write("comment_post", ["api", "-i", "-X", "POST", path, "--input", "-"], {"body": decision.comment})
+
+    if decision.label == "set":
+        path = f"{_API}/issues/{number}/labels"
+        write("label_set", ["api", "-i", "-X", "POST", path, "--input", "-"], {"labels": [roadmap_model.NEEDS_TRIAGE]})
+    elif decision.label == "clear":
+        path = f"{_API}/issues/{number}/labels/status%3Aneeds-triage"
+        write("label_clear", ["api", "-i", "-X", "DELETE", path])
+
+    if decision.disable_auto_merge and facts.auto_merge:
+        write("auto_merge_off", ["pr", "merge", str(number), "--disable-auto", "--repo", roadmap_model.REPO])
+        # The disable is confirmed by reading the pull request back, not trusted from the exit
+        # code. A draft cannot merge, so converting is the fallback when auto-merge survives.
+        try:
+            survived = _read_pull(run, number).get("auto_merge") is not None
+        except RunnerError:
+            raise WriteError("auto_merge_off re-read failed") from None
+        if survived:
+            write("converted_to_draft", ["pr", "ready", str(number), "--undo", "--repo", roadmap_model.REPO])
+
+    return done
+
+
+def _command(run: Runner, name: str, args: list[str]) -> None:
+    """A `gh pr` subcommand, which prints no status line. Its exit code is the result."""
+    code, _stdout, _stderr = run(args, None)
+    if code != 0:
+        raise WriteError(f"{name} exited {code}")
+
+
+def _api_write(run: Runner, name: str, args: list[str], stdin: str | None, sleep) -> None:
+    """One API write, retried once when a secondary rate limit names its own wait."""
+    for attempt in range(2):
+        code, stdout, _stderr = run(args, stdin)
+        if not stdout:
+            raise WriteError(f"{name} exited {code}")
+        try:
+            status, headers, body = split_http(stdout)
+        except RunnerError:
+            raise WriteError(f"{name} returned no HTTP status") from None
+        if 200 <= status < 300 or (status == 404 and name == "label_clear"):
+            return
+        # The primary limit resets on a window far longer than a Retry-After wait, so the
+        # caller stops instead of sleeping.
+        if status == 403 and _PRIMARY_LIMIT in body:
+            raise WriteError("rate_limit_primary")
+        wait = headers.get("retry-after", "")
+        if attempt == 0 and status in _RETRY_STATUSES and _RETRY_AFTER.fullmatch(wait):
+            sleep(int(wait))
+            continue
+        raise WriteError(f"{name} returned HTTP {status}")
