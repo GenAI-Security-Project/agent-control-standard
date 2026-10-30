@@ -184,10 +184,23 @@ def review(*, login="rocklambros", state="APPROVED", association="MEMBER", days=
     return Review(login=login, state=state, association=association, submitted_at=submitted, commit_id=commit)
 
 
+BOT_WRITE_AT = datetime(2026, 11, 10, 3, 10, tzinfo=timezone.utc)
+
+
 def with_comment(f: Facts, decision) -> Facts:
-    """The facts as the next run reads them, after the writer posted `decision`'s comment."""
-    body = decision.comment
-    return dataclasses.replace(f, bot_comment=BotComment(id=1, body=body, data=parse_data_line(body), legacy=False))
+    """The facts as the next run reads them, after the writer applied `decision`.
+
+    The comment is posted or edited, and the label is set or removed. A removal by the bot
+    shows up in the timeline as the bot's own unlabel.
+    """
+    if decision.comment is not None:
+        body = decision.comment
+        f = dataclasses.replace(f, bot_comment=BotComment(id=1, body=body, data=parse_data_line(body), legacy=False))
+    if decision.label == "set":
+        f = dataclasses.replace(f, labels=f.labels | {NEEDS_TRIAGE})
+    elif decision.label == "clear":
+        f = dataclasses.replace(f, labels=f.labels - {NEEDS_TRIAGE}, last_unlabel=(roadmap_model.BOT_LOGIN, BOT_WRITE_AT))
+    return f
 
 
 def outcome(decision):
@@ -275,6 +288,7 @@ def test_hand_clear_records_the_head_and_holds_while_it_matches():
     cleared = decide(unlabeled, TODAY)
     assert outcome(cleared) == ("pass", "hand", ())
     assert cleared.data["cleared_head"] == HEAD and cleared.data["reason"] == "cleared"
+    assert cleared.data["cleared_at"] == "2026-11-03T12:00:00Z"
     assert cleared.data["route"] == "hand" and cleared.data["cleared"] == TODAY.isoformat()
     assert cleared.label == "keep" and cleared.comment is not None
     held = decide(with_comment(unlabeled, cleared), TODAY + timedelta(days=3))
@@ -307,8 +321,12 @@ def test_hand_clear_by_non_roster_is_reversed():
     assert decision.label == "set" and "cleared_head" not in decision.data
     assert "someone other than a lead" in decision.comment
     # The bot's own removal on an earlier clear is not a removal to reverse in words.
+    # The label is outside the hash, so the short circuit restores it without a comment.
     by_bot = decide(dataclasses.replace(removed, last_unlabel=(roadmap_model.BOT_LOGIN, OPENED)), TODAY)
-    assert by_bot.label == "set" and "someone other than a lead" not in by_bot.comment
+    assert by_bot.label == "set" and by_bot.comment is None
+    # The reversal renders once. Once the label is back, the next run writes nothing.
+    settled = decide(with_comment(removed, decision), TODAY)
+    assert settled.outcome == "queue" and settled.label == "keep" and settled.comment is None
 
 
 def test_author_merged_record_passes():
@@ -497,6 +515,63 @@ def test_unchanged_facts_keep_label_and_comment():
     again = decide(with_comment(f, first), TODAY + timedelta(days=2))
     assert outcome(again) == outcome(first)
     assert again.label == "keep" and again.comment is None
+
+
+def test_bot_label_writes_do_not_defeat_the_short_circuit():
+    f = facts(references=(issue(71),), held_use={71: (354,)})
+    queued = decide(f, TODAY)
+    assert queued.label == "set" and queued.comment is not None
+    after_queue = with_comment(f, queued)
+    assert NEEDS_TRIAGE in after_queue.labels
+    again = decide(after_queue, TODAY)
+    assert again.outcome == "queue" and again.label == "keep" and again.comment is None
+
+    passing = dataclasses.replace(after_queue, author_record=True)
+    cleared = decide(passing, TODAY)
+    assert cleared.label == "clear" and cleared.comment is not None
+    after_clear = with_comment(passing, cleared)
+    assert after_clear.last_unlabel[0] == roadmap_model.BOT_LOGIN and NEEDS_TRIAGE not in after_clear.labels
+    settled = decide(after_clear, TODAY + timedelta(days=1))
+    assert settled.outcome == "pass" and settled.label == "keep" and settled.comment is None
+
+
+def test_second_hand_clear_after_a_push_is_a_fresh_clear():
+    first_at = OPENED + timedelta(days=1)
+    queued = facts()
+    removed = dataclasses.replace(
+        with_comment(queued, decide(queued, TODAY)), labels=frozenset(), last_unlabel=("rocklambros", first_at)
+    )
+    cleared = decide(removed, TODAY)
+    assert cleared.data["cleared_head"] == HEAD
+    pushed = dataclasses.replace(with_comment(removed, cleared), head_sha="b" * 40)
+    requeued = decide(pushed, TODAY)
+    assert requeued.outcome == "queue" and requeued.label == "set"
+    assert requeued.data["cleared_at"] == "2026-11-03T12:00:00Z"
+    # The same old removal, read again with the label back, still does not clear the new head.
+    relabeled = with_comment(pushed, requeued)
+    assert decide(relabeled, TODAY).outcome == "queue"
+    # A lead removes the label again after the push: a fresh clear at the new head.
+    second_at = first_at + timedelta(days=2, hours=3)
+    again = dataclasses.replace(relabeled, labels=frozenset(), last_unlabel=("lrd0036", second_at))
+    fresh = decide(again, TODAY)
+    assert outcome(fresh) == ("pass", "hand", ())
+    assert fresh.label == "keep" and fresh.comment is not None
+    assert fresh.data["cleared_head"] == "b" * 40 and fresh.data["cleared_at"] == "2026-11-05T15:00:00Z"
+    held = decide(with_comment(again, fresh), TODAY)
+    assert outcome(held) == ("pass", "hand", ()) and held.comment is None
+
+
+def test_data_line_values_are_capped_so_decide_is_total():
+    many = tuple(issue(1000 + n, commented=OPENED - timedelta(days=1)) for n in range(14))
+    decision = decide(facts(references=many), TODAY)
+    assert decision.reasons == ("not_held",)
+    claimed = decision.data["claimed"].split(",")
+    assert claimed == [f"{1000 + n}:2026-11-01" for n in range(pr_intake.MAX_CLAIM_READS)]
+    assert parse_data_line(decision.comment) == decision.data
+    huge = tuple(issue(999_999_000 + n, commented=OPENED - timedelta(days=1)) for n in range(40))
+    wide = decide(facts(references=huge), TODAY)
+    assert parse_data_line(wide.comment) == wide.data
+    assert wide.data["issues"].split(",")[0] == "999999000"
 
 
 # One changed value per Facts field. The set of keys must equal the dataclass fields, so a

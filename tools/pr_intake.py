@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import base_branch_guard
 import closing_choice
@@ -57,7 +57,7 @@ REASONS = (
 CLEAR_ROUTES = ("roster", "review", "hand", "record", "editorial", "assignment", "help_wanted")
 
 DATA_KEYS = frozenset(
-    {"reason", "route", "issues", "since", "cleared", "head", "cleared_head", "facts", "claimed", "seen"}
+    {"reason", "route", "issues", "since", "cleared", "head", "cleared_head", "cleared_at", "facts", "claimed", "seen"}
 )
 # Linear: one bounded group repeated at most 12 times, each repeat anchored by a literal
 # `=` and an optional single space, with no quantified group inside another.
@@ -191,6 +191,10 @@ def engaged_by_fresh_review(facts: Facts, today: date) -> bool:
     )
 
 
+def _by_bot(unlabel: tuple[str, datetime] | None) -> bool:
+    return unlabel is not None and unlabel[0].casefold() == roadmap_model.BOT_LOGIN
+
+
 def facts_hash(facts: Facts, today: date) -> str:
     """Twelve hex characters that change when anything the gate reads changes.
 
@@ -206,8 +210,14 @@ def facts_hash(facts: Facts, today: date) -> str:
     `created_at` enters because the help wanted route compares the claim with it, and a
     reason behind the first one may turn on it. It never changes on a real pull request.
 
+    `labels` enters without the queue label, and `last_unlabel` enters only when a person
+    removed the label. The bot owns that label and writes both facts itself, so hashing
+    them would make every write re-render on the next run. The queue state is already on
+    the data line as its reason.
+
     Excluded: `updated_at`, because any comment moves it and the bot's own writes would
-    change the hash. Raw review timestamps, whose one effect is
+    change the hash. `cleared_at` from the data line, which is bot state that changes only
+    together with `last_unlabel`, already hashed. Raw review timestamps, whose one effect is
     freshness, already carried by the derived boolean. `sweep` and `event_action`, which
     describe why the run started, not the pull request. `title` and `body`, which enter
     only through `editorial_ticked`, so an edit that changes no fact keeps the comment.
@@ -221,7 +231,7 @@ def facts_hash(facts: Facts, today: date) -> str:
         "base": facts.base,
         "head_sha": facts.head_sha,
         "created_at": facts.created_at,
-        "labels": sorted(facts.labels),
+        "labels": sorted(facts.labels - {roadmap_model.NEEDS_TRIAGE}),
         "paths": list(facts.paths),
         "paths_truncated": facts.paths_truncated,
         # Sorted by repr so a None beside a datetime or a string never raises TypeError.
@@ -238,7 +248,7 @@ def facts_hash(facts: Facts, today: date) -> str:
         "references_dropped": facts.references_dropped,
         "reviews": sorted(((r.login, r.state, r.association, r.commit_id) for r in facts.reviews), key=repr),
         "cleared_head": (facts.bot_comment.data or {}).get("cleared_head") if facts.bot_comment else None,
-        "last_unlabel": facts.last_unlabel,
+        "last_unlabel": None if _by_bot(facts.last_unlabel) else facts.last_unlabel,
         "last_author_comment_at": facts.last_author_comment_at,
         "auto_merge": facts.auto_merge,
         "author_record": facts.author_record,
@@ -309,18 +319,30 @@ def _stored(facts: Facts) -> dict[str, str]:
     return facts.bot_comment.data
 
 
+def _unlabel_time(facts: Facts) -> str:
+    """The last unlabel's time in the data line's form. A naive time is read as UTC."""
+    when = facts.last_unlabel[1]
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _hand_clear(facts: Facts) -> tuple[bool, bool]:
-    """Whether a lead's removal of the label stands, and whether this run must record the head.
+    """Whether a lead's removal of the label stands, and whether this run must record it.
 
     The clear is bound to the head it was made at, so a push after it does not ride on it.
-    The first run that sees the removal records the head. Until then nothing is recorded.
+    A removal newer than the recorded one is a fresh clear at the current head, so a lead
+    who clears again after a push is not overruled. The run that first sees a removal
+    records its head and time.
     """
     if facts.last_unlabel is None or not _on_roster(facts.last_unlabel[0], facts):
         return False, False
-    recorded = _stored(facts).get("cleared_head")
-    if recorded is None:
+    stored = _stored(facts)
+    recorded_at = stored.get("cleared_at")
+    # Both sides are fixed-width UTC strings, so string order is time order.
+    if recorded_at is None or _unlabel_time(facts) > recorded_at:
         return True, True
-    return recorded == facts.head_sha, False
+    return stored.get("cleared_head") == facts.head_sha, False
 
 
 def _engaged(facts: Facts, today: date) -> str | None:
@@ -475,6 +497,11 @@ def _auto_merge_off(facts: Facts, queued: bool) -> bool:
     return queued or (not _on_roster(facts.author, facts) and bool(_roadmap_closes(facts)))
 
 
+# Data line values stop at 200 characters. A bounded count of the lowest numbers keeps a
+# body naming many issues from making the line unwritable.
+MAX_DATA_ISSUES = 10
+
+
 def _claims(facts: Facts) -> list[tuple[int, date]]:
     """Comments by the author on accepted open issues they do not hold, which may be claims."""
     return sorted(
@@ -492,7 +519,10 @@ def _hash_as_read_next(facts: Facts, cleared_head: str | None, today: date) -> s
     return facts_hash(replace(facts, bot_comment=comment), today)
 
 
-def _data(facts: Facts, today: date, route: str | None, reasons: tuple[str, ...], cleared_head: str | None) -> dict[str, str]:
+def _data(
+    facts: Facts, today: date, route: str | None, reasons: tuple[str, ...], cleared_head: str | None,
+    cleared_at: str | None,
+) -> dict[str, str]:
     stored = _stored(facts)
     data: dict[str, str] = {}
     if route is not None:
@@ -504,17 +534,19 @@ def _data(facts: Facts, today: date, route: str | None, reasons: tuple[str, ...]
         data["reason"] = reasons[0]
         issues = sorted({ref.number for ref in _accepted_issues(facts)})
         if issues:
-            data["issues"] = ",".join(str(number) for number in issues)
+            data["issues"] = ",".join(str(number) for number in issues[:MAX_DATA_ISSUES])
         # The queue clock runs from the first queue and survives re-renders, so the health
         # issue's day count is the time waited, not the time since the last edit.
         queued_before = stored.get("reason") not in (None, "cleared") and "since" in stored
         data["since"] = stored["since"] if queued_before else today.isoformat()
         claims = _claims(facts)
         if claims:
-            data["claimed"] = ",".join(f"{number}:{when.isoformat()}" for number, when in claims)
+            data["claimed"] = ",".join(f"{number}:{when.isoformat()}" for number, when in claims[:MAX_CLAIM_READS])
     data["head"] = facts.head_sha
     if cleared_head:
         data["cleared_head"] = cleared_head
+    if cleared_at:
+        data["cleared_at"] = cleared_at
     data["facts"] = _hash_as_read_next(facts, cleared_head, today)
     return data
 
@@ -550,11 +582,12 @@ def _enforced(facts: Facts, today: date) -> Decision:
         reasons: tuple[str, ...] = ()
     else:
         route, reasons = None, _reasons(facts, today)
-    recorded, newly = stored.get("cleared_head"), False
+    recorded, recorded_at, newly = stored.get("cleared_head"), stored.get("cleared_at"), False
     if route == "hand":
         newly = _hand_clear(facts)[1]
-        recorded = facts.head_sha if newly else recorded
-    data = _data(facts, today, route, reasons, recorded)
+        if newly:
+            recorded, recorded_at = facts.head_sha, _unlabel_time(facts)
+    data = _data(facts, today, route, reasons, recorded, recorded_at)
     labeled = roadmap_model.NEEDS_TRIAGE in facts.labels
     decision = Decision(
         outcome="pass" if passed else "queue",
@@ -567,7 +600,10 @@ def _enforced(facts: Facts, today: date) -> Decision:
         notices=(),
     )
     if stored.get("facts") == data["facts"] and stored.get("reason") == data["reason"]:
-        return Decision(decision.outcome, route, reasons, "keep", None, stored, decision.disable_auto_merge, ())
+        # The queue label is outside the hash, so a label that drifted from the recorded
+        # state is repaired here without re-rendering the comment.
+        drift = "set" if not passed and not labeled else "clear" if passed and labeled else "keep"
+        return Decision(decision.outcome, route, reasons, drift, None, stored, decision.disable_auto_merge, ())
     # A pass on a pull request the bot never spoke on stays silent, unless the merger needs
     # the roadmap warning or a hand clear must be recorded.
     if passed and facts.bot_comment is None and not labeled and not _roadmap_closes(facts) and not newly:
