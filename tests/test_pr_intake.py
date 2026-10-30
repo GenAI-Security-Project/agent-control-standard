@@ -1,7 +1,8 @@
-"""Tests for the intake tool's data model: the facts hash, the data line, and the helpers."""
+"""Tests for the intake tool: the data model, the data line, the helpers, and the gate."""
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -12,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import closing_choice  # noqa: E402
 import pr_intake  # noqa: E402
-from pr_intake import Facts, Reference, Review, facts_hash, parse_data_line, render_data_line, safe_path  # noqa: E402
+import roadmap_model  # noqa: E402
+from pr_intake import (  # noqa: E402
+    BotComment, Facts, Reference, Review, decide, facts_hash, parse_data_line, render_comment, render_data_line,
+    safe_path, unmet_routes,
+)
 
 TODAY = date(2026, 11, 10)
 NOW = datetime(2026, 11, 1, tzinfo=timezone.utc)
@@ -141,3 +146,508 @@ def test_facts_hash_survives_none_beside_a_value_in_sort_ties():
     forward = dataclasses.replace(base, reviews=reviews, references=refs)
     backward = dataclasses.replace(base, reviews=reviews[::-1], references=refs[::-1])
     assert facts_hash(forward, TODAY) == facts_hash(backward, TODAY)
+
+
+# --- The gate -------------------------------------------------------------------------
+
+ROSTER = frozenset({"rocklambros", "lrd0036"})
+OPENED = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
+HEAD = "a" * 40
+TICKED = "- [x] This is an editorial correction on the documentation lane (typo, grammar, link, formatting)"
+NEEDS_TRIAGE = roadmap_model.NEEDS_TRIAGE
+POPULATION = Path(__file__).resolve().parent / "fixtures" / "pr_intake" / "population.json"
+
+
+def facts(**overrides) -> Facts:
+    """A non-roster pull request with no references, in enforced mode, opened after the rule."""
+    base = dict(
+        number=354, state="open", draft=False, author="outsider", author_is_bot=False, title="Add a thing",
+        body="b", base="integration", head_sha=HEAD, created_at=OPENED, updated_at=OPENED,
+        labels=frozenset(), paths=("tools/x.py",), paths_truncated=False, references=(), references_dropped=0,
+        reviews=(), last_unlabel=None, last_author_comment_at=None, bot_comment=None, auto_merge=False,
+        author_record=False, held_use={}, roster=ROSTER, mode="enforced", sweep=False, event_action="opened",
+    )
+    base.update(overrides)
+    return Facts(**base)
+
+
+def issue(number, *, state="open", kind="contribute", labels=(roadmap_model.ACCEPTED,), assignees=(),
+          milestoned=False, commented=None, is_pull=False, unresolved=False) -> Reference:
+    return Reference(
+        number=number, kind=kind, is_pull=is_pull, state=state, labels=frozenset(labels),
+        assignees=frozenset(assignees), milestoned=milestoned, author_commented_at=commented, unresolved=unresolved,
+    )
+
+
+def review(*, login="rocklambros", state="APPROVED", association="MEMBER", days=1, commit=HEAD, today=TODAY) -> Review:
+    submitted = datetime.combine(today - timedelta(days=days), datetime.min.time(), tzinfo=timezone.utc)
+    return Review(login=login, state=state, association=association, submitted_at=submitted, commit_id=commit)
+
+
+def with_comment(f: Facts, decision) -> Facts:
+    """The facts as the next run reads them, after the writer posted `decision`'s comment."""
+    body = decision.comment
+    return dataclasses.replace(f, bot_comment=BotComment(id=1, body=body, data=parse_data_line(body), legacy=False))
+
+
+def outcome(decision):
+    return decision.outcome, decision.route, decision.reasons
+
+
+def test_known_bot_author_is_out_of_scope():
+    for author in sorted(pr_intake.KNOWN_BOTS):
+        for mode in ("enforced", "legacy"):
+            decision = decide(facts(author=author, author_is_bot=True, mode=mode), TODAY)
+            assert decision.outcome == "skip" and decision.label == "keep"
+            assert decision.comment is None and decision.data is None and decision.disable_auto_merge is False
+
+
+def test_unknown_bot_author_is_evaluated_as_non_roster():
+    decision = decide(facts(author="renovate[bot]", author_is_bot=True), TODAY)
+    assert outcome(decision) == ("queue", None, ("no_accepted",))
+    assert decision.label == "set" and decision.comment is not None
+
+
+def test_draft_is_skipped():
+    for mode in ("enforced", "legacy"):
+        decision = decide(facts(draft=True, mode=mode), TODAY)
+        assert decision.outcome == "skip" and decision.label == "keep" and decision.comment is None
+
+
+def test_roster_author_passes_case_insensitively():
+    stored = facts(author="Lrd0036".casefold())
+    assert outcome(decide(stored, TODAY)) == ("pass", "roster", ())
+    assert outcome(decide(facts(author="Lrd0036"), TODAY)) == ("pass", "roster", ())
+    # Never queued and never labeled: nothing to write.
+    quiet = decide(stored, TODAY)
+    assert quiet.label == "keep" and quiet.comment is None
+    labeled = decide(dataclasses.replace(stored, labels=frozenset({NEEDS_TRIAGE})), TODAY)
+    assert labeled.label == "clear" and labeled.data["reason"] == "cleared" and labeled.data["route"] == "roster"
+
+
+def test_approved_review_by_roster_collaborator_passes():
+    decision = decide(facts(reviews=(review(login="LRD0036".casefold(), association="COLLABORATOR", days=400),)), TODAY)
+    assert outcome(decision) == ("pass", "review", ())
+
+
+def test_approved_review_by_roster_login_without_role_does_not_count():
+    for association in ("CONTRIBUTOR", "NONE", "FIRST_TIME_CONTRIBUTOR"):
+        decision = decide(facts(reviews=(review(association=association),)), TODAY)
+        assert outcome(decision) == ("queue", None, ("no_accepted",))
+    stranger = decide(facts(reviews=(review(login="someone", association="MEMBER"),)), TODAY)
+    assert stranger.outcome == "queue"
+
+
+def test_commented_reviews_do_not_count():
+    decision = decide(facts(reviews=(review(state="COMMENTED"), review(state="DISMISSED"))), TODAY)
+    assert outcome(decision) == ("queue", None, ("no_accepted",))
+
+
+def test_changes_requested_at_29_days_passes_and_at_31_days_is_sent_back_or_awaiting():
+    fresh = decide(facts(reviews=(review(state="CHANGES_REQUESTED", days=29),)), TODAY)
+    assert outcome(fresh) == ("pass", "review", ())
+    edge = decide(facts(reviews=(review(state="CHANGES_REQUESTED", days=30),)), TODAY)
+    assert edge.outcome == "pass"
+    stale = facts(reviews=(review(state="CHANGES_REQUESTED", days=31),))
+    assert outcome(decide(stale, TODAY)) == ("queue", None, ("sent_back", "no_accepted"))
+    replied = dataclasses.replace(stale, last_author_comment_at=datetime.combine(
+        TODAY - timedelta(days=5), datetime.min.time(), tzinfo=timezone.utc))
+    assert decide(replied, TODAY).reasons == ("awaiting_rereview", "no_accepted")
+    # A newer roster review, even a comment, means the lead has looked again.
+    relooked = dataclasses.replace(stale, reviews=stale.reviews + (review(state="COMMENTED", days=20),))
+    assert decide(relooked, TODAY).reasons == ("no_accepted",)
+
+
+def test_push_after_changes_requested_is_awaiting_rereview_not_sent_back():
+    decision = decide(facts(reviews=(review(state="CHANGES_REQUESTED", days=45, commit="c" * 40),)), TODAY)
+    assert decision.reasons[0] == "awaiting_rereview"
+    assert "sent_back" not in decision.reasons
+    assert decision.data["reason"] == "awaiting_rereview"
+    assert "re-review" in decision.comment or "second review" in decision.comment
+
+
+def test_hand_clear_records_the_head_and_holds_while_it_matches():
+    queued = facts(labels=frozenset({NEEDS_TRIAGE}))
+    first = decide(queued, TODAY)
+    unlabeled = dataclasses.replace(
+        with_comment(queued, first), labels=frozenset(), last_unlabel=("rocklambros", OPENED + timedelta(days=1))
+    )
+    cleared = decide(unlabeled, TODAY)
+    assert outcome(cleared) == ("pass", "hand", ())
+    assert cleared.data["cleared_head"] == HEAD and cleared.data["reason"] == "cleared"
+    assert cleared.data["route"] == "hand" and cleared.data["cleared"] == TODAY.isoformat()
+    assert cleared.label == "keep" and cleared.comment is not None
+    held = decide(with_comment(unlabeled, cleared), TODAY + timedelta(days=3))
+    assert outcome(held) == ("pass", "hand", ())
+    assert held.label == "keep" and held.comment is None
+
+
+def test_hand_clear_stops_holding_when_the_head_sha_changes():
+    queued = facts(labels=frozenset({NEEDS_TRIAGE}))
+    unlabeled = dataclasses.replace(
+        with_comment(queued, decide(queued, TODAY)), labels=frozenset(), last_unlabel=("lrd0036", OPENED)
+    )
+    cleared = with_comment(unlabeled, decide(unlabeled, TODAY))
+    pushed = dataclasses.replace(cleared, head_sha="b" * 40)
+    requeued = decide(pushed, TODAY)
+    assert outcome(requeued) == ("queue", None, ("no_accepted",))
+    assert requeued.label == "set" and requeued.comment is not None
+    # The recorded head is carried, so the old unlabel cannot clear the new head next run.
+    assert requeued.data["cleared_head"] == HEAD
+    assert decide(with_comment(pushed, requeued), TODAY).outcome == "queue"
+
+
+def test_hand_clear_by_non_roster_is_reversed():
+    queued = facts(labels=frozenset({NEEDS_TRIAGE}))
+    removed = dataclasses.replace(
+        with_comment(queued, decide(queued, TODAY)), labels=frozenset(), last_unlabel=("outsider", OPENED)
+    )
+    decision = decide(removed, TODAY)
+    assert outcome(decision) == ("queue", None, ("no_accepted",))
+    assert decision.label == "set" and "cleared_head" not in decision.data
+    assert "someone other than a lead" in decision.comment
+    # The bot's own removal on an earlier clear is not a removal to reverse in words.
+    by_bot = decide(dataclasses.replace(removed, last_unlabel=(roadmap_model.BOT_LOGIN, OPENED)), TODAY)
+    assert by_bot.label == "set" and "someone other than a lead" not in by_bot.comment
+
+
+def test_author_merged_record_passes():
+    assert outcome(decide(facts(author_record=True), TODAY)) == ("pass", "record", ())
+
+
+def test_editorial_on_the_docs_lane_passes():
+    decision = decide(facts(body=TICKED, paths=("docs/topics/a.md", "design/b.md", "README.md")), TODAY)
+    assert outcome(decision) == ("pass", "editorial", ())
+
+
+def test_editorial_off_lane_queues_naming_sanitized_paths():
+    hostile = "specification/v`1<!--x-->@y #1.json"
+    decision = decide(facts(body=TICKED, paths=("docs/topics/a.md", hostile, "docs/spec/b.md")), TODAY)
+    assert outcome(decision) == ("queue", None, ("editorial_off_lane",))
+    assert f"`{safe_path(hostile)}`" in decision.comment and "`docs/spec/b.md`" in decision.comment
+    assert "`docs/topics/a.md`" not in decision.comment
+    assert hostile not in decision.comment
+
+
+def test_motivating_example_queues():
+    # PR #354: editorial box ticked, one path under reference-implementations/, Refs #92 on a
+    # help wanted issue the author commented on two days earlier. The tick on an off-lane path
+    # queues before the help wanted route is read.
+    claimed = issue(92, labels=(roadmap_model.ACCEPTED, "help wanted"), commented=OPENED - timedelta(days=2))
+    f = facts(body=TICKED + "\n\nRefs #92", paths=("reference-implementations/x.py",), references=(claimed,),
+              held_use={92: (354,)})
+    decision = decide(f, TODAY)
+    assert outcome(decision) == ("queue", None, ("editorial_off_lane",))
+    assert unmet_routes(f, TODAY) == ("roster", "engaged", "record", "editorial")
+    assert "`reference-implementations/x.py`" in decision.comment
+    # Without the tick the same pull request passes on the claim.
+    assert outcome(decide(dataclasses.replace(f, body="Refs #92"), TODAY)) == ("pass", "help_wanted", ())
+
+
+def test_truncated_paths_queue_with_their_own_reason_and_never_pass_editorial():
+    on_lane = tuple(f"docs/topics/p{n}.md" for n in range(3000))
+    decision = decide(facts(body=TICKED, paths=on_lane, paths_truncated=True), TODAY)
+    assert outcome(decision) == ("queue", None, ("paths_truncated",))
+    assert decision.comment.count("`docs/topics/") <= 1
+    both = decide(facts(body=TICKED, paths=("src/x.py",), paths_truncated=True), TODAY)
+    assert both.reasons == ("editorial_off_lane", "paths_truncated")
+    # Truncation without the tick is not a reason: the editorial route was never claimed.
+    assert decide(facts(paths=on_lane, paths_truncated=True), TODAY).reasons == ("no_accepted",)
+
+
+def test_first_two_pull_requests_on_a_held_issue_pass_and_the_third_queues():
+    held = issue(40, assignees=("outsider",))
+    use = {40: (300, 354, 400)}
+    for number in (300, 354):
+        assert outcome(decide(facts(number=number, references=(held,), held_use=use), TODAY)) == ("pass", "assignment", ())
+    third = decide(facts(number=400, references=(held,), held_use=use), TODAY)
+    assert outcome(third) == ("queue", None, ("held_cap",))
+    assert "#40 already clears PR #300 and PR #354." in third.comment
+
+
+def test_first_two_pull_requests_on_a_help_wanted_issue_pass_and_the_third_queues():
+    wanted = issue(41, labels=(roadmap_model.ACCEPTED, "help wanted"), commented=OPENED - timedelta(days=1))
+    use = {41: (354, 360, 365)}
+    for number in (354, 360):
+        assert outcome(decide(facts(number=number, references=(wanted,), held_use=use), TODAY)) == ("pass", "help_wanted", ())
+    third = decide(facts(number=365, references=(wanted,), held_use=use), TODAY)
+    assert outcome(third) == ("queue", None, ("held_cap",))
+    assert "#41 already clears PR #354 and PR #360." in third.comment
+
+
+def test_issue_author_without_assignment_queues():
+    decision = decide(facts(references=(issue(42),), held_use={42: (354,)}), TODAY)
+    assert outcome(decision) == ("queue", None, ("not_held",))
+    assert "This pull request references #42, which is accepted and is not assigned to you." in decision.comment
+    assert "To claim one, comment on it" in decision.comment
+
+
+def test_help_wanted_with_prior_comment_passes_and_without_queues():
+    labels = (roadmap_model.ACCEPTED, "help wanted")
+    claimed = issue(43, labels=labels, commented=OPENED - timedelta(hours=1))
+    assert outcome(decide(facts(references=(claimed,), held_use={43: (354,)}), TODAY)) == ("pass", "help_wanted", ())
+    silent = issue(43, labels=labels)
+    assert outcome(decide(facts(references=(silent,), held_use={43: (354,)}), TODAY)) == ("queue", None, ("not_held",))
+
+
+def test_help_wanted_comment_after_open_does_not_count():
+    late = issue(92, labels=(roadmap_model.ACCEPTED, "help wanted"), commented=datetime(2026, 11, 3, 9, tzinfo=timezone.utc))
+    decision = decide(facts(references=(late,), held_use={92: (354,)}), TODAY)
+    assert outcome(decision) == ("queue", None, ("not_held",))
+    assert "You commented on #92 on 2026-11-03. If that was a claim, it is waiting on a lead." in decision.comment
+    assert decision.data["claimed"] == "92:2026-11-03"
+
+
+def test_closed_accepted_reference_gets_its_own_reason():
+    decision = decide(facts(references=(issue(44, state="closed"),)), TODAY)
+    assert outcome(decision) == ("queue", None, ("closed_accepted",))
+    assert "This pull request references #44, which was accepted and is now closed." in decision.comment
+
+
+def test_reference_to_a_pull_request_number_is_not_an_issue():
+    as_pull = issue(45, is_pull=True, assignees=("outsider",))
+    assert outcome(decide(facts(references=(as_pull,), held_use={45: (354,)}), TODAY)) == ("queue", None, ("no_accepted",))
+    unknown = issue(46, unresolved=True, assignees=("outsider",))
+    assert decide(facts(references=(unknown,)), TODAY).reasons == ("no_accepted",)
+
+
+def test_body_failing_two_routes_renders_both_paragraphs():
+    f = facts(references=(issue(10, state="closed"), issue(11), issue(12)), held_use={11: (354,), 12: (354,)})
+    decision = decide(f, TODAY)
+    assert outcome(decision) == ("queue", None, ("closed_accepted", "not_held"))
+    assert unmet_routes(f, TODAY) == ("roster", "engaged", "record", "editorial", "held", "help_wanted")
+    assert "#10, which was accepted and is now closed" in decision.comment
+    assert "#11 and #12, which are accepted, and neither is assigned to you." in decision.comment
+    assert decision.comment.index("#10, which") < decision.comment.index("#11 and #12")
+    assert decision.data["issues"] == "10,11,12"
+
+
+def test_prior_comment_is_named_as_possibly_waiting():
+    asked = issue(47, commented=OPENED - timedelta(days=4))
+    decision = decide(facts(references=(asked, issue(48)), held_use={47: (354,), 48: (354,)}), TODAY)
+    assert decision.reasons == ("not_held",)
+    assert "You commented on #47 on 2026-10-29. If that was a claim, it is waiting on a lead." in decision.comment
+    assert "#48 on" not in decision.comment
+    assert "To claim one" not in decision.comment
+    assert decision.data["claimed"] == "47:2026-10-29"
+
+
+def test_legacy_mode_matches_todays_three_exits():
+    queued = decide(facts(mode="legacy"), TODAY)
+    assert queued.outcome == "queue" and queued.label == "set" and queued.data is None
+    assert queued.comment.startswith(pr_intake.LEGACY_PREFIX)
+    assert queued.disable_auto_merge is False
+    exits = {
+        "accepted, even closed": facts(mode="legacy", references=(issue(50, state="closed"),)),
+        "editorial ticked": facts(mode="legacy", body=TICKED, paths=("src/x.py",)),
+        "already commented": facts(mode="legacy", bot_comment=BotComment(id=9, body=pr_intake.LEGACY_PREFIX, data=None, legacy=True)),
+    }
+    for name, f in exits.items():
+        decision = decide(f, TODAY)
+        assert decision.label == "keep" and decision.comment is None, name
+        assert decision.notices, name
+    # Legacy never clears a label, even for a roster author.
+    roster = decide(facts(mode="legacy", author="rocklambros", labels=frozenset({NEEDS_TRIAGE}),
+                          bot_comment=BotComment(id=9, body=pr_intake.LEGACY_PREFIX, data=None, legacy=True)), TODAY)
+    assert roster.label == "keep" and roster.comment is None
+
+
+def test_legacy_sweep_writes_nothing():
+    decision = decide(facts(mode="legacy", sweep=True), TODAY)
+    assert decision.label == "keep" and decision.comment is None and decision.disable_auto_merge is False
+    assert any("queue" in notice for notice in decision.notices)
+
+
+def test_pre_rule_pull_request_comment_says_the_rule_is_new():
+    old = decide(facts(created_at=datetime(2026, 10, 1, tzinfo=timezone.utc)), TODAY)
+    assert "The rule is new, and its 30-day clock starts on 2026-11-10." in old.comment
+    assert "The rule is new" not in decide(facts(), TODAY).comment
+
+
+def test_keyword_warning_present_when_a_closing_keyword_names_a_milestoned_issue():
+    roadmap = issue(60, kind="close", labels=(), milestoned=True)
+    decision = decide(facts(references=(roadmap,)), TODAY)
+    assert "says it closes #60, which is on the project roadmap" in decision.comment
+    # A roster author is not queued, but the merger still gets the warning.
+    lead = decide(facts(author="rocklambros", references=(roadmap,)), TODAY)
+    assert lead.outcome == "pass" and "which is on the project roadmap" in lead.comment
+    for quiet in (issue(60, kind="contribute", labels=(), milestoned=True), issue(60, kind="close", labels=())):
+        assert "project roadmap" not in decide(facts(references=(quiet,)), TODAY).comment
+
+
+def test_auto_merge_disabled_whenever_on_for_a_non_roster_milestoned_close():
+    roadmap = issue(61, kind="close", labels=(), milestoned=True)
+    passing = decide(facts(auto_merge=True, author_record=True, references=(roadmap,)), TODAY)
+    assert passing.outcome == "pass" and passing.disable_auto_merge is True
+    assert ("Auto-merge is off because this pull request closes roadmap issue #61. "
+            "A lead merges it by hand after confirming delivery.") in passing.comment
+    for event in ("opened", "edited", "synchronize", "auto_merge_enabled", None):
+        assert decide(facts(auto_merge=True, author_record=True, references=(roadmap,), event_action=event), TODAY).disable_auto_merge
+    assert decide(facts(auto_merge=True, author="rocklambros", references=(roadmap,)), TODAY).disable_auto_merge is False
+    assert decide(facts(auto_merge=False, author_record=True, references=(roadmap,)), TODAY).disable_auto_merge is False
+    closed = issue(61, kind="close", labels=(), milestoned=True, state="closed")
+    assert decide(facts(auto_merge=True, author_record=True, references=(closed,)), TODAY).disable_auto_merge is False
+    # A queued pull request never merges itself either.
+    assert decide(facts(auto_merge=True), TODAY).disable_auto_merge is True
+
+
+def test_unchanged_facts_keep_label_and_comment():
+    f = facts(references=(issue(70),), held_use={70: (354,)})
+    first = decide(f, TODAY)
+    again = decide(with_comment(f, first), TODAY + timedelta(days=2))
+    assert outcome(again) == outcome(first)
+    assert again.label == "keep" and again.comment is None
+
+
+# One changed value per Facts field. The set of keys must equal the dataclass fields, so a
+# field added later fails here until someone decides what changing it means.
+def _mutations(base: Facts) -> dict:
+    return {
+        "number": 999,
+        "state": "closed",
+        "draft": True,
+        "author": "rocklambros",
+        "author_is_bot": True,
+        "title": "Fixes #92",
+        "body": TICKED,
+        "base": "main",
+        "head_sha": "b" * 40,
+        # Before the author's comment on #92, so the claim no longer counts.
+        "created_at": OPENED - timedelta(days=10),
+        "updated_at": OPENED + timedelta(days=3),
+        "labels": frozenset({NEEDS_TRIAGE}),
+        "paths": ("docs/topics/a.md",),
+        "paths_truncated": True,
+        "references": base.references + (issue(93),),
+        "references_dropped": 3,
+        "reviews": (),
+        "last_unlabel": ("rocklambros", OPENED),
+        "last_author_comment_at": OPENED + timedelta(days=60),
+        "bot_comment": None,
+        "auto_merge": True,
+        "author_record": True,
+        "held_use": {92: (354, 400, 500)},
+        "roster": base.roster | {"outsider"},
+        "mode": "legacy",
+        "sweep": True,
+        "event_action": "edited",
+    }
+
+
+@pytest.mark.parametrize("age", [29, 31])
+@pytest.mark.parametrize("field", [f.name for f in dataclasses.fields(Facts)])
+def test_hash_short_circuit_cannot_hide_a_changed_decision(field, age):
+    # The review is 30 days before TODAY, so `today` sits at 29 or 31 days past it. At 31 the
+    # base queues with sent_back first and held_cap second, the shape where a change behind
+    # the first reason is the one a hash gap would hide.
+    submitted = TODAY - timedelta(days=30)
+    today = submitted + timedelta(days=age)
+    wanted = issue(92, labels=(roadmap_model.ACCEPTED, "help wanted"), commented=OPENED - timedelta(days=2))
+    base = facts(
+        references=(wanted,), held_use={92: (100, 200, 354)},
+        reviews=(review(state="CHANGES_REQUESTED", days=30, today=TODAY),),
+    )
+    mutations = _mutations(base)
+    assert set(mutations) == {f.name for f in dataclasses.fields(Facts)}
+    before = decide(base, today)
+    stored = with_comment(base, before) if before.comment else base
+    changed = dataclasses.replace(stored, **{field: mutations[field]})
+    fresh = decide(dataclasses.replace(base, **{field: mutations[field]}), today)
+    after = decide(changed, today)
+    if (fresh.outcome, fresh.reasons) != (before.outcome, before.reasons) and after.outcome != "skip" and changed.mode == "enforced":
+        assert after.comment is not None, field
+    if age == 31:
+        assert before.reasons == ("sent_back", "held_cap")
+    # The same facts read on the other side of the 30-day line always render.
+    other = submitted + timedelta(days=60 - age)
+    crossed = decide(with_comment(base, decide(base, other)), today)
+    assert crossed.comment is not None
+
+
+def test_since_survives_a_rerender_and_resets_on_clear():
+    day0 = TODAY
+    f = facts(references=(issue(80),), held_use={80: (354,)})
+    first = decide(f, day0)
+    assert first.data["since"] == day0.isoformat()
+    grown = dataclasses.replace(with_comment(f, first), references=(issue(80), issue(81, state="closed")))
+    rerendered = decide(grown, day0 + timedelta(days=5))
+    assert rerendered.comment is not None and rerendered.reasons == ("closed_accepted", "not_held")
+    assert rerendered.data["since"] == day0.isoformat()
+    cleared = decide(dataclasses.replace(with_comment(grown, rerendered), author_record=True), day0 + timedelta(days=6))
+    assert cleared.outcome == "pass" and "since" not in cleared.data
+    assert cleared.data["cleared"] == (day0 + timedelta(days=6)).isoformat()
+    after = dataclasses.replace(with_comment(grown, cleared), author_record=False)
+    requeued = decide(after, day0 + timedelta(days=9))
+    assert requeued.data["since"] == (day0 + timedelta(days=9)).isoformat()
+
+
+def test_render_comment_contains_one_html_comment_pair_and_no_at_sign():
+    hostile = ("x/`code`.md", "y/<!-- marker -->.md", "z/@someone.md", "w/#1.md", "v/-->.md") + tuple(
+        f"src/{'q' * 300}{n}.py" for n in range(30)
+    )
+    claimed = issue(9, commented=OPENED - timedelta(days=1))
+    f = facts(body=TICKED, paths=hostile, references=(claimed,), references_dropped=7, author="mallory@example")
+    decision = decide(f, TODAY)
+    for text in (decision.comment, render_comment(f, decision, TODAY)):
+        assert text.count("<!--") == 2 and text.count("-->") == 2
+        assert "@" not in text and "mallory" not in text
+        lines = text.split("\n")
+        assert parse_data_line(lines[0]) == decision.data and lines[1] == pr_intake.MARKER
+        assert len(text) <= 8000
+        assert "and 15 more" in text
+    # Every name the bot quotes comes out of a code span, at most 200 characters each.
+    assert "`x/?code?.md`" in decision.comment
+    long_issue = facts(references=(issue(9),), references_dropped=4)
+    assert "and 4 more" in decide(long_issue, TODAY).comment
+
+
+def _from_json(row: dict) -> Facts:
+    def when(value):
+        return None if value is None else datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    raw = dict(row)
+    for key in ("created_at", "updated_at", "last_author_comment_at"):
+        if key in raw:
+            raw[key] = when(raw[key])
+    for key in ("labels", "roster"):
+        if key in raw:
+            raw[key] = frozenset(raw[key])
+    if "paths" in raw:
+        raw["paths"] = tuple(raw["paths"])
+    if "references" in raw:
+        raw["references"] = tuple(
+            Reference(**{**ref, "labels": frozenset(ref["labels"]), "assignees": frozenset(ref["assignees"]),
+                         "author_commented_at": when(ref.get("author_commented_at"))})
+            for ref in raw["references"]
+        )
+    if "reviews" in raw:
+        raw["reviews"] = tuple(Review(**{**r, "submitted_at": when(r.get("submitted_at"))}) for r in raw["reviews"])
+    if raw.get("last_unlabel") is not None:
+        raw["last_unlabel"] = (raw["last_unlabel"][0], when(raw["last_unlabel"][1]))
+    if "held_use" in raw:
+        raw["held_use"] = {int(n): tuple(numbers) for n, numbers in raw["held_use"].items()}
+    if raw.get("bot_comment") is not None:
+        raw["bot_comment"] = BotComment(**raw["bot_comment"])
+    return facts(**raw)
+
+
+@pytest.mark.skipif(not POPULATION.exists(), reason="recorded by Task 4")
+def test_decide_matches_the_recorded_population():
+    """Every recorded open pull request decides as recorded.
+
+    The fixture is a JSON list. Each row is an object:
+    `{"facts": {<Facts field>: <value>, ...}, "today": "YYYY-MM-DD", "expected":
+    {"outcome": "pass"|"queue"|"skip", "route": <str or null>, "reasons": [<reason>, ...]}}`.
+    `facts` holds overrides on this module's `facts()` defaults in JSON form: datetimes as
+    ISO 8601 strings, sets and tuples as lists, `references` and `reviews` as lists of
+    objects with the dataclass fields, `last_unlabel` as `[login, datetime]`, `held_use`
+    with string keys, and `bot_comment` as an object with the `BotComment` fields. `today`
+    is optional and defaults to TODAY.
+    """
+    rows = json.loads(POPULATION.read_text())
+    assert rows
+    for row in rows:
+        today = date.fromisoformat(row.get("today", TODAY.isoformat()))
+        decision = decide(_from_json(row["facts"]), today)
+        expected = row["expected"]
+        assert outcome(decision) == (expected["outcome"], expected["route"], tuple(expected["reasons"])), row["facts"].get("number")
