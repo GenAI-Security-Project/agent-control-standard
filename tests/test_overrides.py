@@ -201,6 +201,24 @@ def test_rederive_reproduces_the_override(tmp_path):
         assert out.read_bytes() == (OVERRIDES / name).read_bytes()
 
 
+def test_rederive_ignores_an_inherited_git_dir(tmp_path, monkeypatch):
+    """A git hook exports GIT_DIR. Inherited, it points git apply at another repository
+    and loads that repository's config. The config here is broken on purpose, so git
+    exits fatally if it reads it, which proves the scratch run never looked there."""
+    other = tmp_path / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    with open(other / ".git" / "config", "a", encoding="utf-8") as config:
+        config.write("[core\n")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+    for name in PARTIALS:
+        out = tmp_path / "out" / name
+        apply_diff(REPO / UPSTREAM / name, REPO / UPSTREAM / f"{name}.diff", out)
+        assert out.read_bytes() == (OVERRIDES / name).read_bytes()
+    assert [path.name for path in other.iterdir()] == [".git"]
+
+
 def _accept_hex(result: subprocess.CompletedProcess) -> str:
     match = re.search(r"--accept-delta ([0-9a-f]{64})", result.stdout)
     assert match, result.stdout

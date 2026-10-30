@@ -87,8 +87,12 @@ def apply_diff(upstream: Path, diff: Path, out: Path) -> None:
         work = Path(tmp) / target
         shutil.copyfile(upstream, work)
         # The ceiling stops git from finding an enclosing repository, so paths in the
-        # diff resolve against the scratch directory and nowhere else.
+        # diff resolve against the scratch directory and nowhere else. A git hook
+        # exports GIT_DIR and its companions, and any of them would point git at another
+        # repository and its config regardless of the ceiling, so they are dropped.
         env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(tmp).parent))
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            env.pop(name, None)
         for args in (["git", "apply", "--check", str(diff.resolve())], ["git", "apply", str(diff.resolve())]):
             result = subprocess.run(args, cwd=tmp, env=env, capture_output=True, text=True)
             if result.returncode != 0:
