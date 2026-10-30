@@ -5,10 +5,14 @@ Version 1.0. Owner: ACS project leads. This module holds the data model, the par
 helpers, the gate, and the collector. `decide` is a pure function of `Facts` and the date,
 with no I/O. `collect_facts` does every read, through `gh_runner`'s allowlisted shapes,
 inside a call budget. `apply` makes the writes a decision calls for, in a fixed order
-and paced, and reports which ones it made.
+and paced, and reports which ones it made. `main` runs one pull request on an event, every
+open pull request on a sweep, a dry run, or a retraction, in the mode `arming` reads from
+two repository variables.
 
-The workflow runs this under `python3 -I -S` from a checkout of `main`, never the pull
-request's head, with the standard library and the sibling modules under `tools/` only.
+The workflow runs this under `python3 -I -S` from a checkout of a protected base ref, never
+the pull request's head, with the standard library and the sibling modules under `tools/`
+only. `-I` drops the script's own directory from the import path, so it is added back
+explicitly below.
 Everything read from GitHub is untrusted text: titles, bodies, comments, and file paths
 are attacker-controlled. Two rules follow. Free text never reaches a command line or a
 log line unescaped, which is why `safe_path` exists. And the bot's own comment carries
@@ -18,17 +22,24 @@ and no nested quantifiers, so a hostile body cannot stall the job.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import re
-import time
-from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta, timezone
+import sys
+from pathlib import Path
 
-import base_branch_guard
-import closing_choice
-import roadmap_model
-from gh_runner import Runner, RunnerError, paginate, split_http
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import argparse  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+import time  # noqa: E402
+from dataclasses import dataclass, field, replace  # noqa: E402
+from datetime import date, datetime, timedelta, timezone  # noqa: E402
+
+import base_branch_guard  # noqa: E402
+import closing_choice  # noqa: E402
+import roadmap_model  # noqa: E402
+from gh_runner import GH, Runner, RunnerError, make_runner, paginate, remaining, split_http  # noqa: E402
 
 # The marker sits on line 2 of the bot comment. The data line sits on line 1, ahead of it.
 MARKER = "<!-- acs-intake -->"
@@ -1089,18 +1100,22 @@ def _held_use(number: int, author: str, refs: tuple[Reference, ...], listings: L
 
 def collect_facts(
     run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, sweep: bool,
-    event_action: str | None, counter: CallCounter,
+    event_action: str | None, counter: CallCounter, pull: dict | None = None, comments: list | None = None,
 ) -> Facts:
     """Read one pull request's facts: five reads, at most five claim reads, and the record.
 
     A failed read raises RunnerError. A response in a shape this cannot read raises
     RunnerError too, so the caller counts an evaluation error instead of a default fact.
+    A sweep has already read the pull request and its comments to test `seen`, and passes
+    them in rather than reading them twice.
     """
     run = counter.wrap(run)
-    pull = _read_pull(run, number)
+    if pull is None:
+        pull = _read_pull(run, number)
     files = paginate(run, f"{_API}/pulls/{number}/files?per_page=100")
     raw_reviews = paginate(run, f"{_API}/pulls/{number}/reviews?per_page=100")
-    comments = paginate(run, f"{_API}/issues/{number}/comments?per_page=100")
+    if comments is None:
+        comments = paginate(run, f"{_API}/issues/{number}/comments?per_page=100")
     timeline = paginate(run, f"{_API}/issues/{number}/timeline?per_page=100")
     try:
         return _assemble(run, number, pull, files, raw_reviews, comments, timeline, listings=listings, roster=roster,
@@ -1268,3 +1283,546 @@ def _api_write(run: Runner, name: str, args: list[str], stdin: str | None, sleep
             sleep(int(wait))
             continue
         raise WriteError(f"{name} returned HTTP {status}")
+
+
+# --- Modes, the sweep, retract, and main ------------------------------------------------
+
+# Every module whose code decides or writes. A change to any of them disarms enforcement
+# until a lead dry-sweeps the new code and copies the new value into PR_INTAKE_TOOL_SHA.
+ARMED_MODULES = (
+    "tools/pr_intake.py",
+    "tools/gh_runner.py",
+    "tools/closing_choice.py",
+    "tools/base_branch_guard.py",
+    "tools/roadmap_model.py",
+)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+# Seconds between writes. Tests set it to zero.
+PACE_SECONDS = 1.0
+BUDGET_EVERY = 10
+BATCH_OVER = 3
+EVENT_NAMES = frozenset({"pull_request_target", "pull_request_review"})
+SWEEP_NAMES = frozenset({"schedule", "workflow_dispatch"})
+INTAKE_MODES = frozenset({"evaluate", "dryrun", "retract"})
+AUTHOR_SCOPES = frozenset({"all", "bots"})
+QUEUED_ELSEWHERE = "Queued for the reason given on PR #{number}."
+RETRACTED_LINE = "Retracted. This pull request is not queued."
+MISMATCH_ERROR = (
+    "::error::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref; dry-sweep and re-arm,"
+    " or unset PR_INTAKE_ENFORCED"
+)
+_QUEUE_REASONS = frozenset(REASONS) - {"retracted"}
+_DIGITS = re.compile(r"[0-9]{1,9}")
+# What one pull request's evaluation can raise without stopping the others. The class name
+# is printed, never the message, which may carry response text.
+_PER_PULL_ERRORS = (RunnerError, WriteError, KeyError, TypeError, ValueError)
+_AUTO_MERGE_WRITES = frozenset({"auto_merge_off", "converted_to_draft"})
+
+
+def _blob_sha(data: bytes) -> str:
+    """The object id `git hash-object` prints for these bytes, so the job needs no git."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
+
+
+def tool_sha(repo: Path) -> str:
+    """Forty hex characters naming the exact armed modules at `repo`."""
+    blobs = "".join(_blob_sha((repo / module).read_bytes()) for module in ARMED_MODULES)
+    return hashlib.sha256(blobs.encode("ascii")).hexdigest()[:40]
+
+
+def arming(env, repo: Path) -> str:
+    """"enforced" when both variables arm this exact code, "mismatched" when only the switch is
+    on, and "legacy" otherwise."""
+    if env.get("PR_INTAKE_ENFORCED") != "true":
+        return "legacy"
+    return "enforced" if env.get("PR_INTAKE_TOOL_SHA", "") == tool_sha(repo) else "mismatched"
+
+
+@dataclass
+class Summary:
+    """One run's counts. Every evaluated pull request lands in exactly one bucket."""
+
+    mode: str
+    tool_sha: str
+    evaluated: int = 0
+    newly_queued: int = 0
+    queued_total: int = 0
+    cleared: int = 0
+    unchanged: int = 0
+    skipped: int = 0
+    out_of_scope: int = 0
+    errors: list[tuple[int, str]] = field(default_factory=list)
+    writes: int = 0
+    calls: int = 0
+    rate_limit_remaining: int | None = None
+    # Not a count: whether a budget stopped the run early, which makes it red.
+    stopped: bool = False
+
+    def line(self) -> str:
+        rate = "unknown" if self.rate_limit_remaining is None else str(self.rate_limit_remaining)
+        return (
+            f"mode={self.mode} tool_sha={self.tool_sha[:12]} evaluated={self.evaluated}"
+            f" newly_queued={self.newly_queued} queued_total={self.queued_total} cleared={self.cleared}"
+            f" unchanged={self.unchanged} skipped={self.skipped} out_of_scope={self.out_of_scope}"
+            f" errors={len(self.errors)} writes={self.writes} calls={self.calls} rate_limit_remaining={rate}"
+        )
+
+
+def seen_value(pull: dict, listings: Listings) -> str | None:
+    """The pull request's `updated_at` and the newest `updated_at` of the accepted issues it names.
+
+    A sweep compares this with the data line's `seen` and reads nothing more when they
+    match. A comment, push, review, or label moves the first half. A label, assignment, or
+    comment on a referenced issue moves the second.
+    """
+    updated = pull.get("updated_at")
+    if not isinstance(updated, str):
+        return None
+    title, body = pull.get("title"), pull.get("body")
+    named, _dropped = referenced(
+        title if isinstance(title, str) else "", body[: closing_choice.MAX_CHARS] if isinstance(body, str) else ""
+    )
+    times = [listings.accepted[number].get("updated_at") for number, _kind in named if number in listings.accepted]
+    newest = max((when for when in times if isinstance(when, str)), default="none")
+    return f"{updated},{newest}"
+
+
+def _with_seen(decision: Decision, seen: str | None) -> Decision:
+    """The decision with `seen` on the data line of any comment it writes."""
+    if decision.comment is None or decision.data is None or seen is None:
+        return decision
+    data = {**decision.data, "seen": seen}
+    try:
+        line = render_data_line(data)
+    except ValueError:
+        # A timestamp this line cannot carry. The comment goes out without `seen`, and the
+        # next sweep reads the pull request in full, which is the safe direction.
+        return decision
+    rest = decision.comment.split("\n", 1)[1]
+    return replace(decision, data=data, comment=(line + "\n" + rest)[:MAX_COMMENT])
+
+
+def _label_agrees(reason: str | None, labels: frozenset[str]) -> bool:
+    if reason == "cleared":
+        return roadmap_model.NEEDS_TRIAGE not in labels
+    return reason in _QUEUE_REASONS and roadmap_model.NEEDS_TRIAGE in labels
+
+
+@dataclass
+class _Assessment:
+    """One pull request after reading and deciding. `decision` is None when `seen` matched."""
+
+    number: int
+    facts: Facts | None
+    decision: Decision | None
+    updated_at: object
+    stored_reason: str | None = None
+
+
+def _assess(
+    run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, today: date, sweep: bool,
+    event_action: str | None, counter: CallCounter, short_circuit: bool,
+) -> _Assessment:
+    counted = counter.wrap(run)
+    comments = paginate(counted, f"{_API}/issues/{number}/comments?per_page=100")
+    pull = _read_pull(counted, number)
+    seen = seen_value(pull, listings)
+    if short_circuit and seen is not None:
+        bot = _bot_comment(comments)
+        stored = bot.data if bot is not None and bot.data is not None else {}
+        if stored.get("seen") == seen and _label_agrees(stored.get("reason"), _label_names(pull.get("labels"))):
+            return _Assessment(number, None, None, pull.get("updated_at"), stored["reason"])
+    facts = collect_facts(
+        run, number, listings=listings, roster=roster, mode=mode, sweep=sweep, event_action=event_action,
+        counter=counter, pull=pull, comments=comments,
+    )
+    return _Assessment(number, facts, _with_seen(decide(facts, today), seen), pull.get("updated_at"))
+
+
+def _has_writes(facts: Facts, decision: Decision) -> bool:
+    return decision.comment is not None or decision.label != "keep" or (decision.disable_auto_merge and facts.auto_merge)
+
+
+def _is_auto_merge_failure(exc: WriteError) -> bool:
+    return str(exc).split(" ", 1)[0] in _AUTO_MERGE_WRITES
+
+
+def _write(run: Runner, facts: Facts, decision: Decision, counter: CallCounter) -> list[str]:
+    counted = counter.wrap(run)
+    try:
+        return apply(counted, facts, decision, pace=PACE_SECONDS)
+    except WriteError as exc:
+        # A failed comment or label write stops `apply` before the auto-merge write, and
+        # auto-merge left on is the harm the gate exists to prevent, so it is still tried.
+        if decision.disable_auto_merge and facts.auto_merge and not _is_auto_merge_failure(exc):
+            apply(counted, facts, replace(decision, comment=None, label="keep"), pace=PACE_SECONDS)
+        raise
+
+
+def evaluate_one(
+    run: Runner, number: int, *, listings: Listings, roster: frozenset[str], mode: str, today: date, sweep: bool,
+    event_action: str | None, counter: CallCounter, write: bool,
+) -> tuple[Decision, list[str]]:
+    """Read, decide, and, when `write`, apply one pull request. Returns the writes made."""
+    assessment = _assess(
+        run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=sweep,
+        event_action=event_action, counter=counter, short_circuit=False,
+    )
+    facts, decision = assessment.facts, assessment.decision
+    if not write or not _has_writes(facts, decision):
+        return decision, []
+    return decision, _write(run, facts, decision, counter)
+
+
+def _decision_line(number: int, decision: Decision) -> str:
+    """Numbers, outcomes, routes, and reason codes only. Legacy adds its would-be decision."""
+    detail = ",".join(decision.reasons) if decision.outcome == "queue" else decision.route or "none"
+    line = f"#{number} {decision.outcome} {detail}"
+    return line + "".join(f" ({notice})" for notice in decision.notices)
+
+
+def _error(summary: Summary, number: int, exc: BaseException, log) -> None:
+    summary.errors.append((number, type(exc).__name__))
+    log(f"::error::#{number}: {type(exc).__name__}")
+
+
+def _newly_queued(facts: Facts, decision: Decision) -> bool:
+    return decision.outcome == "queue" and decision.label == "set" and roadmap_model.NEEDS_TRIAGE not in facts.labels
+
+
+def _batch(assessed: list[_Assessment]) -> None:
+    """Give an author with many new queues one full comment, on the newest, and a pointer on the rest."""
+    by_author: dict[str, list[_Assessment]] = {}
+    for item in assessed:
+        if item.decision is not None and item.decision.comment is not None and _newly_queued(item.facts, item.decision):
+            by_author.setdefault(item.facts.author, []).append(item)
+    for group in by_author.values():
+        if len(group) <= BATCH_OVER:
+            continue
+        newest = max(item.number for item in group)
+        for item in group:
+            if item.number != newest:
+                line = item.decision.comment.split("\n", 1)[0]
+                text = f"{line}\n{MARKER}\n\n{QUEUED_ELSEWHERE.format(number=newest)}"
+                item.decision = replace(item.decision, comment=text)
+
+
+def _count(summary: Summary, facts: Facts, decision: Decision) -> None:
+    labeled = roadmap_model.NEEDS_TRIAGE in facts.labels
+    if _newly_queued(facts, decision):
+        summary.newly_queued += 1
+    elif decision.outcome == "pass" and decision.label == "clear":
+        summary.cleared += 1
+    else:
+        summary.unchanged += 1
+    if decision.label == "set" or (labeled and decision.label != "clear"):
+        summary.queued_total += 1
+
+
+def run_sweep(
+    run: Runner, numbers: list[int] | None, *, mode: str, write: bool, listings: Listings, roster: frozenset[str],
+    today: date, counter: CallCounter | None = None, arming_mode: str | None = None, sha: str = "", log=print,
+) -> Summary:
+    """Evaluate every open pull request, or `numbers`, then make the writes in a second pass.
+
+    Reading comes first so an author's new queues can be batched before anything is posted.
+    Reading stops BUDGET_RESERVE calls short of the counter's limit, or when the rate limit
+    left falls below BUDGET_RESERVE, so the writes for what was read still fit.
+    """
+    counter = counter or CallCounter()
+    counted = counter.wrap(run)
+    summary = Summary(mode=arming_mode or mode, tool_sha=sha)
+    if numbers is None:
+        numbers = []
+        for pull in listings.open_pulls:
+            if _login(pull.get("user")) in KNOWN_BOTS or pull.get("draft"):
+                summary.out_of_scope += 1
+                log(f"#{int(pull['number'])} out_of_scope")
+            else:
+                numbers.append(int(pull["number"]))
+    summary.evaluated = summary.out_of_scope + len(numbers)
+
+    read_limit = max(0, counter.limit - BUDGET_RESERVE)
+    assessed: list[_Assessment] = []
+    for index, number in enumerate(numbers):
+        try:
+            if index % BUDGET_EVERY == 0:
+                summary.rate_limit_remaining = remaining(counted)
+            low = summary.rate_limit_remaining is not None and summary.rate_limit_remaining < BUDGET_RESERVE
+            if low or counter.calls >= read_limit:
+                raise BudgetStop("read budget reached")
+            assessed.append(_assess(
+                run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=True,
+                event_action=None, counter=counter, short_circuit=mode == "enforced",
+            ))
+        except BudgetStop:
+            summary.stopped = True
+            summary.skipped += len(numbers) - index
+            log(f"::error::The budget ran out before {len(numbers) - index} pull requests were evaluated.")
+            break
+        except _PER_PULL_ERRORS as exc:
+            _error(summary, number, exc, log)
+
+    if mode == "enforced":
+        _batch(assessed)
+
+    for item in assessed:
+        if item.decision is None:
+            summary.unchanged += 1
+            summary.queued_total += item.stored_reason in _QUEUE_REASONS
+            log(f"#{item.number} unchanged {item.stored_reason}")
+            continue
+        facts, decision = item.facts, item.decision
+        log(_decision_line(item.number, decision))
+        if facts.author in KNOWN_BOTS or facts.draft:
+            summary.out_of_scope += 1
+            continue
+        if write and _has_writes(facts, decision):
+            try:
+                # Staleness guard: a pull request that moved since it was read is left for
+                # the next run, which reads it fresh.
+                if _read_pull(counted, item.number).get("updated_at") != item.updated_at:
+                    summary.skipped += 1
+                    log(f"#{item.number} skipped, changed during the sweep")
+                    continue
+                summary.writes += len(_write(run, facts, decision, counter))
+            except BudgetStop:
+                if not summary.stopped:
+                    log("::error::The call budget ran out before every write was made.")
+                summary.stopped = True
+                summary.skipped += 1
+                continue
+            except _PER_PULL_ERRORS as exc:
+                _error(summary, item.number, exc, log)
+                continue
+        _count(summary, facts, decision)
+    summary.calls = counter.calls
+    return summary
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _retract_facts(number: int, pull: dict, bot: BotComment | None, labels: frozenset[str]) -> Facts:
+    """The facts `apply` reads for a retraction: the number, the bot comment, and no auto-merge."""
+    return Facts(
+        number=number, state=str(pull.get("state") or ""), draft=bool(pull.get("draft")),
+        author=_login(pull.get("user")) or "", author_is_bot=False, title="", body="", base="", head_sha="",
+        created_at=_EPOCH, updated_at=_EPOCH, labels=labels, paths=(), paths_truncated=False, references=(),
+        references_dropped=0, reviews=(), last_unlabel=None, last_author_comment_at=None, bot_comment=bot,
+        auto_merge=False, author_record=False, held_use={}, roster=frozenset(), mode="legacy", sweep=True,
+        event_action=None,
+    )
+
+
+def _retract_one(
+    run: Runner, number: int, pull: dict, bot: BotComment | None, *, authors: str, today: date,
+) -> list[str] | None:
+    """The writes that retract one pull request, or None when it is out of the retraction's scope."""
+    if authors == "bots":
+        target = _login(pull.get("user")) in KNOWN_BOTS
+    else:
+        target = bot is not None and not bot.legacy
+    if not target:
+        return None
+    labels = _label_names(pull.get("labels"))
+    data = {"reason": "retracted", "since": today.isoformat()}
+    done = bot is not None and bot.data is not None and bot.data.get("reason") == "retracted"
+    # The marker stays, so the next queue edits this comment instead of posting a second.
+    comment = None if bot is None or done else f"{render_data_line(data)}\n{MARKER}\n\n{RETRACTED_LINE}"
+    label = "clear" if roadmap_model.NEEDS_TRIAGE in labels else "keep"
+    decision = Decision("skip", None, ("retracted",), label, comment, data, False, ())
+    return apply(run, _retract_facts(number, pull, bot, labels), decision, pace=PACE_SECONDS)
+
+
+def retract(
+    run: Runner, numbers: list[int], *, authors: str, today: date, counter: CallCounter | None = None,
+    mode: str = "legacy", sha: str = "", log=print,
+) -> Summary:
+    """Take the queue label off, and say so, on every pull request the bot queued.
+
+    `authors="all"` reaches every pull request whose bot comment carries the marker.
+    `authors="bots"` reaches every pull request by a KNOWN_BOTS author, comment or not.
+    No comment is ever posted. An existing bot comment is edited.
+    """
+    counter = counter or CallCounter()
+    counted = counter.wrap(run)
+    summary = Summary(mode=mode, tool_sha=sha, evaluated=len(numbers))
+    for index, number in enumerate(numbers):
+        try:
+            comments = paginate(counted, f"{_API}/issues/{number}/comments?per_page=100")
+            pull = _read_pull(counted, number)
+            done = _retract_one(counted, number, pull, _bot_comment(comments), authors=authors, today=today)
+        except BudgetStop:
+            summary.stopped = True
+            summary.skipped += len(numbers) - index
+            log(f"::error::The budget ran out before {len(numbers) - index} pull requests were retracted.")
+            break
+        except _PER_PULL_ERRORS as exc:
+            _error(summary, number, exc, log)
+            continue
+        if done is None:
+            summary.unchanged += 1
+            summary.queued_total += roadmap_model.NEEDS_TRIAGE in _label_names(pull.get("labels"))
+            continue
+        summary.cleared += 1
+        summary.writes += len(done)
+        log(f"#{number} retracted")
+    summary.calls = counter.calls
+    return summary
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _report(summary: Summary, lines: list[str]) -> None:
+    """Print the summary line and append it, with one line per pull request, to the step summary."""
+    line = summary.line()
+    print(line)
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    body = [line, ""] + [f"- {text}" for text in lines if not text.startswith("::")]
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(body) + "\n")
+    except OSError:
+        print("::warning::The step summary could not be written.")
+
+
+def _collector() -> tuple[list[str], object]:
+    lines: list[str] = []
+
+    def log(text: str) -> None:
+        print(text)
+        lines.append(text)
+
+    return lines, log
+
+
+def _main_event(
+    run: Runner, number: int, *, state: str, action: str | None, roster: frozenset[str], today: date,
+) -> int:
+    """One pull request on its own event. Green on anything but a failed auto-merge disable."""
+    if state == "mismatched":
+        print("::notice::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref, so this run is legacy.")
+    mode = "enforced" if state == "enforced" else "legacy"
+    counter = CallCounter()
+    counted = counter.wrap(run)
+    try:
+        if action == "synchronize":
+            # A push changes no fact the gate reads except the paths, which only the
+            # editorial route reads. The nightly sweep catches the head change.
+            body = _read_pull(counted, number).get("body")
+            if not editorial_ticked(body[: closing_choice.MAX_CHARS] if isinstance(body, str) else ""):
+                print(f"::notice::#{number}: a push without the editorial box changes nothing the gate reads.")
+                return 0
+        listings = load_listings(counted)
+        decision, done = evaluate_one(
+            run, number, listings=listings, roster=roster, mode=mode, today=today, sweep=False,
+            event_action=action, counter=counter, write=True,
+        )
+    except WriteError as exc:
+        if _is_auto_merge_failure(exc):
+            print(f"::error::#{number}: WriteError on the auto-merge disable")
+            return 1
+        print(f"::notice::#{number}: WriteError, and the next run retries")
+        return 0
+    except (ListingError, BudgetStop, *_PER_PULL_ERRORS) as exc:
+        print(f"::notice::#{number}: {type(exc).__name__}, so nothing was written")
+        return 0
+    print(_decision_line(number, decision))
+    if done:
+        print(f"#{number} wrote {','.join(done)}")
+    return 0
+
+
+def _main_sweep(
+    run: Runner, number: int | None, *, state: str, intake: str, roster: frozenset[str], today: date, sha: str,
+) -> int:
+    """Every open pull request, or the one dispatched. Red on any error or an early stop."""
+    dry = intake == "dryrun"
+    mode = "enforced" if dry or state == "enforced" else "legacy"
+    lines, log = _collector()
+    counter = CallCounter()
+    try:
+        listings = load_listings(counter.wrap(run))
+    except (ListingError, BudgetStop) as exc:
+        print(f"::error::A shared listing failed ({type(exc).__name__}), so no pull request was evaluated.")
+        _report(Summary(mode=state, tool_sha=sha, calls=counter.calls), lines)
+        return 1
+    summary = run_sweep(
+        run, None if number is None else [number], mode=mode, write=not dry and mode == "enforced",
+        listings=listings, roster=roster, today=today, counter=counter, arming_mode=state, sha=sha, log=log,
+    )
+    red = bool(summary.errors) or summary.stopped
+    if state == "mismatched" and not dry:
+        print(MISMATCH_ERROR)
+        red = True
+    if dry:
+        print(f"arm with PR_INTAKE_TOOL_SHA={sha}")
+    _report(summary, lines)
+    return 1 if red else 0
+
+
+def _main_retract(run: Runner, number: int | None, *, state: str, authors: str, today: date, sha: str) -> int:
+    if state == "enforced":
+        print("::error::Unset PR_INTAKE_ENFORCED before retracting")
+        return 1
+    lines, log = _collector()
+    counter = CallCounter()
+    if number is None:
+        try:
+            numbers = [int(pull["number"]) for pull in _pulls(paginate(counter.wrap(run), f"{_API}/pulls?state=open&per_page=100"))]
+        except (RunnerError, BudgetStop) as exc:
+            print(f"::error::The open pull request listing failed ({type(exc).__name__}), so nothing was retracted.")
+            _report(Summary(mode=state, tool_sha=sha, calls=counter.calls), lines)
+            return 1
+    else:
+        numbers = [number]
+    summary = retract(run, numbers, authors=authors, today=today, counter=counter, mode=state, sha=sha, log=log)
+    _report(summary, lines)
+    return 1 if summary.errors or summary.stopped else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--gh", default=GH, help="the gh binary to run, for tests only")
+    args = parser.parse_args(argv)
+    env = os.environ
+    raw_number = env.get("PR_NUMBER", "")
+    if raw_number and not _DIGITS.fullmatch(raw_number):
+        print("::error::PR_NUMBER is not a pull request number.")
+        return 1
+    number = int(raw_number) if raw_number else None
+    intake = env.get("INTAKE_MODE") or "evaluate"
+    authors = env.get("INTAKE_AUTHORS") or "all"
+    event = env.get("EVENT_NAME", "")
+    if intake not in INTAKE_MODES or authors not in AUTHOR_SCOPES or event not in EVENT_NAMES | SWEEP_NAMES:
+        print("::error::INTAKE_MODE, INTAKE_AUTHORS, or EVENT_NAME has a value this tool does not know.")
+        return 1
+    if event in EVENT_NAMES and number is None:
+        print("::error::An event run needs PR_NUMBER.")
+        return 1
+
+    sha = tool_sha(REPO_ROOT)
+    state = arming(env, REPO_ROOT)
+    # The token goes to the runner's environment and nowhere else.
+    run = make_runner(args.gh, env.get("GH_TOKEN", ""))
+    today = _today()
+    if intake == "retract":
+        return _main_retract(run, number, state=state, authors=authors, today=today, sha=sha)
+    try:
+        roster = roadmap_model.trusted_logins(REPO_ROOT)
+    except (OSError, ValueError) as exc:
+        # Without the roster every lead reads as an outsider, so nothing is decided at all.
+        print(f"::warning::The roster did not parse ({type(exc).__name__}), so nothing was evaluated or written.")
+        return 0 if event in EVENT_NAMES else 1
+    if event in EVENT_NAMES and intake == "evaluate":
+        return _main_event(run, number, state=state, action=env.get("EVENT_ACTION") or None, roster=roster, today=today)
+    return _main_sweep(run, number, state=state, intake=intake, roster=roster, today=today, sha=sha)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

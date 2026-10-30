@@ -1263,3 +1263,564 @@ def test_apply_falls_back_to_draft_when_auto_merge_survives_the_disable():
     with pytest.raises(WriteError) as error:
         apply_with(run, facts(auto_merge=True), decision(disable_auto_merge=True))
     assert str(error.value) == "auto_merge_off exited 1"
+
+
+# --- Modes, arming, the sweep, retract, and main -----------------------------------------
+# The fake below is a small stateful GitHub: reads serve the pull requests, comments, and
+# labels it holds, and writes change them, so a second sweep reads what the first wrote.
+# It enforces the production allowlist like the other fakes.
+
+import hashlib  # noqa: E402
+import subprocess  # noqa: E402
+
+from pr_intake import Summary, arming, retract, run_sweep, tool_sha  # noqa: E402
+
+SWEEP_TODAY = date(2026, 11, 10)
+ENV_KEYS = (
+    "PR_NUMBER", "INTAKE_MODE", "INTAKE_AUTHORS", "EVENT_NAME", "EVENT_ACTION", "GITHUB_STEP_SUMMARY",
+    "PR_INTAKE_ENFORCED", "PR_INTAKE_TOOL_SHA", "GH_TOKEN",
+)
+OPEN_PULLS = f"{API}/pulls?state=open&per_page=100"
+MISMATCH = (
+    "::error::PR_INTAKE_TOOL_SHA does not match the armed modules on this ref; dry-sweep and re-arm,"
+    " or unset PR_INTAKE_ENFORCED"
+)
+
+
+def gh_pull(number, *, author="outsider", body="b", draft=False, labels=(), updated="2026-11-09T01:00:00Z",
+            auto_merge=None) -> dict:
+    return {
+        "number": number, "state": "open", "draft": draft, "title": "Add a thing", "body": body,
+        "user": {"login": author, "type": "Bot" if author.endswith("[bot]") else "User"},
+        "base": {"ref": "integration"}, "head": {"sha": f"{number:040d}"},
+        "created_at": "2026-11-02T12:00:00Z", "updated_at": updated, "changed_files": 1,
+        "labels": [{"name": name} for name in labels], "auto_merge": auto_merge,
+    }
+
+
+def gh_issue(number, *, assignees=(), updated="2026-11-01T00:00:00Z") -> dict:
+    return {
+        "number": number, "state": "open", "labels": [{"name": roadmap_model.ACCEPTED}], "milestone": None,
+        "assignees": [{"login": login, "type": "User"} for login in assignees], "updated_at": updated,
+        "user": {"login": "someone", "type": "User"},
+    }
+
+
+def bot_said(body: str, comment_id: int) -> dict:
+    return {"id": comment_id, "user": {"login": roadmap_model.BOT_LOGIN, "type": "Bot"}, "body": body,
+            "created_at": "2026-11-03T00:00:00Z"}
+
+
+class FakeGitHub:
+    def __init__(self, pulls, *, accepted=(), rate=5000):
+        self.pulls = {pull["number"]: pull for pull in pulls}
+        self.accepted = list(accepted)
+        self.comments: dict[int, list] = {}
+        self.rate = rate
+        self.fail: dict[str, tuple[int, str, str]] = {}
+        self.calls: list[tuple[list[str], str | None]] = []
+        self.hooks: list = []
+        self._ids = iter(range(700_001, 799_999))
+
+    @staticmethod
+    def key(args) -> str:
+        if args[0] == "pr":
+            return f"pr {args[1]}"
+        if "-X" in args:
+            return f"{args[3]} {args[4]}"
+        return args[-1]
+
+    def __call__(self, args, stdin=None):
+        gh_runner._check_allowlist(args)
+        self.calls.append((list(args), stdin))
+        for hook in self.hooks:
+            hook(self, args)
+        if self.key(args) in self.fail:
+            return self.fail[self.key(args)]
+        if args == ["api", "rate_limit"]:
+            value = self.rate.pop(0) if isinstance(self.rate, list) else self.rate
+            return 0, json.dumps({"resources": {"core": {"remaining": value}}}), ""
+        if args[0] == "pr":
+            pull = self.pulls[int(args[2])]
+            if args[1] == "merge":
+                pull["auto_merge"] = None
+            else:
+                pull["draft"] = True
+            return 0, "", ""
+        if "-X" in args:
+            return 0, self._write(args[3], args[4][len(API) + 1:], json.loads(stdin) if stdin else None), ""
+        tail = args[-1][len(API) + 1:]
+        if args[1] == "-i":
+            return 0, http(self.pulls[int(tail.split("/")[1])]), ""
+        return 0, slurp(copy.deepcopy(self._list(tail))), ""
+
+    def _list(self, tail: str) -> list:
+        path, _, query = tail.partition("?")
+        if path == "issues":
+            return self.accepted if "labels=" in query else [i for i in self.accepted if i.get("milestone")]
+        if path == "pulls":
+            return [p for p in self.pulls.values() if p["state"] == "open"] if "state=open" in query else []
+        _kind, number, what = path.split("/")
+        if what == "files":
+            return [{"filename": "tools/x.py"}]
+        if what == "comments":
+            return self.comments.get(int(number), [])
+        return []
+
+    def _write(self, method: str, tail: str, payload) -> str:
+        parts = tail.split("/")
+        if method == "PATCH":
+            for comments in self.comments.values():
+                for comment in comments:
+                    if comment["id"] == int(parts[2]):
+                        comment["body"] = payload["body"]
+            return OK
+        number = int(parts[1])
+        if parts[2] == "comments":
+            self.comments.setdefault(number, []).append(bot_said(payload["body"], next(self._ids)))
+            return http({"id": 1}, 201)
+        pull = self.pulls[number]
+        if method == "POST":
+            pull["labels"].append({"name": payload["labels"][0]})
+        else:
+            pull["labels"] = [label for label in pull["labels"] if label["name"] != NEEDS_TRIAGE]
+        return OK
+
+    def writes(self) -> list[tuple[list[str], str | None]]:
+        return [(args, stdin) for args, stdin in self.calls if args[0] == "pr" or "-X" in args]
+
+    def labeled(self, number: int) -> bool:
+        return NEEDS_TRIAGE in {label["name"] for label in self.pulls[number]["labels"]}
+
+    def bodies(self, number: int) -> list[str]:
+        return [comment["body"] for comment in self.comments.get(number, [])]
+
+
+@pytest.fixture(autouse=True)
+def _no_pacing(monkeypatch):
+    monkeypatch.setattr(pr_intake, "PACE_SECONDS", 0)
+
+
+def sweep(fake, *, mode="enforced", write=True, numbers=None, counter=None, today=SWEEP_TODAY):
+    listings = load_listings(fake)
+    lines: list[str] = []
+    summary = run_sweep(
+        fake, numbers, mode=mode, write=write, listings=listings, roster=ROSTER, today=today,
+        counter=counter or CallCounter(), log=lines.append,
+    )
+    return summary, lines
+
+
+def balanced(summary: Summary) -> bool:
+    return summary.evaluated == (
+        summary.newly_queued + summary.cleared + summary.unchanged + summary.skipped + summary.out_of_scope
+        + len(summary.errors)
+    )
+
+
+def armed_env() -> dict:
+    return {"PR_INTAKE_ENFORCED": "true", "PR_INTAKE_TOOL_SHA": tool_sha(pr_intake.REPO_ROOT)}
+
+
+def run_main(monkeypatch, capsys, fake, argv=None, **env):
+    for key in ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    used: list[str] = []
+
+    def factory(gh=gh_runner.GH, token=None):
+        used.append(gh)
+        return fake
+
+    monkeypatch.setattr(pr_intake, "make_runner", factory)
+    monkeypatch.setattr(pr_intake, "_today", lambda: SWEEP_TODAY)
+    monkeypatch.setattr(roadmap_model, "trusted_logins", lambda root: ROSTER)
+    code = pr_intake.main(argv or [])
+    return code, capsys.readouterr().out, used
+
+
+def summary_line(out: str) -> str:
+    return next(line for line in out.splitlines() if line.startswith("mode="))
+
+
+def test_arming_requires_both_variables_and_changes_when_any_of_the_five_modules_changes(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    for module in pr_intake.ARMED_MODULES:
+        target = tmp_path / module
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((root / module).read_bytes())
+    sha = tool_sha(tmp_path)
+    assert re.fullmatch(r"[0-9a-f]{40}", sha) and sha == tool_sha(root)
+    blobs = [
+        subprocess.run(["git", "hash-object", str(tmp_path / module)], capture_output=True, text=True,
+                       check=True).stdout.strip()
+        for module in pr_intake.ARMED_MODULES
+    ]
+    assert sha == hashlib.sha256("".join(blobs).encode("ascii")).hexdigest()[:40]
+
+    assert arming({"PR_INTAKE_ENFORCED": "true", "PR_INTAKE_TOOL_SHA": sha}, tmp_path) == "enforced"
+    for env in ({}, {"PR_INTAKE_TOOL_SHA": sha}, {"PR_INTAKE_ENFORCED": "false", "PR_INTAKE_TOOL_SHA": sha},
+                {"PR_INTAKE_ENFORCED": "True", "PR_INTAKE_TOOL_SHA": sha}):
+        assert arming(env, tmp_path) == "legacy"
+    for wrong in ("", "0" * 40, sha[:12]):
+        assert arming({"PR_INTAKE_ENFORCED": "true", "PR_INTAKE_TOOL_SHA": wrong}, tmp_path) == "mismatched"
+
+    seen = {sha}
+    for module in pr_intake.ARMED_MODULES:
+        path = tmp_path / module
+        original = path.read_bytes()
+        path.write_bytes(original + b"\n")
+        changed = tool_sha(tmp_path)
+        assert changed not in seen, module
+        seen.add(changed)
+        assert arming({"PR_INTAKE_ENFORCED": "true", "PR_INTAKE_TOOL_SHA": sha}, tmp_path) == "mismatched"
+        path.write_bytes(original)
+    assert tool_sha(tmp_path) == sha
+
+
+def identity_fake() -> FakeGitHub:
+    fake = FakeGitHub(
+        [
+            gh_pull(101, author="rocklambros"),
+            gh_pull(102),
+            gh_pull(103, body="Refs #50", labels=(NEEDS_TRIAGE,)),
+            gh_pull(104, author="dependabot[bot]"),
+            gh_pull(105, draft=True),
+            gh_pull(106),
+        ],
+        accepted=[gh_issue(50, assignees=("outsider",))],
+    )
+    fake.fail[f"{API}/pulls/106/reviews?per_page=100"] = (1, "", "boom")
+    return fake
+
+
+def test_sweep_summary_identity_holds():
+    fake = identity_fake()
+    counter = CallCounter()
+    first, lines = sweep(fake, counter=counter)
+    assert balanced(first)
+    assert (first.evaluated, first.newly_queued, first.cleared, first.unchanged, first.skipped, first.out_of_scope) == (
+        6, 1, 1, 1, 0, 2
+    )
+    assert first.errors == [(106, "RunnerError")] and "::error::#106: RunnerError" in lines
+    assert first.queued_total == 1 and first.writes == 4 and first.calls == counter.calls
+    assert fake.labeled(102) and not fake.labeled(103) and not fake.writes()[0][0][4].endswith("/104/comments")
+
+    fake.fail.clear()
+    second, _ = sweep(fake)
+    assert balanced(second)
+    assert (second.newly_queued, second.cleared, second.unchanged, second.out_of_scope, second.errors) == (1, 0, 3, 2, [])
+    assert second.queued_total == 2
+
+
+def test_sweep_fails_red_on_a_listing_failure_and_on_a_per_pull_error(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(201), gh_pull(202)])
+    fake.fail[f"{API}/pulls/202/reviews?per_page=100"] = (1, "", "secret text")
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", **armed_env())
+    assert code == 1
+    assert "::error::#202: RunnerError" in out and "secret text" not in out
+    assert " errors=1 " in summary_line(out) and fake.labeled(201)
+
+    fake = FakeGitHub([gh_pull(201), gh_pull(202)])
+    fake.fail[OPEN_PULLS] = (1, "", "boom")
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", **armed_env())
+    assert code == 1 and "::error::" in out and "ListingError" in out
+    assert fake.writes() == [] and not any("/pulls/201" in args[-1] for args, _ in fake.calls)
+    assert " evaluated=0 " in summary_line(out)
+
+
+@pytest.mark.parametrize("armed", [True, False])
+def test_event_run_exits_zero_on_read_failure_and_writes_nothing(monkeypatch, capsys, armed):
+    env = armed_env() if armed else {}
+    for failing in (f"{API}/issues/301/timeline?per_page=100", OPEN_PULLS, f"{API}/pulls/301"):
+        fake = FakeGitHub([gh_pull(301)])
+        fake.fail[failing] = (1, "", "boom")
+        code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="opened",
+                                PR_NUMBER="301", **env)
+        assert code == 0, failing
+        assert "::notice::" in out and "::error::" not in out and "boom" not in out
+        assert fake.writes() == []
+
+
+def test_event_run_is_red_when_auto_merge_disable_fails(monkeypatch, capsys):
+    on = {"merge_method": "squash"}
+    fake = FakeGitHub([gh_pull(311, auto_merge=on)])
+    fake.fail["pr merge"] = (1, "", "boom")
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="edited",
+                            PR_NUMBER="311", **armed_env())
+    assert code == 1 and "::error::#311" in out and "boom" not in out
+    assert fake.labeled(311) and fake.bodies(311)
+
+    # A failed label write still leaves room for the disable, which is what keeps the run green.
+    fake = FakeGitHub([gh_pull(312, auto_merge=on)])
+    fake.fail[f"POST {API}/issues/312/labels"] = (1, "HTTP/2.0 500 Error\r\n\r\n{}", "")
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="opened",
+                            PR_NUMBER="312", **armed_env())
+    assert code == 0 and "::notice::" in out
+    assert fake.pulls[312]["auto_merge"] is None
+
+    fake = FakeGitHub([gh_pull(313, auto_merge=on)])
+    fake.fail[f"POST {API}/issues/313/labels"] = (1, "HTTP/2.0 500 Error\r\n\r\n{}", "")
+    fake.fail["pr merge"] = (1, "", "boom")
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="opened",
+                            PR_NUMBER="313", **armed_env())
+    assert code == 1 and "::error::#313" in out
+
+
+def test_synchronize_without_the_box_short_circuits(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(321)])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="synchronize",
+                            PR_NUMBER="321", **armed_env())
+    assert code == 0 and "::notice::#321" in out
+    assert [args for args, _ in fake.calls] == [["api", "-i", f"{API}/pulls/321"]]
+
+    ticked = FakeGitHub([gh_pull(322, body=TICKED)])
+    code, out, _ = run_main(monkeypatch, capsys, ticked, EVENT_NAME="pull_request_target",
+                            EVENT_ACTION="synchronize", PR_NUMBER="322", **armed_env())
+    assert code == 0 and "#322 queue editorial_off_lane" in out
+    assert ticked.labeled(322) and OPEN_PULLS in [args[-1] for args, _ in ticked.calls]
+
+
+def test_sweep_skips_a_pull_request_changed_during_the_sweep():
+    fake = FakeGitHub([gh_pull(401), gh_pull(402)])
+
+    def push_during_collection(state, args):
+        if args[-1] == f"{API}/issues/401/timeline?per_page=100":
+            state.pulls[401]["updated_at"] = "2026-11-10T03:00:00Z"
+
+    fake.hooks.append(push_during_collection)
+    summary, lines = sweep(fake)
+    assert summary.skipped == 1 and summary.newly_queued == 1 and balanced(summary)
+    assert not summary.stopped and not summary.errors
+    assert not fake.labeled(401) and not fake.bodies(401)
+    assert fake.labeled(402) and fake.bodies(402)
+    assert any(line.startswith("#401 skipped") for line in lines)
+
+
+def test_sweep_reads_only_the_comment_and_the_pull_for_an_unchanged_pull_request():
+    fake = FakeGitHub([gh_pull(501, body="Refs #60"), gh_pull(502, author="rocklambros")],
+                      accepted=[gh_issue(60)])
+    first, _ = sweep(fake)
+    assert first.newly_queued == 1
+    data = parse_data_line(fake.bodies(501)[0])
+    assert data["reason"] == "not_held" and data["seen"] == "2026-11-09T01:00:00Z,2026-11-01T00:00:00Z"
+
+    fake.calls.clear()
+    second, lines = sweep(fake)
+    reads = [args[-1] for args, _ in fake.calls if "/501" in args[-1]]
+    assert reads == [f"{API}/issues/501/comments?per_page=100", f"{API}/pulls/501"]
+    assert second.unchanged == 2 and second.queued_total == 1 and second.writes == 0 and balanced(second)
+    assert "#501 unchanged not_held" in lines
+
+    # A change on the referenced issue moves `seen`, so the pull request is read in full.
+    fake.accepted[0]["updated_at"] = "2026-11-09T05:00:00Z"
+    fake.calls.clear()
+    sweep(fake)
+    assert f"{API}/issues/501/timeline?per_page=100" in [args[-1] for args, _ in fake.calls]
+
+    # And a label that no longer matches the reason is read in full and repaired.
+    fake.accepted[0]["updated_at"] = "2026-11-01T00:00:00Z"
+    fake.pulls[501]["labels"] = []
+    third, _ = sweep(fake)
+    assert fake.labeled(501) and third.newly_queued == 1
+
+
+def test_sweep_stops_at_the_budget_reserve_and_is_red(monkeypatch, capsys):
+    pulls = [gh_pull(600 + n) for n in range(12)]
+    fake = FakeGitHub(pulls, rate=[1000, pr_intake.BUDGET_RESERVE - 1])
+    summary, lines = sweep(fake)
+    assert summary.stopped and summary.skipped == 2 and summary.newly_queued == 10 and balanced(summary)
+    assert summary.rate_limit_remaining == pr_intake.BUDGET_RESERVE - 1
+    assert not fake.bodies(610) and not fake.bodies(611) and fake.bodies(609)
+    assert any(line.startswith("::error::") for line in lines)
+
+    # Past the call budget: reading stops early enough that the writes still fit.
+    fake = FakeGitHub([gh_pull(600 + n) for n in range(12)])
+    counter = CallCounter(limit=pr_intake.BUDGET_RESERVE + 8)
+    summary, _ = sweep(fake, counter=counter)
+    assert summary.stopped and summary.skipped == 10 and summary.newly_queued == 2 and balanced(summary)
+    assert counter.calls <= counter.limit
+
+    fake = FakeGitHub([gh_pull(600 + n) for n in range(3)], rate=pr_intake.BUDGET_RESERVE - 1)
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", **armed_env())
+    assert code == 1 and fake.writes() == [] and " skipped=3 " in summary_line(out)
+
+
+def test_scheduled_sweep_is_red_when_enforcement_is_requested_but_unarmed(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(651), gh_pull(652, author="rocklambros")])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", PR_INTAKE_ENFORCED="true",
+                            PR_INTAKE_TOOL_SHA="0" * 40)
+    assert code == 1 and MISMATCH in out.splitlines()
+    assert fake.writes() == []
+    assert summary_line(out).startswith("mode=mismatched ")
+
+    # An event run in the same state runs the legacy pass and stays green.
+    fake = FakeGitHub([gh_pull(653)])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="pull_request_target", EVENT_ACTION="opened",
+                            PR_NUMBER="653", PR_INTAKE_ENFORCED="true", PR_INTAKE_TOOL_SHA="0" * 40)
+    assert code == 0 and fake.bodies(653)[0].startswith(pr_intake.LEGACY_PREFIX)
+
+
+def test_summary_line_names_the_mode(monkeypatch, capsys, tmp_path):
+    step = tmp_path / "summary.md"
+    sha = tool_sha(pr_intake.REPO_ROOT)
+    fake = FakeGitHub([gh_pull(661), gh_pull(662, author="dependabot[bot]")])
+    code, out, used = run_main(monkeypatch, capsys, fake, ["--gh", "/opt/gh"], EVENT_NAME="schedule",
+                               GITHUB_STEP_SUMMARY=str(step))
+    assert code == 0 and used == ["/opt/gh"] and fake.writes() == []
+    line = summary_line(out)
+    assert line == (
+        f"mode=legacy tool_sha={sha[:12]} evaluated=2 newly_queued=0 queued_total=0 cleared=0 unchanged=1"
+        f" skipped=0 out_of_scope=1 errors=0 writes=0 calls={len(fake.calls)} rate_limit_remaining=5000"
+    )
+    assert line in step.read_text().splitlines()
+    assert "outsider" not in out and "dependabot" not in out
+
+    code, out, used = run_main(monkeypatch, capsys, FakeGitHub([gh_pull(663)]), EVENT_NAME="schedule",
+                               GITHUB_STEP_SUMMARY=str(step), **armed_env())
+    assert code == 0 and used == [gh_runner.GH]
+    assert summary_line(out).startswith(f"mode=enforced tool_sha={sha[:12]} evaluated=1 newly_queued=1 ")
+    assert sum(text.startswith("mode=") for text in step.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("armed", [True, False])
+def test_dryrun_writes_nothing_and_prints_every_decision_and_the_arm_value(monkeypatch, capsys, armed):
+    env = armed_env() if armed else {}
+    fake = FakeGitHub([gh_pull(671), gh_pull(672, author="rocklambros"), gh_pull(673, draft=True),
+                       gh_pull(674, body="Refs #60", labels=(NEEDS_TRIAGE,), auto_merge={"merge_method": "squash"})],
+                      accepted=[gh_issue(60)])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="workflow_dispatch", INTAKE_MODE="dryrun", **env)
+    assert code == 0 and fake.writes() == []
+    lines = out.splitlines()
+    for expected in ("#671 queue no_accepted", "#672 pass roster", "#673 out_of_scope", "#674 queue not_held"):
+        assert expected in lines
+    assert f"arm with PR_INTAKE_TOOL_SHA={tool_sha(pr_intake.REPO_ROOT)}" in lines
+    assert " newly_queued=1 queued_total=2 " in summary_line(out) and " writes=0 " in summary_line(out)
+    assert MISMATCH not in out
+
+
+def test_retract_refuses_while_enforced(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(681, labels=(NEEDS_TRIAGE,))])
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="workflow_dispatch", INTAKE_MODE="retract",
+                            **armed_env())
+    assert code == 1 and "::error::Unset PR_INTAKE_ENFORCED before retracting" in out.splitlines()
+    assert fake.calls == []
+
+
+def test_retract_keeps_the_marker_so_the_next_queue_edits_not_posts(monkeypatch, capsys):
+    fake = FakeGitHub([gh_pull(691), gh_pull(692, author="rocklambros")])
+    code, _, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", **armed_env())
+    assert code == 0 and fake.labeled(691) and len(fake.bodies(691)) == 1
+
+    code, out, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="workflow_dispatch", INTAKE_MODE="retract")
+    assert code == 0 and not fake.labeled(691)
+    (body,) = fake.bodies(691)
+    lines = body.split("\n")
+    assert parse_data_line(lines[0]) == {"reason": "retracted", "since": SWEEP_TODAY.isoformat()}
+    assert lines[1] == pr_intake.MARKER and "Retracted. This pull request is not queued." in body
+    assert " cleared=1 " in summary_line(out) and " unchanged=1 " in summary_line(out)
+
+    fake.calls.clear()
+    code, _, _ = run_main(monkeypatch, capsys, fake, EVENT_NAME="schedule", **armed_env())
+    assert code == 0 and fake.labeled(691) and len(fake.bodies(691)) == 1
+    written = [args[3:5] for args, _ in fake.writes()]
+    assert ["PATCH", f"{API}/issues/comments/{fake.comments[691][0]['id']}"] in written
+    assert ["POST", f"{API}/issues/691/comments"] not in written
+
+
+def test_retract_scoped_to_bots_touches_only_known_bots():
+    def population() -> FakeGitHub:
+        fake = FakeGitHub([
+            gh_pull(801, author="dependabot[bot]", labels=(NEEDS_TRIAGE,)),
+            gh_pull(802, labels=(NEEDS_TRIAGE,)),
+            gh_pull(803, author="github-actions[bot]", labels=(NEEDS_TRIAGE,)),
+        ])
+        fake.comments[801] = [bot_said(pr_intake.LEGACY_COMMENT, 1)]
+        fake.comments[802] = [bot_said(COMMENT, 2)]
+        return fake
+
+    fake = population()
+    summary = retract(fake, [801, 802, 803], authors="bots", today=SWEEP_TODAY, log=lambda line: None)
+    assert (summary.cleared, summary.unchanged, summary.errors) == (2, 1, []) and balanced(summary)
+    assert not fake.labeled(801) and not fake.labeled(803) and fake.labeled(802)
+    assert parse_data_line(fake.bodies(801)[0])["reason"] == "retracted"
+    assert fake.bodies(802) == [COMMENT] and fake.bodies(803) == []
+    assert not any(args[3] == "POST" and args[4].endswith("/comments") for args, _ in fake.writes())
+
+    fake = population()
+    summary = retract(fake, [801, 802, 803], authors="all", today=SWEEP_TODAY, log=lambda line: None)
+    assert (summary.cleared, summary.unchanged) == (1, 2)
+    assert fake.labeled(801) and fake.labeled(803) and not fake.labeled(802)
+    assert fake.bodies(801) == [pr_intake.LEGACY_COMMENT]
+
+
+def test_any_sweep_batches_an_author_with_many_queues():
+    busy = [gh_pull(900 + n, author="busy") for n in range(1, 6)]
+    calm = [gh_pull(910 + n, author="calm") for n in range(1, 4)]
+    fake = FakeGitHub(busy + calm)
+    summary, _ = sweep(fake)
+    assert summary.newly_queued == 8
+    (newest,) = fake.bodies(905)
+    assert pr_intake.QUEUED_LINE in newest
+    for number in range(901, 905):
+        (body,) = fake.bodies(number)
+        lines = body.split("\n")
+        assert parse_data_line(lines[0])["reason"] == "no_accepted" and lines[1] == pr_intake.MARKER
+        assert lines[2:] == ["", "Queued for the reason given on PR #905."]
+        assert fake.labeled(number)
+    for number in range(911, 914):
+        assert pr_intake.QUEUED_LINE in fake.bodies(number)[0]
+
+
+def test_roster_unparsable_produces_zero_writes_and_a_warning(monkeypatch, capsys):
+    def broken(root):
+        raise roadmap_model.RosterError("a roster row did not parse: someone")
+
+    for event, extra, expected in (
+        ("pull_request_target", {"PR_NUMBER": "951", "EVENT_ACTION": "opened"}, 0),
+        ("schedule", {}, 1),
+    ):
+        fake = FakeGitHub([gh_pull(951)])
+        for key in ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
+        for key, value in {"EVENT_NAME": event, **extra, **armed_env()}.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(pr_intake, "make_runner", lambda gh=gh_runner.GH, token=None: fake)
+        monkeypatch.setattr(roadmap_model, "trusted_logins", broken)
+        assert pr_intake.main([]) == expected
+        out = capsys.readouterr().out
+        assert "::warning::" in out and "RosterError" in out and "someone" not in out
+        assert fake.calls == []
+
+
+def test_sweep_over_the_population_reports_the_expected_summary(monkeypatch):
+    rows = json.loads(POPULATION.read_text())["rows"]
+    by_number = {row["facts"]["number"]: _from_json(row["facts"]) for row in rows}
+    pulls = []
+    for number, f in by_number.items():
+        pull = gh_pull(number, author=f.author, draft=f.draft, labels=tuple(f.labels))
+        pulls.append(pull)
+    fake = FakeGitHub(pulls)
+    monkeypatch.setattr(pr_intake, "collect_facts", lambda run, number, **kwargs: by_number[number])
+    today = date.fromisoformat(rows[0]["today"])
+    summary, lines = sweep(fake, write=False, today=today)
+
+    expected = {"newly_queued": 0, "cleared": 0, "unchanged": 0, "out_of_scope": 0, "queued_total": 0}
+    for row in rows:
+        f, outcome_ = row["facts"], row["expected"]["outcome"]
+        labeled = NEEDS_TRIAGE in f["labels"]
+        if f["author"] in pr_intake.KNOWN_BOTS or f["draft"]:
+            expected["out_of_scope"] += 1
+            continue
+        if outcome_ == "queue":
+            expected["queued_total"] += 1
+            expected["newly_queued" if not labeled else "unchanged"] += 1
+        else:
+            expected["cleared" if labeled else "unchanged"] += 1
+    assert expected == {"newly_queued": 29, "cleared": 1, "unchanged": 15, "out_of_scope": 11, "queued_total": 32}
+    got = {key: getattr(summary, key) for key in expected}
+    assert got == expected
+    assert summary.evaluated == len(rows) == 56 and summary.writes == 0 and not summary.errors and balanced(summary)
+    assert fake.writes() == []
+    assert len([line for line in lines if re.fullmatch(r"#[0-9]+ (queue|pass|out_of_scope)( [a-z_,]+)?", line)]) == 56
