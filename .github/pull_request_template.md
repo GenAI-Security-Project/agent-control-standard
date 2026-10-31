@@ -10,11 +10,12 @@
      The closing-choice check fails a reference with neither.
 
      A change that alters behavior, normative text, or adds code needs an issue carrying
-     `status:accepted`. If yours is not accepted yet, open the PR anyway. It will wait
-     rather than be closed. See Current Priority Scope in CONTRIBUTING.md. -->
+     `status:accepted` that a lead assigned to you, or a `help wanted` issue you commented
+     on first. Comment on the issue to claim it before opening the pull request. If you
+     open the pull request without that, it waits rather than being closed, and a bot
+     comment says which step is missing. See How work gets accepted in CONTRIBUTING.md. -->
 
-- [ ] This is an editorial correction (typo, grammar, link, formatting) with no change in
-      meaning, so it needs no issue
+- [ ] This is an editorial correction on the documentation lane (typo, grammar, link, formatting) with no change in meaning, so it needs no issue
 
 ## Base branch
 

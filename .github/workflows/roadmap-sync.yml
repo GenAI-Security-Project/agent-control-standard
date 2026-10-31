@@ -64,6 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      # Lists the intake sweep's runs for the health issue's queued section.
+      actions: read
       contents: read
       issues: write
       pull-requests: read
@@ -84,6 +86,7 @@ jobs:
           ROADMAP_REFRESH_ENABLED: ${{ vars.ROADMAP_REFRESH_ENABLED }}
           ROADMAP_SYNC_ENABLED: ${{ vars.ROADMAP_SYNC_ENABLED }}
           ROADMAP_HEALTH_ISSUE: ${{ vars.ROADMAP_HEALTH_ISSUE }}
+          PR_INTAKE_BASELINES: ${{ vars.PR_INTAKE_BASELINES }}
         run: python3 -I -S tools/roadmap_sync.py sweep --apply
 
   dryrun:
@@ -91,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      # Lists the intake sweep's runs for the health issue's queued section.
+      actions: read
       contents: read
       issues: read
       pull-requests: read
@@ -109,4 +114,5 @@ jobs:
           ROADMAP_REFRESH_ENABLED: ${{ vars.ROADMAP_REFRESH_ENABLED }}
           ROADMAP_SYNC_ENABLED: ${{ vars.ROADMAP_SYNC_ENABLED }}
           ROADMAP_HEALTH_ISSUE: ${{ vars.ROADMAP_HEALTH_ISSUE }}
+          PR_INTAKE_BASELINES: ${{ vars.PR_INTAKE_BASELINES }}
         run: python3 -I -S tools/roadmap_sync.py dryrun --issue "$ISSUE_NUMBER"

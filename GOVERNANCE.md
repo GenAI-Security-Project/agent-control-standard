@@ -40,6 +40,10 @@ Anyone holding the repository's `triage` role or higher accepts an issue, either
 applying `status:accepted` or by setting a milestone. The roadmap sync applies
 `status:accepted` to a milestoned issue, so the two mean the same thing.
 
+A lead or a triage volunteer holding the repository's triage role or higher accepts a
+claim on an issue by assigning the claimant. GitHub lets a lead assign a non-collaborator
+only after that person has commented on the issue, which is why the claim is a comment.
+
 A workstream lead or a project lead may assign a volunteer or contributor to triage
 alongside them. An assigned volunteer applies any label, decision labels included, and the
 lead who assigned them reviews those calls and owns them. A project lead grants them the
@@ -73,6 +77,9 @@ health issue reports every bypassed merge and every direct push.
 A project lead adds a row when a volunteer accepts the `triage` role, and removes it when
 they step back.
 
+A roster entry also exempts that login's pull requests from intake and lets their
+approval clear another contributor's, so add one only for a person who reviews here.
+
 | Volunteer | Assigned by |
 | --- | --- |
 | Victor Hernandez ([@victorm-hernandez](https://github.com/victorm-hernandez)) | Kyriakos Lambros (Rock) |
@@ -92,6 +99,8 @@ That file therefore names five people: the three project leads and the two creat
 Existing leads propose additions and removals. The project leads confirm the change, then one of them opens a pull request that updates this file and `.github/CODEOWNERS` together. When the change touches a project lead or a creator, the same pull request updates `project.owasp.yaml`, since those are the only people it names.
 
 The CODEOWNERS update is not optional. A lead who loses write access stops being a valid owner, and GitHub fails the entry silently rather than flagging it.
+
+A roster entry also exempts that login's pull requests from intake and lets their approval clear another contributor's, so add one only for a person who reviews here.
 
 ## Related
 

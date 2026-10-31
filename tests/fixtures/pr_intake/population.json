@@ -1,0 +1,5909 @@
+{
+ "generated_by": "tests/fixtures/pr_intake/record_population.py",
+ "recorded": "2026-10-29",
+ "rows": [
+  {
+   "facts": {
+    "number": 1005,
+    "state": "open",
+    "draft": false,
+    "author": "lead-5",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000001",
+    "created_at": "2026-06-15T08:32:20+00:00",
+    "updated_at": "2026-10-29T14:22:42+00:00",
+    "labels": [
+     "priority:P0"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "docs/topics/f2.md",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py",
+     "tools/f15.py",
+     "tools/f16.py",
+     "tools/f17.py",
+     "tools/f18.py",
+     "tools/f19.py",
+     "tools/f20.py",
+     "tools/f21.py",
+     "tools/f22.py",
+     "tools/f23.py",
+     "tools/f24.py",
+     "tools/f25.py",
+     "tools/f26.py",
+     "tools/f27.py",
+     "tools/f28.py",
+     "tools/f29.py",
+     "tools/f30.py",
+     "tools/f31.py",
+     "tools/f32.py",
+     "tools/f33.py",
+     "tools/f34.py",
+     "tools/f35.py",
+     "tools/f36.py",
+     "tools/f37.py",
+     "tools/f38.py",
+     "tools/f39.py",
+     "tools/f40.py",
+     "tools/f41.py",
+     "tools/f42.py",
+     "tools/f43.py",
+     "tools/f44.py",
+     "tools/f45.py",
+     "tools/f46.py",
+     "tools/f47.py",
+     "tools/f48.py",
+     "tools/f49.py",
+     "tools/f50.py",
+     "tools/f51.py",
+     "tools/f52.py",
+     "tools/f53.py",
+     "tools/f54.py",
+     "tools/f55.py",
+     "tools/f56.py",
+     "tools/f57.py",
+     "tools/f58.py",
+     "tools/f59.py",
+     "tools/f60.py",
+     "tools/f61.py",
+     "tools/f62.py",
+     "tools/f63.py",
+     "tools/f64.py",
+     "tools/f65.py",
+     "tools/f66.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1009,
+      "kind": "none",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1004,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [
+       "priority:P0"
+      ],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1008,
+      "kind": "none",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1036,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:refimpl"
+      ],
+      "assignees": [
+       "lead-5"
+      ],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "user-1",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-06-21T08:55:00+00:00",
+      "commit_id": "0000000000000000000000000000000000000002"
+     },
+     {
+      "login": "lead-5",
+      "state": "COMMENTED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-06-21T09:12:57+00:00",
+      "commit_id": "0000000000000000000000000000000000000002"
+     },
+     {
+      "login": "lead-5",
+      "state": "COMMENTED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-06-21T09:14:55+00:00",
+      "commit_id": "0000000000000000000000000000000000000002"
+     },
+     {
+      "login": "lead-1",
+      "state": "COMMENTED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-08-21T12:11:33+00:00",
+      "commit_id": "0000000000000000000000000000000000000003"
+     },
+     {
+      "login": "lead-1",
+      "state": "CHANGES_REQUESTED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-10-05T20:52:32+00:00",
+      "commit_id": "0000000000000000000000000000000000000001"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-09-24T11:13:53+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1008": [
+      1005
+     ],
+     "1009": [
+      1005
+     ],
+     "1036": [
+      1005
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "roster",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1006,
+    "state": "open",
+    "draft": false,
+    "author": "user-2",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000004",
+    "created_at": "2026-07-19T23:53:36+00:00",
+    "updated_at": "2026-10-05T09:06:27+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1002,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1001,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     },
+     {
+      "number": 1004,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [
+       "priority:P0"
+      ],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1037,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-12",
+      "state": "CHANGES_REQUESTED",
+      "association": "MEMBER",
+      "submitted_at": "2026-09-06T18:04:06+00:00",
+      "commit_id": "0000000000000000000000000000000000000005"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-09-18T00:26:13+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1037": [
+      1006
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "awaiting_rereview",
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1018,
+    "state": "open",
+    "draft": true,
+    "author": "user-3",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000006",
+    "created_at": "2026-09-10T05:54:58+00:00",
+    "updated_at": "2026-10-18T11:43:14+00:00",
+    "labels": [
+     "type:refimpl"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1005,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [
+       "priority:P0"
+      ],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1007,
+      "kind": "none",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1012,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1013,
+      "kind": "none",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:sdk"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1007": [
+      1018
+     ],
+     "1013": [
+      1018
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1019,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000007",
+    "created_at": "2026-09-10T12:54:39+00:00",
+    "updated_at": "2026-10-13T21:33:00+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-09-10T12:54:40+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1020,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000008",
+    "created_at": "2026-09-10T12:54:44+00:00",
+    "updated_at": "2026-10-13T21:32:59+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-09-10T12:54:45+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1029,
+    "state": "open",
+    "draft": false,
+    "author": "user-4",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000009",
+    "created_at": "2026-09-13T05:22:50+00:00",
+    "updated_at": "2026-10-20T01:06:57+00:00",
+    "labels": [],
+    "paths": [
+     "docs/topics/f0.md",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1067,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1025,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "closed",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "user-5",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-17T02:25:10+00:00",
+      "commit_id": "000000000000000000000000000000000000000a"
+     },
+     {
+      "login": "user-5",
+      "state": "APPROVED",
+      "association": "NONE",
+      "submitted_at": "2026-10-20T01:06:57+00:00",
+      "commit_id": "0000000000000000000000000000000000000009"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-15T22:16:07+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "closed_accepted"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1030,
+    "state": "open",
+    "draft": false,
+    "author": "user-6",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000000b",
+    "created_at": "2026-09-13T11:53:36+00:00",
+    "updated_at": "2026-10-05T09:05:31+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1026,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-09-13T14:23:38+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1026": [
+      1030
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1033,
+    "state": "open",
+    "draft": false,
+    "author": "lead-12",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000000c",
+    "created_at": "2026-09-15T13:49:04+00:00",
+    "updated_at": "2026-10-05T09:05:23+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1034,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:refimpl"
+      ],
+      "assignees": [
+       "lead-12"
+      ],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": [
+     "lead-12",
+     "2026-09-15T13:51:31+00:00"
+    ],
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1034": [
+      1033
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "roster",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1043,
+    "state": "open",
+    "draft": false,
+    "author": "lead-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000000d",
+    "created_at": "2026-09-19T03:33:17+00:00",
+    "updated_at": "2026-10-05T09:05:14+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "docs/topics/f2.md",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py",
+     "tools/f15.py",
+     "tools/f16.py",
+     "tools/f17.py",
+     "tools/f18.py",
+     "tools/f19.py",
+     "tools/f20.py",
+     "tools/f21.py",
+     "tools/f22.py",
+     "tools/f23.py",
+     "tools/f24.py",
+     "tools/f25.py",
+     "tools/f26.py",
+     "tools/f27.py",
+     "tools/f28.py",
+     "tools/f29.py",
+     "tools/f30.py",
+     "tools/f31.py",
+     "tools/f32.py",
+     "tools/f33.py",
+     "tools/f34.py",
+     "tools/f35.py",
+     "tools/f36.py",
+     "tools/f37.py",
+     "tools/f38.py",
+     "tools/f39.py",
+     "tools/f40.py",
+     "tools/f41.py",
+     "tools/f42.py",
+     "tools/f43.py",
+     "tools/f44.py",
+     "tools/f45.py",
+     "tools/f46.py",
+     "tools/f47.py",
+     "tools/f48.py",
+     "tools/f49.py",
+     "tools/f50.py",
+     "tools/f51.py",
+     "tools/f52.py",
+     "tools/f53.py",
+     "tools/f54.py",
+     "tools/f55.py",
+     "tools/f56.py",
+     "tools/f57.py",
+     "tools/f58.py",
+     "tools/f59.py",
+     "tools/f60.py",
+     "tools/f61.py",
+     "tools/f62.py",
+     "tools/f63.py",
+     "tools/f64.py",
+     "tools/f65.py",
+     "tools/f66.py",
+     "tools/f67.py",
+     "tools/f68.py",
+     "tools/f69.py",
+     "tools/f70.py",
+     "tools/f71.py",
+     "tools/f72.py",
+     "tools/f73.py",
+     "tools/f74.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1005,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [
+       "priority:P0"
+      ],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1048,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:refimpl",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1024,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-09-16T15:20:34+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-09-24T13:19:59+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1024": [
+      1043
+     ],
+     "1048": [
+      1043
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "roster",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1047,
+    "state": "open",
+    "draft": false,
+    "author": "user-5",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000000e",
+    "created_at": "2026-09-21T07:03:41+00:00",
+    "updated_at": "2026-10-25T13:04:24+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py",
+     "tools/f15.py",
+     "tools/f16.py",
+     "tools/f17.py",
+     "tools/f18.py",
+     "tools/f19.py",
+     "tools/f20.py",
+     "tools/f21.py",
+     "tools/f22.py",
+     "tools/f23.py",
+     "tools/f24.py",
+     "tools/f25.py",
+     "tools/f26.py",
+     "tools/f27.py",
+     "tools/f28.py",
+     "tools/f29.py",
+     "tools/f30.py",
+     "tools/f31.py",
+     "tools/f32.py",
+     "tools/f33.py",
+     "tools/f34.py",
+     "tools/f35.py",
+     "tools/f36.py",
+     "tools/f37.py",
+     "tools/f38.py",
+     "tools/f39.py",
+     "tools/f40.py",
+     "tools/f41.py",
+     "tools/f42.py",
+     "tools/f43.py",
+     "tools/f44.py",
+     "tools/f45.py",
+     "tools/f46.py",
+     "tools/f47.py",
+     "tools/f48.py",
+     "tools/f49.py",
+     "tools/f50.py",
+     "tools/f51.py",
+     "tools/f52.py",
+     "tools/f53.py",
+     "tools/f54.py",
+     "tools/f55.py",
+     "tools/f56.py",
+     "tools/f57.py",
+     "tools/f58.py",
+     "tools/f59.py",
+     "tools/f60.py",
+     "tools/f61.py",
+     "tools/f62.py",
+     "tools/f63.py",
+     "tools/f64.py",
+     "tools/f65.py",
+     "tools/f66.py",
+     "tools/f67.py",
+     "tools/f68.py",
+     "tools/f69.py",
+     "tools/f70.py",
+     "tools/f71.py",
+     "tools/f72.py",
+     "tools/f73.py",
+     "tools/f74.py",
+     "tools/f75.py",
+     "tools/f76.py",
+     "tools/f77.py",
+     "tools/f78.py",
+     "tools/f79.py",
+     "tools/f80.py",
+     "tools/f81.py",
+     "tools/f82.py",
+     "tools/f83.py",
+     "tools/f84.py",
+     "tools/f85.py",
+     "tools/f86.py",
+     "tools/f87.py",
+     "tools/f88.py",
+     "tools/f89.py",
+     "tools/f90.py",
+     "tools/f91.py",
+     "tools/f92.py",
+     "tools/f93.py",
+     "tools/f94.py",
+     "tools/f95.py",
+     "tools/f96.py",
+     "tools/f97.py",
+     "tools/f98.py",
+     "tools/f99.py",
+     "tools/f100.py",
+     "tools/f101.py",
+     "tools/f102.py",
+     "tools/f103.py",
+     "tools/f104.py",
+     "tools/f105.py",
+     "tools/f106.py",
+     "tools/f107.py",
+     "tools/f108.py",
+     "tools/f109.py",
+     "tools/f110.py",
+     "tools/f111.py",
+     "tools/f112.py",
+     "tools/f113.py",
+     "tools/f114.py",
+     "tools/f115.py",
+     "tools/f116.py",
+     "tools/f117.py",
+     "tools/f118.py",
+     "tools/f119.py",
+     "tools/f120.py",
+     "tools/f121.py",
+     "tools/f122.py",
+     "tools/f123.py",
+     "tools/f124.py",
+     "tools/f125.py",
+     "tools/f126.py",
+     "tools/f127.py",
+     "tools/f128.py",
+     "tools/f129.py",
+     "tools/f130.py",
+     "tools/f131.py",
+     "tools/f132.py",
+     "tools/f133.py",
+     "tools/f134.py",
+     "tools/f135.py",
+     "tools/f136.py",
+     "tools/f137.py",
+     "tools/f138.py",
+     "tools/f139.py",
+     "tools/f140.py",
+     "tools/f141.py",
+     "tools/f142.py",
+     "tools/f143.py",
+     "tools/f144.py",
+     "tools/f145.py",
+     "tools/f146.py",
+     "tools/f147.py",
+     "tools/f148.py",
+     "tools/f149.py",
+     "tools/f150.py",
+     "tools/f151.py",
+     "tools/f152.py",
+     "tools/f153.py",
+     "tools/f154.py",
+     "tools/f155.py",
+     "tools/f156.py",
+     "tools/f157.py",
+     "tools/f158.py",
+     "tools/f159.py",
+     "tools/f160.py",
+     "tools/f161.py",
+     "tools/f162.py",
+     "tools/f163.py",
+     "tools/f164.py",
+     "tools/f165.py",
+     "tools/f166.py",
+     "tools/f167.py",
+     "tools/f168.py",
+     "tools/f169.py",
+     "tools/f170.py",
+     "tools/f171.py",
+     "tools/f172.py",
+     "tools/f173.py",
+     "tools/f174.py",
+     "tools/f175.py",
+     "tools/f176.py",
+     "tools/f177.py",
+     "tools/f178.py",
+     "tools/f179.py",
+     "tools/f180.py",
+     "tools/f181.py",
+     "tools/f182.py",
+     "tools/f183.py",
+     "tools/f184.py",
+     "tools/f185.py",
+     "tools/f186.py",
+     "tools/f187.py",
+     "tools/f188.py",
+     "tools/f189.py",
+     "tools/f190.py",
+     "tools/f191.py",
+     "tools/f192.py",
+     "tools/f193.py",
+     "tools/f194.py",
+     "tools/f195.py",
+     "tools/f196.py",
+     "tools/f197.py",
+     "tools/f198.py",
+     "tools/f199.py",
+     "tools/f200.py",
+     "tools/f201.py",
+     "tools/f202.py",
+     "tools/f203.py",
+     "tools/f204.py",
+     "tools/f205.py",
+     "tools/f206.py",
+     "tools/f207.py",
+     "tools/f208.py",
+     "tools/f209.py",
+     "tools/f210.py",
+     "tools/f211.py",
+     "tools/f212.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1022,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [
+       "user-5"
+      ],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1062,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1074,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-12",
+      "state": "CHANGES_REQUESTED",
+      "association": "MEMBER",
+      "submitted_at": "2026-10-12T22:26:43+00:00",
+      "commit_id": "000000000000000000000000000000000000000f"
+     },
+     {
+      "login": "lead-3",
+      "state": "APPROVED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-10-25T13:04:24+00:00",
+      "commit_id": "000000000000000000000000000000000000000e"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-25T02:25:00+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1022": [
+      1047
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "review",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1050,
+    "state": "open",
+    "draft": true,
+    "author": "user-7",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000010",
+    "created_at": "2026-09-22T16:18:22+00:00",
+    "updated_at": "2026-10-14T16:44:23+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py",
+     "tools/f15.py",
+     "tools/f16.py",
+     "tools/f17.py",
+     "tools/f18.py",
+     "tools/f19.py",
+     "tools/f20.py",
+     "tools/f21.py",
+     "tools/f22.py",
+     "tools/f23.py",
+     "tools/f24.py",
+     "tools/f25.py",
+     "tools/f26.py",
+     "tools/f27.py",
+     "tools/f28.py",
+     "tools/f29.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1021,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1018,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [
+       "type:refimpl"
+      ],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1047,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-12",
+      "state": "CHANGES_REQUESTED",
+      "association": "MEMBER",
+      "submitted_at": "2026-10-12T23:04:47+00:00",
+      "commit_id": "0000000000000000000000000000000000000011"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-14T16:44:23+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1021": [
+      1050
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1052,
+    "state": "open",
+    "draft": false,
+    "author": "user-8",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000012",
+    "created_at": "2026-09-25T13:58:09+00:00",
+    "updated_at": "2026-10-29T14:38:42+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1023,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-09-25T08:35:11+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-12",
+      "state": "CHANGES_REQUESTED",
+      "association": "MEMBER",
+      "submitted_at": "2026-10-12T22:46:19+00:00",
+      "commit_id": "0000000000000000000000000000000000000013"
+     },
+     {
+      "login": "lead-12",
+      "state": "APPROVED",
+      "association": "MEMBER",
+      "submitted_at": "2026-10-29T14:19:38+00:00",
+      "commit_id": "0000000000000000000000000000000000000012"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-29T14:38:42+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1023": [
+      1052
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "review",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1061,
+    "state": "open",
+    "draft": false,
+    "author": "user-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000014",
+    "created_at": "2026-10-05T11:44:17+00:00",
+    "updated_at": "2026-10-11T00:01:14+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "docs/topics/f1.md",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py",
+     "tools/f15.py",
+     "tools/f16.py",
+     "tools/f17.py",
+     "tools/f18.py",
+     "tools/f19.py",
+     "tools/f20.py",
+     "tools/f21.py",
+     "tools/f22.py",
+     "tools/f23.py",
+     "tools/f24.py",
+     "tools/f25.py",
+     "tools/f26.py",
+     "tools/f27.py",
+     "tools/f28.py",
+     "tools/f29.py",
+     "tools/f30.py",
+     "tools/f31.py",
+     "tools/f32.py",
+     "tools/f33.py",
+     "tools/f34.py",
+     "tools/f35.py",
+     "tools/f36.py",
+     "tools/f37.py",
+     "tools/f38.py",
+     "tools/f39.py",
+     "tools/f40.py",
+     "tools/f41.py",
+     "tools/f42.py",
+     "tools/f43.py",
+     "tools/f44.py",
+     "tools/f45.py",
+     "tools/f46.py",
+     "tools/f47.py",
+     "tools/f48.py",
+     "tools/f49.py",
+     "tools/f50.py",
+     "tools/f51.py",
+     "tools/f52.py",
+     "tools/f53.py",
+     "tools/f54.py",
+     "tools/f55.py",
+     "tools/f56.py",
+     "tools/f57.py",
+     "tools/f58.py",
+     "tools/f59.py",
+     "tools/f60.py",
+     "tools/f61.py",
+     "tools/f62.py",
+     "tools/f63.py",
+     "tools/f64.py",
+     "tools/f65.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1054,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     },
+     {
+      "number": 1009,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-08-21T19:39:16+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-06T16:38:02+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1061,
+      1066,
+      1086,
+      1087,
+      1088,
+      1091
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1062,
+    "state": "open",
+    "draft": false,
+    "author": "user-2",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000015",
+    "created_at": "2026-10-06T06:09:01+00:00",
+    "updated_at": "2026-10-29T14:21:37+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py",
+     "tools/f14.py",
+     "tools/f15.py",
+     "tools/f16.py",
+     "tools/f17.py",
+     "tools/f18.py",
+     "tools/f19.py",
+     "tools/f20.py",
+     "tools/f21.py",
+     "tools/f22.py",
+     "tools/f23.py",
+     "tools/f24.py",
+     "tools/f25.py",
+     "tools/f26.py",
+     "tools/f27.py",
+     "tools/f28.py",
+     "tools/f29.py",
+     "tools/f30.py",
+     "tools/f31.py",
+     "tools/f32.py",
+     "tools/f33.py",
+     "tools/f34.py",
+     "tools/f35.py",
+     "tools/f36.py",
+     "tools/f37.py",
+     "tools/f38.py",
+     "tools/f39.py",
+     "tools/f40.py",
+     "tools/f41.py",
+     "tools/f42.py",
+     "tools/f43.py",
+     "tools/f44.py",
+     "tools/f45.py",
+     "tools/f46.py",
+     "tools/f47.py",
+     "tools/f48.py",
+     "tools/f49.py",
+     "tools/f50.py",
+     "tools/f51.py",
+     "tools/f52.py",
+     "tools/f53.py",
+     "tools/f54.py",
+     "tools/f55.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1051,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:conformance"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-10-06T09:14:28+00:00",
+      "unresolved": false
+     },
+     {
+      "number": 1063,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-1",
+      "state": "CHANGES_REQUESTED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-10-06T19:30:33+00:00",
+      "commit_id": "0000000000000000000000000000000000000016"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:47+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:49+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:50+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:52+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:53+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:55+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-07T08:22:56+00:00",
+      "commit_id": "0000000000000000000000000000000000000017"
+     },
+     {
+      "login": "user-2",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-08T11:23:04+00:00",
+      "commit_id": "0000000000000000000000000000000000000018"
+     },
+     {
+      "login": "lead-12",
+      "state": "CHANGES_REQUESTED",
+      "association": "MEMBER",
+      "submitted_at": "2026-10-13T14:24:13+00:00",
+      "commit_id": "0000000000000000000000000000000000000019"
+     },
+     {
+      "login": "lead-12",
+      "state": "CHANGES_REQUESTED",
+      "association": "MEMBER",
+      "submitted_at": "2026-10-29T14:21:37+00:00",
+      "commit_id": "0000000000000000000000000000000000000015"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-28T19:30:07+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1051": [
+      1062
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "review",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1066,
+    "state": "open",
+    "draft": false,
+    "author": "user-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000001a",
+    "created_at": "2026-10-09T14:44:16+00:00",
+    "updated_at": "2026-10-23T23:35:47+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1009,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-08-21T19:39:16+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-9",
+      "state": "APPROVED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-10-22T15:46:28+00:00",
+      "commit_id": "000000000000000000000000000000000000001a"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-23T23:35:47+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1061,
+      1066,
+      1086,
+      1087,
+      1088,
+      1091
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "review",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1068,
+    "state": "open",
+    "draft": false,
+    "author": "user-10",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000001b",
+    "created_at": "2026-10-10T02:36:33+00:00",
+    "updated_at": "2026-10-28T02:59:22+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1046,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1062,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "user-5",
+      "state": "COMMENTED",
+      "association": "NONE",
+      "submitted_at": "2026-10-27T23:06:18+00:00",
+      "commit_id": "000000000000000000000000000000000000001c"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-27T01:37:01+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1046": [
+      1068
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1069,
+    "state": "open",
+    "draft": false,
+    "author": "lead-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000001d",
+    "created_at": "2026-10-10T04:45:48+00:00",
+    "updated_at": "2026-10-10T04:49:55+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1064,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:docs",
+       "workstream:docs"
+      ],
+      "assignees": [
+       "lead-9"
+      ],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1032,
+      "kind": "none",
+      "is_pull": false,
+      "state": "closed",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:docs"
+      ],
+      "assignees": [
+       "lead-12"
+      ],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1065,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1064": [
+      1069
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "roster",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1070,
+    "state": "open",
+    "draft": false,
+    "author": "user-11",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "main",
+    "head_sha": "000000000000000000000000000000000000001e",
+    "created_at": "2026-10-10T10:21:18+00:00",
+    "updated_at": "2026-10-10T10:21:31+00:00",
+    "labels": [
+     "status:needs-triage"
+    ],
+    "paths": [
+     "docs/topics/f0.md"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "no_accepted"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1071,
+    "state": "open",
+    "draft": true,
+    "author": "user-12",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000001f",
+    "created_at": "2026-10-10T14:41:12+00:00",
+    "updated_at": "2026-10-28T04:20:00+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1062,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1049,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:conformance"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-09-30T04:56:33+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-23T04:29:22+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1049": [
+      1071
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1072,
+    "state": "open",
+    "draft": false,
+    "author": "user-13",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000020",
+    "created_at": "2026-10-11T20:17:05+00:00",
+    "updated_at": "2026-10-12T18:46:34+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1057,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "lead-9",
+      "state": "APPROVED",
+      "association": "COLLABORATOR",
+      "submitted_at": "2026-10-12T18:46:34+00:00",
+      "commit_id": "0000000000000000000000000000000000000020"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": true,
+    "held_use": {
+     "1057": [
+      1072
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "review",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1073,
+    "state": "open",
+    "draft": false,
+    "author": "user-13",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000021",
+    "created_at": "2026-10-11T20:25:34+00:00",
+    "updated_at": "2026-10-11T20:25:47+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1056,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": true,
+    "held_use": {
+     "1056": [
+      1073
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "record",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1077,
+    "state": "open",
+    "draft": false,
+    "author": "user-13",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000022",
+    "created_at": "2026-10-12T06:45:49+00:00",
+    "updated_at": "2026-10-12T06:46:00+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1017,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal",
+       "workstream:sdk"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": true,
+    "held_use": {
+     "1017": [
+      1077
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "record",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1081,
+    "state": "open",
+    "draft": false,
+    "author": "lead-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000023",
+    "created_at": "2026-10-13T05:17:29+00:00",
+    "updated_at": "2026-10-29T14:10:03+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1080,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:docs",
+       "workstream:docs"
+      ],
+      "assignees": [
+       "lead-9"
+      ],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1082,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1069,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1080": [
+      1081
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "roster",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1083,
+    "state": "open",
+    "draft": false,
+    "author": "user-14",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000024",
+    "created_at": "2026-10-15T18:00:20+00:00",
+    "updated_at": "2026-10-20T04:27:53+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1076,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1058,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1065,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-20T04:27:52+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1058": [
+      1083
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1085,
+    "state": "open",
+    "draft": false,
+    "author": "user-15",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000025",
+    "created_at": "2026-10-17T12:38:58+00:00",
+    "updated_at": "2026-10-17T12:39:14+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1027,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-09-10T17:49:34+00:00",
+      "unresolved": false
+     },
+     {
+      "number": 1028,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-10-17T12:09:13+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1027": [
+      1085
+     ],
+     "1028": [
+      1085
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1086,
+    "state": "open",
+    "draft": false,
+    "author": "user-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000026",
+    "created_at": "2026-10-17T13:33:19+00:00",
+    "updated_at": "2026-10-17T13:33:21+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "docs/topics/f1.md",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1009,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-08-21T19:39:16+00:00",
+      "unresolved": false
+     },
+     {
+      "number": 1011,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:deferred",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1061,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1060,
+      "kind": "none",
+      "is_pull": true,
+      "state": "closed",
+      "labels": [
+       "status:needs-triage"
+      ],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1003,
+      "kind": "none",
+      "is_pull": false,
+      "state": "closed",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1061,
+      1066,
+      1086,
+      1087,
+      1088,
+      1091
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "closed_accepted",
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1087,
+    "state": "open",
+    "draft": false,
+    "author": "user-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000027",
+    "created_at": "2026-10-17T15:06:04+00:00",
+    "updated_at": "2026-10-24T07:38:21+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1011,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:deferred",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1003,
+      "kind": "none",
+      "is_pull": false,
+      "state": "closed",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1051,
+      "kind": "none",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:conformance"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-10-24T03:31:40+00:00",
+      "unresolved": false
+     },
+     {
+      "number": 1009,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-08-21T19:39:16+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1061,
+      1066,
+      1086,
+      1087,
+      1088,
+      1091
+     ],
+     "1051": [
+      1087
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "closed_accepted",
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1088,
+    "state": "open",
+    "draft": false,
+    "author": "user-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000028",
+    "created_at": "2026-10-17T15:11:12+00:00",
+    "updated_at": "2026-10-24T03:34:29+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1011,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:deferred",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1075,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     },
+     {
+      "number": 1009,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-08-21T19:39:16+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-22T16:59:59+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1061,
+      1066,
+      1086,
+      1087,
+      1088,
+      1091
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1090,
+    "state": "open",
+    "draft": false,
+    "author": "user-16",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000029",
+    "created_at": "2026-10-18T02:17:22+00:00",
+    "updated_at": "2026-10-18T11:42:53+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1009,
+      "kind": "none",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-10-17T01:10:19+00:00",
+      "unresolved": false
+     },
+     {
+      "number": 1089,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1090
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1091,
+    "state": "open",
+    "draft": false,
+    "author": "user-9",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000002a",
+    "created_at": "2026-10-18T05:58:59+00:00",
+    "updated_at": "2026-10-18T08:48:17+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1090,
+      "kind": "contribute",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1087,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1053,
+      "kind": "none",
+      "is_pull": false,
+      "state": "closed",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1054,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     },
+     {
+      "number": 1009,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:proposal"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-08-21T19:39:16+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1009": [
+      1061,
+      1066,
+      1086,
+      1087,
+      1088,
+      1091
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "closed_accepted",
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1092,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000002b",
+    "created_at": "2026-10-19T14:15:51+00:00",
+    "updated_at": "2026-10-19T14:16:17+00:00",
+    "labels": [
+     "dependencies"
+    ],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-19T14:15:56+00:00",
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1093,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000002c",
+    "created_at": "2026-10-19T14:17:08+00:00",
+    "updated_at": "2026-10-19T17:14:34+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [
+     {
+      "login": "user-17",
+      "state": "APPROVED",
+      "association": "NONE",
+      "submitted_at": "2026-10-19T17:12:45+00:00",
+      "commit_id": "000000000000000000000000000000000000002c"
+     },
+     {
+      "login": "user-17",
+      "state": "APPROVED",
+      "association": "NONE",
+      "submitted_at": "2026-10-19T17:14:33+00:00",
+      "commit_id": "000000000000000000000000000000000000002c"
+     }
+    ],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-19T14:17:12+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1094,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000002d",
+    "created_at": "2026-10-19T14:17:18+00:00",
+    "updated_at": "2026-10-19T14:17:35+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-19T14:17:22+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1099,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000002e",
+    "created_at": "2026-10-26T09:41:22+00:00",
+    "updated_at": "2026-10-26T09:41:36+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-26T09:41:26+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1100,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000002f",
+    "created_at": "2026-10-26T14:17:26+00:00",
+    "updated_at": "2026-10-26T14:17:42+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-26T14:17:30+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1101,
+    "state": "open",
+    "draft": false,
+    "author": "dependabot[bot]",
+    "author_is_bot": true,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000030",
+    "created_at": "2026-10-26T14:17:36+00:00",
+    "updated_at": "2026-10-26T14:17:50+00:00",
+    "labels": [
+     "dependencies",
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": "2026-10-26T14:17:40+00:00",
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "skip",
+    "route": null,
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1103,
+    "state": "open",
+    "draft": false,
+    "author": "user-18",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000031",
+    "created_at": "2026-10-27T23:14:49+00:00",
+    "updated_at": "2026-10-27T23:15:02+00:00",
+    "labels": [
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1102,
+      "kind": "close",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "no_accepted"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1104,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000032",
+    "created_at": "2026-10-28T04:00:49+00:00",
+    "updated_at": "2026-10-29T16:58:10+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1035,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1044,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1035": [
+      1104
+     ],
+     "1044": [
+      1104
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1105,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000033",
+    "created_at": "2026-10-28T04:05:26+00:00",
+    "updated_at": "2026-10-29T16:58:08+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1078,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:spec"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1079,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:spec"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1078": [
+      1105
+     ],
+     "1079": [
+      1105
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1107,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000034",
+    "created_at": "2026-10-28T04:09:17+00:00",
+    "updated_at": "2026-10-29T16:58:05+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1026,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1106,
+      "kind": "close",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1026": [
+      1107
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1108,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000035",
+    "created_at": "2026-10-28T05:13:27+00:00",
+    "updated_at": "2026-10-29T16:58:03+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1031,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1031": [
+      1108
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1109,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000036",
+    "created_at": "2026-10-28T05:15:23+00:00",
+    "updated_at": "2026-10-29T16:58:00+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1055,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1055": [
+      1109
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1110,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000037",
+    "created_at": "2026-10-28T05:17:52+00:00",
+    "updated_at": "2026-10-29T16:57:58+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1042,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1042": [
+      1110
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1111,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000038",
+    "created_at": "2026-10-28T05:19:30+00:00",
+    "updated_at": "2026-10-29T16:57:55+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1041,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1041": [
+      1111
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1112,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000039",
+    "created_at": "2026-10-28T05:21:01+00:00",
+    "updated_at": "2026-10-29T16:57:53+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1010,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1010": [
+      1112
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1113,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000003a",
+    "created_at": "2026-10-28T05:26:04+00:00",
+    "updated_at": "2026-10-29T16:57:51+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1014,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:sdk"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1014": [
+      1113
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1114,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000003b",
+    "created_at": "2026-10-28T05:28:33+00:00",
+    "updated_at": "2026-10-29T16:57:49+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1015,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:sdk"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1015": [
+      1114
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1115,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000003c",
+    "created_at": "2026-10-28T05:31:52+00:00",
+    "updated_at": "2026-10-29T16:57:46+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1016,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:sdk"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1016": [
+      1115
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1116,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000003d",
+    "created_at": "2026-10-28T05:36:00+00:00",
+    "updated_at": "2026-10-29T16:57:44+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1040,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1059,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:conformance"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1040": [
+      1116
+     ],
+     "1059": [
+      1116
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1117,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000003e",
+    "created_at": "2026-10-28T05:38:31+00:00",
+    "updated_at": "2026-10-29T16:57:41+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1039,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1039": [
+      1117
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1118,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "000000000000000000000000000000000000003f",
+    "created_at": "2026-10-28T05:40:41+00:00",
+    "updated_at": "2026-10-29T16:57:39+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1038,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1045,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1038": [
+      1118
+     ],
+     "1045": [
+      1118
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1119,
+    "state": "open",
+    "draft": false,
+    "author": "user-19",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000040",
+    "created_at": "2026-10-28T05:44:36+00:00",
+    "updated_at": "2026-10-29T16:57:36+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1084,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:refimpl",
+       "workstream:refimpl"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1084": [
+      1119
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1121,
+    "state": "open",
+    "draft": false,
+    "author": "user-20",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000041",
+    "created_at": "2026-10-29T07:57:11+00:00",
+    "updated_at": "2026-10-29T10:30:16+00:00",
+    "labels": [
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1096,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     },
+     {
+      "number": 1097,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     },
+     {
+      "number": 1109,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {},
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "no_accepted"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1122,
+    "state": "open",
+    "draft": false,
+    "author": "user-21",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "- [x] This is an editorial correction on the documentation lane (typo, grammar, link, formatting)",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000042",
+    "created_at": "2026-10-29T11:54:39+00:00",
+    "updated_at": "2026-10-29T11:54:47+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1026,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "help wanted",
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "workstream:coding-agents"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-10-27T13:37:35+00:00",
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1026": [
+      1122
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "editorial_off_lane"
+    ]
+   }
+  },
+  {
+   "facts": {
+    "number": 1123,
+    "state": "open",
+    "draft": false,
+    "author": "lead-12",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000043",
+    "created_at": "2026-10-29T13:57:02+00:00",
+    "updated_at": "2026-10-29T13:57:18+00:00",
+    "labels": [
+     "status:needs-triage"
+    ],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py",
+     "tools/f8.py",
+     "tools/f9.py",
+     "tools/f10.py",
+     "tools/f11.py",
+     "tools/f12.py",
+     "tools/f13.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1120,
+      "kind": "close",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P1",
+       "scope:in-focus",
+       "status:accepted",
+       "type:bug",
+       "workstream:refimpl"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1062,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     },
+     {
+      "number": 1095,
+      "kind": "none",
+      "is_pull": false,
+      "state": null,
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": true
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": {
+     "id": 1,
+     "body": "",
+     "data": null,
+     "legacy": true
+    },
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1120": [
+      1123
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "pass",
+    "route": "roster",
+    "reasons": []
+   }
+  },
+  {
+   "facts": {
+    "number": 1124,
+    "state": "open",
+    "draft": false,
+    "author": "user-22",
+    "author_is_bot": false,
+    "title": "t",
+    "body": "b",
+    "base": "integration",
+    "head_sha": "0000000000000000000000000000000000000044",
+    "created_at": "2026-10-29T20:32:19+00:00",
+    "updated_at": "2026-10-29T20:41:46+00:00",
+    "labels": [],
+    "paths": [
+     "tools/f0.py",
+     "tools/f1.py",
+     "tools/f2.py",
+     "tools/f3.py",
+     "tools/f4.py",
+     "tools/f5.py",
+     "tools/f6.py",
+     "tools/f7.py"
+    ],
+    "paths_truncated": false,
+    "references": [
+     {
+      "number": 1098,
+      "kind": "contribute",
+      "is_pull": false,
+      "state": "open",
+      "labels": [
+       "priority:P2",
+       "scope:in-focus",
+       "status:accepted",
+       "type:refimpl",
+       "workstream:refimpl"
+      ],
+      "assignees": [],
+      "milestoned": true,
+      "author_commented_at": "2026-10-26T19:00:44+00:00",
+      "unresolved": false
+     },
+     {
+      "number": 1062,
+      "kind": "none",
+      "is_pull": true,
+      "state": "open",
+      "labels": [],
+      "assignees": [],
+      "milestoned": false,
+      "author_commented_at": null,
+      "unresolved": false
+     }
+    ],
+    "references_dropped": 0,
+    "reviews": [],
+    "last_unlabel": null,
+    "last_author_comment_at": null,
+    "bot_comment": null,
+    "auto_merge": false,
+    "author_record": false,
+    "held_use": {
+     "1098": [
+      1124
+     ]
+    },
+    "roster": [
+     "lead-1",
+     "lead-10",
+     "lead-11",
+     "lead-12",
+     "lead-13",
+     "lead-14",
+     "lead-15",
+     "lead-2",
+     "lead-3",
+     "lead-4",
+     "lead-5",
+     "lead-6",
+     "lead-7",
+     "lead-8",
+     "lead-9"
+    ],
+    "mode": "enforced",
+    "sweep": true,
+    "event_action": null
+   },
+   "today": "2026-10-29",
+   "expected": {
+    "outcome": "queue",
+    "route": null,
+    "reasons": [
+     "not_held"
+    ]
+   }
+  }
+ ]
+}

@@ -29,9 +29,12 @@ import urllib.request  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
 import roadmap_model as model  # noqa: E402
+from gh_runner import RunnerError, make_runner, split_http  # noqa: E402
 
 PAGE_MAX_AGE = timedelta(hours=36)
 HEALTH_MAX_AGE = timedelta(hours=50)
+# A 03:10 UTC cron checked every six hours needs a day plus scheduler slack.
+INTAKE_MAX_AGE = timedelta(hours=30)
 CLOCK_SKEW = timedelta(minutes=10)
 STATUS = re.compile(r"<!-- acs-sweep: (ok|degraded) (\S+) run (\S+)")
 
@@ -100,6 +103,41 @@ def check_health(configured: str, issue: dict | None, now: datetime) -> list[str
     return problems
 
 
+def check_intake(runs: list | None, now: datetime) -> list[str]:
+    """Problems with the latest completed nightly intake sweep. An unfinished run is skipped.
+
+    None means the run list could not be read, a 401 or a 403 for instance, which is its
+    own problem. Reading it as no run at all would send the leads looking for a missing
+    schedule when the token is what failed.
+    """
+    if runs is None:
+        return ["the intake run list could not be read"]
+    finished = [
+        run for run in runs
+        if isinstance(run, dict) and run.get("status") == "completed"
+    ]
+    if not finished:
+        return ["no completed nightly intake sweep run exists"]
+    latest = finished[0]
+    run_id = latest.get("id")
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        return ["the latest nightly intake sweep run has no readable id"]
+    problems = []
+    try:
+        age = now - _time(latest["updated_at"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        problems.append(f"the nightly intake sweep run {run_id} has no readable time")
+    else:
+        if age > INTAKE_MAX_AGE:
+            problems.append(f"the nightly intake sweep run {run_id} is older than 30 hours")
+    conclusion = latest.get("conclusion")
+    if conclusion != "success":
+        # Only a known word is echoed, so nothing fetched reaches the log.
+        word = conclusion if conclusion in {"failure", "cancelled", "skipped", "timed_out", "neutral"} else "an unknown result"
+        problems.append(f"the nightly intake sweep run {run_id} concluded {word}")
+    return problems
+
+
 def _read_json(url: str) -> dict | None:
     request = urllib.request.Request(url, headers={"Cache-Control": "no-cache", "User-Agent": "acs-roadmap"})
     try:
@@ -123,11 +161,32 @@ def _read_issue(number: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _read_runs() -> list | None:
+    """The latest completed scheduled intake sweep run, or None when the read fails.
+
+    Goes through the shared runner so the argv is checked against its allowlist.
+    """
+    path = f"repos/{model.REPO}/actions/workflows/pr-intake.yml/runs?event=schedule&status=completed&per_page=1"
+    try:
+        code, stdout, _stderr = make_runner()(["api", "-i", path], None)
+        if code != 0:
+            return None
+        status, _headers, body = split_http(stdout)
+        runs = json.loads(body).get("workflow_runs")
+    except (RunnerError, ValueError, AttributeError):
+        return None
+    return runs if status == 200 and isinstance(runs, list) else None
+
+
 # The fixed names a comment may carry, keyed by check.
-CHECK_NAMES = {"page": "the published roadmap.json", "health": "the roadmap health issue"}
+CHECK_NAMES = {
+    "page": "the published roadmap.json",
+    "health": "the roadmap health issue",
+    "intake": "the nightly intake sweep",
+}
 
 
-def evaluate_checks(env: dict, read_json, read_issue, now: datetime) -> dict[str, list[str]]:
+def evaluate_checks(env: dict, read_json, read_issue, now: datetime, read_runs=lambda: None) -> dict[str, list[str]]:
     """Problems per check. Each check runs only while the switch it watches is on."""
     checks: dict[str, list[str]] = {}
     if env.get("ROADMAP_RENDER_ENABLED") == "true":
@@ -138,11 +197,15 @@ def evaluate_checks(env: dict, read_json, read_issue, now: datetime) -> dict[str
         number = _issue_number(configured)
         issue = read_issue(number) if number else None
         checks["health"] = check_health(configured, issue, now)
+    # The monitor runs from main, so it sees this check only after the intake tool is promoted.
+    if env.get("PR_INTAKE_ENFORCED") == "true":
+        checks["intake"] = check_intake(read_runs(), now)
     return checks
 
 
-def evaluate(env: dict, read_json, read_issue, now: datetime) -> list[str]:
-    return [problem for problems in evaluate_checks(env, read_json, read_issue, now).values() for problem in problems]
+def evaluate(env: dict, read_json, read_issue, now: datetime, read_runs=lambda: None) -> list[str]:
+    checks = evaluate_checks(env, read_json, read_issue, now, read_runs)
+    return [problem for problems in checks.values() for problem in problems]
 
 
 # --- The alarm ------------------------------------------------------------------------
@@ -238,7 +301,7 @@ def _gh(args: list[str]) -> tuple[int, str, str]:
 
 def main() -> int:
     env = dict(os.environ)
-    checks = evaluate_checks(env, _read_json, _read_issue, datetime.now(timezone.utc))
+    checks = evaluate_checks(env, _read_json, _read_issue, datetime.now(timezone.utc), _read_runs)
     problems = [problem for found in checks.values() for problem in found]
     for problem in problems:
         print(f"::error::{problem}")

@@ -7,9 +7,10 @@ design/2026-10-04-roadmap-rollout-design.md, package D, "What the fetch reads".
 This runs as the first tool step of the deploy build job, before any package is installed,
 under `python3 -I -S`. It is standard library only. `-I` drops the script's own directory
 from the import path, so `main` adds tools/ back inside its `try` and imports only
-closing_choice, which is standard library only too. An import failure therefore still
-writes the failure record. It calls `gh` and `git` by absolute path with explicit minimal
-environments, so nothing an earlier step wrote into the environment can redirect them.
+closing_choice there, plus gh_runner and roadmap_model through `_runner`. All three are
+standard library only too. An import failure therefore still writes the failure record. It
+calls `gh` and `git` by absolute path with explicit minimal environments, so nothing an
+earlier step wrote into the environment can redirect them.
 
 Every closing message is parsed for two booleans and then discarded. No message, title, or
 body text reaches the output file.
@@ -82,18 +83,15 @@ class FetchFailure(Exception):
 
 
 def _split_http(stdout: str) -> tuple[int, dict[str, str], str]:
-    normalized = stdout.replace("\r\n", "\n")
-    head, _, body = normalized.partition("\n\n")
-    lines = head.split("\n")
+    # One parser for every `gh -i` caller, so the fetch and the intake tool cannot drift
+    # apart. Imported here for the same reason `_runner` imports it: tools/ joins the import
+    # path only inside main's try.
+    import gh_runner
+
     try:
-        status = int(lines[0].split()[1])
-    except (IndexError, ValueError):
+        return gh_runner.split_http(stdout)
+    except gh_runner.RunnerError:
         raise FetchFailure("data", "response had no HTTP status line") from None
-    headers = {}
-    for line in lines[1:]:
-        name, _, value = line.partition(":")
-        headers[name.strip().lower()] = value.strip()
-    return status, headers, body
 
 
 def classify_response(returncode: int, stdout: str, stderr: str) -> dict:
@@ -131,13 +129,9 @@ def classify_response(returncode: int, stdout: str, stderr: str) -> dict:
 
 
 def _graphql(run, query: str, variables: dict) -> dict:
-    args = ["api", "-i", "graphql", "-f", f"query={query}"]
-    for key, value in variables.items():
-        if value is None:
-            continue
-        flag = "-F" if isinstance(value, int) else "-f"
-        args += [flag, f"{key}={value}"]
-    return classify_response(*run(args))
+    # The request travels on stdin as JSON, so no query text or variable reaches gh argv.
+    body = json.dumps({"query": query, "variables": {k: v for k, v in variables.items() if v is not None}})
+    return classify_response(*run(["api", "-i", "graphql", "--input", "-"], body))
 
 
 def _same_repo(block: dict | None, repo: str) -> bool:
@@ -401,28 +395,11 @@ def attach_facts(result: dict, git, repo: str) -> dict:
 
 
 def _runner(gh: str):
-    token = os.environ.get("GH_TOKEN", "")
-    env = {
-        "PATH": "/usr/bin:/bin",
-        "HOME": tempfile.mkdtemp(prefix="roadmap-gh-"),
-        "GH_TOKEN": token,
-        "GH_HOST": "github.com",
-    }
+    # Imported here, not at module level, because main adds tools/ to the import path only
+    # inside its try. An import failure there still writes the failure record.
+    import gh_runner
 
-    def run(args: list[str]) -> tuple[int, str, str]:
-        if not token:
-            # Without a token gh would prompt or fall back to ambient credentials. A synthetic 401
-            # classifies as permission, which is never retried.
-            return 0, "HTTP/2.0 401 Unauthorized\r\n\r\n{}", ""
-        try:
-            done = subprocess.run([gh, *args], env=env, capture_output=True, text=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            return 124, "", "gh timed out"
-        except OSError as exc:
-            return 127, "", f"could not run {gh}: {exc.strerror}"
-        return done.returncode, done.stdout, done.stderr
-
-    return run
+    return gh_runner.make_runner(gh)
 
 
 def main(argv: list[str] | None = None) -> int:

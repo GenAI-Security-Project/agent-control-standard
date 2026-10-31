@@ -42,6 +42,12 @@ def test_codeowners_header_names_the_leads_and_the_lapsed_invitations():
     assert "The project leads are @rocklambros,\n# @afogel, and @bar-capsule." in text
     assert "@artmaro holds write access." in text
     assert "lapsed and are not being re-sent" in text
+    # The header is the comment block before the first blank line, read unwrapped.
+    header = " ".join(line.lstrip("#").strip() for line in text.split("\n\n", 1)[0].splitlines())
+    assert (
+        "An owner login here is also exempt from pull request intake and can clear another"
+        " contributor's by approval." in header
+    )
 
 
 def test_project_owasp_yaml_names_the_leads_and_the_creators():

@@ -1,0 +1,74 @@
+[
+ {
+  "additions": 6,
+  "blob_url": "https://api.github.com/scrubbed",
+  "changes": 10,
+  "contents_url": "https://api.github.com/scrubbed",
+  "deletions": 4,
+  "filename": "reference-implementations/agt/test/envelope-log-sink-roundtrip.test.ts",
+  "patch": "scrubbed",
+  "raw_url": "https://api.github.com/scrubbed",
+  "sha": "ce9063b93cd1b1ddf92d24b7dd75612e182a2271",
+  "status": "modified"
+ },
+ {
+  "additions": 34,
+  "blob_url": "https://api.github.com/scrubbed",
+  "changes": 79,
+  "contents_url": "https://api.github.com/scrubbed",
+  "deletions": 45,
+  "filename": "reference-implementations/agt/test/handshake-declares-what-it-evaluates.test.ts",
+  "patch": "scrubbed",
+  "raw_url": "https://api.github.com/scrubbed",
+  "sha": "478c7384e176419c6adc8e985c02e42233f17536",
+  "status": "modified"
+ },
+ {
+  "additions": 55,
+  "blob_url": "https://api.github.com/scrubbed",
+  "changes": 55,
+  "contents_url": "https://api.github.com/scrubbed",
+  "deletions": 0,
+  "filename": "reference-implementations/agt/test/helpers/handshake.ts",
+  "patch": "scrubbed",
+  "raw_url": "https://api.github.com/scrubbed",
+  "sha": "c0712a9d134dfacee8b6572d61d37323eaf2cfa4",
+  "status": "added"
+ },
+ {
+  "additions": 6,
+  "blob_url": "https://api.github.com/scrubbed",
+  "changes": 7,
+  "contents_url": "https://api.github.com/scrubbed",
+  "deletions": 1,
+  "filename": "reference-implementations/agt/test/readme-captures.test.ts",
+  "patch": "scrubbed",
+  "raw_url": "https://api.github.com/scrubbed",
+  "sha": "c79b79ad683b78f65ea325e3a1166e84ea78cede",
+  "status": "modified"
+ },
+ {
+  "additions": 3,
+  "blob_url": "https://api.github.com/scrubbed",
+  "changes": 3,
+  "contents_url": "https://api.github.com/scrubbed",
+  "deletions": 0,
+  "filename": "reference-implementations/agt/test/sample-trace.test.ts",
+  "patch": "scrubbed",
+  "raw_url": "https://api.github.com/scrubbed",
+  "sha": "2242bf07f05befff2fd91a806744f719a6397725",
+  "status": "modified"
+ },
+ {
+  "additions": 2,
+  "blob_url": "https://api.github.com/scrubbed",
+  "changes": 2,
+  "contents_url": "https://api.github.com/scrubbed",
+  "deletions": 0,
+  "filename": "reference-implementations/agt/test/session-context-roundtrip.test.ts",
+  "patch": "scrubbed",
+  "raw_url": "https://api.github.com/scrubbed",
+  "sha": "049fba7d15245638f59caf51a402a568ab07e35d",
+  "status": "modified"
+ }
+]

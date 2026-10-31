@@ -301,7 +301,9 @@ def desired_labels() -> list[Label]:
         # Stock GitHub defaults. Not created by Step 2, but relied on by Step 12.
         Label(
             name="help wanted", color="008672",
-            description="Already accepted work. Safe to start without waiting on triage.",
+            description=(
+                "Already accepted work. Comment on the issue to claim it before opening the pull request."
+            ),
         ),
         Label(name="good first issue", color="7057ff", description="Good for newcomers"),
     ]
@@ -323,8 +325,8 @@ def desired_issues() -> list[Issue]:
 
     Every seeded issue carries `scope:in-focus`, `status:accepted`, and `help wanted`.
     Those three labels are what make the acceptance gate CONTRIBUTING.md describes an
-    invitation rather than a queue: a contributor can open a pull request against one
-    without waiting on triage. The 7 follow-ups are real findings the plan surfaced
+    invitation rather than a queue: a contributor comments on one to claim it, then opens
+    a pull request against it. The 7 follow-ups are real findings the plan surfaced
     while writing itself, but none sit on the ninety-day serial chain, so they carry
     `scope:deferred` and wait for a maintainer like anything else filed from outside.
 
