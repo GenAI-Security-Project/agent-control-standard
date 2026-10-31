@@ -8,7 +8,7 @@ Search existing issues and pull requests to avoid duplicating efforts.
 
 ## Current Priority Scope
 
-Reviewed at each milestone. Current window: the open milestones on the [milestones page](https://github.com/GenAI-Security-Project/agent-control-standard/milestones). Next review October 9, 2026.
+Reviewed at each milestone. Current window: the open milestones on the [milestones page](https://github.com/GenAI-Security-Project/agent-control-standard/milestones). Next review December 9, 2026.
 
 The project has one committed outcome:
 
@@ -24,16 +24,16 @@ or a comment, this wins.
 **In focus.** Work that feeds the runnable Guardian, the interoperability benchmark, or
 the conformance evidence that makes either credible:
 
-- The mandatory floor decision in PR #21, which gates everything behind it
 - The Claude Code, Cursor, and NVIDIA NAT adapters in PR #22
 - The AGT reference implementation in `reference-implementations/agt/`
 - Ports of that reference implementation to other runtimes: Python, Go, Rust, Codex
 - Production-hardening it, including span batching and OpenTelemetry collection
-- Resolving the fail-open default, which issues #32 and #37 attack from opposite ends
-- The ACS-Core conformance claim template
-- The requirement ledger and behavioral tests in milestone #33
-- Closing the Cursor file-read gap
+- Resolving the fail-open default in issue #32
+- Conformance claims against the ACS-Core claim template, issues #106 and #136
+- The requirement ledger and behavioral tests in issue #33
+- Closing the Cursor file-read gap in issue #212
 - Conformance and dogfooding reports that document where ACS fails in practice
+- The public site, when a change helps an evaluator find, install, or run the Guardian
 
 **Deferred to v0.2.0.** Real work, tracked, landing in a later release: async and composition,
 streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
@@ -180,7 +180,7 @@ shipping.
 
 ## Reporting Security Issues
 
-**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. We'll acknowledge within 72 hours and coordinate a fix and disclosure timeline with you.
+**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. [SECURITY.md](./SECURITY.md) sets the response times, and we coordinate a fix and disclosure timeline with you.
 
 ## Developer's Certificate of Origin 1.1
 
