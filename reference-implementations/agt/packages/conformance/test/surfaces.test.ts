@@ -1,15 +1,25 @@
 // packages/conformance/test/surfaces.test.ts
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, sep } from "node:path";
 import { readSurfaces, asPinned, asUpstream, SURFACE_NAMES } from "../src/surfaces.ts";
 
 const createdDirs: string[] = [];
 
-/** trash every fixture directory this file's tests create -- never rm -rf. */
+/** trash every fixture directory this file's tests create, falling back to
+ * tmpdir-scoped rmSync when the external trash binary is absent (#73). */
 async function trashDir(dir: string): Promise<void> {
-  await Bun.$`trash ${dir}`.quiet();
+  if (Bun.which("trash") !== null) {
+    await Bun.$`trash ${dir}`.quiet();
+    return;
+  }
+  const root = resolve(tmpdir());
+  const target = resolve(dir);
+  if (!target.startsWith(`${root}${sep}`)) {
+    throw new Error(`refusing to remove path outside tmpdir(): ${target}`);
+  }
+  rmSync(target, { recursive: true, force: true });
 }
 
 function fakeClone(): string {
