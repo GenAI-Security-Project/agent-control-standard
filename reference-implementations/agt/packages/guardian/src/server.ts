@@ -93,7 +93,13 @@ import {
   type ToolCallResultEnvelope,
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
-import { buildServerHello, type ServerHello } from "./handshake.ts";
+import {
+  buildServerHello,
+  isSupportedAcsVersion,
+  negotiateHandshake,
+  UNSUPPORTED_VERSION_CODE,
+  type ServerHello,
+} from "./handshake.ts";
 import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
 import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
 import type { RejectionReason } from "./otel-mapping.ts";
@@ -901,7 +907,21 @@ async function dispatch(
 
   if (envelope.method === HANDSHAKE_METHOD) {
     const env = onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure };
-    return { response: successResponse(envelope.id, buildServerHello(env)) };
+    const negotiated = negotiateHandshake(envelope.params, env);
+    if (!negotiated.ok) {
+      return { response: errorResponse(envelope.id, negotiated.code, negotiated.message) };
+    }
+    return { response: successResponse(envelope.id, negotiated.serverHello) };
+  }
+
+  if (!isSupportedAcsVersion(envelope.params.acs_version)) {
+    return {
+      response: errorResponse(
+        envelope.id,
+        UNSUPPORTED_VERSION_CODE,
+        `UNSUPPORTED_VERSION: unsupported acs_version ${JSON.stringify(envelope.params.acs_version)}`,
+      ),
+    };
   }
 
   // Two gated branches, one per ACS method this Guardian assembles a snapshot
