@@ -7,16 +7,20 @@ allowlisted reason string.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
-# run_conformance.py lives at adapters/ (two levels up from _common/tests/).
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ADAPTERS = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ADAPTERS))
 
 import run_conformance as rc  # noqa: E402
+from tests.integrations.claude_code import test_live  # noqa: E402
 
 
 class PlatformSelection(unittest.TestCase):
@@ -59,6 +63,32 @@ class PlatformSelection(unittest.TestCase):
         args = rc._parse_args(["claude", "cursor", "--strict"])
         self.assertEqual(args.platforms, ["claude", "cursor"])
         self.assertTrue(args.strict)
+
+
+class LiveClaudeIsOptIn(unittest.TestCase):
+    """The live Claude Code tests call the real claude CLI, so they run only when asked."""
+
+    def test_claude_on_path_alone_does_not_run_them(self):
+        with tempfile.TemporaryDirectory() as bindir:
+            fake = Path(bindir) / "claude"
+            fake.write_text("#!/bin/sh\nexit 0\n")
+            fake.chmod(0o755)
+            env = {k: v for k, v in os.environ.items() if k != "ACS_LIVE_CLAUDE"}
+            env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+            probe = ("from tests.integrations.claude_code.test_live import LiveClaudeCodeRoundTrip as C\n"
+                     "print(C.__unittest_skip__)\nprint(C.__unittest_skip_why__)\n")
+            p = subprocess.run([sys.executable, "-c", probe], cwd=ADAPTERS, env=env,
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        skipped, why = p.stdout.splitlines()[-2:]
+        self.assertEqual(skipped, "True")
+        self.assertEqual(why, test_live.LIVE_SKIP_REASON)
+
+    def test_allowlisted_reasons_match_the_test(self):
+        live = {e for e in rc.EXPECTED_SKIPS if e[0] == "claude-code"}
+        self.assertEqual({e[1].rsplit(".", 1)[-1] for e in live},
+                         {"test_benign_bash_runs", "test_destructive_bash_blocked"})
+        self.assertEqual({e[2] for e in live}, {test_live.LIVE_SKIP_REASON})
 
 
 class SkipClassifierIsExact(unittest.TestCase):

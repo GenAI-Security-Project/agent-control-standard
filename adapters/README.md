@@ -40,7 +40,7 @@ uv run python run_conformance.py claude cursor nat
 
 `claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core` and `package` checks run once for every command, regardless of the platform selection.
 
-It prints every skip by name + reason and fails on any failure **or any _unexpected_ skip** — a skip not on the exact allowlist. The allowlist tolerates only real-framework smoke tests that need an interactive product no runner has (the Cursor GUI, an authenticated `claude` CLI); a dependency-gated test (NAT when `nvidia-nat-core` is installed) that silently skips is a failure, never green. `--strict` additionally fails on the allowlisted skips too, for a fully-provisioned gate.
+It prints every skip by name + reason and fails on any failure **or any _unexpected_ skip** — a skip not on the exact allowlist. The allowlist tolerates only the manual Cursor GUI procedure and the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`; a dependency-gated test (NAT when `nvidia-nat-core` is installed) that silently skips is a failure, never green. `--strict` additionally fails on the allowlisted skips too, for a fully-provisioned gate.
 
 Under the hood it drives two complementary layers:
 

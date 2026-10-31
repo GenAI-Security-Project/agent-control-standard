@@ -22,9 +22,9 @@ Exit status:
     allowlist. A dependency-gated test (e.g. NAT when nvidia-nat IS
     installed) that silently skips is therefore a build failure, never
     banked as green.
-  - the allowlist tolerates only real-framework smoke tests that need an
-    interactive product no runner has (Cursor GUI, authenticated
-    `claude` CLI).
+  - the allowlist tolerates only the manual Cursor GUI procedure and
+    the live Claude Code tests, which call the real `claude` CLI and run
+    only with ACS_LIVE_CLAUDE=1.
   - with --strict: non-zero on ANY skip at all, including the allowlisted
     ones — for a fully-provisioned gate that demands every test run.
 
@@ -84,19 +84,17 @@ class _CountingResult(unittest.TextTestRunner.resultclass):
         self.successes += 1
 
 
-# Skips tolerated in headless CI (tests needing the Cursor GUI or an
-# authenticated `claude` CLI). Full (suite, test id, reason) triples
-# compared for exact equality; any other skip fails the build.
+# Exact (suite, test id, reason) triples tolerated by default; any other skip fails the run.
 EXPECTED_SKIPS = frozenset({
     ("cursor",
      "tests.integrations.cursor.test_live.LiveCursorPlaceholder.test_run_manual_procedure",
      "Cursor live verification is a manual procedure; see live_verification.md"),
     ("claude-code",
      "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_benign_bash_runs",
-     "`claude` CLI not on PATH"),
+     "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"),
     ("claude-code",
      "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_destructive_bash_blocked",
-     "`claude` CLI not on PATH"),
+     "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"),
 })
 
 

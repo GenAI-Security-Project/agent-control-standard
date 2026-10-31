@@ -128,7 +128,11 @@ uv run python run_conformance.py claude
 # Runs the shared Guardian, _common, core and package checks, then Claude Code's suite.
 ```
 
-The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip.
+The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip. The live tests, which drive the real `claude` CLI on your account, run only with `ACS_LIVE_CLAUDE=1`:
+
+```bash
+ACS_LIVE_CLAUDE=1 uv run python run_conformance.py claude
+```
 
 ### Smoke #2 — real Claude end-to-end (~60-90s)
 

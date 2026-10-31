@@ -1,16 +1,4 @@
-"""
-Live end-to-end test: real Claude Code -> ACS adapter -> Guardian.
-
-Spawns `claude --print` in a subprocess against a project-level settings.json
-that wires the adapter, exercises both ALLOW and DENY paths, asserts Claude
-Code's observable output reflects the Guardian's verdict.
-
-Requires:
-  - `claude` CLI available on PATH (Claude Code installed)
-  - Python 3.10+
-
-Skipped automatically when `claude` is not on PATH.
-"""
+"""Live: real Claude Code, the adapter and a Guardian; runs only with ACS_LIVE_CLAUDE=1, since it calls the real claude CLI."""
 from __future__ import annotations
 
 import json
@@ -28,16 +16,19 @@ ADAPTER_DIR = HERE.parents[2] / "src" / "acs" / "integrations" / "claude_code"
 ADAPTER = ADAPTER_DIR / "adapter.py"
 
 
-CLAUDE_AVAILABLE = shutil.which("claude") is not None
+LIVE = os.environ.get("ACS_LIVE_CLAUDE") == "1"
+LIVE_SKIP_REASON = "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"
 
 
 from acs.testing.harness import launch_guardian  # noqa: E402
 
 
-@unittest.skipUnless(CLAUDE_AVAILABLE, "`claude` CLI not on PATH")
+@unittest.skipUnless(LIVE, LIVE_SKIP_REASON)
 class LiveClaudeCodeRoundTrip(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if shutil.which("claude") is None:
+            raise RuntimeError("ACS_LIVE_CLAUDE=1 is set but the `claude` CLI is not on PATH")
         cls.workdir = tempfile.mkdtemp(prefix="acs-live-cc-")
 
         # Launch first: settings.json below needs the OS-assigned port
