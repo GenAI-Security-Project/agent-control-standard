@@ -53,8 +53,9 @@ import {
   type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
 import {
+  asClampedErrorCode,
+  asNumber,
   asObject,
-  DECISION_FAILURE_EVENT,
   decisionFailureAttributes,
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
@@ -88,7 +89,9 @@ export const FAILURE_CLASS_BY_KIND: Readonly<Record<string, FailureClass>> = {
 };
 
 export function failureClassOf(kind: unknown): FailureClass {
-  return (typeof kind === "string" ? FAILURE_CLASS_BY_KIND[kind] : undefined) ?? "other";
+  return typeof kind === "string" && Object.hasOwn(FAILURE_CLASS_BY_KIND, kind)
+    ? FAILURE_CLASS_BY_KIND[kind]!
+    : "other";
 }
 
 /**
@@ -154,6 +157,8 @@ export type ConversionSummary = {
   skippedUngoverned: number;
   /** Lines that were not JSON, not an audit entry, or had no posture. */
   skippedUnreadable: number;
+  /** Count of seq gaps, duplicate seq values, or recorded_at going backwards. */
+  sequenceDiscrepancies?: number;
 };
 
 function readString(value: unknown): string | undefined {
@@ -238,6 +243,10 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     skippedUnreadable: 0,
   };
 
+  let expectedSeq = 1;
+  let lastInstantMs: number | undefined;
+  let sequenceDiscrepancies = 0;
+
   for (const line of auditText.split("\n")) {
     if (line.trim() === "") continue;
     let entry: JsonObject | undefined;
@@ -249,6 +258,21 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     if (entry === undefined) {
       summary.skippedUnreadable += 1;
       continue;
+    }
+    const seqVal = asNumber(entry.seq);
+    if (seqVal !== undefined && Number.isInteger(seqVal)) {
+      if (seqVal !== expectedSeq) {
+        sequenceDiscrepancies += 1;
+      }
+      expectedSeq = seqVal + 1;
+    }
+    const entryInstant = readInstant(entry.recorded_at);
+    if (entryInstant !== undefined) {
+      const ms = entryInstant.getTime();
+      if (lastInstantMs !== undefined && ms < lastInstantMs) {
+        sequenceDiscrepancies += 1;
+      }
+      lastInstantMs = ms;
     }
     const outcome = readString(entry.outcome);
     if (outcome === "ungoverned") {
@@ -267,7 +291,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     const kind = readString(failure.kind);
     const method = readString(entry.method);
     if (method === undefined) {
-      const key = kind !== undefined && kind in FAILURE_DETAIL_BY_KIND ? kind : "other";
+      const key = kind !== undefined && Object.hasOwn(FAILURE_DETAIL_BY_KIND, kind) ? kind : "other";
       summary.skippedNoMethod[key] = (summary.skippedNoMethod[key] ?? 0) + 1;
       continue;
     }
@@ -277,17 +301,20 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       continue;
     }
     const codeText = ERROR_CODE_IN_MESSAGE.exec(readString(failure.message) ?? "")?.[1];
-    const errorCode = codeText === undefined ? undefined : Number(codeText);
+    const errorCode = codeText === undefined ? undefined : asClampedErrorCode(Number(codeText));
     if (errorCode === REPLAY_DETECTED_CODE) {
       summary.skippedReplay += 1;
       continue;
     }
 
-    const instant = readInstant(entry.recorded_at);
-    const detail = (kind !== undefined ? FAILURE_DETAIL_BY_KIND[kind] : undefined) ?? GENERIC_DETAIL;
+    const instant = entryInstant;
+    const detail =
+      kind !== undefined && Object.hasOwn(FAILURE_DETAIL_BY_KIND, kind)
+        ? FAILURE_DETAIL_BY_KIND[kind]!
+        : GENERIC_DETAIL;
     const attributes: Attributes = {};
     const sessionId = readString(entry.session_id);
-    if (sessionId !== undefined) {
+    if (sessionId !== undefined && mapping.stepSpanAttributes.includes("acs.session.id")) {
       attributes["acs.session.id"] = sessionUuid(sessionId);
     }
     // The entry's request_id is the id the Guardian's span for the same
@@ -295,14 +322,14 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     // rpc_id, which equalled params.request_id whenever the host did not
     // derive the request id from its own call id.
     const requestId = readString(entry.request_id) ?? readString(entry.rpc_id);
-    if (requestId !== undefined) {
+    if (requestId !== undefined && mapping.stepSpanAttributes.includes("acs.request_id")) {
       attributes["acs.request_id"] = requestId;
     }
     // The entry is one instant, so the span is too: it opens and closes at
     // recorded_at. The host, not the Guardian, is the reporter.
     const span = tracer.startSpan(spanName, { attributes, root: true, startTime: instant });
     span.addEvent(
-      DECISION_FAILURE_EVENT,
+      mapping.failureEventName,
       decisionFailureAttributes({
         class: failureClassOf(kind),
         posture: posture === "deny" ? "fail_closed" : "fail_open",
@@ -321,6 +348,9 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
   // here; shutdown then releases the processor.
   await provider.forceFlush();
   summary.written = output.written();
+  if (sequenceDiscrepancies > 0) {
+    summary.sequenceDiscrepancies = sequenceDiscrepancies;
+  }
   await provider.shutdown();
   return summary;
 }
@@ -348,6 +378,10 @@ if (import.meta.main) {
   );
   if (summary.written !== summary.converted) {
     console.error(`only ${summary.written} of ${summary.converted} span(s) reached ${otelPath}`);
+    process.exit(1);
+  }
+  if ((summary.sequenceDiscrepancies ?? 0) > 0) {
+    console.error(`audit log had ${summary.sequenceDiscrepancies} sequence/timestamp discrepancy(ies)`);
     process.exit(1);
   }
 }
