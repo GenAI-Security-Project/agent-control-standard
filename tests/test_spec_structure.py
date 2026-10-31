@@ -52,3 +52,20 @@ def test_numbered_sections_run_without_gaps():
         if missing:
             gaps.append(f"{path.relative_to(DOCS.parent)} skips section(s) {missing}")
     assert not gaps, "Numbered section sequences with gaps:\n" + "\n".join(gaps)
+
+
+def test_approver_authentication_and_timeout_disposition_attribution_are_documented():
+    """Specification §9 and §9.1 and ask-details.json must document out-of-band
+    human approver verification and forbid attributing timeout_disposition: allow
+    to an approver who did not act (#51)."""
+    import json
+
+    root = DOCS.parent
+    spec_text = (DOCS / "spec" / "instrument" / "specification.md").read_text(encoding="utf-8")
+    assert "timeout_disposition" in spec_text
+    assert "approver who did not act" in spec_text
+
+    ask_schema = json.loads((root / "specification" / "v0.1.0" / "ask-details.json").read_text(encoding="utf-8"))
+    td_desc = ask_schema["properties"]["timeout_disposition"].get("description", "")
+    assert "MUST NOT attribute" in td_desc
+

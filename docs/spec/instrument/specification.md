@@ -314,7 +314,9 @@ Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline
 
 ## 9. Approver Model
 
-ASK approvers MAY be human, agent, or service. `ask_details.approver = { type, id, endpoint }`. The Approver receives an ACS-shaped request and returns an ACS-shaped decision. Approver authentication is REQUIRED. Guardian MUST verify approver identity against policy.
+ASK approvers MAY be human, agent, or service. `ask_details.approver = { type, id, endpoint, auth }`. The Approver receives an ACS-shaped request and returns an ACS-shaped decision. Approver authentication is REQUIRED across all three approver types (`human`, `agent`, `service`), and the Guardian MUST verify the identity of the party returning an approval decision against deployment policy before honoring it. The optional `approver.auth` member (`bearer` or `mtls`) describes authentication for a machine (`agent` or `service`) approver endpoint; its presence on the wire does not by itself establish that verification occurred. A deployment authenticates a `human` approver out of band through its trusted approval interface and conveys the verified identity to the Guardian; a claimed `approver.id` alone is insufficient.
+
+`ask_details.timeout_disposition` (`"allow"` or `"deny"`, default `"deny"`) governs what happens when `timeout_seconds` elapses with no verified approver decision. A timeout resolved as `"allow"` records a deployment-policy timeout outcome: it MUST NOT record the named `human`, `agent`, or `service` approver as having granted approval.
 
 Single-hop only in v0.1. Approvers MUST NOT return ASK. Quorum and recursive ASK deferred to v0.2.
 
@@ -322,11 +324,13 @@ Single-hop only in v0.1. Approvers MUST NOT return ASK. Quorum and recursive ASK
 
 When a Guardian raises ASK because a request is outside `Intent.parsed`, the approver's grant MAY include an `intent_extension` field (see [`ask-details.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/ask-details.json)) containing capabilities to add to `Intent.parsed`. The extension's `scope` selects between `this_request` (capabilities apply only to the in-flight request) and `session` (capabilities are appended to `Intent.parsed` for the remainder of the session).
 
-On `scope: session`, the Guardian MUST:
+On `scope: session`, when and only when a verified approver grants the request, the Guardian MUST:
 
 1. Append the capabilities to `Intent.parsed`.
-2. Write a ContextEntry with `step_type: "intent_extension"` recording the approver identity, the granted capabilities, and the originating ASK's `step_id`.
+2. Write a ContextEntry with `step_type: "intent_extension"` recording the verified approver identity, the granted capabilities, and the originating ASK's `step_id`.
 3. Carry the extension's `provenance` forward distinct from the original `parser_provenance` so audits can distinguish parser-derived capabilities from approver-extended ones.
+
+A timeout resolved under `timeout_disposition: "allow"` is not an approver grant: it MUST NOT append `intent_extension` capabilities to `Intent.parsed` or write an `intent_extension` ContextEntry attributing a capability grant to an approver who did not act.
 
 Intent extensions are subject to the session's `scope_mode`: a Guardian operating under `scope_mode: strict` MUST NOT honor extensions that would add capabilities the deployment policy forbids in strict mode. This mechanism is the only conformant path to mutate `Intent.parsed` after Intent is committed.
 
