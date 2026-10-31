@@ -57,6 +57,9 @@ jobs:
           ref: main
 
       - name: Verify the published navigation still matches
+        # main has no verifier until the first promotion after this job lands, and a
+        # scheduled run reads this file from integration, so the check waits for it.
+        if: hashFiles('tools/verify_site_nav.py') != ''
         env:
           PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
         run: python3 tools/verify_site_nav.py "$PAGE_URL"
