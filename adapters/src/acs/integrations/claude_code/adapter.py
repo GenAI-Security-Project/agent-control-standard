@@ -77,6 +77,7 @@ from acs.client import (
     current_turn,
     open_session,
     open_turn,
+    record_mcp_use,
     round_trip,
 )
 from acs.core import (
@@ -652,7 +653,9 @@ def main() -> int:
 
 def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             server_hello: dict[str, Any], posture: FailPosture, config: Config) -> int:
-    """One step of a negotiated session: the turn boundary, the request, the round trip and the host response."""
+    tool_name = event.get("tool_name")
+    if isinstance(tool_name, str) and tool_name.startswith("mcp__"):
+        record_mcp_use(session_id, tool=tool_name, workspace=_turn_ws(event))
     # Turn tracking: a UserPromptSubmit OPENS a turn with an explicit,
     # decision-eligible steps/turnStart BEFORE the userMessage. A Guardian
     # MAY deny to block the whole turn (turn-start.json); the deny lands in

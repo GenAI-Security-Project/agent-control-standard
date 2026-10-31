@@ -89,6 +89,10 @@ Cursor's `hooks.json` supports `matcher` regex per hook entry. The adapter does 
 
 Cursor's per-hook `failClosed: true` makes Cursor block when the hook crashes, times out, or returns invalid JSON. The adapter's `ACS_DEFAULT_DENY`, the negotiated posture and `ACS_STARTUP_POSTURE` decide the failures the adapter handles, and every step the adapter decides answers in Cursor's native shape: an explicit allow when it proceeds, a deny when it does not. Use both in production: `failClosed: true` in `hooks.json` for a failed hook process, `ACS_DEFAULT_DENY=1` for a Guardian that cannot decide.
 
+## Concurrency
+
+Cursor's documentation does not say whether hooks of one session overlap, so every session-state update (`record_step` for each step sent, opening or closing a turn, and a signed session's first MCP call's `profile_claim_degraded` record) is one locked read-modify-write through a temp file of its own; no lock is held during a Guardian round trip. The shell and MCP `before`/`after` events carry no call id (see the table above), so parallel shell or MCP calls cannot be paired with their results. The Guardian's rolling `chain_hash` orders steps by arrival, so the order of concurrent steps is the order they reach the Guardian. `acs-cursor-wire` refuses to wire when another copy of the adapter is wired in an enterprise, project or user `hooks.json`, or in the Claude Code settings Cursor's third-party import runs.
+
 ## Conformance posture
 
 The Cursor adapter implements ACS-Core's mandatory floor in the same shape as the Claude Code adapter:

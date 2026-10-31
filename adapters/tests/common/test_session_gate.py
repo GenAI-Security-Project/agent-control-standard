@@ -297,6 +297,33 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/turnStart"],
                                  "a blocked prompt's userMessage is never sent")
 
+    def test_mcp_use_records_the_degraded_claim_once_per_session(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        claude = {"cwd": "/tmp", "hook_event_name": "PreToolUse", "tool_name": "mcp__github__create_issue",
+                  "tool_input": {"title": "x"}}
+        cursor_mcp = {"workspace_roots": ["/tmp"], "tool_name": "create_issue", "tool_input": "{}", "url": "http://mcp"}
+        cursor_tool = {"workspace_roots": ["/tmp"], "tool_name": "MCP:create_issue", "tool_input": {"title": "x"},
+                       "tool_use_id": "call-1", "tool_output": "{}"}
+        claude_hook, cursor_hook = str(BIN / "acs-claude-code-hook"), str(BIN / "acs-cursor-hook")
+        runs = {
+            "claude-code": ("session_id", 1, [([claude_hook], claude)] * 2),
+            "cursor MCP hooks": ("conversation_id", 1, [([cursor_hook, "beforeMCPExecution"], cursor_mcp)] * 2),
+            "cursor tool hooks": ("conversation_id", 1, [([cursor_hook, "preToolUse"], cursor_tool),
+                                                         ([cursor_hook, "postToolUse"], cursor_tool)]),
+            "cursor Shell": ("conversation_id", 0, [([cursor_hook, "preToolUse"], {**cursor_tool, "tool_name": "Shell"})]),
+        }
+        for name, (key, expected, calls) in runs.items():
+            with self.subTest(name):
+                session = str(uuid.uuid4())
+                audits = []
+                for argv, event in calls:
+                    p = subprocess.run(argv, input=json.dumps({**event, key: session}), capture_output=True,
+                                       text=True, env=self._env(guardian.url()), timeout=30)
+                    audits += [r["acs_audit_event"] for r in _audit_records(p.stderr)]
+                self.assertEqual(audits.count("profile_claim_degraded"), expected, audits)
+
     def test_negotiated_per_method_timeouts_bound_their_own_methods(self) -> None:
         """A 300 ms toolCallRequest timeout ends that wait; toolCallResult waits under the 5 s default and its deny applies."""
         guardian = ProgrammableGuardian(hmac_secret=SECRET)

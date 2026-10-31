@@ -36,6 +36,10 @@ Block-shape hooks are only those where a block actually PREVENTS the action: `Po
 
 An arrived decision the host CANNOT apply is substituted to a block/deny (never silently proceeded) and audited. Note the substitutions here are **deployment behavior, not spec-mandated**: §9.2 places disposition substitution on the Guardian, and §6's `timeout_decision: deny` default governs an *expired* defer, not an instant client-side substitution. A deployment that needs approver-driven resumption should run ACS-Core's ASK/DEFER flow at the Guardian layer and have the Guardian return an effective decision before responding to the adapter. A contradictory `modifications` object (both wholesale + structured, or overlapping targets) fails closed to `deny` per §6.3:146.
 
+## Concurrency
+
+Claude Code can run the hooks of parallel tool calls at the same time. `UserPromptSubmit` and `Stop` open and close the turn, and a signed session's first MCP tool call records `profile_claim_degraded`; other tool hooks only read session state. Every write of session state is one locked read-modify-write through a temp file of its own, and no lock is held during a Guardian round trip. The Guardian's rolling `chain_hash` orders steps by arrival, so the order of concurrent steps is the order they reach the Guardian. A second wired copy of the adapter would send every event twice, and both requests for one tool call would carry the same `request_id`, so `acs-claude-code-wire` refuses to wire when it finds one in user, project, local or managed settings, in the hooks of an installed plugin that `enabledPlugins` turns on, or, for a settings file Cursor imports, in a `hooks.json` Cursor loads.
+
 ## Conformance posture
 
 The Claude Code adapter implements ACS-Core's mandatory floor. Every row below describes what the code in `adapter.py` actually does — this table drifted from the code once (PR #22 review caught six false claims in it), so treat the code as ground truth and this table as its description:

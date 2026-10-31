@@ -74,6 +74,10 @@ workflow:
 
 NAT ships `nvidia-nat-security` with `defense_middleware` for content-level checks (PII, output verification, pre-tool LLM gating). The ACS adapter does NOT replace these — both can be attached to the same group. Ordering is by list position in YAML; place ACS first if you want the policy gate before content filters, last if you want content rewrites to be visible to ACS as the final state.
 
+## Concurrency
+
+NAT can invoke several wrapped functions at once in one process. The middleware correlates each call through its own invocation context and keeps no per-call file state; the session's handshake decision is shared by every call. The Guardian's rolling `chain_hash` orders steps by arrival, so the order of concurrent steps is the order they reach the Guardian.
+
 ## Conformance posture
 
 The NAT adapter implements ACS-Core's mandatory floor:

@@ -72,6 +72,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from acs.integrations._duplicates import (
+    cursor_hooks,
+    cursor_imported_settings,
+    hook_files,
+    project_roots,
+    refuse,
+    wired_copies,
+)
 from acs.integrations._hook_command import resolve_hook_command
 
 
@@ -116,9 +124,15 @@ GATE_HOOKS = frozenset({
 WIRE_MARKER = "# acs-adapter-wired"
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Command-line construction
-# ──────────────────────────────────────────────────────────────────────
+def wired_elsewhere(target: Path, *, home: Path, cwd: Path, cursor_imports: bool) -> tuple[list[str], list[str]]:
+    """Adapter copies in the hooks.json files Cursor loads besides target, and in the Claude Code
+    settings Cursor's third-party import runs."""
+    projects = project_roots(target, home=home, cwd=cwd)
+    copies = wired_copies(hook_files(cursor_hooks(home=home, projects=projects), target=target))
+    imported = (wired_copies(hook_files(cursor_imported_settings(home=home, projects=projects), target=target))
+                if cursor_imports else [])
+    return copies, imported
+
 
 def build_command(*, hook_command: str, event_name: str,
                    guardian_url: str,
@@ -363,6 +377,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Comma-separated hostnames the adapter will accept as Guardian URLs.")
     p.add_argument("--unwire", action="store_true",
                     help="Remove any ACS-wired hooks (preserves non-ACS entries).")
+    p.add_argument("--cursor-third-party-imports-off", action="store_true",
+                    help="Cursor's 'Include Third-Party Plugins, Skills, and Other Configs' setting is off, "
+                         "so Cursor runs no Claude Code hooks; skip the copies only that import combines.")
     p.add_argument("--write", action="store_true",
                     help="Actually write the changes to hooks.json (with timestamped backup). "
                          "Without this flag, this tool only prints what it WOULD do.")
@@ -382,6 +399,9 @@ def main(argv: list[str] | None = None) -> int:
             hook_command = resolve_hook_command(HOOK_SCRIPT, args.hook_command)
         except ValueError as e:
             p.error(str(e))
+        if refuse(*wired_elsewhere(settings_path, home=Path.home(), cwd=Path.cwd(),
+                                   cursor_imports=not args.cursor_third_party_imports_off)):
+            return 1
 
     hook_names = [h.strip() for h in args.hooks.split(",") if h.strip()]
     args.hooks = hook_names  # for the warning function

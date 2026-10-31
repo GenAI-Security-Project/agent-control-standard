@@ -60,11 +60,13 @@ Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`
 
 ### 3. Wire `hooks.json`
 
-`acs-cursor-wire` does this safely: dry-run by default, atomic write with a timestamped backup when you pass `--write`. It wires the absolute path of the installed `acs-cursor-hook`, and stops if that command is not installed, or if a `--hook-command` you pass is not an absolute path to an executable file.
+`acs-cursor-wire` does this safely: dry-run by default, atomic write with a timestamped backup when you pass `--write`. It refuses to wire when another copy of the adapter is already wired in a hook file the host may load, and lists where, since two copies would send every step twice, and both requests for one tool call would carry the same `request_id`. It checks the enterprise, project and user `hooks.json` listed below and, unless you pass `--cursor-third-party-imports-off` because Cursor's **Include Third-Party Plugins, Skills, and Other Configs** setting is off, the Claude Code settings Cursor imports. It wires the absolute path of the installed `acs-cursor-hook`, and stops if that command is not installed, or if a `--hook-command` you pass is not an absolute path to an executable file.
 
-Cursor reads from two locations:
-- `~/.cursor/hooks.json` — **user-level** (every workspace)
-- `<workspace>/.cursor/hooks.json` — **project-level** (this workspace only; overrides user-level)
+Cursor runs the hooks from every source below and merges their answers, with any deny winning:
+- `~/.cursor/hooks.json`: **user-level** (every workspace)
+- `<workspace>/.cursor/hooks.json`: **project-level** (this workspace only)
+- the enterprise `hooks.json` (`/Library/Application Support/Cursor/` on macOS, `/etc/cursor/` on Linux, `C:\ProgramData\Cursor\` on Windows), team hooks and plugin hooks
+- with **Include Third-Party Plugins, Skills, and Other Configs** on, the default: the Claude Code hooks in `~/.claude/settings.json` and the project's `.claude/settings.json` and `.claude/settings.local.json`
 
 ```bash
 # Preview wiring into ~/.cursor/hooks.json (default — user-level)
@@ -323,7 +325,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Decision honoring (§6.4) | ✓ Cursor blocks on permission deny; adapter uses exit-2 where stdout JSON is not available; fail-open emits `ACS_AUDIT` event; audit `cause` field distinguishes failure modes (transport vs signature vs malformed envelope vs replay vs skew) |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1 |
-| Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: it maps `beforeMCPExecution` to `steps/toolCallRequest` and `afterMCPExecution` to `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. Known limitation. |
+| Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: it maps `beforeMCPExecution` to `steps/toolCallRequest` and `afterMCPExecution` to `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. The first MCP tool a signed session uses records `profile_claim_degraded` once, whether it arrives through the MCP hooks or through `preToolUse` and `postToolUse` as `MCP:<tool>`. Known limitation. |
 
 ### Per-hook honesty table
 

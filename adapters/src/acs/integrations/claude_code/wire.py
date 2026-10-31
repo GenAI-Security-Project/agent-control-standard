@@ -74,6 +74,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from acs.integrations._duplicates import (
+    claude_code_plugins,
+    claude_code_settings,
+    cursor_hooks,
+    cursor_imported_settings,
+    hook_files,
+    project_roots,
+    refuse,
+    wired_copies,
+)
 from acs.integrations._hook_command import resolve_hook_command
 
 
@@ -110,9 +120,18 @@ GATE_HOOKS = {"PreToolUse", "UserPromptSubmit"}
 WIRE_MARKER = "# acs-adapter-wired"
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Command-line construction
-# ──────────────────────────────────────────────────────────────────────
+def wired_elsewhere(target: Path, *, home: Path, cwd: Path, cursor_imports: bool) -> tuple[list[str], list[str]]:
+    """Adapter copies in the settings and enabled plugins Claude Code loads besides target, and in the
+    Cursor hooks that run alongside target when Cursor imports it."""
+    projects = project_roots(target, home=home, cwd=cwd)
+    copies = wired_copies([*hook_files(claude_code_settings(home=home, projects=projects), target=target),
+                           *claude_code_plugins(home=home, projects=projects)])
+    imported_by_cursor = target.expanduser().resolve() in {
+        path.resolve() for path in cursor_imported_settings(home=home, projects=projects)}
+    imported = (wired_copies(hook_files(cursor_hooks(home=home, projects=projects), target=target))
+                if cursor_imports and imported_by_cursor else [])
+    return copies, imported
+
 
 def build_command(*, hook_command: str, guardian_url: str,
                    secret_file: str | None,
@@ -383,6 +402,9 @@ def main(argv: list[str] | None = None) -> int:
                          "(defense in depth against env-var attacks).")
     p.add_argument("--unwire", action="store_true",
                     help="Remove any ACS-wired hooks (preserves non-ACS entries).")
+    p.add_argument("--cursor-third-party-imports-off", action="store_true",
+                    help="Cursor's 'Include Third-Party Plugins, Skills, and Other Configs' setting is off, "
+                         "so Cursor runs no Claude Code hooks; skip the copies only that import combines.")
     p.add_argument("--write", action="store_true",
                     help="Actually write the changes to settings.json (with timestamped backup). "
                          "Without this flag, this tool only prints what it WOULD do.")
@@ -403,6 +425,9 @@ def main(argv: list[str] | None = None) -> int:
             hook_command = resolve_hook_command(HOOK_SCRIPT, args.hook_command)
         except ValueError as e:
             p.error(str(e))
+        if refuse(*wired_elsewhere(settings_path, home=Path.home(), cwd=Path.cwd(),
+                                   cursor_imports=not args.cursor_third_party_imports_off)):
+            return 1
 
     hook_names = [h.strip() for h in args.hooks.split(",") if h.strip()]
     args.hooks = hook_names  # for the warning function

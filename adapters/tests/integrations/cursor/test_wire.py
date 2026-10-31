@@ -9,6 +9,7 @@ assert the generated hooks.json.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,7 @@ def _run_default_wire() -> dict:
              f"--secret-file={secret}",
              f"--settings={settings}",
              "--write"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, cwd=d, env={**os.environ, "HOME": d},
         )
         if proc.returncode != 0:
             raise AssertionError(

@@ -96,7 +96,11 @@ between adapter invocations. For session-state, this would let them
 inject a fake `parent_step_id` into the next `subagentStart` payload.
 *Mitigation:* Both cache directories created mode 0700; cache files
 created mode 0600 via `os.open(...O_CREAT, 0o600)`. A local attacker
-without same-uid privileges cannot read or write the state. The
+without same-uid privileges cannot read or write the state. Each
+session-state update is one read-modify-write under an exclusive lock on
+a sidecar file, published through a temp file of its own with
+`os.replace`, so parallel hook processes neither lose updates nor read a
+partial file. The
 handshake record carries an HMAC under the session key over the
 decision, the session and the Guardian URL, so a record that is
 modified, damaged, copied from another endpoint or left by an earlier

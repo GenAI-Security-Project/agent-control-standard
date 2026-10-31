@@ -70,7 +70,10 @@ class WireRefusesUnusableCommands(unittest.TestCase):
     )
 
     def _main(self, module, argv: list[str]) -> int:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        # A home and working directory of its own, so no hook file on this machine counts as a second copy.
+        with tempfile.TemporaryDirectory() as home, contextlib.chdir(home), \
+                mock.patch.dict(os.environ, {"HOME": home}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             try:
                 return module.main(argv)
             except SystemExit as e:

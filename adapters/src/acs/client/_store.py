@@ -1,10 +1,21 @@
-"""Per-session adapter state persisted across hook processes."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any, TypeVar
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
+
+T = TypeVar("T")
 
 
 # ----- Per-session adapter state (cross-invocation) -----
@@ -62,16 +73,17 @@ def load_session_state(session_id: str, *, workspace: str | None = None) -> dict
 
 
 def save_session_state(session_id: str, state: dict, *, workspace: str | None = None) -> None:
-    """Persist the session-state dict atomically. No-op on session_id empty.
+    """Replace the session's state; the file is owner-only because its step history backs parent_step_id (§8)."""
+    update_session_state(session_id, lambda current: (current.clear(), current.update(state)),
+                         workspace=workspace)
 
-    The directory is created with mode 0700 and the file with mode 0600
-    so other local users cannot read or poison adapter state. State
-    files contain step_id histories that an attacker could use to spoof
-    `parent_step_id` in subagentStart payloads — a security boundary
-    for the chain integrity properties of §8.
-    """
+
+def update_session_state(session_id: str, change: Callable[[dict], T], *,
+                         workspace: str | None = None) -> T | None:
+    """Apply change as one locked read-modify-write, since a session's hooks run concurrently; returns its result, or None when the state cannot be stored."""
     if not session_id:
-        return
+        return None
+    path = _session_state_path(session_id, workspace=workspace)
     try:
         _SESSION_STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
         # mkdir(exist_ok=True) does not chmod an existing dir — enforce explicitly
@@ -79,34 +91,74 @@ def save_session_state(session_id: str, state: dict, *, workspace: str | None = 
             os.chmod(_SESSION_STATE_DIR, 0o700)
         except OSError:
             pass
-        path = _session_state_path(session_id, workspace=workspace)
-        tmp = path.with_suffix(".json.tmp")
-        # Open with 0o600 from the start so the file is never group/world-readable
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with _locked(path):
+            state = load_session_state(session_id, workspace=workspace)
+            result = change(state)
+            _write(path, state)
+            return result
+    except OSError:
+        return None
+
+
+@contextlib.contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    fd = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        else:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(fd)
+
+
+def _write(path: Path, state: dict[str, Any]) -> None:
+    """Publish the state atomically through a temp file of its own, so concurrent writers never share one."""
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".state-", suffix=".tmp")
+    try:
         with os.fdopen(fd, "w") as f:
             json.dump(state, f)
-        os.replace(tmp, path)
+        os.replace(temporary, path)
+    except BaseException:
         try:
-            os.chmod(path, 0o600)
+            os.unlink(temporary)
         except OSError:
             pass
-    except OSError:
-        pass
+        raise
 
 
 def record_step(session_id: str, step_id: str, *, workspace: str | None = None) -> None:
     """Append step_id to the session's seen-list and update last_step_id."""
     if not session_id or not step_id:
         return
-    st = load_session_state(session_id, workspace=workspace)
-    seen = st.setdefault("seen_step_ids", [])
-    if step_id not in seen:
-        seen.append(step_id)
-        # Bound the list so it doesn't grow unbounded across long sessions
-        if len(seen) > 1000:
-            del seen[: len(seen) - 1000]
-    st["last_step_id"] = step_id
-    save_session_state(session_id, st, workspace=workspace)
+
+    def change(state: dict) -> None:
+        seen = state.get("seen_step_ids")
+        seen = seen if isinstance(seen, list) else []
+        if step_id not in seen:
+            seen.append(step_id)
+            del seen[:-1000]
+        state["seen_step_ids"] = seen
+        state["last_step_id"] = step_id
+
+    update_session_state(session_id, change, workspace=workspace)
+
+
+def mark_once(session_id: str, flag: str, *, workspace: str | None = None) -> bool:
+    """True the first time `flag` is marked for the session, False after; True also when the state cannot be stored, so a record is never lost."""
+    def change(state: dict) -> bool:
+        marked = state.get("marked")
+        marked = marked if isinstance(marked, dict) else {}
+        state["marked"] = {**marked, flag: True}
+        return not marked.get(flag)
+
+    first = update_session_state(session_id, change, workspace=workspace)
+    return first is not False
 
 
 # ----- The open turn -----
@@ -119,14 +171,8 @@ def current_turn(session_id: str | None, *, workspace: str | None = None) -> str
 
 
 def open_turn(session_id: str, turn_id: str, *, workspace: str | None = None) -> None:
-    """Record turn_id as the session's open turn, for later steps to stamp and the turn end to close."""
-    state = load_session_state(session_id, workspace=workspace)
-    state["turn_id"] = turn_id
-    save_session_state(session_id, state, workspace=workspace)
+    update_session_state(session_id, lambda state: state.update(turn_id=turn_id), workspace=workspace)
 
 
 def close_turn(session_id: str, *, workspace: str | None = None) -> None:
-    """Forget the session's open turn once its turnEnd has been sent or recorded."""
-    state = load_session_state(session_id, workspace=workspace)
-    state.pop("turn_id", None)
-    save_session_state(session_id, state, workspace=workspace)
+    update_session_state(session_id, lambda state: state.pop("turn_id", None), workspace=workspace)
