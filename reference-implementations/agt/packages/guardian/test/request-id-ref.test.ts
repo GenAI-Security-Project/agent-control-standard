@@ -2,7 +2,8 @@ import { describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startGuardian } from "../src/index.ts";
+import { startGuardian, type StartGuardianOptions } from "../src/index.ts";
+import { handshakeFor } from "../../../test/helpers/handshake.ts";
 import type { EnvelopeLogEntry } from "../src/envelope-log-sink.ts";
 
 // hooks.md, toolCallResult: a Guardian SHOULD resolve request_id_ref against
@@ -46,6 +47,7 @@ function toolResult(sessionId: string, requestIdRef?: string) {
 }
 
 async function post(url: string, body: unknown): Promise<Record<string, unknown>> {
+  await handshakeFor(url, body);
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return (await res.json()) as Record<string, unknown>;
 }
@@ -61,10 +63,13 @@ function findings(path: string): EnvelopeLogEntry[] {
     .filter((entry) => entry.direction === "finding");
 }
 
-async function withGuardian(run: (url: string, logPath: string) => Promise<void>): Promise<void> {
+async function withGuardian(
+  run: (url: string, logPath: string) => Promise<void>,
+  options: Partial<StartGuardianOptions> = {},
+): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "acs-request-id-ref-"));
   const logPath = join(dir, "envelopes.jsonl");
-  const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", envelopeLogPath: logPath });
+  const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", envelopeLogPath: logPath, ...options });
   try {
     await run(guardian.url, logPath);
   } finally {
@@ -72,6 +77,11 @@ async function withGuardian(run: (url: string, logPath: string) => Promise<void>
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/** A replay store that lets every request through. §10.3's replay check
+ * refuses a repeat inside the skew window first, so the duplicate finding
+ * fires only for a repeat that check missed; this stands in for one. */
+const MISSED_REPLAY: Partial<StartGuardianOptions> = { replayProtectionStore: { seenOrRemember: () => "fresh" } };
 
 describe("request_id_ref resolution", () => {
   it("records a reference the session never saw, and leaves the decision to policy", async () => {
@@ -186,6 +196,19 @@ describe("request_id_ref resolution", () => {
       const recorded = findings(logPath);
       expect(recorded).toHaveLength(1);
       expect(recorded[0]?.envelope).toEqual({ finding: "request_id_duplicate", session_id: sessionId, request_id: requestId });
+    }, MISSED_REPLAY);
+  });
+
+  it("refuses a repeat inside the skew window with REPLAY_DETECTED, before any finding", async () => {
+    await withGuardian(async (url, logPath) => {
+      const sessionId = crypto.randomUUID();
+      const requestId = crypto.randomUUID();
+      await post(url, toolRequest(sessionId, requestId));
+
+      const repeat = await post(url, toolRequest(sessionId, requestId));
+
+      expect((repeat.error as { code: number }).code).toBe(-32005);
+      expect(findings(logPath)).toHaveLength(0);
     });
   });
 
@@ -208,7 +231,7 @@ describe("request_id_ref resolution", () => {
 
       const codes = findings(logPath).map((entry) => (entry.envelope as { finding: string }).finding);
       expect(codes).toEqual(["request_id_duplicate"]);
-    });
+    }, MISSED_REPLAY);
   });
 
   it("puts the finding on the result's own chain entry, which is the Guardian's audit record", async () => {

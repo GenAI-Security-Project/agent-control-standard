@@ -1095,6 +1095,27 @@ describe("AcsPlugin's load-time gate, on the hooks it actually registers", () =>
     }
   });
 
+  // A secret without its label must not unload the plugin: OpenCode would
+  // run every tool ungoverned. It registers, and every tool call is refused.
+  it("registers and refuses every tool when ACS_HMAC_SECRET is set without ACS_HMAC_KEY_ID", async () => {
+    const previous = { secret: process.env.ACS_HMAC_SECRET, keyId: process.env.ACS_HMAC_KEY_ID };
+    process.env.ACS_HMAC_SECRET = Buffer.alloc(32, 0x73).toString("base64");
+    delete process.env.ACS_HMAC_KEY_ID;
+    try {
+      const hooks = await AcsPlugin({} as never);
+      const before = hooks["tool.execute.before"];
+      expect(before).toBeDefined();
+      await expect(
+        before!({ tool: "bash", sessionID: "s-1", callID: "c-1" }, { args: { command: "ls" } }),
+      ).rejects.toThrow(/ACS_HMAC_KEY_ID/);
+    } finally {
+      for (const [name, value] of [["ACS_HMAC_SECRET", previous.secret], ["ACS_HMAC_KEY_ID", previous.keyId]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   // Direction one: a rename applied to the hook METHOD and not to the table.
   // This is the shape an upstream rename takes while it is half-applied, and
   // it is the shape that used to register silently -- OpenCode would have
