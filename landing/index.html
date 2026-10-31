@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!--ACS:CSP-->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ACS Agent Control Standard</title>
 <meta name="description" content="The open standard for runtime agent control. Declarative hooks, policy enforcement, and observability across AI agent frameworks.">
@@ -9,31 +10,21 @@
 <link rel="stylesheet" href="assets/acs.css">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="wordmark" href=".">
+    <img src="assets/icon.svg" alt="" width="28" height="28">
+    <span>ACS</span>
+  </a>
+  <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+</header>
 <div class="layout">
-  <aside class="sidebar">
+  <div class="sidebar">
     <a class="wordmark" href=".">
       <img src="assets/icon.svg" alt="" width="28" height="28">
       <span>ACS</span>
     </a>
-    <nav aria-label="Sections">
-      <a class="nav-primary" href="docs/">Specification</a>
-      <a href="docs/topics/faq/">FAQ</a>
-      <a href="https://github.com/GenAI-Security-Project/agent-control-standard/milestones">Roadmap</a>
-      <a href="#problem">The problem</a>
-      <a href="#solution">The solution</a>
-      <a href="#architecture">How it works</a>
-      <a href="#why-now">Why now</a>
-      <a href="#status">Spec status</a>
-      <a href="#workstreams">Workstreams</a>
-      <a href="#contribute">Contribute</a>
-    </nav>
-    <div>
-      <h2>External resources</h2>
-      <nav aria-label="External resources">
-        <a href="https://github.com/GenAI-Security-Project/agent-control-standard">GitHub</a>
-        <a href="https://owasp.slack.com">Slack</a>
-      </nav>
-    </div>
+    <!--ACS:NAV-->
     <button id="theme-toggle" type="button" aria-label="Switch to dark theme">
       <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/>
@@ -44,9 +35,9 @@
       </svg>
       <span class="visually-hidden">Switch theme</span>
     </button>
-  </aside>
+  </div>
 
-  <main>
+  <main id="main">
     <section class="hero">
       <div>
         <h1>The runtime control plane for AI agents.</h1>
@@ -268,6 +259,51 @@
       root.setAttribute("data-theme", next);
       try { localStorage.setItem("acs-theme", next); } catch (e) { /* ignore */ }
       label();
+    });
+  })();
+
+  // Phone drawer. Without this script the pane renders as a static block below the
+  // header strip, so the class on the root is what lets the stylesheet hide it.
+  (function () {
+    var root = document.documentElement;
+    var body = document.body;
+    var button = document.getElementById("menu-toggle");
+    var sidebar = document.querySelector(".sidebar");
+    if (!button || !sidebar) return;
+    root.classList.add("has-drawer");
+
+    function setOpen(open) {
+      body.classList.toggle("nav-open", open);
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    button.addEventListener("click", function () {
+      setOpen(button.getAttribute("aria-expanded") !== "true");
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && body.classList.contains("nav-open")) {
+        setOpen(false);
+        button.focus();
+      }
+    });
+
+    // Most pane links are anchors on this page. Left open, the panel would cover the
+    // section the reader just asked for.
+    sidebar.addEventListener("click", function (event) {
+      if (event.target.closest("a")) setOpen(false);
+    });
+
+    // A phone has no Escape key, so a tap or a focus move outside the panel and the
+    // button closes it.
+    function outside(node) {
+      return !!node && !sidebar.contains(node) && !button.contains(node);
+    }
+    document.addEventListener("click", function (event) {
+      if (body.classList.contains("nav-open") && outside(event.target)) setOpen(false);
+    });
+    sidebar.addEventListener("focusout", function (event) {
+      if (body.classList.contains("nav-open") && outside(event.relatedTarget)) setOpen(false);
     });
   })();
 </script>

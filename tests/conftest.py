@@ -6,12 +6,17 @@ unquoted value, a stylesheet, a base element, an inline script body. So this one
 enumerates the positions that do not fetch instead. Anything else carrying an absolute
 URL counts as a fetch, which makes an unanticipated construct a failure rather than a
 silent pass.
+
+Never accept a change to this file on a green suite. Inject a third-party host into a fixture and watch `tests/test_third_party_guard.py` fail first.
 """
 import hashlib
 import html.parser
 import json
 import re
 from pathlib import Path
+
+import pytest
+import _docs_build
 
 # Positions a browser resolves but never fetches from. Everything else is a fetch.
 # Form action is deliberately absent. A form needs no click: a script calling submit()
@@ -294,3 +299,8 @@ def stray_scripts(built_site: Path) -> list[str]:
         if hashlib.sha256(path.read_bytes()).hexdigest() not in digests:
             stray.append(rel)
     return stray
+
+
+@pytest.fixture(scope="session")
+def built_docs(tmp_path_factory):
+    return _docs_build.build_docs(tmp_path_factory.mktemp("docs"))

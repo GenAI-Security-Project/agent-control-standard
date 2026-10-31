@@ -1,0 +1,26 @@
+--- nav-item.html.upstream
++++ nav-item.html
+@@ -1,5 +1,13 @@
+ {#-
+-  This file was automatically generated - do not edit
++  Renders one row of the docs site's left pane.
++
++  This is Material's own partials/nav-item.html with one change. The current page's
++  link carries aria-current="page", so a screen reader announces it and the stylesheet
++  can weight it the way the landing page weights its current link. Nothing else here
++  differs from upstream.
++
++  The installed partial and the diff to this file live in overrides/.upstream/partials.
++  After editing this file, run: uv run python tools/rederive_overrides.py --record
+ -#}
+ {% macro render_status(nav_item, type) %}
+   {% set class = "md-status md-status--" ~ type %}
+@@ -153,7 +161,7 @@
+           <span class="md-nav__icon md-icon"></span>
+         </label>
+       {% endif %}
+-      <a href="{{ nav_item.url | url }}" class="md-nav__link md-nav__link--active">
++      <a href="{{ nav_item.url | url }}" class="md-nav__link md-nav__link--active" aria-current="page">
+         {{ render_content(nav_item) }}
+       </a>
+       {% if toc %}
