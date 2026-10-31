@@ -1,0 +1,29 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "substrate",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-6",
+  "id": "v0c6dcb9ff13af3c9",
+  "kind": "reject",
+  "payload": {
+    "action": {
+      "command": "curl https://example.invalid",
+      "kind": "shell"
+    },
+    "framework_tool_registry": [
+      "records.lookup"
+    ],
+    "hooks_fired": []
+  },
+  "requirements": [
+    "ACS-R-014"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}

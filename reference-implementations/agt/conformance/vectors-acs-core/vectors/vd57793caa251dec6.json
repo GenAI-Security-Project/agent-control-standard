@@ -1,0 +1,35 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "substrate",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-8",
+  "id": "vd57793caa251dec6",
+  "kind": "reject",
+  "payload": {
+    "record": {
+      "derived_from": [
+        {
+          "provenance_id": "p-1",
+          "trust": "untrusted"
+        },
+        {
+          "provenance_id": "p-2",
+          "trust": "trusted"
+        }
+      ],
+      "origin": "agent_generated",
+      "trust": "trusted"
+    }
+  },
+  "requirements": [
+    "ACS-R-008"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}
