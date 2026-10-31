@@ -1,8 +1,9 @@
-"""Envelope constants, response binding, timestamps and IDs."""
 from __future__ import annotations
 
 import datetime
 import uuid
+from collections.abc import Mapping
+from typing import Any
 
 
 ACS_VERSION = "0.1.0"
@@ -14,7 +15,28 @@ DEFAULT_SKEW_WINDOW_MS = 300_000
 MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MiB
 
 
-# ----- Response↔request binding -----
+def request_envelope(method: str, *, request_id: str, metadata: Mapping[str, Any],
+                     payload: Mapping[str, Any]) -> dict[str, Any]:
+    """An unsigned step request; round_trip signs it just before sending."""
+    return {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": method,
+        "params": {
+            "acs_version": ACS_VERSION,
+            "request_id": request_id,
+            "timestamp": iso8601_now(),
+            "metadata": dict(metadata),
+            "payload": dict(payload),
+        },
+    }
+
+
+def turn_start_envelope(metadata: Mapping[str, Any], turn_id: str) -> dict[str, Any]:
+    """turn_id doubles as request_id, as turn-start.json recommends."""
+    return request_envelope("steps/turnStart", request_id=turn_id, metadata={**metadata, "turn_id": turn_id},
+                            payload={"turn_id": turn_id, "triggered_by": "user_message"})
+
 
 def response_matches_request(request: dict, response: dict) -> bool:
     """Bind a Guardian response to the request that elicited it.

@@ -25,6 +25,7 @@ class Resolution:
     audit_type: str
     cause: str
     fields: Mapping[str, Any]
+    message: str = ""
 
     @property
     def label(self) -> str:
@@ -65,10 +66,10 @@ class FailPosture:
     def resolve(self, outcome: Undecided | Refused) -> Resolution:
         """The one place a step without a usable decision is settled: a refusal blocks, anything else follows the posture."""
         if isinstance(outcome, Refused):
-            return Resolution(False, "guardian_refusal_fail_closed", outcome.cause, outcome.fields)
+            return Resolution(False, "guardian_refusal_fail_closed", outcome.cause, outcome.fields, outcome.message)
         if self.deny_on_failure:
-            return Resolution(False, "decision_failure_fail_closed", outcome.cause, outcome.fields)
-        return Resolution(True, "fail_open_bypass", outcome.cause, outcome.fields)
+            return Resolution(False, "decision_failure_fail_closed", outcome.cause, outcome.fields, outcome.message)
+        return Resolution(True, "fail_open_bypass", outcome.cause, outcome.fields, outcome.message)
 
 
 @dataclass(frozen=True)

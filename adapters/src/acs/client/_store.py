@@ -107,3 +107,26 @@ def record_step(session_id: str, step_id: str, *, workspace: str | None = None) 
             del seen[: len(seen) - 1000]
     st["last_step_id"] = step_id
     save_session_state(session_id, st, workspace=workspace)
+
+
+# ----- The open turn -----
+
+def current_turn(session_id: str | None, *, workspace: str | None = None) -> str | None:
+    if not session_id:
+        return None
+    turn_id = load_session_state(session_id, workspace=workspace).get("turn_id")
+    return turn_id if isinstance(turn_id, str) else None
+
+
+def open_turn(session_id: str, turn_id: str, *, workspace: str | None = None) -> None:
+    """Record turn_id as the session's open turn, for later steps to stamp and the turn end to close."""
+    state = load_session_state(session_id, workspace=workspace)
+    state["turn_id"] = turn_id
+    save_session_state(session_id, state, workspace=workspace)
+
+
+def close_turn(session_id: str, *, workspace: str | None = None) -> None:
+    """Forget the session's open turn once its turnEnd has been sent or recorded."""
+    state = load_session_state(session_id, workspace=workspace)
+    state.pop("turn_id", None)
+    save_session_state(session_id, state, workspace=workspace)

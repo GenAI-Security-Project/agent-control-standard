@@ -61,23 +61,20 @@ ADAPTER_VERSION = __version__
 try:
     from acs.client import (
         Config,
-        Decided,
         FailPosture,
         Handshake,
         Negotiated,
         Resolution,
         Undecided,
         audit_event,
-        exchange,
         open_session,
-        sign_envelope,
+        round_trip,
     )
     from acs.core import (
-        ACS_VERSION,
-        iso8601_now as _common_iso8601_now,
         method_evaluated,
         modify_composition_violation,
         normalize_decision,
+        request_envelope,
     )
 except ImportError as _acs_import_error:
     # Without acs.core (rfc8785, §10) NAT would run ungoverned, so the import fails loudly.
@@ -183,10 +180,6 @@ if _NAT_AVAILABLE:
 
 
 # ----- Helpers (module-scope so tests can exercise them without instantiating the middleware) -----
-
-
-def _iso8601_now() -> str:
-    return _common_iso8601_now()
 
 
 def _coerce_uuid(raw: str | None) -> str:
@@ -505,26 +498,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             audit_event("method_not_evaluated", method=method,
                         session_id=self._session_id)
             return
-        request = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": method,
-            "params": {
-                "acs_version": ACS_VERSION,
-                "request_id": str(uuid.uuid4()),
-                "timestamp": _iso8601_now(),
-                "metadata": {
-                    "agent_id": self._agent_id,
-                    "session_id": self._session_id,
-                    "platform": "nat",
-                },
-                "payload": payload,
-            },
-        }
-        sign_envelope(request, session_id=self._session_id)
-        outcome = self._exchange(request)
-        if not isinstance(outcome, Decided):
-            audit_event("lifecycle_hook_failed", **{**outcome.fields, "cause": outcome.cause,
+        request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(),
+                                   payload=payload)
+        result = self._round_trip(request)
+        if isinstance(result, Resolution):
+            audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
                                                     "method": method, "session_id": self._session_id})
 
     def _correlation_request_id(self, context) -> str:
@@ -588,12 +566,13 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 request_id=correlation_id,
             )
         except Exception as e:  # noqa: BLE001
-            outcome = Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
+            result = self._posture.resolve(Undecided("adapter_exception", {"error": str(e)},
+                                                     f"adapter error: {e}"))
         else:
-            outcome = self._exchange(request)
-        if not isinstance(outcome, Decided):
-            return self._settle_pre(context, self._posture.resolve(outcome), outcome.message)
-        response = outcome.response
+            result = self._round_trip(request)
+        if isinstance(result, Resolution):
+            return self._settle_pre(context, result)
+        response = result.response
 
         # Total coercion: malformed verdict fields must not throw here.
         decision, reasoning, mods = normalize_decision(
@@ -679,12 +658,13 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 request_id_ref=correlation_id if request_sent else None,
             )
         except Exception as e:  # noqa: BLE001
-            outcome = Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
+            result = self._posture.resolve(Undecided("adapter_exception", {"error": str(e)},
+                                                     f"adapter error: {e}"))
         else:
-            outcome = self._exchange(request)
-        if not isinstance(outcome, Decided):
-            return self._settle_post(context, self._posture.resolve(outcome))
-        response = outcome.response
+            result = self._round_trip(request)
+        if isinstance(result, Resolution):
+            return self._settle_post(context, result)
+        response = result.response
 
         decision, reasoning, mods = normalize_decision(
             (response or {}).get("result"))
@@ -742,9 +722,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
     # ----- helpers -----
 
-    def _exchange(self, request: dict):
-        return exchange(request, guardian_url=self._acs.guardian_url,
-                        timeout_s=self._posture.timeout_for(request.get("method", "")), session_id=self._session_id)
+    def _round_trip(self, request: dict):
+        return round_trip(request, guardian_url=self._acs.guardian_url, posture=self._posture,
+                          session_id=self._session_id)
+
+    def _metadata(self) -> dict[str, Any]:
+        """The envelope metadata every step of this middleware carries."""
+        return {"agent_id": self._agent_id, "session_id": self._session_id,
+                "platform": "nat", "adapter_version": ADAPTER_VERSION}
 
     def _settle_pre(self, context, resolution: Resolution, message: str = ""):
         """Settle a pre_invoke step without a usable decision: block unless the resolution proceeds, and record why."""
@@ -753,7 +738,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                               "method": "steps/toolCallRequest"})
         if resolution.proceed:
             return None
-        return self._block(context, message or resolution.cause)
+        return self._block(context, message or resolution.message or resolution.cause)
 
     def _settle_post(self, context, resolution: Resolution):
         """Settle a post_invoke step without a usable decision: redact the output the Guardian never vetted unless the resolution lets it through, and record why."""
@@ -782,13 +767,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         request_id: str | None = None,
         request_id_ref: str | None = None,
     ) -> dict:
-        """Build a signed ACS request envelope matching request-envelope.json."""
-        metadata = {
-            "agent_id": self._agent_id,
-            "session_id": self._session_id,
-            "platform": "nat",
-            "adapter_version": ADAPTER_VERSION,
-        }
+        """Build an ACS request envelope matching request-envelope.json; the round trip signs it."""
         if method == "steps/toolCallRequest":
             payload: dict[str, Any] = {
                 "tool": {"name": tool_name},
@@ -809,20 +788,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             if request_id_ref:
                 payload["request_id_ref"] = request_id_ref
 
-        envelope = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": method,
-            "params": {
-                "acs_version": ACS_VERSION,
-                "request_id": request_id or str(uuid.uuid4()),
-                "timestamp": _iso8601_now(),
-                "metadata": metadata,
-                "payload": payload,
-            },
-        }
-        sign_envelope(envelope, session_id=self._session_id)
-        return envelope
+        return request_envelope(method, request_id=request_id or str(uuid.uuid4()),
+                                metadata=self._metadata(), payload=payload)
 
 # ----- NAT registration -----
 

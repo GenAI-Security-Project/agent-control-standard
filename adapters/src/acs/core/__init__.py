@@ -23,10 +23,12 @@ _EXPORTS = {
     "modify_composition_violation": "_decision",
     "normalize_decision": "_decision",
     "parse_iso8601": "_envelope",
+    "request_envelope": "_envelope",
     "response_matches_request": "_envelope",
     "schemas_dir": "_schemas",
     "server_hello_problem": "_handshake",
     "sign_with_key": "_signing",
+    "turn_start_envelope": "_envelope",
     "verify_with_key": "_signing",
 }
 

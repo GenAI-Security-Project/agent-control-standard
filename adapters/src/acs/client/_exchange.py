@@ -10,8 +10,9 @@ import urllib.request
 from dataclasses import replace
 from typing import Any
 
+from acs.client._config import FailPosture, Resolution
 from acs.client._outcome import Decided, Outcome, Refused, Undecided
-from acs.client._signing import verify_signature
+from acs.client._signing import sign_envelope, verify_signature
 from acs.client._urls import validate_guardian_url
 from acs.core import MAX_REQUEST_BODY_BYTES, guardian_error_cause, is_guardian_refusal, response_matches_request
 
@@ -178,6 +179,18 @@ def _read(resp: Any, cancelled: threading.Event) -> bytes:
             break
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPosture,
+               session_id: str | None) -> Decided | Resolution:
+    """Sign the request as the last step before sending, exchange it within its method's timeout, and resolve anything but a usable decision with the posture."""
+    try:
+        sign_envelope(request, session_id=session_id)
+    except Exception as e:  # noqa: BLE001
+        return posture.resolve(Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}"))
+    outcome = exchange(request, guardian_url=guardian_url,
+                       timeout_s=posture.timeout_for(request.get("method", "")), session_id=session_id)
+    return outcome if isinstance(outcome, Decided) else posture.resolve(outcome)
 
 
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,

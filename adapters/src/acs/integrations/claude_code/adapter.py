@@ -67,26 +67,25 @@ from acs import __version__
 
 from acs.client import (
     Config,
-    Decided,
     FailPosture,
     Handshake,
     Refused,
     Resolution,
     Undecided,
     audit_event,
-    exchange,
-    load_session_state,
+    close_turn,
+    current_turn,
     open_session,
-    save_session_state,
-    sign_envelope,
+    open_turn,
+    round_trip,
 )
 from acs.core import (
-    ACS_VERSION,
     KNOWN_DECISIONS,
-    iso8601_now,
     method_evaluated,
     modify_composition_violation,
     normalize_decision,
+    request_envelope,
+    turn_start_envelope,
 )
 from acs.integrations.claude_code.hook import _event_name
 
@@ -283,31 +282,13 @@ def _turn_ws(event: dict[str, Any]) -> str | None:
     return event.get("cwd") or None
 
 
-def _current_turn_id(session_id: str | None, event: dict[str, Any]) -> str | None:
-    if not session_id:
-        return None
-    return load_session_state(session_id, workspace=_turn_ws(event)).get("turn_id")
-
-
-def _open_turn(session_id: str, turn_id: str, event: dict[str, Any]) -> None:
-    st = load_session_state(session_id, workspace=_turn_ws(event))
-    st["turn_id"] = turn_id
-    save_session_state(session_id, st, workspace=_turn_ws(event))
-
-
-def _close_turn(session_id: str, event: dict[str, Any]) -> None:
-    st = load_session_state(session_id, workspace=_turn_ws(event))
-    st.pop("turn_id", None)
-    save_session_state(session_id, st, workspace=_turn_ws(event))
-
-
 def _payload_turn_end(event: dict[str, Any]) -> dict[str, Any]:
     """steps/turnEnd — closes the turn opened at the last UserPromptSubmit.
     turn_id comes from session state (empty if no turn is open, in which
     case build_request skips the emission). Claude's Stop fires on normal
     turn completion and carries no error discriminator, so outcome is
     'completed'."""
-    turn_id = _current_turn_id(event.get("session_id"), event)
+    turn_id = current_turn(event.get("session_id"), workspace=_turn_ws(event))
     return {"turn_id": turn_id or "", "outcome": "completed"}
 
 
@@ -401,25 +382,17 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
     if subagent_spawn:
         method = "steps/subagentStart"
 
-    metadata: dict[str, Any] = {
-        "agent_id": _agent_id(event),
-        "session_id": session_id,
-        "platform": "claude-code",
-        "adapter_version": ADAPTER_VERSION,
-    }
-    for k in ("cwd", "transcript_path", "permission_mode"):
-        if event.get(k):
-            metadata[k] = event[k]
+    metadata = _metadata(event)
 
     # Stamp the open turn's id on in-turn steps (request-envelope.json:69).
     if method in _IN_TURN_METHODS:
-        tid = _current_turn_id(session_id, event)
+        tid = current_turn(session_id, workspace=_turn_ws(event))
         if tid:
             metadata["turn_id"] = tid
 
     # steps/turnEnd needs a turn_id (>=1); if no turn is open there is
     # nothing to close honestly, so skip the emission (main audits it).
-    if method == "steps/turnEnd" and not _current_turn_id(session_id, event):
+    if method == "steps/turnEnd" and not current_turn(session_id, workspace=_turn_ws(event)):
         return {}
 
     # For PreToolUse (including the Task→subagentStart remap), pin
@@ -442,52 +415,24 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
             payload["subagent_session_id"] = str(uuid.uuid5(
                 uuid.NAMESPACE_URL, f"claude-code:subagent:{request_id}"))
 
-    envelope = {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": method,
-        "params": {
-            "acs_version": ACS_VERSION,
-            "request_id": request_id,
-            "timestamp": iso8601_now(),
-            "metadata": metadata,
-            "payload": payload,
-        },
-    }
-    sign_envelope(envelope, session_id=session_id)
-    return envelope
+    return request_envelope(method, request_id=request_id, metadata=metadata, payload=payload)
 
 
-def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
-    """steps/turnStart opening the turn for a UserPromptSubmit. turn_id
-    SHOULD equal the envelope's request_id (turn-start.json), so we use it
-    for both. triggered_by is user_message — a user prompt opened this
-    turn. Decision-eligible: a Guardian MAY deny to block the whole turn."""
-    session_id = event.get("session_id") or ""
+def _metadata(event: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "agent_id": _agent_id(event),
-        "session_id": session_id,
+        "session_id": event.get("session_id") or "",
         "platform": "claude-code",
         "adapter_version": ADAPTER_VERSION,
-        "turn_id": turn_id,
     }
     for k in ("cwd", "transcript_path", "permission_mode"):
         if event.get(k):
             metadata[k] = event[k]
-    envelope = {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": "steps/turnStart",
-        "params": {
-            "acs_version": ACS_VERSION,
-            "request_id": turn_id,
-            "timestamp": iso8601_now(),
-            "metadata": metadata,
-            "payload": {"turn_id": turn_id, "triggered_by": "user_message"},
-        },
-    }
-    sign_envelope(envelope, session_id=session_id)
-    return envelope
+    return metadata
+
+
+def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
+    return turn_start_envelope(_metadata(event), turn_id)
 
 
 def _open_session(event: dict[str, Any], config: Config) -> Handshake:
@@ -662,19 +607,6 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
 
 # ─── Main flow ──────────────────────────────────────────────────────────────
 
-def _guardian_roundtrip(request: dict[str, Any], hook_name: str, session_id: str | None,
-                        guardian_url: str, posture: FailPosture) -> tuple[dict | None, int | None]:
-    """POST one request. Returns (response, None) for a usable decision, or
-    (None, exit_code) once a failure has been settled in the hook's shape;
-    shared by the turnStart pre-step and the main step."""
-    outcome = exchange(request, guardian_url=guardian_url, timeout_s=posture.timeout_for(request.get("method", "")),
-                       session_id=session_id)
-    if isinstance(outcome, Decided):
-        return outcome.response, None
-    sys.stderr.write(f"acs-adapter: {outcome.message or outcome.cause}\n")
-    return None, _settle(posture.resolve(outcome), hook_name, session_id)
-
-
 def main() -> int:
     config = Config.from_env(os.environ)
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
@@ -739,12 +671,11 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     if hook_name == "UserPromptSubmit":
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
-            ts_response, terminal = _guardian_roundtrip(
-                build_turn_start_request(event, turn_id), "UserPromptSubmit", session_id,
-                config.guardian_url, posture)
-            if terminal is not None:
-                return terminal
-            ts_decision, ts_reason, _ = normalize_decision(ts_response.get("result"))
+            result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url,
+                                posture=posture, session_id=session_id)
+            if isinstance(result, Resolution):
+                return _settle(result, "UserPromptSubmit", session_id)
+            ts_decision, ts_reason, _ = normalize_decision(result.response.get("result"))
             if ts_decision != "allow":
                 # turnStart is a gate boundary — the host can't apply
                 # modify/ask/defer to "a turn is starting", so any non-allow
@@ -757,7 +688,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         else:
             audit_event("method_not_evaluated", method="steps/turnStart",
                         hook=hook_name, session_id=session_id)
-        _open_turn(session_id, turn_id, event)
+        open_turn(session_id, turn_id, workspace=_turn_ws(event))
 
     try:
         request = build_request(event)
@@ -781,23 +712,21 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         audit_event("method_not_evaluated", method=method, hook=hook_name,
                     session_id=session_id)
         if hook_name == "Stop":
-            _close_turn(session_id, event)
+            close_turn(session_id, workspace=_turn_ws(event))
         return 0
     if method == "steps/toolCallResult":
         origin = ("steps/subagentStart" if _is_subagent_tool(event.get("tool_name"))
                   else "steps/toolCallRequest")
-        if (not method_evaluated(server_hello, origin)
-                and request["params"]["payload"].pop("request_id_ref", None) is not None):
+        if not method_evaluated(server_hello, origin):
             # The originating request was never sent, so citing it would dangle.
-            sign_envelope(request, session_id=request["params"]["metadata"]["session_id"])
+            request["params"]["payload"].pop("request_id_ref", None)
 
-    response, terminal = _guardian_roundtrip(request, hook_name, session_id,
-                                             config.guardian_url, posture)
-    if terminal is not None:
-        return terminal
+    result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
+    if isinstance(result, Resolution):
+        return _settle(result, hook_name, session_id)
+    response = result.response
 
-    # translate_response runs outside _guardian_roundtrip's try/except and
-    # exit 1 means the host proceeds, so a translation bug fails closed here.
+    # A translation bug would exit 1, which the host reads as proceed, so it fails closed here.
     try:
         _emit(translate_response(response, hook_name,
                                  original_input=event.get("tool_input") or {}))
@@ -808,7 +737,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
 
     # Close the turn after the turnEnd has been emitted/recorded.
     if hook_name == "Stop":
-        _close_turn(session_id, event)
+        close_turn(session_id, workspace=_turn_ws(event))
     return 0
 
 
@@ -822,6 +751,8 @@ def _settle(resolution: Resolution, hook_name: str, session_id: str | None) -> i
     what went wrong, so an unreachable Guardian (an ops issue) reads apart from
     a malformed envelope (a client bug).
     """
+    if resolution.message:
+        sys.stderr.write(f"acs-adapter: {resolution.message}\n")
     if not resolution.proceed:
         _emit_deny(hook_name, f"ACS adapter: {resolution.label} ({resolution.cause})")
     audit_event(resolution.audit_type, cause=resolution.cause, hook=hook_name,

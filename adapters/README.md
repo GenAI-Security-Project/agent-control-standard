@@ -227,7 +227,7 @@ adapters/
 ├── uv.lock                         # exact dependency versions, with hashes
 ├── src/acs/
 │   ├── core/                       # no I/O: envelopes, signing, decisions, error codes, bundled schemas
-│   ├── client/                     # I/O: settings and fail posture, the secret, the handshake, the round trip, session state, audit
+│   ├── client/                     # I/O: settings and fail posture, the secret, the handshake, the round trip, session state and turns, audit
 │   ├── integrations/<framework>/
 │   │   ├── hook.py                 # the installed hook command (Claude Code, Cursor)
 │   │   ├── adapter.py              # the hook, or the NAT middleware
@@ -252,6 +252,6 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 5. Add a row to the status table above.
 6. Open a PR against `GenAI-Security-Project/agent-control-standard`.
 
-Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, take each round trip's outcome from `acs.client.exchange`, and settle every step without a usable decision through `FailPosture.resolve`.
+Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, build envelopes with `acs.core.request_envelope` and send them unsigned to `acs.client.round_trip`, which signs as the last step and returns either the decision or the `FailPosture.resolve` resolution to write in the host's shape, and keep the open turn with `acs.client.open_turn` / `current_turn` / `close_turn`.
 
 The bar for "reference implementation" status is: round-trip tests pass against the example Guardian, documented configuration for users, and an explicit conformance posture statement matching the format in the Claude Code adapter's README.
