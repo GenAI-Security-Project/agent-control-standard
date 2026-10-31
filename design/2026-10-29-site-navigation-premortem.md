@@ -1,6 +1,6 @@
 # Adversarial premortem: one navigation for the landing page and the docs
 
-Artifact: `design/2026-10-29-site-navigation-design.md` v1.1 (Round 1), then v2.0 (Rounds 2 to 5). Date: 2026-10-29. Multi-subagent premortem. Each perspective read the artifacts, the installed mkdocs-material 9.7.7 partials and stylesheet, and a scratch build of the docs independently.
+Artifact: `design/2026-10-29-site-navigation-design.md` v1.1 (Round 1), then v2.0 (Rounds 2 to 5). Date: 2026-10-29. Adversarial premortem. Each perspective read the artifacts, the installed mkdocs-material 9.7.7 partials and stylesheet, and a scratch build of the docs independently.
 
 ## Round 1. Problem framing and inputs (against v1.1)
 
