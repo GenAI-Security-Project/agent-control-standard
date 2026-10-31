@@ -73,7 +73,7 @@ Each part has its own README that says how to start it.
 | Request and response envelopes, JSON-RPC 2.0 | Implemented. Inbound envelopes are validated against the schemas. Outbound responses are checked and the check is logged, never thrown. |
 | Hook taxonomy, minimum of six hooks | Two of nineteen `steps/*` methods are evaluated: `steps/toolCallRequest` and `steps/toolCallResult`. The other four minimum hooks are not evaluated. |
 | Five dispositions | `allow`, `deny` and `modify` are complete. `ask` is sent without `ask_details`, so it fails the response schema. `defer` is never produced. |
-| SessionContext with published `chain_hash` | The Guardian keeps a hash chain per session and writes it to a log. It does not put `chain_hash` on any response. |
+| SessionContext with published `chain_hash` | The Guardian keeps a hash chain per session, writes it to a log, and publishes `chain_hash` on every governed step response. |
 | Replay protection | Not implemented. No timestamp window check. No duplicate `request_id` check. |
 | Baseline HMAC-SHA256 signature | Not implemented. Nothing signs or verifies an envelope. |
 | Decision honoring and `on_decision_failure` | Implemented on both hosts. Every fail-open proceed is written to the audit log. |
