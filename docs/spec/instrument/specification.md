@@ -62,7 +62,7 @@ A worked example appears in [ACS in Action](../../topics/ACS_in_action_example.m
 
 | Element | Choice |
 |---|---|
-| Envelope | JSON-RPC 2.0, with top-level `acs_version` |
+| Envelope | JSON-RPC 2.0, with `acs_version` in `params` (requests) and `result` (responses) |
 | Transports | HTTP(S) and stdio (Content-Length framing, UTF-8) |
 | Method namespaces | `steps/*`, `protocols/A2A/*`, `protocols/MCP/*`, `agbom/*`, `system/*`, `handshake/*`, `trace/*` (reserved) |
 | Wrapped methods | `protocols/MCP/*` is the canonical v0.1 namespace for MCP wrapping (e.g. `protocols/MCP/tools/call`). The `wrapped:` prefix is an alternative explicit-version form for deployments that pin a specific protocol version on the wire (e.g. `wrapped:mcp-2025-06-18/tools/call`). Both are valid; `protocols/*` is preferred. A2A wrapping deferred to v0.2. |
@@ -99,7 +99,7 @@ sequenceDiagram
 
 `on_decision_failure` is negotiated in the handshake, so it cannot govern a handshake that never completes. When `handshake/hello` fails — the Guardian is unreachable, silent past the deployment's connection timeout, or errors without producing a ServerHello — the Observed Agent applies its **startup posture**, configured out of band: `proceed` starts the session unguarded, `refuse` does not start it. The default is `proceed`, matching `on_decision_failure`, so a Guardian outage does not block new sessions.
 
-A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) has decided; the startup posture applies only when no answer arrives. A session started unguarded MUST be recorded in the deployment's own audit log — there is no Guardian to receive the event — and SHOULD be surfaced on Trace events when the deployment claims ACS-Trace. The Observed Agent SHOULD retry the handshake for subsequent sessions. Whether a Guardian can attach mid-flight to a session that started unguarded is undefined in v0.1; renegotiation is deferred to v0.2 alongside `system/handshake_renegotiate` (§13).
+A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) has decided; the startup posture applies only when no answer arrives. A session started unguarded MUST be recorded in the deployment's own audit log — there is no Guardian to receive the event — and SHOULD be surfaced on Trace as an `acs.decision.failure` event with class `handshake_failure` and posture `fail_open` on the session span when the deployment claims ACS-Trace. The Observed Agent SHOULD retry the handshake for subsequent sessions. Whether a Guardian can attach mid-flight to a session that started unguarded is undefined in v0.1; renegotiation is deferred to v0.2 alongside `system/handshake_renegotiate` (§13).
 
 ## 5. Hook Taxonomy
 
@@ -137,7 +137,7 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 |---|---|---|
 | `ALLOW` | Proceed | none (`reasoning` RECOMMENDED when user-visible audit trails are expected) |
 | `DENY` | Block | `reasoning` |
-| `MODIFY` | Proceed with changes (covers redaction via `modifications.redactions`; composition rules in [§6.3](#63-modify-composition-normative)) | `reasoning`, `modifications` |
+| `MODIFY` | Proceed with changes (covers redaction via `modifications.redactions`; composition rules in [§6.3](#63-modify-composition-normative); substituted with `DENY` for MODIFY-incapable clients, see [§6.5](#65-modify-incapable-clients-normative)) | `reasoning`, `modifications` |
 | `ASK` | Pause and request approval (substituted with `DEFER` or `DENY` for approver-incapable clients; see [§9.2](#92-approver-incapable-clients-normative)) | `reasoning`, `ask_details` |
 | `DEFER` | Verdict not yet reachable | `reasoning`, `defer_details` |
 
@@ -187,7 +187,7 @@ These fields support the v0.1 paradigm targets (FIDES, CaMeL, AARM-style cumulat
 - **Wholesale replacement.** `modified_content` replaces the entire payload. It is exclusive: a MODIFY that carries `modified_content` MUST NOT also carry `redactions` or `parameter_overrides`, because path-addressed edits have nothing to address inside an opaque replacement string.
 - **Structured edits.** `redactions` and `parameter_overrides` MAY appear together, but their targets MUST be disjoint: no `redactions` path may address the same field as a `parameter_overrides` key, nor an ancestor or descendant of it. Disjoint edits commute, so the effective payload is well-defined with no apply-order rule.
 
-A Guardian MUST NOT emit a `modifications` object that violates either rule. An Observed Agent that receives one cannot determine the Guardian's intent and MUST fail closed, treating the decision as `DENY`, and SHOULD record an audit event.
+A Guardian MUST NOT emit a `modifications` object that violates either rule. An Observed Agent that receives one cannot determine the Guardian's intent and MUST fail closed, treating the decision as `DENY`, and MUST record an audit event so the enforcement gap is visible.
 
 The disjoint-target rule is deliberately narrower than a precedence rule. A fixed apply-order would force every overlap to silently pick a winner, and either order has a failure mode: applying overrides last can re-expose a field a redaction just removed, and applying redactions last lets arbitrary replacement text overwrite a value an override deliberately sanitized. Requiring disjoint targets removes the conflict rather than resolving it by an order the Guardian cannot observe.
 
@@ -195,11 +195,23 @@ The provenance of a value introduced by `parameter_overrides` (its `origin`, and
 
 ### 6.4 Honoring decisions (normative)
 
-A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3), `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant.
+A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3) — or, for a client that cannot apply it, falls back per [§6.5](#65-modify-incapable-clients-normative) — `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant; the one defined substitution is §6.5's MODIFY fallback, which blocks rather than proceeds unmodified at every hook except `postCompact`, where compaction has already happened, so the client keeps the original summary and records an audit event (§6.5).
 
 A step suffers a **decision failure** when no usable decision arrives within the negotiated timeout: the Guardian stays silent, the transport fails (connection refused, TLS failure, malformed response), or the Guardian returns an error instead of a decision. All three resolve the same way: the Observed Agent applies the deployment's failure posture, declared as `on_decision_failure` in the handshake (§4) and defaulting to `proceed` (fail-open) so that a slow, erroring, or unreachable Guardian does not halt production. A deployment MAY set `on_decision_failure: deny` (fail-closed). The negotiated timeout bounds every failure mode: an error from the §17.1 registry carries a recovery action the agent MAY attempt within the remaining budget, and an unambiguous failure (a refused connection) MAY resolve immediately rather than waiting out the clock.
 
-Every step that proceeds without a decision MUST be recorded as an audit event, so the bypass is visible rather than silent. When a decision does arrive within the timeout, the agent MUST honor it regardless of the posture. Fail-open trades enforcement for availability under disruption: an adversary who can disrupt the channel converts control into audit. Deployments for which that trade is unacceptable set `on_decision_failure: deny`.
+Every decision failure MUST be recorded as an audit event, under either posture. Under `proceed` the record makes the bypass visible rather than silent, and under `deny` it shows why the step was blocked. The Observed Agent records it in the deployment's own audit log, the rule §4.1 sets for a session started unguarded, and SHOULD also emit it as an `acs.decision.failure` event when the deployment claims ACS-Trace ([Trace Events](../trace/events.md)). At `sessionEnd`, the Observed Agent SHOULD report how many failures it recorded in each failure class, in `summary.decision_failures`. A reader treats a session that ends without that count as unmeasurable. When a decision does arrive within the timeout, the agent MUST honor it regardless of the posture. Fail-open trades enforcement for availability under disruption: an adversary who can disrupt the channel converts control into audit. Deployments for which that trade is unacceptable set `on_decision_failure: deny`.
+
+### 6.5 MODIFY-incapable clients (normative)
+
+Some Observed Agents cannot apply a `MODIFY` disposition. This covers both framework constraints (shell-hook integrations whose hook API returns allow/deny only, IDE plugins without a mid-flight argument-mutation surface) and deployment preferences (organizations that disable MODIFY for auditability, so the executed action always equals the requested action). The Guardian determines client MODIFY-handling capability by deployment-defined means such as agent identity bound at handshake, policy keyed on `agent_id`, organizational configuration, or any other out-of-band signal the deployment trusts. ACS does not put this declaration on the wire in v0.1; it is part of the Guardian's policy bundle, mirroring the ASK precedent in [§9.2](#92-approver-incapable-clients-normative).
+
+When the Guardian determines that the client cannot apply `MODIFY`, the Guardian MUST NOT return `MODIFY`. The Guardian MUST instead substitute `DENY` with `reason_codes: ["modify_unsupported"]` and `reasoning` that names the intended modification, and MUST record the substitution as an audit event so the enforcement gap is visible.
+
+If a client receives a `MODIFY` it cannot apply — from a Guardian that misjudged capability, or a Guardian that did not consult the declaration — the client MUST treat the decision as `DENY` and MUST record an audit event with `reason_codes: ["modify_unsupported"]`. Proceeding with the original payload is non-conformant: a Guardian that intended to redact a secret out of a tool argument would otherwise get the unredacted secret shipped while the audit log recorded a modification that never happened.
+
+This rule preserves the security guarantee (actions that would have been rewritten by the Guardian are not silently allowed with the unmodified payload) while letting clients whose framework cannot mutate requests, or deployments that choose strict allow/deny for auditability, participate in ACS sessions as fully conformant ACS-Core deployments.
+
+**Exception — `postCompact`.** `postCompact` fires after compaction has occurred and `DENY` is not a legal disposition there ([Hooks › postCompact](hooks.md#postcompact)), so the substitution above has no legal answer at that hook. For a MODIFY-incapable client the Guardian MUST return `ALLOW` at `postCompact` and MUST record an audit event with `reason_codes: ["modify_unsupported"]` naming the rewrite it could not deliver, so the unmodified summary standing is visible rather than silent. A client that receives a `MODIFY` it cannot apply at `postCompact` keeps the original summary and MUST record the same audit event; substituting `DENY` there would record a denial that changed nothing.
 
 ## 7. Provenance
 
@@ -296,7 +308,9 @@ For every step where the Guardian writes a ContextEntry (the content-bearing ste
 
 `CHAIN_MISMATCH` is the named integrity condition, exposed two ways for two detectors. A Guardian that receives an Observed Agent's `chain_hash` (cross-check) that disagrees with its own computed head MAY DENY with `reason_codes: ["chain_mismatch"]`, or return the `CHAIN_MISMATCH` error (`-32007`, §17.1) when it cannot proceed at all. An Observed Agent or external auditor that finds a published `chain_hash` inconsistent with the recomputed chain SHOULD treat it as an integrity event, not a transient error.
 
-Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline the published, signed head gives integrity against a network tamperer and lets a key-holder verify the chain, but it does not bind the Guardian itself: the Guardian holds the symmetric key and can re-sign a rewritten head. Non-repudiation, proving to a third party that a specific Guardian issued a specific head, requires the asymmetric ACS-Crypto profile. The baseline detects accidental divergence and cross-Guardian disagreement; defeating a determined, compromised Guardian is a profile-level guarantee, not a Core one.
+A `subagentStop` payload MAY omit `final_chain_hash`: a framework that maintains no session-chain omits the field rather than fabricate a value, since fabrication corrupts the artifact the field exists to produce. A Guardian MUST treat the omission as "chain not maintained by this framework," not as an integrity failure; integrity claims about that subagent's chain are simply unavailable.
+
+Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline the published, signed head gives integrity against a network tamperer and lets a key-holder verify the chain, but it binds neither party. The Guardian and the Observed Agent derive the same per-session key (§10), so the Guardian can re-sign a rewritten head, and the Observed Agent can produce a validly signed response the Guardian never sent, an `allow` or a `chain_hash` included. A valid HMAC shows that a holder of the session key produced the message, not which holder, so under HMAC a Guardian decision is not attributable to the Guardian against the Observed Agent. Non-repudiation, proving to a third party that a specific Guardian issued a specific head or decision, requires the asymmetric ACS-Crypto profile. The baseline detects accidental divergence and cross-Guardian disagreement; defeating a determined, compromised Guardian is a profile-level guarantee, not a Core one.
 
 ## 9. Approver Model
 
@@ -325,6 +339,8 @@ When the Guardian determines that the client cannot resolve `ASK`, the Guardian 
 1. `DEFER` with `timeout_decision: "deny"`: when the underlying issue might resolve through retry, an out-of-band escalation, or a later state change. The deferred verdict still counts toward cascading-deferral limits (§6).
 2. `DENY` with `reason_codes: ["approver_unavailable"]` and `reasoning` that names the missing capability: when no recovery path exists.
 
+In either case, the Guardian MUST record the substitution as an audit event so the enforcement gap is visible. Without a recorded substitution the substitution rate is only reachable by grepping log prose, which defeats the one metric that catches a client misdeclaring its capability.
+
 The choice is policy-driven: deployments SHOULD prefer `DEFER` when the request is potentially recoverable through a different surface, and `DENY` when the action is unconditionally outside the client's reachable authority.
 
 This rule preserves the security guarantee (actions that would have been `ASK`'d in an approver-capable deployment are not silently allowed) while letting clients without approver UX participate in ACS sessions as fully conformant ACS-Core deployments.
@@ -332,6 +348,10 @@ This rule preserves the security guarantee (actions that would have been `ASK`'d
 ## 10. Cryptographic Signatures
 
 A signature over the §10 canonical input is REQUIRED in ACS-Core. The signature envelope is `{ algorithm, value, key_id }`, the algorithm drawn from the registry below and the per-direction supported set declared in the handshake. `HMAC-SHA256` is the baseline that satisfies the requirement; ACS-Core does not require asymmetric or post-quantum signatures, which are the ACS-Crypto profile (§10.1). The per-session HMAC key is `HKDF`-derived from deployment-provided input keying material (a pre-shared secret, or a transport channel binding such as a TLS exporter) together with the `session_id`. ACS v0.1 defines no in-band key-exchange: a deployment with neither a shared secret nor a secure transport cannot use the HMAC baseline and satisfies the requirement with an ACS-Crypto algorithm whose key distribution it manages out of band.
+
+**HMAC key derivation.** For `HMAC-SHA256`, the per-session key is HKDF ([RFC 5869](https://www.rfc-editor.org/rfc/rfc5869)) with SHA-256, no salt (RFC 5869's default, a string of 32 zero bytes, which gives the same key as an empty salt), `info` set to the UTF-8 bytes of `metadata.session_id`, and a 32-byte output, applied to the secret that `key_id` names. Both parties MUST derive the key with exactly these parameters, so independent implementations holding the same secret derive the same key. `info` is the `session_id` string exactly as the request carries it, not parsed or normalized first: an uppercase or `urn:uuid:` spelling of the same UUID derives a different key. A response carries no `session_id`, so it is signed and verified with the key of the request it answers. The secret MUST be at least 32 bytes from a cryptographically secure random source. HKDF does no key stretching, so a passphrase used as the secret can be recovered offline from one captured signature. This derivation is defined for a pre-shared secret. v0.1 defines no exporter label or context for a channel-binding input, so that input is not yet interoperable between implementations. For example, the 32-byte secret `000102…1e1f` (the bytes 0 through 31) and the `session_id` `6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36` give the key `80f0dc8c611279bfc2af2d5f374c5cb685888192ce1af5c3e0673d8fa748e8a4`.
+
+**`key_id` for HMAC.** For `HMAC-SHA256`, `key_id` is an opaque label, chosen by the deployment, that names one configured secret. This specification reserves no values, and an implementation takes the label from its configuration. It does not hardcode one. A verifier MUST reject an unknown `key_id` (`SIGNATURE_INVALID`, §17.1) and MUST NOT fall back to another secret. `key_id` MUST NOT be derived from the secret. A Guardian that signs its response with `HMAC-SHA256` uses the secret, and the `key_id`, that the request named. The `SIGNATURE_INVALID` error for an unknown `key_id` is unsigned, because no configured secret matches it. A deployment rotating its secret configures the new secret under a new label, such as `"2026-10"`, so a verifier can hold both secrets while the rotation is in progress. That is what the §17.1 recovery for `SIGNATURE_INVALID`, re-resolving `key_id`, relies on. For the asymmetric algorithms of ACS-Crypto, `key_id` identifies the public key or hybrid key descriptor (§10.2).
 
 **Signed input.** The signed input for every algorithm is the RFC 8785 (JCS) canonicalization of the request or response envelope with the `signature` field removed, encoded as UTF-8. This binds the signature to the whole envelope, including `method`, `metadata.session_id`, `request_id`, and `timestamp`, so a captured signature cannot be lifted into a different envelope (for example, re-wrapping a signed `toolCallResult` under a different `session_id`). A verifier MUST recompute this canonical form and MUST reject a signature that does not cover it (`SIGNATURE_INVALID`, §17.1). The input is fixed by this rule, not declared per message: a discoverable `signed_fields` would let a producer advertise partial coverage that omits `session_id`, reopening the gap this closes. Alternative canonicalization is not permitted in v0.1, matching the chain-hash rule in §8.
 
@@ -341,7 +361,7 @@ The registry is crypto-agile: the `{ algorithm, value, key_id }` envelope suppor
 
 | Algorithm | Class | v0.1.0 status |
 |---|---|---|
-| `HMAC-SHA256` | Symmetric MAC | RECOMMENDED. Shared-secret integrity; simplest deployment path. Sufficient for same-host and trusted-network topologies where the threat is accidental tampering or replay. |
+| `HMAC-SHA256` | Symmetric MAC | RECOMMENDED. Shared-secret integrity; simplest deployment path. Sufficient for same-host and trusted-network topologies where the threat is accidental tampering or replay. Both parties hold the key, so it attributes a message to neither (§8.6). |
 | `ECDSA-P256` | Classical asymmetric | OPTIONAL. Strongest current ecosystem support across Java, Node, .NET, HSMs, and major cloud KMS providers. |
 | `RSA-PSS-SHA256` | Classical asymmetric | OPTIONAL. Legacy interop; deployments with existing RSA PKI. |
 | `ML-DSA-65` | PQC, lattice (FIPS 204) | OPTIONAL. ~128-bit post-quantum security; ~3.3 KB signatures. Recommended for deployments shipping PQC libraries today. |
@@ -399,7 +419,7 @@ OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 
 ## 13. Liveness / System Methods
 
-A liveness method is required for connection-health checks, transport-debugging, and timeout tuning. It carries no enforcement semantics and is not part of the audit chain.
+`system/ping` SHOULD be implemented for connection-health checks, transport debugging, and timeout tuning; a deployment MAY omit it only with a declared alternative liveness mechanism ([Conformance › ACS-Core](../conformance.md#acs-core-mandatory-baseline)). It carries no enforcement semantics and is not part of the audit chain.
 
 **Method:** `system/ping`. Schema: [`hooks/system-ping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/system-ping.json).
 
