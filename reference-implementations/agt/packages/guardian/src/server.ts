@@ -925,16 +925,20 @@ async function dispatch(
   //     shape. Anything neither predicate answers falls past both, to
   //     METHOD_NOT_DISPATCHED_CODE below.
   if (isToolCallRequest(envelope)) {
-    // Examined before evaluateStep appends this step, so a request id is in
-    // the session already only if an earlier step carried it.
-    const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return { response: await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
+    return inSessionOrder(sessionContextStore, envelope.params.metadata.session_id, async () => {
+      // Examined before evaluateStep appends this step, so a request id is in
+      // the session already only if an earlier step carried it.
+      const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
+      return { response: await evaluateStep(raw, envelope, assemblePreToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
+    });
   }
 
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
-    const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return { response: await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
+    return inSessionOrder(sessionContextStore, envelope.params.metadata.session_id, async () => {
+      const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
+      return { response: await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
+    });
   }
 
   // A well-formed envelope (it passed validateEnvelope: the method matched
@@ -957,6 +961,40 @@ async function dispatch(
  * the specific envelope type, not on this bound itself.
  */
 type SteppedEnvelope = AcsRequestEnvelope & { params: { payload: { tool: { name: string } } } };
+
+/** Tail of each session's step queue, per store, so two Guardians in one
+ * process never wait on each other. */
+const sessionQueues = new WeakMap<SessionContextStore, Map<string, Promise<unknown>>>();
+
+/**
+ * Runs one step after every earlier step of the same session has finished
+ * (#310). A step reads the session's IFC labels before AGT is awaited and
+ * replaces them after; two steps overlapping across that await would each
+ * write a result computed from the labels they read, and the later write
+ * would drop a label the earlier one added -- `secret` included. Merging
+ * instead of replacing is not the fix, because an empty result clears the
+ * labels on purpose (see persistIfcLabels).
+ *
+ * The duplicate-request-id check runs inside the queue too: it reads the
+ * chain that evaluateStep appends to, so the two have to stay one unit.
+ * Steps of different sessions still run concurrently. `run` never rejects
+ * (evaluateStep turns every failure into a response), and the tail is
+ * caught anyway so one rejected step cannot stall the session behind it.
+ */
+function inSessionOrder<T>(store: SessionContextStore, sessionId: string, run: () => Promise<T>): Promise<T> {
+  let queues = sessionQueues.get(store);
+  if (!queues) {
+    queues = new Map();
+    sessionQueues.set(store, queues);
+  }
+  const current = (queues.get(sessionId) ?? Promise.resolve()).then(run);
+  const tail = current.catch(() => undefined);
+  queues.set(sessionId, tail);
+  void tail.then(() => {
+    if (queues.get(sessionId) === tail) queues.delete(sessionId);
+  });
+  return current;
+}
 
 /**
  * The half of an assembling branch that is the same whichever gate reached it:
