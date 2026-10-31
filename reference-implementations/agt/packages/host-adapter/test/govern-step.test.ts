@@ -1397,7 +1397,7 @@ describe("governStep: a request id derived from the host's call id", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("retries only once, and leaves a second REPLAY_DETECTED to the delivery posture (issue #32)", async () => {
+  it("retries only once, and a second REPLAY_DETECTED leaves the first refusal standing (issue #32)", async () => {
     const { sink, events } = recordingSink();
     const { guardian, sent } = scripted([REPLAY, REPLAY]);
 
@@ -1405,9 +1405,22 @@ describe("governStep: a request id derived from the host's call id", () => {
 
     expect(sent).toHaveLength(2);
     expect(governed.stage).toBe("delivery");
-    // The audit entry names the request id the retry actually sent.
+    expect(governed.decision?.decision).toBe("deny");
+    // Only a decision replaces the refusal, so the entry names the first request.
     expect(events).toHaveLength(1);
-    expect(events[0]?.request_id).toBe(sent[1]);
+    expect(events[0]?.request_id).toBe(sent[0]);
+    expect(events[0]).toMatchObject({ failure: { kind: "refused" } });
+  });
+
+  it("keeps the refusal when the retry times out, so a stalled retry cannot become an allow", async () => {
+    const { sink, events } = recordingSink();
+    const { guardian, sent } = scripted([REPLAY, { decisionArrived: false, failure: new GuardianTimeoutError(120) }]);
+
+    const governed = await govern(guardian, sink, undefined, { hookmap: paired, payload: pairedPayload });
+
+    expect(sent).toHaveLength(2);
+    expect(governed.decision?.decision).toBe("deny");
+    expect(events[0]).toMatchObject({ posture: "proceed", outcome: "blocked", failure: { kind: "refused" } });
   });
 
   it("audits the derived request_id apart from the random JSON-RPC id when no decision arrives", async () => {

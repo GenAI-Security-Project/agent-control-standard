@@ -106,7 +106,14 @@ export const FAILURE_ATTRIBUTES = {
   payloadBytes: "acs.failure.payload_bytes",
 } as const;
 
-export type FailureClass = "timeout" | "unreachable" | "malformed_response" | "guardian_error" | "observed_agent_error" | "other";
+export type FailureClass =
+  | "timeout"
+  | "unreachable"
+  | "malformed_response"
+  | "guardian_error"
+  | "observed_agent_error"
+  | "signature_invalid"
+  | "other";
 export type FailurePosture = "fail_open" | "fail_closed";
 export type FailureReporter = "guardian" | "observed_agent";
 
