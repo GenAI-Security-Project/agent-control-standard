@@ -16,7 +16,7 @@
     },
     "intent": {
       "type": "object",
-      "description": "Optional Intent registered at session start (IBAC adopters populate)",
+      "description": "Optional Intent for the session (IBAC adopters populate). If sessionStart already established a canonical session Intent, this field MUST match it (or be omitted); if sessionStart omitted Intent (for example on an unattended scheduled, external_event, a2a_inbound, or system activation), the first agentTrigger carrying Intent establishes the canonical session Intent, and any subsequent agentTrigger proposing a different Intent MUST be rejected (Specification §8.4).",
       "properties": {
         "raw": { "type": "string" },
         "parsed": {

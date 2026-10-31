@@ -101,7 +101,7 @@ Schema: [`hooks/agent-trigger.json`](https://genai-security-project.github.io/ag
 
 Fires when the agent is activated by an external triggering condition (event arrival, scheduled tick, A2A inbound message, user-initiated session, or system-issued activation). For A2A-mediated delegation, `trigger_type: "a2a_inbound"` carries the originating peer identity; for in-process subagent spawns, see [`subagentStart`](#subagentstart).
 
-**Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), `trigger_source` (shape depends on `trigger_type`), optional `intent` (IBAC adopters populate; the Intent registered at sessionStart, carried here for activation-time policy checks).
+**Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), `trigger_source` (shape depends on `trigger_type`), optional `intent` (IBAC adopters populate; when `sessionStart` omitted `intent`, the first `agentTrigger` carrying `intent` establishes the canonical session Intent, and any later `agentTrigger` proposing a different `intent` MUST be rejected per [Specification §8.4](./specification.md#84-intent)).
 
 **Decision:** ALLOW / DENY / MODIFY. Guardian MAY rewrite the trigger payload (e.g. redact PII) before activation.
 
