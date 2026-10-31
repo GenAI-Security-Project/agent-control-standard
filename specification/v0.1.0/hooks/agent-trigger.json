@@ -16,7 +16,7 @@
     },
     "intent": {
       "type": "object",
-      "description": "Optional Intent registered at session start (IBAC adopters populate)",
+      "description": "Optional Intent for the session (IBAC adopters populate). Specification §8.4 defines what establishes the canonical session Intent and when a later Intent is rejected.",
       "properties": {
         "raw": { "type": "string" },
         "parsed": {
