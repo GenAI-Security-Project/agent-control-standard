@@ -238,6 +238,8 @@ premortem found the owner's own PR #357 would have failed the red check. It is a
 from the owner's 2026-10-29 request. The owner writes one line here, "Deviation accepted"
 or "Overridden", before the implementing pull request opens.
 
+Deviation accepted, 2026-10-30, Rock Lambros.
+
 ## The health issue
 
 `roadmap_sync.py` gains a section, "Queued pull requests", rendered from the bot's own data
