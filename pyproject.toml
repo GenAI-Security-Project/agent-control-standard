@@ -12,6 +12,10 @@ dev = [ "pytest>=8.0", "jsonschema>=4.25.0",]
 # than dev, so the docs build and the test gate never install it. The lockfile pins the
 # version with hashes, and Dependabot moves it under the usual cooldown.
 zizmor = [ "zizmor>=1.30.1",]
+# The verdict evidence controls in tests/test_verdict_evidence_controls.py, run by
+# .github/workflows/verdict-evidence-controls.yml. A named group, like zizmor, so the
+# docs build and the guard job never install it. The lockfile pins the commit.
+verdict-evidence = [ "agent-evidence-vectors",]
 
 [tool.pytest.ini_options]
 # The deploy workflow runs a bare `uv run pytest -v` as the gate the site build
@@ -21,3 +25,7 @@ zizmor = [ "zizmor>=1.30.1",]
 # collection to tests/ keeps that gate about the guards it was written for.
 # Suites that carry their own dependencies run from their own workflow.
 testpaths = ["tests"]
+
+[tool.uv.sources]
+# Pinned to the commit that carries the controls until a release on PyPI does.
+agent-evidence-vectors = { git = "https://github.com/probityai/agent-evidence-vectors", rev = "617cf55151b2142c5ff4eed4aa2f4eeb5a8261c5" }
