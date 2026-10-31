@@ -81,9 +81,11 @@
  *     wherever the failure was caught, not something re-inferred afterwards
  *     from leftover variables.
  */
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createAuditSink,
+  createFileAppliedRequestStore,
   createFileSessionConfigStore,
   createGuardianClient,
   DEFAULT_TIMEOUT_MS,
@@ -514,18 +516,25 @@ async function main(): Promise<void> {
   // proceed a non-blocking exit code would produce. Nothing is written
   // anywhere before this succeeds: createFileSessionConfigStore's
   // InvalidSessionIdError throws synchronously, before its first write.
+  const sessionDir = process.env.ACS_SESSION_DIR ?? ".acs/sessions";
   let hookmap: Hookmap;
   let store: SessionConfigStore;
   try {
     hookmap = loadHookmap(HOOKMAP_PATH);
     assertHostAcceptsEveryDecision(hookmap, HOOKMAP_PATH);
-    store = createFileSessionConfigStore({
-      dir: process.env.ACS_SESSION_DIR ?? ".acs/sessions",
-      sessionId,
-    });
+    store = createFileSessionConfigStore({ dir: sessionDir, sessionId });
   } catch (error) {
     throw new BlockingConfigurationError(error);
   }
+
+  // Where this process tells the next one that a call's decision came from a
+  // retry, so the result names the request this host acted on rather than
+  // the one it derived (issue #351). Under the session dir because it is the
+  // same kind of fact as the negotiated config: per session, written by one
+  // hook process, read by a later one. Total by construction, like the
+  // audit sink: a record it cannot write is reported on stderr, never a
+  // reason to drop the decision the retry brought back.
+  const appliedRequests = createFileAppliedRequestStore({ dir: join(sessionDir, "applied") });
 
   // Step 3: the audit log -- total by construction, so building it cannot
   // itself throw, and a write to it never happens unless a fail-open
@@ -574,7 +583,16 @@ async function main(): Promise<void> {
   // rules produce for it, is stated once inside `governStep`, host-agnostically,
   // so a second host inherits it by calling the function rather than
   // reimplementing it.
-  const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit });
+  const governed = await governStep({
+    hookEventName,
+    payload,
+    hookmap,
+    guardian,
+    session,
+    sessionId,
+    audit,
+    appliedRequests,
+  });
 
   process.stdout.write(JSON.stringify(asClaudeCodeOutput(governed.output, hookEventName)));
 }
