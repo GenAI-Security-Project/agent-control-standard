@@ -80,7 +80,7 @@ from acs.client import (
     round_trip,
 )
 from acs.core import (
-    KNOWN_DECISIONS,
+    Decision,
     method_evaluated,
     modify_composition_violation,
     normalize_decision,
@@ -452,29 +452,27 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
 
 # ─── Response translation — dispatch table, one function per hook ─────────
 
-def _translate_pretool(decision: str, reasoning: str,
-                        modifications: dict,
-                        original_input: dict) -> dict[str, Any]:
-    if decision in PRETOOL_PERMISSION_MAP:
-        return _pretool_response(PRETOOL_PERMISSION_MAP[decision], reasoning)
-    if decision == "defer":
+def _translate_pretool(decision: Decision, original_input: dict) -> dict[str, Any]:
+    if decision.disposition in PRETOOL_PERMISSION_MAP:
+        return _pretool_response(PRETOOL_PERMISSION_MAP[decision.disposition], decision.reasoning)
+    if decision.disposition == "defer":
         # No native defer in permissionDecision; spec default
         # timeout_decision is deny (§6). Audited so substitution rate
         # is machine-visible.
         audit_event("defer_substituted_deny", hook="PreToolUse")
         return _pretool_response(
-            "deny", f"DEFER substituted to DENY (no native defer): {reasoning}")
-    if decision == "modify":
+            "deny", f"DEFER substituted to DENY (no native defer): {decision.reasoning}")
+    if decision.disposition == "modify":
         # §6.3:146 — a modifications object that breaks the composition
         # rules (both shapes, or overlapping structured targets) is
         # un-interpretable; fail closed to DENY rather than half-apply it.
-        violation = modify_composition_violation(modifications)
+        violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", hook="PreToolUse",
                         detail=violation)
             return _pretool_response(
                 "deny", f"MODIFY refused ({violation}); failing closed per §6.3:146")
-        if modifications.get("redactions"):
+        if decision.modifications.get("redactions"):
             # Claude's updatedInput can replace arguments, but it exposes no
             # native JSON-Pointer redaction operation.  Applying sibling
             # parameter_overrides while dropping redactions would change the
@@ -484,81 +482,73 @@ def _translate_pretool(decision: str, reasoning: str,
             return _pretool_response(
                 "deny", "MODIFY refused: Claude Code cannot apply the "
                 "requested redactions without dropping part of the decision")
-        overrides = modifications.get("parameter_overrides")
+        overrides = decision.modifications.get("parameter_overrides")
         # A non-dict override cannot be applied as updatedInput; §6.3:146
         # fails an unrealizable modification closed to DENY.
         if isinstance(overrides, dict):
             # updatedInput REPLACES the whole input, so merge the per-
             # argument overrides (modifications.json) onto the original.
             merged = {**original_input, **overrides}
-            return _pretool_response("allow", reasoning, updated_input=merged)
+            return _pretool_response("allow", decision.reasoning, updated_input=merged)
         return _pretool_response(
             "deny",
-            f"MODIFY substituted to DENY (no usable parameter_overrides): {reasoning}",
+            f"MODIFY substituted to DENY (no usable parameter_overrides): {decision.reasoning}",
         )
     return {}
 
 
-def _translate_posttool(decision: str, reasoning: str,
-                         modifications: dict,
-                         original_input: dict) -> dict[str, Any]:
-    if decision == "deny":
-        return _block_response(reasoning or "blocked by Guardian", "PostToolUse")
-    if decision == "modify":
-        violation = modify_composition_violation(modifications)
+def _translate_posttool(decision: Decision, original_input: dict) -> dict[str, Any]:
+    if decision.disposition == "deny":
+        return _block_response(decision.reasoning or "blocked by Guardian", "PostToolUse")
+    if decision.disposition == "modify":
+        violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", hook="PostToolUse",
                         detail=violation)
             return _block_response(
                 f"MODIFY refused ({violation}); failing closed per §6.3:146")
-        updated = modifications.get("modified_content")
+        updated = decision.modifications.get("modified_content")
         if updated is not None:
             hso = {
                 "hookEventName": "PostToolUse",
                 "updatedToolOutput": str(updated),
             }
-            if reasoning:
-                hso["additionalContext"] = reasoning
+            if decision.reasoning:
+                hso["additionalContext"] = decision.reasoning
             return {"hookSpecificOutput": hso}
         return _block_response(
-            f"MODIFY substituted to DENY (no modified_content): {reasoning}")
-    if decision in ("ask", "defer"):
+            f"MODIFY substituted to DENY (no modified_content): {decision.reasoning}")
+    if decision.disposition in ("ask", "defer"):
         return _block_response(
-            f"{decision} on post-tool not supported by Claude Code: {reasoning}")
+            f"{decision.disposition} on post-tool not supported by Claude Code: {decision.reasoning}")
     return {}
 
 
-def _translate_user_prompt(decision: str, reasoning: str,
-                            modifications: dict,
-                            original_input: dict) -> dict[str, Any]:
-    if decision == "allow":
+def _translate_user_prompt(decision: Decision, original_input: dict) -> dict[str, Any]:
+    if decision.disposition == "allow":
         return {}
-    if decision == "deny":
-        return _block_response(reasoning or "blocked by Guardian")
-    # The prompt hook can only allow or block, so ask/defer/modify fail
-    # closed to a block, audited — an arrived restrictive decision the
-    # host cannot apply must not execute as allow (§6.4).
+    if decision.disposition == "deny":
+        return _block_response(decision.reasoning or "blocked by Guardian")
+    # The prompt hook can only allow or block, so ask, defer and modify block, audited (§6.4).
     audit_event("prompt_decision_substituted_block",
-                disposition=decision, hook="UserPromptSubmit")
+                disposition=decision.disposition, hook="UserPromptSubmit")
     return _block_response(
-        f"{decision} on user prompt not applicable at this hook — blocking: {reasoning}")
+        f"{decision.disposition} on user prompt not applicable at this hook — blocking: {decision.reasoning}")
 
 
-def _translate_session_stop(decision: str, reasoning: str,
-                             modifications: dict,
-                             original_input: dict) -> dict[str, Any]:
+def _translate_session_stop(decision: Decision, original_input: dict) -> dict[str, Any]:
     """Stop (steps/turnEnd) is not decision-eligible — the turn has
     already happened (hooks.md:290). A DENY cannot be enforced here, and
     Claude Code reads {"decision":"block"} on Stop as "do not stop,
     continue the conversation", so emitting one would turn a denial into
     an instruction to keep working. Record it and emit nothing."""
-    if decision in ("deny", "ask", "defer"):
-        audit_event("unenforceable_decision", decision=decision,
-                    reason=reasoning or "(none)")
+    if decision.disposition in ("deny", "ask", "defer"):
+        audit_event("unenforceable_decision", decision=decision.disposition,
+                    reason=decision.reasoning or "(none)")
     return {}
 
 
-_TRANSLATORS: dict[str, Callable[[str, str, dict, dict], dict[str, Any]]] = {
+_TRANSLATORS: dict[str, Callable[[Decision, dict], dict[str, Any]]] = {
     "PreToolUse":       _translate_pretool,
     "PostToolUse":      _translate_posttool,
     "UserPromptSubmit": _translate_user_prompt,
@@ -571,16 +561,15 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
     # normalize_decision never raises: this runs outside main()'s
     # try/except and an uncaught error is exit 1, which Claude Code
     # proceeds on.
-    decision, reasoning, modifications = normalize_decision(
-        acs_response.get("result"))
+    decision = normalize_decision(acs_response.get("result"))
 
     # An arrived decision outside the five dispositions fails closed;
     # whether §6.4:156 (posture) or §6.3:146 (fail closed) governs is
     # unsettled and tracked in issue #32 — deny is the safe reading.
-    if decision not in KNOWN_DECISIONS:
+    if not decision.known:
         audit_event("unusable_disposition",
-                    disposition=decision or "(missing)", hook=hook_event)
-        reason = (f"unusable Guardian disposition '{decision}' — cannot be "
+                    disposition=decision.disposition or "(missing)", hook=hook_event)
+        reason = (f"unusable Guardian disposition '{decision.disposition}' — cannot be "
                   f"interpreted; failing closed (see issue #32)")
         if hook_event == "PreToolUse":
             return _pretool_response("deny", reason)
@@ -593,14 +582,14 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
 
     translator = _TRANSLATORS.get(hook_event)
     if translator:
-        return translator(decision, reasoning, modifications, original_input or {})
+        return translator(decision, original_input or {})
 
     # Informational hooks (SessionStart, SessionEnd, Notification):
     # surface the Guardian's `reasoning` as additionalContext when present.
-    if reasoning:
+    if decision.reasoning:
         return {"hookSpecificOutput": {
             "hookEventName": hook_event,
-            "additionalContext": reasoning,
+            "additionalContext": decision.reasoning,
         }}
     return {}
 
@@ -675,15 +664,13 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
                 return _settle(result, "UserPromptSubmit", session_id)
-            ts_decision, ts_reason, _ = normalize_decision(result.response.get("result"))
-            if ts_decision != "allow":
-                # turnStart is a gate boundary — the host can't apply
-                # modify/ask/defer to "a turn is starting", so any non-allow
-                # blocks the prompt (fail closed). Audited.
+            turn_start = normalize_decision(result.response.get("result"))
+            if turn_start.disposition != "allow":
+                # Only allow applies to a turn start, so any other disposition blocks the prompt.
                 audit_event("turn_start_blocked", turn_id=turn_id,
-                            disposition=ts_decision or "(unusable)")
+                            disposition=turn_start.disposition or "(unusable)")
                 _emit(_block_response(
-                    f"turn blocked at start ({ts_decision or 'unusable'}): {ts_reason}"))
+                    f"turn blocked at start ({turn_start.disposition or 'unusable'}): {turn_start.reasoning}"))
                 return 0
         else:
             audit_event("method_not_evaluated", method="steps/turnStart",

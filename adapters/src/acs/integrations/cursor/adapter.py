@@ -87,7 +87,7 @@ from acs.client import (
     round_trip,
 )
 from acs.core import (
-    KNOWN_DECISIONS,
+    Decision,
     coerce_uuid,
     method_evaluated,
     modify_composition_violation,
@@ -671,112 +671,105 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
 #     internal __exit_code/_reasoning keys consumed by main()
 #   - everything else: no response shape (Stop, SessionStart, SessionEnd, etc.)
 
-def _translate_permission(decision: str, reasoning: str,
-                           modifications: dict, event_name: str,
-                           original_input: dict) -> dict[str, Any]:
-    if decision in PERMISSION_MAP:
-        return _permission_response(PERMISSION_MAP[decision], reasoning)
-    if decision == "modify":
+def _translate_permission(decision: Decision, event_name: str, original_input: dict) -> dict[str, Any]:
+    if decision.disposition in PERMISSION_MAP:
+        return _permission_response(PERMISSION_MAP[decision.disposition], decision.reasoning)
+    if decision.disposition == "modify":
         # §6.3:146 — refuse an un-interpretable modifications object
         # (both shapes, or overlapping structured targets) rather than
         # half-apply it.
-        violation = modify_composition_violation(modifications)
+        violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", event=event_name,
                         detail=violation)
             return _permission_response(
                 "deny", f"MODIFY refused ({violation}); failing closed per §6.3:146")
-        if modifications.get("redactions"):
+        if decision.modifications.get("redactions"):
             # updated_input cannot express JSON-Pointer redactions; never
             # apply only the override half of a compound decision.
             audit_event("modify_unapplied_redactions", event=event_name)
             return _permission_response(
                 "deny", "MODIFY refused: Cursor cannot apply the requested "
                 "redactions without dropping part of the decision")
-        overrides = modifications.get("parameter_overrides")
+        overrides = decision.modifications.get("parameter_overrides")
         # A non-dict override cannot be applied — fail closed per §6.3:146.
         if isinstance(overrides, dict) and event_name == "preToolUse":
             # parameter_overrides are per-argument EDITS while Cursor's
             # updated_input REPLACES the whole input, so merge onto the
             # original.
             merged = {**original_input, **overrides}
-            return _permission_response("allow", reasoning, updated_input=merged)
+            return _permission_response("allow", decision.reasoning, updated_input=merged)
         return _permission_response("deny",
-                                     f"MODIFY substituted to DENY: {reasoning}")
+                                     f"MODIFY substituted to DENY: {decision.reasoning}")
     return {}
 
 
-def _translate_post_tool(decision: str, reasoning: str,
-                          modifications: dict, event_name: str) -> dict[str, Any]:
+def _translate_post_tool(decision: Decision, event_name: str) -> dict[str, Any]:
     """Only `postToolUse` documents output fields (`additional_context`,
     and `updated_mcp_tool_output` for MCP tools); every other post-tool
     event documents "No output fields currently supported" (docs
     2026-08-22), so an arrived restrictive decision there is recorded and
     nothing is emitted."""
     if event_name != "postToolUse":
-        if decision in ("deny", "modify", "ask", "defer"):
-            audit_event("unenforceable_decision", decision=decision,
-                        event=event_name, reason=reasoning or "(none)")
+        if decision.disposition in ("deny", "modify", "ask", "defer"):
+            audit_event("unenforceable_decision", decision=decision.disposition,
+                        event=event_name, reason=decision.reasoning or "(none)")
         return {}
-    if decision == "deny":
+    if decision.disposition == "deny":
         # postToolUse fires after execution — no block exists; the denial
         # reaches the conversation as additional_context and is audited.
         audit_event("unenforceable_decision", decision="deny",
-                    event=event_name, reason=reasoning or "(none)")
+                    event=event_name, reason=decision.reasoning or "(none)")
         return _post_tool_response(
             additional_context=f"ACS Guardian denied this result: "
-                               f"{reasoning or '(no reasoning)'}")
-    if decision == "modify":
-        violation = modify_composition_violation(modifications)
+                               f"{decision.reasoning or '(no reasoning)'}")
+    if decision.disposition == "modify":
+        violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", event=event_name,
                         detail=violation)
             return _post_tool_response(
                 additional_context=f"MODIFY refused ({violation})")
-        updated = modifications.get("modified_content")
+        updated = decision.modifications.get("modified_content")
         if updated is not None:
             # Docs show an OBJECT value; ACS modified_content is a string.
             # Parse JSON content when it is JSON, else pass the string.
             return _post_tool_response(
                 updated_mcp_tool_output=_parse_json_field(updated))
         return _post_tool_response(
-            additional_context=f"MODIFY received: {reasoning}")
-    if reasoning:
-        return _post_tool_response(additional_context=reasoning)
+            additional_context=f"MODIFY received: {decision.reasoning}")
+    if decision.reasoning:
+        return _post_tool_response(additional_context=decision.reasoning)
     return {}
 
 
-def _translate_before_submit_prompt(decision: str, reasoning: str,
-                                     modifications: dict,
-                                     event_name: str) -> dict[str, Any]:
+def _translate_before_submit_prompt(decision: Decision, event_name: str) -> dict[str, Any]:
     """The prompt hook can only allow (exit 0) or block (exit 2), so every
     non-allow decision fails closed per §6.4; returns internal
     __exit_code/_reasoning keys for main()."""
-    if decision == "allow":
+    if decision.disposition == "allow":
         return {"__exit_code": 0, "_reasoning": None}
-    if decision != "deny":
-        # Audit the substitution for decisions the prompt hook can't apply.
+    if decision.disposition != "deny":
         audit_event("prompt_decision_substituted_block",
-                    disposition=decision, event="beforeSubmitPrompt")
+                    disposition=decision.disposition, event="beforeSubmitPrompt")
     return {"__exit_code": 2,
-            "_reasoning": reasoning or f"{decision} on prompt not applicable — blocking"}
+            "_reasoning": decision.reasoning or f"{decision.disposition} on prompt not applicable — blocking"}
 
 
 def translate_response(acs_response: dict[str, Any], event_name: str,
                        original_input: dict | None = None) -> dict[str, Any]:
     # normalize_decision coerces every field to a safe type and never
     # raises — an uncaught throw here would exit 1 and Cursor would proceed.
-    decision, reasoning, modifications = normalize_decision(
-        acs_response.get("result"))
+    decision = normalize_decision(acs_response.get("result"))
     original_input = original_input or {}
 
     # An arrived-but-uninterpretable decision fails closed; the exact
     # spec basis is unsettled (§6.4:156 vs. arrived-and-unusable),
     # tracked in issue #32.
-    if decision not in KNOWN_DECISIONS:
+    if not decision.known:
         audit_event("unusable_disposition",
-                    disposition=decision or "(missing)", event=event_name)
-        reason = (f"unusable Guardian disposition '{decision}' — cannot be "
+                    disposition=decision.disposition or "(missing)", event=event_name)
+        reason = (f"unusable Guardian disposition '{decision.disposition}' — cannot be "
                   f"interpreted; failing closed (see issue #32)")
         if event_name in PERMISSION_EVENTS:
             return _permission_response("deny", reason)
@@ -787,12 +780,11 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
         return {}
 
     if event_name in PERMISSION_EVENTS:
-        return _translate_permission(decision, reasoning, modifications,
-                                     event_name, original_input)
+        return _translate_permission(decision, event_name, original_input)
     if event_name in POST_TOOL_EVENTS:
-        return _translate_post_tool(decision, reasoning, modifications, event_name)
+        return _translate_post_tool(decision, event_name)
     if event_name == "beforeSubmitPrompt":
-        return _translate_before_submit_prompt(decision, reasoning, modifications, event_name)
+        return _translate_before_submit_prompt(decision, event_name)
 
     # Remaining events are observational with no response shape — empty
     # dict skips stdout emission.
@@ -871,15 +863,15 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
                 return _settle(result, "beforeSubmitPrompt", session_id)
-            ts_decision, ts_reason, _ = normalize_decision(result.response.get("result"))
-            if ts_decision != "allow":
+            turn_start = normalize_decision(result.response.get("result"))
+            if turn_start.disposition != "allow":
                 # A turn boundary can't be modify/ask'd — any non-allow
                 # blocks the prompt (exit 2).
                 audit_event("turn_start_blocked", turn_id=turn_id,
-                            disposition=ts_decision or "(unusable)",
+                            disposition=turn_start.disposition or "(unusable)",
                             event="beforeSubmitPrompt")
-                msg = (f"turn blocked at start ({ts_decision or 'unusable'}): "
-                       f"{ts_reason}")
+                msg = (f"turn blocked at start ({turn_start.disposition or 'unusable'}): "
+                       f"{turn_start.reasoning}")
                 sys.stderr.write(f"acs-adapter: {msg}\n")
                 sys.stdout.write(json.dumps({"continue": False,
                                              "user_message": msg}) + "\n")

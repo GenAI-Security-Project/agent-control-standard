@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -13,7 +14,30 @@ from typing import Any
 KNOWN_DECISIONS = frozenset({"allow", "deny", "modify", "ask", "defer"})
 
 
-def normalize_decision(result: Any) -> tuple[str, str, dict]:
+@dataclass(frozen=True)
+class Decision:
+    """A Guardian result's decision fields, each coerced to a safe type.
+
+    - disposition: stripped, lower-cased str; "" when the field is not a
+      usable string, which routes the caller to its unusable→DENY branch.
+    - reasoning: always a str (JSON repr if the Guardian sent a
+      non-string, so it can go into a `reason` field unchanged).
+    - modifications: always a dict ({} when the Guardian sent a
+      non-object, which makes a MODIFY with no usable mutation
+      substitute to DENY per §6.3:146).
+    """
+
+    disposition: str = ""
+    reasoning: str = ""
+    modifications: dict = field(default_factory=dict)
+
+    @property
+    def known(self) -> bool:
+        """Whether the disposition is one of the five ACS dispositions (§6.3)."""
+        return self.disposition in KNOWN_DECISIONS
+
+
+def normalize_decision(result: Any) -> Decision:
     """Coerce a Guardian result's decision fields to safe types, never
     raising.
 
@@ -22,17 +46,10 @@ def normalize_decision(result: Any) -> tuple[str, str, dict]:
     intent, and an uncaught AttributeError exits 1, which the shell
     hosts treat as proceed (fail-open).
 
-    Returns (decision, reasoning, modifications):
-      - decision: stripped, lower-cased str; "" when the field is not a
-        usable string, which routes the caller to its unusable→DENY branch.
-      - reasoning: always a str (JSON repr if the Guardian sent a
-        non-string, so it can go into a `reason` field unchanged).
-      - modifications: always a dict ({} when the Guardian sent a
-        non-object, which makes a MODIFY with no usable mutation
-        substitute to DENY per §6.3:146).
+    Returns a Decision with every field set.
     """
     if not isinstance(result, dict):
-        return "", "", {}
+        return Decision()
     raw_decision = result.get("decision")
     decision = raw_decision.strip().lower() if isinstance(raw_decision, str) else ""
     raw_reason = result.get("reasoning", "")
@@ -40,7 +57,7 @@ def normalize_decision(result: Any) -> tuple[str, str, dict]:
                  else json.dumps(raw_reason, default=str))
     raw_mods = result.get("modifications", {})
     modifications = raw_mods if isinstance(raw_mods, dict) else {}
-    return decision, reasoning, modifications
+    return Decision(decision, reasoning, modifications)
 
 
 def modify_composition_violation(modifications: dict) -> str | None:

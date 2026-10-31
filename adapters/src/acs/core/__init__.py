@@ -6,6 +6,7 @@ from typing import Any
 _EXPORTS = {
     "ACS_VERSION": "_envelope",
     "DEFAULT_SKEW_WINDOW_MS": "_envelope",
+    "Decision": "_decision",
     "GUARDIAN_ERROR_CAUSE": "_errors",
     "GUARDIAN_REFUSAL_CODES": "_errors",
     "KNOWN_DECISIONS": "_decision",

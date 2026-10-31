@@ -272,6 +272,31 @@ class SessionGateThroughHooks(unittest.TestCase):
                 p, denied, _ = run(guardian.url(), str(uuid.uuid4()), ACS_REQUIRE_PROFILES="acs-core")
                 self.assertTrue(denied, "control: a fresh session with the requirement is refused too")
 
+    def test_a_denied_turn_start_blocks_the_prompt_and_sends_no_message(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.handlers["steps/turnStart"] = lambda req: {
+            "type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+            "decision": "deny", "reasoning": "policy", "chain_hash": "0" * 64}
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        runs = {"claude-code": ([str(BIN / "acs-claude-code-hook")],
+                                {"session_id": str(uuid.uuid4()), "cwd": "/tmp",
+                                 "hook_event_name": "UserPromptSubmit", "prompt": "hello"}),
+                "cursor": ([str(BIN / "acs-cursor-hook"), "beforeSubmitPrompt"],
+                           {"conversation_id": str(uuid.uuid4()), "workspace_roots": ["/tmp"], "prompt": "hello"})}
+        for name, (argv, event) in runs.items():
+            with self.subTest(name):
+                guardian.reset()
+                p = subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True,
+                                   env=self._env(guardian.url()), timeout=30)
+                out = json.loads(p.stdout or "{}")
+                blocked = (out.get("decision") == "block" if name == "claude-code"
+                           else p.returncode == 2 and out.get("continue") is False)
+                self.assertTrue(blocked, (p.returncode, p.stdout, p.stderr[-300:]))
+                self.assertIn("turn_start_blocked", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/turnStart"],
+                                 "a blocked prompt's userMessage is never sent")
+
     def test_negotiated_per_method_timeouts_bound_their_own_methods(self) -> None:
         """A 300 ms toolCallRequest timeout ends that wait; toolCallResult waits under the 5 s default and its deny applies."""
         guardian = ProgrammableGuardian(hmac_secret=SECRET)

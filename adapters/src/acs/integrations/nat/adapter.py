@@ -224,9 +224,6 @@ def _stringify_step_data(data: Any) -> str:
     return str(data)
 
 
-KNOWN_DECISIONS = frozenset({"allow", "deny", "modify", "ask", "defer"})
-
-
 def _extract_arguments(context: Any) -> dict[str, Any]:
     """Build a flat {arg_name: value} dict from NAT's invocation context.
 
@@ -574,16 +571,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return self._settle_pre(context, result)
         response = result.response
 
-        # Total coercion: malformed verdict fields must not throw here.
-        decision, reasoning, mods = normalize_decision(
-            (response or {}).get("result"))
+        decision = normalize_decision((response or {}).get("result"))
 
-        if decision == "allow":
+        if decision.disposition == "allow":
             return None
-        if decision == "deny":
-            return self._block(context, reasoning or "denied by Guardian")
-        if decision == "modify":
-            violation = modify_composition_violation(mods)
+        if decision.disposition == "deny":
+            return self._block(context, decision.reasoning or "denied by Guardian")
+        if decision.disposition == "modify":
+            violation = modify_composition_violation(decision.modifications)
             if violation:
                 audit_event("modify_composition_invalid",
                             session_id=self._session_id,
@@ -591,7 +586,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 return self._block(
                     context,
                     f"MODIFY refused ({violation}); failing closed per §6.3:146")
-            if mods.get("redactions"):
+            if decision.modifications.get("redactions"):
                 # NAT has no JSON-Pointer redaction primitive; applying only
                 # parameter_overrides would drop part of the compound decision.
                 audit_event("modify_unapplied_redactions",
@@ -600,25 +595,24 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 return self._block(
                     context, "MODIFY refused: NAT cannot apply the requested "
                     "redactions without dropping part of the decision")
-            overrides = mods.get("parameter_overrides")
+            overrides = decision.modifications.get("parameter_overrides")
             if isinstance(overrides, dict):
                 _apply_overrides_to_context(context, overrides)
                 return context
-            return self._block(context, f"MODIFY substituted to DENY: {reasoning}")
-        if decision in ("ask", "defer"):
-            # No pause-and-resume primitive on this boundary: substitute
-            # block; ASK/DEFER deployments compose with NAT's HITL middleware.
-            return self._block(context, f"{decision}: {reasoning}")
+            return self._block(context, f"MODIFY substituted to DENY: {decision.reasoning}")
+        if decision.disposition in ("ask", "defer"):
+            # No pause primitive here, so ask and defer block; NAT's HITL middleware composes for approvals.
+            return self._block(context, f"{decision.disposition}: {decision.reasoning}")
 
         # An arrived-but-uninterpretable decision fails closed; the spec
         # basis is tracked in issue #32.
         audit_event("unusable_disposition",
-                    disposition=decision or "(missing)",
+                    disposition=decision.disposition or "(missing)",
                     session_id=self._session_id,
                     method="steps/toolCallRequest")
         return self._block(
             context,
-            f"unusable Guardian disposition '{decision}' — cannot be "
+            f"unusable Guardian disposition '{decision.disposition}' — cannot be "
             f"interpreted; failing closed (see issue #32)")
 
     async def post_invoke(self, context):
@@ -666,22 +660,18 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return self._settle_post(context, result)
         response = result.response
 
-        decision, reasoning, mods = normalize_decision(
-            (response or {}).get("result"))
+        decision = normalize_decision((response or {}).get("result"))
 
-        if decision == "deny":
-            # The tool already executed; the redaction signal is
-            # output=None plus the audit event (strict Pydantic model —
-            # ad-hoc attributes raise ValidationError).
+        if decision.disposition == "deny":
             _redact_output(context)
             audit_event("post_invoke_redacted",
                         cause="guardian_deny",
                         session_id=self._session_id,
                         method="steps/toolCallResult",
-                        reasoning=reasoning or "output redacted by Guardian")
+                        reasoning=decision.reasoning or "output redacted by Guardian")
             return context
-        if decision == "modify":
-            violation = modify_composition_violation(mods)
+        if decision.disposition == "modify":
+            violation = modify_composition_violation(decision.modifications)
             if violation:
                 audit_event("modify_composition_invalid",
                             session_id=self._session_id,
@@ -692,7 +682,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                             session_id=self._session_id,
                             method="steps/toolCallResult")
                 return context
-            modified_content = mods.get("modified_content")
+            modified_content = decision.modifications.get("modified_content")
             if modified_content is not None:
                 context.output = modified_content
                 return context
@@ -704,11 +694,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         session_id=self._session_id,
                         method="steps/toolCallResult")
             return context
-        if decision not in KNOWN_DECISIONS:
-            # Arrived-but-uninterpretable decision: redact (fail closed);
-            # spec basis tracked in issue #32.
+        if not decision.known:
             audit_event("unusable_disposition",
-                        disposition=decision or "(missing)",
+                        disposition=decision.disposition or "(missing)",
                         session_id=self._session_id,
                         method="steps/toolCallResult")
             _redact_output(context)
@@ -716,7 +704,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         cause="unusable_disposition",
                         session_id=self._session_id,
                         method="steps/toolCallResult",
-                        decision=decision)
+                        decision=decision.disposition)
             return context
         return None
 

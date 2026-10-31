@@ -275,6 +275,19 @@ class DispositionsLive(unittest.TestCase):
             "the secret/sensitive value flows through despite Guardian "
             "demanding redaction")
 
+    def test_post_invoke_unusable_disposition_redacts_output_under_fail_open(self) -> None:
+        """An arrived decision outside the five dispositions fails closed, whatever the posture."""
+        class ShellInput(BaseModel):
+            command: str
+        for decision in ("maybe", None):
+            with self.subTest(decision=decision):
+                ctx = _make_ctx_with_pydantic_input(
+                    "Bash", ShellInput, ShellInput(command="cat /etc/secret"))
+                ctx.output = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                self._set_response("steps/toolCallResult", {"decision": decision, "reasoning": "?"})
+                asyncio.run(self._mw(default_deny=False).post_invoke(ctx))
+                self.assertIsNone(ctx.output, "an unusable disposition let the output through")
+
     def test_post_invoke_structured_modify_never_leaks_unmodified_output(self) -> None:
         """A structured result redaction NAT cannot realize fails closed."""
         class ShellInput(BaseModel):
