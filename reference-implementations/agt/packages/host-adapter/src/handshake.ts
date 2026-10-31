@@ -174,7 +174,13 @@ export class SessionConfigStoreFailedError extends SessionConfigNotStoredError {
  * answered, and its answer carries neither of the two fields this host reads.
  * Nothing was stored, and -- unlike a hello that could not be persisted --
  * there is nothing to apply to the current step either, so `config` is
- * `undefined` by construction rather than by convention.
+ * `undefined`.
+ *
+ * The one exception is a verified, well-formed hello this signed client
+ * still rejects, because it does not accept `acs-core` or HMAC-SHA256. That
+ * hello's posture is authentic, so it rides along as `config` and governs
+ * the step: falling back to the ACS default instead would downgrade a
+ * declared `deny` to `proceed`.
  *
  * Its own class because the remedy is entirely different: this one is a
  * Guardian emitting the wrong shape, not a host that cannot write to its own
@@ -184,10 +190,8 @@ export class SessionConfigStoreFailedError extends SessionConfigNotStoredError {
  */
 export class ServerHelloInvalidError extends SessionConfigNotStoredError {
   declare readonly kind: "server_hello_invalid";
-  declare readonly config: undefined;
-
-  constructor(message: string) {
-    super(message, { kind: "server_hello_invalid" });
+  constructor(message: string, config?: SessionConfig) {
+    super(message, { kind: "server_hello_invalid", config });
     this.name = "ServerHelloInvalidError";
   }
 }
@@ -286,11 +290,13 @@ export async function negotiateSessionConfig(
     if (!Array.isArray(coreProfiles) || !coreProfiles.includes("acs-core")) {
       throw new ServerHelloInvalidError(
         "handshake: the Guardian did not accept the acs-core profile required by this signed client",
+        serverHello,
       );
     }
     if (!Array.isArray(signatureAlgorithms) || !signatureAlgorithms.includes("HMAC-SHA256")) {
       throw new ServerHelloInvalidError(
         "handshake: the Guardian did not advertise HMAC-SHA256 request verification for this acs-core session",
+        serverHello,
       );
     }
   }
@@ -364,8 +370,10 @@ export type ResolvedSessionConfig = {
  * Without this function, every host shim would have to ask an error object
  * what it was carrying. `SessionConfigNotStoredError` is this module's own
  * type, so reading it here is a module reading itself; the `.config` on it is
- * `undefined` for `ServerHelloInvalidError` by construction, which is why one
- * branch covers both members of the family.
+ * `undefined` for a malformed ServerHello, which is why one branch covers
+ * every member of the family. A hello that failed verification carries no
+ * config at all, and `applyFailurePosture` blocks every failure in such a
+ * session rather than apply the ACS default.
  */
 export async function resolveSessionConfig(
   options: HandshakeOptions,

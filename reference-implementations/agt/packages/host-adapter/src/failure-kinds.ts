@@ -104,6 +104,20 @@ export type HostFailureKind =
 export type RefusalFailureKind = "refused";
 
 /**
+ * Something answered and the answer cannot be trusted: its signature failed
+ * verification, or it answers a different request (its JSON-RPC id or
+ * `result.request_id` does not match the one sent). A tampered deny, a
+ * stripped signature, or a replayed earlier allow all land here.
+ *
+ * Not a delivery failure, so never answered by the posture: under `proceed`
+ * an on-path attacker could otherwise turn any decision into an allow. Issue
+ * #308 rules that such a reply blocks the step whatever `on_decision_failure`
+ * says, and is recorded as an integrity failure, class `signature_invalid`,
+ * not as a deny from the Guardian.
+ */
+export type IntegrityFailureKind = "signature_invalid";
+
+/**
  * Everything `AuditEntry.failure.kind` can name about one step: the wire's
  * failures, the Guardian's refusals, and this host's own faults.
  *
@@ -112,7 +126,7 @@ export type RefusalFailureKind = "refused";
  * answers; a reader asking "what can an audit entry say about a step?" gets
  * seven; and neither question is answered with the other one's list.
  */
-export type StepFailureKind = DeliveryFailureKind | RefusalFailureKind | HostFailureKind;
+export type StepFailureKind = DeliveryFailureKind | RefusalFailureKind | IntegrityFailureKind | HostFailureKind;
 
 /**
  * WHERE in the exchange the failure happened. Three materially different

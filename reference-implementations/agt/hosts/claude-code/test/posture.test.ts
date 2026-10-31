@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startGuardian } from "guardian";
+import { deriveSessionKey, signResponseHmacSha256, startGuardian } from "guardian";
 // The adapter's own rule for which dispositions withhold at a result gate,
 // read rather than restated: a copy here could pass a shipped hookmap the
 // shim's gate would refuse, or miss one it would accept.
@@ -1314,3 +1314,157 @@ describe("acs-hook — an unsigned refusal under HMAC still refuses", () => {
     }
   });
 });
+
+type Rpc = Record<string, any>;
+
+/**
+ * A proxy between the shim and a real Guardian that rewrites the Guardian's
+ * replies, the way an on-path attacker could. `tamper` sees each request and
+ * the reply it got, and returns the reply to send on, or a Response to send
+ * instead. Close it with `stop(true)`.
+ */
+function tamperingProxy(target: string, tamper: (request: Rpc, reply: Rpc) => Rpc | Response) {
+  return Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = await req.text();
+      const request = JSON.parse(body) as Rpc;
+      const upstream = await fetch(target, { method: "POST", headers: { "content-type": "application/json" }, body });
+      const out = tamper(request, (await upstream.json()) as Rpc);
+      return out instanceof Response ? out : Response.json(out);
+    },
+  });
+}
+
+/** Re-signs `reply` with `secret`, as the Guardian holding it would. */
+function resign(reply: Rpc, request: Rpc, secret: string): Rpc {
+  const carrier = reply.result ?? reply.error;
+  delete carrier.signature;
+  const key = deriveSessionKey(Buffer.from(secret, "base64"), request.params.metadata.session_id);
+  carrier.signature = { algorithm: "HMAC-SHA256", key_id: "test-key", value: signResponseHmacSha256(reply, key) };
+  return reply;
+}
+
+const isHello = (request: Rpc) => request.method === "handshake/hello";
+
+// Issue #308: a reply that fails verification blocks the step whatever the
+// posture, and is recorded as signature_invalid. Each case runs under the
+// shipped `proceed`, on a command the policy allows, so only that rule can
+// turn it into a deny.
+describe("acs-hook — a reply that fails verification blocks the step under proceed", () => {
+  const KEY = Buffer.alloc(32, 0x61).toString("base64");
+  const env = (dir: string, url: string) => ({
+    ACS_GUARDIAN_URL: url,
+    ACS_SESSION_DIR: join(dir, "sessions"),
+    ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+    ACS_HMAC_SECRET: KEY,
+    ACS_HMAC_KEY_ID: "test-key",
+  });
+  const lastAudit = (dir: string) =>
+    readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+
+  async function viaProxy(tamper: (request: Rpc, reply: Rpc) => Rpc | Response, stdin = payload("ls -la")) {
+    const dir = scratch();
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: KEY, hmacKeyId: "test-key" });
+    const proxy = tamperingProxy(guardian.url, tamper);
+    try {
+      const out = await runShim(stdin, env(dir, `http://localhost:${proxy.port}/acs`));
+      return { decision: expectQuietDecision(out).permissionDecision, audit: lastAudit(dir) };
+    } finally {
+      proxy.stop(true);
+      await guardian.close();
+    }
+  }
+
+  it("blocks an allow whose signature was stripped", async () => {
+    const { decision, audit } = await viaProxy((request, reply) => {
+      if (!isHello(request)) delete reply.result.signature;
+      return reply;
+    });
+    expect(decision).toBe("deny");
+    expect(audit).toMatchObject({ posture: "proceed", outcome: "blocked", failure: { kind: "signature_invalid" } });
+  });
+
+  it("blocks an allow signed with a key other than the host's", async () => {
+    const { decision, audit } = await viaProxy((request, reply) =>
+      isHello(request) ? reply : resign(reply, request, Buffer.alloc(32, 0x62).toString("base64")),
+    );
+    expect(decision).toBe("deny");
+    expect(audit).toMatchObject({ outcome: "blocked", failure: { kind: "signature_invalid" } });
+  });
+
+  it("blocks an earlier signed allow replayed as the answer to a later step", async () => {
+    let captured: Rpc | undefined;
+    const tamper = (request: Rpc, reply: Rpc) => {
+      if (isHello(request)) return reply;
+      captured ??= structuredClone(reply);
+      return structuredClone(captured);
+    };
+    const dir = scratch();
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: KEY, hmacKeyId: "test-key" });
+    const proxy = tamperingProxy(guardian.url, tamper);
+    try {
+      const url = `http://localhost:${proxy.port}/acs`;
+      expect(expectQuietDecision(await runShim(payload("ls -la"), env(dir, url))).permissionDecision).toBe("allow");
+      const second = await runShim(payload("rm -rf /"), env(dir, url));
+      expect(expectQuietDecision(second).permissionDecision).toBe("deny");
+      expect(lastAudit(dir)).toMatchObject({ outcome: "blocked", failure: { kind: "signature_invalid" } });
+    } finally {
+      proxy.stop(true);
+      await guardian.close();
+    }
+  });
+
+  it("blocks an unsigned allow from a Guardian that holds no key", async () => {
+    const dir = scratch();
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST });
+    try {
+      const out = await runShim(payload("ls -la"), env(dir, guardian.url));
+      expect(expectQuietDecision(out).permissionDecision).toBe("deny");
+      expect(lastAudit(dir)).toMatchObject({ outcome: "blocked", failure: { kind: "signature_invalid" } });
+    } finally {
+      await guardian.close();
+    }
+  });
+});
+
+// A hello this host rejects, or cannot verify, must not downgrade a
+// declared deny to the ACS default proceed. The step's reply is replaced
+// with a gateway error, so the posture is what decides.
+describe("acs-hook — a rejected or unverifiable hello keeps the step from proceeding", () => {
+  const KEY = Buffer.alloc(32, 0x61).toString("base64");
+  const badGateway = () => new Response("bad gateway", { status: 502 });
+
+  async function stepUnderPosture(guardian: { url: string; close(): Promise<void> }, tamperHello: (request: Rpc, reply: Rpc) => Rpc) {
+    const dir = scratch();
+    const proxy = tamperingProxy(guardian.url, (request, reply) => (isHello(request) ? tamperHello(request, reply) : badGateway()));
+    try {
+      const out = await runShim(payload("ls -la"), {
+        ACS_GUARDIAN_URL: `http://localhost:${proxy.port}/acs`,
+        ACS_SESSION_DIR: join(dir, "sessions"),
+        ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+        ACS_HMAC_SECRET: KEY,
+        ACS_HMAC_KEY_ID: "test-key",
+      });
+      return expectQuietDecision(out).permissionDecision;
+    } finally {
+      proxy.stop(true);
+      await guardian.close();
+    }
+  }
+
+  it("keeps a deny-posture Guardian's posture when its signed hello lacks acs-core", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, hmacSecret: KEY, hmacKeyId: "test-key", onDecisionFailure: "deny" });
+    const decision = await stepUnderPosture(guardian, (request, reply) => {
+      reply.result.profiles_accepted = [];
+      return resign(reply, request, KEY);
+    });
+    expect(decision).toBe("deny");
+  });
+
+  it("blocks a keyed host's step when the deny-posture Guardian holds no key, so its hello is unsigned", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, onDecisionFailure: "deny" });
+    expect(await stepUnderPosture(guardian, (_request, reply) => reply)).toBe("deny");
+  });
+});
+

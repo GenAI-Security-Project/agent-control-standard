@@ -44,13 +44,19 @@ import type { AuditEvent, AuditSink } from "./audit-sink.ts";
 import type {
   DeliveryFailureKind,
   FailureStage,
+  IntegrityFailureKind,
   RefusalFailureKind,
   SessionFailureKind,
   StepFailureKind,
 } from "./failure-kinds.ts";
 import type { AcsDecision } from "./decision-message.ts";
 import { isRefusalCode } from "./failure-kinds.ts";
-import { GuardianTimeoutError } from "./guardian-client.ts";
+import {
+  GuardianResponseMismatchError,
+  GuardianResultCorrelationError,
+  GuardianSignatureError,
+  GuardianTimeoutError,
+} from "./guardian-client.ts";
 import { SessionConfigNotStoredError, type ResolvedSessionConfig } from "./handshake.ts";
 
 // The failure taxonomies this module classifies into live in
@@ -61,6 +67,7 @@ export type {
   DeliveryFailureKind,
   FailureStage,
   HostFailureKind,
+  IntegrityFailureKind,
   RefusalFailureKind,
   SessionFailureKind,
   StepFailureKind,
@@ -130,8 +137,11 @@ const TRANSPORT_ERROR_CODES = new Set([
  */
 export function classifyDeliveryFailure(
   failure: unknown,
-): { kind: DeliveryFailureKind | RefusalFailureKind; message: string } {
+): { kind: DeliveryFailureKind | RefusalFailureKind | IntegrityFailureKind; message: string } {
   try {
+    if (isIntegrityFailure(failure)) {
+      return { kind: "signature_invalid", message: failure.message };
+    }
     if (failure instanceof GuardianTimeoutError) {
       return { kind: "timeout", message: failure.message };
     }
@@ -167,6 +177,16 @@ export function classifyDeliveryFailure(
   } catch {
     return { kind: "unknown", message: "<unprintable failure>" };
   }
+}
+
+/** A reply that cannot be trusted: a signature that fails verification, or an
+ * answer to a different request. See IntegrityFailureKind. */
+function isIntegrityFailure(failure: unknown): failure is Error {
+  return (
+    failure instanceof GuardianSignatureError ||
+    failure instanceof GuardianResponseMismatchError ||
+    failure instanceof GuardianResultCorrelationError
+  );
 }
 
 /**
@@ -266,9 +286,17 @@ export function applyFailurePosture({
   const classified = classifyStepFailure(stage, failure);
   const refused = classified.kind === "refused";
   const unsignable = classified.kind === "unsignable";
+  // A reply that failed verification blocks whatever the posture (issue
+  // #308). So does any failure in a session whose ServerHello could not be
+  // verified: no posture arrived that this host can trust, and falling back
+  // to the default `proceed` would let a stripped signature on the hello
+  // downgrade a declared `deny`.
+  const integrity = classified.kind === "signature_invalid";
+  const untrustedSession = sessionConfig === undefined && isIntegrityFailure(sessionFailure);
   // One resolution, read once, in the three vocabularies it is expressed in --
   // see RESOLUTION_BY_POSTURE.
-  const { decision, outcome } = refused || unsignable ? REFUSAL_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
+  const { decision, outcome } =
+    refused || unsignable || integrity || untrustedSession ? REFUSAL_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
 
   // Computed before the audit write, and written into it: "the guardian was
   // down for this whole session" (default) and "this deployment chose to
@@ -355,6 +383,27 @@ export function applyFailurePosture({
         `(${classified.kind}: ${classified.message});${sessionNote} an ACS-Core Guardian must reject an unsigned ` +
         `request, so on_decision_failure=${posture} does not apply and this step was blocked.`,
       reason_codes: [REASON_CODE_BY_STAGE.sign],
+    };
+  }
+
+  if (integrity) {
+    return {
+      decision,
+      reasoning:
+        `the guardian's reply for ${method ?? "this step"} could not be verified (${classified.kind}: ` +
+        `${classified.message});${sessionNote} a reply that fails verification may have been tampered with, so ` +
+        `on_decision_failure=${posture} does not apply and this step was blocked.`,
+      reason_codes: [INTEGRITY_REASON_CODE],
+    };
+  }
+
+  if (untrustedSession) {
+    return {
+      decision,
+      reasoning:
+        `${cause};${sessionNote} the session's ServerHello could not be verified, so no posture this host can ` +
+        "trust was negotiated, and the ACS default does not apply: this step was blocked.",
+      reason_codes: [INTEGRITY_REASON_CODE],
     };
   }
 
@@ -469,6 +518,10 @@ const REASON_CODE_BY_STAGE: Record<FailureStage, string> = {
  * stage, and `decision_failure` there would tell a machine reader that no
  * decision arrived when the Guardian's refusal is exactly what did. */
 const REFUSAL_REASON_CODE = "guardian_refused";
+
+/** A reply that failed verification, and the session whose ServerHello did:
+ * the class issue #308 names for it. */
+const INTEGRITY_REASON_CODE = "signature_invalid";
 
 /**
  * The classified `{kind, message}` for one step, at the stage that failed --

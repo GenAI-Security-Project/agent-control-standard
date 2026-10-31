@@ -173,6 +173,7 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
       transport: "unreachable",
       error_without_decision: "guardian_error",
       refused: "guardian_error",
+      signature_invalid: "signature_invalid",
       host_configuration: "observed_agent_error",
     });
     // A decision did arrive, so observed_agent_error does not fit (#244 review).

@@ -814,8 +814,15 @@ export async function governStep({
     ) {
       const remainingMs = timeoutMs - (performance.now() - startedAt);
       if (remainingMs > 0) {
-        envelope = signRequest(buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false }));
-        answer = await guardian.requestDecision(envelope, { timeoutMs: remainingMs });
+        // Only a decision replaces the refusal, as on the -32003 path above:
+        // a retry that times out or errors leaves the REPLAY_DETECTED
+        // standing, so a stalled retry cannot turn it into a posture allow.
+        const retryEnvelope = signRequest(buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false }));
+        const retried = await guardian.requestDecision(retryEnvelope, { timeoutMs: remainingMs });
+        if (retried.decisionArrived) {
+          envelope = retryEnvelope;
+          answer = retried;
+        }
       }
     }
     const elapsedMs = performance.now() - startedAt;
