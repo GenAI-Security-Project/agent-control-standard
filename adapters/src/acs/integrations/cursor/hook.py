@@ -10,7 +10,7 @@ from acs.integrations._bootstrap import run_hook
 PERMISSION_EVENTS = frozenset({"preToolUse", "subagentStart", "beforeShellExecution", "beforeMCPExecution"})
 
 
-def _event_name() -> str:
+def _event_name(raw: str) -> str:
     return sys.argv[1] if len(sys.argv) > 1 else ""
 
 

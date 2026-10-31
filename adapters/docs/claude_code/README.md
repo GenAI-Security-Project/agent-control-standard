@@ -266,18 +266,18 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_DEFAULT_DENY` | `0` | Fail-open with audit (§6.4 default). Set to `1` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
-| `ACS_HANDSHAKE` | `1` | Set to `0` to disable the handshake/hello call on first use. |
+| `ACS_STARTUP_POSTURE` | follows `ACS_DEFAULT_DENY` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
+| `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
 | `ACS_AGENT_ID` | derived from cwd | Stable agent identifier sent in `metadata.agent_id`. |
-| `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Per-session ServerHello cache dir. |
+| `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Each session's handshake decision, kept for the session's lifetime. |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Network timeout for handshake/hello. |
-| `ACS_HANDSHAKE_FAILURE_CACHE_TTL_SECONDS` | `30` | Failed handshakes are negative-cached this long, so a dead Guardian costs one timeout, not one per hook event. |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr — the durable audit half of §6.4's fail-open trade. |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 
 ## On-disk state
 
-- `~/.cache/acs-adapter-handshake/<sha256(session_id+url)>.json` — cached ServerHello per session. Adapter creates with mode 0600; refreshed when older than 1 hour.
+- `~/.cache/acs-adapter-handshake/<sha256(session_id+url)>.json` — the session's handshake decision (negotiated ServerHello, refusal, or no answer) with an HMAC under the session key over the decision, the session and the Guardian URL. Mode 0600; kept for the session's lifetime. A record that is modified, damaged, copied from another endpoint or written by an earlier adapter refuses the session, and so does a decision that cannot be stored.
 - `~/.cache/acs-guardian-state/<sha256(session_id)>.json` — Guardian-side per-session chain head + replay set; survives Guardian restart.
 
 ## Conformance status
@@ -286,7 +286,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 
 | ACS-Core item | Status |
 |---|---|
-| Handshake (`handshake/hello`) | ✓ adapter sends ClientHello on first session call; cached in `~/.cache/acs-adapter-handshake/`. |
+| Handshake (`handshake/hello`) | ✓ adapter sends ClientHello on the first event of a session; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1). |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema for every mapped hook (`tests/test_envelope_schema.py`); format checking enforces `uuid` and `date-time`. |
 | Hook taxonomy (Core minimum set) | ✓ `sessionStart`, `userMessage`, `toolCallRequest`, `toolCallResult`, `agentResponse`, `sessionEnd`; plus `subagentStart`, which ACS-Core requires of a subagent-capable client. Claude Code spawns subagents through the Agent tool (legacy `Task`), and the adapter remaps that PreToolUse to `steps/subagentStart` (see mapping.md). `subagentStop`, which ACS-Core lists as SHOULD-emit, stays deliberately unmapped (see mapping.md). The adapter also emits the turn boundary: `turnStart` (emitted on UserPromptSubmit) / `turnEnd` (Stop). `preCompact` deliberately unmapped — the platform exposes no entry list (mapping.md). |
 | Dispositions (ALLOW/DENY/ASK/DEFER) | ✓ on **pre-execution** hooks (`PreToolUse`, `UserPromptSubmit`, `turnStart`); MODIFY partial (`PreToolUse` with `parameter_overrides`, merged onto the original input). **Post-execution and lifecycle hooks (`PostToolUse`, `Notification → agentResponse`, `Stop → turnEnd`, `SessionEnd`) are observation-only** — Claude Code fires them after the side effect / message / turn has occurred; a Guardian `deny` on those cannot undo it. See `mapping.md`. |

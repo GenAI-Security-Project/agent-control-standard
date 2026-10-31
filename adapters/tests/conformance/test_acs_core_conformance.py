@@ -88,6 +88,7 @@ TEST_HMAC_SECRET = "acs-core-conformance-test-secret-not-for-production"
 
 from acs.testing.harness import (  # noqa: E402
     launch_guardian,
+    seed_negotiated_session,
     build_local_resolver as _build_local_resolver,
     validate_request_envelope as _validate_request_envelope,
     validate_response_envelope as _validate_response_envelope,
@@ -766,7 +767,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         env.update({
             "ACS_GUARDIAN_URL": guardian.url(),
             "ACS_HMAC_SECRET": self.SECRET,
-            "ACS_HANDSHAKE": "0",
+            "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
             # Hermetic per-call turn/session state.
             "ACS_SESSION_STATE_DIR": tempfile.mkdtemp(),
         })
@@ -787,7 +788,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         env.update({
             "ACS_GUARDIAN_URL": guardian.url(),
             "ACS_HMAC_SECRET": self.SECRET,
-            "ACS_HANDSHAKE": "0",
+            "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
             # Hermetic per-call turn/session state.
             "ACS_SESSION_STATE_DIR": tempfile.mkdtemp(),
         })
@@ -949,7 +950,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
     def _env(self, g):
         env = os.environ.copy()
         env.update({"ACS_GUARDIAN_URL": g.url(), "ACS_HMAC_SECRET": self.SECRET,
-                    "ACS_HANDSHAKE": "0",
+                    "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
                     "ACS_SESSION_STATE_DIR": tempfile.mkdtemp()})
         env.pop("ACS_HMAC_SECRET_FILE", None)
         env.pop("ACS_DEFAULT_DENY", None)   # shipped fail-open default on purpose
@@ -1454,29 +1455,16 @@ class Core07_BaselineIntegrity(CoreHarness):
         self.assertEqual(resp["error"]["code"], -32004)
 
 
-# =============================================================================
-# CORE-08 — Decision honoring (conformance.md, ACS-Core / Decision honoring, §6.4)
-# =============================================================================
-#
-# Adapter-side property — covered end-to-end in the per-adapter test
-# suites because it depends on how the framework (Claude Code, Cursor,
-# NAT) routes the verdict. The wire-level property "Guardian responds
-# in time" is covered here; "framework actually waits and applies" is
-# covered in adapters/{claude-code,cursor,nat}/tests/.
-# =============================================================================
+# conformance.md ACS-Core: Decision honoring, §6.4; the per-adapter suites cover it end to end.
+def _negotiated(env: dict, session_id: str) -> None:
+    env["ACS_HANDSHAKE_CACHE"] = tempfile.mkdtemp()
+    seed_negotiated_session(env["ACS_HANDSHAKE_CACHE"], session_id=session_id,
+                            guardian_url=env["ACS_GUARDIAN_URL"],
+                            hmac_secret=env.get("ACS_HMAC_SECRET"))
+
 
 class Core08_DecisionHonoringAdapter(unittest.TestCase):
-    """§6.4 is an adapter-side property: 'the Observed Agent MUST wait
-    for the Guardian's decision up to the negotiated timeout and apply
-    it'. We falsify this by:
-
-      1. The adapter MUST apply DENY when the Guardian returns DENY
-         (positive: deny shows up as `permissionDecision: deny`).
-      2. The adapter MUST wait for the response, not proceed before it
-         arrives (a slow-but-responsive Guardian still gets honored).
-      3. On no-response, the adapter MUST fall to its fail posture and
-         emit an audit event (contradiction: silent bypass is a §6.4 violation).
-    """
+    """§6.4: the adapter waits up to the negotiated timeout and applies the decision, and without one falls to its posture with an audit."""
 
     def _run_claude_adapter(self, *, guardian_url: str,
                              env_overrides: dict | None = None,
@@ -1484,10 +1472,10 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
         env = os.environ.copy()
         env["ACS_GUARDIAN_URL"] = guardian_url
-        env["ACS_HANDSHAKE"] = "0"
         env.pop("ACS_DEFAULT_DENY", None)
         if env_overrides:
             env.update(env_overrides)
+        _negotiated(env, "00000000-0000-4000-8000-000000000001")
         return subprocess.run(
             [sys.executable, str(adapter)],
             input=json.dumps({
@@ -1558,7 +1546,6 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         secret, so the Guardian responds -32004 SIGNATURE_INVALID.
         """
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
-        # Spin up a Guardian that requires signing
         env_g = os.environ.copy()
         env_g["ACS_HMAC_SECRET"] = "regression-test-secret"
         env_g.pop("ACS_DEV_MODE", None)
@@ -1567,10 +1554,10 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         try:
             env_a = os.environ.copy()
             env_a["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{port}/acs"
-            env_a["ACS_HANDSHAKE"] = "0"
             env_a.pop("ACS_HMAC_SECRET", None)
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
             env_a.pop("ACS_DEFAULT_DENY", None)  # default fail-open
+            _negotiated(env_a, "00000000-0000-4000-8000-000000000001")
 
             proc = subprocess.run(
                 [sys.executable, str(adapter)],
@@ -1622,10 +1609,10 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         try:
             env_a = os.environ.copy()
             env_a["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{port}/acs"
-            env_a["ACS_HANDSHAKE"] = "0"
             env_a["ACS_DEFAULT_DENY"] = "1"
             env_a.pop("ACS_HMAC_SECRET", None)
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
+            _negotiated(env_a, "00000000-0000-4000-8000-000000000002")
 
             proc = subprocess.run(
                 [sys.executable, str(adapter)],
@@ -1679,13 +1666,12 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         try:
             env_a = os.environ.copy()
             env_a["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{port}/acs"
-            env_a["ACS_HANDSHAKE"] = "0"
             env_a["ACS_DEFAULT_DENY"] = "1"
             env_a.pop("ACS_HMAC_SECRET", None)
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
 
-            # Non-UUID session_id triggers -32600 from the Guardian's
-            # request-envelope.json schema validation
+            _negotiated(env_a, "test-sess")
+
             proc = subprocess.run(
                 [sys.executable, str(adapter)],
                 input=json.dumps({

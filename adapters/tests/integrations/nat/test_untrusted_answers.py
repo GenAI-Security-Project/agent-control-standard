@@ -5,8 +5,10 @@ import asyncio
 import io
 import json
 import os
+import tempfile
 import unittest
 import urllib.error
+from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
 
@@ -17,8 +19,10 @@ except ImportError:
     _NAT_OK = False
 
 from acs.client import _exchange
+from acs.client import _handshake
 from acs.core import derive_session_key, sign_with_key
 from acs.integrations.nat.adapter import ACSGuardianDenied, ACSMiddleware
+from acs.testing.harness import seed_negotiated_session
 
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig
@@ -43,12 +47,24 @@ class _Body:
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
 @mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": "",
-                              "ACS_HANDSHAKE": "0", "ACS_DISABLED": ""})
+                              "ACS_DISABLED": "", "ACS_STARTUP_POSTURE": ""})
 class UntrustedAnswersNeverRunTheFunction(unittest.TestCase):
+    def setUp(self) -> None:
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        self.records = Path(records.name)
+        patcher = mock.patch.object(_handshake, "_HANDSHAKE_CACHE_DIR", self.records)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _run(self, answer: Callable[[dict], tuple[int, dict]], *, default_deny: bool = False) -> tuple[int, bool]:
         """Invoke a protected function through the middleware (fail-open unless default_deny); return how often it ran and whether NAT blocked it."""
-        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url="http://127.0.0.1:9/acs",
-                                               default_deny=default_deny, session_id="nat-untrusted"))
+        url = "http://127.0.0.1:9/acs"
+        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url=url, default_deny=default_deny,
+                                               session_id="nat-untrusted"))
+        # The session already negotiated, so every request below is a step.
+        seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=url,
+                                hmac_secret=SECRET)
         key = derive_session_key(SECRET.encode(), mw._session_id)
         executed = {"count": 0}
 

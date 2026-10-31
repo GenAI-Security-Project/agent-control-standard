@@ -276,11 +276,12 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: every call passes through with no Guardian traffic and an `acs_disabled_bypass` audit event. Read when NAT builds the middleware, so set it before the workflow starts. |
-| `ACS_HANDSHAKE` | `1` | Set to `0` to disable the handshake/hello call on first use. Read when NAT builds the middleware. |
+| `ACS_STARTUP_POSTURE` | follows `default_deny` | `proceed` or `refuse`: what a call does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the call run, audited, with nothing sent to the Guardian; `refuse` blocks it. The session keeps no negotiated Guardian for its lifetime. Any other value refuses. Read when NAT builds the middleware. |
+| `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every call. Read when NAT builds the middleware. |
 
 ## On-disk state
 
-NAT runs the adapter in-process; there is no per-event subprocess state to persist. The handshake is cached in the middleware instance's memory for the process lifetime; restarting the process triggers a fresh handshake on the next call. The Guardian-side state (`~/.cache/acs-guardian-state/<sha256(session_id)>.json`) is the same as for the other adapters — chain head + replay set, survives Guardian restart.
+NAT runs the adapter in-process. The middleware keeps its session's handshake decision in memory and stores it in `~/.cache/acs-adapter-handshake/` like the other adapters, so a restarted process with the same `session_id` follows the same decision, and a new session handshakes again. The Guardian-side state (`~/.cache/acs-guardian-state/<sha256(session_id)>.json`) is the same as for the other adapters — chain head + replay set, survives Guardian restart.
 
 ## Conformance status
 
@@ -288,7 +289,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 
 | ACS-Core item | Status |
 |---|---|
-| Handshake (`handshake/hello`) | ✓ on first `pre_invoke`; cached per session in process memory |
+| Handshake (`handshake/hello`) | ✓ on the first `pre_invoke`; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1) |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema (`test_envelope_schema.py`) |
 | Hook taxonomy (Core minimum set) | ⚠ emitted, but read the enforcement split. **Decision-eligible** coverage: `toolCallRequest` / `toolCallResult`, via the `FunctionMiddleware` path — these can actually block/redact. The other four — `sessionStart`, `userMessage`, `agentResponse`, `sessionEnd` — are emitted **observation-only** from the `IntermediateStepManager` subscription (fire-and-forget; the Guardian's verdict is not applied), so they provide audit/trace coverage, **not** enforcement, and should not be counted as decision-eligible Core coverage. ACS-Core requires a subagent-capable client to emit `subagentStart` when it spawns a sub-agent, and a framework with no sub-agent abstraction has nothing to emit. The adapter emits no `subagentStart`: nested workflow functions reach the Guardian as generic tool calls. The Guardian decides by deployment-defined means whether a NAT deployment counts as subagent-capable. Where sub-workflows act as sub-agents, this is a known gap. See `mapping.md`. Verified in `test_lifecycle.py`. |
 | Dispositions | ALLOW / DENY / MODIFY supported on **function-middleware (pre-execution)** hooks (`pre_invoke` for every wrapped function — tools, sub-workflows, LLM, retrievers). ASK/DEFER substituted to DENY at the middleware boundary; deployments wanting pause-and-resume should compose with NAT's HITL middleware (`nat.middleware.hitl`). **Lifecycle hooks from the `IntermediateStepManager` subscription (`steps/sessionStart`, `steps/userMessage`, `steps/agentResponse`, `steps/sessionEnd`) are observation-only** — subscription callbacks cannot veto a NAT event after it fires. See `mapping.md`. |

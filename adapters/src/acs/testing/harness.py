@@ -287,6 +287,25 @@ GUARDIAN_SCRIPT = _HERE.parent / "guardian" / "example_guardian.py"
 # delays, use ProgrammableGuardian: an in-process HTTP server you can
 # configure handler-by-handler.
 
+# A ServerHello for a session whose handshake already happened; no methods_evaluated means every method is sent.
+NEGOTIATED_HELLO = {
+    "negotiated_version": "0.1.0",
+    "selected_transport": "http",
+    "timeout_config": {"default_ms": 5000},
+    "on_decision_failure": "proceed",
+}
+
+
+def seed_negotiated_session(cache_dir: str | Path, *, session_id: str, guardian_url: str,
+                            hmac_secret: str | None = None,
+                            server_hello: dict | None = None) -> None:
+    """Store a negotiated decision for a session, as its first handshake would, so a test can exercise its steps."""
+    from acs.client._handshake import store_session_decision
+    decision = client.Negotiated(dict(server_hello or NEGOTIATED_HELLO))
+    store_session_decision(Path(cache_dir), session_id, guardian_url, decision,
+                           (hmac_secret or "").encode())
+
+
 class ProgrammableGuardian:
     """Test Guardian whose response can be programmed per method.
 
@@ -300,7 +319,7 @@ class ProgrammableGuardian:
     DEFAULT_TEST_HMAC_SECRET = "shared-test-harness-secret-not-for-production"
 
     def __init__(self, *, hmac_secret: str | None = None,
-                  sign_responses: bool = True) -> None:
+                  sign_responses: bool = True, port: int = 0) -> None:
         import http.server
         self.hmac_secret = hmac_secret or self.DEFAULT_TEST_HMAC_SECRET
         self.sign_responses = sign_responses
@@ -320,10 +339,9 @@ class ProgrammableGuardian:
         self.on_request = None
         self.on_request_errors: list[str] = []
         self._http = http.server
-        # Bind port 0 and read the OS-assigned port — no bind-then-release
-        # race.
+        # Port 0 takes an OS-assigned port; a fixed port brings a stopped Guardian back at the same URL.
         self._server = self._http.HTTPServer(
-            ("127.0.0.1", 0), self._make_handler_cls())
+            ("127.0.0.1", port), self._make_handler_cls())
         self.port: int = self._server.server_address[1]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -426,17 +444,15 @@ class ProgrammableGuardian:
 
                 handler = guardian.handlers.get(method, guardian.handlers["__default__"])
                 result_or_error = handler(req)
-                if "code" in result_or_error and "message" in result_or_error:
-                    resp = {"jsonrpc": "2.0", "id": req.get("id"),
-                            "error": result_or_error}
-                else:
-                    resp = {"jsonrpc": "2.0", "id": req.get("id"),
-                            "result": result_or_error}
-                    if guardian.sign_responses:
-                        sid = req["params"]["metadata"]["session_id"]
-                        key = core.derive_session_key(
-                            guardian.hmac_secret.encode(), sid)
-                        client.sign_envelope(resp, key=key, session_id=sid)
+                container = ("error" if "code" in result_or_error and "message" in result_or_error
+                             else "result")
+                resp = {"jsonrpc": "2.0", "id": req.get("id"), container: result_or_error}
+                # Errors are signed too under ACS-Core (§10).
+                if guardian.sign_responses:
+                    sid = req["params"]["metadata"]["session_id"]
+                    key = core.derive_session_key(
+                        guardian.hmac_secret.encode(), sid)
+                    client.sign_envelope(resp, key=key, session_id=sid)
                 self_h._reply(resp)
 
             def _reply(self_h, resp: dict):

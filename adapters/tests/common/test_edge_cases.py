@@ -6,6 +6,7 @@ the fix-side behavior. Tests are written first; fixes follow.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import socket
@@ -20,6 +21,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from acs import client  # noqa: E402
 from acs import core  # noqa: E402
@@ -169,86 +171,35 @@ class Item04_ReplaySetTtlEviction(unittest.TestCase):
                     "recent request_id wrongly evicted")
 
 
-# ===== #5: handshake cache TTL =====
+class Item05_SessionDecisionLifetime(unittest.TestCase):
+    """§4.1 defers renegotiation to v0.2: a Guardian config change reaches
+    the next session, and a running session keeps the decision its
+    handshake made however old the stored record is."""
 
-class Item05_HandshakeCacheTtl(unittest.TestCase):
-    """Handshake cache must invalidate after a TTL. Operator config
-    changes (skew window, profiles) MUST not be served from stale cache."""
+    def test_a_config_change_reaches_the_next_session_only(self) -> None:
+        hellos = iter([{"negotiated_version": "0.1.0", "on_decision_failure": "deny"},
+                       {"negotiated_version": "0.1.0", "on_decision_failure": "proceed"}])
 
-    def test_fresh_cache_is_honored(self) -> None:
-        # The cache holds the whole response envelope so the read path
-        # can re-verify its signature; unsigned + no secret configured =
-        # local-dev mode, which verify_signature accepts.
-        saved = {k: os.environ.pop(k, None)
-                 for k in ("ACS_HMAC_SECRET", "ACS_HMAC_SECRET_FILE")}
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                os.environ["ACS_HANDSHAKE_CACHE"] = tmp
-                import importlib
-                importlib.reload(client_handshake)
-                url = "http://127.0.0.1:1/dead"
-                fake_payload = {"negotiated_version": "0.1.0", "_synthetic": True,
-                                "methods_evaluated": [], "selected_transport": "http",
-                                "timeout_config": {"default_ms": 5000}}
-                envelope = {"jsonrpc": "2.0", "id": "cache-test",
-                            "result": fake_payload}
-                cache_path = client_handshake._handshake_cache_path("sess1", url)
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(json.dumps(envelope))
-                # Recently-mtimed cache must be honored
-                result = client.ensure_session_handshake(
-                    guardian_url=url, session_id="sess1",
-                    agent_id="x", platform="t", methods_implemented=[],
-                )
-                self.assertEqual(result, fake_payload,
-                    "fresh handshake cache must be honored to avoid the "
-                    "per-process re-handshake overhead")
-        finally:
-            for k, v in saved.items():
-                if v is not None:
-                    os.environ[k] = v
+        def respond(request, timeout=None):
+            incoming = json.loads(request.data)
+            return io.BytesIO(json.dumps({"jsonrpc": "2.0", "id": incoming["id"],
+                                          "result": next(hellos)}).encode())
 
-    def test_legacy_bare_payload_cache_is_a_miss(self) -> None:
-        """A pre-0.1.2 bare-payload cache entry has no signature to
-        verify (§10 binds it to the envelope), so it must be a miss."""
-        with tempfile.TemporaryDirectory() as tmp:
-            os.environ["ACS_HANDSHAKE_CACHE"] = tmp
-            import importlib
-            importlib.reload(client_handshake)
-            url = "http://127.0.0.1:1/dead"
-            cache_path = client_handshake._handshake_cache_path("sess-legacy", url)
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(
-                {"negotiated_version": "0.1.0", "on_decision_failure": "proceed"}))
-            result = client.ensure_session_handshake(
-                guardian_url=url, session_id="sess-legacy",
-                agent_id="x", platform="t", methods_implemented=[],
-            )
-            # Legacy entry → miss → re-handshake → dead URL → None
-            self.assertIsNone(result,
-                "a bare-payload cache entry has no signature to check and "
-                "must not govern the fail posture")
-
-    def test_stale_cache_is_ignored(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            os.environ["ACS_HANDSHAKE_CACHE"] = tmp
-            import importlib
-            importlib.reload(client_handshake)
-            url = "http://127.0.0.1:1/dead"
-            cache_path = client_handshake._handshake_cache_path("sess2", url)
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps({"_synthetic": True}))
-            # Backdate the cache file 2 hours
-            two_hours_ago = time.time() - 2 * 3600
-            os.utime(cache_path, (two_hours_ago, two_hours_ago))
-            result = client.ensure_session_handshake(
-                guardian_url=url, session_id="sess2",
-                agent_id="x", platform="t", methods_implemented=[],
-            )
-            # Cache stale → not honored → handshake attempted → fails (dead URL) → None
-            self.assertIsNone(result,
-                "stale handshake cache was honored — operator Guardian-config "
-                "changes would not propagate within the TTL")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+        config = client.Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs"})
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(tmp)), \
+                mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
+            def open_(session_id: str):
+                return client.open_session(config=config, session_id=session_id, agent_id="x",
+                                           platform="t", methods_implemented=[])
+            running = open_("running")
+            for record in Path(tmp).glob("*.json"):
+                os.utime(record, (0, 0))
+            self.assertEqual(open_("running"), running)
+            self.assertEqual(running.server_hello["on_decision_failure"], "deny")
+            self.assertEqual(open_("next").server_hello["on_decision_failure"], "proceed")
 
 
 # ===== #6: NAT id(context) collision — WeakKeyDictionary =====

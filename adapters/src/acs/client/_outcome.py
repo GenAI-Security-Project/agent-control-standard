@@ -1,4 +1,3 @@
-"""What one Guardian round trip produced: a usable decision, no usable decision, or an answer that must not be trusted."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -29,3 +28,26 @@ class Refused:
 
 
 Outcome = Decided | Undecided | Refused
+
+
+@dataclass(frozen=True)
+class Negotiated:
+    """The Guardian answered the handshake with a verified ServerHello; the session's steps go to it."""
+    server_hello: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SessionRefused:
+    """The Guardian refused the session, or its answer failed its checks; every step of the session is denied."""
+    cause: str
+    fields: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NoAnswer:
+    """No ServerHello arrived: the session sends nothing more, and each hook's startup posture settles its steps."""
+    cause: str
+    fields: Mapping[str, Any] = field(default_factory=dict)
+
+
+Handshake = Negotiated | SessionRefused | NoAnswer

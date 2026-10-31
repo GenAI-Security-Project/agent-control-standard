@@ -559,35 +559,28 @@ class Item19_SecretFileUnreadableRaises(unittest.TestCase):
                 os.environ["ACS_HMAC_SECRET"] = old
 
 
-class Item20_HandshakeNegativeCache(unittest.TestCase):
-    """Handshake failures are negative-cached for a short TTL so a dead
-    Guardian costs one timeout, not one per hook event."""
+class Item20_DeadGuardianCostsOneTimeoutPerSession(unittest.TestCase):
+    """A session whose handshake got no answer stores that decision, so a
+    dead Guardian costs one timeout per session, not one per hook event."""
 
-    def test_second_failure_is_fast_and_cached(self) -> None:
+    def test_second_event_of_the_session_is_fast(self) -> None:
         import time as _time
-        with tempfile.TemporaryDirectory() as d:
-            os.environ["ACS_HANDSHAKE_CACHE"] = d
-            # Force module to re-read the cache dir env
-            import importlib
-            importlib.reload(client_handshake)
-            try:
-                kw = dict(guardian_url="http://127.0.0.1:1/acs",
-                          session_id="cache-test", agent_id="a",
-                          platform="test",
-                          methods_implemented=["steps/toolCallRequest"],
-                          timeout=2.0)
-                t0 = _time.time()
-                self.assertIsNone(client.ensure_session_handshake(**kw))
-                first = _time.time() - t0
-                t1 = _time.time()
-                self.assertIsNone(client.ensure_session_handshake(**kw))
-                second = _time.time() - t1
-                self.assertLess(second, 0.1,
-                    f"second handshake attempt took {second:.3f}s — the "
-                    f"failure was not negative-cached (first: {first:.3f}s)")
-            finally:
-                os.environ.pop("ACS_HANDSHAKE_CACHE", None)
-                importlib.reload(client_handshake)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(d)):
+            kw = dict(config=client.Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs"}),
+                      session_id="cache-test", agent_id="a", platform="test",
+                      methods_implemented=["steps/toolCallRequest"], timeout=2.0)
+            t0 = _time.time()
+            first = client.open_session(**kw)
+            elapsed_first = _time.time() - t0
+            t1 = _time.time()
+            second = client.open_session(**kw)
+            elapsed_second = _time.time() - t1
+        self.assertIsInstance(first, client.NoAnswer)
+        self.assertEqual(second, first)
+        self.assertLess(elapsed_second, 0.1,
+            f"second event took {elapsed_second:.3f}s; the session's no-answer "
+            f"decision was not stored (first: {elapsed_first:.3f}s)")
 
 
 BIN = Path(sys.executable).parent
@@ -729,6 +722,50 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
                 self.assertEqual([r["acs_audit_event"] for r in records], ["acs_disabled_bypass"])
                 self.assertEqual(records[0]["event"], "preToolUse")
 
+    def test_an_adapter_that_raises_is_audited_and_fails_closed(self) -> None:
+        """An uncaught exception would exit 1, which both hosts treat as proceed with no record; the
+        session's posture is unknown here, so the step is denied under either local default."""
+        (self.shadow / "crashing_adapter.py").write_text(
+            "def main():\n    raise RecursionError('maximum recursion depth exceeded')\n")
+        hooks = {
+            "claude-code": ("acs.integrations.claude_code.hook", "hook",
+                            json.dumps({"session_id": "s", "hook_event_name": "PreToolUse"}),
+                            lambda out: json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"),
+            "cursor": ("acs.integrations.cursor.hook", "event", "{}",
+                       lambda out: json.loads(out)["permission"] == "deny"),
+        }
+        for name, (module, key, stdin, denied) in hooks.items():
+            code = (f"import sys; sys.argv = ['hook', 'preToolUse']\n"
+                    f"from acs.integrations._bootstrap import run_hook\n"
+                    f"from {module} import _deny, _event_name\n"
+                    f"sys.exit(run_hook('crashing_adapter', event_key='{key}', event_name=_event_name, deny=_deny))\n")
+            for posture in ("1", "0"):
+                with self.subTest(name, ACS_DEFAULT_DENY=posture):
+                    p, records = self._run([sys.executable, "-c", code], stdin, ACS_DEFAULT_DENY=posture)
+                    self.assertEqual(p.returncode, 0, p.stderr[-400:])
+                    self.assertEqual([r["acs_audit_event"] for r in records], ["adapter_crashed"])
+                    self.assertIn("RecursionError", records[0]["error"])
+                    self.assertEqual(records[0]["posture"], "deny")
+                    self.assertTrue(denied(p.stdout), p.stdout)
+
+    def test_version_answers_with_stdin_open(self) -> None:
+        for script, label in (("acs-claude-code-hook", "claude-code"), ("acs-cursor-hook", "cursor")):
+            with self.subTest(script):
+                proc = subprocess.Popen([str(BIN / script), "--version"], stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    returncode = proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    self.fail(f"{script} --version waited for stdin")
+                finally:
+                    proc.stdin.close()
+                out = proc.stdout.read()
+                proc.stdout.close()
+                proc.stderr.close()
+                self.assertEqual(returncode, 0)
+                self.assertIn(f"({label})", out)
+
     def test_nat_middleware_import_failure_is_loud_not_silent(self) -> None:
         """Without acs.core the NAT module prints an UNGOVERNED banner and re-raises."""
         env = os.environ.copy()
@@ -745,14 +782,11 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
             "the banner must name the missing dependency and the fix")
 
 
-# ----- 22. Cached ServerHello re-verification -----
-
-class Item22_CachedServerHelloReverified(unittest.TestCase):
-    """§4.1:75 says on_decision_failure is negotiated in the handshake.
-    §10 says every response carries a signature and a verifier MUST reject
-    one that does not cover the envelope. The cached ServerHello is a
-    response, held at a predictable path the observed agent can write, and
-    its only consumer is the fail posture."""
+class Item22_StoredSessionDecisionIsAuthenticated(unittest.TestCase):
+    """§4.1:75 says on_decision_failure is negotiated in the handshake, and
+    the session's decision is stored at a predictable path the observed
+    agent can write. The record carries an HMAC under the session key, and
+    a record that fails it refuses the session."""
 
     SESSION = "55555555-5555-4555-8555-555555555555"
 
@@ -789,8 +823,6 @@ class Item22_CachedServerHelloReverified(unittest.TestCase):
             "ACS_GUARDIAN_URL": guardian_url,
             "ACS_HMAC_SECRET": secret,
             "ACS_HANDSHAKE_CACHE": str(self.cache_dir),
-            # Fresh-failure markers from earlier stanzas must not
-            # short-circuit later ones except where the test says so.
             "ACS_HANDSHAKE_TIMEOUT_SECONDS": "2",
         })
         env.pop("ACS_HMAC_SECRET_FILE", None)
@@ -805,53 +837,44 @@ class Item22_CachedServerHelloReverified(unittest.TestCase):
             capture_output=True, text=True, env=env, timeout=20)
         return proc.returncode, proc.stdout, proc.stderr
 
-    def test_cached_serverhello_is_reverified_before_governing_posture(self) -> None:
+    def test_a_stored_decision_the_agent_edits_refuses_the_session(self) -> None:
         from acs.testing.harness import ProgrammableGuardian
         g = ProgrammableGuardian()
         g.handlers["handshake/hello"] = self._hello(on_decision_failure="deny")
         with g:
             url = g.url()
             self._run_claude_adapter(guardian_url=url,
-                                     secret=g.hmac_secret)  # populates cache
-        cache = self._cache_file(url)
-        self.assertTrue(cache.exists(), "handshake cache was not populated")
+                                     secret=g.hmac_secret)  # stores the session decision
+        record = self._cache_file(url)
+        self.assertTrue(record.exists(), "the session decision was not stored")
 
-        # Guardian is down from here on, so the posture decides every event.
+        # Guardian is down from here on, so the posture decides every step.
         rc, out, err = self._run_claude_adapter(guardian_url=url,
                                                 secret=g.hmac_secret)
         self.assertIn('"permissionDecision": "deny"', out,
-            "an honest cached ServerHello declaring deny must fail closed")
+            "an honest stored ServerHello declaring deny must fail closed")
+        self.assertIn("decision_failure_fail_closed", err)
 
-        # Edit one word in the cached envelope: deny -> proceed.
-        entry = json.loads(cache.read_text())
-        # Change the direct ServerHello while leaving its signature intact.
-        # This must exercise the tamper check, not a legacy payload fallback.
-        payload = entry["result"]
-        self.assertEqual(payload["on_decision_failure"], "deny")
-        payload["on_decision_failure"] = "proceed"
-        cache.write_text(json.dumps(entry))
-        # Refresh mtime so the TTL check passes and only the signature
-        # can reject it.
-        os.utime(cache)
+        # Edit one word in the stored decision: deny -> proceed.
+        entry = json.loads(record.read_text())
+        self.assertEqual(entry["server_hello"]["on_decision_failure"], "deny")
+        entry["server_hello"]["on_decision_failure"] = "proceed"
+        record.write_text(json.dumps(entry))
         rc, out, err = self._run_claude_adapter(guardian_url=url,
                                                 secret=g.hmac_secret)
-        self.assertIn("handshake_cache_signature_invalid", err,
-            "§10 requires a verifier to reject a signature that does not "
-            "cover the envelope. The edit must be detected, not accepted in "
-            "silence. Note the edit still lands on the §4.1:75 startup "
-            "posture, which defaults to proceed, so this makes the "
-            "downgrade visible, not impossible.")
+        self.assertIn('"permissionDecision": "deny"', out,
+            "§10 requires a verifier to reject what its MAC does not cover; the "
+            "edited record must refuse the session, not downgrade its posture")
+        self.assertIn("session_record_invalid", err)
 
-        # Replace the cache with a bare, fresh failure marker.
-        cache.unlink()
-        marker = cache.with_suffix(".failed")
-        marker.touch()
-        os.utime(marker)
+        # Replace it with a no-answer decision, which would run the session unguarded.
+        record.write_text(json.dumps({"acs_session_record": 1, "decision": "no_answer",
+                                      "cause": "transport_failure", "fields": {}, "mac": None}))
         rc, out, err = self._run_claude_adapter(guardian_url=url,
                                                 secret=g.hmac_secret)
-        self.assertIn("handshake_negative_cache_hit", err,
-            "§4.1:77 requires a session that proceeds unguarded to be "
-            "recorded. This branch must be audited, not silent.")
+        self.assertIn('"permissionDecision": "deny"', out,
+            "a forged 'unguarded' record must not let the session run without the Guardian")
+        self.assertIn("session_record_invalid", err)
 
 
 # ----- 23. ClientHello advertises only earned integrity capabilities -----
@@ -886,14 +909,14 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
                                       Path(d)), \
                     mock.patch.object(client_handshake.urllib.request, "urlopen",
                                       side_effect=refuse_after_capture):
-                result = client.ensure_session_handshake(
-                    guardian_url="http://127.0.0.1:8787/acs",
+                result = client.open_session(
+                    config=client.Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:8787/acs"}),
                     session_id=str(uuid.uuid4()),
                     agent_id="capability-test",
                     platform="test",
                     methods_implemented=["steps/toolCallRequest"],
                 )
-            self.assertIsNone(result)
+            self.assertEqual(result, client.NoAnswer("transport_failure", {"error": "<urlopen error capture complete>"}))
             self.assertEqual(len(captured), 1)
             return captured[0]
         finally:

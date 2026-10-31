@@ -63,5 +63,17 @@ GUARDIAN_REFUSAL_CODES = frozenset({
 })
 
 
+SESSION_REFUSAL_CODES = frozenset({
+    -32000,  # SESSION_REFUSED
+    -32001,  # UNSUPPORTED_VERSION
+    -32002,  # PROVENANCE_REQUIRED
+})
+
+
+def is_session_refusal(code: object) -> bool:
+    """True when a handshake error code refuses the session (§4.1)."""
+    return _is_code(code) and code in SESSION_REFUSAL_CODES
+
+
 def is_guardian_refusal(code: object) -> bool:
     return _is_code(code) and code in GUARDIAN_REFUSAL_CODES

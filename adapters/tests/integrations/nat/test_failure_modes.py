@@ -11,10 +11,12 @@ import socket
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest import mock
 
 try:
     from nat.builder.context import Context, ContextState
@@ -26,6 +28,7 @@ try:
 except ImportError:
     _NAT_OK = False
 
+from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
 
 if _NAT_OK:
@@ -35,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 GUARDIAN_SCRIPT = HERE.parents[2] / "src" / "acs" / "guardian" / "example_guardian.py"
 
 
-from acs.testing.harness import launch_guardian  # noqa: E402
+from acs.testing.harness import launch_guardian, seed_negotiated_session  # noqa: E402
 
 
 class RecordingGuardian(BaseHTTPRequestHandler):
@@ -104,7 +107,14 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
     def setUp(self) -> None:
         RecordingGuardian.recorded.clear()
         RecordingGuardian.seen_per_session.clear()
-        os.environ["ACS_HANDSHAKE"] = "0"
+        # Per-test handshake records, and environment changes undone after the test.
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        self.records = Path(records.name)
+        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
+                        mock.patch.dict(os.environ)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _ctx(self, tool_name: str, kwargs: dict):
         from nat.middleware.middleware import (
@@ -128,6 +138,8 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
             session_id="repeat-tool-session",
         )
         mw = ACSMiddleware(cfg)
+        seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=self.url,
+                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
 
         ctx1 = self._ctx("list_files", {})
         r1 = asyncio.run(mw.pre_invoke(ctx1))

@@ -24,6 +24,7 @@ ADAPTER = ADAPTER_DIR / "adapter.py"
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     launch_guardian,
+    seed_negotiated_session,
 )
 
 
@@ -56,6 +57,18 @@ class AdapterRoundTrip(unittest.TestCase):
         except subprocess.TimeoutExpired:
             cls.guardian_proc.kill()
 
+    def setUp(self) -> None:
+        # Per-test handshake records, so no run reads a session decision another test stored.
+        handshake = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(handshake.cleanup)
+        self._handshake_dir = handshake.name
+
+    def _negotiated(self, url: str, session_id: str) -> dict[str, str]:
+        """Env overrides in which the session already negotiated with url, so the test exercises a step-level failure."""
+        seed_negotiated_session(self._handshake_dir, session_id=session_id, guardian_url=url,
+                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
+        return {"ACS_HANDSHAKE_CACHE": self._handshake_dir}
+
     def _run_adapter(
         self,
         event: dict,
@@ -63,9 +76,8 @@ class AdapterRoundTrip(unittest.TestCase):
     ) -> tuple[int, str, str]:
         env = os.environ.copy()
         env["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{self.port}/acs"
-        # Isolate turn-tracking state per test: leftover state from earlier
-        # runs made local and clean-CI results diverge. Tests needing state
-        # continuity pass their own ACS_SESSION_STATE_DIR override.
+        env["ACS_HANDSHAKE_CACHE"] = self._handshake_dir
+        # Turn state is per test unless the test passes its own ACS_SESSION_STATE_DIR.
         if not (env_overrides and "ACS_SESSION_STATE_DIR" in env_overrides):
             self._state_tmp = tempfile.TemporaryDirectory()
             self.addCleanup(self._state_tmp.cleanup)
@@ -177,7 +189,7 @@ class AdapterRoundTrip(unittest.TestCase):
             ),
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
                            "ACS_DEFAULT_DENY": "1",
-                           "ACS_HANDSHAKE": "0"},
+                           **self._negotiated("http://127.0.0.1:1/dead", "00000000-0000-4000-8000-000000000001")},
         )
         self.assertEqual(rc, 0, err)
         payload = json.loads(out)
@@ -196,7 +208,7 @@ class AdapterRoundTrip(unittest.TestCase):
             ),
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
                            "ACS_DEFAULT_DENY": "1",
-                           "ACS_HANDSHAKE": "0"},
+                           **self._negotiated("http://127.0.0.1:1/dead", "00000000-0000-4000-8000-000000000001")},
         )
         self.assertEqual(rc, 0, err)
         payload = json.loads(out)
@@ -212,7 +224,7 @@ class AdapterRoundTrip(unittest.TestCase):
                 tool_input={"file_path": "/tmp/x"},
             ),
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
-                           "ACS_HANDSHAKE": "0"},
+                           **self._negotiated("http://127.0.0.1:1/dead", "00000000-0000-4000-8000-000000000001")},
         )
         self.assertEqual(rc, 0, err)
         self.assertEqual(out, "")  # proceed (fail-open)
@@ -248,7 +260,6 @@ class AdapterRoundTrip(unittest.TestCase):
                 with g, tempfile.TemporaryDirectory() as state:
                     env = {"ACS_GUARDIAN_URL": g.url(),
                            "ACS_HMAC_SECRET": g.hmac_secret,
-                           "ACS_HANDSHAKE": "0",
                            "ACS_SESSION_STATE_DIR": state}
                     if hook == "Stop":
                         # Open the turn: allow turnStart + userMessage
@@ -277,7 +288,7 @@ class AdapterRoundTrip(unittest.TestCase):
                     _claude_code_event(hook),
                     env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs",
                                    "ACS_DEFAULT_DENY": "1",
-                                   "ACS_HANDSHAKE": "0"})
+                                   **self._negotiated("http://127.0.0.1:1/acs", "00000000-0000-4000-8000-000000000001")})
                 self.assertNotIn('"decision": "block"', out,
                     f"fail-closed on {hook} must not emit a block, which reads "
                     f"as 'do not stop'. Got {out!r}")
@@ -291,7 +302,7 @@ class AdapterRoundTrip(unittest.TestCase):
             _claude_code_event("SubagentStop"),
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs",
                            "ACS_DEFAULT_DENY": "1",
-                           "ACS_HANDSHAKE": "0"})
+                           **self._negotiated("http://127.0.0.1:1/acs", "00000000-0000-4000-8000-000000000001")})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "",
             f"unmapped SubagentStop must produce no output; got {out!r}")

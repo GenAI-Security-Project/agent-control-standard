@@ -22,10 +22,12 @@ import socket
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest import mock
 
 try:
     from nat.builder.context import Context
@@ -38,7 +40,9 @@ try:
 except ImportError:
     _NAT_OK = False
 
+from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
+from acs.testing.harness import seed_negotiated_session  # noqa: E402
 
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
@@ -91,6 +95,14 @@ class LifecycleObserver(unittest.TestCase):
 
     def setUp(self) -> None:
         RecordingGuardian.recorded.clear()
+        # Per-test handshake records, and environment changes undone after the test.
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        self.records = Path(records.name)
+        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
+                        mock.patch.dict(os.environ)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _push(self, mgr, event_type, name="test", input=None, output=None, uuid_=None):
         data = StreamEventData(input=input, output=output) if (input or output) else None
@@ -109,9 +121,10 @@ class LifecycleObserver(unittest.TestCase):
             guardian_url=self.url, default_deny=False,
             session_id="lifecycle-non-trigger-test",
         )
-        # The middleware reads ACS_HANDSHAKE when it is built.
-        os.environ["ACS_HANDSHAKE"] = "0"
         mw = ACSMiddleware(cfg)
+        # A negotiated session, so a lifecycle hook fired here would reach the Guardian and be recorded.
+        seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=self.url,
+                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
         ctx_state = ContextState.get()
         mgr = IntermediateStepManager(ctx_state)
         sub = mgr.subscribe(on_next=mw._on_intermediate_step)

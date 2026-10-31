@@ -18,8 +18,6 @@ import unittest
 import uuid
 from pathlib import Path
 
-from acs import client  # noqa: E402
-from acs import core  # noqa: E402
 from acs.testing.harness import ProgrammableGuardian  # noqa: E402
 
 ADAPTERS = Path(__file__).resolve().parents[2]
@@ -27,20 +25,22 @@ TOOL_HOOKS = ["steps/toolCallRequest", "steps/toolCallResult"]
 
 
 class SubsetGuardian(ProgrammableGuardian):
-    """Declares `evaluated` in its ServerHello and signs error replies too,
-    since ACS-Core requires a signature on every response."""
+    """Declares `evaluated` in its ServerHello, or no methods_evaluated at all when it is None."""
 
-    def __init__(self, evaluated: list[str], tool_decision: str = "allow") -> None:
+    def __init__(self, evaluated: list[str] | None, tool_decision: str = "allow") -> None:
         super().__init__()
         self.evaluated = evaluated
 
         def hello(req: dict) -> dict:
             result = self._default_handshake(req)
-            result["methods_evaluated"] = list(evaluated)
+            if evaluated is None:
+                del result["methods_evaluated"]
+            else:
+                result["methods_evaluated"] = list(evaluated)
             return result
 
         def step(req: dict) -> dict:
-            if req["method"] not in evaluated:
+            if evaluated is not None and req["method"] not in evaluated:
                 return {"code": -32601, "message": "Method not found"}
             result = self._default_allow(req)
             if req["method"] == "steps/toolCallRequest":
@@ -52,31 +52,12 @@ class SubsetGuardian(ProgrammableGuardian):
         self.handlers["handshake/hello"] = hello
         self.handlers["__default__"] = step
 
-    def _make_handler_cls(self):
-        base = super()._make_handler_cls()
-        guardian = self
-
-        class SigningHandler(base):
-            def _reply(self_h, resp: dict) -> None:
-                if "error" in resp and guardian.received:
-                    sid = guardian.received[-1]["params"]["metadata"]["session_id"]
-                    key = core.derive_session_key(
-                        guardian.hmac_secret.encode(), sid)
-                    client.sign_envelope(resp, key=key, session_id=sid)
-                super()._reply(resp)
-
-        return SigningHandler
-
     def methods_received(self) -> list[str]:
         return [r.get("method", "") for r in self.received]
 
 
 class Harness:
-    """Runs one adapter process per event against a Guardian, sharing
-    session state across the events of one test."""
-
-    def __init__(self, guardian: ProgrammableGuardian, *, fail_closed: bool = True,
-                 handshake: bool = True) -> None:
+    def __init__(self, guardian: ProgrammableGuardian, *, fail_closed: bool = True) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         d = Path(self._tmp.name)
         self.audit_path = d / "audit.log"
@@ -89,8 +70,6 @@ class Harness:
             ACS_AUDIT_FILE=str(self.audit_path))
         if fail_closed:
             self.env["ACS_DEFAULT_DENY"] = "1"
-        if not handshake:
-            self.env["ACS_HANDSHAKE"] = "0"
         self.session_id = str(uuid.uuid4())
 
     def close(self) -> None:
@@ -240,17 +219,15 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertEqual("request_id_ref" in self._sent_result(guardian, h), cites)
 
     def test_without_a_negotiated_list_every_method_is_sent(self) -> None:
-        """No ServerHello means no evaluated subset is known, so the adapters
-        keep sending every method they implement."""
+        """A ServerHello without methods_evaluated declares no subset, so the
+        adapters send every method they implement."""
         for adapter in ("claude-code", "cursor"):
             with self.subTest(adapter=adapter):
-                guardian, h = self._session(
-                    ["steps/turnStart", "steps/userMessage", *TOOL_HOOKS],
-                    handshake=False)
+                guardian, h = self._session(None)
                 p = h.run(adapter, *PROMPT[adapter])
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(guardian.methods_received(),
-                                 ["steps/turnStart", "steps/userMessage"])
+                                 ["handshake/hello", "steps/turnStart", "steps/userMessage"])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest import mock
 
-from acs.client import Config, FailPosture, Refused, Resolution, Undecided
+from acs.client import Config, FailPosture, Negotiated, NoAnswer, Refused, Resolution, SessionRefused, Undecided
 from acs.client._config import DEFAULT_GUARDIAN_URL, DEFAULT_TIMEOUT_S
 
 PROCEED = FailPosture(deny_on_failure=False, timeout_s=1.0)
@@ -73,12 +73,52 @@ class Resolve(unittest.TestCase):
                 self.assertEqual(posture.resolve(outcome), expected)
 
 
+class Gate(unittest.TestCase):
+    """§4.1: only a negotiated session reaches the Guardian; the others settle each step locally."""
+
+    def test_gate_table(self) -> None:
+        fields = {"error_code": -32000}
+        proceed, refuse = Config.from_env({}), Config.from_env({"ACS_STARTUP_POSTURE": "refuse"})
+        table = [
+            (proceed, Negotiated({"negotiated_version": "0.1.0"}), None),
+            (proceed, SessionRefused("session_refused_response", fields),
+             Resolution(False, "session_refused_fail_closed", "session_refused_response", fields)),
+            (proceed, NoAnswer("transport_failure"),
+             Resolution(True, "unguarded_session_bypass", "transport_failure", {})),
+            (refuse, NoAnswer("transport_failure"),
+             Resolution(False, "session_not_started_fail_closed", "transport_failure", {})),
+        ]
+        for config, session, expected in table:
+            with self.subTest(session=session, startup=config.startup_posture):
+                self.assertEqual(config.gate(session), expected)
+
+    def test_deny_labels(self) -> None:
+        for audit_type, label in (("session_refused_fail_closed", "session refused"),
+                                  ("session_not_started_fail_closed", "session not started"),
+                                  ("guardian_refusal_fail_closed", "refused"),
+                                  ("decision_failure_fail_closed", "decision-failure")):
+            with self.subTest(audit_type):
+                self.assertEqual(Resolution(False, audit_type, "cause", {}).label, label)
+
+
 class FromEnv(unittest.TestCase):
     def test_defaults(self) -> None:
         self.assertEqual(Config.from_env({}), Config(
             guardian_url=DEFAULT_GUARDIAN_URL,
             posture=FailPosture(deny_on_failure=False, timeout_s=DEFAULT_TIMEOUT_S),
-            handshake_enabled=True, disabled=False))
+            handshake_enabled=True, disabled=False, startup_posture=None))
+
+    def test_startup_posture(self) -> None:
+        """§4.1: unset follows the local fail posture; anything but proceed refuses."""
+        table = [({}, True), ({"ACS_DEFAULT_DENY": "1"}, False),
+                 ({"ACS_STARTUP_POSTURE": "proceed", "ACS_DEFAULT_DENY": "1"}, True),
+                 ({"ACS_STARTUP_POSTURE": " Proceed "}, True),
+                 ({"ACS_STARTUP_POSTURE": "refuse"}, False),
+                 ({"ACS_STARTUP_POSTURE": "procede"}, False),
+                 ({"ACS_STARTUP_POSTURE": ""}, True)]
+        for env, proceeds in table:
+            with self.subTest(env=env):
+                self.assertIs(Config.from_env(env).startup_proceeds, proceeds)
 
     def test_settings(self) -> None:
         config = Config.from_env({"ACS_GUARDIAN_URL": "https://guardian.example/acs",

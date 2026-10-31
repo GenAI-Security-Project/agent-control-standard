@@ -1,14 +1,21 @@
-"""The Guardian URL, fail posture, handshake and kill-switch settings, read once from the environment, and the §6.4 posture they imply."""
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from acs.client._outcome import Refused, Undecided
+from acs.client._outcome import Handshake, Negotiated, Refused, SessionRefused, Undecided
 
 DEFAULT_GUARDIAN_URL = "http://127.0.0.1:8787/acs"
 DEFAULT_TIMEOUT_S = 5.0
+
+
+# The deny message's label for each audit type that blocks.
+_DENY_LABELS = {
+    "guardian_refusal_fail_closed": "refused",
+    "session_refused_fail_closed": "session refused",
+    "session_not_started_fail_closed": "session not started",
+}
 
 
 @dataclass(frozen=True)
@@ -18,6 +25,10 @@ class Resolution:
     audit_type: str
     cause: str
     fields: Mapping[str, Any]
+
+    @property
+    def label(self) -> str:
+        return _DENY_LABELS.get(self.audit_type, "decision-failure")
 
 
 @dataclass(frozen=True)
@@ -49,11 +60,12 @@ class FailPosture:
 
 @dataclass(frozen=True)
 class Config:
-    """ACS_GUARDIAN_URL, ACS_DEFAULT_DENY, ACS_HANDSHAKE and ACS_DISABLED, read once at the entry point."""
+    """ACS_GUARDIAN_URL, ACS_DEFAULT_DENY, ACS_STARTUP_POSTURE, ACS_HANDSHAKE and ACS_DISABLED, read once at the entry point."""
     guardian_url: str
     posture: FailPosture
     handshake_enabled: bool
     disabled: bool
+    startup_posture: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Config:
@@ -63,4 +75,22 @@ class Config:
                                 timeout_s=DEFAULT_TIMEOUT_S),
             handshake_enabled=env.get("ACS_HANDSHAKE", "1") == "1",
             disabled=env.get("ACS_DISABLED") == "1",
+            startup_posture=env.get("ACS_STARTUP_POSTURE", "").strip().lower() or None,
         )
+
+    @property
+    def startup_proceeds(self) -> bool:
+        """Whether steps proceed with no negotiated Guardian (§4.1): unset follows the fail posture, "proceed" proceeds, anything else refuses."""
+        if self.startup_posture is None:
+            return not self.posture.deny_on_failure
+        return self.startup_posture == "proceed"
+
+    def gate(self, handshake: Handshake) -> Resolution | None:
+        """None when the session's steps go to the Guardian; otherwise how this step ends without one (§4.1)."""
+        if isinstance(handshake, Negotiated):
+            return None
+        if isinstance(handshake, SessionRefused):
+            return Resolution(False, "session_refused_fail_closed", handshake.cause, handshake.fields)
+        if self.startup_proceeds:
+            return Resolution(True, "unguarded_session_bypass", handshake.cause, handshake.fields)
+        return Resolution(False, "session_not_started_fail_closed", handshake.cause, handshake.fields)

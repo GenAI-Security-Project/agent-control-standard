@@ -7,12 +7,47 @@ import sys
 from acs.integrations._bootstrap import run_hook
 
 
-def _event_name() -> str:
+def _event_name(raw: str) -> str:
+    """The event's top-level hook_event_name, scanned without parsing when the event does not parse."""
     try:
-        event = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
-        event = {}
-    return event.get("hook_event_name", "") if isinstance(event, dict) else ""
+        event = json.loads(raw or "{}")
+    except Exception:  # noqa: BLE001
+        return _top_level_string(raw, "hook_event_name")
+    name = event.get("hook_event_name", "") if isinstance(event, dict) else ""
+    return name if isinstance(name, str) else ""
+
+
+def _top_level_string(raw: str, key: str) -> str:
+    """The last string value of `key` in the top-level JSON object, skipping nested values iteratively; "" if none."""
+    found, depth, last_key, awaiting, i = "", 0, None, False, 0
+    while i < len(raw):
+        c = raw[i]
+        if c == '"':
+            j = i + 1
+            while j < len(raw) and raw[j] != '"':
+                j += 2 if raw[j] == "\\" else 1
+            text, i = raw[i + 1:j], j + 1
+            if depth == 1:
+                if awaiting:
+                    try:
+                        found = json.loads(f'"{text}"')
+                    except ValueError:
+                        found = ""
+                    awaiting = False
+                else:
+                    last_key = text
+            continue
+        if c in "{[":
+            depth += 1
+            awaiting = False
+        elif c in "}]":
+            depth -= 1
+        elif depth == 1 and c == ":":
+            awaiting = last_key == key
+        elif depth == 1 and c == ",":
+            last_key, awaiting = None, False
+        i += 1
+    return found if found.isascii() and found.isalpha() else ""
 
 
 def _deny(event_name: str, reason: str) -> int:

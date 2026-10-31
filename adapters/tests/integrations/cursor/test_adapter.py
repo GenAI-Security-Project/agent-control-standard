@@ -23,7 +23,8 @@ ADAPTER_DIR = HERE.parents[2] / "src" / "acs" / "integrations" / "cursor"
 ADAPTER = ADAPTER_DIR / "adapter.py"
 
 
-from acs.testing.harness import launch_guardian  # noqa: E402
+from acs.core import coerce_uuid  # noqa: E402
+from acs.testing.harness import launch_guardian, seed_negotiated_session  # noqa: E402
 
 
 class CursorAdapter(unittest.TestCase):
@@ -40,11 +41,23 @@ class CursorAdapter(unittest.TestCase):
         except subprocess.TimeoutExpired:
             cls.guardian_proc.kill()
 
+    def setUp(self) -> None:
+        # Per-test handshake records, so no run reads a session decision another test stored.
+        handshake = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(handshake.cleanup)
+        self._handshake_dir = handshake.name
+
+    def _negotiated(self, url: str, session_id: str) -> dict[str, str]:
+        """Env overrides in which the session already negotiated with url, so the test exercises a step-level failure."""
+        seed_negotiated_session(self._handshake_dir, session_id=session_id, guardian_url=url,
+                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
+        return {"ACS_HANDSHAKE_CACHE": self._handshake_dir}
+
     def _run(self, event_name: str, event: dict, env_overrides: dict | None = None) -> tuple[int, str, str]:
         env = os.environ.copy()
         env["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{self.port}/acs"
-        # Isolate turn-tracking state per test: leftover state from earlier
-        # runs made local and clean-CI results diverge.
+        env["ACS_HANDSHAKE_CACHE"] = self._handshake_dir
+        # Turn state is per test, so earlier runs cannot leak into this one.
         if not (env_overrides and "ACS_SESSION_STATE_DIR" in env_overrides):
             tmp = tempfile.TemporaryDirectory()
             self.addCleanup(tmp.cleanup)
@@ -143,7 +156,7 @@ class CursorAdapter(unittest.TestCase):
              "tool_input": {"file_path": "/tmp/x"}},
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
                            "ACS_DEFAULT_DENY": "1",
-                           "ACS_HANDSHAKE": "0"},
+                           **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-10", namespace_prefix="cursor"))},
         )
         self.assertEqual(rc, 0, err)
         payload = json.loads(out)
@@ -158,10 +171,11 @@ class CursorAdapter(unittest.TestCase):
             {"session_id": "cur-11", "tool_name": "Read",
              "tool_input": {"file_path": "/tmp/x"}},
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
-                           "ACS_HANDSHAKE": "0"},
+                           **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-11", namespace_prefix="cursor"))},
         )
         self.assertEqual(rc, 0)
-        self.assertEqual(out, "")
+        self.assertEqual(json.loads(out), {"permission": "allow"},
+            "a decided proceed answers in Cursor's allow shape; failClosed reads an empty reply as a failed hook")
         self.assertIn("ACS_AUDIT", err, "fail-open MUST emit an audit event per §6.4")
         self.assertIn("fail_open_bypass", err)
 
@@ -172,7 +186,7 @@ class CursorAdapter(unittest.TestCase):
             {"session_id": "cur-12", "prompt": "anything"},
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
                            "ACS_DEFAULT_DENY": "1",
-                           "ACS_HANDSHAKE": "0"},
+                           **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-12", namespace_prefix="cursor"))},
         )
         self.assertEqual(rc, 2)
         self.assertIn("prompt blocked", err.lower())

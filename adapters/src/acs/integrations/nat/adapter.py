@@ -63,11 +63,13 @@ try:
         Config,
         Decided,
         FailPosture,
-        Refused,
+        Handshake,
+        Negotiated,
+        Resolution,
         Undecided,
         audit_event,
-        ensure_session_handshake,
         exchange,
+        open_session,
         sign_envelope,
     )
     from acs.core import (
@@ -390,7 +392,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         )
         target = getattr(config, "target_function_or_group", None) or "nat"
         self._agent_id = os.environ.get("ACS_AGENT_ID") or f"nat:{hashlib.sha256(target.encode()).hexdigest()[:8]}"
-        self._handshake_done = False
+        # The session's §4.1 decision, made by the first handshake and kept for the middleware's lifetime.
+        self._session: Handshake | None = None
         self._server_hello: dict | None = None
         self._lifecycle_subscribed = False
         self._lifecycle_subscription = None
@@ -403,28 +406,29 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
 
-    def _ensure_handshake(self) -> None:
-        if self._handshake_done or not self._acs.handshake_enabled:
-            return
+    def _ensure_handshake(self) -> Handshake:
+        if self._session is not None:
+            return self._session
         methods = ["steps/toolCallRequest", "steps/toolCallResult"]
         if _HAS_LIFECYCLE:
             methods += [
                 "steps/sessionStart", "steps/userMessage",
                 "steps/agentResponse", "steps/sessionEnd",
             ]
-        # In-memory `_handshake_done` is the primary guard; the disk cache
-        # keeps the handshake idempotent across process restarts.
-        server_hello = ensure_session_handshake(
-            guardian_url=self._acs.guardian_url,
+        # The stored decision keeps the session's gate across middleware instances and processes.
+        session = open_session(
+            config=self._acs,
             session_id=self._session_id,
             agent_id=self._agent_id,
             platform="nat",
             methods_implemented=methods,
         )
-        # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
-        self._posture = self._posture.negotiated(server_hello)
-        self._server_hello = server_hello
-        self._handshake_done = True
+        if isinstance(session, Negotiated):
+            # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
+            self._posture = self._posture.negotiated(session.server_hello)
+            self._server_hello = dict(session.server_hello)
+        self._session = session
+        return session
 
     def _ensure_lifecycle_subscribed(self) -> None:
         """Subscribe to NAT's IntermediateStepManager so workflow-boundary
@@ -491,6 +495,12 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         """Build, sign, and POST a lifecycle hook; errors are audited but
         never interrupt the workflow (enforcement lives in
         pre_invoke/post_invoke)."""
+        gated = self._acs.gate(self._ensure_handshake())
+        if gated is not None:
+            # §4.1: a refused or unanswered session sends the Guardian nothing.
+            audit_event(gated.audit_type, **{**gated.fields, "cause": gated.cause,
+                                             "session_id": self._session_id, "method": method})
+            return
         if not method_evaluated(self._server_hello, method):
             audit_event("method_not_evaluated", method=method,
                         session_id=self._session_id)
@@ -559,8 +569,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallRequest",
                         detail="ACS_DISABLED=1 — pre_invoke bypassed ungoverned")
             return None
-        self._ensure_handshake()
+        gated = self._acs.gate(self._ensure_handshake())
         self._ensure_lifecycle_subscribed()
+        if gated is not None:
+            # §4.1: a refused or unanswered session sends the Guardian nothing.
+            return self._settle_pre(context, gated, f"{gated.label} ({gated.cause})")
         if not method_evaluated(self._server_hello, "steps/toolCallRequest"):
             # ALLOW-by-default (handshake.json): the call proceeds unsent.
             audit_event("method_not_evaluated", method="steps/toolCallRequest",
@@ -579,7 +592,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         else:
             outcome = self._exchange(request)
         if not isinstance(outcome, Decided):
-            return self._settle_pre(context, outcome)
+            return self._settle_pre(context, self._posture.resolve(outcome), outcome.message)
         response = outcome.response
 
         # Total coercion: malformed verdict fields must not throw here.
@@ -645,6 +658,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallResult",
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
+        gated = self._acs.gate(self._ensure_handshake())
+        if gated is not None:
+            return self._settle_post(context, gated)
         if not method_evaluated(self._server_hello, "steps/toolCallResult"):
             audit_event("method_not_evaluated", method="steps/toolCallResult",
                         session_id=self._session_id)
@@ -667,7 +683,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         else:
             outcome = self._exchange(request)
         if not isinstance(outcome, Decided):
-            return self._settle_post(context, outcome)
+            return self._settle_post(context, self._posture.resolve(outcome))
         response = outcome.response
 
         decision, reasoning, mods = normalize_decision(
@@ -730,19 +746,17 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return exchange(request, guardian_url=self._acs.guardian_url,
                         timeout_s=self._posture.timeout_s, session_id=self._session_id)
 
-    def _settle_pre(self, context, outcome: Undecided | Refused):
-        """Settle a pre_invoke step without a usable decision: block unless the posture lets it proceed, and record why."""
-        resolution = self._posture.resolve(outcome)
+    def _settle_pre(self, context, resolution: Resolution, message: str = ""):
+        """Settle a pre_invoke step without a usable decision: block unless the resolution proceeds, and record why."""
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": self._session_id,
                                               "method": "steps/toolCallRequest"})
         if resolution.proceed:
             return None
-        return self._block(context, outcome.message or resolution.cause)
+        return self._block(context, message or resolution.cause)
 
-    def _settle_post(self, context, outcome: Undecided | Refused):
-        """Settle a post_invoke step without a usable decision: redact the output the Guardian never vetted unless the posture lets it through, and record why."""
-        resolution = self._posture.resolve(outcome)
+    def _settle_post(self, context, resolution: Resolution):
+        """Settle a post_invoke step without a usable decision: redact the output the Guardian never vetted unless the resolution lets it through, and record why."""
         if not resolution.proceed:
             _redact_output(context)
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,

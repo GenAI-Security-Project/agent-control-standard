@@ -32,7 +32,7 @@ v0.1.0 hook schemas require.
 See the README per-hook honesty table for the full mapping.
 
 Usage in hooks.json:
-  { "command": "python3 /path/to/acs_adapter.py preToolUse" }
+  { "command": "/path/to/acs-cursor-hook preToolUse" }
 
 Environment variables (same defaults / semantics as the Claude Code adapter):
   ACS_GUARDIAN_URL    Guardian endpoint (default: http://127.0.0.1:8787/acs)
@@ -47,7 +47,12 @@ Environment variables (same defaults / semantics as the Claude Code adapter):
                       ACS_HMAC_SECRET_FILE, preferred). Unset = no signing
                       (local dev, loud audit event).
   ACS_AGENT_ID        Explicit agent_id; defaults to cursor:<sha8(workspace)>.
-  ACS_HANDSHAKE       "0" disables handshake. Default "1".
+  ACS_STARTUP_POSTURE "proceed" or "refuse": what this hook does in a
+                      session with no negotiated Guardian (§4.1); the
+                      session keeps none for its lifetime. Unset follows
+                      ACS_DEFAULT_DENY.
+  ACS_HANDSHAKE       "0" skips the handshake; ACS_STARTUP_POSTURE then
+                      settles every step. Default "1".
   ACS_AUDIT_FILE      Append every ACS_AUDIT event to this file (0600) in
                       addition to stderr.
   ACS_DISABLED        "1" = incident kill switch: exit immediately, no
@@ -69,13 +74,14 @@ from acs.client import (
     Config,
     Decided,
     FailPosture,
+    Handshake,
     Refused,
     Resolution,
     Undecided,
     audit_event,
-    ensure_session_handshake,
     exchange,
     load_session_state,
+    open_session,
     record_step,
     save_session_state,
     sign_envelope,
@@ -232,7 +238,8 @@ def _parse_json_field(raw: Any) -> Any:
     if isinstance(raw, str):
         try:
             return json.loads(raw)
-        except ValueError:
+        except Exception:  # noqa: BLE001
+            # Any parse failure counts, including RecursionError from deep nesting.
             return raw
     return raw
 
@@ -692,25 +699,12 @@ def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, A
     return envelope
 
 
-def _maybe_handshake(event: dict[str, Any], config: Config) -> dict | None:
-    """Called on every hook event. Idempotent per session via disk
-    cache — only the first event of a session actually POSTs
-    handshake/hello. Returns the negotiated ServerHello (cached or
-    fresh) or None. See ensure_session_handshake's docstring."""
-    if not config.handshake_enabled:
-        # ACS_HANDSHAKE=0 skips the §4-REQUIRED handshake (dev/test
-        # only); record the non-conformance rather than skip silently (§4.1:77).
-        audit_event("handshake_disabled_nonconformant",
-                    session_id=_session_id(event),
-                    detail="ACS_HANDSHAKE=0 — §4 handshake skipped; "
-                           "session is NON-CONFORMANT")
-        return None
-    sid = _session_id(event)
-    if not sid:
-        return None
-    return ensure_session_handshake(
-        guardian_url=config.guardian_url,
-        session_id=sid,
+def _open_session(event: dict[str, Any], config: Config) -> Handshake:
+    """The session's §4.1 decision. The first event of a session handshakes and stores
+    the decision; every later hook process of that session reads it without a network call."""
+    return open_session(
+        config=config,
+        session_id=_session_id(event),
         agent_id=_agent_id(event),
         platform="cursor",
         # steps/turnStart is emitted on beforeSubmitPrompt but is not a
@@ -899,7 +893,9 @@ def main() -> int:
         return 0
     try:
         event = json.loads(raw)
-    except json.JSONDecodeError as e:
+        if not isinstance(event, dict):
+            raise ValueError("the event is not a JSON object")
+    except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: invalid JSON on stdin: {e}\n")
         return _settle(config.posture.resolve(Undecided("invalid_stdin_json")), event_name, None)
 
@@ -911,12 +907,29 @@ def main() -> int:
                         session_id=_session_id(event))
         return 0
 
-    server_hello = _maybe_handshake(event, config)
+    session_id = _session_id(event)
+
+    # §4.1: a refused or unanswered session sends the Guardian nothing; each step is settled here.
+    session = _open_session(event, config)
+    gated = config.gate(session)
+    if gated is not None:
+        return _settle(gated, event_name, session_id)
+    server_hello = session.server_hello
     # §6.4:154: the negotiated posture and default timeout govern every round trip below.
     posture = config.posture.negotiated(server_hello)
 
-    session_id = _session_id(event)
+    try:
+        return _govern(event_name, event, session_id, server_hello, posture, config)
+    except Exception as e:  # noqa: BLE001
+        # Settled with the session's effective posture; an exit 1 would let the host proceed.
+        sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
+        return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
+                       event_name, session_id)
 
+
+def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
+            server_hello: dict[str, Any], posture: FailPosture, config: Config) -> int:
+    """One step of a negotiated session: the turn boundary, the request, the round trip and the host response."""
     # Turn tracking: beforeSubmitPrompt OPENS a turn with an explicit,
     # decision-eligible steps/turnStart BEFORE the userMessage. A Guardian
     # MAY deny to block the whole turn — which blocks the prompt (exit 2).
@@ -968,7 +981,7 @@ def main() -> int:
                     session_id=session_id)
         if event_name == "stop":
             _close_turn(event)
-        return _unevaluated_proceed(event_name)
+        return _explicit_allow(event_name)
     if (method == "steps/toolCallResult"
             and not method_evaluated(server_hello, "steps/toolCallRequest")
             and request["params"]["payload"].pop("request_id_ref", None) is not None):
@@ -1024,10 +1037,8 @@ def main() -> int:
     return 0
 
 
-def _unevaluated_proceed(event_name: str) -> int:
-    """ALLOW-by-default for a method the Guardian does not evaluate; failClosed
-    gates read an empty reply as a failed hook, so gates and the prompt hook
-    get their explicit allow shapes."""
+def _explicit_allow(event_name: str) -> int:
+    """Cursor's allow shape: a failClosed gate reads an empty reply as a failed hook."""
     if event_name in PERMISSION_EVENTS:
         _emit(_permission_response("allow"))
     elif event_name == "beforeSubmitPrompt":
@@ -1036,25 +1047,28 @@ def _unevaluated_proceed(event_name: str) -> int:
 
 
 def _settle(resolution: Resolution, event_name: str, session_id: str | None) -> int:
-    """Carry out a resolution: deny in the event's native shape unless it proceeds, and record why per §6.4."""
+    """Carry out a resolution in the event's native shape, allow or deny, and record why per §6.4.
+
+    A proceed carries Cursor's explicit allow: failClosed covers hook crashes
+    and timeouts, and the posture already decided this step.
+    """
     if resolution.proceed:
         audit_event(resolution.audit_type, cause=resolution.cause, event=event_name,
                     session_id=session_id, **resolution.fields)
-        return 0
+        return _explicit_allow(event_name)
     return _deny_with_audit(resolution.audit_type, event_name, session_id,
-                            resolution.cause, dict(resolution.fields))
+                            resolution.cause, dict(resolution.fields), label=resolution.label)
 
 
 def _deny_with_audit(audit_type: str, event_name: str,
                      session_id: str | None, cause: str,
-                     audit_extras: dict) -> int:
-    """Emit a deny in the event's native shape + one audit event."""
+                     audit_extras: dict, *, label: str = "decision-failure") -> int:
     audit_event(audit_type,
                 cause=cause, event=event_name, session_id=session_id,
                 **audit_extras)
     if event_name in PERMISSION_EVENTS:
         _emit(_permission_response(
-            "deny", f"ACS adapter: decision-failure ({cause})"))
+            "deny", f"ACS adapter: {label} ({cause})"))
         return 0
     if event_name == "beforeSubmitPrompt":
         sys.stderr.write(f"acs-adapter: prompt blocked ({cause})\n")

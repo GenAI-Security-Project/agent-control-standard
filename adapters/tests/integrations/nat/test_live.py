@@ -25,8 +25,10 @@ import asyncio
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 try:
     from nat.middleware.middleware import FunctionMiddlewareContext
@@ -34,6 +36,7 @@ try:
 except ImportError:
     _NAT_OK = False
 
+from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied  # noqa: E402
 
 if _NAT_OK:
@@ -60,6 +63,16 @@ class LiveNATWorkflow(unittest.TestCase):
             cls.guardian_proc.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
             cls.guardian_proc.kill()
+
+    def setUp(self) -> None:
+        # Per-test handshake records, and environment changes undone after the test.
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        self.records = Path(records.name)
+        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
+                        mock.patch.dict(os.environ)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _make_middleware(self, default_deny: bool = True) -> ACSMiddleware:
         return ACSMiddleware(ACSMiddlewareConfig(

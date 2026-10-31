@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 try:
     from nat.middleware.middleware import (  # type: ignore[import-not-found]
@@ -35,6 +37,7 @@ except ImportError:
     _NAT_OK = False
 
 
+from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
@@ -64,20 +67,17 @@ class NatEmission(unittest.TestCase):
     def setUp(self) -> None:
         self.guardian = CaptureGuardian(hmac_secret=HMAC)
         self.guardian.start()
-        self._cache = Path(
-            __import__("tempfile").mkdtemp())
-        prior = os.environ.get("ACS_HMAC_SECRET")
+        self.addCleanup(self.guardian.stop)
+        # Per-test handshake records, and environment changes undone after the test.
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        self.records = Path(records.name)
+        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
+                        mock.patch.dict(os.environ)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         os.environ["ACS_HMAC_SECRET"] = HMAC
-        os.environ["ACS_HANDSHAKE"] = "1"
-        os.environ["ACS_HANDSHAKE_CACHE"] = str(self._cache)
-
-        def _restore():
-            self.guardian.stop()
-            if prior is None:
-                os.environ.pop("ACS_HMAC_SECRET", None)
-            else:
-                os.environ["ACS_HMAC_SECRET"] = prior
-        self.addCleanup(_restore)
+        os.environ.pop("ACS_HANDSHAKE", None)
 
     def _mw(self) -> ACSMiddleware:
         return ACSMiddleware(ACSMiddlewareConfig(
@@ -102,7 +102,6 @@ class NatEmission(unittest.TestCase):
         self.guardian.assert_all_valid(self)
 
     def test_lifecycle_observer_emits_session_hooks(self) -> None:
-        os.environ["ACS_HANDSHAKE"] = "0"  # focus on lifecycle emissions
         mw = self._mw()
         mgr = IntermediateStepManager(ContextState.get())
         sub = mgr.subscribe(on_next=mw._on_intermediate_step)

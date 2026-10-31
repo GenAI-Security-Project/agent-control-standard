@@ -61,5 +61,16 @@ class UuidCoercion(unittest.TestCase):
                          "uuid5 coercion must be deterministic")
 
 
+class JsonFieldParsing(unittest.TestCase):
+    """Cursor's stringified MCP payloads come from the agent; an uncaught parse error exits 1, which Cursor proceeds on."""
+
+    def test_unparseable_strings_pass_through(self) -> None:
+        for name, raw in (("nested past the recursion limit", "[" * 20000 + "]" * 20000),
+                          ("not JSON", "{"), ("plain text", "hello")):
+            with self.subTest(name):
+                self.assertEqual(acs_adapter._parse_json_field(raw), raw)
+        self.assertEqual(acs_adapter._parse_json_field('{"a": 1}'), {"a": 1})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

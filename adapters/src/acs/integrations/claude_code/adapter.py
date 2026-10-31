@@ -32,9 +32,16 @@ Environment variables:
                       conformance requires one of these to be set.
   ACS_AGENT_ID        Explicit agent_id for metadata. If unset, derived
                       from cwd as `claude-code:<sha8(cwd)>`.
-  ACS_HANDSHAKE       "0" disables the handshake/hello call on first
-                      use. Default "1". Handshake result is cached
-                      per-session in ~/.cache/acs-adapter-handshake/.
+  ACS_STARTUP_POSTURE "proceed" or "refuse": what this hook does in a
+                      session with no negotiated Guardian, because its
+                      handshake got no answer (§4.1). "proceed" lets the
+                      step run with nothing sent to the Guardian, "refuse"
+                      denies it; the session keeps no negotiated Guardian
+                      for its lifetime. Unset follows ACS_DEFAULT_DENY.
+  ACS_HANDSHAKE       "0" skips the handshake, so the session gets no
+                      answer and ACS_STARTUP_POSTURE settles every step.
+                      Default "1". Each session's decision is stored in
+                      ~/.cache/acs-adapter-handshake/ for its lifetime.
   ACS_AUDIT_FILE      Append every ACS_AUDIT event to this file (0600)
                       in addition to stderr, so the §6.4 audit half of
                       the fail-open trade lands somewhere durable.
@@ -62,13 +69,14 @@ from acs.client import (
     Config,
     Decided,
     FailPosture,
+    Handshake,
     Refused,
     Resolution,
     Undecided,
     audit_event,
-    ensure_session_handshake,
     exchange,
     load_session_state,
+    open_session,
     save_session_state,
     sign_envelope,
 )
@@ -80,6 +88,7 @@ from acs.core import (
     modify_composition_violation,
     normalize_decision,
 )
+from acs.integrations.claude_code.hook import _event_name
 
 ADAPTER_VERSION = __version__
 
@@ -481,30 +490,12 @@ def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, A
     return envelope
 
 
-def _maybe_handshake(event: dict[str, Any], config: Config) -> dict | None:
-    """Called on every hook event. Returns the negotiated ServerHello
-    (cached or fresh) or None.
-
-    Looks like 'handshake every event', but `ensure_session_handshake`
-    is idempotent: the FIRST event of a session_id triggers a real
-    handshake/hello POST and writes the negotiated ServerHello to
-    ~/.cache/acs-adapter-handshake/. Every subsequent event for the
-    same session_id reads that file and returns without a network call.
-    """
-    if not config.handshake_enabled:
-        # ACS_HANDSHAKE=0 is a dev/test switch: the session skips the
-        # §4-required handshake and is recorded as non-conformant (§4.1:77).
-        audit_event("handshake_disabled_nonconformant",
-                    session_id=event.get("session_id"),
-                    detail="ACS_HANDSHAKE=0 — §4 handshake skipped; "
-                           "session is NON-CONFORMANT")
-        return None
-    session_id = event.get("session_id")
-    if not session_id:
-        return None
-    return ensure_session_handshake(
-        guardian_url=config.guardian_url,
-        session_id=session_id,
+def _open_session(event: dict[str, Any], config: Config) -> Handshake:
+    """The session's §4.1 decision. The first event of a session_id handshakes and stores
+    the decision; every later hook process of that session reads it without a network call."""
+    return open_session(
+        config=config,
+        session_id=event.get("session_id"),
         agent_id=_agent_id(event),
         platform="claude-code",
         # subagentStart and turnStart are emitted but not HOOK_MAP
@@ -702,9 +693,12 @@ def main() -> int:
         return 0
     try:
         event = json.loads(raw)
-    except json.JSONDecodeError as e:
+        if not isinstance(event, dict):
+            raise ValueError("the event is not a JSON object")
+    except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: invalid JSON on stdin: {e}\n")
-        return _settle(config.posture.resolve(Undecided("invalid_stdin_json")), "", None)
+        # The hook's own deny shape needs its name, read from the raw text.
+        return _settle(config.posture.resolve(Undecided("invalid_stdin_json")), _event_name(raw), None)
 
     hook_name = event.get("hook_event_name", "")
     if hook_name not in HOOK_MAP:
@@ -715,16 +709,29 @@ def main() -> int:
                         session_id=event.get("session_id"))
         return 0
 
-    # Handshake on first call of a session (cached after). Best-effort:
-    # a failed handshake follows the deployment's startup posture (§4.1).
-    # The negotiated posture participates in the effective fail posture
-    # (most-restrictive-wins with ACS_DEFAULT_DENY).
-    server_hello = _maybe_handshake(event, config)
+    session_id = event.get("session_id")
+
+    # §4.1: a refused or unanswered session sends the Guardian nothing; each step is settled here.
+    session = _open_session(event, config)
+    gated = config.gate(session)
+    if gated is not None:
+        return _settle(gated, hook_name, session_id)
+    server_hello = session.server_hello
     # §6.4:154: the negotiated posture and default timeout govern every round trip below.
     posture = config.posture.negotiated(server_hello)
 
-    session_id = event.get("session_id")
+    try:
+        return _govern(event, hook_name, session_id, server_hello, posture, config)
+    except Exception as e:  # noqa: BLE001
+        # Settled with the session's effective posture; an exit 1 would let the host proceed.
+        sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
+        return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
+                       hook_name, session_id)
 
+
+def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
+            server_hello: dict[str, Any], posture: FailPosture, config: Config) -> int:
+    """One step of a negotiated session: the turn boundary, the request, the round trip and the host response."""
     # Turn tracking: a UserPromptSubmit OPENS a turn with an explicit,
     # decision-eligible steps/turnStart BEFORE the userMessage. A Guardian
     # MAY deny to block the whole turn (turn-start.json); the deny lands in
@@ -809,13 +816,14 @@ def _settle(resolution: Resolution, hook_name: str, session_id: str | None) -> i
     """Carry out a resolution: block in the hook's native shape unless it proceeds, and record why per §6.4.
 
     The audit type says which rule decided (fail_open_bypass,
-    decision_failure_fail_closed, guardian_refusal_fail_closed); `cause` says
+    decision_failure_fail_closed, guardian_refusal_fail_closed, or a session
+    gate: unguarded_session_bypass, session_not_started_fail_closed,
+    session_refused_fail_closed); `cause` says
     what went wrong, so an unreachable Guardian (an ops issue) reads apart from
     a malformed envelope (a client bug).
     """
     if not resolution.proceed:
-        label = "refused" if resolution.audit_type == "guardian_refusal_fail_closed" else "decision-failure"
-        _emit_deny(hook_name, f"ACS adapter: {label} ({resolution.cause})")
+        _emit_deny(hook_name, f"ACS adapter: {resolution.label} ({resolution.cause})")
     audit_event(resolution.audit_type, cause=resolution.cause, hook=hook_name,
                 session_id=session_id, **resolution.fields)
     return 0

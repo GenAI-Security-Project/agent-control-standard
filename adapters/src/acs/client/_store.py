@@ -54,9 +54,11 @@ def load_session_state(session_id: str, *, workspace: str | None = None) -> dict
     path = _session_state_path(session_id, workspace=workspace)
     try:
         with open(path) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+            state = json.load(f)
+    except Exception:  # noqa: BLE001
+        # Any parse failure counts, including RecursionError from deep nesting.
         return {}
+    return state if isinstance(state, dict) else {}
 
 
 def save_session_state(session_id: str, state: dict, *, workspace: str | None = None) -> None:

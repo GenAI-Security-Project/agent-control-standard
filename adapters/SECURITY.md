@@ -65,7 +65,7 @@ Attacker controls the env var; sets it to `file:///etc/passwd` to
 read arbitrary files, or to `data://` to feed a crafted response.
 *Mitigation:* `validate_guardian_url()` rejects any scheme that is
 not `http` or `https`. Called from `acs.client.exchange` (every
-step's round trip), `ensure_session_handshake` and `ping`.
+step's round trip), `open_session` and `ping`.
 *Test:* `GuardianUrlSchemeAllowlist::test_file_scheme_rejected` and
 five other scheme rejections.
 
@@ -93,9 +93,15 @@ between adapter invocations. For session-state, this would let them
 inject a fake `parent_step_id` into the next `subagentStart` payload.
 *Mitigation:* Both cache directories created mode 0700; cache files
 created mode 0600 via `os.open(...O_CREAT, 0o600)`. A local attacker
-without same-uid privileges cannot read or write the state.
+without same-uid privileges cannot read or write the state. The
+handshake record carries an HMAC under the session key over the
+decision, the session and the Guardian URL, so a record that is
+modified, damaged, copied from another endpoint or left by an earlier
+adapter refuses the session, and so does a decision that cannot be
+stored; a deleted record makes the next event handshake again.
 *Test:* `CacheDirPermissions::{test_session_state_dir_is_0700,
-test_session_state_file_is_0600}`
+test_session_state_file_is_0600}`,
+`Item22_StoredSessionDecisionIsAuthenticated`
 
 **T9 — Regex DoS via oversized command.**
 Attacker submits a multi-MB command string crafted to trigger
