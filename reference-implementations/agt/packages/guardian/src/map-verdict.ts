@@ -7,12 +7,27 @@ export type AcsModifications = {
   parameter_overrides?: Record<string, unknown>;
 };
 
+export type AcsAskDetails = {
+  approver: {
+    type: "human" | "agent" | "service";
+    id: string;
+    endpoint?: string;
+    auth?: { method?: "bearer" | "mtls" };
+  };
+  question: string;
+  context?: string;
+  options?: string[];
+  timeout_seconds: number;
+  timeout_disposition?: "allow" | "deny";
+};
+
 export type AcsDecision = {
   decision: "allow" | "deny" | "modify" | "ask" | "defer";
   reasoning?: string;
   reason_codes?: string[];
   policy_references?: { policy_id: string; policy_version?: string; rule_id: string }[];
   modifications?: AcsModifications;
+  ask_details?: AcsAskDetails;
 };
 
 type VerdictRule = {
@@ -125,6 +140,15 @@ export type Mapping = {
     policy_references: {
       rule_id: FieldSource;
       policy_id: FieldLiteral;
+    };
+    ask_details?: {
+      approver: {
+        type: { literal: "human" | "agent" | "service" };
+        id: FieldLiteral;
+      };
+      question: FieldSource;
+      timeout_seconds: { literal: number };
+      timeout_disposition?: { literal: "allow" | "deny" };
     };
   };
 };
@@ -491,6 +515,29 @@ export function mapVerdict(
 
   if (rule.decision === "modify") {
     out.modifications = synthesizeModifications(verdict, mapping, point, policyTargetArgument);
+  }
+
+  if (rule.decision === "ask") {
+    const fallbackQuestion =
+      out.reasoning ??
+      (typeof agtMessage === "string" && agtMessage.length > 0
+        ? agtMessage
+        : "This step needs human approval before it can run.");
+    if (out.reasoning === undefined) {
+      out.reasoning = fallbackQuestion;
+    }
+    const askRule = fs.ask_details;
+    out.ask_details = {
+      approver: {
+        type: askRule?.approver.type.literal ?? "human",
+        id: askRule?.approver.id.literal ?? "operator",
+      },
+      question: fallbackQuestion,
+      timeout_seconds: askRule?.timeout_seconds.literal ?? 300,
+      ...(askRule?.timeout_disposition?.literal === undefined
+        ? {}
+        : { timeout_disposition: askRule.timeout_disposition.literal }),
+    };
   }
 
   return out;
