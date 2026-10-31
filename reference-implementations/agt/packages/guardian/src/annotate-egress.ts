@@ -191,14 +191,20 @@ const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as con
  * Scheme-anchored on purpose. A bare-host pattern would match package names,
  * file paths and flag values, and every false positive here becomes a denial
  * of a step nobody meant to govern. The character class ends the match at
- * whitespace and at the shell metacharacters that end a word, so a trailing
- * `; ls` or `| tee` is not swallowed into the host.
+ * ASCII whitespace and at the shell metacharacters that end a word, so a
+ * trailing `; ls` or `| tee` is not swallowed into the host.
+ *
+ * ASCII whitespace only, not `\s` (#268). `\s` also matches U+FEFF, U+00A0 and
+ * the other Unicode spaces, which the shell does not split on: the match would
+ * end at one while `curl` reads on past it, so `https://allowed<U+FEFF>@evil`
+ * answered the allowed host. Kept in the match, the character fails
+ * UNAMBIGUOUS_AUTHORITY below and the command gets the unresolvable sentinel.
  *
  * First match, not every match: the gate takes one destination. A command
  * reaching two hosts has its first examined and the rest unexamined, which is
  * this module's stated miss direction rather than a hidden one.
  */
-const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\s'"`;|&()<>]+/;
+const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\t\n\v\f\r '"`;|&()<>]+/;
 
 /**
  * The authority shapes on which no parser disagrees: a plain host, optionally a
