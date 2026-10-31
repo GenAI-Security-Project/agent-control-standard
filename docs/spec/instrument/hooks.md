@@ -37,9 +37,9 @@ flowchart TB
 | [`toolCallRequest`](#toolcallrequest) | Before tool execution | Yes | Yes |
 | [`toolCallResult`](#toolcallresult) | After tool execution, before agent ingestion | Yes | Yes |
 | [`preCompact`](#precompact) | Before context-window compaction | Yes | Yes |
-| [`postCompact`](#postcompact) | After compaction; carries new summary | No (audit + lineage binding) | Yes |
+| [`postCompact`](#postcompact) | After compaction; carries new summary | ALLOW / MODIFY (no DENY; audit + lineage binding) | Yes |
 | [`subagentStart`](#subagentstart) | In-process subagent spawned | Yes | Yes |
-| [`subagentStop`](#subagentstop) | Subagent terminated | No | Yes |
+| [`subagentStop`](#subagentstop) | Subagent terminated | No (audit) | Yes |
 | [`skillRegister`](#skillregister) | Skill enters the available set, before it can load | Yes | Yes |
 | [`skillLoad`](#skillload) | Registered skill activates into a session, before its actions run | Yes | Yes |
 | [`skillUnload`](#skillunload) | Skill leaves the active set | No (audit) | Yes |
@@ -229,7 +229,7 @@ Fires after compaction. Audit + provenance-binding hook.
 
 **Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`.
 
-**Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
+**Decision:** ALLOW / MODIFY (DENY not permitted) — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
 
 ---
 
@@ -255,7 +255,7 @@ Schema: [`hooks/subagent-stop.json`](https://genai-security-project.github.io/ag
 
 **Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`); optional `final_chain_hash` (a framework that maintains no session-chain omits it rather than fabricate a value — Guardian handling in [§8.6](specification.md#86-chain-head-publication-normative)); optional `summary` of what was returned to the parent; optional `subagent_step_count`. The summary's `provenance` follows the standard monotonicity rule.
 
-**Decision:** Audit only.
+**Decision:** Audit only (ALLOW only) — the subagent has already terminated. Because `subagentStop` is audit-only on the parent chain, redaction of subagent outputs MUST be enforced within the subagent's own session hooks (`toolCallResult`, `agentResponse`) or when the parent subsequently acts on the returned content.
 
 ---
 
@@ -307,7 +307,7 @@ Schema: [`hooks/turn-end.json`](https://genai-security-project.github.io/agent-c
 
 **Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`), `step_count`, optional `summary`.
 
-**Decision:** Not decision-eligible — the turn has already happened.
+**Decision:** Audit only (ALLOW only) — the turn has already happened.
 
 ---
 

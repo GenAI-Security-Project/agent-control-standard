@@ -325,3 +325,14 @@ def test_every_docs_page_states_the_real_hook_count():
         + f"\nUpdate the count. To count a subset, write it as \"9 of the {expected} "
         "native hooks\" so the total stays checked."
     )
+
+
+def test_not_decision_eligible_is_not_overloaded_and_subagent_stop_matches_hooks_md():
+    """'Not decision-eligible' must not be used for both MODIFY-eligible
+    (postCompact) and audit-only (subagentStop, turnEnd) hooks (#146)."""
+    hooks_text = HOOKS_PAGE.read_text(encoding="utf-8")
+    subagent_stop_schema = json.loads((HOOK_SCHEMAS / "subagent-stop.json").read_text(encoding="utf-8"))
+    assert "Not decision-eligible" not in hooks_text
+    assert "Not decision-eligible" not in subagent_stop_schema["description"]
+    assert "Audit-only" in subagent_stop_schema["description"]
+
