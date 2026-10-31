@@ -277,19 +277,12 @@ def post_envelope(url: str, envelope: dict, *, timeout: float = 5.0) -> dict:
 GUARDIAN_SCRIPT = _HERE.parent / "guardian" / "example_guardian.py"
 
 
-# ────────────────────────────────────────────────────────────────────
-# Programmable Guardian — for tests that need to control responses.
-# ────────────────────────────────────────────────────────────────────
-#
-# `launch_guardian` runs the REAL example_guardian process — useful for
-# integration tests against the production code path. For unit tests
-# that need to force specific dispositions (modify, ask, defer) or
-# delays, use ProgrammableGuardian: an in-process HTTP server you can
-# configure handler-by-handler.
-
-# A ServerHello for a session whose handshake already happened; no methods_evaluated means every method is sent.
+# A ServerHello for a session whose handshake already happened, evaluating every method the reference adapters send.
 NEGOTIATED_HELLO = {
     "negotiated_version": "0.1.0",
+    "methods_evaluated": ["steps/sessionStart", "steps/sessionEnd", "steps/userMessage", "steps/agentResponse",
+                          "steps/turnStart", "steps/turnEnd", "steps/toolCallRequest", "steps/toolCallResult",
+                          "steps/subagentStart", "steps/preCompact"],
     "selected_transport": "http",
     "timeout_config": {"default_ms": 5000},
     "on_decision_failure": "proceed",
@@ -383,17 +376,18 @@ class ProgrammableGuardian:
     # ─── Default handlers ───
 
     def _default_handshake(self, req: dict) -> dict:
-        # The HTTP handler wraps this ServerHello in result and signs the
-        # complete JSON-RPC envelope. Handshakes do not carry a decision.
+        # The HTTP handler wraps this ServerHello in result and signs the envelope.
+        offered = req["params"]["payload"]
         return {
             "negotiated_version": "0.1.0",
-            "methods_evaluated": req["params"]["payload"].get("methods_implemented", []),
-            "selected_transport": "http",
+            "methods_evaluated": offered.get("methods_implemented", []),
+            "selected_transport": next((t for t in offered.get("transports_supported", []) if t != "stdio"),
+                                       "http"),
             "signature_algorithms_supported": ["HMAC-SHA256"],
             "timeout_config": {"default_ms": 5000},
             "skew_window_ms": 300000,
             "on_decision_failure": "proceed",
-            "profiles_accepted": ["acs-core"],
+            "profiles_accepted": [p for p in offered.get("profiles_supported", []) if p == "acs-core"],
         }
 
     def _default_allow(self, req: dict) -> dict:

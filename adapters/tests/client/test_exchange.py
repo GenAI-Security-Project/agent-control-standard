@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -154,7 +155,7 @@ CASES = [
 class ExchangeCauses(unittest.TestCase):
     def _exchange(self, urlopen: Any, *, request: dict | None = None, url: str = URL,
                   timeout_s: float = 2.5):
-        with mock.patch.object(_exchange.urllib.request, "urlopen", side_effect=urlopen) as fake:
+        with mock.patch.object(_exchange, "_open", side_effect=urlopen) as fake:
             outcome = exchange(request or _request(), guardian_url=url,
                                timeout_s=timeout_s, session_id=SESSION)
         return outcome, fake
@@ -211,6 +212,279 @@ class ExchangeCauses(unittest.TestCase):
         self.assertEqual(outcome.cause, "response_unverifiable")
 
 
+class _DrippingGuardian:
+    """A real HTTP Guardian that answers with a signed deny, sending its body a few bytes at a time."""
+
+    def __init__(self, interval_s: float, *, handshake: bool = False) -> None:
+        import http.server
+        import threading
+        import time
+
+        def respond(request: dict) -> dict:
+            if handshake:
+                result = {"negotiated_version": "0.1.0", "methods_evaluated": [], "selected_transport": "http",
+                          "timeout_config": {"default_ms": 5000}}
+            else:
+                result = {"request_id": request["params"]["request_id"], "decision": "deny"}
+            return _signed({"jsonrpc": "2.0", "id": request["id"], "result": result})
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                body = json.dumps(respond(request)).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    for i in range(0, len(body), 16):
+                        self.wfile.write(body[i:i + 16])
+                        self.wfile.flush()
+                        time.sleep(interval_s)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/acs"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": ""})
+class OverallDeadline(unittest.TestCase):
+    """§6.4: the negotiated timeout bounds the whole wait, including a body that arrives slowly."""
+
+    def test_a_slowly_delivered_decision_times_out_at_the_deadline(self) -> None:
+        import time
+        guardian = _DrippingGuardian(0.08)
+        self.addCleanup(guardian.close)
+        started = time.monotonic()
+        outcome = exchange(_request(), guardian_url=guardian.url, timeout_s=0.15, session_id=SESSION)
+        elapsed = time.monotonic() - started
+        self.assertIsInstance(outcome, Undecided, "a deny that finishes arriving after the deadline must not apply")
+        self.assertEqual(outcome.cause, "decision_timeout")
+        self.assertLess(elapsed, 0.6, f"the exchange returned {elapsed:.2f}s after it started")
+        import threading
+        stop = time.monotonic() + 0.5
+        while any(t.name == "acs-exchange" for t in threading.enumerate()) and time.monotonic() < stop:
+            time.sleep(0.01)
+        self.assertEqual([t for t in threading.enumerate() if t.name == "acs-exchange"], [],
+                         "the worker reading the slow body must end within 0.5 s of the deadline")
+
+    def test_the_same_decision_within_the_deadline_applies(self) -> None:
+        guardian = _DrippingGuardian(0.0)
+        self.addCleanup(guardian.close)
+        outcome = exchange(_request(), guardian_url=guardian.url, timeout_s=2.0, session_id=SESSION)
+        self.assertIsInstance(outcome, Decided)
+        self.assertEqual(outcome.response["result"]["decision"], "deny")
+
+    def test_timed_out_workers_stop_and_send_nothing_more(self) -> None:
+        """Expiry shuts the exchange's sockets, so a worker blocked on slow headers ends promptly."""
+        import socketserver
+        import threading
+        import time
+        connections: list[float] = []
+
+        class SlowHeaders(socketserver.BaseRequestHandler):
+            def handle(self) -> None:
+                connections.append(time.monotonic())
+                self.request.recv(65536)
+                try:
+                    self.request.sendall(b"HTTP/1.1 200 OK\r\n")
+                    for i in range(100):
+                        time.sleep(0.03)
+                        self.request.sendall(b"X-Slow-%d: 1\r\n" % i)
+                except OSError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), SlowHeaders)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_address[1]}/acs"
+        for _ in range(4):
+            started = time.monotonic()
+            outcome = exchange(_request(), guardian_url=url, timeout_s=0.1, session_id=SESSION)
+            self.assertEqual(outcome.cause, "decision_timeout")
+            self.assertLess(time.monotonic() - started, 0.5)
+        deadline = time.monotonic() + 0.5
+        while any(t.name == "acs-exchange" for t in threading.enumerate()) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        alive = [t for t in threading.enumerate() if t.name == "acs-exchange"]
+        self.assertEqual(alive, [], "every timed-out worker must end within 0.5 s of its deadline")
+        time.sleep(0.2)
+        self.assertEqual(len(connections), 4, "no request after a caller timed out")
+
+    def test_an_https_guardian_goes_through_the_abortable_transport(self) -> None:
+        """Builds the HTTPS connection on this Python version; a refused port is a transport failure, not an adapter error."""
+        outcome = exchange(_request(), guardian_url="https://127.0.0.1:1/acs", timeout_s=2.0, session_id=SESSION)
+        self.assertIsInstance(outcome, Undecided)
+        self.assertEqual(outcome.cause, "transport_failure", outcome.fields)
+
+    def test_a_redirect_is_an_http_error_not_another_request(self) -> None:
+        import http.server
+        import threading
+        requests: list[str] = []
+        status = {"code": 307}
+
+        class Redirect(http.server.BaseHTTPRequestHandler):
+            def _redirect(self) -> None:
+                requests.append(f"{self.command} {self.path}")
+                if self.command == "POST":
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(status["code"])
+                self.send_header("Location", "/elsewhere")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = do_POST = _redirect  # noqa: N815
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        for code in (301, 302, 303, 307, 308):
+            with self.subTest(code):
+                status["code"] = code
+                requests.clear()
+                outcome = exchange(_request(), guardian_url=f"http://127.0.0.1:{server.server_address[1]}/acs",
+                                   timeout_s=2.0, session_id=SESSION)
+                self.assertIsInstance(outcome, Undecided)
+                self.assertEqual(outcome.cause, f"http_{code}_error")
+                self.assertEqual(requests, ["POST /acs"], "a redirect must not send another request")
+
+    def test_a_slowly_delivered_server_hello_is_no_answer(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from acs.client import Config, NoAnswer, open_session
+        from acs.client import _handshake
+        guardian = _DrippingGuardian(0.08, handshake=True)
+        self.addCleanup(guardian.close)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(_handshake, "_HANDSHAKE_CACHE_DIR", Path(d)):
+            decision = open_session(config=Config.from_env({"ACS_GUARDIAN_URL": guardian.url}),
+                                    session_id=SESSION, agent_id="t", platform="t", methods_implemented=[],
+                                    timeout=0.15)
+        self.assertIsInstance(decision, NoAnswer)
+        self.assertEqual(decision.cause, "handshake_timeout")
+
+
+def _exchange_workers_end(test: unittest.TestCase, within_s: float = 0.5) -> None:
+    import threading
+    import time
+    stop = time.monotonic() + within_s
+    while any(t.name == "acs-exchange" for t in threading.enumerate()) and time.monotonic() < stop:
+        time.sleep(0.01)
+    test.assertEqual([t for t in threading.enumerate() if t.name == "acs-exchange"], [],
+                     f"every timed-out worker must end within {within_s} s of its deadline")
+
+
+class TlsDeadline(unittest.TestCase):
+    """The deadline ends TLS handshakes and TLS reads too, with certificate verification on."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import shutil
+        import subprocess
+        import tempfile
+        if shutil.which("openssl") is None:
+            raise AssertionError("these tests make a throwaway certificate with the openssl command")
+        cls._tmp = tempfile.TemporaryDirectory(prefix="acs-tls-")
+        d = Path(cls._tmp.name)
+        (d / "cert.cfg").write_text("[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n"
+                                    "[dn]\nCN=127.0.0.1\n[ext]\nsubjectAltName=IP:127.0.0.1\n"
+                                    "basicConstraints=critical,CA:TRUE\n")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-keyout", str(d / "key.pem"), "-out", str(d / "cert.pem"), "-config", str(d / "cert.cfg")],
+                       check=True, capture_output=True, timeout=60)
+        cls.cert, cls.key = str(d / "cert.pem"), str(d / "key.pem")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def _serve(self, mode: str) -> str:
+        import socketserver
+        import ssl
+        import threading
+        import time
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.cert, self.key)
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self) -> None:
+                if mode == "stalled handshake":
+                    time.sleep(3)
+                    return
+                try:
+                    with context.wrap_socket(self.request, server_side=True) as tls:
+                        self._answer(tls)
+                except (OSError, ssl.SSLError):
+                    pass
+
+            def _answer(self, tls: ssl.SSLSocket) -> None:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += tls.recv(65536)
+                head, _, body = data.partition(b"\r\n\r\n")
+                length = int([h.split(b":")[1] for h in head.split(b"\r\n")
+                              if h.lower().startswith(b"content-length")][0])
+                while len(body) < length:
+                    body += tls.recv(65536)
+                if mode == "slow headers":
+                    tls.sendall(b"HTTP/1.1 200 OK\r\n")
+                    for i in range(100):
+                        time.sleep(0.03)
+                        tls.sendall(b"X-Slow-%d: 1\r\n" % i)
+                    return
+                request = json.loads(body)
+                answer = json.dumps(_signed({"jsonrpc": "2.0", "id": request["id"], "result": {
+                    "request_id": request["params"]["request_id"], "decision": "deny"}})).encode()
+                tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                            b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(answer) + answer)
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"https://127.0.0.1:{server.server_address[1]}/acs"
+
+    def _exchange(self, url: str, timeout_s: float):
+        env = {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": "", "SSL_CERT_FILE": self.cert}
+        with mock.patch.dict(os.environ, env):
+            return exchange(_request(), guardian_url=url, timeout_s=timeout_s, session_id=SESSION)
+
+    def test_a_verified_https_decision_applies(self) -> None:
+        outcome = self._exchange(self._serve("signed"), 5.0)
+        self.assertIsInstance(outcome, Decided, outcome)
+        self.assertEqual(outcome.response["result"]["decision"], "deny")
+
+    def test_slow_tls_headers_end_at_the_deadline(self) -> None:
+        import time
+        url = self._serve("slow headers")
+        for _ in range(4):
+            started = time.monotonic()
+            outcome = self._exchange(url, 0.1)
+            self.assertEqual(outcome.cause, "decision_timeout")
+            self.assertLess(time.monotonic() - started, 0.5)
+        _exchange_workers_end(self)
+
+    def test_a_stalled_tls_handshake_ends_at_the_deadline(self) -> None:
+        outcome = self._exchange(self._serve("stalled handshake"), 0.1)
+        self.assertEqual(outcome.cause, "decision_timeout")
+        _exchange_workers_end(self)
+
+
 # Each JSON-RPC envelope is checked the same way whatever HTTP status carries it.
 STATUSES = (200, 400, 413, 500, 503)
 MATRIX = [
@@ -246,7 +520,7 @@ class HttpStatusMatrix(unittest.TestCase):
             for name, body, kind, cause in MATRIX:
                 with self.subTest(status=status, body=name):
                     urlopen = _json(body()) if status == 200 else _http(status, body())
-                    with mock.patch.object(_exchange.urllib.request, "urlopen", side_effect=urlopen):
+                    with mock.patch.object(_exchange, "_open", side_effect=urlopen):
                         outcome = exchange(_request(), guardian_url=URL, timeout_s=1.0, session_id=SESSION)
                     self.assertIsInstance(outcome, kind)
                     if kind is Decided:
@@ -266,7 +540,7 @@ class HttpStatusMatrix(unittest.TestCase):
             for name, body in NON_ENVELOPES:
                 with self.subTest(status=status, body=name):
                     urlopen = _json(body) if status == 200 else _http(status, body)
-                    with mock.patch.object(_exchange.urllib.request, "urlopen", side_effect=urlopen):
+                    with mock.patch.object(_exchange, "_open", side_effect=urlopen):
                         outcome = exchange(_request(), guardian_url=URL, timeout_s=1.0, session_id=SESSION)
                     self.assertIsInstance(outcome, kind)
                     self.assertEqual(outcome.cause, cause)

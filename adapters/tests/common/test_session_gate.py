@@ -235,6 +235,70 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertEqual(json.loads(p.stdout), {"permission": "allow"})
                 self.assertEqual(audits, ["unguarded_session_bypass"])
 
+    def test_integral_timeouts_written_as_decimals_still_negotiate(self) -> None:
+        """5000.0 is a JSON Schema integer: the session negotiates, so the step reaches the Guardian and its deny applies."""
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        hello = guardian._default_handshake
+        guardian.handlers["handshake/hello"] = lambda req: {
+            **hello(req), "on_decision_failure": "deny",
+            "timeout_config": {"default_ms": 5000.0, "per_method_ms": {"steps/toolCallResult": 300.0}}}
+        guardian.handlers["steps/toolCallRequest"] = lambda req: {
+            "type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+            "decision": "deny", "reasoning": "policy", "chain_hash": "0" * 64}
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        p, denied, audits = self._claude(guardian.url(), str(uuid.uuid4()), ACS_STARTUP_POSTURE="proceed")
+        self.assertTrue(denied, p.stderr[-300:])
+        self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/toolCallRequest"])
+        self.assertNotIn("session_without_negotiated_guardian", audits)
+
+    def test_a_later_hooks_required_profile_refuses_a_stored_negotiation(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        hello = guardian._default_handshake
+        guardian.handlers["handshake/hello"] = lambda req: {**hello(req), "profiles_accepted": []}
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        for name, run in (("claude-code", self._claude), ("cursor", self._cursor)):
+            with self.subTest(name):
+                session = str(uuid.uuid4())
+                p, denied, _ = run(guardian.url(), session)
+                self.assertFalse(denied, p.stdout)
+                guardian.reset()
+                p, denied, audits = run(guardian.url(), session, ACS_REQUIRE_PROFILES="acs-core")
+                self.assertTrue(denied, f"stdout={p.stdout!r}")
+                self.assertIn('"cause": "required_profile_not_accepted"', p.stderr)
+                self.assertEqual(guardian.methods_seen(), [], "the requirement applies without renegotiating")
+                guardian.reset()
+                p, denied, _ = run(guardian.url(), str(uuid.uuid4()), ACS_REQUIRE_PROFILES="acs-core")
+                self.assertTrue(denied, "control: a fresh session with the requirement is refused too")
+
+    def test_negotiated_per_method_timeouts_bound_their_own_methods(self) -> None:
+        """A 300 ms toolCallRequest timeout ends that wait; toolCallResult waits under the 5 s default and its deny applies."""
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        hello = guardian._default_handshake
+        guardian.handlers["handshake/hello"] = lambda req: {
+            **hello(req), "timeout_config": {"default_ms": 5000, "per_method_ms": {"steps/toolCallRequest": 300}}}
+
+        def slow_deny(req: dict) -> dict:
+            time.sleep(1.0)
+            return {"type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+                    "decision": "deny", "reasoning": "slow deny", "chain_hash": "0" * 64}
+
+        guardian.handlers["steps/toolCallRequest"] = slow_deny
+        guardian.handlers["steps/toolCallResult"] = slow_deny
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        session = str(uuid.uuid4())
+        p, denied, audits = self._claude(guardian.url(), session)
+        # Under the 5 s default the deny would arrive after 1 s and apply.
+        self.assertFalse(denied, p.stdout)
+        self.assertIn('"cause": "decision_timeout"', p.stderr)
+        event = {"session_id": session, "cwd": "/tmp", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "echo hi"}, "tool_response": {"stdout": "hi"}}
+        p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(event), capture_output=True,
+                           text=True, env=self._env(guardian.url()), timeout=30)
+        self.assertEqual(json.loads(p.stdout).get("decision"), "block", p.stderr[-300:])
+
     def test_a_step_timeout_in_a_negotiated_session_leaves_later_steps_governed(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         hello = guardian._default_handshake

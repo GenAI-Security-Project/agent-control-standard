@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import urllib.error
+import urllib.parse
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -27,6 +28,7 @@ from acs.core import (
     is_session_refusal,
     iso8601_now,
     jcs_canonicalize,
+    server_hello_problem,
 )
 
 
@@ -69,20 +71,32 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     path = _handshake_cache_path(session_id, config.guardian_url)
     stored = _read_record(path, ikm, session_id, config.guardian_url)
     if stored is not None:
-        return stored
+        return _required_profiles(stored, config)
+    # An unsigned session does not meet acs-core's signed-envelope floor (§10), so it claims no profile.
+    claimed = (profiles_supported if profiles_supported is not None else ["acs-core"]) if ikm else []
     if not config.handshake_enabled:
         decision: Handshake = NoAnswer("handshake_disabled")
     else:
         decision = _hello(
             guardian_url=config.guardian_url, session_id=session_id, agent_id=agent_id,
             platform=platform, methods_implemented=methods_implemented,
-            wrapped_protocols=wrapped_protocols, profiles_supported=profiles_supported,
+            wrapped_protocols=wrapped_protocols, profiles_supported=claimed,
             transports_supported=transports_supported, signed=bool(ikm),
             timeout=_HANDSHAKE_TIMEOUT_S if timeout is None else timeout,
         )
     decision, ours = _store_first(path, decision, ikm, session_id, config.guardian_url)
     if ours:
-        _audit_start(decision, config, session_id)
+        _audit_start(decision, config, session_id, claimed)
+    return _required_profiles(decision, config)
+
+
+def _required_profiles(decision: Handshake, config: Config) -> Handshake:
+    """This hook's ACS_REQUIRE_PROFILES applied to the session's negotiation; the stored record keeps what the Guardian answered."""
+    if not isinstance(decision, Negotiated):
+        return decision
+    missing = sorted(config.require_profiles - set(decision.server_hello.get("profiles_accepted") or []))
+    if missing:
+        return SessionRefused("required_profile_not_accepted", {"profiles": missing})
     return decision
 
 
@@ -95,8 +109,10 @@ def store_session_decision(directory: Path, session_id: str, guardian_url: str,
 
 def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
            methods_implemented: list[str], wrapped_protocols: list[str] | None,
-           profiles_supported: list[str] | None, transports_supported: list[str] | None,
+           profiles_supported: list[str], transports_supported: list[str] | None,
            signed: bool, timeout: float) -> Handshake:
+    # The client POSTs to the Guardian URL, so that URL's scheme is the one transport it offers.
+    scheme = urllib.parse.urlsplit(guardian_url).scheme
     client_hello = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),
@@ -109,17 +125,12 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
             "payload": {
                 "acs_versions_supported": [ACS_VERSION],
                 "methods_implemented": methods_implemented,
-                "transports_supported": (transports_supported if transports_supported
-                                         is not None else ["http", "stdio"]),
+                "transports_supported": (transports_supported if transports_supported is not None
+                                         else [scheme]),
                 "max_payload_size_bytes": 1_000_000,
                 "provenance_producer": "none",
                 "wrapped_protocols": wrapped_protocols or [],
-                # An unsigned session does not meet acs-core's signed-
-                # envelope floor (§10), so it must not advertise the profile.
-                "profiles_supported": (
-                    (profiles_supported if profiles_supported is not None else ["acs-core"])
-                    if signed else []
-                ),
+                "profiles_supported": profiles_supported,
                 "signature_algorithms_supported": ["HMAC-SHA256"] if signed else [],
             },
         },
@@ -144,18 +155,18 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     except Exception as e:  # noqa: BLE001
         return NoAnswer("adapter_exception", {"error": str(e)})
     try:
-        return _classify_hello(client_hello["id"], response, session_id)
+        return _classify_hello(client_hello, response, session_id)
     except Exception as e:  # noqa: BLE001
         return SessionRefused("response_unverifiable", {"error": str(e)})
 
 
-def _classify_hello(hello_id: str, response: Any, session_id: str) -> Handshake:
-    """An answer that fails its checks refuses the session; a verified error that is not a refusal is no answer (§4.1)."""
+def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
+    """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
     if not is_jsonrpc_response(response):
         return NoAnswer("malformed_response")
     error = response.get("error")
     code = error.get("code") if error is not None else None
-    if response.get("id") != hello_id:
+    if response.get("id") != client_hello["id"]:
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
     verified = verify_signature(response, session_id=session_id)
@@ -173,14 +184,22 @@ def _classify_hello(hello_id: str, response: Any, session_id: str) -> Handshake:
     server_hello = response["result"]
     if "negotiated_version" not in server_hello:
         return NoAnswer("invalid_server_hello")
+    problem = server_hello_problem(server_hello, client_hello["params"]["payload"])
+    if problem is not None:
+        return NoAnswer("invalid_server_hello", {"problem": problem})
     return Negotiated(server_hello)
 
 
-def _audit_start(decision: Handshake, config: Config, session_id: str) -> None:
-    """Record how the session started, once, when its decision is stored (§4.1)."""
+def _audit_start(decision: Handshake, config: Config, session_id: str, claimed: list[str]) -> None:
     common = {"cause": getattr(decision, "cause", None), "session_id": session_id,
               "guardian_url": config.guardian_url}
-    if isinstance(decision, SessionRefused):
+    if isinstance(decision, Negotiated):
+        accepted = decision.server_hello.get("profiles_accepted")
+        declined = sorted(set(claimed) - set(accepted)) if isinstance(accepted, list) else []
+        if declined:
+            audit_event("profile_not_accepted", profiles=declined, session_id=session_id,
+                        guardian_url=config.guardian_url)
+    elif isinstance(decision, SessionRefused):
         audit_event("session_refused", **{**decision.fields, **common})
     elif isinstance(decision, NoAnswer):
         audit_event("session_without_negotiated_guardian",

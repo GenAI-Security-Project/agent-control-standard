@@ -105,7 +105,7 @@ class ServerHelloContract(unittest.TestCase):
         self.assertTrue(matches, self.audit.call_args_list)
 
     def test_fresh_direct_result_is_negotiated_and_stored(self):
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             session = self._run()
         self.assertIsInstance(session, Negotiated)
         self._assert_hello_schema(session.server_hello)
@@ -119,15 +119,15 @@ class ServerHelloContract(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.cache_directory.stat().st_mode), 0o700)
 
     def test_a_stored_decision_is_read_without_network(self):
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             first = self._run()
-        with mock.patch.object(client_handshake.urllib.request, "urlopen") as network:
+        with mock.patch.object(_exchange, "_open") as network:
             second = self._run()
         network.assert_not_called()
         self.assertEqual(first, second)
 
     def test_two_calls_perform_one_handshake(self):
-        with mock.patch.object(client_handshake.urllib.request, "urlopen",
+        with mock.patch.object(_exchange, "_open",
                                side_effect=self._respond) as network:
             first = self._run()
             second = self._run()
@@ -136,12 +136,12 @@ class ServerHelloContract(unittest.TestCase):
         self.assertEqual(network.call_count, 1)
 
     def test_a_modified_record_refuses_the_session_without_network(self):
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             self._run()
         record = json.loads(self._record().read_text())
         record["server_hello"]["on_decision_failure"] = "proceed"
         self._record().write_text(json.dumps(record))
-        with mock.patch.object(client_handshake.urllib.request, "urlopen") as network:
+        with mock.patch.object(_exchange, "_open") as network:
             session = self._run()
         network.assert_not_called()
         self.assertEqual(session, SessionRefused("session_record_invalid", {"record": str(self._record())}))
@@ -151,7 +151,7 @@ class ServerHelloContract(unittest.TestCase):
             response = json.loads(self._respond(request).read())
             response["result"]["on_decision_failure"] = "proceed"
             return io.BytesIO(json.dumps(response).encode())
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
+        with mock.patch.object(_exchange, "_open", side_effect=respond):
             session = self._run()
         self.assertEqual(session, SessionRefused("server_hello_signature_invalid"))
         self.assertEqual(json.loads(self._record().read_text())["decision"], "refused")
@@ -162,7 +162,7 @@ class ServerHelloContract(unittest.TestCase):
             response = json.loads(self._respond(request).read())
             response["result"].pop("signature")
             return io.BytesIO(json.dumps(response).encode())
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
+        with mock.patch.object(_exchange, "_open", side_effect=respond):
             session = self._run()
         self.assertEqual(session, SessionRefused("server_hello_signature_invalid"))
 
@@ -172,7 +172,7 @@ class ServerHelloContract(unittest.TestCase):
             response["id"] = "a-different-request"
             self._sign(response)
             return io.BytesIO(json.dumps(response).encode())
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
+        with mock.patch.object(_exchange, "_open", side_effect=respond):
             session = self._run()
         self.assertEqual(session, SessionRefused("response_binding_mismatch"))
 
@@ -182,7 +182,7 @@ class ServerHelloContract(unittest.TestCase):
             "request_id": str(uuid.uuid4()), "decision": "allow",
             "payload": copy.deepcopy(self.hello),
         }
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             session = self._run()
         self.assertEqual(session, NoAnswer("invalid_server_hello"))
         self._assert_audit("session_without_negotiated_guardian", "invalid_server_hello")
@@ -193,7 +193,7 @@ class ServerHelloContract(unittest.TestCase):
         self._record().write_text(json.dumps(self._sign({
             "jsonrpc": "2.0", "id": "previous-handshake", "result": copy.deepcopy(self.hello),
         })))
-        with mock.patch.object(client_handshake.urllib.request, "urlopen") as network:
+        with mock.patch.object(_exchange, "_open") as network:
             session = self._run()
         network.assert_not_called()
         self.assertEqual(session, SessionRefused("session_record_legacy", {"record": str(self._record())}))
@@ -203,7 +203,7 @@ class ServerHelloContract(unittest.TestCase):
         # is not a reason to unwrap a valid direct ServerHello.
         self.hello["payload"] = {"future_extension": True}
         self.hello["another_extension"] = "preserve"
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             session = self._run()
         self._assert_hello_schema(session.server_hello)
         self.assertEqual(session.server_hello["payload"], {"future_extension": True})
@@ -211,7 +211,7 @@ class ServerHelloContract(unittest.TestCase):
 
     def test_empty_result_is_no_answer(self):
         self.hello = {}
-        with mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=self._respond):
+        with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             self.assertEqual(self._run(), NoAnswer("invalid_server_hello"))
 
     def test_fixture_emits_the_handshake_specific_schema(self):
@@ -225,6 +225,23 @@ class ServerHelloContract(unittest.TestCase):
         self._assert_hello_schema(result)
         self.assertNotIn("decision", result)
         self.assertNotIn("payload", result)
+
+    def test_real_python_guardian_answers_with_what_the_client_offered(self):
+        env = os.environ.copy()
+        env["ACS_GUARDIAN_STATE_DIR"] = str(self.directory / "guardian-state")
+        proc, port = launch_guardian(env=env)
+        self.addCleanup(proc.wait, 3)
+        self.addCleanup(proc.terminate)
+        url = f"http://127.0.0.1:{port}/acs"
+        for i, (transports, profiles) in enumerate(((["https"], []), (["http"], ["acs-core"]))):
+            with self.subTest(transports=transports, profiles=profiles):
+                session = client.open_session(
+                    config=Config.from_env({"ACS_GUARDIAN_URL": url}), session_id=f"{self.SESSION}-{i}",
+                    agent_id="offer-test", platform="test", methods_implemented=["steps/toolCallRequest"],
+                    profiles_supported=profiles, transports_supported=transports, timeout=2)
+                self.assertIsInstance(session, Negotiated)
+                self.assertEqual(session.server_hello["selected_transport"], transports[0])
+                self.assertEqual(session.server_hello["profiles_accepted"], profiles)
 
     def test_real_python_guardian_returns_a_signed_direct_result(self):
         env = os.environ.copy()

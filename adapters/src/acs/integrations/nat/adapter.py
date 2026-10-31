@@ -744,7 +744,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
     def _exchange(self, request: dict):
         return exchange(request, guardian_url=self._acs.guardian_url,
-                        timeout_s=self._posture.timeout_s, session_id=self._session_id)
+                        timeout_s=self._posture.timeout_for(request.get("method", "")), session_id=self._session_id)
 
     def _settle_pre(self, context, resolution: Resolution, message: str = ""):
         """Settle a pre_invoke step without a usable decision: block unless the resolution proceeds, and record why."""

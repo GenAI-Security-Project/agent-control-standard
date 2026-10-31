@@ -218,16 +218,20 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual("request_id_ref" in self._sent_result(guardian, h), cites)
 
-    def test_without_a_negotiated_list_every_method_is_sent(self) -> None:
-        """A ServerHello without methods_evaluated declares no subset, so the
-        adapters send every method they implement."""
+    def test_a_server_hello_without_methods_evaluated_negotiates_nothing(self) -> None:
+        """handshake.json requires methods_evaluated, so a ServerHello without it is no answer, and the fail-closed startup posture blocks the prompt."""
         for adapter in ("claude-code", "cursor"):
             with self.subTest(adapter=adapter):
                 guardian, h = self._session(None)
                 p = h.run(adapter, *PROMPT[adapter])
-                self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual(guardian.methods_received(),
-                                 ["handshake/hello", "steps/turnStart", "steps/userMessage"])
+                self.assertEqual(guardian.methods_received(), ["handshake/hello"])
+                if adapter == "claude-code":
+                    self.assertEqual(json.loads(p.stdout)["decision"], "block")
+                else:
+                    self.assertEqual(p.returncode, 2, p.stderr)
+                start = [a for a in h.audits() if a.get("acs_audit_event") == "session_without_negotiated_guardian"]
+                self.assertEqual([(a["cause"], a["problem"]) for a in start],
+                                 [("invalid_server_hello", "methods_evaluated is not a list of method names")])
 
 
 if __name__ == "__main__":

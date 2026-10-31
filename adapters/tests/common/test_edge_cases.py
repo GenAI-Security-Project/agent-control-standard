@@ -25,6 +25,7 @@ from unittest import mock
 
 from acs import client  # noqa: E402
 from acs import core  # noqa: E402
+from acs.client import _exchange
 from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.client import _store as client_store  # noqa: E402
 
@@ -177,8 +178,9 @@ class Item05_SessionDecisionLifetime(unittest.TestCase):
     handshake made however old the stored record is."""
 
     def test_a_config_change_reaches_the_next_session_only(self) -> None:
-        hellos = iter([{"negotiated_version": "0.1.0", "on_decision_failure": "deny"},
-                       {"negotiated_version": "0.1.0", "on_decision_failure": "proceed"}])
+        hello = {"negotiated_version": "0.1.0", "methods_evaluated": [], "selected_transport": "http",
+                 "timeout_config": {"default_ms": 5000}}
+        hellos = iter([{**hello, "on_decision_failure": "deny"}, {**hello, "on_decision_failure": "proceed"}])
 
         def respond(request, timeout=None):
             incoming = json.loads(request.data)
@@ -190,7 +192,7 @@ class Item05_SessionDecisionLifetime(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(tmp)), \
-                mock.patch.object(client_handshake.urllib.request, "urlopen", side_effect=respond):
+                mock.patch.object(_exchange, "_open", side_effect=respond):
             def open_(session_id: str):
                 return client.open_session(config=config, session_id=session_id, agent_id="x",
                                            platform="t", methods_implemented=[])

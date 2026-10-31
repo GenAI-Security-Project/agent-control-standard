@@ -29,6 +29,7 @@ from unittest import mock
 
 from acs import client  # noqa: E402
 from acs import core  # noqa: E402
+from acs.client import _exchange
 from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.client import _store as client_store  # noqa: E402
 from acs.guardian import example_guardian  # noqa: E402
@@ -907,7 +908,7 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
                                       Path(d)), \
-                    mock.patch.object(client_handshake.urllib.request, "urlopen",
+                    mock.patch.object(_exchange, "_open",
                                       side_effect=refuse_after_capture):
                 result = client.open_session(
                     config=client.Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:8787/acs"}),

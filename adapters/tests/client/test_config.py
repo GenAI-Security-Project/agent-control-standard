@@ -47,6 +47,15 @@ class Negotiation(unittest.TestCase):
                 self.assertEqual(DENY.negotiated(hello), DENY)
                 self.assertEqual(PROCEED.negotiated(hello), PROCEED)
 
+    def test_per_method_timeouts_bound_their_own_methods(self) -> None:
+        posture = PROCEED.negotiated({"timeout_config": {"default_ms": 2000, "per_method_ms": {
+            "steps/toolCallRequest": 300, "steps/bad": 0, "steps/also_bad": "5"}}})
+        self.assertEqual(posture.timeout_for("steps/toolCallRequest"), 0.3)
+        self.assertEqual(posture.timeout_for("steps/userMessage"), 2.0)
+        self.assertEqual(posture.timeout_for("steps/bad"), 2.0)
+        self.assertEqual(posture.timeout_for("steps/also_bad"), 2.0)
+        self.assertEqual(PROCEED.timeout_for("steps/toolCallRequest"), 1.0)
+
     def test_negotiation_returns_a_new_posture(self) -> None:
         negotiated = PROCEED.negotiated({"on_decision_failure": "deny",
                                          "timeout_config": {"default_ms": 100}})
@@ -128,6 +137,11 @@ class FromEnv(unittest.TestCase):
         self.assertTrue(config.posture.deny_on_failure)
         self.assertFalse(config.handshake_enabled)
         self.assertTrue(config.disabled)
+
+    def test_required_profiles(self) -> None:
+        self.assertEqual(Config.from_env({}).require_profiles, frozenset())
+        self.assertEqual(Config.from_env({"ACS_REQUIRE_PROFILES": " ACS-Core, acs-trace ,,"}).require_profiles,
+                         frozenset({"acs-core", "acs-trace"}))
 
     def test_switches_turn_on_only_with_1(self) -> None:
         for value in ("true", "yes", "0", ""):

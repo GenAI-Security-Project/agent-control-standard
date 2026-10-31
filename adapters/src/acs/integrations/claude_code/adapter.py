@@ -667,7 +667,7 @@ def _guardian_roundtrip(request: dict[str, Any], hook_name: str, session_id: str
     """POST one request. Returns (response, None) for a usable decision, or
     (None, exit_code) once a failure has been settled in the hook's shape;
     shared by the turnStart pre-step and the main step."""
-    outcome = exchange(request, guardian_url=guardian_url, timeout_s=posture.timeout_s,
+    outcome = exchange(request, guardian_url=guardian_url, timeout_s=posture.timeout_for(request.get("method", "")),
                        session_id=session_id)
     if isinstance(outcome, Decided):
         return outcome.response, None

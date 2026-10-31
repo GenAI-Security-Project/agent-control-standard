@@ -862,7 +862,7 @@ def _guardian_roundtrip(request: dict[str, Any], event_name: str, event: dict[st
     (None, exit_code) once a failure has been settled in the event's shape;
     shared by the turnStart pre-step and the main step."""
     session_id = _session_id(event)
-    outcome = exchange(request, guardian_url=guardian_url, timeout_s=posture.timeout_s,
+    outcome = exchange(request, guardian_url=guardian_url, timeout_s=posture.timeout_for(request.get("method", "")),
                        session_id=session_id)
     if isinstance(outcome, Decided):
         return outcome.response, None

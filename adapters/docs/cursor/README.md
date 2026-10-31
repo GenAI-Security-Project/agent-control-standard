@@ -288,10 +288,11 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_DEFAULT_DENY` | `0` | Fail-open with audit (§6.4 default). Set to `1` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
 | `ACS_STARTUP_POSTURE` | follows `ACS_DEFAULT_DENY` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
+| `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused; the stored record keeps what the Guardian answered, so each hook applies its own setting. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
 | `ACS_AGENT_ID` | derived from cwd | Stable agent identifier sent in `metadata.agent_id`. |
 | `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Each session's handshake decision, kept for the session's lifetime. |
-| `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Network timeout for handshake/hello. |
+| `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Deadline for the whole handshake/hello exchange, including a response that arrives slowly. |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
@@ -311,6 +312,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | ACS-Core item | Status |
 |---|---|
 | Handshake (`handshake/hello`) | ✓ on the first event of a session; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1) |
+| Profiles (`profiles_supported` / `profiles_accepted`) | ✓ claims `acs-core` when a signing secret is configured and no profile without one. A ServerHello accepting a profile the adapter did not claim is not a valid answer, a claimed profile the Guardian leaves out is audited as `profile_not_accepted`, and a hook's `ACS_REQUIRE_PROFILES` turns a left-out profile into a refusal of that hook's steps. |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema for every mapped hook (emission suite), with format checking |
 | Hook taxonomy (Core minimum set) | ✓ the six unconditional hooks are covered, and so is `subagentStart`, which ACS-Core requires of a subagent-capable client. Cursor exposes the spawn boundary, and the default wiring gates it fail-closed. Seventeen Cursor events are mapped in total; `subagentStop` is intentionally omitted — see the honesty table below. |
 | Dispositions | ALLOW / DENY / ASK supported on **permission (pre-execution) events** (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeSubmitPrompt`, `subagentStart`). DEFER substituted to ASK (Cursor has no defer). MODIFY supported on `preToolUse` via `updated_input`. **Lifecycle / post-execution hooks (`afterAgentResponse → steps/agentResponse`, `sessionStart`, `sessionEnd`, `afterShellExecution`, etc.) are observation-only** — Cursor fires them after the message / side effect has occurred; a Guardian `deny` cannot undo it. See `mapping.md`. |

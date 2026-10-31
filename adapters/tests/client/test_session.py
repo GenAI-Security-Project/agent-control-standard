@@ -11,14 +11,16 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from acs.client import _exchange
 from acs.client import Config, Negotiated, NoAnswer, SessionRefused, open_session
 from acs.client import _handshake
 from acs.core import derive_session_key, sign_with_key
 
 SECRET = "session-gate-test-secret"
 URL = "http://127.0.0.1:8787/acs"
-HELLO = {"negotiated_version": "0.1.0", "selected_transport": "http",
-         "timeout_config": {"default_ms": 5000}, "on_decision_failure": "proceed"}
+HELLO = {"negotiated_version": "0.1.0", "methods_evaluated": ["steps/toolCallRequest"],
+         "selected_transport": "http", "timeout_config": {"default_ms": 5000},
+         "on_decision_failure": "proceed", "profiles_accepted": ["acs-core"]}
 FORGED = {"algorithm": "HMAC-SHA256", "value": "AAAA"}
 
 
@@ -107,7 +109,7 @@ class _SessionTest(unittest.TestCase):
 
     def _open(self, urlopen=None, *, session_id: str = "session-1", **env: str):
         config = Config.from_env({"ACS_GUARDIAN_URL": URL, **env})
-        with mock.patch.object(_handshake.urllib.request, "urlopen",
+        with mock.patch.object(_exchange, "_open",
                                side_effect=urlopen or _answer(lambda h: _result(h, HELLO))) as network:
             decision = open_session(config=config, session_id=session_id, agent_id="test",
                                     platform="test", methods_implemented=["steps/toolCallRequest"])
@@ -150,6 +152,73 @@ class Classification(_SessionTest):
             decision, calls = self._open()
         self.assertIsInstance(decision, SessionRefused)
         self.assertEqual((decision.cause, calls), ("secret_unavailable", 0))
+
+
+class Negotiation(_SessionTest):
+    """A ServerHello must answer the ClientHello it was sent for; the client offers only what it implements."""
+
+    def _hello(self, **change):
+        hello = {**HELLO, **change}
+        return _answer(lambda h: _result(h, {k: v for k, v in hello.items() if v is not None}))
+
+    def test_a_server_hello_that_does_not_answer_the_client_hello_negotiates_nothing(self) -> None:
+        cases = {"another major version": {"negotiated_version": "1.0.0"},
+                 "transport not offered": {"selected_transport": "stdio"},
+                 "profile not claimed": {"profiles_accepted": ["acs-core", "acs-trace"]},
+                 "posture in another case": {"on_decision_failure": "Deny"},
+                 "no default timeout": {"timeout_config": {"per_method_ms": {}}},
+                 "no methods_evaluated": {"methods_evaluated": None}}
+        for i, (name, change) in enumerate(cases.items()):
+            with self.subTest(name):
+                decision, calls = self._open(self._hello(**change), session_id=f"invalid-{i}")
+                self.assertEqual(calls, 1)
+                self.assertIsInstance(decision, NoAnswer)
+                self.assertEqual(decision.cause, "invalid_server_hello")
+                self.assertIn("problem", decision.fields)
+
+    def test_the_client_offers_its_guardian_urls_transport(self) -> None:
+        for scheme in ("http", "https"):
+            with self.subTest(scheme):
+                sent: list[dict] = []
+
+                def urlopen(req, timeout):
+                    sent.append(json.loads(req.data))
+                    raise urllib.error.URLError("captured")
+
+                config = Config.from_env({"ACS_GUARDIAN_URL": f"{scheme}://127.0.0.1:8787/acs"})
+                with mock.patch.object(_exchange, "_open", side_effect=urlopen):
+                    open_session(config=config, session_id=f"transport-{scheme}", agent_id="test",
+                                 platform="test", methods_implemented=["steps/toolCallRequest"])
+                self.assertEqual(sent[0]["params"]["payload"]["transports_supported"], [scheme])
+
+    def test_a_required_profile_the_guardian_does_not_accept_refuses_the_session(self) -> None:
+        required = {"ACS_REQUIRE_PROFILES": "acs-core"}
+        refused, _ = self._open(self._hello(profiles_accepted=[]), session_id="required-declined", **required)
+        self.assertEqual(refused, SessionRefused("required_profile_not_accepted", {"profiles": ["acs-core"]}))
+        missing, _ = self._open(self._hello(profiles_accepted=None), session_id="required-missing", **required)
+        self.assertEqual(missing.cause, "required_profile_not_accepted")
+        accepted, _ = self._open(self._hello(), session_id="required-accepted", **required)
+        self.assertIsInstance(accepted, Negotiated)
+
+    def test_each_hook_applies_its_required_profiles_to_the_stored_negotiation(self) -> None:
+        declining = self._hello(profiles_accepted=[])
+        first, calls = self._open(declining, session_id="per-hook")
+        self.assertEqual((type(first), calls), (Negotiated, 1))
+        refused, calls = self._open(session_id="per-hook", ACS_REQUIRE_PROFILES="acs-core")
+        self.assertEqual((refused, calls),
+                         (SessionRefused("required_profile_not_accepted", {"profiles": ["acs-core"]}), 0),
+                         "a stored negotiation must not skip this hook's requirement")
+        again, calls = self._open(session_id="per-hook")
+        self.assertEqual((again, calls), (first, 0), "the record keeps what the Guardian answered")
+
+    def test_a_claimed_profile_the_guardian_declines_is_audited_once(self) -> None:
+        self._open(self._hello(profiles_accepted=[]), session_id="declined")
+        self._open(session_id="declined")
+        declined = [c for c in self.audit.call_args_list if c.args[0] == "profile_not_accepted"]
+        self.assertEqual([c.kwargs["profiles"] for c in declined], [["acs-core"]])
+        self.audit.reset_mock()
+        self._open(self._hello(profiles_accepted=None), session_id="unstated")
+        self.assertNotIn("profile_not_accepted", [c.args[0] for c in self.audit.call_args_list])
 
 
 class Lifetime(_SessionTest):
@@ -312,6 +381,11 @@ class Records(_SessionTest):
 
 class UnsignedMode(_SessionTest):
     ENV: dict = {}
+
+    def test_an_unsigned_client_claims_no_profile_so_a_required_one_refuses(self) -> None:
+        unsigned_hello = _answer(lambda h: _result(h, {**HELLO, "profiles_accepted": []}, sign=False))
+        decision, _ = self._open(unsigned_hello, session_id="dev-required", ACS_REQUIRE_PROFILES="acs-core")
+        self.assertEqual(decision.cause, "required_profile_not_accepted")
 
     def test_records_carry_no_mac_and_still_hold_the_session(self) -> None:
         first, _ = self._open(_raises(urllib.error.URLError("down")), session_id="dev")

@@ -524,16 +524,21 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
             f"UNSUPPORTED_VERSION: client majors "
             f"{[_major(v) for v in client_versions]}, Guardian major {our_major}")
 
+    # Answer only with what the client offered: a transport this Guardian serves, and the profiles it implements.
+    offered = client_hello.get("transports_supported") or []
+    transport = next((t for t in ("http", "https") if t in offered), None)
+    if transport is None:
+        raise GuardianError(-32602, f"Invalid params: no offered transport this Guardian serves in {offered}")
     server_hello = {
         "negotiated_version": ACS_VERSION,
         "methods_evaluated": client_hello.get("methods_implemented") or [],
-        "selected_transport": "http",
+        "selected_transport": transport,
         "signature_algorithms_supported": (["HMAC-SHA256"] if _hmac_secret() else []),
         "timeout_config": {"default_ms": 5000},
         "skew_window_ms": SKEW_WINDOW_MS,
         "on_decision_failure": "proceed",  # spec default per §6.4
         "policy_requires_provenance": False,
-        "profiles_accepted": ["acs-core"],
+        "profiles_accepted": [p for p in client_hello.get("profiles_supported") or [] if p == "acs-core"],
     }
     # handle_request wraps and signs this direct ServerHello as result.
     return server_hello

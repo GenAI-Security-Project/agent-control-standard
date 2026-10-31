@@ -83,7 +83,7 @@ class UntrustedAnswersNeverRunTheFunction(unittest.TestCase):
 
         context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=None,
                                             single_output_schema=type(None), stream_output_schema=type(None))
-        with mock.patch.object(_exchange.urllib.request, "urlopen", side_effect=urlopen):
+        with mock.patch.object(_exchange, "_open", side_effect=urlopen):
             try:
                 asyncio.run(mw.function_middleware_invoke(command="rm -rf /srv/data",
                                                           call_next=target, context=context))

@@ -1,7 +1,10 @@
 """One Guardian round trip: POST a signed request and classify what came back, with no side effects."""
 from __future__ import annotations
 
+import http.client
 import json
+import socket
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import replace
@@ -47,16 +50,134 @@ def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any
         guardian_url, data=body,
         headers={"Content-Type": "application/json"}, method="POST",
     )
+    # A socket timeout bounds each read, not the exchange, so the §6.4 deadline waits on a worker and then shuts its sockets.
+    done, aborter, box = threading.Event(), _Aborter(), {}
+
+    def fetch() -> None:
+        _worker.aborter = aborter
+        try:
+            box["value"] = _fetch(req, timeout_s, aborter)
+        except BaseException as e:  # noqa: BLE001
+            box["error"] = e
+        finally:
+            aborter.release()
+            done.set()
+
+    worker = threading.Thread(target=fetch, name="acs-exchange", daemon=True)
+    worker.start()
+    if not done.wait(timeout_s):
+        aborter.abort()
+        raise TimeoutError(f"no complete response within {timeout_s:g}s")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+class _Aborter:
+    """The exchange's sockets, held as duplicates because TLS wrapping detaches the original, shut down together at the deadline."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sockets: list[socket.socket] = []
+        self.aborted = threading.Event()
+
+    def add(self, sock: socket.socket) -> None:
+        with self._lock:
+            if not self.aborted.is_set():
+                self._sockets.append(sock.dup())
+                return
+        sock.close()
+        raise TimeoutError("the exchange passed its deadline")
+
+    def abort(self) -> None:
+        with self._lock:
+            self.aborted.set()
+            sockets, self._sockets = self._sockets, []
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
+    def release(self) -> None:
+        with self._lock:
+            sockets, self._sockets = self._sockets, []
+        for sock in sockets:
+            sock.close()
+
+
+_worker = threading.local()
+
+
+def _create_connection(*args: Any, **kwargs: Any) -> socket.socket:
+    sock = socket.create_connection(*args, **kwargs)
+    aborter = getattr(_worker, "aborter", None)
+    if aborter is not None:
+        aborter.add(sock)
+    return sock
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _create_connection
+
+
+class _HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _create_connection
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(_HTTPConnection, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> Any:
+        kwargs: dict[str, Any] = {"context": self._context}
+        if hasattr(self, "_check_hostname"):
+            kwargs["check_hostname"] = self._check_hostname
+        return self.do_open(_HTTPSConnection, req, **kwargs)
+
+
+def _open(req: urllib.request.Request, timeout: float) -> Any:
+    """Send through the environment's proxies on abortable connections; a redirect is an HTTP error, not a new request."""
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.ProxyHandler(), _HTTPHandler(), _HTTPSHandler(),
+                    urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor()):
+        opener.add_handler(handler)
+    return opener.open(req, timeout=timeout)
+
+
+def _fetch(req: urllib.request.Request, timeout_s: float, aborter: _Aborter) -> Any:
+    cancelled = aborter.aborted
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            raw = resp.read()
+        with _open(req, timeout=timeout_s) as resp:
+            raw = _read(resp, cancelled)
     except urllib.error.HTTPError as e:
         try:
-            parsed = json.loads(e.read().decode("utf-8"))
+            parsed = json.loads(_read(e, cancelled).decode("utf-8"))
         except Exception:  # noqa: BLE001
             parsed = None
         raise GuardianHTTPError(e.code, parsed) from e
     return json.loads(raw.decode("utf-8"))
+
+
+def _read(resp: Any, cancelled: threading.Event) -> bytes:
+    """Read the body one socket read at a time until the deadline."""
+    read1 = getattr(resp, "read1", None)
+    if read1 is None:
+        return resp.read()
+    chunks = []
+    while not cancelled.is_set():
+        chunk = read1(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
