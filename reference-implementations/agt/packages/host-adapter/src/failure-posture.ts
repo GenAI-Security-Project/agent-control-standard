@@ -157,7 +157,7 @@ const TRANSPORT_ERROR_CODES = new Set([
  * preferred to guessing, because widening this to every error object would
  * also fail closed on an intermediary's error the Guardian never sent.
  */
-const REFUSAL_RPC_CODES = new Set([-32700, -32010, -32011, -32020]);
+const REFUSAL_RPC_CODES = new Set([-32700, -32600, -32010, -32011, -32020]);
 
 /**
  * Names what came back INSTEAD of a decision, for the audit entry. Total: an
