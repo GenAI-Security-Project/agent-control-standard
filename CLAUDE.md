@@ -79,7 +79,7 @@ The ACS framework consists of three interconnected layers:
 - `docs/topics/core_concepts.md`: Fundamental concepts and terminology
 - `docs/topics/ACS_in_action_example.md`: Step-by-step implementation example
 - `project.owasp.yaml`: OWASP Nest project metadata, validated in CI against `owasp/nest-schema`
-- `mkdocs.yml`: Documentation site configuration
+- `mkdocs.yml`: documentation site configuration and the navigation source for both the docs and the landing page. Its values render into the landing page as untrusted text.
 
 ### Navigation Structure
 The documentation follows this hierarchy:
@@ -105,13 +105,16 @@ resolve, fragment included.
 
 `GOVERNANCE.md` is a build input. Its workstream table renders into the published page,
 so a change to its shape can fail the deploy, and its contents are escaped as untrusted
-text.
+text. `mkdocs.yml` is also a landing build input, and its values are escaped as untrusted
+text too.
 
 The marketing site at **agentcontrolstandard.org** is still built and deployed from a
 separate repository. It will redirect here later. Adding the custom domain makes GitHub
 301 the `github.io` URIs to it, which schema tooling follows. Do not rebase `$id` onto
 the marketing domain during that cutover. A `CNAME` must be written into `_site` by the
 build. Placing one in `landing/` does not reach the artifact.
+
+Rollback: before re-running an older deploy, run `gh variable set ROADMAP_REFRESH_ENABLED --body false`, or the 05:15 UTC nightly redeploys main. Expect the navigation job in `monitor-pages.yml` to stay red until the revert reaches main, since it checks out main's verifier against the rolled-back site. Re-enable the variable once the revert deploys. A red navigation verify after a green Deploy to Pages means the site is live and the edge may be stale. Re-run once, then read the step summary.
 
 ### Contact channels
 The repository carries one contact address and no others. `rock.lambros@owasp.org`

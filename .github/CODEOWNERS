@@ -8,9 +8,8 @@
 # leadership roster in GOVERNANCE.md. The project leads are @rocklambros,
 # @afogel, and @bar-capsule.
 #
-# @artmaro holds write access. @Lrd0036 was invited to write access on
-# 2026-10-05, and his entries stay inert until he accepts. The write
-# invitations to @evabenn, @RbBuiltWrong, and @aruneeshsalhotra
+# @artmaro holds write access. @Lrd0036 accepted write access and his entries are live.
+# The write invitations to @evabenn, @RbBuiltWrong, and @aruneeshsalhotra
 # lapsed and are not being re-sent, so their entries stay inert. The other
 # owners on their lines still apply, so review coverage holds.
 
@@ -36,15 +35,15 @@
 # The docs stylesheet and asset directories render into every documentation page and
 # can reach a third party through url(), @font-face, or @import with no script at all.
 /tools/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /GOVERNANCE.md  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /project.owasp.yaml @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
-/mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
+/docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 
 # The roster files and the code that turns them into trust decide whose closes count as

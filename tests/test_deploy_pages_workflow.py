@@ -82,3 +82,45 @@ def test_build_checkout_is_a_full_clone():
     steps = load()["jobs"]["build"]["steps"]
     checkout = next(step for step in steps if step.get("name") == "Check out the repository")
     assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}
+
+
+def test_docs_build_precedes_the_404_copy_and_the_render():
+    # Pages serves only a root-level 404.html. MkDocs writes its own into _site/docs, so
+    # without the copy a missed address gets GitHub's page and no navigation pane.
+    steps = load()["jobs"]["build"]["steps"]
+    names = [step.get("name") for step in steps]
+    build = names.index("Build the documentation site")
+    copy = names.index("Copy the 404 page to the site root")
+    render = names.index("Render the landing page")
+    assert build + 1 == copy < render
+    assert steps[copy]["run"] == "cp _site/docs/404.html _site/404.html"
+    assert set(steps[copy]) == {"name", "run"}
+
+
+def test_render_step_has_no_env():
+    steps = load()["jobs"]["build"]["steps"]
+    render = next(step for step in steps if step.get("name") == "Render the landing page")
+    assert "env" not in render
+
+
+def test_no_step_after_uv_install_references_a_token():
+    # Every step after setup-uv runs code uv installed, so none of them may see a token.
+    steps = load()["jobs"]["build"]["steps"]
+    setup = [step.get("name") for step in steps].index("Install uv")
+    for step in steps[setup + 1:]:
+        assert "token" not in repr(step).lower(), step.get("name")
+        assert "secrets." not in repr(step), step.get("name")
+
+
+def test_navigation_verify_is_its_own_step_with_a_timeout_and_no_continue_on_error():
+    steps = load()["jobs"]["deploy"]["steps"]
+    names = [step.get("name") for step in steps]
+    schemas = names.index("Verify the published schemas")
+    navigation = names.index("Verify the published navigation")
+    assert navigation == schemas + 1 == len(steps) - 1
+    step = steps[navigation]
+    assert step["timeout-minutes"] == 15
+    assert step["env"] == {"PAGE_URL": "${{ steps.deployment.outputs.page_url }}"}
+    assert step["run"].strip() == 'python3 tools/verify_site_nav.py "$PAGE_URL"'
+    assert "continue-on-error" not in step
+    assert "verify_site_nav" not in steps[schemas]["run"]

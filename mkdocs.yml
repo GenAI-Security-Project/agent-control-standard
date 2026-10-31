@@ -49,19 +49,35 @@ extra:
     - icon: /fontawesome/brands/github
       name: Join the discussion on GitHub
       link: https://github.com/GenAI-Security-Project/agent-control-standard/discussions
+  # The left navigation pane on both surfaces. The nav: list below is the docs half.
+  # This block holds what nav: cannot express. tools/render_landing.py and
+  # overrides/partials/nav.html both read it, so a change here changes the landing page
+  # and the docs site together.
+  acs_nav:
+    landing_sections:
+      - {title: The problem, anchor: problem}
+      - {title: The solution, anchor: solution}
+      - {title: How it works, anchor: architecture}
+      - {title: Why now, anchor: why-now}
+      - {title: Built with the community, anchor: built-with}
+      - {title: Spec status, anchor: status}
+      - {title: Workstreams, anchor: workstreams}
+      - {title: Contribute, anchor: contribute}
+    external_resources:
+      - {title: GitHub, url: "https://github.com/GenAI-Security-Project/agent-control-standard"}
+      - {title: Roadmap, url: "https://github.com/GenAI-Security-Project/agent-control-standard/milestones"}
+      - {title: Slack, url: "https://owasp.slack.com"}
+    # Pages that exist in the build but stay out of nav: on purpose.
+    out_of_nav_prefixes:
+      - spec/instrument/a2a/hooks/
 
 nav:
-  # The landing page links into the docs, so the docs need the return path. The URL is
-  # absolute rather than derived from site_url because site_url names the /docs/ subpath,
-  # which cannot address its own parent. It survives the agentcontrolstandard.org
-  # cutover, when the custom domain makes this URL redirect rather than break.
-  - ACS home: https://genai-security-project.github.io/agent-control-standard/
   - Trustworthy Agents: README.md
   - ACS: acs.md
+  - FAQ: topics/faq.md
   - Topics:
     - Core concepts: topics/core_concepts.md
     - ACS in Action: topics/ACS_in_action_example.md
-    - FAQ: topics/faq.md
   - Concepts:
     - Overview: concepts/README.md
     - Agents: concepts/agents.md

@@ -167,7 +167,7 @@ Profiles compose: a minimal IDE harness declares `["acs-core"]`; a full-coverage
 
 The framework advertises in `methods_implemented` at handshake time the hooks it implements. The Guardian's `methods_evaluated` response names the subset it will actually evaluate against policy, and the Guardian may refuse the session if a hook its policy requires is absent. So the negotiation is explicit on both sides — the framework says what it can emit, the Guardian says what it needs to see, and they either agree to proceed or the session does not start.
 
-The conformance line is between *not having the surface* and *suppressing the hook for an event that did happen*. The first is fine and negotiated explicitly. The second is non-conformant for a required hook, and for any hook the framework advertised in `methods_implemented`: once declared, it must fire for every event that happens. The other observable hooks are SHOULD-implement, so a framework can leave one out of `methods_implemented` and still conform.
+The conformance line is between *not having the surface* and *suppressing the hook for an event that did happen*. The first is fine and negotiated explicitly. The second is non-conformant for a required hook, and for any hook the framework advertised in `methods_implemented`: once declared, it must fire for every event that happens. The other observable hooks are should-implement, so a framework can leave one out of `methods_implemented` and still conform.
 
 ### Does ACS require a specific transport, cryptography, or identity system?
 
