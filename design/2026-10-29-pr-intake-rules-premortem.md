@@ -99,7 +99,7 @@ Findings, surviving at Plausible or above.
 12. The design document names a contributor by full name as the problem case, in a directory that publishes to `main`, with a count that is wrong on the day of writing (14 of 15 declare a closing keyword on a milestoned issue. None of the 15 has received a human review).
     - Impact: Medium. Reputational, in a public governance record, reversible only by a history rewrite the project denies on `main`.
     - Confidence: Likely (fires if committed as written).
-    - Evidence anchor: design v1.1 "Raghuvar Karthik Durga's fifteen open pull requests".
+    - Evidence anchor: design v1.1 named one contributor beside the phrase "fifteen open pull requests".
     - Failure mode: the contributor finds the sentence. Any later conduct question starts from it.
     - Blind spot: design documents are written as memos and published as record.
 
