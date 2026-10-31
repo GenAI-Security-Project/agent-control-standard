@@ -63,7 +63,7 @@
  * -- a Guardian in its own container, say -- opts in explicitly through the
  * `hostname` option (main.ts reads ACS_GUARDIAN_HOST for it).
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotator, PolicyBridge } from "agt-bridge";
@@ -94,7 +94,7 @@ import {
 } from "./validate-envelope.ts";
 import { checkResponse } from "./check-response.ts";
 import { buildServerHello, type ServerHello } from "./handshake.ts";
-import { createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
+import { appendPrivate, createEnvelopeLogSink, NULL_ENVELOPE_LOG_SINK, type EnvelopeLogSink } from "./envelope-log-sink.ts";
 import { createOtelTraceExporter, NULL_OTEL_TRACE_EXPORTER, type OtelTraceExporter } from "./otel-trace-exporter.ts";
 import type { RejectionReason } from "./otel-mapping.ts";
 import {
@@ -386,7 +386,7 @@ function createSessionContextLogAppender(path: string): (line: string) => void {
   };
 
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   } catch (error) {
     fail(error);
   }
@@ -396,7 +396,7 @@ function createSessionContextLogAppender(path: string): (line: string) => void {
       return;
     }
     try {
-      appendFileSync(path, `${line}\n`);
+      appendPrivate(path, `${line}\n`);
     } catch (error) {
       fail(error);
     }
