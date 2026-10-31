@@ -135,17 +135,21 @@ const LOOPBACK_ONLY = "127.0.0.1";
 // validate-envelope.ts relies on. Used only to redact it out of error text
 // before that text leaves the Guardian; see toRepoRelativeMessage below.
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url)).replace(/[/\\]+$/, "");
-// The lookahead requires the root to be followed by a path separator or the
-// end of the string, before the optional `[/\\]?` consumes one such
-// separator. Without it, a *sibling* directory whose name merely extends
-// the root (`<root>_old`) matched too: the literal
-// text of REPO_ROOT is a prefix of that name, so it stripped, leaving a
-// misleading `_old/reference-implementations/agt` behind -- not a disclosure of this tree's
-// own location, since it's a different directory entirely, but a
-// diagnostic that then reads as if it were one. The lookahead makes that
-// prefix match fail outright, so a message naming the sibling is left
-// alone, in full.
-const REPO_ROOT_PATTERN = new RegExp(`${REPO_ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[/\\\\]|$)[/\\\\]?`, "g");
+// The root must be followed by a path separator or the end of the string.
+// Without that rule, a *sibling* directory whose name merely extends the root
+// (`<root>_old`) matched too: the literal text of REPO_ROOT is a prefix of
+// that name, so it stripped, leaving a misleading
+// `_old/reference-implementations/agt` behind -- not a disclosure of this
+// tree's own location, since it's a different directory entirely, but a
+// diagnostic that then reads as if it were one. A message naming the sibling
+// is left alone, in full.
+//
+// The group captures the repository-relative remainder, so the replacer in
+// toRepoRelativeMessage can change its backslashes to slashes. The group stops
+// before the next copy of the root, because a list such as `<root>/a:<root>/b`
+// is one token, and the `g` flag must still find the second copy.
+const REPO_ROOT_SOURCE = REPO_ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const REPO_ROOT_PATTERN = new RegExp(`${REPO_ROOT_SOURCE}(?:[/\\\\]((?:(?!${REPO_ROOT_SOURCE})[^'"\\s])*)|$)`, "g");
 
 /**
  * Both catches in this module -- the outer net in handleAcsRequest and the
@@ -192,7 +196,7 @@ const REPO_ROOT_PATTERN = new RegExp(`${REPO_ROOT.replace(/[.*+?^${}()|[\]\\]/g,
 export function toRepoRelativeMessage(error: unknown): string {
   try {
     const message = String(error instanceof Error ? error.message : error);
-    return message.replace(REPO_ROOT_PATTERN, "");
+    return message.replace(REPO_ROOT_PATTERN, (_match, rel?: string) => (rel ? rel.replace(/\\/g, "/") : ""));
   } catch {
     return "<unprintable error>";
   }

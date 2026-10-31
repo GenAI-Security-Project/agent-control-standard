@@ -959,6 +959,13 @@ describe("startGuardian POST /acs -- the outer net around dispatch", () => {
 });
 
 describe("toRepoRelativeMessage", () => {
+  it("strips the root from every path in one token, and writes the remainder with slashes", () => {
+    const root = fileURLToPath(new URL("../../../../../", import.meta.url)).replace(/[/\\]+$/, "");
+    expect(toRepoRelativeMessage(`search path ${root}/a:${root}/b`)).toBe("search path a:b");
+    expect(toRepoRelativeMessage(`tried ${root}/a,${root}/b;${root}/c`)).toBe("tried a,b;c");
+    expect(toRepoRelativeMessage(`scandir '${root}\\specification\\v0.1.0\\'`)).toBe("scandir 'specification/v0.1.0/'");
+  });
+
   // `instanceof Error` says nothing about what `.message` was reassigned to
   // after construction, so this function must not assume it is a string.
   // Exercised directly (rather than only through

@@ -76,6 +76,7 @@ export function publishOpaPath(): string {
   // the loud failure this file wants: an explicit hint that names nothing
   // stops here, before any setenv, and never falls back to another opa.
   const resolved = ensureOpaResolvable();
+  if (process.platform === "win32") process.env[OPA_PATH_ENV] = resolved;
 
   const libc = openLibc();
   if (libc === undefined) {
