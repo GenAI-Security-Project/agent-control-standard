@@ -1,6 +1,6 @@
 """Tests for the nightly health report.
 
-The report is the weekly call's triage agenda, so these pin both its content and the
+The report lists what needs attention, so these pin both its content and the
 contract the roadmap monitor parses: the status line, the marker, and that no fetched
 issue text or contributor login ever appears in it.
 """
@@ -322,7 +322,7 @@ def test_migrate_dry_run_prints_each_current_milestone(monkeypatch, tmp_path, ca
 
 
 def test_switches_heading_says_every_value_is_listed():
-    # The section lists every switch so the weekly call sees rendering turned off, and only
+    # The section lists every switch so a lead sees rendering turned off, and only
     # flags odd values. The heading must not claim it lists odd values alone.
     import roadmap_sync
     note = dict((key, note) for key, _title, note in roadmap_sync.SECTION_TITLES)["switches"]

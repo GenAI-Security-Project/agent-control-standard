@@ -73,6 +73,8 @@ request that sits untriaged for a long time may be closed with an invitation to 
 once its issue is accepted. Start from an issue labeled `help wanted` if you want work
 that is already accepted.
 
+We try to reply to new issues within about a week.
+
 [Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who applies
 `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue form can apply them,
 which is what makes the rule hold rather than depend on everyone remembering it.
