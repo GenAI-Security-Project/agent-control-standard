@@ -78,7 +78,7 @@ Existing efforts solve one slice each. Vendor governance tools come with each ve
 
 ACS is an OWASP project. It is a vendor-neutral community effort: workstream leads come from multiple organizations, no single company owns or steers the standard, and every pull request goes through community review.
 
-Work is split across workstreams, each owning a slice of the standard and running its own review. **[GOVERNANCE.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md) is the authoritative roster**, naming the project leads and the leads for each workstream. It is kept in sync with repository write access and `CODEOWNERS`, which a table copied into this page would not be. Read it there rather than here.
+Work is split across workstreams, each owning a slice of the standard and running its own review. **[GOVERNANCE.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md) is the authoritative roster**, naming the project leads and the leads for each workstream. Leads with write access are also listed in `CODEOWNERS`. Read the roster in GOVERNANCE.md rather than here.
 
 Contribution guidance is in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md).
 
