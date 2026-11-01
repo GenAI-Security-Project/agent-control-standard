@@ -494,21 +494,24 @@ class Startup(_SessionTest):
 
     def test_concurrent_hooks_without_a_startup_lock_are_refused_before_any_handshake(self) -> None:
         Path(f"{self._record('start-unlocked')}.lock").mkdir(parents=True)
+        config = Config.from_env({"ACS_GUARDIAN_URL": URL})
         starts: list = []
         results: list = []
         barrier = threading.Barrier(2)
 
         def hook() -> None:
             barrier.wait(timeout=5)
-            results.append(self._open(session_id="start-unlocked", start=starts.append))
-        threads = [threading.Thread(target=hook) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
-        self.assertEqual(sorted((d.cause, calls) for d, calls in results),
-                         [("session_startup_lock_unavailable", 0)] * 2)
-        self.assertEqual(starts, [])
+            results.append(open_session(config=config, session_id="start-unlocked", agent_id="test", platform="test",
+                                        methods_implemented=["steps/toolCallRequest"], start=starts.append))
+        # One patch for both threads, so neither thread restores the other's.
+        with mock.patch.object(_exchange, "_open", side_effect=_answer(lambda h: _result(h, HELLO))) as network:
+            threads = [threading.Thread(target=hook) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        self.assertEqual([d.cause for d in results], ["session_startup_lock_unavailable"] * 2)
+        self.assertEqual((network.call_count, starts), (0, []))
         self.assertEqual([c.args[0] for c in self.audit.call_args_list], ["session_record_unwritable"] * 2)
 
 
