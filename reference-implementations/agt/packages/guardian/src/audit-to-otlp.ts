@@ -39,17 +39,20 @@
  * it does not append into the audit log, the Guardian's trace file, or its
  * own earlier run.
  *
- * It also checks the log's order and exits non-zero when it finds a seq gap,
- * a duplicate seq, a recorded_at timestamp going backwards, or a line with no
- * usable seq. The output file is still complete for the lines that remain. A
- * gap means a line is missing; duplicates or timestamps going backwards can
- * come from hooks that ran at the same time; deleting the last lines cannot
- * be detected, because nothing comes after them to compare.
+ * It also checks the log and exits non-zero when it finds a seq gap, a
+ * duplicate seq, a recorded_at timestamp going backwards, a line with no usable
+ * seq, which includes a line that does not parse, or an entry with no usable
+ * recorded_at, which is timed at now. The output file is still complete for
+ * the lines that remain. A gap means a line is missing. Duplicates or
+ * timestamps going backwards can come from hooks that ran at the same time.
+ * Deleting the last lines cannot be detected, because nothing comes after them
+ * to compare. seq carries no signature, so this is a check for lost writes, not
+ * for tampering: anyone who can edit the log can renumber it and pass.
  */
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { SpanStatusCode, type Attributes } from "@opentelemetry/api";
+import { SpanStatusCode } from "@opentelemetry/api";
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
@@ -62,16 +65,23 @@ import {
 import {
   asClampedErrorCode,
   asObject,
+  correlationAttributes,
   decisionFailureAttributes,
   FAILURE_STATUS,
-  GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
+  printableId,
   REPLAY_DETECTED_CODE,
   type FailureClass,
   type JsonObject,
 } from "./otel-mapping.ts";
 import { SPAN_LIMITS } from "./otel-trace-exporter.ts";
 import { createFileSpanExporter } from "./otlp-file-exporter.ts";
+
+/** A lookup table with no prototype. `failure.kind` comes from a log file, so
+ * a kind like `toString` has to miss rather than find Object.prototype's. */
+function withoutPrototype<Value>(rows: Record<string, Value>): Readonly<Record<string, Value>> {
+  return Object.assign(Object.create(null) as Record<string, Value>, rows);
+}
 
 /**
  * The host's `failure.kind` (packages/host-adapter/src/failure-kinds.ts)
@@ -87,18 +97,16 @@ import { createFileSpanExporter } from "./otlp-file-exporter.ts";
  * `unknown`, and any kind this table does not know, is `other`, and a rising
  * `other` count is the signal the list needs a row.
  */
-export const FAILURE_CLASS_BY_KIND: Readonly<Record<string, FailureClass>> = {
+export const FAILURE_CLASS_BY_KIND = withoutPrototype<FailureClass>({
   timeout: "timeout",
   transport: "unreachable",
   error_without_decision: "guardian_error",
   refused: "guardian_error",
   host_configuration: "observed_agent_error",
-};
+});
 
 export function failureClassOf(kind: unknown): FailureClass {
-  return typeof kind === "string" && Object.hasOwn(FAILURE_CLASS_BY_KIND, kind)
-    ? FAILURE_CLASS_BY_KIND[kind]!
-    : "other";
+  return (typeof kind === "string" ? FAILURE_CLASS_BY_KIND[kind] : undefined) ?? "other";
 }
 
 /**
@@ -109,20 +117,22 @@ export function failureClassOf(kind: unknown): FailureClass {
  * since the class folds some kinds together. A kind this table does not
  * know gets the generic sentence; the kind string itself is never copied.
  */
-export const FAILURE_DETAIL_BY_KIND: Readonly<Record<string, string>> = {
-  timeout: "No decision arrived before the host's timeout.",
-  transport: "The host could not reach the Guardian.",
-  error_without_decision: GUARDIAN_ERROR_STATUS,
+export const FAILURE_DETAIL_BY_KIND = withoutPrototype<string>({
+  timeout: FAILURE_STATUS.timeout,
+  transport: FAILURE_STATUS.unreachable,
+  error_without_decision: FAILURE_STATUS.guardian_error,
   refused: "The Guardian refused the request, and this host blocked the step.",
-  host_configuration: "The host could not build a request for this hook.",
+  host_configuration: FAILURE_STATUS.observed_agent_error,
   decision_unrenderable: "A decision arrived, and this host could not express it in its hook output.",
-};
+});
 const GENERIC_DETAIL = "The host recorded a failure this converter does not classify.";
 
 /** The JSON-RPC code, parsed out of the two message shapes the host writes
- * (packages/host-adapter/src/failure-posture.ts). Only the integer is
- * taken; nothing else in the message is copied. */
-const ERROR_CODE_IN_MESSAGE = /^guardian (?:refused the envelope with|returned) error (-?\d+):/;
+ * (packages/host-adapter/src/failure-posture.ts). The host writes
+ * `String(code)`, so a code the exporter would keep can read `-1e+21`,
+ * `-Infinity` or `-32005.5`. Only the number is taken, and nothing else in the
+ * message is copied. */
+const ERROR_CODE_IN_MESSAGE = /^guardian (?:refused the envelope with|returned) error (-?(?:Infinity|\d+(?:\.\d+)?(?:e[+-]\d+)?)):/;
 
 /**
  * The host adapter's `toSessionUuid` (packages/host-adapter/src/build-envelope.ts),
@@ -164,12 +174,13 @@ export type ConversionSummary = {
   skippedUngoverned: number;
   /** Lines that were not JSON, not an audit entry, or had no posture. */
   skippedUnreadable: number;
-  /** Counts of seq gaps, duplicate seq values, recorded_at going backwards, and lines with no usable seq. */
+  /** Counts of seq gaps, duplicate seq values, recorded_at going backwards, lines with no usable seq, and entries with no usable recorded_at. */
   sequence?: {
     gaps: number;
     duplicates: number;
     backwards: number;
     unnumbered: number;
+    untimed: number;
   };
 };
 
@@ -177,13 +188,18 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** `recorded_at` as a Date, or undefined for a value Date cannot read, in
- * which case the span is timed at now rather than at a nonsense instant. */
+/** The last millisecond OTLP's unsigned 64-bit nanosecond field can hold. */
+const MAX_OTLP_INSTANT_MS = 18_446_744_073_709;
+
+/** `recorded_at` as a Date, or undefined for a value Date cannot read or OTLP
+ * cannot carry, in which case the span is timed at now rather than at a
+ * nonsense instant and the entry counts as untimed. A negative or huge instant
+ * would write a startTimeUnixNano outside the field's range. */
 function readInstant(value: unknown): Date | undefined {
   const text = readString(value);
   if (text === undefined) return undefined;
-  const instant = new Date(text);
-  return Number.isNaN(instant.getTime()) ? undefined : instant;
+  const ms = new Date(text).getTime();
+  return ms >= 0 && ms <= MAX_OTLP_INSTANT_MS ? new Date(ms) : undefined;
 }
 
 /** Counts the spans the wrapped exporter reports written, so the summary
@@ -255,7 +271,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     skippedUnreadable: 0,
   };
 
-  const sequence = { gaps: 0, duplicates: 0, backwards: 0, unnumbered: 0 };
+  const sequence = { gaps: 0, duplicates: 0, backwards: 0, unnumbered: 0, untimed: 0 };
   const seenSeq = new Set<number>();
   let highestSeq = 0;
   let lineCount = 0;
@@ -272,11 +288,18 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       entry = undefined;
     }
     if (entry === undefined) {
+      // It still advances lineCount, because the host counts it too, so it
+      // would hide the gap of the line it stands in for. Counting it here is
+      // what keeps "replace a line with junk" from exiting 0. A half-written
+      // line is a lost entry as well, so that case exits non-zero too.
       summary.skippedUnreadable += 1;
+      sequence.unnumbered += 1;
       continue;
     }
     const seq = entry.seq;
-    if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 1) {
+    // Safe integers only: past that, one huge seq raises highestSeq above every
+    // later value and no later gap is counted.
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) {
       sequence.unnumbered += 1;
     } else {
       if (seenSeq.has(seq)) {
@@ -294,6 +317,10 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
         sequence.backwards += 1;
       }
       lastInstantMs = ms;
+    } else {
+      // The host always writes one. Without it the span lands at now, outside
+      // any window a reader would search, so it cannot pass quietly.
+      sequence.untimed += 1;
     }
     const outcome = readString(entry.outcome);
     if (outcome === "ungoverned") {
@@ -310,9 +337,10 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     }
     const failure = asObject(entry.failure) ?? {};
     const kind = readString(failure.kind);
+    const detail = kind === undefined ? undefined : FAILURE_DETAIL_BY_KIND[kind];
     const method = readString(entry.method);
     if (method === undefined) {
-      const key = kind !== undefined && Object.hasOwn(FAILURE_DETAIL_BY_KIND, kind) ? kind : "other";
+      const key = kind !== undefined && detail !== undefined ? kind : "other";
       summary.skippedNoMethod[key] = (summary.skippedNoMethod[key] ?? 0) + 1;
       continue;
     }
@@ -328,40 +356,35 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       continue;
     }
 
-    const instant = entryInstant;
-    const detail =
-      kind !== undefined && Object.hasOwn(FAILURE_DETAIL_BY_KIND, kind)
-        ? FAILURE_DETAIL_BY_KIND[kind]!
-        : GENERIC_DETAIL;
-    const attributes: Attributes = {};
     const sessionId = readString(entry.session_id);
-    if (sessionId !== undefined && mapping.stepSpanAttributes.includes("acs.session.id")) {
-      attributes["acs.session.id"] = sessionUuid(sessionId);
-    }
     // The entry's request_id is the id the Guardian's span for the same
     // request carries. Entries written before that field existed have only
     // rpc_id, which equalled params.request_id whenever the host did not
     // derive the request id from its own call id.
     const requestId = readString(entry.request_id) ?? readString(entry.rpc_id);
-    if (requestId !== undefined && mapping.stepSpanAttributes.includes("acs.request_id")) {
-      attributes["acs.request_id"] = requestId;
-    }
+    const attributes = correlationAttributes(
+      {
+        sessionId: sessionId === undefined ? undefined : sessionUuid(sessionId),
+        requestId: requestId === undefined ? undefined : printableId(requestId),
+      },
+      mapping.stepSpanAttributes,
+    );
     // The entry is one instant, so the span is too: it opens and closes at
     // recorded_at. The host, not the Guardian, is the reporter.
-    const span = tracer.startSpan(spanName, { attributes, root: true, startTime: instant });
+    const span = tracer.startSpan(spanName, { attributes, root: true, startTime: entryInstant });
     span.addEvent(
       mapping.failureEventName,
       decisionFailureAttributes({
         class: failureClassOf(kind),
         posture: posture === "deny" ? "fail_closed" : "fail_open",
         reportedBy: "observed_agent",
-        detail,
+        detail: detail ?? GENERIC_DETAIL,
         errorCode,
       }),
-      instant,
+      entryInstant,
     );
     span.setStatus({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS[failureClassOf(kind)] });
-    span.end(instant);
+    span.end(entryInstant);
     summary.converted += 1;
   }
 
@@ -369,11 +392,38 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
   // here; shutdown then releases the processor.
   await provider.forceFlush();
   summary.written = output.written();
-  if (sequence.gaps > 0 || sequence.duplicates > 0 || sequence.backwards > 0 || sequence.unnumbered > 0) {
+  if (Object.values(sequence).some((count) => count > 0)) {
     summary.sequence = sequence;
   }
   await provider.shutdown();
   return summary;
+}
+
+/** Prints a run's summary and returns its exit status. Apart from the main
+ * block because a failed write cannot be produced on demand from the command
+ * line, and this is where a lost span becomes a non-zero exit. */
+export function reportConversion(summary: ConversionSummary, otelPath: string): number {
+  const noMethod = Object.entries(summary.skippedNoMethod)
+    .map(([kind, count]) => `${count} ${kind}`)
+    .join(", ");
+  console.log(
+    `wrote ${summary.written} of ${summary.converted} span(s) to ${otelPath}; skipped ${summary.skippedUnmapped} with no mapping entry, ` +
+      `${noMethod === "" ? 0 : noMethod} with no method, ${summary.skippedReplay} replay, ` +
+      `${summary.skippedUngoverned} ungoverned, ${summary.skippedUnreadable} unreadable`,
+  );
+  if (summary.sequence !== undefined) {
+    const s = summary.sequence;
+    console.error(
+      `audit log order: ${s.gaps} gap(s), ${s.duplicates} duplicate(s), ${s.backwards} recorded_at going backwards, ${s.unnumbered} line(s) with no usable seq`,
+    );
+    if (s.untimed > 0) {
+      console.error(`audit log time: ${s.untimed} line(s) with no usable recorded_at, timed at now`);
+    }
+  }
+  if (summary.written !== summary.converted) {
+    console.error(`only ${summary.written} of ${summary.converted} span(s) reached ${otelPath}`);
+  }
+  return summary.sequence !== undefined || summary.written !== summary.converted ? 1 : 0;
 }
 
 if (import.meta.main) {
@@ -389,24 +439,8 @@ if (import.meta.main) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-  const noMethod = Object.entries(summary.skippedNoMethod)
-    .map(([kind, count]) => `${count} ${kind}`)
-    .join(", ");
-  console.log(
-    `wrote ${summary.written} of ${summary.converted} span(s) to ${otelPath}; skipped ${summary.skippedUnmapped} with no mapping entry, ` +
-      `${noMethod === "" ? 0 : noMethod} with no method, ${summary.skippedReplay} replay, ` +
-      `${summary.skippedUngoverned} ungoverned, ${summary.skippedUnreadable} unreadable`,
-  );
-  if (summary.sequence !== undefined) {
-    const s = summary.sequence;
-    console.error(
-      `audit log order: ${s.gaps} gap(s), ${s.duplicates} duplicate(s), ${s.backwards} recorded_at going backwards, ${s.unnumbered} line(s) with no usable seq`,
-    );
-  }
-  if (summary.written !== summary.converted) {
-    console.error(`only ${summary.written} of ${summary.converted} span(s) reached ${otelPath}`);
-  }
-  if (summary.sequence !== undefined || summary.written !== summary.converted) {
-    process.exit(1);
+  const status = reportConversion(summary, otelPath);
+  if (status !== 0) {
+    process.exit(status);
   }
 }

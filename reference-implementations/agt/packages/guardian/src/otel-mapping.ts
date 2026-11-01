@@ -59,6 +59,18 @@ export const REJECTED_REASON = "guardian.rejected.reason";
 export const REJECTED_ERROR_CODE = "guardian.rejected.error_code";
 export const REJECTED_STATUS = "The Guardian could not vouch for this request, so it carries no ACS ids or events.";
 
+/** The longest id an unverified source puts on a span. A real one is a UUID. */
+const UNVERIFIED_ID_LIMIT = 128;
+
+/** An id nothing has verified, safe to print: bounded, with control, format
+ * and line-separator characters written as `\\uXXXX`, because a reader may
+ * decode the attribute into a terminal or a line-based log. A UUID is unchanged. */
+export function printableId(value: string): string {
+  return value
+    .slice(0, UNVERIFIED_ID_LIMIT)
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 /** Why a request was rejected before it was trusted. `guardian_fault` is the
  * Guardian failing to check the request at all (a missing schema directory,
  * say): its ids are just as unverified, so it is recorded the same way. */
@@ -169,9 +181,8 @@ type StepSpanEntry = {
  */
 export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
 
-/** otel-mapping.json is a JSON Schema whose data lives inside `default`
- * keys, the same three places `packages/conformance/src/trace-pillar.ts`
- * reads. This type names only those. */
+/** otel-mapping.json is a JSON Schema whose data lives inside `default` and
+ * `const` keys. This type names only the ones the loader below reads. */
 type OtelMappingSchema = {
   properties: {
     step_to_span: { default: Record<string, StepSpanEntry> };
@@ -190,8 +201,6 @@ type OtelMappingSchema = {
     decision_failure_event: {
       properties: {
         event_name: { const: string };
-        required_attributes: { default: string[] };
-        conditional_attributes: { default: string[] };
       };
     };
     provenance_attributes: {
@@ -223,12 +232,32 @@ export function loadOtelMapping(path: string = OTEL_MAPPING_PATH): OtelMapping {
   const decision = schema.properties.decision_event.properties;
   const failure = schema.properties.decision_failure_event.properties;
   const provenance = schema.properties.provenance_attributes.properties;
+  const stepSpanAttributes = stepSpan.required_attributes.default;
+  const decisionEventName = decision.event_name.const;
+  const failureEventName = failure.event_name.const;
+  // Checked here because these are otherwise first read per step. A bad value
+  // would load, then cost the exporter on its first step or the converter
+  // halfway through a run, after it created its output. One name for both
+  // events would let a failure read as a verdict. A listed name with no source
+  // would drop the join ids from every span and report nothing.
+  if (typeof decisionEventName !== "string" || decisionEventName === "") {
+    throw new Error(`${path}: decision_event.event_name has no const string`);
+  }
+  if (typeof failureEventName !== "string" || failureEventName === "") {
+    throw new Error(`${path}: decision_failure_event.event_name has no const string`);
+  }
+  if (decisionEventName === failureEventName) {
+    throw new Error(`${path}: decision_event and decision_failure_event share one event_name`);
+  }
+  if (!Array.isArray(stepSpanAttributes) || stepSpanAttributes.some((name) => !Object.hasOwn(CORRELATION_ATTRIBUTE_SOURCES, name))) {
+    throw new Error(`${path}: step_span_attributes must list only ${Object.keys(CORRELATION_ATTRIBUTE_SOURCES).join(" and ")}`);
+  }
   return {
     stepToSpan: schema.properties.step_to_span.default,
-    stepSpanAttributes: stepSpan.required_attributes.default,
-    decisionEventName: decision.event_name.const,
+    stepSpanAttributes,
+    decisionEventName,
     decisionAttributes: [...decision.required_attributes.default, ...decision.conditional_attributes.default],
-    failureEventName: failure.event_name.const,
+    failureEventName,
     provenanceAttributes: [...provenance.required.default, ...provenance.optional.default],
   };
 }
@@ -243,7 +272,7 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-export function asNumber(value: unknown): number | undefined {
+function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
@@ -315,10 +344,36 @@ export const STEP_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<RequestParts
   "acs.request_id_ref": (r) => asString(r.payload.request_id_ref),
 };
 
-export const CORRELATION_ATTRIBUTE_SOURCES: Record<string, Source<RequestParts>> = {
-  "acs.session.id": (r) => asString(r.metadata.session_id),
-  "acs.request_id": (r) => asString(r.params.request_id),
+/** The ids that join a step across the Guardian's spans and the converter's.
+ * Each writer reads them from its own input: the envelope, or the audit entry. */
+export type CorrelationIds = { sessionId: string | undefined; requestId: string | undefined };
+
+export function requestCorrelationIds(parts: RequestParts): CorrelationIds {
+  return { sessionId: asString(parts.metadata.session_id), requestId: asString(parts.params.request_id) };
+}
+
+/**
+ * Attribute name -> which id fills it, for every name `step_span_attributes`
+ * can list. Both writers read this through `correlationAttributes`, so the
+ * mapping alone decides which ids a span carries. loadOtelMapping refuses a listed name with
+ * no row here, the check `packages/conformance/src/trace-pillar.ts` makes on
+ * its own table, so a renamed attribute stops the run instead of dropping the
+ * join ids.
+ */
+export const CORRELATION_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<CorrelationIds>>> = {
+  "acs.session.id": (ids) => ids.sessionId,
+  "acs.request_id": (ids) => ids.requestId,
 };
+
+/** The join attributes for one span: the names the mapping lists, in this
+ * table's order, so the order of the mapping's list cannot reorder every span
+ * and every example copied from one. */
+export function correlationAttributes(ids: CorrelationIds, listed: readonly string[]): Attributes {
+  const attributes: Attributes = {};
+  const names = Object.keys(CORRELATION_ATTRIBUTE_SOURCES).filter((name) => listed.includes(name));
+  collect(attributes, names, CORRELATION_ATTRIBUTE_SOURCES, ids);
+  return attributes;
+}
 
 /**
  * The `acs.decision` event's attributes, for every name the mapping's
@@ -411,7 +466,7 @@ export function provenanceColumn(objects: JsonObject[], read: (provenance: JsonO
 
 export function collect<Parts>(into: Attributes, names: Iterable<string>, sources: Record<string, Source<Parts>>, parts: Parts): void {
   for (const name of names) {
-    const value = sources[name]?.(parts);
+    const value = Object.hasOwn(sources, name) ? sources[name]?.(parts) : undefined;
     if (value !== undefined) {
       into[name] = value;
     }

@@ -56,26 +56,27 @@ import {
   asClampedErrorCode,
   asObject,
   collect,
-  CORRELATION_ATTRIBUTE_SOURCES,
+  correlationAttributes,
   DECISION_ATTRIBUTE_SOURCES,
   decisionFailureAttributes,
-  FAILURE_CLASSES,
   FAILURE_STATUS,
-  GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
   PROVENANCE_ATTRIBUTE_SOURCES,
   provenanceColumn,
   provenanceObjects,
   PRE_TRUST_REJECTION_CODES,
+  printableId,
   REJECTED_CLAIMED_REQUEST_ID,
   REJECTED_CLAIMED_SESSION_ID,
   REJECTED_ERROR_CODE,
   REJECTED_REASON,
   REJECTED_SPAN_NAME,
   REJECTED_STATUS,
+  requestCorrelationIds,
   requestParts,
   resultParts,
   STEP_ATTRIBUTE_SOURCES,
+  type CorrelationIds,
   type DecisionFailure,
   type FailureClass,
   type OtelMapping,
@@ -83,8 +84,8 @@ import {
 } from "./otel-mapping.ts";
 import { createFileSpanExporter } from "./otlp-file-exporter.ts";
 
-// Every name this module exported before the split, so existing importers
-// keep working.
+// Re-exported so importers of the exporter need not know which names moved to
+// otel-mapping.ts.
 export {
   asClampedErrorCode,
   DECISION_ATTRIBUTE_SOURCES,
@@ -161,9 +162,9 @@ export type StepSpan = {
   readonly startedAt: number;
   readonly payloadBytes?: number;
   /** The session and request id the request claimed. They go onto the span
-   * as acs.session.id and acs.request_id only when it ends as a trusted step
-   * (see `finish`), and under the rejected names otherwise. */
-  readonly claimed: Attributes;
+   * under the names `step_span_attributes` lists only when it ends as a trusted
+   * step (see `finish`), and under the rejected names otherwise. */
+  readonly claimed: CorrelationIds;
   /** Every other step attribute, read from the request and held back the
    * same way, so a span that ends as a rejected request carries none of
    * them (`acs.request_id_ref` on a forged result names a genuine call). */
@@ -327,22 +328,18 @@ function isolated({ label, exporter }: Output, report: (label: string, error: un
 
 /** A rejected request's attributes: the ids it claimed, under names a reader
  * cannot mistake for the ACS pair, and why it was rejected. */
-function rejectedAttributes(claimed: Attributes, reason: RejectionReason, errorCode?: number): Attributes {
+function rejectedAttributes(claimed: CorrelationIds, reason: RejectionReason, errorCode?: number): Attributes {
   const attributes: Attributes = { [REJECTED_REASON]: reason };
-  if (claimed["acs.session.id"] !== undefined) {
-    attributes[REJECTED_CLAIMED_SESSION_ID] = claimed["acs.session.id"];
+  if (claimed.sessionId !== undefined) {
+    attributes[REJECTED_CLAIMED_SESSION_ID] = printableId(claimed.sessionId);
   }
-  if (claimed["acs.request_id"] !== undefined) {
-    attributes[REJECTED_CLAIMED_REQUEST_ID] = claimed["acs.request_id"];
+  if (claimed.requestId !== undefined) {
+    attributes[REJECTED_CLAIMED_REQUEST_ID] = printableId(claimed.requestId);
   }
   if (errorCode !== undefined) {
     attributes[REJECTED_ERROR_CODE] = errorCode;
   }
   return attributes;
-}
-
-function stepIds(stepSpan: StepSpan, stepAttributes: readonly string[]): Attributes {
-  return Object.fromEntries(Object.entries(stepSpan.claimed).filter(([name]) => stepAttributes.includes(name)));
 }
 
 export function createOtelTraceExporter({
@@ -478,8 +475,7 @@ export function createOtelTraceExporter({
     // Held back, not set: the pair, and every other step attribute, goes on
     // only when the span ends as a trusted step, because a check that runs
     // after this point can still reject the request.
-    const claimed: Attributes = {};
-    collect(claimed, Object.keys(CORRELATION_ATTRIBUTE_SOURCES), CORRELATION_ATTRIBUTE_SOURCES, parts);
+    const claimed = requestCorrelationIds(parts);
     const startedAt = step.receivedAt ?? performance.now();
     // The span's own start is the arrival too, so its duration agrees with
     // the elapsed time the failure event reports.
@@ -540,13 +536,15 @@ export function createOtelTraceExporter({
   /** Ends a span as a rejected request: renamed if it opened as a step, the
    * claimed ids under the rejected names, and no ACS pair, step attribute or
    * decision event. A Guardian fault is still a decision failure for the
-   * host, which got an error, so it keeps that event, on a span with no pair. */
+   * host, which got an error, so it keeps that event, on a span with no pair,
+   * and takes the status of that failure: REJECTED_STATUS says no event exists. */
   function finishRejected(stepSpan: StepSpan, reason: RejectionReason, errorCode?: number): void {
     const { span } = stepSpan;
     span.updateName(REJECTED_SPAN_NAME);
     span.setAttributes(rejectedAttributes(stepSpan.claimed, reason, errorCode));
-    span.setStatus({ code: SpanStatusCode.ERROR, message: REJECTED_STATUS });
-    if (reason === "guardian_fault") {
+    const fault = reason === "guardian_fault";
+    span.setStatus({ code: SpanStatusCode.ERROR, message: fault ? FAILURE_STATUS.guardian_error : REJECTED_STATUS });
+    if (fault) {
       span.addEvent(
         mapping!.failureEventName,
         failureAttributes(stepSpan, "guardian_error", { errorCode }),
@@ -568,7 +566,7 @@ export function createOtelTraceExporter({
       finishRejected(stepSpan, reason, errorCode);
       return;
     }
-    span.setAttributes({ ...stepIds(stepSpan, mapping.stepSpanAttributes), ...stepSpan.held });
+    span.setAttributes({ ...correlationAttributes(stepSpan.claimed, mapping.stepSpanAttributes), ...stepSpan.held });
     const decision = resultParts(envelope);
     if (decision === undefined) {
       // A JSON-RPC error: the step was answered but not decided. The first
@@ -589,6 +587,7 @@ export function createOtelTraceExporter({
       // probably never took effect, and a reader has to be told.
       const timeoutMs = timeoutConfig?.per_method_ms?.[stepSpan.method] ?? timeoutConfig?.default_ms;
       if (timeoutMs !== undefined && performance.now() - stepSpan.startedAt > timeoutMs) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: FAILURE_STATUS.timeout });
         span.addEvent(mapping.failureEventName, failureAttributes(stepSpan, "timeout", { timeoutMs }));
       }
     }
@@ -653,7 +652,7 @@ export function createOtelTraceExporter({
               finishRejected(stepSpan, stepSpan.rejected);
               continue;
             }
-            stepSpan.span.setAttributes({ ...stepIds(stepSpan, mapping!.stepSpanAttributes), ...stepSpan.held });
+            stepSpan.span.setAttributes({ ...correlationAttributes(stepSpan.claimed, mapping!.stepSpanAttributes), ...stepSpan.held });
             stepSpan.span.addEvent(
               mapping!.failureEventName,
               failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
