@@ -218,7 +218,7 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
         started, release = threading.Event(), threading.Event()
         sent: list[tuple[str, str]] = []
 
-        def emit(method: str, payload: dict) -> None:
+        def emit(method: str, payload: dict, run: str | None = None) -> None:
             if method == "steps/sessionStart":
                 started.set()
                 release.wait(5)
@@ -262,7 +262,7 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
         self.addCleanup(nat_adapter._OPEN_SENDERS.discard, mw._lifecycle)
         release, sent = threading.Event(), []
 
-        def emit(method: str, payload: dict) -> None:
+        def emit(method: str, payload: dict, run: str | None = None) -> None:
             if method == "first":
                 release.wait(5)
             sent.append(method)

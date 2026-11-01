@@ -379,6 +379,10 @@ def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> None
 
 # ----- Middleware class -----
 
+# Runs whose decision failures are kept until their sessionEnd; a run that never ends ages out past this many.
+_MAX_COUNTED_RUNS = 256
+
+
 class _LifecycleSender:
     """Sends lifecycle hooks on one thread, in the order they are accepted.
 
@@ -386,7 +390,7 @@ class _LifecycleSender:
     hooks that arrive meanwhile, and then accepts no more.
     """
 
-    def __init__(self, send: Callable[[str, dict], None]) -> None:
+    def __init__(self, send: Callable[[str, dict, str | None], None]) -> None:
         self._send = send
         self._pending: collections.deque = collections.deque()
         self._changed = threading.Condition()
@@ -395,12 +399,12 @@ class _LifecycleSender:
         self._thread: threading.Thread | None = None
         _OPEN_SENDERS.add(self)
 
-    def submit(self, method: str, payload: dict) -> bool:
-        """Queue a hook behind the ones already accepted; False once closed."""
+    def submit(self, method: str, payload: dict, run: str | None = None) -> bool:
+        """Queue a hook of a run behind the ones already accepted; False once closed."""
         with self._changed:
             if self._closed:
                 return False
-            self._pending.append((method, payload))
+            self._pending.append((method, payload, run))
             self._wake()
             return True
 
@@ -496,8 +500,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         # would collide once GC recycles addresses.
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
-        # §6.4: decision failures per failure class, for sessionEnd's summary; calls and the lifecycle thread both count.
-        self._decision_failures: collections.Counter = collections.Counter()
+        # §6.4: decision failures per run and failure class; each run's sessionEnd reports its own run's.
+        # Calls and the lifecycle thread both count, and a run that ends without sessionEnd ages out.
+        self._decision_failures: collections.OrderedDict = collections.OrderedDict()
         self._decision_failures_lock = threading.Lock()
 
     def _ensure_handshake(self) -> Handshake:
@@ -589,42 +594,43 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         except AttributeError:
             return
 
+        run = self._current_run()
         if event_type == IntermediateStepType.WORKFLOW_START:
             # Workflow input becomes both sessionStart (boundary marker)
             # and userMessage (the input itself).
             self._queue_lifecycle_hook(
                 "steps/sessionStart",
-                payload={"platform_context": {"workflow_name": payload.name or ""}})
+                payload={"platform_context": {"workflow_name": payload.name or ""}}, run=run)
             input_text = _stringify_step_data(payload.data)
             if input_text:
                 self._queue_lifecycle_hook(
                     "steps/userMessage",
-                    payload={"content": [{"type": "text", "value": input_text}]})
+                    payload={"content": [{"type": "text", "value": input_text}]}, run=run)
         elif event_type == IntermediateStepType.WORKFLOW_END:
             # Workflow output becomes agentResponse; sessionEnd closes the boundary.
             output_text = _stringify_step_data(payload.data)
             if output_text:
                 self._queue_lifecycle_hook(
                     "steps/agentResponse",
-                    payload={"content": [{"type": "text", "value": output_text}]})
+                    payload={"content": [{"type": "text", "value": output_text}]}, run=run)
             self._queue_lifecycle_hook(
                 "steps/sessionEnd",
-                payload={"reason": "completed"})
+                payload={"reason": "completed"}, run=run)
 
-    def _queue_lifecycle_hook(self, method: str, payload: dict) -> None:
-        """Hand a lifecycle hook to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
-        if not self._lifecycle.submit(method, payload):
+    def _queue_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
+        """Hand a lifecycle hook of a run to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
+        if not self._lifecycle.submit(method, payload, run):
             audit_event("lifecycle_hook_not_sent", cause="middleware_closed", method=method,
                         session_id=self._session_id)
 
-    def _send_lifecycle_hook(self, method: str, payload: dict) -> None:
+    def _send_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         try:
-            self._emit_lifecycle_hook(method, payload)
+            self._emit_lifecycle_hook(method, payload, run)
         except Exception as e:  # noqa: BLE001
             audit_event("lifecycle_hook_failed", cause="adapter_exception", error=str(e),
                         method=method, session_id=self._session_id)
 
-    def _emit_lifecycle_hook(self, method: str, payload: dict) -> None:
+    def _emit_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         """Build, sign, and POST a lifecycle hook; errors are audited but
         never interrupt the workflow (enforcement lives in
         pre_invoke/post_invoke)."""
@@ -644,14 +650,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return
         if method == "steps/sessionEnd":
             # Built as it is sent, so it counts the failures of every hook sent before it.
-            payload = {**payload, "summary": {"decision_failures": self._failure_counts()}}
+            payload = {**payload, "summary": {"decision_failures": self._take_failure_counts(run)}}
         request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(),
                                    payload=payload)
         result = self._round_trip(request)
         if isinstance(result, Resolution):
             audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
                                                     "method": method, "session_id": self._session_id})
-            self._count_failure(result)
+            self._count_failure(result, run)
 
     def _correlation_request_id(self, context) -> str:
         """Return a request_id unique per invocation but stable across
@@ -863,22 +869,35 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return {"agent_id": self._agent_id, "session_id": self._session_id,
                 "platform": "nat", "adapter_version": ADAPTER_VERSION}
 
-    def _count_failure(self, resolution: Resolution) -> None:
-        """Count a step's own decision failure under its failure class (§6.4)."""
-        if resolution.decision_failure:
-            with self._decision_failures_lock:
-                self._decision_failures[resolution.fields.get("failure_class", "other")] += 1
+    @staticmethod
+    def _current_run() -> str | None:
+        """The NAT run the current call or workflow event belongs to; None outside a Runner."""
+        try:
+            return _NATContextState.get().workflow_run_id.get() if _NATContextState is not None else None
+        except Exception:  # noqa: BLE001
+            return None
 
-    def _failure_counts(self) -> dict[str, int]:
+    def _count_failure(self, resolution: Resolution, run: str | None = None) -> None:
+        """Count a step's own decision failure under its run and failure class (§6.4)."""
+        if not resolution.decision_failure:
+            return
         with self._decision_failures_lock:
-            return dict(self._decision_failures)
+            counts = self._decision_failures.setdefault(run, collections.Counter())
+            counts[resolution.fields.get("failure_class", "other")] += 1
+            while len(self._decision_failures) > _MAX_COUNTED_RUNS:
+                self._decision_failures.popitem(last=False)
+
+    def _take_failure_counts(self, run: str | None) -> dict[str, int]:
+        """The run's decision failures per failure class, removed now that its sessionEnd reports them."""
+        with self._decision_failures_lock:
+            return dict(self._decision_failures.pop(run, {}))
 
     def _settle_pre(self, context, resolution: Resolution, message: str = ""):
         """Settle a pre_invoke step without a usable decision: block unless the resolution proceeds, and record why."""
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": self._session_id,
                                               "method": "steps/toolCallRequest"})
-        self._count_failure(resolution)
+        self._count_failure(resolution, self._current_run())
         if resolution.proceed:
             return None
         return self._block(context, message or resolution.message or resolution.cause)
@@ -890,7 +909,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": self._session_id,
                                               "method": "steps/toolCallResult"})
-        self._count_failure(resolution)
+        self._count_failure(resolution, self._current_run())
         return None if resolution.proceed else context
 
     def _block(self, context, reason: str):

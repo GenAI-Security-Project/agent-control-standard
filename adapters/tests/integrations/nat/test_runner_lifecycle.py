@@ -68,6 +68,14 @@ class _Failing(_Entry):
         raise _RunFailed(message)
 
 
+class _TwoCalls(_Entry):
+    """A workflow entry function that makes two wrapped calls, message-1 then message-2."""
+
+    async def ainvoke(self, message: str, to_type=None) -> str:
+        await super().ainvoke(f"{message}-1", to_type)
+        return await super().ainvoke(f"{message}-2", to_type)
+
+
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
 class EveryRunReportsItsLifecycle(unittest.TestCase):
     def setUp(self) -> None:
@@ -117,11 +125,47 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         hello = self.guardian._default_handshake
         allow = self.guardian._default_allow
         self.guardian.handlers["handshake/hello"] = lambda req: {**hello(req), "timeout_config": {"default_ms": 300}}
-        self.guardian.handlers["steps/toolCallRequest"] = lambda req: (time.sleep(0.6), allow(req))[1]
-        self.assertEqual(self._runs("first"), ["first"], "under proceed the call runs after its decision times out")
-        payload = self.guardian.envelopes_for("steps/sessionEnd")[0]["params"]["payload"]
-        self.assertEqual(payload["summary"]["decision_failures"], {"timeout": 1})
-        self.assertEqual(validate_hook_payload(payload, "session-end.json"), [])
+        calls = iter([0.6, 0.0])
+        self.guardian.handlers["steps/toolCallRequest"] = lambda req: (time.sleep(next(calls)), allow(req))[1]
+        self.assertEqual(self._runs("first", "second"), ["first", "second"],
+                         "under proceed the call runs after its decision times out")
+        first, second = (end["params"]["payload"] for end in self.guardian.envelopes_for("steps/sessionEnd"))
+        self.assertEqual(first["summary"]["decision_failures"], {"timeout": 1})
+        self.assertEqual(second["summary"]["decision_failures"], {}, "each run's sessionEnd reports its own run's failures")
+        self.assertEqual(validate_hook_payload(first, "session-end.json"), [])
+
+    def test_overlapping_runs_each_report_their_own_failures(self) -> None:
+        self.guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+        self.guardian.start()
+        self.addCleanup(self.guardian.stop)
+        hello, allow = self.guardian._default_handshake, self.guardian._default_allow
+        # slow-1 outlives the negotiated 400 ms; slow-2 answers inside it and keeps the slow run going past the fast one.
+        delays = {"slow-1": 0.8, "slow-2": 0.3}
+
+        def call(req):
+            command = req["params"]["payload"]["arguments"]["command"]["value"]
+            time.sleep(delays.get(command, 0.0))
+            return allow(req)
+        self.guardian.handlers.update({"handshake/hello": lambda req: {**hello(req), "timeout_config": {"default_ms": 400}},
+                                       "steps/toolCallRequest": call})
+        executed: list[str] = []
+
+        async def run() -> None:
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=False, session_id=str(uuid.uuid4()))
+            async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
+                exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
+
+                async def one(message: str, delay: float) -> None:
+                    await asyncio.sleep(delay)
+                    manager = ExporterManager.from_exporters(exporters)
+                    async with Runner(message, _TwoCalls(middleware, executed), ContextState.get(), manager) as runner:
+                        await runner.result()
+                await asyncio.gather(one("slow", 0.0), one("fast", 0.5))
+                await middleware._lifecycle_sent()
+        asyncio.run(run())
+        fast, slow = (end["params"]["payload"]["summary"]["decision_failures"]
+                      for end in self.guardian.envelopes_for("steps/sessionEnd"))
+        self.assertEqual((fast, slow), ({}, {"timeout": 1}), "the fast run ends first, after the slow run's failure")
 
     def test_a_failed_run_reports_no_end(self) -> None:
         """NAT pushes WORKFLOW_END only once the workflow returns, so a failed run sends no agentResponse or sessionEnd."""
