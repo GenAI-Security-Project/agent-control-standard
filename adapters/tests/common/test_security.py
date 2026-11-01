@@ -32,7 +32,7 @@ from acs import core  # noqa: E402
 from acs.client import _exchange
 from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.client import _store as client_store  # noqa: E402
-from acs.guardian import example_guardian  # noqa: E402
+from acs.examples import destructive_bash  # noqa: E402
 from acs.testing.harness import launch_guardian  # noqa: E402
 
 
@@ -182,20 +182,12 @@ class CacheDirPermissions(unittest.TestCase):
     attacker can read or poison adapter state."""
 
     def setUp(self) -> None:
-        self.tmpdir = Path(tempfile.mkdtemp())
-        self._old = os.environ.get("ACS_SESSION_STATE_DIR")
-        os.environ["ACS_SESSION_STATE_DIR"] = str(self.tmpdir / "state")
-        # Re-evaluate module-level dir
-        import importlib
-        importlib.reload(client_store)
-
-    def tearDown(self) -> None:
         import shutil
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-        if self._old is None:
-            os.environ.pop("ACS_SESSION_STATE_DIR", None)
-        else:
-            os.environ["ACS_SESSION_STATE_DIR"] = self._old
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+        patcher = mock.patch.object(client_store, "_SESSION_STATE_DIR", self.tmpdir / "state")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_session_state_file_is_0600(self) -> None:
         client.save_session_state("test-session", {"x": 1})
@@ -226,21 +218,20 @@ class RegexInputSizeCap(unittest.TestCase):
         # The destructive matcher should refuse to scan and return a
         # sentinel that the caller treats as "do not allow without
         # external review", not a False that allows the command.
-        result = example_guardian.scan_destructive_bash_safely(large_cmd, max_len=8192)
+        result = destructive_bash.scan_destructive_bash_safely(large_cmd, max_len=8192)
         self.assertEqual(result, "input_too_large",
             "oversized command MUST be flagged, not scanned, not silently allowed")
 
     def test_small_destructive_command_still_caught(self) -> None:
         # Use the Guardian's actual pattern set
-        from acs.guardian import example_guardian
-        for pat in example_guardian.DESTRUCTIVE_BASH_PATTERNS:
+        for pat in destructive_bash.DESTRUCTIVE_BASH_PATTERNS:
             if pat.search("rm -rf /home/x"):
                 return
         self.fail("destructive pattern matching broken")
 
     def test_small_safe_command_returns_none(self) -> None:
         self.assertIsNone(
-            example_guardian.scan_destructive_bash_safely("ls -la", max_len=8192))
+            destructive_bash.scan_destructive_bash_safely("ls -la", max_len=8192))
 
 
 class Item13_DestructiveRmFlagVariants(unittest.TestCase):
@@ -253,20 +244,15 @@ class Item13_DestructiveRmFlagVariants(unittest.TestCase):
     word boundary. A trivial single-letter extension defeating the
     policy is the worst class of regex bug for a security control."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        from acs.guardian import example_guardian
-        cls.eg = example_guardian
-
     def _assert_caught(self, cmd: str) -> None:
-        match = self.eg._matches_destructive_bash(cmd)
+        match = destructive_bash.matches_destructive_bash(cmd)
         self.assertTrue(match,
             f"REGRESSION: destructive command not caught: {cmd!r}. "
             f"The Guardian's regex must match rm with recursive+force "
             f"flags regardless of additional harmless flags.")
 
     def _assert_allowed(self, cmd: str) -> None:
-        match = self.eg._matches_destructive_bash(cmd)
+        match = destructive_bash.matches_destructive_bash(cmd)
         self.assertFalse(match,
             f"FALSE POSITIVE: benign command flagged as destructive: {cmd!r}")
 

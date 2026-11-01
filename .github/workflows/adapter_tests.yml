@@ -91,6 +91,8 @@ jobs:
         run: uv sync --locked --python 3.12 --group test
       - name: Run the shared and Claude Code and Cursor suites
         run: uv run python run_conformance.py claude cursor
+      - name: Check that imports flow integrations, client, core
+        run: uv run lint-imports
 
   package:
     # Builds the sdist and a wheel from it, then installs the wheel outside the

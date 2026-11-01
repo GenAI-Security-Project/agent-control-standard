@@ -232,12 +232,15 @@ adapters/
 │   │   ├── hook.py                 # the installed hook command (Claude Code, Cursor)
 │   │   ├── adapter.py              # the hook, or the NAT middleware
 │   │   └── wire.py                 # writes the framework's own config
-│   ├── guardian/example_guardian.py
+│   ├── guardian/example_guardian.py  # the example Guardian: wire handling, replay, skew and the session chain
+│   ├── examples/destructive_bash.py  # the example Guardian's toy policy
 │   └── testing/                    # CaptureGuardian and the shared test harness
 ├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/
 ├── docs/<framework>/               # README, mapping.md, example config, example payloads
 └── scripts/check_wheel.py          # installs a built wheel outside the repo and checks it
 ```
+
+Imports flow `integrations → client → core`, and none of the three imports `guardian`, `examples` or `testing`; `uv run lint-imports` checks both rules in CI.
 
 Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`); NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point.
 
@@ -252,6 +255,6 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 5. Add a row to the status table above.
 6. Open a PR against `GenAI-Security-Project/agent-control-standard`.
 
-Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, build envelopes with `acs.core.request_envelope` and send them unsigned to `acs.client.round_trip`, which signs as the last step and returns either the decision or the `FailPosture.resolve` resolution to write in the host's shape, and keep the open turn with `acs.client.open_turn` / `current_turn` / `close_turn`.
+Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_REQUIRE_PROFILES`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, build envelopes with `acs.core.request_envelope` and send them unsigned to `acs.client.round_trip`, which signs as the last step and returns either the decision or the `FailPosture.resolve` resolution to write in the host's shape, and keep the open turn with `acs.client.open_turn` / `current_turn` / `close_turn`.
 
 The bar for "reference implementation" status is: round-trip tests pass against the example Guardian, documented configuration for users, and an explicit conformance posture statement matching the format in the Claude Code adapter's README.
