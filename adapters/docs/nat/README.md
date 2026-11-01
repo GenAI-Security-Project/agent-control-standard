@@ -82,7 +82,7 @@ acs-nat-wire \
 | top-level `middleware:` block | adds the `acs_guardian:` definition with your guardian_url, default_deny, timeout_s |
 | `workflow.middleware` | prepends `acs_guardian` (policy gate runs before content filters) |
 | every `function_groups.*.middleware` | prepends `acs_guardian` |
-| every `functions.*.middleware` that overrides its group | prepends `acs_guardian` |
+| every `functions.*.middleware` | prepends `acs_guardian`, creating the list when the function has none |
 
 Every line we add carries a `# acs-adapter-wired` marker. Re-running is a no-op. `--unwire --write` removes exactly what we added and nothing else.
 
@@ -114,7 +114,7 @@ uv run python -m unittest tests.integrations.nat.test_live -v
 
 ## Coverage discipline (the YAML-only rule)
 
-NAT's middleware fires per-attachment-point: workflow, function_groups, and individual functions with their own `middleware:` block. If an attachment point is not wired, every call routed through it bypasses the Guardian. This is a structural property of NAT, not a bug in the adapter — Cursor and Claude Code get framework-wide interception for free; NAT does not.
+NAT's middleware fires per attachment point: the workflow, each function group and each function, and gates only the calls to that point. A function the workflow or another function calls is gated by its own `middleware:` list, so every function needs `acs_guardian` there. If an attachment point is not wired, every call routed through it bypasses the Guardian. This is a structural property of NAT, not a bug in the adapter — Cursor and Claude Code get framework-wide interception for free; NAT does not.
 
 **The three rules for ACS-conformant NAT deployments:**
 

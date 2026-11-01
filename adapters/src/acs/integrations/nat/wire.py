@@ -2,10 +2,10 @@
 """
 Wire (or unwire / lint) the ACS adapter into a NAT `workflow.yml`.
 
-NAT's middleware is opt-in per attachment point: the user has to list
-`acs_guardian` under `middleware:` on the workflow, every function_group,
-and any function that overrides its group's middleware. Miss one and
-that path bypasses the Guardian. This CLI walks the YAML, finds every
+NAT's middleware is opt-in per attachment point, and an attachment
+point's middleware gates only the calls to it: the user has to list
+`acs_guardian` under `middleware:` on the workflow, every function_group
+and every function. Miss one and that path bypasses the Guardian. This CLI walks the YAML, finds every
 attachment point, and either reports gaps (`--check`) or fills them in
 (`--write`). It is idempotent: every line we add carries a
 `# acs-adapter-wired` comment so a re-run is a no-op and `--unwire`
@@ -161,18 +161,18 @@ def find_attachment_points(doc: Any) -> list[Gap]:
                     f"function_groups.{name}", _line_of(fg),
                     f"function_group `{name}` does not list `{MIDDLEWARE_NAME}` — every function in this group will bypass the Guardian"))
 
-    # 4) Any individual function with its own middleware: list — that
-    # override punches a hole through its group's wiring if it omits us.
+    # 4) Every function: a call to a function, from the workflow or from another
+    # function, runs only that function's own middleware.
     funcs = doc.get("functions")
     if isinstance(funcs, (dict, CommentedMap)):
         for name, fn in funcs.items():
             if not isinstance(fn, (dict, CommentedMap)):
                 continue
-            if "middleware" in fn and not _list_includes_middleware(fn.get("middleware")):
+            if not _list_includes_middleware(fn.get("middleware")):
                 gaps.append(Gap(
                     "error", "function",
                     f"functions.{name}", _line_of(fn),
-                    f"function `{name}` overrides `middleware:` but omits `{MIDDLEWARE_NAME}` — this call path bypasses the Guardian"))
+                    f"function `{name}` does not list `{MIDDLEWARE_NAME}` — every call to it bypasses the Guardian"))
 
     return gaps
 
@@ -257,7 +257,7 @@ def install(doc: CommentedMap, *, guardian_url: str, default_deny: bool,
     funcs = doc.get("functions")
     if isinstance(funcs, (dict, CommentedMap)):
         for name, fn in funcs.items():
-            if isinstance(fn, (dict, CommentedMap)) and "middleware" in fn:
+            if isinstance(fn, (dict, CommentedMap)):
                 if _ensure_middleware_listed(fn, f"functions.{name}"):
                     changes.append(f"functions.{name}.middleware: added `{MIDDLEWARE_NAME}`")
 
