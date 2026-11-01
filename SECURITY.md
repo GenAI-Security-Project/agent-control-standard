@@ -50,7 +50,7 @@ We use [CVSS v3.1](https://www.first.org/cvss/calculator/3.1) for severity. Spec
 
 ## Coordinated disclosure
 
-We fix reports in a public pull request, and we agree the timing with you first. We publish an advisory when a finding needs one. If a fix takes longer than expected, we tell you why.
+We fix reports in a public pull request, and we agree the timing with you first. Starting at version 1.0, we publish an advisory when a finding needs one. If a fix takes longer than expected, we tell you why.
 
 Tell us if you want credit and how. If you say nothing, we leave your name out.
 
