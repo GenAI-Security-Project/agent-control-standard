@@ -1,4 +1,4 @@
-# Agent Control Standard
+# OWASP Agent Control Standard
 
 [![Code: Apache 2.0](https://img.shields.io/badge/Code-Apache%202.0-blue.svg)](./LICENSE)
 [![Docs: CC BY-SA 4.0](https://img.shields.io/badge/Docs-CC%20BY--SA%204.0-lightgrey.svg)](./LICENSE-DOCS)

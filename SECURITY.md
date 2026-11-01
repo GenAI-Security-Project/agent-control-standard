@@ -33,7 +33,7 @@ Rock Lambros ([rock.lambros@owasp.org](mailto:rock.lambros@owasp.org)) is the pr
 | The published site at genai-security-project.github.io/agent-control-standard, including the landing page, the documentation, and the schema endpoints | Missing security response headers on the Pages site, which GitHub Pages does not allow us to set |
 | The reference implementation under `reference-implementations/`, which is runnable code people install and wire into a live development environment | Gaps the reference implementation documents about itself, which are tracked as issues rather than handled as reports |
 
-A specification flaw counts. If a hook definition forces implementers to log secrets, or an event schema makes an authorization bypass easy to write, that is a finding even though no code here executes.
+Specification flaws are welcome here too. If a hook definition forces implementers to log secrets, or an event schema makes an authorization bypass easy to write, please tell us, even though no code here executes.
 
 Code here does now execute. The reference implementation under `reference-implementations/`
 runs a Guardian process and installs hooks into a coding agent, so a report against it is
@@ -46,7 +46,7 @@ issue where the discussion is public.
 
 We try to acknowledge reports within about a week, and we work with you on timing from there. We will publish response SLAs with version 1.0.
 
-We use [CVSS v3.1](https://www.first.org/cvss/calculator/3.1) for severity. Specification flaws get scored against a reference implementation, since the specification itself has no runtime.
+We use [CVSS v3.1](https://www.first.org/cvss/calculator/3.1) for severity.
 
 ## Coordinated disclosure
 

@@ -10,7 +10,7 @@ This page answers questions ACS gets from enterprise security teams, framework i
 
 ### What is ACS?
 
-ACS (Agent Control Standard) is a runtime governance specification for AI agents. It defines how an agent reports the actions it is about to take, how an external policy engine ("Guardian Agent") responds with a decision, what behavior the agent must exhibit in response, and what audit record the interaction leaves behind. The spec is organized into three pillars:
+ACS (OWASP Agent Control Standard) is a runtime governance specification for AI agents. It defines how an agent reports the actions it is about to take, how an external policy engine ("Guardian Agent") responds with a decision, what behavior the agent must exhibit in response, and what audit record the interaction leaves behind. The spec is organized into three pillars:
 
 ```
    ┌──────────────────────────────────┐  ┌──────────────────────────────────┐  ┌──────────────────────────────────┐
