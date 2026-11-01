@@ -14,6 +14,7 @@ import {
 } from "../src/index.ts";
 import { toRepoRelativeMessage } from "../src/server.ts";
 import { dispatchGuardianAnnotator } from "../src/deployment-bridge.ts";
+import { repoRootStripper } from "../src/server.ts";
 import type { AcsFinalResult } from "../src/acs-result.ts";
 
 // The repository's own handshake schema, five directories up from this
@@ -959,11 +960,132 @@ describe("startGuardian POST /acs -- the outer net around dispatch", () => {
 });
 
 describe("toRepoRelativeMessage", () => {
-  it("strips the root from every path in one token, and writes the remainder with slashes", () => {
-    const root = fileURLToPath(new URL("../../../../../", import.meta.url)).replace(/[/\\]+$/, "");
+  // toRepoRelativeMessage strips the *repository* root -- two directories
+  // above this tree, which sits at reference-implementations/agt -- not
+  // this file's own REPO_ROOT. Bare, with no trailing separator, so these
+  // tests can build "root + separator + subpath" and "root + suffix"
+  // strings without accidentally doubling or misplacing a slash.
+  const REPOSITORY_ROOT_BARE = fileURLToPath(new URL("../../../../../", import.meta.url)).replace(/[/\\]+$/, "");
+
+  it("still strips the root when one token runs past what the regex engine will match", () => {
+    const root = REPOSITORY_ROOT_BARE;
+    const tail = "a".repeat(2_000_000);
+    expect(toRepoRelativeMessage(`open ${root}/${tail}`)).toBe(`open ${tail}`);
+    expect(toRepoRelativeMessage(`open ${root}/${tail} then ${root}/b`)).toBe(`open ${tail} then b`);
+    expect(toRepoRelativeMessage(`${root}/${tail}:${root}/b`)).toBe(`${tail}:b`);
+    expect(toRepoRelativeMessage(`open ${root}\\${tail}`)).toBe(`open ${tail}`);
+
+    const strip = repoRootStripper("C:\\Users\\you\\repo", true);
+    expect(strip(`open C:\\Users\\you\\repo\\${"b\\".repeat(700_000)}`)).toBe(`open ${"b/".repeat(700_000)}`);
+    expect(strip(`open c:/users/you/repo/${tail} then C:\\Users\\you\\repo\\b`)).toBe(`open ${tail} then b`);
+  });
+
+  it("strips a root that ends a path, and leaves a sibling alone", () => {
+    const root = REPOSITORY_ROOT_BARE;
+    expect(toRepoRelativeMessage(`scandir '${root}'`)).toBe("scandir ''");
+    expect(toRepoRelativeMessage(`cwd ${root}\nnext`)).toBe("cwd \nnext");
+    expect(toRepoRelativeMessage(`roots ${root}, ${root}: ${root}`)).toBe("roots , : ");
+    expect(toRepoRelativeMessage(`${root}-secret/a ${root}_old/b ${root}.bak/c`)).toBe(`${root}-secret/a ${root}_old/b ${root}.bak/c`);
+    expect(toRepoRelativeMessage(`${root}/a:${root}-secret/b:${root}/c`)).toBe(`a:${root}-secret/b:c`);
+    expect(toRepoRelativeMessage(`'${root}\\a' then C:\\other`)).toBe("'a' then C:\\other");
+  });
+
+  describe("under a simulated Windows root", () => {
+    const strip = repoRootStripper("C:\\Users\\you\\repo", true);
+
+    it("matches every spelling of the root, in any case", () => {
+      for (const spelling of [
+        "C:\\Users\\you\\repo\\spec",
+        "c:\\users\\YOU\\repo\\spec",
+        "C:/Users/you/repo/spec",
+        "/C:/Users/you/repo/spec",
+        "/c:/users/you/REPO/spec",
+        "file:///C:/Users/you/repo/spec",
+        "FILE:///c:/users/you/repo/spec",
+        "C:\\Users/you\\repo/spec",
+        "C:\\\\Users\\\\you\\\\repo\\\\spec",
+      ]) {
+        expect(strip(`open '${spelling}'`)).toBe("open 'spec'");
+      }
+      expect(strip("open \\\\?\\C:\\Users\\you\\repo\\spec")).toBe("open \\\\?\\spec");
+      expect(strip("scandir 'C:\\Users\\you\\repo'")).toBe("scandir ''");
+    });
+
+    it("matches a percent-encoded space in the root", () => {
+      const spaced = repoRootStripper("C:\\Users\\you\\my repo", true);
+      expect(spaced("file:///C:/Users/you/my%20repo/spec")).toBe("spec");
+      expect(spaced("/c:/users/you/MY%20REPO/spec")).toBe("spec");
+      expect(spaced("'C:\\\\Users\\\\you\\\\my repo\\\\spec'")).toBe("'spec'");
+      expect(spaced("open C:\\Users\\you\\my repo\\spec")).toBe("open spec");
+      expect(repoRootStripper("/home/you/my repo", false)("/home/you/my%20repo/spec")).toBe("spec");
+    });
+
+    it("leaves a sibling alone in every spelling", () => {
+      for (const sibling of [
+        "C:\\Users\\you\\repo_old\\spec",
+        "c:/users/you/REPO_old/spec",
+        "/C:/Users/you/repo_old/spec",
+        "file:///C:/Users/you/repo_old/spec",
+        "C:\\\\Users\\\\you\\\\repo_old\\\\spec",
+        "C:\\Users\\you\\repo-secret\\spec",
+      ]) {
+        expect(strip(sibling)).toBe(sibling);
+      }
+    });
+
+    it("strips a UNC root, in its long form too", () => {
+      const unc = repoRootStripper("\\\\srv\\share\\repo", true);
+      expect(unc("open \\\\?\\UNC\\srv\\share\\repo\\spec")).toBe("open \\\\?\\UNCspec");
+      expect(unc("open //srv/share/repo/spec")).toBe("open spec");
+      expect(unc("open file://srv/share/repo/spec")).toBe("open spec");
+    });
+
+    it("writes the path remainder with slashes, and only the path remainder", () => {
+      expect(strip("scandir 'C:\\Users\\you\\repo\\specification\\v0.1.0\\'")).toBe("scandir 'specification/v0.1.0/'");
+      expect(strip('"C:\\\\Users\\\\you\\\\repo\\\\spec\\\\v0.1.0"')).toBe('"spec/v0.1.0"');
+      expect(strip("C:\\Users\\you\\repo\\a\\b.ts,pattern=^\\d+$")).toBe("a/b.ts,pattern=^\\d+$");
+      expect(strip("C:\\Users\\you\\repo\\a;D:\\Other\\b")).toBe("a;D:\\Other\\b");
+      expect(strip("C:\\Users\\you\\repo\\a:C:\\Users\\you\\repo\\b\\c")).toBe("a:b/c");
+      expect(strip("C:\\Users\\you\\repo:D:\\Other\\b")).toBe(":D:\\Other\\b");
+      expect(strip("at (C:\\Users\\you\\repo\\a\\b.ts:12:3) \\d")).toBe("at (a/b.ts:12:3) \\d");
+      expect(strip("a\\b C:\\Users\\you\\repo\\c")).toBe("a\\b c");
+    });
+
+    it("ends the path remainder at every delimiter, quoted or bare", () => {
+      for (const end of [":", ";", ",", "=", ")", "]", "\t", "\n", "\r", "\f", "\v"]) {
+        expect(strip(`C:\\Users\\you\\repo\\a\\b${end}c\\d`)).toBe(`a/b${end}c\\d`);
+        expect(strip(`'C:\\Users\\you\\repo\\a\\b${end}c\\d'`)).toBe(`'a/b${end}c\\d'`);
+      }
+      for (const quote of ["'", '"']) {
+        expect(strip(`C:\\Users\\you\\repo\\a\\b${quote}c\\d`)).toBe(`a/b${quote}c\\d`);
+        expect(strip(`${quote}C:\\Users\\you\\repo\\a\\b${quote}c\\d`)).toBe(`${quote}a/b${quote}c\\d`);
+      }
+    });
+
+    it("keeps a space inside a quoted remainder, and stops at the first space in a bare one", () => {
+      expect(strip("scandir 'C:\\Users\\you\\repo\\spec dir\\v0.1.0\\'")).toBe("scandir 'spec dir/v0.1.0/'");
+      expect(strip('open "C:\\Users\\you\\repo\\spec dir\\a b\\c" then \\d')).toBe('open "spec dir/a b/c" then \\d');
+      expect(strip("scandir C:\\Users\\you\\repo\\spec dir\\v0.1.0\\")).toBe("scandir spec dir\\v0.1.0\\");
+      expect(strip("'C:\\Users\\you\\repo\\a;D:\\Other\\b'")).toBe("'a;D:\\Other\\b'");
+    });
+  });
+
+  it("treats a POSIX root as literal text, and never rewrites a backslash", () => {
+    const strip = repoRootStripper("/home/you/repo", false);
+    expect(strip("/home/you/repo/we\\ird.json")).toBe("we\\ird.json");
+    expect(strip("/home/you/repo/a.ts,pattern=^\\d+$")).toBe("a.ts,pattern=^\\d+$");
+    expect(strip("scandir '/home/you/repo\\specification\\v0.1.0\\'")).toBe("scandir 'specification\\v0.1.0\\'");
+    expect(strip("/HOME/you/repo/a")).toBe("/HOME/you/repo/a");
+    expect(strip("/home//you/repo/a")).toBe("/home//you/repo/a");
+    expect(strip("\\home\\you\\repo\\a")).toBe("\\home\\you\\repo\\a");
+    expect(strip("/home/you/repo//a")).toBe("/a");
+    expect(strip("file:///home/you/repo/a")).toBe("file://a");
+  });
+
+  it("strips the root from every path in one token", () => {
+    const root = REPOSITORY_ROOT_BARE;
     expect(toRepoRelativeMessage(`search path ${root}/a:${root}/b`)).toBe("search path a:b");
     expect(toRepoRelativeMessage(`tried ${root}/a,${root}/b;${root}/c`)).toBe("tried a,b;c");
-    expect(toRepoRelativeMessage(`scandir '${root}\\specification\\v0.1.0\\'`)).toBe("scandir 'specification/v0.1.0/'");
   });
 
   // `instanceof Error` says nothing about what `.message` was reassigned to
@@ -1045,13 +1167,6 @@ describe("toRepoRelativeMessage", () => {
     expect(toRepoRelativeMessage(throwingGetProxy)).toBe("<unprintable error>");
     expect(toRepoRelativeMessage(throwingGetPrototypeOfProxy)).toBe("<unprintable error>");
   });
-
-  // toRepoRelativeMessage strips the *repository* root -- two directories
-  // above this tree, which sits at reference-implementations/agt -- not
-  // this file's own REPO_ROOT. Bare, with no trailing separator, so these
-  // tests can build "root + separator + subpath" and "root + suffix"
-  // strings without accidentally doubling or misplacing a slash.
-  const REPOSITORY_ROOT_BARE = fileURLToPath(new URL("../../../../../", import.meta.url)).replace(/[/\\]+$/, "");
 
   it("strips the repository's root, with or without a trailing separator", () => {
     expect(toRepoRelativeMessage(new Error(`${REPOSITORY_ROOT_BARE}/specification/v0.1.0`))).toBe(

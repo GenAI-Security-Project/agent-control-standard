@@ -143,12 +143,50 @@ const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url)).rep
 // diagnostic that then reads as if it were one. A message naming the sibling
 // is left alone, in full.
 //
-// The group captures the repository-relative remainder, so the replacer in
-// toRepoRelativeMessage can change its backslashes to slashes. The group stops
-// before the next copy of the root, because a list such as `<root>/a:<root>/b`
-// is one token, and the `g` flag must still find the second copy.
-const REPO_ROOT_SOURCE = REPO_ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const REPO_ROOT_PATTERN = new RegExp(`${REPO_ROOT_SOURCE}(?:[/\\\\]((?:(?!${REPO_ROOT_SOURCE})[^'"\\s])*)|$)`, "g");
+// The pattern matches the root and nothing after it, with no repeated group.
+// JavaScriptCore stops matching a repeated group that holds a lookahead once it
+// has run about 900 KB, and it reports no match instead of an error, so such a
+// pattern hands the whole message back with the root still in it. The stripper
+// splits on this pattern, which removes every copy of the root.
+//
+// A root that ends a path, as in `scandir '<root>'`, counts too, so it stops at
+// the delimiters that can close a path. Anything else after the root is a
+// sibling, and stays.
+//
+// On Windows a path can come back in a spelling the root does not have: `c:\`
+// for `C:\`, forward slashes, doubled backslashes from JSON, or a `/C:/` or
+// `file:///C:/` lead-in from a file URL. The lead-in goes with the root, so
+// what remains is relative. Any platform's file URL writes a space as `%20`.
+//
+// Only a Windows root rewrites backslashes, and only in the path remainder. On
+// Linux and macOS a backslash is an ordinary file name character, so rewriting
+// it names a different file. After the remainder, a backslash belongs to
+// whatever text comes next: a regex, or another drive's path.
+const BARE_REMAINDER = /^[^'"\s:;,=)\]]+/;
+// A quote says where the path closes, so a space inside it is part of the path.
+// Bare text gives no such signal, so a bare remainder stops at the first space.
+const QUOTED_REMAINDER = /^[^'"\t\n\v\f\r:;,=)\]]+/;
+
+export function repoRootStripper(root: string, windows = process.platform === "win32"): (message: string) => string {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "(?: |%20)");
+  const separator = windows ? "[/\\\\]+" : "[/\\\\]";
+  const source = windows ? root.split(/[/\\]+/).map(escape).join(separator) : escape(root);
+  const leadIn = windows ? "(?:file:/+|/)?" : "";
+  const pattern = new RegExp(`${leadIn}${source}(?:${separator}|(?=['"\\s:;,=)\\]]|$))`, windows ? "gi" : "g");
+  return (message) => {
+    const parts = message.split(pattern);
+    if (!windows) return parts.join("");
+    return parts
+      .map((part, index) => {
+        if (index === 0) return part;
+        const previous = parts[index - 1] as string;
+        const remainder = previous.endsWith("'") || previous.endsWith('"') ? QUOTED_REMAINDER : BARE_REMAINDER;
+        return part.replace(remainder, (rel) => rel.replace(/\\+/g, "/"));
+      })
+      .join("");
+  };
+}
+const stripRepoRoot = repoRootStripper(REPO_ROOT);
 
 /**
  * Both catches in this module -- the outer net in handleAcsRequest and the
@@ -195,7 +233,7 @@ const REPO_ROOT_PATTERN = new RegExp(`${REPO_ROOT_SOURCE}(?:[/\\\\]((?:(?!${REPO
 export function toRepoRelativeMessage(error: unknown): string {
   try {
     const message = String(error instanceof Error ? error.message : error);
-    return message.replace(REPO_ROOT_PATTERN, (_match, rel?: string) => (rel ? rel.replace(/\\/g, "/") : ""));
+    return stripRepoRoot(message);
   } catch {
     return "<unprintable error>";
   }

@@ -9,35 +9,43 @@
  * prepending its directory to `process.env.PATH`. The Rust core then spawns
  * `opa` by name, reading PATH from the real process environment. Under Node
  * those are one environment: a `process.env` assignment calls `setenv`.
- * Under Bun they are not. `process.env` is a JavaScript-side copy, and
- * writing to it changes nothing libc's `getenv` can see -- measured on Bun
- * 1.3.11 by reading the variable back through `bun:ffi` immediately after
- * the write and getting the old value. So in every Bun process the SDK's own
- * wiring is a silent no-op, the core spawns whatever `opa` the shell that
- * launched Bun already had -- none, on a fresh GitHub runner -- and EVERY
- * evaluation answers deny on `runtime_error:policy_invocation_failed`.
+ * Under Bun on Linux and macOS they are not. `process.env` is a
+ * JavaScript-side copy, and writing to it changes nothing libc's `getenv` can
+ * see -- measured on Bun 1.3.11 by reading the variable back through
+ * `bun:ffi` immediately after the write and getting the old value. So in
+ * those Bun processes the SDK's own wiring is a silent no-op, the core spawns
+ * whatever `opa` the shell that launched Bun already had -- none, on a fresh
+ * GitHub runner -- and EVERY evaluation answers deny on
+ * `runtime_error:policy_invocation_failed`.
  * Fail-closed, which is the right direction, and also sixty-eight red tests
  * for a reason with nothing to do with the commit under test.
  *
  * What this does about it. Resolve OPA through the SDK's own resolver, in
  * the SDK's own documented order (an explicit `$ACS_OPA_PATH`, then the
  * bundled optional dependency, then `opa` on PATH), then publish the
- * resolved executable into the REAL environment as `ACS_OPA_PATH` through
- * libc's `setenv`. `ACS_OPA_PATH` rather than PATH, for two reasons: the
- * core treats it as authoritative -- "explicit OPA paths do not fall back to
+ * resolved executable into the REAL environment as `ACS_OPA_PATH`. Linux and
+ * macOS publish through libc's `setenv`. Windows publishes through a
+ * `process.env` write, which there reaches the real environment and needs no
+ * C library. `ACS_OPA_PATH` rather than PATH, for two reasons. The core
+ * treats it as authoritative -- "explicit OPA paths do not fall back to
  * PATH" is its own error text -- so a wrong value fails loudly instead of
- * quietly picking up some other `opa`; and rewriting PATH would reorder
+ * quietly picking up some other `opa`. Rewriting PATH would also reorder
  * lookups for every other subprocess the Guardian ever spawns.
  *
- * Then read it back. A `setenv` that returned 0 but did not land -- a libc
- * this file did not know how to open, or a Bun that one day grows a real
- * `process.env` bridge with different semantics -- would put this process
- * straight back into the silent case above. The readback is the check, and
- * a mismatch throws. `createBridge` calls this before constructing the SDK's
- * runtime, so a process that cannot reach OPA never gets a bridge at all:
- * the Guardian refuses to start, rather than starting and denying everything.
+ * Then, on Linux and macOS, read it back. A `setenv` that returned 0 but did
+ * not land -- a libc this file did not know how to open, or a Bun that one
+ * day grows a real `process.env` bridge with different semantics -- would put
+ * this process straight back into the silent case above. The readback is the
+ * check, and a mismatch throws. `createBridge` calls this before constructing
+ * the SDK's runtime, so a process that cannot reach OPA never gets a bridge
+ * at all: the Guardian refuses to start, rather than starting and denying
+ * everything.
  *
- * The one path that skips FFI entirely: a libc this file cannot open, on a
+ * Windows has no readback, so a lost write there does not stop the Guardian.
+ * It starts, and every evaluation denies on
+ * `runtime_error:policy_invocation_failed`. publishOpaPath says why.
+ *
+ * On Linux and macOS one path skips FFI: a libc this file cannot open, on a
  * process whose real environment already names the resolved binary. Bun
  * seeds `process.env` from the real environment at startup, so
  * `ACS_OPA_PATH=<binary> bun test` is the escape hatch for such a platform,
@@ -76,10 +84,23 @@ export function publishOpaPath(): string {
   // the loud failure this file wants: an explicit hint that names nothing
   // stops here, before any setenv, and never falls back to another opa.
   const resolved = ensureOpaResolvable();
+
   // On Windows a Bun `process.env` write calls SetEnvironmentVariableW, so it
   // reaches the real environment and this platform needs no C library. Linux
-  // and macOS keep the JavaScript-side copy the header describes.
-  if (process.platform === "win32") process.env[OPA_PATH_ENV] = resolved;
+  // and macOS keep the JavaScript-side copy the header describes. Return here,
+  // because a probe for libc.so would make the DLL loader search the working
+  // directory and PATH for a file of that name.
+  //
+  // Nothing reads the native environment back here. `process.env` answers from
+  // the copy this line just wrote, so reading it would compare the value with
+  // itself. The real read is kernel32 through FFI, and no runner in this
+  // project is Windows, so nobody could run that code. If the write is ever
+  // lost, nothing throws: the native core spawns opa without it and every
+  // evaluation denies on runtime_error:policy_invocation_failed.
+  if (process.platform === "win32") {
+    process.env[OPA_PATH_ENV] = resolved;
+    return resolved;
+  }
 
   const libc = openLibc();
   if (libc === undefined) {

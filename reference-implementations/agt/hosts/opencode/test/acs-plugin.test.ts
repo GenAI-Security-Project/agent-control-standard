@@ -56,7 +56,7 @@ describe("AcsPlugin's load-time gate", () => {
     // Sanity: the gate below does not false-positive on the real, shipped
     // opencode.hookmap.yaml, which declares `refuse.denied: { value: true }`
     // on deny/ask/defer precisely so this passes.
-    const shipped = new URL("../opencode.hookmap.yaml", import.meta.url).pathname;
+    const shipped = fileURLToPath(new URL("../opencode.hookmap.yaml", import.meta.url));
     await expect(runPlugin(shipped)).resolves.toBeUndefined();
   });
 
