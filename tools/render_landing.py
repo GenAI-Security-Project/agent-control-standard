@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import html
 import posixpath
 import re
@@ -33,6 +34,7 @@ from site_nav import ANCHOR, DOC_PATH, EXTERNAL, EXTERNAL_URL, TITLE
 PRIORITY_SCOPE_HEADING = re.compile(r"^##\s+current\s+priority\s+scope\s*$", re.IGNORECASE)
 ANY_HEADING = re.compile(r"^#{2,6}\s")
 PLACEHOLDER = re.compile(r"<!--ACS:[A-Z_]+-->")
+LITERAL_TAG = re.compile(r"<(/?)(?:code|pre|script|style|svg)\b[^>]*>", re.IGNORECASE)
 # The pattern tag-release.yml validates against. version.txt reaches an href, so a value
 # outside it stops the build rather than reaching the page.
 RELEASE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?")
@@ -454,6 +456,45 @@ def render(
     return out
 
 
+def show_release(page: str, spec: str, release: str) -> str:
+    """Show the release in a page's prose wherever it names the specification version.
+
+    Readers take the number in a sentence to be the current release, and the source text
+    is written against the specification version, which changes rarely. Rewriting it here
+    tracks version.txt with no upkeep. Tags are copied whole, so links and attributes keep
+    their paths, and code keeps its wire values, because acs_version and the schema
+    namespace really are the specification version.
+    """
+    # The schemas are published under the specification version, so naming them with the
+    # release would point a reader at a path that does not exist.
+    number = re.compile(rf"(?<![\w/.-])v{re.escape(spec)}(?!\w|\.\d)(?!\s+schemas?\b)")
+    literal = 0
+    out = []
+    for part in re.split(r"(<[^>]*>)", page):
+        tag = LITERAL_TAG.fullmatch(part)
+        if tag:
+            literal += -1 if tag.group(1) else 1
+            literal = max(literal, 0)
+        out.append(part if literal or part.startswith("<") else number.sub(f"v{release}", part))
+    return "".join(out)
+
+
+def show_release_in_docs(out: Path, spec: str, release: str) -> None:
+    """Apply show_release to the built docs and to the search index built from them."""
+    root = out / "docs"
+    for path in [out / "404.html", *root.rglob("*.html")]:
+        if path.is_file():
+            path.write_text(show_release(path.read_text(encoding="utf-8"), spec, release), encoding="utf-8")
+    index = root / "search" / "search_index.json"
+    if index.is_file():
+        data = json.loads(index.read_text(encoding="utf-8"))
+        for entry in data.get("docs", []):
+            for key in ("title", "text"):
+                if isinstance(entry.get(key), str):
+                    entry[key] = show_release(entry[key], spec, release)
+        index.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
 def pin_stylesheet(page: str, name: str, path: Path) -> str:
     """Put a content hash in a stylesheet's URL.
 
@@ -513,6 +554,11 @@ def main(argv: list[str]) -> int:
         for name in ("demo.mp4", "demo-poster.jpg"):
             shutil.copy2(repo / "reference-implementations" / "agt" / "docs" / name, video / name)
         (out / "index.html").write_text(pin_stylesheet(page, "assets/acs.css", out / "assets" / "acs.css"), encoding="utf-8")
+        show_release_in_docs(
+            out,
+            spec_version(repo / "specification").removeprefix("v"),
+            release_version((repo / "version.txt").read_text(encoding="utf-8")).removeprefix("v"),
+        )
         pin_docs_stylesheet(out)
     except OSError as error:
         print(f"error: cannot write the rendered site: {error}", file=sys.stderr)

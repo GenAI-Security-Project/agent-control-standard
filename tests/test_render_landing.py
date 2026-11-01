@@ -300,6 +300,52 @@ def test_main_ties_the_page_to_the_stylesheet_it_was_built_with(tmp_path):
     assert f'href="assets/acs.css?v={digest}"' in (tmp_path / "index.html").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("before, after", [
+    ("<p>ACS v0.1.0 organizes</p>", "<p>ACS v0.1.4 organizes</p>"),
+    ("<p>A v0.1.0-conformant deployment</p>", "<p>A v0.1.4-conformant deployment</p>"),
+    ("<h1>ACS v0.1.0 — Instrument</h1>", "<h1>ACS v0.1.4 — Instrument</h1>"),
+    # Wire values and paths are the specification version, and changing them breaks readers.
+    ("<code>acs_version: v0.1.0</code>", "<code>acs_version: v0.1.0</code>"),
+    ("<pre><code>v0.1.0\n<span>v0.1.0</span></code></pre>", "<pre><code>v0.1.0\n<span>v0.1.0</span></code></pre>"),
+    ('<a href="/schema/v0.1.0/x.json">root</a>', '<a href="/schema/v0.1.0/x.json">root</a>'),
+    ("<p>specification/v0.1.0/hooks</p>", "<p>specification/v0.1.0/hooks</p>"),
+    ("<p>the v0.1.0 schemas</p>", "<p>the v0.1.0 schemas</p>"),
+    ("<p>v0.1.01</p>", "<p>v0.1.01</p>"),
+    ("<p>not supported in v0.1.0.</p>", "<p>not supported in v0.1.4.</p>"),
+    ("<p>v0.1.0.1</p>", "<p>v0.1.0.1</p>"),
+])
+def test_show_release_changes_prose_and_leaves_literals(before, after):
+    assert render_landing.show_release(before, "0.1.0", "0.1.4") == after
+
+
+def test_docs_prose_and_search_show_the_release(tmp_path):
+    page = tmp_path / "docs" / "a" / "index.html"
+    page.parent.mkdir(parents=True)
+    page.write_text("<p>ACS v0.1.0 ships</p>", encoding="utf-8")
+    index = tmp_path / "docs" / "search" / "search_index.json"
+    index.parent.mkdir(parents=True)
+    index.write_text(json.dumps({"docs": [{"title": "ACS v0.1.0", "text": "<code>v0.1.0</code> in v0.1.0"}]}), encoding="utf-8")
+
+    render_landing.show_release_in_docs(tmp_path, "0.1.0", "0.1.4")
+
+    assert "ACS v0.1.4 ships" in page.read_text(encoding="utf-8")
+    entry = json.loads(index.read_text(encoding="utf-8"))["docs"][0]
+    assert entry == {"title": "ACS v0.1.4", "text": "<code>v0.1.0</code> in v0.1.4"}
+
+
+def test_main_shows_the_real_release_in_built_docs(tmp_path):
+    """Uses the real version inputs, whose prefixes a fixture would hide."""
+    page = tmp_path / "docs" / "a" / "index.html"
+    page.parent.mkdir(parents=True)
+    spec = render_landing.spec_version(REPO / "specification")
+    page.write_text(f"<p>ACS {spec} ships</p><code>{spec}</code>", encoding="utf-8")
+
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
+
+    release = render_landing.release_version((REPO / "version.txt").read_text(encoding="utf-8")).removeprefix("v")
+    assert page.read_text(encoding="utf-8") == f"<p>ACS v{release} ships</p><code>{spec}</code>"
+
+
 def test_docs_pages_are_tied_to_the_stylesheet_they_were_built_with(tmp_path):
     sheet = tmp_path / "docs" / "stylesheets" / "extra.css"
     sheet.parent.mkdir(parents=True)
