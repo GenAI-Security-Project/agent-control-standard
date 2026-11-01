@@ -333,7 +333,7 @@ When a paradigm needs a wire signal that no existing field can carry, yes. That 
 
 ### What is in v0.1.0?
 
-`v0.1.0` is the specification version, which changes only when the wire format does. The release number changes with each release. The [releases page](https://github.com/GenAI-Security-Project/agent-control-standard/releases) and the [CHANGELOG](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CHANGELOG.md) list each one.
+`v0.1.0` is the specification version, which names the schema namespace, and a release can update the schemas inside it. The release number changes with each release. The [releases page](https://github.com/GenAI-Security-Project/agent-control-standard/releases) and the [CHANGELOG](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CHANGELOG.md) list each one.
 
 ACS-Core (mandatory), and six optional profiles: ACS-Trace, ACS-Inspect, ACS-Inspect-Dynamic, ACS-Provenance, ACS-Crypto, ACS-Audit. Full content lock and the design record are in [Conformance Profiles](../spec/conformance.md) and the [v0.1.0 schemas](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification/v0.1.0).
 
