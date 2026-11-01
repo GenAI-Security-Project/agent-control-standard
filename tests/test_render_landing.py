@@ -396,6 +396,14 @@ def test_main_does_not_republish_the_inlined_diagram(tmp_path):
     assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
     assert not (tmp_path / "assets" / "starburst.svg").exists()
     assert (tmp_path / "assets" / "acs.css").is_file()
+
+
+def test_main_publishes_the_demo_the_page_points_at(tmp_path):
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
+    page = (tmp_path / "index.html").read_text(encoding="utf-8")
+    for name in ("demo.mp4", "demo-poster.jpg"):
+        assert f'"assets/video/{name}"' in page
+        assert (tmp_path / "assets" / "video" / name).stat().st_size > 0
     assert (tmp_path / "assets" / "icon.svg").is_file()
 
 
@@ -607,7 +615,7 @@ def test_csp_hashes_the_one_script_and_one_style():
         "default-src 'none'; "
         f"script-src 'sha256-{_hash(chr(10) + '  var x = 1;' + chr(10))}'; "
         f"style-src 'self' 'sha256-{_hash(chr(10) + ' a{fill:red} ' + chr(10))}'; "
-        "img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'"
+        "img-src 'self'; media-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'"
         '">'
     )
 
