@@ -32,14 +32,14 @@ echo '{"session_id":"demo","hook_event_name":"PreToolUse","tool_name":"Bash","to
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0."}}
 ```
 
-The first hook of a session sends `handshake/hello` and stores the Guardian's answer under `.acs/sessions/<session_id>.json`, so the next subprocess for that session finds it and skips the handshake.
+The first hook of a session sends `handshake/hello` and stores the Guardian's answer under `.acs/sessions/<session_id>.json`, so the next subprocess for that session finds it and skips the handshake. When a `PreToolUse` hook has to retry a call under a fresh `request_id` after `REPLAY_DETECTED`, it stores the retry's id under `.acs/sessions/applied/<derived request_id>.json`, so the `PostToolUse` subprocess for the same call names the request this host acted on.
 
 ## What it reads
 
 | Variable | Default | What it does |
 |---|---|---|
 | `ACS_GUARDIAN_URL` | `http://localhost:8787/acs` | Where the shim sends envelopes |
-| `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
+| `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session, and under `applied/`, which request a result names for a call the shim retried |
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `claude-code.hookmap.yaml`, beside the shim | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 

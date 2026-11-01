@@ -10,6 +10,7 @@
  * bridge behind it: it talks to the Guardian over the wire, never in-process.
  */
 import { createHash, randomUUID } from "node:crypto";
+import type { AppliedRequestStore } from "./applied-request-store.ts";
 import { readFileSync } from "node:fs";
 import { pathSegments, resolvePath } from "./hookmap-path.ts";
 
@@ -77,7 +78,10 @@ type HookmapHookEntryCommon = {
    * carries the same value as `request_id_ref`, so the Guardian can pair the
    * two without the shim keeping any state. When it does not resolve, the
    * request gets a random `request_id` and the result no `request_id_ref`,
-   * which is what every hookmap without this key gets.
+   * which is what every hookmap without this key gets. The one exception is
+   * a call `governStep` had to retry under a fresh id: the result then
+   * names the retry, read from the applied request store (see
+   * applied-request-store.ts).
    */
   call_id?: string;
   /**
@@ -234,8 +238,8 @@ export type AcsToolCallResultPayload = {
    * exclusive union stays exclusive and `raw_command` reads as `string |
    * undefined` on either payload shape without a cast. */
   raw_command?: never;
-  /** The originating request's `request_id`, present when the hookmap's
-   * `call_id` resolved (see HookmapHookEntryCommon). */
+  /** The `request_id` of the request the host acted on for this call,
+   * present when the hookmap's `call_id` resolved (see HookmapHookEntryCommon). */
   request_id_ref?: string;
   exit_status: string;
   outputs: AcsOutput[];
@@ -1080,7 +1084,17 @@ export function buildEnvelope(
   event: string,
   payload: Record<string, unknown>,
   hookmap: Hookmap,
-  options: { pairWithHostCall?: boolean } = {},
+  options: {
+    /** False only on `governStep`'s retry after REPLAY_DETECTED: that one request gets a fresh random id. */
+    pairWithHostCall?: boolean;
+    /**
+     * Where a result gate learns that the host acted on a retry rather than
+     * on the derived request. Read only when building a result for a call
+     * the host identified; a request gate never consults it, since the
+     * derived id is what the host sends first every time.
+     */
+    appliedRequests?: AppliedRequestStore;
+  } = {},
 ): AcsRequestEnvelope {
   const entry = hookmap.hooks[event];
   if (!entry) {
@@ -1104,19 +1118,19 @@ export function buildEnvelope(
   const sessionUuid = toSessionUuid(rawSessionId);
   // `pairWithHostCall: false` is governStep's retry after a REPLAY_DETECTED
   // answer. Only this request gets a fresh random id. The host's result hook
-  // runs on its own and still names the derived id, so the result resolves
-  // against the earlier request that carried it: the first time the host
-  // asked about this call.
+  // runs on its own, so it names the retry only if the request gate recorded
+  // it in the applied request store; with no record it names the derived id,
+  // which is right for every call the host asked about once.
   const invocationId = options.pairWithHostCall === false ? undefined : invocationIdOf(event, entry, payload);
   const invocationRequestId = invocationId === undefined ? undefined : toInvocationRequestId(sessionUuid, invocationId);
   // The request gate takes the derived id as its request_id. The result gate
-  // names it as the request it answers and keeps a fresh id of its own.
+  // names the request the host acted on and keeps a fresh id of its own.
   let requestId: string = randomUUID();
   if (invocationRequestId !== undefined) {
     if (acsPayload.outputs === undefined) {
       requestId = invocationRequestId;
     } else {
-      acsPayload.request_id_ref = invocationRequestId;
+      acsPayload.request_id_ref = options.appliedRequests?.get(invocationRequestId) ?? invocationRequestId;
     }
   }
   // The JSON-RPC id stays random even when request_id is derived. The

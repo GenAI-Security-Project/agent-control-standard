@@ -76,6 +76,7 @@
  * it returns, which is what lets the same function serve a second host with a
  * different wire shape (see render-decision.ts).
  */
+import type { AppliedRequestStore } from "./applied-request-store.ts";
 import { buildEnvelope, modificationDocumentOf, type AcsRequestEnvelope, type Hookmap } from "./build-envelope.ts";
 import type { AuditSink } from "./audit-sink.ts";
 import {
@@ -167,6 +168,16 @@ export type GovernStepInput = {
    * into a silent skip any more.
    */
   scopedTool?: string;
+  /**
+   * Where the request gate records that the host acted on a retry rather
+   * than on the request it derived from the host's call id, and where the
+   * result gate reads it back (issue #351). Optional because a host that
+   * never asks twice about one call never retries, and a caller that wires
+   * no store gets the derived id at every result, as before. A host whose
+   * Guardian can answer REPLAY_DETECTED wires one, file-backed where the
+   * two gates run in separate processes.
+   */
+  appliedRequests?: AppliedRequestStore;
 };
 
 /**
@@ -439,6 +450,7 @@ export async function governStep({
   sessionId,
   audit,
   scopedTool,
+  appliedRequests,
 }: GovernStepInput): Promise<GovernedStep> {
   // Every render below -- the arriving decision's and the posture's -- goes
   // through the hook's own decisions block, so a hook this hookmap does not map
@@ -663,7 +675,7 @@ export async function governStep({
   // `buildEnvelope` can fail still lands here.
   let envelope: AcsRequestEnvelope;
   try {
-    envelope = buildEnvelope(hookEventName, payload, hookmap);
+    envelope = buildEnvelope(hookEventName, payload, hookmap, { appliedRequests });
   } catch (failure) {
     return resolveByPosture(failure, "request", undefined);
   }
@@ -738,9 +750,18 @@ export async function governStep({
     // REPLAY_DETECTED. That code carries no decision, so under `proceed` it
     // would run the step ungoverned. §17.1's recovery is to regenerate the id
     // and retry, so this does that once, with a random id, inside whatever is
-    // left of the timeout. The result hook still names the derived id, which
-    // resolves against the first request the host sent for this call. Only
-    // the request gate derives its own id, so only it can hit this.
+    // left of the timeout. Only the request gate derives its own id, so only
+    // it can hit this.
+    //
+    // Whatever answers the retry -- a decision, or the posture answering its
+    // absence -- is what this host acts on, so the retry's id is the one the
+    // result for this call has to name (hooks.md's `request_id_ref`). The
+    // result hook runs on its own, so the record goes into the applied
+    // request store for it to find; recorded after the retry's answer, so a
+    // record always describes a request that was actually sent. Without a
+    // record the result names the derived id, which resolves against the
+    // first ask: a DENY there and an allow here would read as a host that
+    // ignored the deny, and the reverse would hide one (issue #351).
     if (
       answer.decisionArrived === false &&
       isReplayDetected(answer.failure) &&
@@ -748,8 +769,10 @@ export async function governStep({
     ) {
       const remainingMs = timeoutMs - (performance.now() - startedAt);
       if (remainingMs > 0) {
+        const derivedRequestId = envelope.params.request_id;
         envelope = buildEnvelope(hookEventName, payload, hookmap, { pairWithHostCall: false });
         answer = await guardian.requestDecision(envelope, { timeoutMs: remainingMs });
+        appliedRequests?.set(derivedRequestId, envelope.params.request_id);
       }
     }
     const elapsedMs = performance.now() - startedAt;
