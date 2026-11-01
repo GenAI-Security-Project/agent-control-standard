@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts\""
+            "command": "bun run \"$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts\"",
+            "onFailure": "block"
           }
         ]
       }
