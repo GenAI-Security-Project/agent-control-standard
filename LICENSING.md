@@ -33,8 +33,8 @@ Code samples inside the documentation carry the Apache 2.0 grant, not the ShareA
 The design tokens in `landing/assets/acs.css`, the diagram geometry in
 `landing/assets/starburst.svg`, and the mark in `landing/assets/icon.svg`, which is
 duplicated at `docs/assets/icon.svg` because MkDocs requires a theme logo inside its own
-documentation directory, derive from agentcontrolstandard.org, which the OWASP GenAI
-Security Project operates and which is built from a separate repository. They are used
+documentation directory, derive from the project's earlier website, which the OWASP GenAI
+Security Project operated and which was built from a separate repository. They are used
 here as the project's own work. Both copies of the mark are covered by the
 `landing/**` row above.
 
