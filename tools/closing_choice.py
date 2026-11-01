@@ -36,9 +36,11 @@ EDITORIAL = re.compile(r"^[ \t]*-[ \t]*\[[xX]\][ \t]*This is an editorial correc
 DEPENDABOT = "dependabot[bot]"
 
 _LINK = re.compile(r"\[([^\[\]\n]{0,500})\]\([^()\s]{0,2048}\)")
+# The forms that put an issue in closingIssuesReferences, measured on PR #410. `http://`,
+# `www.`, and an uppercase URL did not, so a reference there closes nothing and is not read.
 _REF = re.compile(
     r"(?<![A-Za-z0-9_/#.-])"
-    r"(?:https?://(?:www\.)?github\.com/(?P<url_owner>[A-Za-z0-9-]{1,39})/(?P<url_repo>[A-Za-z0-9.-]{1,100})"
+    r"(?:https://github\.com/(?P<url_owner>[A-Za-z0-9-]{1,39})/(?P<url_repo>[A-Za-z0-9.-]{1,100})"
     r"/issues/(?P<url_number>[0-9]{1,9})"
     r"|[Gg][Hh]-(?P<gh_number>[0-9]{1,9})"
     r"|(?:(?P<owner>[A-Za-z0-9-]{1,39})/(?P<repo>[A-Za-z0-9.-]{1,100}))?#(?P<number>[0-9]{1,9}))"
