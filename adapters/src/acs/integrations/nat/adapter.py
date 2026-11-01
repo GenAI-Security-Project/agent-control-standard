@@ -57,7 +57,7 @@ import uuid
 import weakref
 from collections.abc import Callable
 from concurrent.futures import Future
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from typing import Any, Optional
 
 from acs import __version__
@@ -76,6 +76,7 @@ try:
         audit_modify_unsupported,
         open_session,
         round_trip,
+        session_start_outcome,
     )
     from acs.core import (
         method_evaluated,
@@ -464,6 +465,14 @@ _OPEN_SENDERS: weakref.WeakSet = weakref.WeakSet()
 atexit.register(lambda: [sender.close() for sender in list(_OPEN_SENDERS)])
 
 
+@dataclass
+class _Run:
+    """One NAT run: the task running it, whether its sessionEnd is queued, and its decision after sessionStart."""
+    task: asyncio.Task | None = None
+    ended: bool = False
+    outcome: Handshake | None = None
+
+
 class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
     """NAT middleware that defers each call's allow/deny/modify decision to an ACS Guardian."""
 
@@ -505,6 +514,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         # Calls and the lifecycle thread both count, and a run that ends without sessionEnd ages out.
         self._decision_failures: collections.OrderedDict = collections.OrderedDict()
         self._decision_failures_lock = threading.Lock()
+        # The runs whose WORKFLOW_START was seen; a run that never stops ages out like its failure counts.
+        self._runs: collections.OrderedDict = collections.OrderedDict()
+        self._runs_lock = threading.Lock()
 
     def _ensure_handshake(self) -> Handshake:
         """The session's decision, opened once under a lock so concurrent first calls share one handshake."""
@@ -597,6 +609,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
         run = self._current_run()
         if event_type == IntermediateStepType.WORKFLOW_START:
+            self._track_run(run)
             # Workflow input becomes both sessionStart (boundary marker)
             # and userMessage (the input itself).
             self._queue_lifecycle_hook(
@@ -608,6 +621,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                     "steps/userMessage",
                     payload={"content": [{"type": "text", "value": input_text}]}, run=run)
         elif event_type == IntermediateStepType.WORKFLOW_END:
+            self._end_run(run)
             # Workflow output becomes agentResponse; sessionEnd closes the boundary.
             output_text = _stringify_step_data(payload.data)
             if output_text:
@@ -617,6 +631,45 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             self._queue_lifecycle_hook(
                 "steps/sessionEnd",
                 payload={"reason": "completed"}, run=run)
+
+    def _track_run(self, run: str | None) -> None:
+        """Record a run at its WORKFLOW_START, which NAT pushes in the task running it."""
+        if run is None:
+            return
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        with self._runs_lock:
+            self._runs[run] = _Run(task=task)
+            while len(self._runs) > _MAX_COUNTED_RUNS:
+                self._runs.popitem(last=False)
+
+    def _end_run(self, run: str | None) -> bool:
+        """Mark the run's sessionEnd as queued; False only when a tracked run's already was."""
+        with self._runs_lock:
+            state = self._runs.get(run)
+            if state is None or state.ended:
+                return state is None
+            state.ended = True
+            return True
+
+    def _run_stopped(self, run: str | None) -> None:
+        """NAT stopped the run's exporter: a run that started and pushed no WORKFLOW_END failed or was cancelled."""
+        with self._runs_lock:
+            state = self._runs.get(run)
+            task = state.task if state is not None else None
+        if state is None or not self._end_run(run):
+            return
+        cancelled = task is not None and (task.cancelled() or task.cancelling() > 0)
+        self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "cancelled" if cancelled else "error"}, run=run)
+
+    def _run_gate(self, run: str | None) -> Resolution | None:
+        """How a step of the run ends without the Guardian once its sessionStart was denied, refused, or got no decision."""
+        with self._runs_lock:
+            state = self._runs.get(run)
+            outcome = state.outcome if state is not None else None
+        return self._acs.gate(outcome) if outcome is not None else None
 
     def _queue_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         """Hand a lifecycle hook of a run to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
@@ -649,23 +702,36 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             audit_event("method_not_evaluated", method=method,
                         session_id=self._session_id)
             return
+        gated = self._run_gate(run)
+        if gated is not None:
+            audit_event(gated.audit_type, **{**gated.fields, "cause": gated.cause,
+                                             "session_id": self._session_id, "method": method})
+            return
         if method == "steps/sessionEnd":
             # Built as it is sent, so it counts the failures of every hook sent before it.
             payload = {**payload, "summary": {"decision_failures": self._take_failure_counts(run)}}
         request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(),
                                    payload=payload)
         result = self._round_trip(request)
-        if isinstance(result, Resolution):
+        if method == "steps/sessionStart":
+            self._record_start(run, result)
+        elif isinstance(result, Resolution):
             audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
                                                     "method": method, "session_id": self._session_id})
+        if isinstance(result, Resolution):
             self._count_failure(result, run)
 
+    def _record_start(self, run: str | None, result) -> None:
+        """Keep the run's decision after its sessionStart, so the run's later steps follow it (hooks.md sessionStart: ALLOW / DENY)."""
+        outcome = session_start_outcome(Negotiated(self._server_hello or {}), result, session_id=self._session_id,
+                                        guardian_url=self._acs.guardian_url)
+        with self._runs_lock:
+            state = self._runs.get(run)
+            if state is not None:
+                state.outcome = outcome
+
     def _correlation_request_id(self, context) -> str:
-        """Return a request_id unique per invocation but stable across
-        pre_invoke + post_invoke: stash a uuid4 on the shared context,
-        falling back to a WeakKeyDictionary for frozen contexts (id()
-        would collide once GC recycles addresses).
-        """
+        """A uuid4 per invocation, stable from pre_invoke to post_invoke: stashed on the context, else in a WeakKeyDictionary, since id() repeats after GC."""
         existing = getattr(context, "_acs_correlation_request_id", None)
         if existing:
             return existing
@@ -704,6 +770,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return None
         gated = self._acs.gate(await self._session_decision())
         self._ensure_lifecycle_subscribed()
+        if gated is None:
+            # The run's sessionStart, reported before this call, decides whether the run's calls go out.
+            await self._lifecycle_sent()
+            gated = self._run_gate(self._current_run())
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
             return self._settle_pre(context, gated, f"{gated.label} ({gated.cause})")
@@ -783,6 +853,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
         gated = self._acs.gate(await self._session_decision())
+        if gated is None:
+            await self._lifecycle_sent()
+            gated = self._run_gate(self._current_run())
         if gated is not None:
             return self._settle_post(context, gated)
         if not method_evaluated(self._server_hello, "steps/toolCallResult"):
@@ -993,16 +1066,24 @@ if _NAT_AVAILABLE and _HAS_REGISTRATION and _HAS_EXPORTER and _HAS_LIFECYCLE:
     class _LifecycleExporter(BaseExporter):  # type: ignore[misc, valid-type]
         """Hands every step of a run to the middleware's lifecycle callback; NAT subscribes it before WORKFLOW_START."""
 
+        # The run this exporter instance reports; NAT copies the exporter for each run.
+        _run: str | None = None
+
         def __init__(self, middleware: ACSMiddleware) -> None:
             super().__init__()
             self._middleware = middleware
 
         def export(self, event) -> None:
+            if self._run is None:
+                self._run = self._middleware._current_run()
             self._middleware._on_intermediate_step(event)
+
+        async def _cleanup(self) -> None:
+            # NAT stops a run's exporter when the run ends, whether or not it pushed WORKFLOW_END.
+            self._middleware._run_stopped(self._run)
 
     @register_telemetry_exporter(config_type=ACSLifecycleExporterConfig)  # type: ignore[misc]
     async def build_acs_lifecycle_exporter(config: "ACSLifecycleExporterConfig", builder):  # type: ignore[name-defined]
-        """Build the exporter that feeds one `acs_guardian` middleware."""
         middleware = _LIFECYCLE_MIDDLEWARES.get(config.middleware_key)
         if middleware is None:
             raise ValueError("acs_lifecycle is added by the acs_guardian middleware; it is not configured on its own")

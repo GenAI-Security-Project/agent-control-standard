@@ -42,6 +42,7 @@ _EXPORTS = {
     "record_step": "_store",
     "round_trip": "_exchange",
     "save_session_state": "_store",
+    "session_start_outcome": "_handshake",
     "sign_envelope": "_signing",
     "update_session_state": "_store",
     "validate_guardian_url": "_urls",

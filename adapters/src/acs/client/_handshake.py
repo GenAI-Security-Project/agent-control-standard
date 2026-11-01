@@ -135,10 +135,16 @@ def _start_session(decision: Negotiated, start: Callable[[Negotiated], Decided |
     except Exception as e:  # noqa: BLE001
         result = config.posture.negotiated(decision.server_hello).resolve(
             Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}"))
+    return session_start_outcome(decision, result, session_id=session_id, guardian_url=config.guardian_url)
+
+
+def session_start_outcome(decision: Negotiated, result: Decided | Resolution | None, *, session_id: str,
+                          guardian_url: str) -> Handshake:
+    """The session's decision after its sessionStart answered with result, audited (hooks.md sessionStart: ALLOW / DENY)."""
     if result is None:
         # The Guardian does not evaluate sessionStart.
         return decision
-    common = {"method": "steps/sessionStart", "session_id": session_id, "guardian_url": config.guardian_url}
+    common = {"method": "steps/sessionStart", "session_id": session_id, "guardian_url": guardian_url}
     if isinstance(result, Resolution):
         audit_event(result.audit_type, **{**result.fields, "cause": result.cause, **common})
         if result.audit_type == "guardian_refusal_fail_closed":

@@ -30,8 +30,8 @@ from acs.client import _handshake
 from acs.testing.harness import ProgrammableGuardian, validate_hook_payload
 
 if _NAT_OK:
-    from acs.integrations.nat.adapter import (ACSLifecycleExporterConfig, ACSMiddleware, ACSMiddlewareConfig,
-                                              build_acs_middleware)
+    from acs.integrations.nat.adapter import (ACSGuardianDenied, ACSLifecycleExporterConfig, ACSMiddleware,
+                                              ACSMiddlewareConfig, build_acs_middleware)
 
 SECRET = "nat-runner-lifecycle-secret-padded-to-32-bytes"
 RUN = ["steps/sessionStart", "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
@@ -68,6 +68,15 @@ class _Failing(_Entry):
         raise _RunFailed(message)
 
 
+class _Hangs(_Entry):
+    """A workflow entry function that waits after its wrapped call until the run is cancelled."""
+
+    async def ainvoke(self, message: str, to_type=None) -> str:
+        await super().ainvoke(message, to_type)
+        await asyncio.Event().wait()
+        return message
+
+
 class _TwoCalls(_Entry):
     """A workflow entry function that makes two wrapped calls, message-1 then message-2."""
 
@@ -90,13 +99,14 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.guardian.start()
         self.addCleanup(self.guardian.stop)
 
-    def _runs(self, *messages: str, with_builder: bool = True, entry: type[_Entry] = _Entry) -> list[str]:
+    def _runs(self, *messages: str, with_builder: bool = True, entry: type[_Entry] = _Entry,
+              default_deny: bool = False) -> list[str]:
         """Run each message through NAT's Runner with the exporters the middleware's builder registered."""
         executed: list[str] = []
         self.exporters: list[str] = []
 
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=False,
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=default_deny,
                                          session_id=str(uuid.uuid4()))
             async with WorkflowBuilder() as builder, \
                     build_acs_middleware(config, builder if with_builder else None) as middleware:
@@ -106,7 +116,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                 manager = ExporterManager.from_exporters(exporters)
                 for message in messages:
                     async with Runner(message, entry(middleware, executed), ContextState.get(), manager) as runner:
-                        with contextlib.suppress(_RunFailed):
+                        with contextlib.suppress(_RunFailed, ACSGuardianDenied):
                             await runner.result()
                     await middleware._lifecycle_sent()
         asyncio.run(run())
@@ -167,10 +177,80 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                       for end in self.guardian.envelopes_for("steps/sessionEnd"))
         self.assertEqual((fast, slow), ({}, {"timeout": 1}), "the fast run ends first, after the slow run's failure")
 
-    def test_a_failed_run_reports_no_end(self) -> None:
-        """NAT pushes WORKFLOW_END only once the workflow returns, so a failed run sends no agentResponse or sessionEnd."""
+    def test_a_failed_run_still_reports_its_end(self) -> None:
+        """NAT pushes WORKFLOW_END only once the workflow returns; a failed run's sessionEnd goes out when NAT stops its exporter."""
         self.assertEqual(self._runs("first", "second", entry=_Failing), ["first", "second"])
-        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN[:4] + RUN[:4])
+        ended = RUN[:4] + ["steps/sessionEnd"]
+        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + ended + ended)
+        for end in self.guardian.envelopes_for("steps/sessionEnd"):
+            payload = end["params"]["payload"]
+            self.assertEqual((payload["reason"], payload["summary"]), ("error", {"decision_failures": {}}))
+            self.assertEqual(validate_hook_payload(payload, "session-end.json"), [])
+
+    def test_a_cancelled_run_reports_its_end_as_cancelled(self) -> None:
+        executed: list[str] = []
+
+        async def run() -> None:
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
+                exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
+
+                async def one() -> None:
+                    manager = ExporterManager.from_exporters(exporters)
+                    async with Runner("first", _Hangs(middleware, executed), ContextState.get(), manager) as runner:
+                        await runner.result()
+                task = asyncio.create_task(one())
+                while not executed:
+                    await asyncio.sleep(0.01)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                await middleware._lifecycle_sent()
+        asyncio.run(run())
+        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN[:4] + ["steps/sessionEnd"])
+        [end] = self.guardian.envelopes_for("steps/sessionEnd")
+        self.assertEqual(end["params"]["payload"]["reason"], "cancelled")
+
+    def test_a_denied_session_start_refuses_that_run(self) -> None:
+        """hooks.md sessionStart: ALLOW / DENY. A denied run's calls are blocked and nothing more of it is sent."""
+        allow = self.guardian._default_allow
+        answers = iter(["deny", "allow"])
+        # Answered late, so a call that did not wait for its run's sessionStart would reach the Guardian first.
+        self.guardian.handlers["steps/sessionStart"] = lambda req: (time.sleep(0.3), {**allow(req), "decision": next(answers)})[1]
+        self.assertEqual(self._runs("first", "second"), ["second"], "the denied run's call did not run")
+        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"] + RUN)
+
+    def test_a_refused_run_withholds_a_result_and_sends_nothing(self) -> None:
+        from acs.client import SessionRefused
+        from acs.integrations.nat.adapter import _Run
+        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
+        self.addCleanup(middleware.close)
+        middleware._runs["refused-run"] = _Run(outcome=SessionRefused("session_start_denied", {"decision": "deny"}))
+        context = SimpleNamespace(function_context=SimpleNamespace(name="Read"), output="SECRET-OUTPUT",
+                                  modified_args=("x",), modified_kwargs={})
+
+        async def post() -> None:
+            ContextState.get().workflow_run_id.set("refused-run")
+            await middleware.post_invoke(context)
+        asyncio.run(post())
+        self.assertIsNone(context.output)
+        self.assertNotIn("steps/toolCallResult", self.guardian.methods_seen())
+
+    def test_a_session_start_without_a_decision_follows_the_posture(self) -> None:
+        for default_deny, executed, sent in ((False, ["first"], RUN), (True, [], ["steps/sessionStart"])):
+            with self.subTest(default_deny=default_deny):
+                self.guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+                self.guardian.start()
+                self.addCleanup(self.guardian.stop)
+                hello, allow = self.guardian._default_handshake, self.guardian._default_allow
+                self.guardian.handlers.update({
+                    "handshake/hello": lambda req: {**hello(req), "timeout_config": {"default_ms": 300}},
+                    "steps/sessionStart": lambda req: (time.sleep(0.6), allow(req))[1]})
+                self.assertEqual(self._runs("first", default_deny=default_deny), executed)
+                self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + sent)
+                if not default_deny:
+                    [end] = self.guardian.envelopes_for("steps/sessionEnd")
+                    self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
 
     def test_without_the_builder_each_run_reports_from_its_first_call(self) -> None:
         self.assertEqual(self._runs("first", "second", with_builder=False), ["first", "second"])
