@@ -1,8 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { buildServerHello } from "../src/handshake.ts";
+import {
+  buildServerHello,
+  CAPABILITY_NOT_NEGOTIATED_CODE,
+  negotiateHandshake,
+  UNSUPPORTED_VERSION_CODE,
+} from "../src/handshake.ts";
 
-const MODULE = fileURLToPath(new URL("../src/handshake.ts", import.meta.url));
+const MODULE = new URL("../src/handshake.ts", import.meta.url).href;
 
 /**
  * Calls `buildServerHello()` with NO argument at all -- the shipped call
@@ -26,7 +31,7 @@ async function respondInSubprocess(
     env.ACS_ON_DECISION_FAILURE = posture;
   }
   const proc = Bun.spawn(
-    ["bun", "-e", `import {buildServerHello} from ${JSON.stringify(MODULE)};` +
+    [process.execPath, "-e", `import {buildServerHello} from ${JSON.stringify(MODULE)};` +
       "process.stdout.write(JSON.stringify(buildServerHello()));"],
     { env: env as Record<string, string>, stdout: "pipe", stderr: "pipe" },
   );
@@ -108,5 +113,52 @@ describe("buildServerHello — the zero-argument path the Guardian actually call
     expect(exitCode).not.toBe(0);
     expect(stdout).toBe("");
     expect(stderr).toContain("dney");
+  });
+});
+
+describe("negotiateHandshake — version compatibility (#139) and transport selection (#165)", () => {
+  it("rejects incompatible acs_version or acs_versions_supported with -32001 UNSUPPORTED_VERSION", () => {
+    expect(negotiateHandshake({ acs_version: "1.0.0", payload: {} })).toEqual({
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: expect.stringContaining("UNSUPPORTED_VERSION"),
+    });
+    expect(
+      negotiateHandshake({
+        acs_version: "0.1.0",
+        payload: { acs_versions_supported: ["1.0.0", "2.0.0"] },
+      }),
+    ).toEqual({
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: expect.stringContaining("UNSUPPORTED_VERSION"),
+    });
+  });
+
+  it("rejects ClientHello transports_supported that exclude http with -32003 CAPABILITY_NOT_NEGOTIATED", () => {
+    for (const transports of [["stdio"], ["https"], ["stdio", "https"]]) {
+      expect(
+        negotiateHandshake({
+          acs_version: "0.1.0",
+          payload: { transports_supported: transports },
+        }),
+      ).toEqual({
+        ok: false,
+        code: CAPABILITY_NOT_NEGOTIATED_CODE,
+        message: expect.stringContaining("CAPABILITY_NOT_NEGOTIATED"),
+      });
+    }
+  });
+
+  it("selects http when ClientHello advertises http in transports_supported", () => {
+    const res = negotiateHandshake({
+      acs_version: "0.1.0",
+      payload: { acs_versions_supported: ["0.1.0"], transports_supported: ["stdio", "http"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.serverHello.selected_transport).toBe("http");
+      expect(res.serverHello.negotiated_version).toBe("0.1.0");
+    }
   });
 });

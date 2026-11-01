@@ -196,6 +196,22 @@ describe("startGuardian POST /acs", () => {
     expect(serverHello.on_decision_failure).toBe("proceed");
   });
 
+  it("rejects unsupported ACS versions on handshake/hello and steps/* with -32001 (#139) and unsupported ClientHello transports with -32003 (#165)", async () => {
+    const badHello = await postAcs(url, makeEnvelope("handshake/hello", { acs_versions_supported: ["1.0.0"] }, { id: 43 }));
+    expect(badHello.result).toBeUndefined();
+    expect(badHello.error?.code).toBe(-32001);
+
+    const badStep = toolCallEnvelope("ls -la", { id: 44 });
+    (badStep.params as Record<string, unknown>).acs_version = "1.0.0";
+    const stepRes = await postAcs(url, badStep);
+    expect(stepRes.result).toBeUndefined();
+    expect(stepRes.error?.code).toBe(-32001);
+
+    const stdioOnly = await postAcs(url, makeEnvelope("handshake/hello", { transports_supported: ["stdio"] }, { id: 45 }));
+    expect(stdioOnly.result).toBeUndefined();
+    expect(stdioOnly.error?.code).toBe(-32003);
+  });
+
   it("steps/toolCallRequest carrying rm -rf / denies, with non-empty reasoning and reason_codes, echoing request_id", async () => {
     const requestId = crypto.randomUUID();
     const response = await postAcs(url, toolCallEnvelope("rm -rf /", { requestId }));
