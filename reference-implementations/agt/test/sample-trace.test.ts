@@ -75,6 +75,9 @@ function normalize(spans: LabeledSpan[]): unknown[] {
       status: span.status ?? {},
       events: (span.events ?? []).map((event) => {
         const { "acs.failure.elapsed_ms": _elapsed, ...rest } = attributes(event);
+        // The chain hash covers each entry's recorded time, so its value is set
+        // aside with the timestamps; that it is present is still compared.
+        if ("acs.chain_hash" in rest) rest["acs.chain_hash"] = "<chain hash>";
         return { name: event.name, attributes: rest };
       }),
     }))

@@ -204,7 +204,12 @@ describe("README.md's quickstart captures are what the processes actually print"
     const documented = captureAfter(FENCES, "bun run guardian");
     const observed = await bannerOf(
       GUARDIAN,
-      { ACS_GUARDIAN_PORT: "0", ACS_MANIFEST_PATH: MANIFEST },
+      {
+        ACS_GUARDIAN_PORT: "0",
+        ACS_MANIFEST_PATH: MANIFEST,
+        ACS_HMAC_SECRET: Buffer.alloc(32, 7).toString("base64"),
+        ACS_HMAC_KEY_ID: "test-key",
+      },
       documented.split("\n").length,
     );
     expect(normalisePort(observed, documented)).toBe(documented);

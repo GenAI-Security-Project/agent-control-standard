@@ -241,6 +241,14 @@ export function assemblePreToolCallSnapshot(
         `(it sent: ${Object.keys(args).join(", ") || "none"})`,
     );
   }
+  // The stock rules guard on is_string and skip anything else, so a command
+  // sent as an object or array would never be checked and would be allowed.
+  if (typeof args[policyTargetArgument] !== "string") {
+    throw new Error(
+      `tool ${JSON.stringify(payload.tool.name)}'s policy target argument ${JSON.stringify(policyTargetArgument)} ` +
+        `is not a string, so no rule can evaluate it`,
+    );
+  }
   args[POLICY_TARGET_LEAF] = args[policyTargetArgument];
 
   return {
