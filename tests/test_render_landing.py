@@ -293,6 +293,30 @@ def test_main_does_not_republish_the_inlined_diagram(tmp_path):
     assert (tmp_path / "assets" / "acs.css").is_file()
 
 
+def test_main_ties_the_page_to_the_stylesheet_it_was_built_with(tmp_path):
+    """A stale stylesheet under a new page breaks the header for returning visitors."""
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
+    digest = hashlib.sha256((REPO / "landing" / "assets" / "acs.css").read_bytes()).hexdigest()[:12]
+    assert f'href="assets/acs.css?v={digest}"' in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+def test_docs_pages_are_tied_to_the_stylesheet_they_were_built_with(tmp_path):
+    sheet = tmp_path / "docs" / "stylesheets" / "extra.css"
+    sheet.parent.mkdir(parents=True)
+    sheet.write_text("a { color: red; }", encoding="utf-8")
+    deep = tmp_path / "docs" / "a" / "b" / "index.html"
+    deep.parent.mkdir(parents=True)
+    link = '<link rel="stylesheet" href="../../stylesheets/extra.css">'
+    deep.write_text(link, encoding="utf-8")
+    (tmp_path / "404.html").write_text('<link href="/docs/stylesheets/extra.css">', encoding="utf-8")
+
+    render_landing.pin_docs_stylesheet(tmp_path)
+
+    digest = hashlib.sha256(sheet.read_bytes()).hexdigest()[:12]
+    assert f"stylesheets/extra.css?v={digest}" in deep.read_text(encoding="utf-8")
+    assert f"stylesheets/extra.css?v={digest}" in (tmp_path / "404.html").read_text(encoding="utf-8")
+
+
 def test_main_publishes_the_demo_the_page_points_at(tmp_path):
     assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
     page = (tmp_path / "index.html").read_text(encoding="utf-8")

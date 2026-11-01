@@ -454,6 +454,29 @@ def render(
     return out
 
 
+def pin_stylesheet(page: str, name: str, path: Path) -> str:
+    """Put a content hash in a stylesheet's URL.
+
+    Pages cache for 10 minutes and stylesheets for 4 hours, so a returning visitor can get
+    a new page with an old stylesheet. Markup that needs a new rule then renders broken
+    for hours, and a fresh browser never shows it. The hash makes each page ask for the
+    file it was built with. Material already does this for its own CSS.
+    """
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    return page.replace(f'{name}"', f'{name}?v={digest}"')
+
+
+def pin_docs_stylesheet(out: Path) -> None:
+    """Pin the docs pages too. This runs here because mkdocs.yml may not carry hooks."""
+    stylesheet = out / "docs" / "stylesheets" / "extra.css"
+    if not stylesheet.is_file():
+        return
+    for page in [out / "404.html", *(out / "docs").rglob("*.html")]:
+        if page.is_file():
+            text = page.read_text(encoding="utf-8")
+            page.write_text(pin_stylesheet(text, "stylesheets/extra.css", stylesheet), encoding="utf-8")
+
+
 def main(argv: list[str]) -> int:
     landing = Path(argv[1]) if len(argv) > 1 else Path("landing")
     out = Path(argv[2]) if len(argv) > 2 else Path("_site")
@@ -475,7 +498,6 @@ def main(argv: list[str]) -> int:
         return 1
     try:
         out.mkdir(parents=True, exist_ok=True)
-        (out / "index.html").write_text(page, encoding="utf-8")
         shutil.copytree(
             landing / "assets",
             out / "assets",
@@ -490,6 +512,8 @@ def main(argv: list[str]) -> int:
         video.mkdir(parents=True, exist_ok=True)
         for name in ("demo.mp4", "demo-poster.jpg"):
             shutil.copy2(repo / "reference-implementations" / "agt" / "docs" / name, video / name)
+        (out / "index.html").write_text(pin_stylesheet(page, "assets/acs.css", out / "assets" / "acs.css"), encoding="utf-8")
+        pin_docs_stylesheet(out)
     except OSError as error:
         print(f"error: cannot write the rendered site: {error}", file=sys.stderr)
         return 1
