@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from unittest import mock
 
 from acs.client import Config, FailPosture, Negotiated, NoAnswer, Refused, Resolution, SessionRefused, Undecided
-from acs.client._config import DEFAULT_GUARDIAN_URL, DEFAULT_TIMEOUT_S
+from acs.client._config import DEFAULT_GUARDIAN_URL, DEFAULT_TIMEOUT_S, FAILURE_CLASSES, failure_class
+from acs.core import schemas_dir
 
 PROCEED = FailPosture(deny_on_failure=False, timeout_s=1.0)
 DENY = FailPosture(deny_on_failure=True, timeout_s=1.0)
@@ -71,15 +73,55 @@ class Resolve(unittest.TestCase):
     def test_resolution_table(self) -> None:
         refused = Refused("replay_detected_response", self.FIELDS)
         undecided = Undecided("transport_failure", self.FIELDS)
+        closed = {"posture": "fail_closed"}
+        refusal = {**self.FIELDS, "failure_class": "guardian_error", **closed}
+        unreachable = {**self.FIELDS, "failure_class": "unreachable"}
         table = [
-            (PROCEED, refused, Resolution(False, "guardian_refusal_fail_closed", refused.cause, self.FIELDS)),
-            (DENY, refused, Resolution(False, "guardian_refusal_fail_closed", refused.cause, self.FIELDS)),
-            (DENY, undecided, Resolution(False, "decision_failure_fail_closed", undecided.cause, self.FIELDS)),
-            (PROCEED, undecided, Resolution(True, "fail_open_bypass", undecided.cause, self.FIELDS)),
+            (PROCEED, refused, Resolution(False, "guardian_refusal_fail_closed", refused.cause, refusal,
+                                          decision_failure=True)),
+            (DENY, refused, Resolution(False, "guardian_refusal_fail_closed", refused.cause, refusal,
+                                       decision_failure=True)),
+            (DENY, undecided, Resolution(False, "decision_failure_fail_closed", undecided.cause,
+                                         {**unreachable, **closed}, decision_failure=True)),
+            (PROCEED, undecided, Resolution(True, "fail_open_bypass", undecided.cause,
+                                            {**unreachable, "posture": "fail_open"}, decision_failure=True)),
         ]
         for posture, outcome, expected in table:
             with self.subTest(deny=posture.deny_on_failure, outcome=type(outcome).__name__):
                 self.assertEqual(posture.resolve(outcome), expected)
+
+
+class FailureClasses(unittest.TestCase):
+    """§6.4: every decision failure carries one of the failure classes sessionEnd counts."""
+
+    def test_the_classes_are_the_ones_session_end_counts(self) -> None:
+        schema = json.loads((schemas_dir() / "hooks" / "session-end.json").read_text())
+        counted = schema["properties"]["summary"]["properties"]["decision_failures"]["propertyNames"]["enum"]
+        self.assertEqual(sorted(FAILURE_CLASSES), sorted(counted))
+
+    def test_each_cause_maps_to_its_class(self) -> None:
+        table = {
+            "decision_timeout": "timeout", "transport_failure": "unreachable",
+            "malformed_response": "malformed_response", "response_binding_mismatch": "malformed_response",
+            "response_signature_invalid": "signature_invalid", "error_signature_invalid": "signature_invalid",
+            "response_unverifiable": "signature_invalid",
+            "internal_error_response": "guardian_error", "replay_detected_response": "guardian_error",
+            "http_503_error": "guardian_error", "http_403_refusal": "guardian_error", "key_id_rejected": "guardian_error",
+            "adapter_exception": "observed_agent_error", "adapter_build_failed": "observed_agent_error",
+            "adapter_translate_exception": "observed_agent_error", "request_exceeds_max_payload": "observed_agent_error",
+            "guardian_url_rejected": "observed_agent_error", "invalid_stdin_json": "observed_agent_error",
+            "something_new": "other",
+        }
+        for cause, expected in table.items():
+            with self.subTest(cause):
+                self.assertEqual(failure_class(cause), expected)
+                self.assertIn(expected, FAILURE_CLASSES)
+
+    def test_a_gate_restating_a_start_failure_is_not_counted_again(self) -> None:
+        session = Negotiated({"on_decision_failure": "proceed"},
+                             {"cause": "decision_timeout", "fields": {"failure_class": "timeout", "posture": "fail_open"}})
+        gated = Config.from_env({"ACS_DEFAULT_DENY": "1"}).gate(session)
+        self.assertEqual((gated.decision_failure, gated.fields["posture"]), (False, "fail_closed"))
 
 
 class Gate(unittest.TestCase):

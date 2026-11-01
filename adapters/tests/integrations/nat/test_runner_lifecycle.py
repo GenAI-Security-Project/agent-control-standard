@@ -7,6 +7,7 @@ import contextlib
 import contextvars
 import os
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -26,7 +27,7 @@ except ImportError:
     _NAT_OK = False
 
 from acs.client import _handshake
-from acs.testing.harness import ProgrammableGuardian
+from acs.testing.harness import ProgrammableGuardian, validate_hook_payload
 
 if _NAT_OK:
     from acs.integrations.nat.adapter import (ACSLifecycleExporterConfig, ACSMiddleware, ACSMiddlewareConfig,
@@ -107,6 +108,20 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.assertEqual(self._runs("first", "second"), ["first", "second"])
         self.assertEqual(self.exporters, ["acs_lifecycle"])
         self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN + RUN)
+
+    def test_session_end_counts_the_runs_decision_failures(self) -> None:
+        # Threaded, so only the slow call times out and nothing queues behind it.
+        self.guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+        self.guardian.start()
+        self.addCleanup(self.guardian.stop)
+        hello = self.guardian._default_handshake
+        allow = self.guardian._default_allow
+        self.guardian.handlers["handshake/hello"] = lambda req: {**hello(req), "timeout_config": {"default_ms": 300}}
+        self.guardian.handlers["steps/toolCallRequest"] = lambda req: (time.sleep(0.6), allow(req))[1]
+        self.assertEqual(self._runs("first"), ["first"], "under proceed the call runs after its decision times out")
+        payload = self.guardian.envelopes_for("steps/sessionEnd")[0]["params"]["payload"]
+        self.assertEqual(payload["summary"]["decision_failures"], {"timeout": 1})
+        self.assertEqual(validate_hook_payload(payload, "session-end.json"), [])
 
     def test_a_failed_run_reports_no_end(self) -> None:
         """NAT pushes WORKFLOW_END only once the workflow returns, so a failed run sends no agentResponse or sessionEnd."""

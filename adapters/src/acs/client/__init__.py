@@ -4,6 +4,10 @@ from typing import Any
 
 # Exports load on first use, so _config, _outcome and _audit import without the signing dependency.
 _EXPORTS = {
+    "FAILURE_CLASSES": "_config",
+    "failure_class": "_config",
+    "decision_failure_counts": "_store",
+    "count_decision_failure": "_store",
     "Config": "_config",
     "Decided": "_outcome",
     "FailPosture": "_config",

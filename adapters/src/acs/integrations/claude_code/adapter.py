@@ -67,6 +67,8 @@ from acs import __version__
 
 from acs.client import (
     Config,
+    count_decision_failure,
+    decision_failure_counts,
     Decided,
     FailPosture,
     Handshake,
@@ -272,7 +274,9 @@ def _payload_session_start(event: dict[str, Any]) -> dict[str, Any]:
 def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
     name = event.get("hook_event_name", "")
     raw_reason = event.get("reason") or ("completed" if name == "Stop" else "other")
-    return {"reason": SESSION_END_REASON_MAP.get(raw_reason, "completed")}
+    # §6.4: the session's decision failures per failure class; an empty count says none were recorded.
+    counts = decision_failure_counts(event.get("session_id"), workspace=_turn_ws(event))
+    return {"reason": SESSION_END_REASON_MAP.get(raw_reason, "completed"), "summary": {"decision_failures": counts}}
 
 
 # ─── Turn tracking ────────────────────────────────────────────────────────
@@ -469,6 +473,8 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
                         session_id=session_id)
     if isinstance(result, Decided) and started is not None:
         started.append(result)
+    elif isinstance(result, Resolution):
+        count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=_turn_ws(event))
     return result
 
 
@@ -659,7 +665,7 @@ def main() -> int:
     session = _open_session(event, config, started)
     gated = config.gate(session)
     if gated is not None:
-        return _settle(gated, hook_name, session_id)
+        return _settle(gated, hook_name, session_id, workspace=_turn_ws(event))
     if hook_name == "SessionStart":
         # The session's sessionStart went out when the session opened, from this hook or an earlier one.
         if started:
@@ -675,7 +681,7 @@ def main() -> int:
         # Settled with the session's effective posture; an exit 1 would let the host proceed.
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       hook_name, session_id)
+                       hook_name, session_id, workspace=_turn_ws(event))
 
 
 def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
@@ -693,7 +699,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
-                return _settle(result, "UserPromptSubmit", session_id)
+                return _settle(result, "UserPromptSubmit", session_id, workspace=_turn_ws(event))
             turn_start = normalize_decision(result.response.get("result"))
             if turn_start.disposition != "allow":
                 # Only allow applies to a turn start, so any other disposition blocks the prompt.
@@ -712,7 +718,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       hook_name, session_id)
+                       hook_name, session_id, workspace=_turn_ws(event))
     if not request:
         if hook_name == "Stop":
             # turnEnd with no open turn: audit it rather than fabricate
@@ -720,7 +726,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {hook_name}\n")
-        return _settle(posture.resolve(Undecided("adapter_build_failed")), hook_name, session_id)
+        return _settle(posture.resolve(Undecided("adapter_build_failed")), hook_name, session_id, workspace=_turn_ws(event))
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
@@ -740,7 +746,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
 
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
     if isinstance(result, Resolution):
-        return _settle(result, hook_name, session_id)
+        return _settle(result, hook_name, session_id, workspace=_turn_ws(event))
     response = result.response
 
     # A translation bug would exit 1, which the host reads as proceed, so it fails closed here.
@@ -750,7 +756,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
-                       hook_name, session_id)
+                       hook_name, session_id, workspace=_turn_ws(event))
 
     # Close the turn after the turnEnd has been emitted/recorded.
     if hook_name == "Stop":
@@ -758,7 +764,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     return 0
 
 
-def _settle(resolution: Resolution, hook_name: str, session_id: str | None) -> int:
+def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, workspace: str | None = None) -> int:
     """Carry out a resolution: block in the hook's native shape unless it proceeds, and record why per §6.4.
 
     The audit type says which rule decided (fail_open_bypass,
@@ -774,6 +780,8 @@ def _settle(resolution: Resolution, hook_name: str, session_id: str | None) -> i
         _emit_deny(hook_name, f"ACS adapter: {resolution.label} ({resolution.cause})")
     audit_event(resolution.audit_type, cause=resolution.cause, hook=hook_name,
                 session_id=session_id, **resolution.fields)
+    if resolution.decision_failure:
+        count_decision_failure(session_id, resolution.fields.get("failure_class", "other"), workspace=workspace)
     return 0
 
 

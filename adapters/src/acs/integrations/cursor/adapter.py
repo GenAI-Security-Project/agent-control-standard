@@ -72,6 +72,8 @@ from acs import __version__
 
 from acs.client import (
     Config,
+    count_decision_failure,
+    decision_failure_counts,
     Decided,
     FailPosture,
     Handshake,
@@ -462,7 +464,8 @@ def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
         # Legacy/unknown value: accept it if it happens to be an ACS enum
         # member already, else default to completed.
         mapped = raw if raw in SESSION_END_REASONS else "completed"
-    return {"reason": mapped}
+    counts = decision_failure_counts(_session_id(event), workspace=_workspace(event))
+    return {"reason": mapped, "summary": {"decision_failures": counts}}
 
 
 # Cursor stop.status → ACS turn-end outcome enum
@@ -662,8 +665,11 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
     if not method_evaluated(session.server_hello, "steps/sessionStart"):
         audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session_id)
         return None
-    return round_trip(build_request("sessionStart", event), guardian_url=config.guardian_url,
-                      posture=config.posture.negotiated(session.server_hello), session_id=session_id)
+    result = round_trip(build_request("sessionStart", event), guardian_url=config.guardian_url,
+                        posture=config.posture.negotiated(session.server_hello), session_id=session_id)
+    if isinstance(result, Resolution):
+        count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=_workspace(event))
+    return result
 
 
 # ─── Response translation — dispatch table by event category ──────────────
@@ -842,7 +848,7 @@ def main() -> int:
     session = _open_session(event, config)
     gated = config.gate(session)
     if gated is not None:
-        return _settle(gated, event_name, session_id)
+        return _settle(gated, event_name, session_id, workspace=_workspace(event))
     if event_name == "sessionStart":
         # The session's sessionStart went out when the session opened, from this hook or an earlier one.
         return 0
@@ -856,7 +862,7 @@ def main() -> int:
         # Settled with the session's effective posture; an exit 1 would let the host proceed.
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       event_name, session_id)
+                       event_name, session_id, workspace=_workspace(event))
 
 
 def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
@@ -873,7 +879,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
             result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
-                return _settle(result, "beforeSubmitPrompt", session_id)
+                return _settle(result, "beforeSubmitPrompt", session_id, workspace=_workspace(event))
             turn_start = normalize_decision(result.response.get("result"))
             if turn_start.disposition != "allow":
                 # Only allow applies to a turn start, so any other disposition blocks the prompt.
@@ -896,14 +902,14 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       event_name, session_id)
+                       event_name, session_id, workspace=_workspace(event))
     if not request:
         if event_name == "stop":
             # turnEnd with no open turn: nothing to close honestly.
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {event_name}\n")
-        return _settle(posture.resolve(Undecided("adapter_build_failed")), event_name, session_id)
+        return _settle(posture.resolve(Undecided("adapter_build_failed")), event_name, session_id, workspace=_workspace(event))
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
@@ -929,7 +935,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
 
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
     if isinstance(result, Resolution):
-        return _settle(result, event_name, session_id)
+        return _settle(result, event_name, session_id, workspace=_workspace(event))
     response = result.response
 
     # A bug escaping translate_response would exit 1 = Cursor proceeds;
@@ -940,7 +946,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
-                       event_name, session_id)
+                       event_name, session_id, workspace=_workspace(event))
 
     # Close the turn after the turnEnd has been emitted/recorded.
     if event_name == "stop":
@@ -973,7 +979,7 @@ def _explicit_allow(event_name: str) -> int:
     return 0
 
 
-def _settle(resolution: Resolution, event_name: str, session_id: str | None) -> int:
+def _settle(resolution: Resolution, event_name: str, session_id: str | None, *, workspace: str | None = None) -> int:
     """Carry out a resolution in the event's native shape, allow or deny, and record why per §6.4.
 
     A proceed carries Cursor's explicit allow: failClosed covers hook crashes
@@ -981,6 +987,8 @@ def _settle(resolution: Resolution, event_name: str, session_id: str | None) -> 
     """
     if resolution.message:
         sys.stderr.write(f"acs-adapter: {resolution.message}\n")
+    if resolution.decision_failure:
+        count_decision_failure(session_id, resolution.fields.get("failure_class", "other"), workspace=workspace)
     if resolution.proceed:
         audit_event(resolution.audit_type, cause=resolution.cause, event=event_name,
                     session_id=session_id, **resolution.fields)

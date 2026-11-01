@@ -161,7 +161,30 @@ def mark_once(session_id: str, flag: str, *, workspace: str | None = None) -> bo
     return first is not False
 
 
-# ----- The open turn -----
+def count_decision_failure(session_id: str | None, failure: str, *, workspace: str | None = None) -> None:
+    """Count one decision failure for sessionEnd's summary; never raises, so a count cannot stop a deny."""
+    if not session_id:
+        return
+
+    def change(state: dict) -> None:
+        counts = state.get("decision_failures")
+        counts = counts if isinstance(counts, dict) else {}
+        counts[failure] = int(counts.get(failure, 0)) + 1
+        state["decision_failures"] = counts
+
+    try:
+        update_session_state(session_id, change, workspace=workspace)
+    except Exception:  # noqa: BLE001
+        # The failure itself is already audited; sessionEnd's count is a lower bound (trace/events.md).
+        pass
+
+
+def decision_failure_counts(session_id: str | None, *, workspace: str | None = None) -> dict[str, int]:
+    counts = load_session_state(session_id, workspace=workspace).get("decision_failures") if session_id else None
+    if not isinstance(counts, dict):
+        return {}
+    return {k: v for k, v in counts.items() if isinstance(k, str) and isinstance(v, int) and v >= 0}
+
 
 def current_turn(session_id: str | None, *, workspace: str | None = None) -> str | None:
     if not session_id:

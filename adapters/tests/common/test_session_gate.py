@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from acs.testing.harness import ProgrammableGuardian
+from acs.testing.harness import ProgrammableGuardian, validate_hook_payload
 
 BIN = Path(sys.executable).parent
 SECRET = "session-gate-hook-secret-padded-to-32-bytes"
@@ -518,6 +518,43 @@ class SessionGateThroughHooks(unittest.TestCase):
                 p, denied, _ = run(guardian.url(), session)
                 self.assertFalse(denied, p.stdout)
                 self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest"])
+
+    def _end(self, host: str, url: str, session: str, **extra: str) -> subprocess.CompletedProcess:
+        if host == "claude-code":
+            argv, event = [str(BIN / "acs-claude-code-hook")], {"session_id": session, "cwd": "/tmp",
+                                                               "hook_event_name": "SessionEnd", "reason": "clear"}
+        else:
+            argv, event = [str(BIN / "acs-cursor-hook"), "sessionEnd"], {"conversation_id": session,
+                                                                        "workspace_roots": ["/tmp"], "reason": "completed"}
+        return subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True,
+                              env=self._env(url, **extra), timeout=30)
+
+    def test_session_end_counts_the_sessions_decision_failures_once_each(self) -> None:
+        # The tool call, or sessionStart, gets no decision within the negotiated 300 ms (§6.4: timeout).
+        for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
+            for slow in ("steps/toolCallRequest", "steps/sessionStart"):
+                with self.subTest(host, slow=slow):
+                    guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+                    def hello(req, base=guardian._default_handshake):
+                        return {**base(req), "timeout_config": {"default_ms": 300}}
+
+                    def late(req, allow=guardian._default_allow):
+                        time.sleep(0.6)
+                        return allow(req)
+                    guardian.handlers.update({"handshake/hello": hello, slow: late})
+                    guardian.start()
+                    self.addCleanup(guardian.stop)
+                    session = str(uuid.uuid4())
+                    # A fail-closed hook re-settles a sessionStart failure through the gate; that is not a second failure.
+                    run(guardian.url(), session, ACS_DEFAULT_DENY="0" if slow == "steps/toolCallRequest" else "1")
+                    p = self._end(host, guardian.url(), session)
+                    self.assertEqual(p.returncode, 0, p.stderr[-300:])
+                    ends = guardian.envelopes_for("steps/sessionEnd")
+                    self.assertEqual(len(ends), 1, guardian.methods_seen())
+                    payload = ends[0]["params"]["payload"]
+                    self.assertEqual(payload["summary"]["decision_failures"], {"timeout": 1})
+                    self.assertEqual(validate_hook_payload(payload, "session-end.json"), [])
 
     def test_parallel_startup_hooks_follow_one_refusal(self) -> None:
         guardian = self._slow_hello(0.5, lambda req: {"code": -32000, "message": "agent not permitted"})

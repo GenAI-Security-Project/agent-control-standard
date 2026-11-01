@@ -10,7 +10,32 @@ DEFAULT_GUARDIAN_URL = "http://127.0.0.1:8787/acs"
 DEFAULT_TIMEOUT_S = 5.0
 
 
-# The deny message's label for each audit type that blocks.
+# §6.4 failure classes, the acs.failure.class values in trace/otel-mapping.json.
+FAILURE_CLASSES = ("timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error",
+                   "signature_invalid", "handshake_failure", "other")
+
+_OBSERVED_AGENT_CAUSES = {"adapter_exception", "adapter_build_failed", "adapter_translate_exception",
+                          "invalid_stdin_json", "guardian_url_rejected", "request_exceeds_max_payload"}
+_SIGNATURE_CAUSES = {"response_signature_invalid", "error_signature_invalid", "response_unverifiable",
+                     "server_hello_signature_invalid"}
+
+
+def failure_class(cause: str) -> str:
+    if cause in ("decision_timeout", "handshake_timeout"):
+        return "timeout"
+    if cause == "transport_failure":
+        return "unreachable"
+    if cause in ("malformed_response", "response_binding_mismatch"):
+        return "malformed_response"
+    if cause in _SIGNATURE_CAUSES:
+        return "signature_invalid"
+    if cause in _OBSERVED_AGENT_CAUSES:
+        return "observed_agent_error"
+    if cause.endswith("_response") or cause.startswith("http_") or cause == "key_id_rejected":
+        return "guardian_error"
+    return "other"
+
+
 _DENY_LABELS = {
     "guardian_refusal_fail_closed": "refused",
     "session_refused_fail_closed": "session refused",
@@ -26,6 +51,8 @@ class Resolution:
     cause: str
     fields: Mapping[str, Any]
     message: str = ""
+    # This step's own decision failure (§6.4), counted once; a session gate restating one is not.
+    decision_failure: bool = False
 
     @property
     def label(self) -> str:
@@ -65,11 +92,14 @@ class FailPosture:
 
     def resolve(self, outcome: Undecided | Refused) -> Resolution:
         """The one place a step without a usable decision is settled: a refusal blocks, anything else follows the posture."""
+        proceed = not isinstance(outcome, Refused) and not self.deny_on_failure
+        fields = {**outcome.fields, "failure_class": failure_class(outcome.cause),
+                  "posture": "fail_open" if proceed else "fail_closed"}
         if isinstance(outcome, Refused):
-            return Resolution(False, "guardian_refusal_fail_closed", outcome.cause, outcome.fields, outcome.message)
-        if self.deny_on_failure:
-            return Resolution(False, "decision_failure_fail_closed", outcome.cause, outcome.fields, outcome.message)
-        return Resolution(True, "fail_open_bypass", outcome.cause, outcome.fields, outcome.message)
+            audit_type = "guardian_refusal_fail_closed"
+        else:
+            audit_type = "fail_open_bypass" if proceed else "decision_failure_fail_closed"
+        return Resolution(proceed, audit_type, outcome.cause, fields, outcome.message, decision_failure=True)
 
 
 @dataclass(frozen=True)
@@ -109,7 +139,7 @@ class Config:
             if failure is None or not self.posture.negotiated(handshake.server_hello).deny_on_failure:
                 return None
             return Resolution(False, "decision_failure_fail_closed", failure["cause"],
-                              {**failure["fields"], "method": "steps/sessionStart"})
+                              {**failure["fields"], "method": "steps/sessionStart", "posture": "fail_closed"})
         if isinstance(handshake, SessionRefused):
             return Resolution(False, "session_refused_fail_closed", handshake.cause, handshake.fields)
         if self.startup_proceeds:

@@ -496,6 +496,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         # would collide once GC recycles addresses.
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
+        # §6.4: decision failures per failure class, for sessionEnd's summary; calls and the lifecycle thread both count.
+        self._decision_failures: collections.Counter = collections.Counter()
+        self._decision_failures_lock = threading.Lock()
 
     def _ensure_handshake(self) -> Handshake:
         """The session's decision, opened once under a lock so concurrent first calls share one handshake."""
@@ -639,12 +642,16 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             audit_event("method_not_evaluated", method=method,
                         session_id=self._session_id)
             return
+        if method == "steps/sessionEnd":
+            # Built as it is sent, so it counts the failures of every hook sent before it.
+            payload = {**payload, "summary": {"decision_failures": self._failure_counts()}}
         request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(),
                                    payload=payload)
         result = self._round_trip(request)
         if isinstance(result, Resolution):
             audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
                                                     "method": method, "session_id": self._session_id})
+            self._count_failure(result)
 
     def _correlation_request_id(self, context) -> str:
         """Return a request_id unique per invocation but stable across
@@ -856,11 +863,22 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return {"agent_id": self._agent_id, "session_id": self._session_id,
                 "platform": "nat", "adapter_version": ADAPTER_VERSION}
 
+    def _count_failure(self, resolution: Resolution) -> None:
+        """Count a step's own decision failure under its failure class (§6.4)."""
+        if resolution.decision_failure:
+            with self._decision_failures_lock:
+                self._decision_failures[resolution.fields.get("failure_class", "other")] += 1
+
+    def _failure_counts(self) -> dict[str, int]:
+        with self._decision_failures_lock:
+            return dict(self._decision_failures)
+
     def _settle_pre(self, context, resolution: Resolution, message: str = ""):
         """Settle a pre_invoke step without a usable decision: block unless the resolution proceeds, and record why."""
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": self._session_id,
                                               "method": "steps/toolCallRequest"})
+        self._count_failure(resolution)
         if resolution.proceed:
             return None
         return self._block(context, message or resolution.message or resolution.cause)
@@ -872,6 +890,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": self._session_id,
                                               "method": "steps/toolCallResult"})
+        self._count_failure(resolution)
         return None if resolution.proceed else context
 
     def _block(self, context, reason: str):
