@@ -18,7 +18,7 @@
     "agent-control-specification": "0.3.1-beta.0"
   },
   "devDependencies": {
-    "bun-types": "^1.3.14",
+    "bun-types": "^1.4.4",
     "typescript": "^7.0.2",
     "host-adapter": "workspace:*",
     "guardian": "workspace:*"
