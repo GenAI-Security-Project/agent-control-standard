@@ -523,7 +523,7 @@ def build_report(
     report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
     report["promotion"] = list(snapshot.get("promotion") or [])
     report["bypasses"] = [list(line) for line in snapshot.get("bypasses") or []]
-    # Every switch is listed, so the weekly call sees that rendering is off, not only that a
+    # Every switch is listed, so a lead sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
     report["unverified_closes"].sort()
@@ -544,8 +544,8 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
         status_line(status, stamp, run_id, failed),
         model.HEALTH_MARKER,
         "",
-        "This issue is rewritten every night by the roadmap sweep. It is the weekly call's "
-        "triage agenda. Fix what it lists in GitHub, and the next sweep clears the line.",
+        "This issue is rewritten every night by the roadmap sweep. It lists what needs "
+        "attention. Fix what it lists in GitHub, and the next sweep clears the line.",
         "",
         f"Written {stamp}, run [{run_id}]({repo_url}/actions/runs/{run_id}), rules {model.RULES_VERSION}.",
     ]

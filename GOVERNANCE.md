@@ -62,11 +62,11 @@ is how a taxonomy stops getting used in month two.
 the mandatory floor decision, the adapters, the installable Guardian, and the
 interoperability benchmark. It does not mean important.
 
-Triage runs on the weekly call. Promotion from `integration` to `main` is a standing item
-on the same call, and a project lead opens and merges it.
+Issues get triaged as they come in. A project lead opens and merges the promotion from
+`integration` to `main`.
 
-The pinned "Roadmap health" issue, rewritten nightly by the roadmap sweep, is the weekly
-call's triage agenda.
+The pinned "Roadmap health" issue, rewritten nightly by the roadmap sweep, lists what
+needs attention.
 
 Repository admins can bypass the rulesets on `main`, `integration`, and `release/*`. The
 health issue reports every bypassed merge and every direct push.
