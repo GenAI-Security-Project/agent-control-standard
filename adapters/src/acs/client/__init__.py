@@ -24,6 +24,7 @@ _EXPORTS = {
     "SessionRefused": "_outcome",
     "Undecided": "_outcome",
     "audit_event": "_audit",
+    "audit_modify_unsupported": "_audit",
     "classify_response": "_exchange",
     "close_turn": "_store",
     "current_turn": "_store",

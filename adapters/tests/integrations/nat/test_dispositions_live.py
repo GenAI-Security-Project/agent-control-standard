@@ -22,6 +22,9 @@ the agent path and ship to production as theatre.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -201,10 +204,39 @@ class DispositionsLive(unittest.TestCase):
         except ACSGuardianDenied:
             pass
 
-    # ────────────────────────────────────────────────────────────────
-    # ASK / DEFER substitution — per docs both substitute to DENY at
-    # the middleware boundary. Verify the function does NOT execute.
-    # ────────────────────────────────────────────────────────────────
+    def test_a_modify_nat_cannot_apply_is_denied_and_recorded(self) -> None:
+        """§6.5: a MODIFY the client cannot apply is a DENY, recorded with reason_codes ["modify_unsupported"]."""
+        class ShellInput(BaseModel):
+            command: str
+            secret: str
+
+        cases = {
+            "tool call with redactions": ("steps/toolCallRequest",
+                                          {"redactions": [{"path": "/secret", "replacement": "[REDACTED]"}]}),
+            "tool call with replacement content": ("steps/toolCallRequest", {"modified_content": "echo SAFE"}),
+            "tool result with structured edits": ("steps/toolCallResult", {"parameter_overrides": {"command": "x"}}),
+        }
+        for name, (method, mods) in cases.items():
+            with self.subTest(name):
+                ctx = _make_ctx_with_pydantic_input("Bash", ShellInput, ShellInput(command="unsafe", secret="s"))
+                ctx.output = "SECRET-OUTPUT"
+                self._set_response(method, {"decision": "modify", "reasoning": "rewrite", "modifications": mods})
+                mw = self._mw(default_deny=False)
+                err, raised = io.StringIO(), False
+                with contextlib.redirect_stderr(err):
+                    try:
+                        asyncio.run(mw.pre_invoke(ctx) if method == "steps/toolCallRequest" else mw.post_invoke(ctx))
+                    except ACSGuardianDenied:
+                        raised = True
+                if method == "steps/toolCallRequest":
+                    self.assertTrue(raised or getattr(ctx, "action", None) is not None,
+                                    "the call was neither raised nor skipped")
+                else:
+                    self.assertIsNone(ctx.output)
+                audits = [json.loads(line.removeprefix("ACS_AUDIT ")) for line in err.getvalue().splitlines()
+                          if line.startswith("ACS_AUDIT ")]
+                self.assertEqual([a["reason_codes"] for a in audits if a["acs_audit_event"] == "modify_unsupported"],
+                                 [["modify_unsupported"]])
 
     def test_ask_substituted_to_deny(self) -> None:
         class ShellInput(BaseModel):

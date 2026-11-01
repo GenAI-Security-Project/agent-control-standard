@@ -39,3 +39,8 @@ def audit_event(event_type: str, **fields: Any) -> None:
             sys.stderr.write(
                 f"ACS_AUDIT_SINK_ERROR cannot append to {audit_file!r}: {e}\n")
             sys.stderr.flush()
+
+
+def audit_modify_unsupported(detail: str, **fields: Any) -> None:
+    """Record a MODIFY the client cannot apply and treats as DENY, under reason code modify_unsupported (§6.5)."""
+    audit_event("modify_unsupported", reason_codes=["modify_unsupported"], detail=detail, **fields)

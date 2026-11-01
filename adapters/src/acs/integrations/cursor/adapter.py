@@ -82,6 +82,7 @@ from acs.client import (
     Resolution,
     Undecided,
     audit_event,
+    audit_modify_unsupported,
     close_turn,
     current_turn,
     load_session_state,
@@ -672,20 +673,8 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
     return result
 
 
-# ─── Response translation — dispatch table by event category ──────────────
-#
-# Cursor's response shapes group naturally into 4 categories:
-#   - permission events (preToolUse, subagentStart, beforeShellExecution,
-#     beforeMCPExecution): {"permission": ..., "user_message": ..., "agent_message": ...,
-#     "updated_input": ...}
-#   - post-tool events (postToolUse, postToolUseFailure, afterShellExecution,
-#     afterMCPExecution, afterFileEdit, afterTabFileEdit): {"additional_context": ...,
-#     "updated_mcp_tool_output": ...}
-#   - beforeSubmitPrompt: blocks with {"continue": false, "user_message"}; carries
-#     internal __exit_code/_reasoning keys consumed by main()
-#   - everything else: no response shape (Stop, SessionStart, SessionEnd, etc.)
-
-def _translate_permission(decision: Decision, event_name: str, original_input: dict) -> dict[str, Any]:
+def _translate_permission(decision: Decision, event_name: str, original_input: dict,
+                          tool_name: str = "") -> dict[str, Any]:
     if decision.disposition in PERMISSION_MAP:
         return _permission_response(PERMISSION_MAP[decision.disposition], decision.reasoning)
     if decision.disposition == "modify":
@@ -699,44 +688,62 @@ def _translate_permission(decision: Decision, event_name: str, original_input: d
             return _permission_response(
                 "deny", f"MODIFY refused ({violation}); failing closed per §6.3:146")
         if decision.modifications.get("redactions"):
-            # updated_input cannot express JSON-Pointer redactions; never
-            # apply only the override half of a compound decision.
-            audit_event("modify_unapplied_redactions", event=event_name)
+            # updated_input cannot express redactions, so the override half is never applied alone.
+            audit_modify_unsupported("redactions", event=event_name)
             return _permission_response(
                 "deny", "MODIFY refused: Cursor cannot apply the requested "
                 "redactions without dropping part of the decision")
         overrides = decision.modifications.get("parameter_overrides")
-        # A non-dict override cannot be applied — fail closed per §6.3:146.
-        if isinstance(overrides, dict) and event_name == "preToolUse":
-            # parameter_overrides are per-argument EDITS while Cursor's
-            # updated_input REPLACES the whole input, so merge onto the
-            # original.
+        if event_name != "preToolUse":
+            unsupported = "no updated_input on this event"
+        elif _is_mcp_tool(tool_name):
+            # Cursor ignores updated_input for an HTTP MCP server's tool, and the name does not say which kind it is.
+            unsupported = "updated_input on an MCP tool"
+        elif not isinstance(overrides, dict):
+            unsupported = "no parameter_overrides object"
+        else:
+            # updated_input replaces the whole input.
             merged = {**original_input, **overrides}
             return _permission_response("allow", decision.reasoning, updated_input=merged)
+        audit_modify_unsupported(unsupported, event=event_name, tool=tool_name)
         return _permission_response("deny",
                                      f"MODIFY substituted to DENY: {decision.reasoning}")
     return {}
 
 
-def _translate_post_tool(decision: Decision, event_name: str) -> dict[str, Any]:
+def _is_mcp_tool(tool_name: Any) -> bool:
+    return isinstance(tool_name, str) and tool_name.startswith("MCP:")
+
+
+def _mcp_output_replaceable(tool_name: Any, tool_output: Any) -> bool:
+    """updated_mcp_tool_output replaces an MCP tool's output, except an HTTP MCP server's, whose tool_output arrives as {"redacted": true} (hooks docs)."""
+    parsed = _parse_json_field(tool_output)
+    return _is_mcp_tool(tool_name) and not (isinstance(parsed, dict) and parsed.get("redacted") is True)
+
+
+def _post_tool_deny(event_name: str, reason: str) -> dict[str, Any]:
+    # postToolUse fires after execution — no block exists; the denial
+    # reaches the conversation as additional_context and is audited.
+    audit_event("unenforceable_decision", decision="deny", event=event_name, reason=reason or "(none)")
+    return _post_tool_response(additional_context=f"ACS Guardian denied this result: {reason or '(no reasoning)'}")
+
+
+def _translate_post_tool(decision: Decision, event_name: str, tool_name: str = "",
+                         tool_output: Any = None) -> dict[str, Any]:
     """Only `postToolUse` documents output fields (`additional_context`,
     and `updated_mcp_tool_output` for MCP tools); every other post-tool
     event documents "No output fields currently supported" (docs
     2026-08-22), so an arrived restrictive decision there is recorded and
     nothing is emitted."""
     if event_name != "postToolUse":
+        if decision.disposition == "modify":
+            audit_modify_unsupported("no output field on this event", event=event_name, tool=tool_name)
         if decision.disposition in ("deny", "modify", "ask", "defer"):
             audit_event("unenforceable_decision", decision=decision.disposition,
                         event=event_name, reason=decision.reasoning or "(none)")
         return {}
     if decision.disposition == "deny":
-        # postToolUse fires after execution — no block exists; the denial
-        # reaches the conversation as additional_context and is audited.
-        audit_event("unenforceable_decision", decision="deny",
-                    event=event_name, reason=decision.reasoning or "(none)")
-        return _post_tool_response(
-            additional_context=f"ACS Guardian denied this result: "
-                               f"{decision.reasoning or '(no reasoning)'}")
+        return _post_tool_deny(event_name, decision.reasoning)
     if decision.disposition == "modify":
         violation = modify_composition_violation(decision.modifications)
         if violation:
@@ -745,13 +752,14 @@ def _translate_post_tool(decision: Decision, event_name: str) -> dict[str, Any]:
             return _post_tool_response(
                 additional_context=f"MODIFY refused ({violation})")
         updated = decision.modifications.get("modified_content")
-        if updated is not None:
+        if updated is not None and _mcp_output_replaceable(tool_name, tool_output):
             # Docs show an OBJECT value; ACS modified_content is a string.
             # Parse JSON content when it is JSON, else pass the string.
             return _post_tool_response(
                 updated_mcp_tool_output=_parse_json_field(updated))
-        return _post_tool_response(
-            additional_context=f"MODIFY received: {decision.reasoning}")
+        audit_modify_unsupported("structured edits on a tool result" if updated is None
+                                 else "updated_mcp_tool_output on this tool", event=event_name, tool=tool_name)
+        return _post_tool_deny(event_name, f"MODIFY substituted to DENY: {decision.reasoning}")
     if decision.reasoning:
         return _post_tool_response(additional_context=decision.reasoning)
     return {}
@@ -764,14 +772,15 @@ def _translate_before_submit_prompt(decision: Decision, event_name: str) -> dict
     if decision.disposition != "deny":
         audit_event("prompt_decision_substituted_block",
                     disposition=decision.disposition, event="beforeSubmitPrompt")
+        if decision.disposition == "modify":
+            audit_modify_unsupported("the prompt cannot be rewritten", event="beforeSubmitPrompt")
     return {"__exit_code": 2,
             "_reasoning": decision.reasoning or f"{decision.disposition} on prompt not applicable — blocking"}
 
 
 def translate_response(acs_response: dict[str, Any], event_name: str,
-                       original_input: dict | None = None) -> dict[str, Any]:
-    # normalize_decision coerces every field to a safe type and never
-    # raises — an uncaught throw here would exit 1 and Cursor would proceed.
+                       original_input: dict | None = None, tool_name: str = "",
+                       tool_output: Any = None) -> dict[str, Any]:
     decision = normalize_decision(acs_response.get("result"))
     original_input = original_input or {}
 
@@ -792,9 +801,9 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
         return {}
 
     if event_name in PERMISSION_EVENTS:
-        return _translate_permission(decision, event_name, original_input)
+        return _translate_permission(decision, event_name, original_input, tool_name)
     if event_name in POST_TOOL_EVENTS:
-        return _translate_post_tool(decision, event_name)
+        return _translate_post_tool(decision, event_name, tool_name, tool_output)
     if event_name == "beforeSubmitPrompt":
         return _translate_before_submit_prompt(decision, event_name)
 
@@ -941,8 +950,8 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     # A bug escaping translate_response would exit 1 = Cursor proceeds;
     # this guard makes any translation bug fail closed instead.
     try:
-        out = translate_response(response, event_name,
-                                 original_input=event.get("tool_input") or {})
+        out = translate_response(response, event_name, original_input=event.get("tool_input") or {},
+                                 tool_name=event.get("tool_name") or "", tool_output=event.get("tool_output"))
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),

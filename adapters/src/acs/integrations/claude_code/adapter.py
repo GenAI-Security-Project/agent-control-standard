@@ -77,6 +77,7 @@ from acs.client import (
     Resolution,
     Undecided,
     audit_event,
+    audit_modify_unsupported,
     close_turn,
     current_turn,
     open_session,
@@ -501,12 +502,8 @@ def _translate_pretool(decision: Decision, original_input: dict) -> dict[str, An
             return _pretool_response(
                 "deny", f"MODIFY refused ({violation}); failing closed per §6.3:146")
         if decision.modifications.get("redactions"):
-            # Claude's updatedInput can replace arguments, but it exposes no
-            # native JSON-Pointer redaction operation.  Applying sibling
-            # parameter_overrides while dropping redactions would change the
-            # Guardian's decision. Treat the valid-but-unrealizable compound
-            # edit as DENY until the whole modification can be applied.
-            audit_event("modify_unapplied_redactions", hook="PreToolUse")
+            # updatedInput has no redaction operation, and dropping the redactions would change the decision, so the MODIFY is a DENY.
+            audit_modify_unsupported("redactions", hook="PreToolUse")
             return _pretool_response(
                 "deny", "MODIFY refused: Claude Code cannot apply the "
                 "requested redactions without dropping part of the decision")
@@ -518,6 +515,7 @@ def _translate_pretool(decision: Decision, original_input: dict) -> dict[str, An
             # argument overrides (modifications.json) onto the original.
             merged = {**original_input, **overrides}
             return _pretool_response("allow", decision.reasoning, updated_input=merged)
+        audit_modify_unsupported("no parameter_overrides object", hook="PreToolUse")
         return _pretool_response(
             "deny",
             f"MODIFY substituted to DENY (no usable parameter_overrides): {decision.reasoning}",
@@ -544,6 +542,7 @@ def _translate_posttool(decision: Decision, original_input: dict) -> dict[str, A
             if decision.reasoning:
                 hso["additionalContext"] = decision.reasoning
             return {"hookSpecificOutput": hso}
+        audit_modify_unsupported("structured edits on a tool result", hook="PostToolUse")
         return _block_response(
             f"MODIFY substituted to DENY (no modified_content): {decision.reasoning}")
     if decision.disposition in ("ask", "defer"):
@@ -560,6 +559,8 @@ def _translate_user_prompt(decision: Decision, original_input: dict) -> dict[str
     # The prompt hook can only allow or block, so ask, defer and modify block, audited (§6.4).
     audit_event("prompt_decision_substituted_block",
                 disposition=decision.disposition, hook="UserPromptSubmit")
+    if decision.disposition == "modify":
+        audit_modify_unsupported("the prompt cannot be rewritten", hook="UserPromptSubmit")
     return _block_response(
         f"{decision.disposition} on user prompt not applicable at this hook — blocking: {decision.reasoning}")
 

@@ -44,7 +44,7 @@ Cursor's documented response keys are event-specific. The adapter translates ACS
 | `deny` | `{"permission": "deny", "user_message": reasoning, "agent_message": reasoning}` | Cursor displays user_message in UI; agent_message is fed back to the agent's context. |
 | `ask` | `{"permission": "ask", "user_message": reasoning, "agent_message": reasoning}` | Upstream caveat: Cursor documents `ask` as "accepted by the schema but not enforced for preToolUse today", and `subagentStart` treats `ask` as `deny`. On those events ask is a soft signal, not a hard pause. |
 | `defer` | `{"permission": "ask", ...}` | Deployment substitution (not spec-mandated; §9.2 places substitution on the Guardian): Cursor has no defer. |
-| `modify` | `{"permission": "allow", "updated_input": original ⊕ parameter_overrides, "user_message": reasoning}` on `preToolUse` only | `updated_input` REPLACES the whole input, so the adapter MERGES the overrides onto the original arguments. Other permission events have no documented updated-input field; modify substitutes to deny with audit. A contradictory `modifications` object fails closed to deny (§6.3:146). |
+| `modify` | `{"permission": "allow", "updated_input": original ⊕ parameter_overrides, "user_message": reasoning}` on `preToolUse` only | `updated_input` REPLACES the whole input, so the adapter MERGES the overrides onto the original arguments. On the other permission events, which have no documented updated-input field, and for an `MCP:` tool, whose `updated_input` Cursor ignores when an HTTP MCP server runs it, a MODIFY is a DENY recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5), as are redactions. A contradictory `modifications` object fails closed to deny (§6.3:146). |
 
 ### `postToolUse` — the only post-tool event with documented output fields
 
@@ -52,12 +52,13 @@ Cursor's documented response keys are event-specific. The adapter translates ACS
 |---|---|
 | `allow` | `{}` (no output; proceed) |
 | `deny` | `{"additional_context": "ACS Guardian denied this result: …"}` + `unenforceable_decision` audit (the tool already ran; feedback is the only channel) |
-| `modify` with `modified_content` | `{"updated_mcp_tool_output": <parsed content>}` — "For MCP tools only: replaces the tool output seen by the model" |
+| `modify` with `modified_content` on an MCP tool | `{"updated_mcp_tool_output": <parsed content>}` — "For MCP tools only: replaces the tool output seen by the model" |
+| `modify` on another tool, on an HTTP MCP server's tool (its `tool_output` is `{"redacted": true}`), or with structured edits | as `deny`, recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5) |
 | any other decision with reasoning | `{"additional_context": reasoning}` |
 
 ### Other post-tool events (`postToolUseFailure`, `afterShellExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`)
 
-"No output fields currently supported" (Cursor docs) — the adapter emits nothing; an arrived restrictive decision is recorded as an `unenforceable_decision` audit event.
+"No output fields currently supported" (Cursor docs) — the adapter emits nothing; an arrived restrictive decision is recorded as an `unenforceable_decision` audit event, and a MODIFY also as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5).
 
 ### `beforeSubmitPrompt`
 
@@ -67,7 +68,7 @@ Cursor's documented output is `{"continue": bool, "user_message": str}`. The ada
 |---|---|
 | `allow` | `{"continue": true}`, exit 0 |
 | `deny` | `{"continue": false, "user_message": reasoning}`, exit 0 |
-| `ask` / `defer` / `modify` | same as deny (substituted to block + audit; the prompt hook can't pause or edit) |
+| `ask` / `defer` / `modify` | same as deny (substituted to block + audit; the prompt hook can't pause or edit); a MODIFY is also recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5) |
 
 ### Lifecycle events (`sessionEnd`, `stop`, `preCompact`, `afterAgentResponse`, `afterAgentThought`)
 
@@ -100,7 +101,7 @@ The Cursor adapter covers ACS-Core's mandatory floor in the same shape as the Cl
 - Handshake: `handshake/hello` performed on the first event of a session, and its answer decides the session (§4.1): a verified ServerHello negotiates; a refusal, or an answer that fails its checks, refuses every step; and no answer leaves the session with no negotiated Guardian, so each hook's `ACS_STARTUP_POSTURE` applies (`proceed` lets the step run with nothing sent to the Guardian; `refuse` denies it). The decision is stored in `~/.cache/acs-adapter-handshake/` with an HMAC under the session key over the decision, the session and the Guardian URL, and holds for the session's lifetime, so a dead Guardian costs one timeout per session; a record that fails its checks, or a decision that cannot be stored, refuses the session. ServerHello signature-verified, bound to the ClientHello, its `on_decision_failure` combines with `ACS_DEFAULT_DENY` (deny wins over proceed), and its `timeout_config` replaces the local decision timeout, per method where `per_method_ms` names one (§6.4). The ServerHello must answer the ClientHello: a `negotiated_version` sharing a major version the adapter offered, a `methods_evaluated` list, the one transport the adapter offers (its Guardian URL's scheme), a positive `timeout_config.default_ms`, an `on_decision_failure` of `proceed` or `deny`, and only profiles the adapter claimed; otherwise the session has no negotiated Guardian (`invalid_server_hello`). Its `methods_evaluated` bounds what is sent: a method the Guardian omits resolves as ALLOW-by-default without being sent (handshake.json), recorded as `method_not_evaluated`; permission events and `beforeSubmitPrompt` return their explicit allow shapes, since `failClosed` reads an empty reply as a failed hook. With no negotiated list, every mapped event is sent. `ACS_HANDSHAKE=0` skips the handshake, and the startup posture settles every step.
 - Turns: a `beforeSubmitPrompt` opens a turn with an explicit `steps/turnStart` (decision-eligible) before the `steps/userMessage`; `stop` closes it with `steps/turnEnd`. `turn_id` is held in per-session state and stamped on `metadata.turn_id` of every in-turn step.
 - Hook taxonomy minimum: all covered, plus many additional Cursor events. `subagentStop`, `beforeReadFile`, `beforeTabFileRead`, `workspaceOpen` deliberately unmapped with documented reasons; unknown events emit an `unmapped_hook_event` audit line rather than going quiet.
-- Dispositions: ALLOW / DENY / ASK supported on permission events (see the upstream ask-enforcement caveat); MODIFY supported on `preToolUse` (merged overrides); DEFER → ASK substitution (deployment behavior, not spec-mandated).
+- Dispositions: ALLOW / DENY / ASK supported on permission events (see the upstream ask-enforcement caveat); MODIFY supported on `preToolUse` for tools other than MCP tools (merged overrides) and on an MCP tool's `postToolUse` output, and elsewhere a DENY recorded as `modify_unsupported` (§6.5); DEFER → ASK substitution (deployment behavior, not spec-mandated).
 - SessionContext: session_id sent every request (non-UUID `conversation_id` coerced deterministically).
 - Replay protection: ✓
 - Baseline integrity: HMAC-SHA256 per §10 over the RFC 8785 (JCS) canonical envelope, HKDF per-session key (`ACS_HMAC_SECRET_FILE` / `ACS_HMAC_SECRET`); `rfc8785` is a hard dependency. The signature names the configured label `ACS_HMAC_KEY_ID` as `key_id`, and a response under any other label fails verification with no other secret tried; an unsigned `SIGNATURE_INVALID`, a Guardian's answer to a label it does not hold, is recorded as `key_id_rejected` and fails closed. Responses signature-verified and bound to their request under any HTTP status; refusals, binding mismatches, bad response signatures, and responses that cannot be verified fail closed regardless of posture (deliberately stricter than the current §6.4 text — spec issue #32). A hook with no secret, a secret under 32 bytes, or no label refuses its session and sends nothing (`secret_missing`, `secret_too_short`, `key_id_missing`), whatever the posture: ACS-Core signs every request.

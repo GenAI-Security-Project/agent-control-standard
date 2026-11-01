@@ -73,6 +73,7 @@ try:
         Resolution,
         Undecided,
         audit_event,
+        audit_modify_unsupported,
         open_session,
         round_trip,
     )
@@ -747,9 +748,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             if decision.modifications.get("redactions"):
                 # NAT has no JSON-Pointer redaction primitive; applying only
                 # parameter_overrides would drop part of the compound decision.
-                audit_event("modify_unapplied_redactions",
-                            session_id=self._session_id,
-                            method="steps/toolCallRequest")
+                audit_modify_unsupported("redactions", session_id=self._session_id,
+                                         method="steps/toolCallRequest")
                 return self._block(
                     context, "MODIFY refused: NAT cannot apply the requested "
                     "redactions without dropping part of the decision")
@@ -757,6 +757,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             if isinstance(overrides, dict):
                 _apply_overrides_to_context(context, overrides)
                 return context
+            audit_modify_unsupported("no parameter_overrides object", session_id=self._session_id,
+                                     method="steps/toolCallRequest")
             return self._block(context, f"MODIFY substituted to DENY: {decision.reasoning}")
         if decision.disposition in ("ask", "defer"):
             # No pause primitive here, so ask and defer block; NAT's HITL middleware composes for approvals.
@@ -838,6 +840,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 return context
             # A structured MODIFY on a result cannot be realized generically;
             # redact the whole result rather than silently ignore the Guardian.
+            audit_modify_unsupported("structured edits on a tool result", session_id=self._session_id,
+                                     method="steps/toolCallResult")
             _redact_output(context)
             audit_event("post_invoke_redacted",
                         cause="modify_unapplied_structured_edits",

@@ -1144,16 +1144,97 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
             f"Cursor half-applied a combined MODIFY: {cursor!r}")
 
 
-# =============================================================================
-# CORE-05 — SessionContext + chain head (conformance.md, ACS-Core / SessionContext and Intent, §8)
-# =============================================================================
-#
-# "session_id, chain_hash (rolling SHA-256), append-only ContextEntry chain,
-#  with the Guardian publishing the chain head (chain_hash) on responses for
-#  content-bearing steps"
-# §8.2 — entry_hash = SHA-256(JCS(entry minus entry_hash/previous_hash) || prev_hash_bytes)
-# =============================================================================
+class Core04d_ModifyUnsupported(unittest.TestCase):
+    """§6.5: a MODIFY the client cannot apply is a DENY, recorded with reason_codes ["modify_unsupported"]."""
 
+    SECRET = Core04c_PromptGateAndMergeFailClosed.SECRET
+    _guardian = Core04c_PromptGateAndMergeFailClosed._guardian
+    _env = Core04c_PromptGateAndMergeFailClosed._env
+
+    REDACT = {"redactions": [{"path": "/command", "replacement": "[REDACTED]"}]}
+    CONTENT = {"modified_content": "echo safe"}
+    OVERRIDE = {"parameter_overrides": {"command": "echo safe"}}
+    CLAUDE = {"session_id": "mu-1", "cwd": "/tmp", "tool_name": "Bash", "tool_input": {"command": "unsafe"},
+              "tool_use_id": "mu1"}
+    CURSOR = {"conversation_id": "conv-mu-1", "workspace_roots": ["/tmp"], "tool_input": {"command": "unsafe"}}
+
+    def _modify(self, host: str, hook: str, event: dict, method: str, mods: dict) -> tuple[dict, list[dict]]:
+        result = {"decision": "modify", "reasoning": "rewrite", "modifications": mods}
+        argv = [sys.executable, str(INTEGRATIONS_DIR / host / "adapter.py")] + ([hook] if host == "cursor" else [])
+        with self._guardian(method, result) as g:
+            proc = subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True,
+                                  env=self._env(g), timeout=15)
+            self.assertIn(method, g.methods_seen())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        audits = [json.loads(line.removeprefix("ACS_AUDIT ")) for line in proc.stderr.splitlines()
+                  if line.startswith("ACS_AUDIT ")]
+        return (json.loads(proc.stdout) if proc.stdout.strip() else {},
+                [a for a in audits if a.get("acs_audit_event") == "modify_unsupported"])
+
+    def test_a_modify_the_host_cannot_apply_is_denied_and_recorded(self) -> None:
+        def claude_denied(o): return o.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+        def claude_blocked(o): return o.get("decision") == "block"
+        def cursor_denied(o): return o.get("permission") == "deny"
+        def cursor_result_denied(o): return "updated_mcp_tool_output" not in o and \
+            o.get("additional_context", "").startswith("ACS Guardian denied this result")
+        def cursor_blocked(o): return o.get("continue") is False
+        claude_result = {**self.CLAUDE, "hook_event_name": "PostToolUse", "tool_response": {"stdout": "x"}}
+        cases = {
+            "Claude tool call with redactions": ("claude_code", "", {**self.CLAUDE, "hook_event_name": "PreToolUse"},
+                                                 "steps/toolCallRequest", self.REDACT, claude_denied),
+            "Claude tool call with replacement content": ("claude_code", "",
+                                                          {**self.CLAUDE, "hook_event_name": "PreToolUse"},
+                                                          "steps/toolCallRequest", self.CONTENT, claude_denied),
+            "Claude tool result with structured edits": ("claude_code", "", claude_result, "steps/toolCallResult",
+                                                         self.OVERRIDE, claude_blocked),
+            "Claude prompt": ("claude_code", "", {**self.CLAUDE, "hook_event_name": "UserPromptSubmit", "prompt": "hi"},
+                              "steps/userMessage", self.OVERRIDE, claude_blocked),
+            "Cursor tool call with redactions": ("cursor", "preToolUse", {**self.CURSOR, "tool_name": "Shell"},
+                                                 "steps/toolCallRequest", self.REDACT, cursor_denied),
+            "Cursor MCP tool call with overrides": ("cursor", "preToolUse", {**self.CURSOR, "tool_name": "MCP:run"},
+                                                    "steps/toolCallRequest", self.OVERRIDE, cursor_denied),
+            "Cursor shell execution with overrides": ("cursor", "beforeShellExecution",
+                                                      {**self.CURSOR, "command": "unsafe", "cwd": "/tmp"},
+                                                      "steps/toolCallRequest", self.OVERRIDE, cursor_denied),
+            "Cursor result of a built-in tool": ("cursor", "postToolUse",
+                                                 {**self.CURSOR, "tool_name": "Shell", "tool_output": "{\"stdout\": \"x\"}"},
+                                                 "steps/toolCallResult", self.CONTENT, cursor_result_denied),
+            "Cursor result of an HTTP MCP tool": ("cursor", "postToolUse",
+                                                  {**self.CURSOR, "tool_name": "MCP:run", "tool_output": "{\"redacted\": true}"},
+                                                  "steps/toolCallResult", self.CONTENT, cursor_result_denied),
+            "Cursor result with structured edits": ("cursor", "postToolUse",
+                                                    {**self.CURSOR, "tool_name": "MCP:run", "tool_output": "{\"x\": 1}"},
+                                                    "steps/toolCallResult", self.OVERRIDE, cursor_result_denied),
+            "Cursor shell execution result": ("cursor", "afterShellExecution",
+                                              {**self.CURSOR, "command": "unsafe", "output": "x", "cwd": "/tmp"},
+                                              "steps/toolCallResult", self.CONTENT, lambda o: o == {}),
+            "Cursor prompt": ("cursor", "beforeSubmitPrompt", {**self.CURSOR, "prompt": "hi"}, "steps/userMessage",
+                              self.OVERRIDE, cursor_blocked),
+        }
+        for name, (host, hook, event, method, mods, denied) in cases.items():
+            with self.subTest(name):
+                out, unsupported = self._modify(host, hook, event, method, mods)
+                self.assertTrue(denied(out), out)
+                self.assertEqual([a["reason_codes"] for a in unsupported], [["modify_unsupported"]])
+
+    def test_a_modify_the_host_applies_records_no_substitution(self) -> None:
+        cases = {
+            "Claude tool call with overrides": ("claude_code", "", {**self.CLAUDE, "hook_event_name": "PreToolUse"},
+                                                "steps/toolCallRequest", self.OVERRIDE,
+                                                lambda o: o["hookSpecificOutput"]["updatedInput"]["command"]),
+            "Cursor result of a local MCP tool": ("cursor", "postToolUse",
+                                                  {**self.CURSOR, "tool_name": "MCP:run", "tool_output": "{\"x\": 1}"},
+                                                  "steps/toolCallResult", self.CONTENT,
+                                                  lambda o: o["updated_mcp_tool_output"]),
+        }
+        for name, (host, hook, event, method, mods, applied) in cases.items():
+            with self.subTest(name):
+                out, unsupported = self._modify(host, hook, event, method, mods)
+                self.assertEqual(applied(out), "echo safe")
+                self.assertEqual(unsupported, [])
+
+
+# conformance.md ACS-Core: SessionContext and Intent, §8.
 class Core05_SessionContext(CoreHarness):
 
     def test_response_carries_chain_hash(self) -> None:
