@@ -36,6 +36,11 @@
   --acs-tier-1: #0f7b3f;
   --acs-tier-2: #1b4f72;
   --acs-tier-3: #6b46c1;
+  /* The chrome repeats the docs header and pane, so these equal the values that
+     docs/stylesheets/extra.css gives Material in each theme. */
+  --acs-chrome-bg: #111111;
+  --acs-chrome-fg: #f7f7f7;
+  --acs-nav-accent: #1b4f72;
   --acs-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --acs-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", monospace;
@@ -69,6 +74,8 @@
     --acs-tier-1: #48bb78;
     --acs-tier-2: #63b3ed;
     --acs-tier-3: #805ad5;
+    --acs-chrome-bg: #0a0a0a;
+    --acs-nav-accent: #63b3ed;
   }
 }
 
@@ -95,7 +102,19 @@
   --acs-tier-1: #48bb78;
   --acs-tier-2: #63b3ed;
   --acs-tier-3: #805ad5;
+  --acs-chrome-bg: #0a0a0a;
+  --acs-nav-accent: #63b3ed;
 }
+
+/* Material sizes its chrome in rem and steps the root font at these widths. This page's
+   rem has to stay 16px for its own content, so the chrome uses this unit, which is the
+   docs rem at every width. Each size below is the docs value times this unit. */
+:root { --acs-u: 20px; }
+@media screen and (min-width: 100em) { :root { --acs-u: 22px; } }
+@media screen and (min-width: 125em) { :root { --acs-u: 24px; } }
+
+/* The sticky header would otherwise cover the section a pane link jumps to. */
+html { scroll-padding-top: calc(var(--acs-u) * 2.4); }
 
 * { box-sizing: border-box; }
 
@@ -114,52 +133,223 @@ a { color: inherit; }
 a:focus-visible,
 button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
 
-.layout { display: grid; grid-template-columns: 260px 1fr; }
+.layout {
+  display: grid;
+  grid-template-columns: calc(var(--acs-u) * 12.1) minmax(0, 1fr);
+  max-width: calc(var(--acs-u) * 61);
+  margin-inline: auto;
+}
 
+/* Material antialiases its whole page. Without this the same font at the same size
+   reads heavier here than it does in the docs chrome. */
+.site-header,
 .sidebar {
-  position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
-  padding: 2rem 1.5rem; border-right: 1px solid var(--acs-border);
-  display: flex; flex-direction: column; gap: 1.5rem;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "kern", "liga";
 }
-.wordmark {
-  display: inline-flex;
+
+/* The docs header at every width. It is one header rather than a desktop pane heading
+   plus a phone strip, because two copies are how the surfaces came to differ. */
+.site-header {
+  position: sticky;
+  top: 0;
+  /* Paints above the open panel, so the button that closes it stays reachable. */
+  z-index: 30;
+  color: var(--acs-chrome-fg);
+  background-color: var(--acs-chrome-bg);
+  box-shadow: 0 0 calc(var(--acs-u) * 0.2) rgba(0, 0, 0, 0.1), 0 calc(var(--acs-u) * 0.2) calc(var(--acs-u) * 0.4) rgba(0, 0, 0, 0.2);
+}
+.site-header__inner {
+  display: flex;
   align-items: center;
-  gap: 0.55rem;
+  max-width: calc(var(--acs-u) * 61);
+  height: calc(var(--acs-u) * 2.4);
+  margin-inline: auto;
+  padding-inline: calc(var(--acs-u) * 0.2);
+}
+/* The page's focus ring is navy in the light theme, which is lost on this bar. */
+.site-header :focus-visible { outline-color: var(--acs-chrome-fg); outline-offset: -2px; }
+.site-header a { color: inherit; text-decoration: none; }
+
+.site-logo {
+  flex: none;
+  width: calc(var(--acs-u) * 2);
+  height: calc(var(--acs-u) * 2);
+  padding: calc(var(--acs-u) * 0.2);
+}
+.site-logo img { display: block; width: 100%; height: 100%; }
+.site-logo:hover,
+.site-source:hover,
+#menu-toggle:hover,
+#theme-toggle:hover { opacity: 0.7; }
+
+.wordmark {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-inline: calc(var(--acs-u) * 1) calc(var(--acs-u) * 0.4);
+  overflow: hidden;
+  font-size: calc(var(--acs-u) * 0.9);
   font-weight: 700;
-  letter-spacing: 0.12em;
-  font-size: 1.1rem;
+  line-height: calc(var(--acs-u) * 2.4);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#menu-toggle,
+#theme-toggle {
+  flex: none;
+  width: calc(var(--acs-u) * 2);
+  height: calc(var(--acs-u) * 2);
+  margin: calc(var(--acs-u) * 0.2);
+  padding: calc(var(--acs-u) * 0.4);
+  color: inherit;
+  background-color: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: opacity 0.25s;
+}
+#menu-toggle { display: none; }
+#menu-toggle svg,
+#theme-toggle svg { display: block; width: 100%; height: 100%; fill: currentColor; }
+
+/* The docs search field, drawn as the link it is. This page has no search index, and an
+   input that went nowhere would be worse than sending the reader to the one that works. */
+.site-search {
+  position: relative;
+  display: block;
+  flex: none;
+  width: calc(var(--acs-u) * 11.7);
+  height: calc(var(--acs-u) * 1.8);
+  padding-inline-start: calc(var(--acs-u) * 2.2);
+  background-color: rgba(0, 0, 0, 0.26);
+  border-radius: calc(var(--acs-u) * 0.1);
+  transition: background-color 0.25s;
+}
+.site-search:hover { background-color: rgba(255, 255, 255, 0.12); }
+.site-search svg {
+  position: absolute;
+  top: calc(var(--acs-u) * 0.3);
+  left: calc(var(--acs-u) * 0.5);
+  width: calc(var(--acs-u) * 1.2);
+  height: calc(var(--acs-u) * 1.2);
+  fill: currentColor;
+}
+.site-search__label {
+  font-size: calc(var(--acs-u) * 0.8);
+  line-height: calc(var(--acs-u) * 1.8);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.site-header__source {
+  flex: none;
+  width: calc(var(--acs-u) * 11.7);
+  margin-inline-start: calc(var(--acs-u) * 1.4);
+}
+.site-source {
+  display: block;
+  height: calc(var(--acs-u) * 2.4);
+  font-size: calc(var(--acs-u) * 0.65);
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: opacity 0.25s;
+}
+.site-source__icon {
+  display: inline-block;
+  width: calc(var(--acs-u) * 2);
+  height: calc(var(--acs-u) * 2.4);
+  vertical-align: middle;
+}
+.site-source__icon svg {
+  display: block;
+  width: calc(var(--acs-u) * 1.2);
+  height: calc(var(--acs-u) * 1.2);
+  margin-block-start: calc(var(--acs-u) * 0.6);
+  margin-inline-start: calc(var(--acs-u) * 0.6);
+  fill: currentColor;
+}
+.site-source__repository {
+  display: inline-block;
+  max-width: calc(100% - var(--acs-u) * 1.2);
+  margin-inline-start: calc(var(--acs-u) * -2);
+  padding-inline-start: calc(var(--acs-u) * 2);
+  overflow: hidden;
+  vertical-align: middle;
+  text-overflow: ellipsis;
+}
+
+/* The docs pane. The pad differs on each side because Material insets the pane's list
+   by the scrollbar gutter on the right only. */
+.sidebar {
+  position: sticky;
+  top: calc(var(--acs-u) * 2.4);
+  align-self: start;
+  max-height: calc(100vh - var(--acs-u) * 2.4);
+  margin-top: calc(var(--acs-u) * 1.5);
+  padding: calc(var(--acs-u) * 1.2) calc(var(--acs-u) * 0.4) calc(var(--acs-u) * 1.2) calc(var(--acs-u) * 0.2);
+  overflow-y: auto;
+  /* Material's pane scrollbar. The default one is bright in the dark theme and wide
+     enough to wrap the drawer's rows. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--acs-text-muted) transparent;
+}
+.pane-title {
+  padding-inline: calc(var(--acs-u) * 0.6);
+  font-size: calc(var(--acs-u) * 0.7);
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--acs-text-soft);
+}
+/* The docs show these two only in the drawer. */
+.pane-logo,
+.pane-source { display: none; }
+
+#site-nav { font-size: calc(var(--acs-u) * 0.7); line-height: 1.3; }
+#site-nav ul { margin: 0; padding: 0 0 calc(var(--acs-u) * 0.4) calc(var(--acs-u) * 0.6); list-style: none; }
+#site-nav a,
+#site-nav summary {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 0.625em;
+  margin-right: calc(var(--acs-u) * 0.4);
+  color: var(--acs-text);
   text-decoration: none;
+  cursor: pointer;
+  transition: color 125ms;
 }
-.wordmark img { width: 28px; height: 28px; border-radius: 6px; }
-/* The pane holds 20 rows with Home open. A tighter line keeps the theme toggle below
-   it on screen at 1366x768, and the column scrolls when a taller pane pushes it off. */
-#site-nav { font-size: 0.95rem; line-height: 1.45; }
-#site-nav ul { list-style: none; margin: 0; padding: 0; }
-#site-nav li { margin-block: 0.2rem; }
-/* The rule on the left shows nesting by position, so depth does not rely on color. */
-#site-nav ul ul {
-  margin: 0.2rem 0 0.35rem 0.35rem;
-  padding-left: 0.85rem;
-  border-left: 1px solid var(--acs-border);
+#site-nav summary { list-style: none; }
+#site-nav summary::-webkit-details-marker { display: none; }
+/* Home's row is a link inside the disclosure, so the row carries the spacing. */
+#site-nav summary a { flex: 1 1 auto; min-width: 0; margin: 0; }
+/* The docs chevron. A file rather than Material's data URI, which img-src 'self' blocks.
+   Rotation states that the row is open, so the state does not rest on color. */
+#site-nav summary::after {
+  flex: none;
+  width: calc(var(--acs-u) * 0.9);
+  height: calc(var(--acs-u) * 0.9);
+  margin-inline-start: auto;
+  content: "";
+  background-color: currentColor;
+  -webkit-mask: url("chevron.svg") center / contain no-repeat;
+  mask: url("chevron.svg") center / contain no-repeat;
+  transition: transform 0.25s;
 }
-#site-nav a { text-decoration: none; color: var(--acs-text-soft); }
+#site-nav details[open] > summary::after { transform: rotate(90deg); }
 #site-nav a:hover,
-#site-nav summary:hover { color: var(--acs-text); }
-#site-nav summary { cursor: pointer; color: var(--acs-text-soft); }
+#site-nav summary:hover { color: var(--acs-nav-accent); }
 #site-nav summary:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
 /* Weight marks the current page as well as color, so the state survives without color. */
-#site-nav a[aria-current="page"] { font-weight: 600; color: var(--acs-text); }
-/* A section never collapses, so it reads as a heading with a divider rather than a
-   disclosure. Its list sits flush because nothing above it nests. */
-#site-nav .nav-section { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--acs-border); }
+#site-nav a[aria-current="page"] { font-weight: 600; color: var(--acs-nav-accent); }
+/* A section never collapses, so it reads as a heading, and its list sits flush with it. */
+#site-nav .nav-section { margin-top: 1.25em; }
 #site-nav .nav-section h2 {
-  margin: 0 0 0.35rem;
-  font-size: 0.75rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--acs-text-muted);
+  margin: 0 calc(var(--acs-u) * 0.4) 0 0;
+  font-size: inherit;
+  font-weight: 700;
+  line-height: inherit;
+  color: var(--acs-text-soft);
 }
-#site-nav .nav-section ul { margin: 0; padding-left: 0; border-left: 0; }
+#site-nav .nav-section ul { padding-left: 0; }
 
 /* Off screen until focused, so it costs sighted mouse users nothing and still comes
    first for a keyboard. */
@@ -167,7 +357,7 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
   position: absolute;
   top: -100px;
   left: 1rem;
-  z-index: 30;
+  z-index: 40;
   padding: 0.6rem 1rem;
   font-weight: 600;
   color: var(--acs-text);
@@ -177,22 +367,8 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
 }
 .skip-link:focus { top: 1rem; }
 
-/* The strip exists only below the layout breakpoint. Above it the sidebar is the pane. */
-.topbar { display: none; }
-#menu-toggle {
-  min-height: 40px;
-  padding: 0.4rem 1rem;
-  font: inherit;
-  font-weight: 600;
-  color: var(--acs-text);
-  background-color: transparent;
-  border: 1px solid var(--acs-border-strong);
-  border-radius: 999px;
-  cursor: pointer;
-}
-#menu-toggle:hover { background-color: var(--acs-surface); }
-
-main { padding: 4rem 3rem; max-width: 1100px; }
+/* The inline pad is the docs content inset, so text starts at the same x on both surfaces. */
+main { padding: 4rem calc(var(--acs-u) * 1.2); }
 section { padding-block: 3.5rem; border-top: 1px solid var(--acs-border); }
 section:first-of-type { border-top: 0; }
 
@@ -217,35 +393,6 @@ section:first-of-type { border-top: 0; }
 }
 .cta:hover { background-color: var(--acs-surface); transform: translateY(-1px); }
 .cta-primary { background-color: var(--acs-brand); color: var(--acs-text-inverse); border-color: var(--acs-brand); }
-
-#theme-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  color: var(--acs-text-soft);
-  background-color: transparent;
-  border: 1px solid var(--acs-border);
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-#theme-toggle:hover {
-  background-color: var(--acs-surface);
-  color: var(--acs-text);
-}
-#theme-toggle svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-}
-/* The moon is filled rather than stroked, so it reads as a shape at this size. */
-#theme-toggle .icon-moon { fill: currentColor; stroke: none; }
 
 /* Show the mark for the theme a click would give, not the one already showing. */
 #theme-toggle .icon-sun { display: none; }
@@ -333,52 +480,132 @@ footer { background-color: var(--acs-footer); color: var(--acs-text-inverse); pa
 footer a { color: var(--acs-text-inverse); }
 footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
 
-@media (max-width: 1024px) {
-  .layout { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--acs-border); }
-  .hero { grid-template-columns: 1fr; }
-  main { padding: 2rem 1.25rem; }
-
-  .topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.75rem 1.25rem;
-    border-bottom: 1px solid var(--acs-border);
-    background-color: var(--acs-page);
-    /* Paints above the open panel, so the Menu button that closes it stays on top
-       on a phone, where the panel is wider than the space left of the button. */
-    position: relative;
-    z-index: 30;
-  }
-  /* The strip carries the wordmark at this width, so the pane drops its copy. */
-  .sidebar .wordmark { display: none; }
+/* The docs drop the pane into a drawer here, so the two surfaces change at one width. */
+@media (max-width: 76.234375em) {
+  .layout { grid-template-columns: minmax(0, 1fr); max-width: none; }
+  .site-logo { display: none; }
+  .site-header__source { margin-inline-start: calc(var(--acs-u) * 1); }
   /* Without the drawer script the button would do nothing, and the pane is already
-     showing as a block below the strip. The script adds has-drawer to the root. */
-  #menu-toggle { display: none; }
-  .has-drawer #menu-toggle { display: inline-flex; align-items: center; }
-  /* Hidden as well as moved, so a closed panel's links leave the tab order. */
+     showing as a block below the header. The script adds has-drawer to the root. */
+  .has-drawer #menu-toggle { display: block; }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+    margin-top: 0;
+    padding: 0;
+    overflow-y: visible;
+    background-color: var(--acs-page);
+  }
+  .pane-title {
+    position: relative;
+    height: calc(var(--acs-u) * 5.6);
+    padding: calc(var(--acs-u) * 3) calc(var(--acs-u) * 0.8) calc(var(--acs-u) * 0.2);
+    overflow: hidden;
+    font-size: calc(var(--acs-u) * 0.8);
+    line-height: calc(var(--acs-u) * 2.4);
+    color: var(--acs-chrome-fg);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    background-color: var(--acs-chrome-bg);
+  }
+  .pane-logo {
+    position: absolute;
+    top: calc(var(--acs-u) * 0.4);
+    left: calc(var(--acs-u) * 0.4);
+    display: block;
+    padding: calc(var(--acs-u) * 0.4);
+  }
+  .pane-logo img { display: block; width: calc(var(--acs-u) * 2.4); height: calc(var(--acs-u) * 2.4); }
+  /* The theme's indigo, which docs/stylesheets/extra.css leaves on this one bar in both
+     themes. Kept equal so that retiring it there is a change to two named places. */
+  .pane-source {
+    display: block;
+    padding-inline: calc(var(--acs-u) * 0.2);
+    color: var(--acs-chrome-fg);
+    background-color: #303fa1;
+  }
+  .pane-source a { color: inherit; text-decoration: none; }
+
+  #site-nav { font-size: calc(var(--acs-u) * 0.8); line-height: 1.5; }
+  #site-nav ul,
+  #site-nav .nav-section ul { padding: 0; }
+  #site-nav li { border-top: 1px solid var(--acs-border-strong); }
+  #site-nav a,
+  #site-nav summary { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
+  #site-nav summary a { padding: 0; }
+  /* The docs slide a nested list in over its parent. Here it opens in place, so the
+     indent carries the depth the slide would have shown. */
+  #site-nav ul ul a,
+  #site-nav ul ul summary { padding-inline-start: calc(var(--acs-u) * 1.6); }
+  #site-nav ul ul ul a,
+  #site-nav ul ul ul summary { padding-inline-start: calc(var(--acs-u) * 2.4); }
+  #site-nav ul ul summary a { padding: 0; }
+  #site-nav .nav-section ul a { padding-inline-start: calc(var(--acs-u) * 0.8); }
+  #site-nav summary::after {
+    width: calc(var(--acs-u) * 1.2);
+    height: calc(var(--acs-u) * 1.2);
+    margin-inline-end: calc(var(--acs-u) * -0.2);
+  }
+  #site-nav .nav-section { margin-top: 0; }
+  #site-nav .nav-section h2 { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
+
+  /* Hidden as well as moved, so a closed panel's links leave the tab order. The panel
+     starts below the header rather than over it, as the docs drawer does, because the
+     button that closes it lives in the header. */
   .has-drawer .sidebar {
     position: fixed;
-    top: 0;
+    top: calc(var(--acs-u) * 2.4);
     bottom: 0;
     left: 0;
     z-index: 20;
-    width: min(20rem, 85vw);
-    height: 100vh;
+    /* The sticky rule's start alignment would size this box to its rows and push it
+       past both insets, which leaves nothing for the panel to scroll. */
+    align-self: stretch;
+    width: calc(var(--acs-u) * 12.1);
     overflow-y: auto;
-    /* The strip paints over the panel's top, so the first row starts below it: the
-       40px button, the strip's 1.5rem of padding, and the panel's own 1.5rem. */
-    padding-top: calc(40px + 3rem);
-    background-color: var(--acs-page);
-    border-right: 1px solid var(--acs-border);
-    border-bottom: 0;
+    box-shadow: 0 calc(var(--acs-u) * 0.2) calc(var(--acs-u) * 0.5) rgba(0, 0, 0, 0.2), 0 0 1px rgba(0, 0, 0, 0.35);
     transform: translateX(-100%);
     visibility: hidden;
-    transition: transform 0.2s ease, visibility 0.2s;
+    transition: transform 0.25s ease, visibility 0.25s;
   }
   .has-drawer .nav-open .sidebar { transform: none; visibility: visible; }
+  /* The docs scrim. A tap on it lands on the body, which the drawer script reads as a
+     tap outside the panel. */
+  .has-drawer .nav-open::after {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    content: "";
+    background-color: rgba(0, 0, 0, 0.54);
+  }
+}
+
+/* The docs fold the search field to its icon and move the repository link to the drawer. */
+@media (max-width: 59.984375em) {
+  .site-search {
+    width: calc(var(--acs-u) * 2);
+    height: calc(var(--acs-u) * 2);
+    margin: calc(var(--acs-u) * 0.2);
+    padding: 0;
+    background-color: transparent;
+  }
+  .site-search:hover { background-color: transparent; opacity: 0.7; }
+  .site-search svg { top: calc(var(--acs-u) * 0.4); left: calc(var(--acs-u) * 0.4); }
+  .site-search__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .site-header__source { display: none; }
+}
+
+@media (max-width: 1024px) {
+  .hero { grid-template-columns: 1fr; }
+  main { padding: 2rem 1.25rem; }
 }
 
 /* Continuous motion is a vestibular trigger and a battery cost. CSS animation is

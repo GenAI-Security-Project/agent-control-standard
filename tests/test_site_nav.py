@@ -488,6 +488,132 @@ class _Tags(HTMLParser):
         self.tags.append((tag, dict(attrs)))
 
 
+class _Elements(HTMLParser):
+    """Every element with its classes, attributes, and text, in document order."""
+
+    VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+                      "source", "track", "wbr"})
+
+    def __init__(self, markup: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.elements: list[dict] = []
+        self._open: list[dict] = []
+        self.feed(markup)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        element = {"tag": tag, "attrs": attributes, "text": [],
+                   "classes": frozenset((attributes.get("class") or "").split())}
+        self.elements.append(element)
+        if tag not in self.VOID:
+            self._open.append(element)
+
+    def handle_endtag(self, tag):
+        for index in range(len(self._open) - 1, -1, -1):
+            if self._open[index]["tag"] == tag:
+                del self._open[index:]
+                return
+
+    def handle_data(self, data):
+        for element in self._open:
+            element["text"].append(data)
+
+    def having(self, *classes: str) -> list[dict]:
+        return [e for e in self.elements if e["classes"].issuperset(classes)]
+
+
+def _text(element: dict) -> str:
+    return " ".join("".join(element["text"]).split())
+
+
+def _header(markup: str) -> str:
+    """The header element alone, so a link elsewhere on the page cannot satisfy a test."""
+    return markup[markup.index("<header"):markup.index("</header>")]
+
+
+def _built_pages(built_docs: Path) -> list[Path]:
+    pages = sorted(built_docs.rglob("*.html"))
+    assert built_docs / "404.html" in pages
+    return pages
+
+
+def test_landing_wordmark_and_pane_title_equal_site_name(page):
+    """The two titles are placeholders. A literal is how the wordmark came to say ACS
+    while the docs said the project's name."""
+    site_name = load_mkdocs()["site_name"]
+    elements = _Elements(page)
+    wordmarks, panes = elements.having("wordmark"), elements.having("pane-title")
+    assert [_text(e) for e in wordmarks] == [site_name], wordmarks
+    assert [_text(e) for e in panes] == [site_name], panes
+
+
+def test_landing_header_carries_the_docs_header_items(samples, page):
+    """The rows were shared and the chrome was not, which is how the surfaces came to
+    differ with every test green. This compares the header each reader sees."""
+    cfg = load_mkdocs()
+    landing = _Elements(_header(page))
+    landing_title = _text(landing.having("wordmark")[0])
+    landing_repo = landing.having("site-source")[0]
+    assert len(landing.having("site-source")) == 1
+    for _state, markup, _base_, _rows in _docs_pages(samples):
+        docs = _Elements(_header(markup))
+        assert _text(docs.having("md-header__topic")[0]) == landing_title == cfg["site_name"]
+        source = docs.having("md-source")[0]
+        assert source["attrs"]["href"] == landing_repo["attrs"]["href"] == cfg["repo_url"]
+        assert source["attrs"]["title"] == landing_repo["attrs"]["title"] == cfg["repo_name"]
+        assert (_text(source) == _text(landing_repo) == cfg["repo_name"])
+    # The docs control is a field. This page has no index, so it is a link to that field,
+    # and a field here would accept a query and do nothing with it.
+    assert [e["attrs"]["href"] for e in landing.having("site-search")] == ["docs/?q="]
+    assert not [e for e in landing.elements if e["tag"] in ("input", "form")]
+    assert [e for e in landing.elements if e["attrs"].get("id") == "theme-toggle"]
+
+
+def test_icon_and_title_link_home_on_every_built_page(built_docs):
+    """A reader gets home from the mark or the title wherever they landed, and a page
+    outside the nav or a missed URL is where that matters most, so this reads every
+    built page rather than the samples. Each page resolves against its own address,
+    because a relative href that looks right can point somewhere else from a deep page."""
+    pages = _built_pages(built_docs)
+    for path in pages:
+        markup = path.read_text(encoding="utf-8")
+        base = _base(path, markup)
+        header = _Elements(_header(markup))
+        whole = _Elements(markup)
+        controls = {
+            "header icon": header.having("md-header__button", "md-logo"),
+            "header title": [e for e in header.having("md-header__ellipsis") if e["tag"] == "a"],
+            "pane icon": whole.having("md-nav__button", "md-logo"),
+        }
+        for name, found in controls.items():
+            assert len(found) == 1, f"{path}: expected one {name} link, found {len(found)}"
+            target = urljoin(base, found[0]["attrs"]["href"])
+            assert target == LANDING_ROOT, f"{path}: the {name} links to {target}, not {LANDING_ROOT}"
+
+
+def test_icon_and_title_link_home_on_the_landing_page(page):
+    elements = _Elements(page)
+    header = _Elements(_header(page))
+    controls = {
+        "header icon": header.having("site-logo"),
+        "header title": header.having("wordmark"),
+        "pane icon": elements.having("pane-logo"),
+    }
+    for name, found in controls.items():
+        assert len(found) == 1, f"expected one {name} link, found {len(found)}"
+        assert found[0]["tag"] == "a", name
+        target = urljoin(LANDING_ROOT, found[0]["attrs"]["href"])
+        assert target == LANDING_ROOT, f"the {name} links to {target}, not {LANDING_ROOT}"
+
+
+def test_docs_title_link_keeps_a_block_box():
+    """Material sets no display on the element this link replaced, and its title sizes
+    from it, so without this rule the header title renders at zero width with no error."""
+    css = (REPO / "docs" / "stylesheets" / "extra.css").read_text(encoding="utf-8")
+    assert "a.md-header__ellipsis { display: block; }" in css
+
+
 def test_every_pane_host_is_reviewed(samples, page, landing_rows):
     rows = list(landing_rows)
     for _state, _markup, _base_, docs_rows in _docs_pages(samples):

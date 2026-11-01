@@ -35,7 +35,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-PARTIALS = ("nav.html", "nav-item.html")
+PARTIALS = ("header.html", "nav.html", "nav-item.html")
 UPSTREAM = Path("overrides/.upstream/partials")
 OVERRIDES = Path("overrides/partials")
 REPO = Path(__file__).resolve().parents[1]

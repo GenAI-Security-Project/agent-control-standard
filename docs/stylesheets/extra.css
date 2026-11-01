@@ -83,6 +83,11 @@
   max-width: none;
 }
 
+/* The header title is a link to the landing page. Material styles this element as a
+   div and sets no display, so as an inline anchor it collapses to zero width, and the
+   absolutely positioned title inside it, sized from it, disappears. */
+a.md-header__ellipsis { display: block; }
+
 /* Weight the current page's link in the left pane the way the landing page weights
    its own. The nav-item override sets the attribute. */
 .md-nav__link[aria-current="page"] { font-weight: 600; }
