@@ -140,6 +140,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
         saved_secret_file = os.environ.get("ACS_HMAC_SECRET_FILE")
         try:
             os.environ["ACS_HMAC_SECRET"] = g.hmac_secret
+            os.environ["ACS_HMAC_KEY_ID"] = "test-key"
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
@@ -159,10 +160,12 @@ class NATMiddlewareIntegration(unittest.TestCase):
                 os.environ.pop("ACS_HMAC_SECRET", None)
             else:
                 os.environ["ACS_HMAC_SECRET"] = saved_secret
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
             if saved_secret_file is None:
                 os.environ.pop("ACS_HMAC_SECRET_FILE", None)
             else:
                 os.environ["ACS_HMAC_SECRET_FILE"] = saved_secret_file
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
 
     def test_unevaluated_tool_call_proceeds_unsent(self) -> None:
         """handshake.json: methods absent from methods_evaluated are
@@ -181,6 +184,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
         saved_secret_file = os.environ.get("ACS_HMAC_SECRET_FILE")
         try:
             os.environ["ACS_HMAC_SECRET"] = g.hmac_secret
+            os.environ["ACS_HMAC_KEY_ID"] = "test-key"
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
@@ -203,10 +207,12 @@ class NATMiddlewareIntegration(unittest.TestCase):
                 os.environ.pop("ACS_HMAC_SECRET", None)
             else:
                 os.environ["ACS_HMAC_SECRET"] = saved_secret
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
             if saved_secret_file is None:
                 os.environ.pop("ACS_HMAC_SECRET_FILE", None)
             else:
                 os.environ["ACS_HMAC_SECRET_FILE"] = saved_secret_file
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
 
     def test_acs_disabled_bypass_is_written_to_the_durable_sink(self) -> None:
         """Both NAT bypass boundaries must leave structured durable records."""

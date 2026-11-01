@@ -94,11 +94,13 @@ class DispositionsLive(unittest.TestCase):
         # invalid. addCleanup runs even on test failure.
         prior = os.environ.get("ACS_HMAC_SECRET")
         os.environ["ACS_HMAC_SECRET"] = HMAC
+        os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         def _restore():
             if prior is None:
                 os.environ.pop("ACS_HMAC_SECRET", None)
             else:
                 os.environ["ACS_HMAC_SECRET"] = prior
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         self.addCleanup(_restore)
         return ACSMiddleware(ACSMiddlewareConfig(
             guardian_url=self.url, default_deny=default_deny,

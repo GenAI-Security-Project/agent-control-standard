@@ -46,7 +46,7 @@ class _Body:
 
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
-@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": "",
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key",
                               "ACS_DISABLED": "", "ACS_STARTUP_POSTURE": ""})
 class UntrustedAnswersNeverRunTheFunction(unittest.TestCase):
     def setUp(self) -> None:
@@ -75,7 +75,7 @@ class UntrustedAnswersNeverRunTheFunction(unittest.TestCase):
         def urlopen(req: Any, timeout: float) -> _Body:
             status, body = answer(json.loads(req.data))
             if body.get("sign"):
-                body = sign_with_key(body["envelope"], key)
+                body = sign_with_key(body["envelope"], key, key_id="test-key")
             raw = json.dumps(body).encode()
             if status == 200:
                 return _Body(raw)

@@ -14,6 +14,7 @@
     "/path/to/ placeholders with real absolute paths.",
     "",
     "ACS_HMAC_SECRET_FILE: REQUIRED for ACS-Core baseline integrity (\u00a710).",
+    "ACS_HMAC_KEY_ID: REQUIRED with the secret. The label that names it; the Guardian holds the same one.",
     "Without a secret both ends run unsigned and any local process that",
     "binds the Guardian port first becomes the Guardian. Generate one:",
     "  mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key",
@@ -36,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -47,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -58,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -69,7 +70,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -80,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -91,7 +92,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }
@@ -102,7 +103,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
           }
         ]
       }

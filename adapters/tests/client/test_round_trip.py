@@ -28,7 +28,7 @@ def _request(**payload: Any) -> dict:
                             payload=payload)
 
 
-@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": ""})
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"})
 class RoundTrip(unittest.TestCase):
     def _send(self, request: dict, answer, posture: FailPosture = PROCEED):
         sent: list[tuple[dict, float]] = []
@@ -46,7 +46,7 @@ class RoundTrip(unittest.TestCase):
     def _signed_allow(body: dict):
         response = sign_with_key({"jsonrpc": "2.0", "id": body["id"], "result": {
             "request_id": body["params"]["request_id"], "decision": "allow"}},
-            derive_session_key(SECRET.encode(), SESSION))
+            derive_session_key(SECRET.encode(), SESSION), key_id="test-key")
         return io.BytesIO(json.dumps(response).encode())
 
     def test_an_edit_after_building_is_covered_by_the_one_signature(self) -> None:

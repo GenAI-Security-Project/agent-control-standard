@@ -51,6 +51,7 @@ class ServerHelloContract(unittest.TestCase):
             if not key.startswith("ACS_")
         }
         clean_environment["ACS_HMAC_SECRET"] = self.SECRET
+        clean_environment["ACS_HMAC_KEY_ID"] = "test-key"
         self._stack.enter_context(mock.patch.dict(os.environ, clean_environment, clear=True))
         self._stack.enter_context(mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.cache_directory))
         self.audit = self._stack.enter_context(mock.patch.object(client_handshake, "audit_event"))
@@ -75,7 +76,7 @@ class ServerHelloContract(unittest.TestCase):
     def _sign(self, response: dict) -> dict:
         return client.sign_envelope(
             response, session_id=self.SESSION,
-            key=core.derive_session_key(self.SECRET.encode(), self.SESSION),
+            key=core.derive_session_key(self.SECRET.encode(), self.SESSION), key_id="test-key",
         )
 
     def _respond(self, request, timeout=None):

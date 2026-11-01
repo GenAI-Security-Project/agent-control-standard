@@ -32,7 +32,7 @@ class SessionGateThroughHooks(unittest.TestCase):
 
     def _env(self, url: str, **extra: str) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
-        env.update(ACS_GUARDIAN_URL=url, ACS_HMAC_SECRET=SECRET,
+        env.update(ACS_GUARDIAN_URL=url, ACS_HMAC_SECRET=SECRET, ACS_HMAC_KEY_ID="test-key",
                    ACS_HANDSHAKE_CACHE=str(self.root / "handshake"),
                    ACS_SESSION_STATE_DIR=str(self.root / "state"),
                    ACS_HANDSHAKE_TIMEOUT_SECONDS="2")

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from acs.client._audit import audit_event
-from acs.client._secrets import load_hmac_secret
+from acs.client._secrets import load_hmac_secret, load_key_id
 from acs.core import container_key, derive_session_key, sign_with_key, verify_with_key
 
 
@@ -30,9 +30,9 @@ def _warn_unsigned_once() -> None:
 
 
 def sign_envelope(envelope: dict, *, key: bytes | None = None,
-                  session_id: str | None = None, key_id: str = "default") -> dict:
-    """Add a signature to the envelope. Returns the envelope unchanged
-    (after a loud one-time audit event) if no key material is available."""
+                  session_id: str | None = None, key_id: str | None = None) -> dict:
+    """Add a signature under key_id, the configured ACS_HMAC_KEY_ID unless given. Returns the envelope
+    unchanged (after a loud one-time audit event) if no key material is available."""
     if key is None:
         ikm = load_hmac_secret()
         if not ikm:
@@ -43,13 +43,17 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
             meta = params.get("metadata") or {}
             session_id = meta.get("session_id") or params.get("request_id") or ""
         key = derive_session_key(ikm, session_id)
-    return sign_with_key(envelope, key, key_id=key_id)
+    label = key_id if key_id is not None else load_key_id()
+    if not label:
+        raise ValueError("ACS_HMAC_KEY_ID is not set; it names the configured secret (§10)")
+    return sign_with_key(envelope, key, key_id=label)
 
 
 def verify_signature(envelope: dict, *, key: bytes | None = None,
-                     session_id: str | None = None) -> bool:
+                     session_id: str | None = None, key_id: str | None = None) -> bool:
     """Verify a signed envelope (request, decision response, or error
-    response). Returns True if valid (or if no signature present and no
+    response) made under key_id, the configured ACS_HMAC_KEY_ID unless
+    given. Returns True if valid (or if no signature present and no
     key material configured — local-dev mode)."""
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
@@ -62,6 +66,10 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     if not isinstance(sig, dict) or sig.get("algorithm") != "HMAC-SHA256":
         return False
     if not sig.get("value"):
+        return False
+    # §10: an unknown key_id is rejected, with no fallback to another secret.
+    label = key_id if key_id is not None else load_key_id()
+    if not label or sig.get("key_id") != label:
         return False
 
     if key is None:

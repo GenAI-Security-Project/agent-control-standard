@@ -134,6 +134,7 @@ class CoreHarness(unittest.TestCase):
         env["ACS_GUARDIAN_STATE_DIR"] = cls.statedir
         if cls.HMAC_SECRET:
             env["ACS_HMAC_SECRET"] = cls.HMAC_SECRET
+            env["ACS_HMAC_KEY_ID"] = "test-key"
             env.pop("ACS_DEV_MODE", None)
         else:
             env["ACS_DEV_MODE"] = "1"
@@ -176,7 +177,7 @@ class CoreHarness(unittest.TestCase):
         }
         if sign and self.HMAC_SECRET:
             key = core.derive_session_key(self.HMAC_SECRET.encode(), sid)
-            client.sign_envelope(env, key=key, session_id=sid)
+            client.sign_envelope(env, key=key, session_id=sid, key_id="test-key")
         return env
 
     def _post(self, envelope: dict) -> dict:
@@ -766,7 +767,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         env = os.environ.copy()
         env.update({
             "ACS_GUARDIAN_URL": guardian.url(),
-            "ACS_HMAC_SECRET": self.SECRET,
+            "ACS_HMAC_SECRET": self.SECRET, "ACS_HMAC_KEY_ID": "test-key",
             "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
             # Hermetic per-call turn/session state.
             "ACS_SESSION_STATE_DIR": tempfile.mkdtemp(),
@@ -787,7 +788,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         env = os.environ.copy()
         env.update({
             "ACS_GUARDIAN_URL": guardian.url(),
-            "ACS_HMAC_SECRET": self.SECRET,
+            "ACS_HMAC_SECRET": self.SECRET, "ACS_HMAC_KEY_ID": "test-key",
             "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
             # Hermetic per-call turn/session state.
             "ACS_SESSION_STATE_DIR": tempfile.mkdtemp(),
@@ -949,7 +950,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
 
     def _env(self, g):
         env = os.environ.copy()
-        env.update({"ACS_GUARDIAN_URL": g.url(), "ACS_HMAC_SECRET": self.SECRET,
+        env.update({"ACS_GUARDIAN_URL": g.url(), "ACS_HMAC_SECRET": self.SECRET, "ACS_HMAC_KEY_ID": "test-key",
                     "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
                     "ACS_SESSION_STATE_DIR": tempfile.mkdtemp()})
         env.pop("ACS_HMAC_SECRET_FILE", None)
@@ -1388,7 +1389,7 @@ class Core07_BaselineIntegrity(CoreHarness):
         self.assertIsNotNone(sig,
             "Guardian response missing `signature` field per §10")
         key = core.derive_session_key(self.HMAC_SECRET.encode(), sid)
-        self.assertTrue(client.verify_signature(resp, key=key),
+        self.assertTrue(client.verify_signature(resp, key=key, key_id="test-key"),
             "Guardian's response signature must verify with the "
             "HKDF-derived per-session key")
 
@@ -1415,12 +1416,12 @@ class Core07_BaselineIntegrity(CoreHarness):
             "error response missing `signature` — errors are responses "
             "too; conformance.md, ACS-Core / Baseline integrity exempts only system/ping")
         key = core.derive_session_key(self.HMAC_SECRET.encode(), sid)
-        self.assertTrue(client.verify_signature(resp, key=key),
+        self.assertTrue(client.verify_signature(resp, key=key, key_id="test-key"),
             "error-response signature must verify with the per-session key")
         # And a tampered error must NOT verify (the check is real).
         tampered = json.loads(json.dumps(resp))
         tampered["error"]["message"] = "REPLAY_DETECTED but for a different action"
-        self.assertFalse(client.verify_signature(tampered, key=key),
+        self.assertFalse(client.verify_signature(tampered, key=key, key_id="test-key"),
             "tampered error envelope must fail verification")
 
     def test_per_session_key_derivation(self) -> None:
@@ -1548,6 +1549,7 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
         env_g = os.environ.copy()
         env_g["ACS_HMAC_SECRET"] = "regression-test-secret"
+        env_g["ACS_HMAC_KEY_ID"] = "test-key"
         env_g.pop("ACS_DEV_MODE", None)
         env_g["ACS_GUARDIAN_STATE_DIR"] = tempfile.mkdtemp()
         guardian, port = launch_guardian(env=env_g)
@@ -1603,6 +1605,7 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
         env_g = os.environ.copy()
         env_g["ACS_HMAC_SECRET"] = "regression-test-secret-2"
+        env_g["ACS_HMAC_KEY_ID"] = "test-key"
         env_g.pop("ACS_DEV_MODE", None)
         env_g["ACS_GUARDIAN_STATE_DIR"] = tempfile.mkdtemp()
         guardian, port = launch_guardian(env=env_g)
@@ -1732,7 +1735,7 @@ class Core08b_NegotiatedDecisionTimeout(unittest.TestCase):
         env = os.environ.copy()
         env.update({
             "ACS_GUARDIAN_URL": guardian.url(),
-            "ACS_HMAC_SECRET": guardian.hmac_secret,
+            "ACS_HMAC_SECRET": guardian.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
             "ACS_HANDSHAKE_CACHE": cache_dir,
         })
         env.pop("ACS_HMAC_SECRET_FILE", None)

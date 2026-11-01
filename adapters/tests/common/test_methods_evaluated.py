@@ -64,7 +64,7 @@ class Harness:
         self.env = {k: v for k, v in os.environ.items()
                     if k not in ("ACS_HMAC_SECRET_FILE", "ACS_DEFAULT_DENY", "ACS_HANDSHAKE")}
         self.env.update(
-            ACS_GUARDIAN_URL=guardian.url(), ACS_HMAC_SECRET=guardian.hmac_secret,
+            ACS_GUARDIAN_URL=guardian.url(), ACS_HMAC_SECRET=guardian.hmac_secret, ACS_HMAC_KEY_ID="test-key",
             ACS_HANDSHAKE_CACHE=str(d / "handshake"),
             ACS_SESSION_STATE_DIR=str(d / "state"),
             ACS_AUDIT_FILE=str(self.audit_path))

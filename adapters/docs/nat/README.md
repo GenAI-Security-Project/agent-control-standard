@@ -8,7 +8,7 @@ NAT exposes a `FunctionMiddleware` abstraction that wraps any function — tools
 
 1. Receives the `InvocationContext` (function name, arguments, output) from NAT's middleware pipeline.
 2. Translates it to an ACS JSON-RPC envelope ([mapping.md](./mapping.md)).
-3. Signs it with HMAC-SHA256 (`ACS_HMAC_SECRET` or `ACS_HMAC_SECRET_FILE`).
+3. Signs it with HMAC-SHA256 (`ACS_HMAC_SECRET` or `ACS_HMAC_SECRET_FILE`, under the label `ACS_HMAC_KEY_ID`).
 4. POSTs to the Guardian.
 5. Verifies the response signature and the JSON-RPC error/result shape.
 6. Applies the verdict: `allow` passes through; `deny` raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP` on NAT releases that expose it); `modify` mutates `context.modified_kwargs`; `ask`/`defer` substitute to deny at the middleware boundary.
@@ -50,7 +50,7 @@ chmod 600 ~/.acs/hmac.key
 The example Guardian is for testing; a production Guardian is the same wire protocol with a real policy engine attached.
 
 ```bash
-ACS_HMAC_SECRET_FILE=~/.acs/hmac.key \
+ACS_HMAC_SECRET_FILE=~/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 \
   acs-example-guardian --port 8787
 ```
 
@@ -271,6 +271,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 |---|---|---|
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
+| `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
 | `ACS_AGENT_ID` | derived from `target_function_or_group` | Stable agent identifier sent in `metadata.agent_id`. |
 | `ACS_SESSION_ID` | derived | Overrides the auto-generated session_id. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |

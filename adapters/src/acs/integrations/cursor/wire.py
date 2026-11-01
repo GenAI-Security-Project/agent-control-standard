@@ -138,6 +138,7 @@ def build_command(*, hook_command: str, event_name: str,
                    guardian_url: str,
                    secret_file: str | None,
                    secret_env: str | None,
+                   key_id: str | None = None,
                    default_deny: bool,
                    host_allowlist: str | None) -> str:
     """Compose the hook command string used inside hooks.json.
@@ -150,6 +151,8 @@ def build_command(*, hook_command: str, event_name: str,
         env_pairs.append(f"ACS_HMAC_SECRET_FILE={_expand(secret_file)}")
     elif secret_env:
         env_pairs.append(f"ACS_HMAC_SECRET={secret_env}")
+    if key_id:
+        env_pairs.append(f"ACS_HMAC_KEY_ID={shlex.quote(key_id)}")
     if default_deny:
         env_pairs.append("ACS_DEFAULT_DENY=1")
     if host_allowlist:
@@ -349,6 +352,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Guardian endpoint (http:// or https://). Required unless --unwire.")
     p.add_argument("--secret-file",
                     help="Path to the HMAC secret file (preferred). The adapter reads it lazily.")
+    p.add_argument("--key-id", metavar="LABEL",
+                    help="The label that names the secret (§10), the same one the Guardian has; "
+                         "required with --secret-file or --secret-env-inline.")
     p.add_argument("--secret-env-inline", metavar="HEX",
                     help="HMAC secret inlined into hooks.json env (visible in `ps aux`; "
                          "dev only). Use --secret-file for production.")
@@ -390,6 +396,8 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--guardian-url is required (unless --unwire)")
     if args.secret_file and args.secret_env_inline:
         p.error("provide --secret-file OR --secret-env-inline, not both")
+    if (args.secret_file or args.secret_env_inline) and not (args.key_id or "").strip():
+        p.error("--key-id is required with a secret: it names the secret, and the Guardian must hold the same label")
 
     settings_path = _expand(args.settings)
     # A hook command that cannot run makes the host proceed with no audit record.
@@ -437,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
                 guardian_url=args.guardian_url,
                 secret_file=args.secret_file,
                 secret_env=args.secret_env_inline,
+                key_id=args.key_id,
                 default_deny=hook_deny,
                 host_allowlist=args.host_allowlist,
             )

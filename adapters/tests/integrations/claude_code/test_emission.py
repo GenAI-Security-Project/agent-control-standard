@@ -48,12 +48,10 @@ class ClaudeEmission(unittest.TestCase):
             env = os.environ.copy()
             env.update({
                 "ACS_GUARDIAN_URL": g.url(),
-                "ACS_HMAC_SECRET": g.hmac_secret,
-                "ACS_HANDSHAKE": "1",           # capture the handshake too
-                "ACS_HANDSHAKE_CACHE": cache,   # fresh → handshake fires
-                # Fresh, isolated turn/session state per one-shot emit so a
-                # turn opened by one test can't leak into another (all
-                # cases reuse one SESSION id).
+                "ACS_HMAC_SECRET": g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
+                "ACS_HANDSHAKE": "1",
+                "ACS_HANDSHAKE_CACHE": cache,
+                # Fresh state per emit, since every case reuses SESSION.
                 "ACS_SESSION_STATE_DIR": cache,
             })
             env.pop("ACS_HMAC_SECRET_FILE", None)
@@ -184,7 +182,7 @@ class ClaudeSequentialSession(unittest.TestCase):
             env = os.environ.copy()
             env.update({
                 "ACS_GUARDIAN_URL": cls.g.url(),
-                "ACS_HMAC_SECRET": cls.g.hmac_secret,
+                "ACS_HMAC_SECRET": cls.g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
                 "ACS_HANDSHAKE": "1",
                 "ACS_HANDSHAKE_CACHE": cls._cache,  # SHARED → handshake once
                 "ACS_SESSION_STATE_DIR": cls._state,  # SHARED → turn_id persists

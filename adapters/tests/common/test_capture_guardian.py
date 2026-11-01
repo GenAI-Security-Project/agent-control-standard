@@ -42,7 +42,7 @@ def _signed_tool_call(secret: str, **overrides) -> dict:
     key = core.derive_session_key(secret.encode(),
                                         env["params"]["metadata"].get("session_id", ""))
     client.sign_envelope(env, key=key,
-                             session_id=env["params"]["metadata"].get("session_id", ""))
+                             session_id=env["params"]["metadata"].get("session_id", ""), key_id="test-key")
     return env
 
 
@@ -105,7 +105,7 @@ class IndependentVerifierKnownAnswer(unittest.TestCase):
         from acs.testing.capture_guardian import independent_verify
         env = self._envelope()
         key = core.derive_session_key(self.SECRET, self.SID)
-        client.sign_envelope(env, key=key, session_id=self.SID)
+        client.sign_envelope(env, key=key, session_id=self.SID, key_id="test-key")
         self.assertTrue(independent_verify(env, self.SECRET, self.SID),
             "independent verifier and acs.core disagree on a valid envelope")
 

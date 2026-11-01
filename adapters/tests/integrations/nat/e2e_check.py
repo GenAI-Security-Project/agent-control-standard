@@ -68,6 +68,7 @@ def _build_middleware(guardian_url: str, *, default_deny: bool = True,
     """Construct an ACSMiddleware with the same env the operator uses
     in production (HMAC secret on; signs every envelope)."""
     os.environ["ACS_HMAC_SECRET"] = HMAC_SECRET
+    os.environ["ACS_HMAC_KEY_ID"] = "test-key"
     from acs.integrations.nat.adapter import ACSMiddleware, ACSMiddlewareConfig  # noqa: E402
     return ACSMiddleware(ACSMiddlewareConfig(
         guardian_url=guardian_url,

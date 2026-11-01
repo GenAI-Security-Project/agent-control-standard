@@ -26,7 +26,7 @@ def _request(**payload: Any) -> dict:
 
 
 def _signed(response: dict) -> dict:
-    return sign_with_key(response, derive_session_key(SECRET.encode(), SESSION))
+    return sign_with_key(response, derive_session_key(SECRET.encode(), SESSION), key_id="test-key")
 
 
 def _result(**overrides: Any) -> dict:
@@ -151,7 +151,7 @@ CASES = [
 ]
 
 
-@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": ""})
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"})
 class ExchangeCauses(unittest.TestCase):
     def _exchange(self, urlopen: Any, *, request: dict | None = None, url: str = URL,
                   timeout_s: float = 2.5):
@@ -206,7 +206,7 @@ class ExchangeCauses(unittest.TestCase):
             secret_file = Path(d) / "hmac.key"
             secret_file.write_text(SECRET)
             secret_file.chmod(0o644)
-            with mock.patch.dict(os.environ, {"ACS_HMAC_SECRET_FILE": str(secret_file)}):
+            with mock.patch.dict(os.environ, {"ACS_HMAC_SECRET_FILE": str(secret_file), "ACS_HMAC_KEY_ID": "test-key"}):
                 outcome, _ = self._exchange(_json(_signed(_result())))
         self.assertIsInstance(outcome, Refused)
         self.assertEqual(outcome.cause, "response_unverifiable")
@@ -256,7 +256,7 @@ class _DrippingGuardian:
         self.server.server_close()
 
 
-@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": ""})
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"})
 class OverallDeadline(unittest.TestCase):
     """§6.4: the negotiated timeout bounds the whole wait, including a body that arrives slowly."""
 
@@ -460,7 +460,7 @@ class TlsDeadline(unittest.TestCase):
         return f"https://127.0.0.1:{server.server_address[1]}/acs"
 
     def _exchange(self, url: str, timeout_s: float):
-        env = {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": "", "SSL_CERT_FILE": self.cert}
+        env = {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key", "SSL_CERT_FILE": self.cert}
         with mock.patch.dict(os.environ, env):
             return exchange(_request(), guardian_url=url, timeout_s=timeout_s, session_id=SESSION)
 
@@ -489,7 +489,8 @@ class TlsDeadline(unittest.TestCase):
 STATUSES = (200, 400, 413, 500, 503)
 MATRIX = [
     ("unsigned non-refusal error", lambda: _error(-32603), Refused, "error_signature_invalid"),
-    ("unsigned refusal error", lambda: _error(-32004), Refused, "error_signature_invalid"),
+    ("unsigned refusal error", lambda: _error(-32005), Refused, "error_signature_invalid"),
+    ("unsigned SIGNATURE_INVALID, an unknown key_id", lambda: _error(-32004), Refused, "key_id_rejected"),
     ("error with a forged signature", lambda: _forged_error(-32603), Refused, "error_signature_invalid"),
     ("signed error for another request", lambda: _signed({**_error(-32603), "id": "rpc-2"}),
      Refused, "response_binding_mismatch"),
@@ -513,7 +514,7 @@ NON_ENVELOPES = [
 ]
 
 
-@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_SECRET_FILE": ""})
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"})
 class HttpStatusMatrix(unittest.TestCase):
     def test_every_envelope_under_every_status(self) -> None:
         for status in STATUSES:

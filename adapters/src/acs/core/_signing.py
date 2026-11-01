@@ -38,8 +38,8 @@ def container_key(envelope: dict) -> str:
     return "result"
 
 
-def sign_with_key(envelope: dict, key: bytes, *, key_id: str = "default") -> dict:
-    """Add an HMAC-SHA256 signature made with `key` over JCS(envelope without its signature), in place."""
+def sign_with_key(envelope: dict, key: bytes, *, key_id: str) -> dict:
+    """Sign in place with HMAC-SHA256 over JCS(envelope without its signature), labelled key_id (§10)."""
     ckey = container_key(envelope)
     container = envelope.get(ckey, {})
     # Strip any existing signature before signing

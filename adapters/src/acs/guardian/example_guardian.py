@@ -35,6 +35,10 @@ Environment variables:
                       File path is preferred for production (no exposure
                       in `ps aux`); use `chmod 600`.
                       Generate: `openssl rand -hex 32 > /etc/acs/hmac.key`
+  ACS_HMAC_KEY_ID     The label that names the secret (§10), the same one
+                      the adapters send. A request under another label
+                      gets an unsigned SIGNATURE_INVALID. Required with a
+                      secret.
   ACS_DEV_MODE        "1" allows starting without a signing secret. Local
                       development only. ACS-Core baseline integrity (§10)
                       is not satisfied in dev mode.
@@ -65,7 +69,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from acs.client import load_hmac_secret, sign_envelope, verify_signature  # noqa: E402
+from acs.client import audit_event, load_hmac_secret, load_key_id, sign_envelope, verify_signature  # noqa: E402
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash  # noqa: E402
 from acs.core import (  # noqa: E402
     ACS_VERSION,
@@ -382,10 +386,12 @@ def append_to_chain(session_id: str, method: str, request_id: str,
 # ----- Replay + skew checks (§10.3 normative) -----
 
 class GuardianError(Exception):
-    def __init__(self, code: int, message: str) -> None:
+    def __init__(self, code: int, message: str, *, signed: bool = True) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        # §10: the error for a key_id no configured secret matches is unsigned.
+        self.signed = signed
 
 
 def check_replay(session_id: str, request_id: str) -> None:
@@ -421,11 +427,13 @@ def check_skew(timestamp: str) -> None:
 def check_signature(envelope: dict, session_id: str) -> None:
     if not _hmac_secret():
         return  # local-dev mode
+    signature = (envelope.get("params") or {}).get("signature")
+    if isinstance(signature, dict) and signature.get("key_id") != load_key_id():
+        # §10: reject an unknown key_id without trying another secret.
+        raise GuardianError(-32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
     if not verify_signature(envelope, session_id=session_id):
         raise GuardianError(-32004, "SIGNATURE_INVALID")
 
-
-# ----- Method evaluators -----
 
 def _major(version: str) -> str | None:
     """Major component of an X.Y.Z version string, or None if unparseable."""
@@ -564,16 +572,14 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
             "reason_codes": ["unknown_method"]}
 
 
-# ----- Request dispatch -----
-
-def _error_envelope(request_id, session_id: str, code: int, message: str) -> dict:
+def _error_envelope(request_id, session_id: str, code: int, message: str, *, signed: bool = True) -> dict:
     """Build a SIGNED JSON-RPC error envelope — conformance.md:23 covers
     error responses too (an unsigned spoofable error under fail-open is
     an allow). Signed whenever session_id makes the per-session key
     derivable; earlier failures surface as HTTP refusals in do_POST."""
     envelope = {"jsonrpc": "2.0", "id": request_id,
                 "error": {"code": code, "message": message}}
-    if _hmac_secret() and session_id:
+    if signed and _hmac_secret() and session_id:
         sign_envelope(envelope, session_id=session_id)
     return envelope
 
@@ -616,7 +622,7 @@ def handle_request(request: dict) -> dict:
             check_signature(request, session_id)
             result = evaluate_handshake(params, acs_request_id)
         except GuardianError as e:
-            return _error_envelope(request_id, session_id, e.code, e.message)
+            return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
         envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
         if _hmac_secret():
             sign_envelope(envelope, session_id=session_id)
@@ -628,7 +634,7 @@ def handle_request(request: dict) -> dict:
         check_skew(timestamp)
         check_replay(session_id, acs_request_id)
     except GuardianError as e:
-        return _error_envelope(request_id, session_id, e.code, e.message)
+        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
 
     # Compute chain entry BEFORE evaluating, then include head in result.
     payload_canonical = jcs_canonicalize(params).decode("utf-8")
@@ -735,6 +741,12 @@ def main() -> int:
             "    openssl rand -hex 32 > /etc/acs/hmac.key && chmod 600 /etc/acs/hmac.key\n"
             "  For local development without a secret (NON-CONFORMANT per §10):\n"
             "    ACS_DEV_MODE=1\n"
+        )
+        return 1
+    if load_hmac_secret() and not load_key_id():
+        sys.stderr.write(
+            "[guardian] REFUSING TO START: ACS_HMAC_KEY_ID is not set.\n"
+            "  It names the signing secret (§10); set the same label the adapters use, e.g. ACS_HMAC_KEY_ID=2026-11\n"
         )
         return 1
 

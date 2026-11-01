@@ -43,6 +43,8 @@ from acs import core
 from acs.core import schemas_dir
 
 _HERE = Path(__file__).resolve().parent
+# The ACS_HMAC_KEY_ID the test setups configure, and the label the test Guardian signs with by default.
+TEST_KEY_ID = "test-key"
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -119,6 +121,7 @@ def make_envelope(
     agent_id: str = "test",
     platform: str = "test",
     sign_with_secret: str | bytes | None = None,
+    key_id: str = TEST_KEY_ID,
 ) -> dict:
     """Build a canonical request envelope ready for the wire.
 
@@ -147,7 +150,7 @@ def make_envelope(
     if sign_with_secret is not None:
         secret = sign_with_secret.encode() if isinstance(sign_with_secret, str) else sign_with_secret
         key = core.derive_session_key(secret, sid)
-        client.sign_envelope(env, key=key, session_id=sid)
+        client.sign_envelope(env, key=key, session_id=sid, key_id=key_id)
     return env
 
 
@@ -312,9 +315,12 @@ class ProgrammableGuardian:
     DEFAULT_TEST_HMAC_SECRET = "shared-test-harness-secret-not-for-production"
 
     def __init__(self, *, hmac_secret: str | None = None,
-                  sign_responses: bool = True, port: int = 0, threaded: bool = False) -> None:
+                  sign_responses: bool = True, port: int = 0, threaded: bool = False,
+                  key_id: str = TEST_KEY_ID) -> None:
         import http.server
         self.hmac_secret = hmac_secret or self.DEFAULT_TEST_HMAC_SECRET
+        # The label of hmac_secret (§10): requests under another label get an unsigned SIGNATURE_INVALID.
+        self.key_id = key_id
         self.sign_responses = sign_responses
         self.received: list[dict] = []
         self.sent: list[dict] = []
@@ -430,7 +436,7 @@ class ProgrammableGuardian:
                     sid = req.get("params", {}).get("metadata", {}).get("session_id", "")
                     key = core.derive_session_key(
                         guardian.hmac_secret.encode(), sid)
-                    if not client.verify_signature(req, key=key, session_id=sid):
+                    if not client.verify_signature(req, key=key, session_id=sid, key_id=guardian.key_id):
                         self_h._reply({
                             "jsonrpc": "2.0", "id": req.get("id"),
                             "error": {"code": -32004, "message": "SIGNATURE_INVALID"},
@@ -447,7 +453,7 @@ class ProgrammableGuardian:
                     sid = req["params"]["metadata"]["session_id"]
                     key = core.derive_session_key(
                         guardian.hmac_secret.encode(), sid)
-                    client.sign_envelope(resp, key=key, session_id=sid)
+                    client.sign_envelope(resp, key=key, session_id=sid, key_id=guardian.key_id)
                 self_h._reply(resp)
 
             def _reply(self_h, resp: dict):

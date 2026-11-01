@@ -272,21 +272,21 @@ class Item07_UnicodeRoundTrip(unittest.TestCase):
     def test_emoji_round_trip(self) -> None:
         env = self._make_envelope("🚀 from agent — ✨")
         key = core.derive_session_key(b"test-secret", "sess")
-        client.sign_envelope(env, key=key, session_id="sess")
-        self.assertTrue(client.verify_signature(env, key=key, session_id="sess"))
+        client.sign_envelope(env, key=key, session_id="sess", key_id="test-key")
+        self.assertTrue(client.verify_signature(env, key=key, session_id="sess", key_id="test-key"))
 
     def test_null_byte_round_trip(self) -> None:
         env = self._make_envelope("before\x00after")
         key = core.derive_session_key(b"test-secret", "sess")
-        client.sign_envelope(env, key=key, session_id="sess")
-        self.assertTrue(client.verify_signature(env, key=key, session_id="sess"))
+        client.sign_envelope(env, key=key, session_id="sess", key_id="test-key")
+        self.assertTrue(client.verify_signature(env, key=key, session_id="sess", key_id="test-key"))
 
     def test_bmp_and_supplementary_planes_round_trip(self) -> None:
         # Hebrew (BMP) + emoji (supplementary plane)
         env = self._make_envelope("שלום 🌍 こんにちは")
         key = core.derive_session_key(b"test-secret", "sess")
-        client.sign_envelope(env, key=key, session_id="sess")
-        self.assertTrue(client.verify_signature(env, key=key, session_id="sess"))
+        client.sign_envelope(env, key=key, session_id="sess", key_id="test-key")
+        self.assertTrue(client.verify_signature(env, key=key, session_id="sess", key_id="test-key"))
 
 
 # ===== #8: ISO 8601 parse resilience =====

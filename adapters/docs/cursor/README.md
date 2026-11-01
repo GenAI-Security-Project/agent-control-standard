@@ -10,7 +10,7 @@ This adapter is that command. On every hook event Cursor spawns it as a subproce
 
 1. Reads the Cursor hook event from stdin.
 2. Translates it to an ACS JSON-RPC envelope ([mapping.md](./mapping.md)).
-3. Signs it with HMAC-SHA256 (`ACS_HMAC_SECRET_FILE`).
+3. Signs it with HMAC-SHA256 (`ACS_HMAC_SECRET_FILE`, under the label `ACS_HMAC_KEY_ID`).
 4. POSTs to the Guardian.
 5. Verifies the response signature.
 6. Translates the verdict back to Cursor's expected output shape and writes to stdout (or exits with code 2 for `beforeSubmitPrompt`).
@@ -50,7 +50,7 @@ chmod 600 ~/.acs/hmac.key
 Use the example Guardian for testing; a production Guardian is the same wire protocol with a real policy engine attached.
 
 ```bash
-ACS_HMAC_SECRET_FILE=~/.acs/hmac.key \
+ACS_HMAC_SECRET_FILE=~/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 \
   acs-example-guardian --port 8787
 ```
 
@@ -72,18 +72,21 @@ Cursor runs the hooks from every source below and merges their answers, with any
 # Preview wiring into ~/.cursor/hooks.json (default — user-level)
 acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
-  --secret-file=~/.acs/hmac.key
+  --secret-file=~/.acs/hmac.key \
+  --key-id=2026-11
 
 # Apply user-level wiring
 acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
+  --key-id=2026-11 \
   --write
 
 # OR — project-level wiring for a specific workspace
 acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
+  --key-id=2026-11 \
   --settings=./.cursor/hooks.json \
   --write
 ```
@@ -288,6 +291,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_GUARDIAN_URL` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only; SSRF allowlist refuses other schemes. |
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
+| `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
 | `ACS_DEFAULT_DENY` | `0` | Fail-open with audit (§6.4 default). Set to `1` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
 | `ACS_STARTUP_POSTURE` | follows `ACS_DEFAULT_DENY` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |

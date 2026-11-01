@@ -64,7 +64,7 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
         for patcher in (mock.patch.object(_handshake, "_HANDSHAKE_CACHE_DIR", Path(records.name)),
                         mock.patch.object(_handshake, "_HANDSHAKE_TIMEOUT_S", 5.0),
-                        mock.patch.dict(os.environ, {**env, "ACS_HMAC_SECRET": SECRET}, clear=True)):
+                        mock.patch.dict(os.environ, {**env, "ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key"}, clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.guardian = ProgrammableGuardian(hmac_secret=SECRET)

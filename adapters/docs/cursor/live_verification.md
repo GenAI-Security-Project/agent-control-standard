@@ -11,7 +11,7 @@ The procedure below has been run end-to-end and produced the expected outcomes (
 ```bash
 # 1. Generate a shared signing secret and start the example Guardian
 mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key
-ACS_HMAC_SECRET_FILE=~/.acs/hmac.key acs-example-guardian --port 8787
+ACS_HMAC_SECRET_FILE=~/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 acs-example-guardian --port 8787
 
 # 2. In a new shell, set up a test project with the adapter wired in
 mkdir -p /tmp/acs-cursor-live/.cursor
@@ -20,19 +20,19 @@ cat > /tmp/acs-cursor-live/.cursor/hooks.json <<'EOF'
   "version": 1,
   "hooks": {
     "sessionStart": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook sessionStart" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 /path/to/acs-cursor-hook sessionStart" }
     ],
     "beforeSubmitPrompt": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook beforeSubmitPrompt" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 /path/to/acs-cursor-hook beforeSubmitPrompt" }
     ],
     "preToolUse": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook preToolUse" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 /path/to/acs-cursor-hook preToolUse" }
     ],
     "postToolUse": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook postToolUse" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 /path/to/acs-cursor-hook postToolUse" }
     ],
     "beforeShellExecution": [
-      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key /path/to/acs-cursor-hook beforeShellExecution" }
+      { "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 /path/to/acs-cursor-hook beforeShellExecution" }
     ]
   }
 }

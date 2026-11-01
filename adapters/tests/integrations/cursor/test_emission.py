@@ -36,7 +36,7 @@ class CursorEmission(unittest.TestCase):
             env = os.environ.copy()
             env.update({
                 "ACS_GUARDIAN_URL": g.url(),
-                "ACS_HMAC_SECRET": g.hmac_secret,
+                "ACS_HMAC_SECRET": g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
                 "ACS_HANDSHAKE": "1",
                 "ACS_HANDSHAKE_CACHE": cache,
                 # subagentStart needs a recorded prior step OR falls back
@@ -294,7 +294,7 @@ class CursorSequentialSession(unittest.TestCase):
             env = os.environ.copy()
             env.update({
                 "ACS_GUARDIAN_URL": cls.g.url(),
-                "ACS_HMAC_SECRET": cls.g.hmac_secret,
+                "ACS_HMAC_SECRET": cls.g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
                 "ACS_HANDSHAKE": "1",
                 "ACS_HANDSHAKE_CACHE": cls._cache,      # SHARED → handshake once
                 "ACS_SESSION_STATE_DIR": cls._cache,    # SHARED → preCompact entries populate

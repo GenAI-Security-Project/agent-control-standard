@@ -19,7 +19,7 @@ below.
 | Adapter middleware (`nat/`) | In-process inside the agent's Python runtime. Same address space as the agent. |
 | Guardian process (`src/acs/guardian/`) | HTTP server. Holds the HMAC secret. Computes the rolling audit chain. |
 | Wire transport | JSON-RPC over HTTP (deployments wrap with HTTPS / mTLS for production). |
-| HMAC shared secret | Loaded from `ACS_HMAC_SECRET_FILE` (preferred) or `ACS_HMAC_SECRET` (env-var fallback). |
+| HMAC shared secret | Loaded from `ACS_HMAC_SECRET_FILE` (preferred) or `ACS_HMAC_SECRET` (env-var fallback), and named by the label in `ACS_HMAC_KEY_ID` (§10). A response signed under any other label fails verification; no other secret is tried. |
 | Cache files | `~/.cache/acs-adapter-handshake/` (ServerHello cache), `~/.cache/acs-adapter-session/` (per-session step-id tracking). |
 | Audit log | `ACS_AUDIT <json>` lines on adapter stderr. |
 

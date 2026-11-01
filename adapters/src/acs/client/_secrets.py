@@ -73,3 +73,8 @@ def load_hmac_secret() -> bytes:
             ) from e
     env_val = os.environ.get("ACS_HMAC_SECRET", "")
     return env_val.encode("utf-8") if env_val else b""
+
+
+def load_key_id() -> str:
+    """ACS_HMAC_KEY_ID, the deployment's label for the secret (§10); "" when unset."""
+    return os.environ.get("ACS_HMAC_KEY_ID", "").strip()

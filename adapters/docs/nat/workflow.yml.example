@@ -5,6 +5,8 @@
 #
 # Environment (set on the NAT process — the adapter is in-process):
 #   ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key
+#   ACS_HMAC_KEY_ID=2026-11
+#       REQUIRED with the secret: the label that names it (§10); the Guardian holds the same one.
 #       REQUIRED for ACS-Core baseline integrity (§10). Without a secret
 #       both ends run unsigned and any local process that binds the
 #       Guardian port becomes the Guardian. Generate:

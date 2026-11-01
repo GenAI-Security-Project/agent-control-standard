@@ -80,6 +80,7 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
                 guardian_url="http://127.0.0.1:8787/acs",
                 secret_file="/path/to/.acs/hmac.key",
                 secret_env=None,
+                key_id="2026-11",
                 default_deny=(hook in wire.GATE_HOOKS),
                 host_allowlist=None,
                 audit_file="/path/to/.acs/audit.log",

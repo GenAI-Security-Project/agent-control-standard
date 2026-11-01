@@ -98,6 +98,7 @@ def base_checks(env_dir: Path, wheel_version: str, cwd: Path) -> None:
 
     guardian_env = {k: v for k, v in os.environ.items() if k != "ACS_SPEC_DIR"}
     guardian_env["ACS_HMAC_SECRET"] = "ab" * 32
+    guardian_env["ACS_HMAC_KEY_ID"] = "check-wheel"
     guardian = subprocess.Popen([str(bindir / "acs-example-guardian"), "--port", "0"], cwd=cwd,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 env=guardian_env)

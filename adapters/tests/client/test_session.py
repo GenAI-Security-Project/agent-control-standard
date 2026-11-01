@@ -28,7 +28,7 @@ FORGED = {"algorithm": "HMAC-SHA256", "value": "AAAA"}
 
 
 def _signed(response: dict, session_id: str) -> dict:
-    return sign_with_key(response, derive_session_key(SECRET.encode(), session_id))
+    return sign_with_key(response, derive_session_key(SECRET.encode(), session_id), key_id="test-key")
 
 
 def _answer(build, status: int = 200):
@@ -96,7 +96,7 @@ CASES = [
 
 
 class _SessionTest(unittest.TestCase):
-    ENV = {"ACS_HMAC_SECRET": SECRET}
+    ENV = {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key"}
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="acs-session-")
@@ -151,7 +151,7 @@ class Classification(_SessionTest):
         secret_file = self.cache / "hmac.key"
         secret_file.write_text(SECRET)
         secret_file.chmod(0o644)
-        with mock.patch.dict(os.environ, {"ACS_HMAC_SECRET_FILE": str(secret_file)}):
+        with mock.patch.dict(os.environ, {"ACS_HMAC_SECRET_FILE": str(secret_file), "ACS_HMAC_KEY_ID": "test-key"}):
             decision, calls = self._open()
         self.assertIsInstance(decision, SessionRefused)
         self.assertEqual((decision.cause, calls), ("secret_unavailable", 0))

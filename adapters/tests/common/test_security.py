@@ -83,10 +83,11 @@ class HmacSecretFilePermissions(unittest.TestCase):
         self.secret_path = Path(self.tmpdir) / "hmac.key"
         self.secret_path.write_bytes(b"super-secret-key-material" * 4)
         self._old_env = {
-            "ACS_HMAC_SECRET_FILE": os.environ.get("ACS_HMAC_SECRET_FILE"),
-            "ACS_HMAC_SECRET": os.environ.get("ACS_HMAC_SECRET"),
+            "ACS_HMAC_SECRET_FILE": os.environ.get("ACS_HMAC_SECRET_FILE"), "ACS_HMAC_KEY_ID": "test-key",
+            "ACS_HMAC_SECRET": os.environ.get("ACS_HMAC_SECRET"), "ACS_HMAC_KEY_ID": "test-key",
         }
         os.environ["ACS_HMAC_SECRET_FILE"] = str(self.secret_path)
+        os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         os.environ.pop("ACS_HMAC_SECRET", None)
 
     def tearDown(self) -> None:
@@ -410,6 +411,7 @@ class Item15_VerifySignatureRobustToMalformedBase64(unittest.TestCase):
     def test_malformed_signature_returns_false_not_crashes(self) -> None:
         import os
         os.environ["ACS_HMAC_SECRET"] = "verify-sig-robustness-test-secret"
+        os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         try:
             for bad in self.BAD_VALUES:
                 with self.subTest(signature=bad[:30]):
@@ -528,6 +530,7 @@ class Item19_SecretFileUnreadableRaises(unittest.TestCase):
 
     def test_missing_secret_file_raises(self) -> None:
         os.environ["ACS_HMAC_SECRET_FILE"] = "/nonexistent-secret-file"
+        os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         try:
             with self.assertRaises(client.SecretFileUnreadableError):
                 client.load_hmac_secret()
@@ -544,6 +547,7 @@ class Item19_SecretFileUnreadableRaises(unittest.TestCase):
         finally:
             if old is not None:
                 os.environ["ACS_HMAC_SECRET"] = old
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
 
 
 class Item20_DeadGuardianCostsOneTimeoutPerSession(unittest.TestCase):
@@ -807,7 +811,7 @@ class Item22_StoredSessionDecisionIsAuthenticated(unittest.TestCase):
         env = os.environ.copy()
         env.update({
             "ACS_GUARDIAN_URL": guardian_url,
-            "ACS_HMAC_SECRET": secret,
+            "ACS_HMAC_SECRET": secret, "ACS_HMAC_KEY_ID": "test-key",
             "ACS_HANDSHAKE_CACHE": str(self.cache_dir),
             "ACS_HANDSHAKE_TIMEOUT_SECONDS": "2",
         })
@@ -882,6 +886,7 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
                 os.environ.pop("ACS_HMAC_SECRET", None)
             else:
                 os.environ["ACS_HMAC_SECRET"] = secret
+                os.environ["ACS_HMAC_KEY_ID"] = "test-key"
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
 
             captured: list[dict] = []

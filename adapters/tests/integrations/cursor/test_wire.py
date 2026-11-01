@@ -30,7 +30,7 @@ def _run_default_wire() -> dict:
         proc = subprocess.run(
             [sys.executable, str(WIRE),
              "--guardian-url=http://127.0.0.1:8787/acs",
-             f"--secret-file={secret}",
+             f"--secret-file={secret}", "--key-id=test-key",
              f"--settings={settings}",
              "--write"],
             capture_output=True, text=True, timeout=30, cwd=d, env={**os.environ, "HOME": d},

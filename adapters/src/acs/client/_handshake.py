@@ -16,9 +16,9 @@ from typing import Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, post
+from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, key_id_rejected, post
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
-from acs.client._secrets import load_hmac_secret
+from acs.client._secrets import load_hmac_secret, load_key_id
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
@@ -160,8 +160,10 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
         return stored
     # An unsigned session does not meet acs-core's signed-envelope floor (§10), so it claims no profile.
     claimed = (profiles_supported if profiles_supported is not None else ["acs-core"]) if ikm else []
-    if not config.handshake_enabled:
-        decision: Handshake = NoAnswer("handshake_disabled")
+    if ikm and not load_key_id():
+        decision: Handshake = SessionRefused("key_id_missing")
+    elif not config.handshake_enabled:
+        decision = NoAnswer("handshake_disabled")
     else:
         decision = _hello(
             guardian_url=config.guardian_url, session_id=session_id, agent_id=agent_id,
@@ -258,6 +260,8 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     verified = verify_signature(response, session_id=session_id)
     if error is not None:
         if not verified:
+            if key_id_rejected(error):
+                return SessionRefused("key_id_rejected", {"claimed_error_code": code})
             return SessionRefused("error_signature_invalid",
                                   {"claimed_error_code": code, "claimed_cause": guardian_error_cause(code)})
         fields = {"error_code": code, "error_message": error.get("message")}

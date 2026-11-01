@@ -238,6 +238,11 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
     return replace(outcome, fields={**outcome.fields, "http_status": http_status})
 
 
+def key_id_rejected(error: Any) -> bool:
+    """An unsigned SIGNATURE_INVALID error: how a Guardian answers a key_id it holds no secret for (§10)."""
+    return isinstance(error, dict) and error.get("code") == -32004 and "signature" not in error
+
+
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
     """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
     params = request.get("params") or {}
@@ -255,6 +260,10 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         code = err.get("code")
         # Errors are signed too; an unverifiable error under fail-open would be an allow.
         if not verify_signature(response, session_id=session_id):
+            if key_id_rejected(err):
+                return Refused("key_id_rejected", {"claimed_error_code": code},
+                               "Guardian answered an unsigned SIGNATURE_INVALID, how it reports a key_id it does not "
+                               "hold (§10); check ACS_HMAC_KEY_ID")
             return Refused("error_signature_invalid",
                            {"claimed_error_code": code, "claimed_cause": guardian_error_cause(code)},
                            "error response signature invalid")

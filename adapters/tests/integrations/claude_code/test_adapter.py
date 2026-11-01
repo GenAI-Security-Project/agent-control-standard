@@ -259,7 +259,7 @@ class AdapterRoundTrip(unittest.TestCase):
                 # red. State is now isolated per test.)
                 with g, tempfile.TemporaryDirectory() as state:
                     env = {"ACS_GUARDIAN_URL": g.url(),
-                           "ACS_HMAC_SECRET": g.hmac_secret,
+                           "ACS_HMAC_SECRET": g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
                            "ACS_SESSION_STATE_DIR": state}
                     if hook == "Stop":
                         # Open the turn: allow turnStart + userMessage

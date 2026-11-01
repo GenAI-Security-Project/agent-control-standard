@@ -24,6 +24,7 @@ _EXPORTS = {
     "current_turn": "_store",
     "exchange": "_exchange",
     "load_hmac_secret": "_secrets",
+    "load_key_id": "_secrets",
     "load_session_state": "_store",
     "mark_once": "_store",
     "open_session": "_handshake",

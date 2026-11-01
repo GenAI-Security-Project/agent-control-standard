@@ -77,6 +77,7 @@ class NatEmission(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         os.environ["ACS_HMAC_SECRET"] = HMAC
+        os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         os.environ.pop("ACS_HANDSHAKE", None)
 
     def _mw(self) -> ACSMiddleware:
