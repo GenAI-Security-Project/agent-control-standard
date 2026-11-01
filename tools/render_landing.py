@@ -5,7 +5,8 @@ Injection happens at build time, so the published page stays static and renders 
 JavaScript disabled.
 
 mkdocs.yml is a build input too. Its nav and its extra.acs_nav block become the page's
-left pane, so every value from it is validated against the patterns in site_nav and then
+left pane, and site_name, repo_name, and repo_url fill the header the page shares with
+the docs, so every value from it is validated against the patterns in site_nav and then
 escaped. A value that fails stops the build. Dropping one link would ship a pane that
 differs from the docs site with no error anywhere.
 """
@@ -44,6 +45,9 @@ REQUIRED_PLACEHOLDERS = (
     "<!--ACS:PRIORITY_SCOPE-->",
     "<!--ACS:STARBURST-->",
     "<!--ACS:NAV-->",
+    "<!--ACS:SITE_NAME-->",
+    "<!--ACS:REPO_NAME-->",
+    "<!--ACS:REPO_URL-->",
     "<!--ACS:CSP-->",
 )
 
@@ -150,17 +154,19 @@ def render_priority_scope(scope: str) -> str:
 
 @dataclass(frozen=True)
 class NavConfig:
-    """The parts of mkdocs.yml the pane is built from, unvalidated until render_nav."""
+    """The parts of mkdocs.yml the pane and header are built from, unvalidated until use."""
 
     nav: tuple
     landing_sections: tuple[dict, ...]
     external_resources: tuple[dict, ...]
     out_of_nav_prefixes: tuple[str, ...]
     repo_url: str
+    site_name: str
+    repo_name: str
 
 
 def read_nav_config(path: Path) -> NavConfig:
-    """Read the pane's inputs from mkdocs.yml without building a mkdocs config object.
+    """Read the pane's and the header's inputs from mkdocs.yml without building a mkdocs config object.
 
     A config object would validate plugins and the theme, which needs the whole docs
     toolchain. The landing render only needs these keys.
@@ -185,6 +191,8 @@ def read_nav_config(path: Path) -> NavConfig:
             external_resources=tuple(acs_nav["external_resources"]),
             out_of_nav_prefixes=tuple(acs_nav["out_of_nav_prefixes"]),
             repo_url=cfg["repo_url"],
+            site_name=cfg["site_name"],
+            repo_name=cfg["repo_name"],
         )
     except (KeyError, TypeError) as error:
         raise RenderError(f"{path.name}: missing or malformed key {error}. {REPAIR}") from error
@@ -431,6 +439,11 @@ def render(
     # custom properties, so the diagram would ignore the theme.
     out = out.replace("<!--ACS:STARBURST-->", starburst)
     out = out.replace("<!--ACS:NAV-->", render_nav(nav))
+    # The header repeats the docs header, so its text comes from the keys the theme reads.
+    # A literal here is how the wordmark came to say something the docs did not.
+    out = out.replace("<!--ACS:SITE_NAME-->", _title(nav.site_name, "site_name"))
+    out = out.replace("<!--ACS:REPO_NAME-->", _title(nav.repo_name, "repo_name"))
+    out = out.replace("<!--ACS:REPO_URL-->", _external_url(nav.repo_url, "repo_url"))
     # Last, so the hashes cover the bodies as they ship. The placeholder is a comment,
     # which the body scan skips.
     out = out.replace("<!--ACS:CSP-->", render_csp(out))

@@ -207,7 +207,7 @@ def test_only_one_theme_mark_shows_at_a_time():
     assert ".visually-hidden" in css
 
 
-def test_the_sidebar_shows_the_same_mark_as_the_documentation(page):
+def test_the_header_shows_the_same_mark_as_the_documentation(page):
     """The two surfaces drew the same file differently, text here and an image there."""
     assert 'src="assets/icon.svg"' in page
     assert '<img src="assets/icon.svg" alt=""' in page
@@ -337,16 +337,17 @@ def test_rendered_element_bodies_equal_the_starburst_plus_the_template(page):
 
 
 def test_menu_button_contract(page):
-    """The phone strip carries a real button wired by listeners, and the skip link is
-    the first thing a keyboard reaches."""
+    """The header carries a real button wired by listeners, named in text the icon
+    cannot supply, and the skip link is the first thing a keyboard reaches."""
     from conftest import _element_bodies
 
     assert re.search(r"<body>\s*<a class=\"skip-link\" href=\"#main\">", page)
     assert '<main id="main">' in page
     assert re.search(
-        r'<header class="topbar">\s*<a class="wordmark" href="\.">.*?</a>\s*'
+        r'<header class="site-header">(?:(?!</header>).)*'
         r'<button id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">'
-        r"Menu</button>\s*</header>",
+        r'\s*<svg [^>]*aria-hidden="true"[^>]*>.*?</svg>\s*'
+        r'<span class="visually-hidden">Menu</span>\s*</button>',
         page,
         re.S,
     )
@@ -360,19 +361,23 @@ def test_menu_button_contract(page):
         assert needle in script, needle
 
 
-def test_phone_strip_paints_above_the_open_panel():
-    """The open panel overlaps the Menu button on a phone, so the strip must stack
-    above the panel or the button that closes it is unreachable."""
+def test_header_paints_above_the_open_panel():
+    """The open panel would overlap the button that closes it, so the header must stack
+    above the panel and the panel must start below the header, or the button is
+    unreachable. The panel also has to fill the space between its insets, because a
+    start-aligned fixed box sizes to its rows, overflows, and cannot scroll."""
     css = re.sub(r"/\*.*?\*/", "", (LANDING / "assets" / "acs.css").read_text(encoding="utf-8"), flags=re.S)
-    phone = css[css.index("@media (max-width: 1024px)"):]
-    strip = " ".join(re.search(r"\.topbar\s*\{(.*?)\}", phone, re.S).group(1).split())
-    panel = " ".join(re.search(r"\.has-drawer \.sidebar\s*\{(.*?)\}", phone, re.S).group(1).split())
-    assert "position: relative;" in strip, strip
+    strip = " ".join(re.search(r"\.site-header\s*\{(.*?)\}", css, re.S).group(1).split())
+    inner = " ".join(re.search(r"\.site-header__inner\s*\{(.*?)\}", css, re.S).group(1).split())
+    panel = " ".join(re.search(r"\.has-drawer \.sidebar\s*\{(.*?)\}", css, re.S).group(1).split())
+    assert "position: sticky;" in strip, strip
     strip_z = int(re.search(r"z-index: (\d+);", strip).group(1))
     panel_z = int(re.search(r"z-index: (\d+);", panel).group(1))
     assert strip_z > panel_z, (strip_z, panel_z)
-    # The strip now covers the panel's top, so the first row must start below it.
-    assert "padding-top: calc(40px + 3rem);" in panel, panel
+    height = re.search(r"(?<![-\w])height: ([^;]+);", inner).group(1)
+    assert f"top: {height};" in panel, (height, panel)
+    assert "bottom: 0;" in panel and "overflow-y: auto;" in panel, panel
+    assert "align-self: stretch;" in panel, panel
 
 
 def test_pane_row_ceilings(page):
@@ -395,8 +400,9 @@ def test_pane_row_ceilings(page):
 
 
 def test_sidebar_keeps_its_own_scroll(page):
-    """The column scrolls by itself, so the theme toggle below the pane stays reachable
-    when the open pane is taller than the viewport."""
+    """The column scrolls by itself, so the rows stay reachable when the open pane is
+    taller than the space below the header. The theme toggle lives in that header, so
+    no pane length can push it off screen."""
     css = re.sub(r"/\*.*?\*/", "", (LANDING / "assets" / "acs.css").read_text(encoding="utf-8"), flags=re.S)
     top_level, depth, start = [], 0, 0
     for index, char in enumerate(css):
@@ -411,9 +417,12 @@ def test_sidebar_keeps_its_own_scroll(page):
                 start = index + 1
     rules = [" ".join(body.split()) for selector, body in top_level if selector == ".sidebar"]
     assert len(rules) == 1, rules
-    assert "height: 100vh;" in rules[0] and "overflow-y: auto;" in rules[0], rules[0]
+    assert "max-height: calc(100vh - var(--acs-u) * 2.4);" in rules[0], rules[0]
+    assert "overflow-y: auto;" in rules[0], rules[0]
+    header = page[page.index('<header class="site-header">'):page.index("</header>")]
     sidebar = page[page.index('<div class="sidebar">'):page.index("<main")]
-    assert sidebar.index('id="site-nav"') < sidebar.index('id="theme-toggle"')
+    assert 'id="site-nav"' in sidebar
+    assert 'id="theme-toggle"' in header and 'id="theme-toggle"' not in sidebar
 
 
 def test_no_pane_link_has_target_or_rel(page):
