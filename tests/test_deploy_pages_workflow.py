@@ -103,6 +103,17 @@ def test_render_step_has_no_env():
     assert "env" not in render
 
 
+def test_the_release_check_runs_on_the_rendered_page_before_the_upload():
+    # Build time, so a pull request runs it too and a slow CDN cannot fail a good deploy.
+    steps = load()["jobs"]["build"]["steps"]
+    names = [step.get("name") for step in steps]
+    check = names.index("Check the landing page names the release")
+    assert check == names.index("Render the landing page") + 1
+    assert check < names.index("Upload the artifact")
+    assert "version.txt" in steps[check]["run"] and "_site/index.html" in steps[check]["run"]
+    assert "continue-on-error" not in steps[check]
+
+
 def test_no_step_after_uv_install_references_a_token():
     # Every step after setup-uv runs code uv installed, so none of them may see a token.
     steps = load()["jobs"]["build"]["steps"]

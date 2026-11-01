@@ -42,4 +42,5 @@ def render_landing_page() -> str:
         (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         (landing / "assets" / "starburst.svg").read_text(encoding="utf-8"),
         read_nav_config(REPO / "mkdocs.yml"),
+        (REPO / "version.txt").read_text(encoding="utf-8"),
     )

@@ -140,6 +140,18 @@ jobs:
       - name: Render the landing page
         run: uv run --no-dev python tools/render_landing.py landing _site
 
+      - name: Check the landing page names the release
+        # At build time rather than after publishing. The Pages CDN and the Cloudflare proxy
+        # in front of it can both serve the previous page for minutes after a good deploy.
+        # The match includes the link, because a spec version equal to the release would
+        # satisfy a search for the number alone.
+        run: |
+          VERSION="$(tr -d '[:space:]' < version.txt)"
+          grep -qF "/releases/tag/v${VERSION}\"><code>v${VERSION}</code>" _site/index.html || {
+            echo "::error file=landing/index.html::The landing page does not show release v${VERSION}"
+            exit 1
+          }
+
       - name: Publish the schemas
         # Fails when any $id is unsafe or duplicated, or any $ref does not resolve.
         run: uv run --no-dev python tools/publish_schemas.py specification _site/schema
