@@ -1,0 +1,27 @@
+{
+  "coverage": "configured",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": null,
+    "verdict": "allow"
+  },
+  "family": "acs-f-6",
+  "id": "v3c03d4e4ce213e9c",
+  "kind": "accept",
+  "payload": {
+    "context_entry": {
+      "chain_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "request_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "step_type": "hooks/toolCallRequest"
+    },
+    "profile": "ACS-Audit"
+  },
+  "requirements": [
+    "ACS-R-016"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "PEER"
+}
