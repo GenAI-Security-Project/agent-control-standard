@@ -1,36 +1,5 @@
 #!/usr/bin/env python3
-"""
-End-to-end conformance check for an adopter's Claude Code ACS integration.
-
-This is NOT a synthetic adapter test. It drives a REAL `claude --print`
-invocation against a freshly-wired `.claude/settings.json` and a
-recording Guardian, and verifies that:
-
-  1. Claude actually fires the hooks we expect, in the order we expect.
-  2. The adapter translates each hook into a wire-conformant ACS envelope.
-  3. Every envelope is HMAC-signed end-to-end and the Guardian verifies it.
-  4. The Guardian's verdicts are actually applied by Claude — allow lets
-     the tool run, deny visibly blocks it.
-  5. The handshake fires ONCE per Claude session, even when many hooks
-     fire within that session.
-
-A developer integrating ACS runs this once after wiring the adapter to
-confirm their installation works in production-like conditions.
-
-Prerequisites:
-  - `claude` CLI on PATH (Claude Code installed and authenticated)
-  - Python 3.10+
-  - The canonical ACS schemas at $ACS_SPEC_DIR (default: the in-repo specification/v0.1.0/)
-
-Usage (from this directory):
-
-    python3 e2e_check.py
-
-Each scenario takes ~10-15 seconds because real Claude is in the loop.
-Total wall-clock ~60-90 seconds. Add `--model` overrides via the
-CLAUDE_MODEL env var if you want a different model than the default
-(claude-haiku-4-5 — chosen for speed).
-"""
+"""Live check of a Claude Code ACS install: real claude --print, a freshly wired settings.json and a recording Guardian; needs claude on PATH."""
 from __future__ import annotations
 
 import json
@@ -105,7 +74,6 @@ def write_settings(workdir: Path, port: int) -> None:
             "UserPromptSubmit": [one()],
             "PreToolUse":       [one()],
             "PostToolUse":      [one()],
-            "Notification":     [one()],
             "Stop":             [one()],
             "SessionEnd":       [one()],
         }
@@ -195,11 +163,7 @@ def dump_session_envelopes(report: Report, guardian: ProgrammableGuardian,
                            pretool, truncate=140)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Scenarios
-# ──────────────────────────────────────────────────────────────────────
-
-TOTAL_SCENARIOS = 4
+TOTAL_SCENARIOS = 5
 
 
 def scenario_allow(report: Report, workdir: Path,
@@ -423,9 +387,52 @@ def scenario_handshake_once(report: Report, workdir: Path,
     report.finish("handshake-once-per-session", all(ok for _, ok, _ in sub_results))
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────
+def scenario_withheld_output(report: Report, workdir: Path,
+                             guardian: ProgrammableGuardian) -> None:
+    marker = f"ACS_E2E_SECRET_{uuid.uuid4().hex[:8]}"
+    (workdir / "secret.txt").write_text(marker + "\n")
+    prompt = "Use the Bash tool exactly once to run: cat secret.txt. Then repeat exactly what it printed."
+    header_for_scenario(
+        report, 5, TOTAL_SCENARIOS,
+        title="WITHHELD OUTPUT — Guardian denies a tool result; Claude never sees it",
+        prompt=prompt,
+        expectation=("Bash runs and its output reaches the Guardian in steps/toolCallResult; "
+                     "the Guardian denies the result and the adapter replaces Bash's output, "
+                     f"so the file's marker {marker!r} is NOT in Claude's reply"),
+    )
+
+    def answer(req: dict, decision: str) -> dict:
+        return {"type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+                "chain_hash": "0" * 64, "decision": decision, "reasoning": "E2E test: result withheld"}
+
+    def bash_only(req: dict) -> dict:
+        # Another tool could read the file again, so only Bash runs here.
+        tool = (req["params"].get("payload") or {}).get("tool", {}).get("name", "")
+        return answer(req, "allow" if tool == "Bash" else "deny")
+
+    guardian.reset()
+    guardian.handlers["steps/toolCallRequest"] = bash_only
+    guardian.handlers["steps/toolCallResult"] = lambda req: answer(req, "deny")
+    try:
+        rc, stdout, _ = run_claude(prompt, workdir=workdir)
+    finally:
+        guardian.handlers.pop("steps/toolCallResult", None)
+    report.quote_block(f"Claude's stdout (rc={rc})", stdout, max_chars=300)
+
+    result_envs = [r for r in guardian.received if r.get("method") == "steps/toolCallResult"]
+    ran = any(marker in json.dumps(r.get("params", {}).get("payload", {})) for r in result_envs)
+    sub_results = [
+        ("Marker appears in the toolCallResult envelope (Bash ran and the Guardian saw its output)",
+         ran, f"{len(result_envs)} toolCallResult envelope(s)"),
+        ("Marker is NOT in Claude's reply (the output was withheld)",
+         marker not in stdout, "marker absent" if marker not in stdout else "MARKER PRESENT (Claude saw the output)"),
+    ]
+    _envelope_checks(guardian, sub_results)
+    dump_session_envelopes(report, guardian)
+    for label, ok, detail in sub_results:
+        report.sub(label, ok, detail)
+    report.finish("withheld-output", all(ok for _, ok, _ in sub_results))
+
 
 def main() -> int:
     # Prereq: claude on PATH
@@ -470,6 +477,7 @@ def main() -> int:
         scenario_deny(report, workdir, guardian)
         scenario_read_tool(report, workdir, guardian)
         scenario_handshake_once(report, workdir, guardian)
+        scenario_withheld_output(report, workdir, guardian)
     finally:
         guardian.stop()
         shutil.rmtree(workdir, ignore_errors=True)

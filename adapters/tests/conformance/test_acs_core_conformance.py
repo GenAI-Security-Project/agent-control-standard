@@ -803,16 +803,15 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
                 "out": json.loads(proc.stdout) if proc.stdout.strip() else {}}
 
     def test_modify_applies_parameter_overrides_claude(self) -> None:
-        """MODIFY with parameter_overrides → permissionDecision allow +
-        updatedInput carrying the override (mapping.md disposition table)."""
+        """MODIFY with parameter_overrides answers ask with updatedInput carrying the override (mapping.md)."""
         with self._scripted_guardian({
             "decision": "modify", "reasoning": "redacted",
             "modifications": {"parameter_overrides": {"command": "echo REDACTED"}},
         }) as g:
             r = self._run_claude(g)
         hso = r["out"].get("hookSpecificOutput", {})
-        self.assertEqual(hso.get("permissionDecision"), "allow",
-            f"MODIFY must surface as allow+updatedInput; got {r['out']!r}")
+        self.assertEqual(hso.get("permissionDecision"), "ask",
+            f"MODIFY must surface as ask+updatedInput; got {r['out']!r}")
         self.assertEqual(hso.get("updatedInput"), {"command": "echo REDACTED"},
             "the Guardian's parameter_overrides must reach updatedInput")
 

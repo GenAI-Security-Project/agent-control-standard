@@ -436,6 +436,40 @@ class Startup(_SessionTest):
         self.assertEqual([c.args[0] for c in self.audit.call_args_list if c.kwargs.get("method") == "steps/sessionStart"],
                          ["fail_open_bypass"])
 
+    def test_an_allowed_start_s_reasoning_reaches_every_later_hook(self) -> None:
+        for reasoning in ("start policy", ""):
+            with self.subTest(reasoning=reasoning):
+                session = f"start-context-{bool(reasoning)}"
+                allowed = Decided({"jsonrpc": "2.0", "id": "1", "result": {"decision": "allow", "reasoning": reasoning}})
+                first, _ = self._open(session_id=session, start=lambda s: allowed)
+                again, calls = self._open(session_id=session, start=lambda s: self.fail("started twice"))
+                self.assertEqual((first.start_context, again.start_context, calls), (reasoning, reasoning, 0))
+                self.assertIsNone(Config.from_env({"ACS_GUARDIAN_URL": URL, "ACS_DEFAULT_DENY": "1"}).gate(again))
+
+    def test_a_session_record_that_says_how_the_start_went_refuses_the_session(self) -> None:
+        for name, extra in (("context", {"start_context": "start policy"}),
+                            ("failure", {"start_failure": {"cause": "decision_timeout", "fields": {}}})):
+            with self.subTest(name):
+                session = f"record-claims-{name}"
+                self._open(session_id=session)
+                body = {k: v for k, v in json.loads(self._record(session).read_text()).items() if k != "mac"}
+                body.update(extra)
+                ikm, _ = _handshake.load_signing_material()
+                self._record(session).write_text(json.dumps({**body, "mac": _handshake._mac(body, ikm, session)}))
+                decision, calls = self._open(session_id=session)
+                self.assertEqual((decision.cause, calls), ("session_record_invalid", 0))
+
+    def test_a_startup_record_with_a_context_that_is_not_text_refuses_the_session(self) -> None:
+        session = "start-context-invalid"
+        allowed = Decided({"jsonrpc": "2.0", "id": "1", "result": {"decision": "allow", "reasoning": "start policy"}})
+        self._open(session_id=session, start=lambda s: allowed)
+        body = {k: v for k, v in json.loads(self._started(session).read_text()).items() if k != "mac"}
+        body["start_context"] = ["start policy"]
+        ikm, _ = _handshake.load_signing_material()
+        self._started(session).write_text(json.dumps({**body, "mac": _handshake._mac(body, ikm, session)}))
+        decision, calls = self._open(session_id=session, start=lambda s: self.fail("started twice"))
+        self.assertEqual((decision.cause, calls), ("session_record_invalid", 0))
+
     def test_a_failed_start_is_audited_once_and_not_retried(self) -> None:
         def fail(session: Negotiated) -> None:
             raise RuntimeError("boom")

@@ -36,6 +36,8 @@ class Negotiated:
     server_hello: Mapping[str, Any]
     # The session's sessionStart got no decision ({"cause", "fields"}); each hook's fail posture settles its steps.
     start_failure: Mapping[str, Any] | None = None
+    # The reasoning the Guardian gave when it allowed the session's sessionStart.
+    start_context: str = ""
 
 
 @dataclass(frozen=True)

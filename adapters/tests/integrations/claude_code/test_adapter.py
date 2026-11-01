@@ -97,16 +97,14 @@ class AdapterRoundTrip(unittest.TestCase):
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
-    # ----- PreToolUse: allow path (must produce hookSpecificOutput.permissionDecision=allow) -----
-
     def test_safe_tool_call_allows(self) -> None:
         rc, out, err = self._run_adapter(_claude_code_event(
             "PreToolUse", tool_name="Read", tool_input={"file_path": "/tmp/safe.txt"},
         ))
         self.assertEqual(rc, 0, err)
-        payload = json.loads(out)
-        self.assertEqual(payload["hookSpecificOutput"]["hookEventName"], "PreToolUse")
-        self.assertEqual(payload["hookSpecificOutput"]["permissionDecision"], "allow")
+        # An allow prints nothing, so Claude Code's own permission prompt still applies.
+        self.assertEqual(out, "")
+        self.assertNotIn("ACS_AUDIT", err, "the Guardian answered; nothing proceeded undecided")
 
     def test_destructive_bash_denied(self) -> None:
         rc, out, _ = self._run_adapter(_claude_code_event(
@@ -309,6 +307,155 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out, "",
             f"unmapped SubagentStop must produce no output; got {out!r}")
+
+
+
+def _answer(**decision):
+    return lambda req: {"type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+                        "chain_hash": "0" * 64, **decision}
+
+
+class _GuardianRun(unittest.TestCase):
+    def _run(self, g: ProgrammableGuardian, *events: dict) -> list[tuple[str, str]]:
+        results = []
+        with tempfile.TemporaryDirectory() as root:
+            env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+            env.update(ACS_GUARDIAN_URL=g.url(), ACS_HMAC_SECRET=g.hmac_secret, ACS_HMAC_KEY_ID="test-key",
+                       ACS_HANDSHAKE_CACHE=f"{root}/handshake", ACS_SESSION_STATE_DIR=f"{root}/state")
+            for event in events:
+                proc = subprocess.run([sys.executable, str(ADAPTER)], input=json.dumps(event),
+                                      capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                results.append((proc.stdout.strip(), proc.stderr))
+        return results
+
+
+BASH_SHAPE = {"stdout", "stderr", "interrupted", "isImage"}
+
+
+class PostToolUseWithholdsOutput(_GuardianRun):
+    """A decision that keeps a delivered result from Claude replaces the output where Claude Code applies a
+    replacement (hooks reference, PostToolUse decision control) and is recorded where it cannot."""
+
+    def _post(self, tool_name: str, **decision) -> tuple[dict, str]:
+        g = ProgrammableGuardian()
+        g.handlers["steps/toolCallResult"] = _answer(**decision)
+        with g:
+            [(out, err)] = self._run(g, _claude_code_event(
+                "PostToolUse", tool_name=tool_name, tool_input={"command": "cat key"},
+                tool_response={"stdout": "SECRET-OUTPUT", "stderr": "", "interrupted": False, "isImage": False},
+                tool_use_id="t1"))
+            self.assertIn("steps/toolCallResult", g.methods_seen())
+        self.assertNotIn("SECRET-OUTPUT", out)
+        return json.loads(out), err
+
+    def test_a_denied_bash_result_is_replaced_in_bash_s_output_shape(self) -> None:
+        for decision in ({"decision": "deny", "reasoning": "leaks a key"},
+                         {"decision": "ask", "reasoning": "needs a person", "ask_details": {"approver_types": ["human"]}},
+                         {"decision": "defer", "reasoning": "later"},
+                         {"decision": "maybe", "reasoning": "not a disposition"},
+                         {"decision": "modify", "reasoning": "both shapes",
+                          "modifications": {"modified_content": "x", "parameter_overrides": {"command": "y"}}}):
+            with self.subTest(decision["decision"]):
+                out, err = self._post("Bash", **decision)
+                self.assertEqual(out["decision"], "block")
+                replacement = out["hookSpecificOutput"]["updatedToolOutput"]
+                self.assertEqual(set(replacement), BASH_SHAPE)
+                self.assertIn("withheld", replacement["stdout"])
+                self.assertNotIn("unenforceable_decision", err)
+
+    def test_a_denied_mcp_result_is_replaced_with_text(self) -> None:
+        out, err = self._post("mcp__files__read", decision="deny", reasoning="leaks a key")
+        self.assertEqual(out["decision"], "block")
+        self.assertIsInstance(out["hookSpecificOutput"]["updatedToolOutput"], str)
+        self.assertIn("withheld", out["hookSpecificOutput"]["updatedToolOutput"])
+        self.assertNotIn("unenforceable_decision", err)
+
+    def test_a_denied_result_of_another_tool_is_blocked_and_recorded_as_unenforceable(self) -> None:
+        for decision in ({"decision": "deny", "reasoning": "leaks a key"},
+                         {"decision": "modify", "reasoning": "rewrite", "modifications": {"modified_content": "x"}}):
+            with self.subTest(decision["decision"]):
+                out, err = self._post("Read", **decision)
+                self.assertEqual(out["decision"], "block")
+                self.assertNotIn("updatedToolOutput", out["hookSpecificOutput"])
+                self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
+                self.assertIn('"tool": "Read"', err)
+
+    def test_a_fail_closed_result_is_withheld_too(self) -> None:
+        for tool_name, replaced in (("Bash", True), ("mcp__files__read", True), ("Read", False), (7, False)):
+            with self.subTest(tool=tool_name), tempfile.TemporaryDirectory() as root:
+                env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+                env.update(ACS_GUARDIAN_URL="http://127.0.0.1:1/acs", ACS_DEFAULT_DENY="1", ACS_HMAC_KEY_ID="test-key",
+                           ACS_HMAC_SECRET=signing_env()["ACS_HMAC_SECRET"], ACS_HANDSHAKE_CACHE=root,
+                           ACS_SESSION_STATE_DIR=root)
+                seed_negotiated_session(root, session_id="00000000-0000-4000-8000-000000000001",
+                                        guardian_url="http://127.0.0.1:1/acs", hmac_secret=signing_env()["ACS_HMAC_SECRET"])
+                proc = subprocess.run([sys.executable, str(ADAPTER)], input=json.dumps(_claude_code_event(
+                    "PostToolUse", tool_name=tool_name, tool_input={"command": "cat key"},
+                    tool_response={"stdout": "SECRET-OUTPUT", "stderr": "", "interrupted": False, "isImage": False})),
+                    capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                out = json.loads(proc.stdout)
+                self.assertEqual(out["decision"], "block")
+                self.assertEqual("updatedToolOutput" in out["hookSpecificOutput"], replaced)
+                self.assertNotIn("SECRET-OUTPUT", proc.stdout)
+
+    def test_a_modify_replaces_bash_and_mcp_output_with_the_guardian_s_content(self) -> None:
+        for tool, expected in (("Bash", {"stdout": "redacted", "stderr": "", "interrupted": False, "isImage": False}),
+                               ("mcp__files__read", "redacted")):
+            with self.subTest(tool):
+                out, err = self._post(tool, decision="modify", reasoning="redact",
+                                      modifications={"modified_content": "redacted"})
+                self.assertNotIn("decision", out)
+                self.assertEqual(out["hookSpecificOutput"]["updatedToolOutput"], expected)
+
+
+class StopSendsTheReply(_GuardianRun):
+    """Stop's last_assistant_message is the turn's reply (hooks reference, Stop input): it goes out as
+    steps/agentResponse under the open turn, before steps/turnEnd."""
+
+    def _turn(self, g: ProgrammableGuardian, stop: dict) -> tuple[str, str]:
+        return self._run(g, _claude_code_event("UserPromptSubmit", prompt="hi"), stop)[1]
+
+    def test_the_reply_is_sent_under_the_open_turn_before_the_turn_ends(self) -> None:
+        g = ProgrammableGuardian()
+        with g:
+            out, _ = self._turn(g, _claude_code_event("Stop", last_assistant_message="the reply"))
+            methods = g.methods_seen()
+            [reply] = g.envelopes_for("steps/agentResponse")
+            [turn_start] = g.envelopes_for("steps/turnStart")
+        self.assertEqual(out, "")
+        self.assertEqual(methods[-2:], ["steps/agentResponse", "steps/turnEnd"])
+        self.assertEqual(reply["params"]["payload"]["content"], [{"type": "text", "value": "the reply"}])
+        self.assertEqual(reply["params"]["metadata"]["turn_id"], turn_start["params"]["payload"]["turn_id"])
+
+    def test_a_decision_on_the_delivered_reply_is_recorded_and_the_turn_still_ends(self) -> None:
+        g = ProgrammableGuardian()
+        g.handlers["steps/agentResponse"] = _answer(decision="deny", reasoning="policy hit")
+        with g:
+            out, err = self._turn(g, _claude_code_event("Stop", last_assistant_message="the reply"))
+            methods = g.methods_seen()
+        self.assertEqual(out, "", "a block on Stop would tell Claude Code to keep going")
+        self.assertEqual(methods[-1], "steps/turnEnd")
+        self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
+        self.assertIn('"method": "steps/agentResponse"', err)
+
+    def test_a_stop_without_a_reply_sends_no_agent_response(self) -> None:
+        g = ProgrammableGuardian()
+        with g:
+            self._turn(g, _claude_code_event("Stop"))
+            methods = g.methods_seen()
+        self.assertNotIn("steps/agentResponse", methods)
+        self.assertEqual(methods[-1], "steps/turnEnd")
+
+    def test_a_notification_sends_nothing(self) -> None:
+        g = ProgrammableGuardian()
+        with g:
+            [(out, _)] = self._run(g, _claude_code_event("Notification", message="Claude needs your permission",
+                                                         notification_type="permission_prompt"))
+            methods = g.methods_seen()
+        self.assertEqual(out, "")
+        self.assertEqual(methods, [], "Notification is unmapped, so the Guardian receives nothing")
 
 
 if __name__ == "__main__":

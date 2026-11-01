@@ -95,8 +95,8 @@ class ClaudeEmission(unittest.TestCase):
                                   tool_use_id="t1", duration_ms=12), "steps/toolCallResult")
 
     def test_agent_response(self):
-        self._assert_emits(_event("Notification", message="done",
-                                  notification_type="permission_prompt"),
+        self._assert_emits(_event("Stop", permission_mode="default",
+                                  last_assistant_message="done"),
                            "steps/agentResponse")
 
     def test_session_end(self):
@@ -159,16 +159,14 @@ class ClaudeSequentialSession(unittest.TestCase):
         _event("PostToolUse", tool_name="Bash", tool_input={"command": "echo hi"},
                tool_response={"stdout": "hi", "interrupted": False},
                tool_use_id="tc-1", duration_ms=5),
-        _event("Notification", message="fyi"),
+        _event("Notification", message="fyi", notification_type="idle_prompt"),
         _event("PreToolUse", tool_name="Agent",
                tool_input={"subagent_type": "researcher", "prompt": "x"},
                tool_use_id="spawn-1", permission_mode="default"),
         # SubagentStop stays in the sequence as a realistic event but is
         # KNOWN_UNMAPPED (emits nothing) — see test_subagent_stop_not_forwarded.
         _event("SubagentStop", transcript_path="/tmp/sub.jsonl"),
-        # Stop closes the turn opened by the UserPromptSubmit above →
-        # steps/turnEnd (turn-tracking); SessionEnd then closes the session.
-        _event("Stop", permission_mode="default"),
+        _event("Stop", permission_mode="default", last_assistant_message="did the thing"),
         _event("SessionEnd", reason="clear"),
     ]
 
@@ -238,8 +236,7 @@ class ClaudeSequentialSession(unittest.TestCase):
         self.assertTrue(tid, "turnStart must carry a turn_id")
         self.assertEqual(self.g.payload_of("steps/turnEnd").get("turn_id"), tid,
             "turnEnd.turn_id must equal the turnStart's")
-        # userMessage and toolCallRequest (in-turn) must stamp metadata.turn_id.
-        for method in ("steps/userMessage", "steps/toolCallRequest"):
+        for method in ("steps/userMessage", "steps/toolCallRequest", "steps/agentResponse"):
             meta = (self.g.records_for(method)[0].parsed.get("params") or {}).get("metadata") or {}
             self.assertEqual(meta.get("turn_id"), tid,
                 f"{method} must carry metadata.turn_id={tid!r}; got {meta.get('turn_id')!r}")

@@ -195,5 +195,26 @@ class WrittenCommandsAndFiles(unittest.TestCase):
                 self._wire(module, tmp, settings, f"--hook-command={_executable(tmp / script)}", *SECRET_ARGS)
                 self.assertEqual(stat.S_IMODE(settings.stat().st_mode), 0o600)
 
+class ClaudeCodeRetiredNotificationHook(unittest.TestCase):
+    def _settings_after(self, *mode: str) -> dict:
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), mock.patch.dict(os.environ, {"HOME": d}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            hook = _executable(Path(d) / "acs-claude-code-hook")
+            settings = Path(d) / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"Notification": [{"matcher": "*", "hooks": [
+                {"type": "command", "command": f"{hook} {claude_wire.WIRE_MARKER}"},
+                {"type": "command", "command": "notify-send claude"}]}]}}))
+            claude_wire.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                              f"--hook-command={hook}", "--write", *SECRET_ARGS, *mode])
+            return json.loads(settings.read_text())
+
+    def test_wiring_and_unwiring_remove_only_the_acs_notification_hook(self) -> None:
+        for mode in ((), ("--unwire",)):
+            with self.subTest(mode=mode):
+                hooks = self._settings_after(*mode)["hooks"]
+                self.assertEqual(hooks["Notification"], [{"matcher": "*", "hooks": [
+                    {"type": "command", "command": "notify-send claude"}]}])
+
+
 if __name__ == "__main__":
     unittest.main()

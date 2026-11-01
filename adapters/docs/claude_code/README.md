@@ -87,7 +87,7 @@ What it wires by default:
 | `UserPromptSubmit` | **fail-CLOSED** (gate) |
 | `SessionStart` | fail-open (§6.4 default); a Guardian `deny` refuses the session |
 | `PostToolUse` | fail-open |
-| `Notification` | fail-open |
+| `Stop` | fail-open; sends the reply (`agentResponse`) and closes the turn |
 | `SessionEnd` | fail-open |
 
 Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere). Every fail-closed hook also carries `"onFailure": "block"`, so Claude Code v2.1.295 or later blocks the action when the hook itself crashes, times out or cannot start; Claude Code ignores it on `Stop`.
@@ -108,7 +108,7 @@ uv sync --locked --group test
 uv run python tests/integrations/claude_code/e2e_check.py
 ```
 
-Real Claude is driven through four scenarios — allow, deny, Read tool, multi-tool handshake-once — every envelope is printed verbatim, you read PASS/FAIL per scenario. Wall-clock ~60-90s because real Claude is in the loop. The final line is either `ACS-CORE SMOKE PASS (claude-code)` (exit 0) — a smoke verdict, not a conformance certification — or a per-scenario failure list (exit 1).
+Real Claude is driven through five scenarios — allow, deny, Read tool, multi-tool handshake-once, withheld output — every envelope is printed verbatim, you read PASS/FAIL per scenario. Wall-clock ~60-90s because real Claude is in the loop. The final line is either `ACS-CORE SMOKE PASS (claude-code)` (exit 0) — a smoke verdict, not a conformance certification — or a per-scenario failure list (exit 1).
 
 You can also do an in-session manual smoke test (see [Smoke tests](#smoke-tests) below).
 
@@ -146,7 +146,7 @@ uv sync --locked --group test
 uv run python tests/integrations/claude_code/e2e_check.py
 ```
 
-Drives real Claude through 4 scenarios with a recording Guardian. Prints every envelope on the wire plus per-scenario PASS/FAIL.
+Drives real Claude through 5 scenarios with a recording Guardian. Prints every envelope on the wire plus per-scenario PASS/FAIL.
 
 ### Smoke #3 — in-session manual test
 
@@ -156,15 +156,19 @@ Open a real Claude Code session. Try:
 echo hello via Bash
 ```
 
+The Guardian allows it and the hook prints nothing, so Claude Code's own permission rules decide; `echo` is one of its read-only commands, which run without a prompt.
+
 In your Guardian terminal you should see roughly this sequence (one new entry per hook Claude fires):
 
 ```
 [guardian] handshake/hello       session=<uuid>...
 [guardian] steps/sessionStart    session=<uuid>...
+[guardian] steps/turnStart       session=<uuid>...
 [guardian] steps/userMessage     session=<uuid>...
 [guardian] steps/toolCallRequest session=<uuid>...
 [guardian] steps/toolCallResult  session=<uuid>...
 [guardian] steps/agentResponse   session=<uuid>...
+[guardian] steps/turnEnd         session=<uuid>...
 [guardian] steps/sessionEnd      session=<uuid>...
 ```
 
@@ -243,7 +247,7 @@ r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r 
 - `src/acs/integrations/claude_code/hook.py`: the entry point installed as `acs-claude-code-hook`. Stdlib only, so it can still audit and apply the configured posture when the adapter's dependencies are missing.
 - `src/acs/integrations/claude_code/adapter.py`: the adapter itself, which `hook.py` loads. Stdlib + `rfc8785` for JCS canonicalization.
 - `src/acs/integrations/claude_code/wire.py`: the settings.json wiring CLI, installed as `acs-claude-code-wire` (dry-run by default; `--write` to apply).
-- `tests/integrations/claude_code/e2e_check.py`: real-Claude end-to-end verifier (4 scenarios).
+- `tests/integrations/claude_code/e2e_check.py`: real-Claude end-to-end verifier (5 scenarios).
 - `docs/claude_code/settings.json.example`: reference wiring (`acs-claude-code-wire` produces a more comprehensive one).
 - `docs/claude_code/mapping.md`: Claude Code hook → ACS step method table, plus disposition translation.
 - `tests/integrations/claude_code/`: round-trip, schema and live integration tests.
@@ -286,8 +290,8 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Handshake (`handshake/hello`) | ✓ adapter sends ClientHello on the first event of a session; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1). |
 | Profiles (`profiles_supported` / `profiles_accepted`) | ✓ always claims `acs-core`: a hook with no usable secret and label refuses its session before the handshake. A ServerHello accepting a profile the adapter did not claim is not a valid answer, a claimed profile the Guardian leaves out is audited as `profile_not_accepted`, and a hook's `ACS_REQUIRE_PROFILES` turns a left-out profile into a refusal of that hook's steps. |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema for every mapped hook (`tests/test_envelope_schema.py`); format checking enforces `uuid` and `date-time`. |
-| Hook taxonomy (Core minimum set) | ✓ `sessionStart`, `userMessage`, `toolCallRequest`, `toolCallResult`, `agentResponse`, `sessionEnd`; plus `subagentStart`, which ACS-Core requires of a subagent-capable client. Claude Code spawns subagents through the Agent tool (legacy `Task`), and the adapter remaps that PreToolUse to `steps/subagentStart` (see mapping.md). `subagentStop`, which ACS-Core lists as SHOULD-emit, stays deliberately unmapped (see mapping.md). The adapter also emits the turn boundary: `turnStart` (emitted on UserPromptSubmit) / `turnEnd` (Stop). `preCompact` deliberately unmapped — the platform exposes no entry list (mapping.md). |
-| Dispositions (ALLOW/DENY/ASK/DEFER) | ✓ on **pre-execution** hooks (`PreToolUse`, `UserPromptSubmit`, `turnStart`); MODIFY partial (`PreToolUse` with `parameter_overrides`, merged onto the original input). **Post-execution and lifecycle hooks (`PostToolUse`, `Notification → agentResponse`, `Stop → turnEnd`, `SessionEnd`) are observation-only** — Claude Code fires them after the side effect / message / turn has occurred; a Guardian `deny` on those cannot undo it. See `mapping.md`. |
+| Hook taxonomy (Core minimum set) | ✓ `sessionStart`, `userMessage`, `toolCallRequest`, `toolCallResult`, `agentResponse` (the reply `Stop` carries in `last_assistant_message`), `sessionEnd`; plus `subagentStart`, which ACS-Core requires of a subagent-capable client. Claude Code spawns subagents through the Agent tool (legacy `Task`), and the adapter remaps that PreToolUse to `steps/subagentStart` (see mapping.md). `subagentStop`, which ACS-Core lists as SHOULD-emit, stays deliberately unmapped (see mapping.md). The adapter also emits the turn boundary: `turnStart` (emitted on UserPromptSubmit) / `turnEnd` (Stop). `preCompact` deliberately unmapped — the platform exposes no entry list (mapping.md). |
+| Dispositions (ALLOW/DENY/ASK/DEFER) | ✓ on **pre-execution** hooks (`PreToolUse`, `UserPromptSubmit`, `turnStart`). On `PreToolUse` an ALLOW prints nothing, so Claude Code's own permission rules and prompt still decide, and MODIFY is partial: an `ask` carrying `updatedInput` (`parameter_overrides` merged onto the original input), so the user approves the rewritten call. On `PostToolUse` a DENY, ASK, DEFER or unusable MODIFY replaces the output Claude sees for `Bash` and MCP tools, and is recorded as `unenforceable_decision` for other tools. **Lifecycle hooks (`Stop → agentResponse, turnEnd`, `SessionEnd`) are observation-only**: Claude Code fires them after the reply / turn / session has completed, and a Guardian `deny` on them is recorded. See `mapping.md`. |
 | Unknown-disposition fail posture | ✓ default-deny honored on unknown verdicts when `ACS_DEFAULT_DENY=1`; spec-default fail-open path emits audit event. |
 | SessionContext + published `chain_hash` | ✓ session_id propagated; Guardian computes rolling SHA-256 chain per §8.2 (`adapters/test_acs_core_conformance.py::Core05_SessionContext`). |
 | Replay protection (`request_id` + `timestamp`) | ✓ adapter sends both; Guardian rejects duplicate `request_id` (REPLAY_DETECTED -32005) and timestamps outside skew window (TIMESTAMP_OUT_OF_WINDOW -32006) per §10.3. |

@@ -97,14 +97,7 @@ Fields not in the public docs but present in real payloads: `effort.level`, `too
 
 ### Allow (any PreToolUse)
 
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "allow"
-  }
-}
-```
+Nothing on stdout. Claude Code's own permission rules and prompt then decide; a `permissionDecision` of `"allow"` would skip that prompt.
 
 ### Deny (PreToolUse)
 
@@ -118,26 +111,47 @@ Fields not in the public docs but present in real payloads: `effort.level`, `too
 }
 ```
 
-### Modify (PreToolUse) — passes modified tool_input back to Claude Code
+### Modify (PreToolUse) — shows the user the rewritten tool_input to approve
 
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "allow",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "sanitized by Guardian",
     "updatedInput": {"command": "echo hello # sanitized by Guardian"}
   }
 }
 ```
 
-### Block on lifecycle hooks (PostToolUse, UserPromptSubmit, Stop, etc.)
+### Block (UserPromptSubmit)
 
-These use top-level `decision: "block"`:
+UserPromptSubmit uses top-level `decision: "block"`. `Stop` never gets one: Claude Code reads it there as "keep going".
 
 ```json
 {
   "decision": "block",
   "reason": "ACS adapter: Guardian unreachable"
+}
+```
+
+### Withheld output (PostToolUse, Bash tool)
+
+A block alone leaves Claude the original output, so a deny also replaces it in the tool's output shape:
+
+```json
+{
+  "decision": "block",
+  "reason": "leaks a key",
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "updatedToolOutput": {
+      "stdout": "[output withheld by the ACS Guardian: leaks a key]",
+      "stderr": "",
+      "interrupted": false,
+      "isImage": false
+    }
+  }
 }
 ```
 

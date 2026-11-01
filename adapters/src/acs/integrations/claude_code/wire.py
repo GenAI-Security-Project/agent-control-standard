@@ -97,21 +97,14 @@ ACS_CORE_HOOKS = [
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
-    "Notification",
     "SessionEnd",
     "Stop",
 ]
 
-# Hooks whose ACS verdict ACTUALLY GATES the action: the framework
-# blocks Claude from running a tool until the adapter returns a verdict.
-# A silent fail-open on these is a security hole — if the Guardian is
-# down (or the envelope is malformed), the tool runs anyway with no
-# policy check. So we set ACS_DEFAULT_DENY=1 on these by default and
-# operators must explicitly opt out (--all-fail-open).
-#
-# The rest (PostToolUse, Notification, SessionEnd, SessionStart) are
-# observational — fail-open matches the §6.4 spec default and doesn't
-# create a policy hole (no in-flight action to block).
+# Wired by an earlier version; wiring and unwiring both remove them.
+RETIRED_HOOKS = ["Notification"]
+
+# Hooks that gate an action fail closed by default; the others report what already happened, where §6.4's default is fail-open.
 GATE_HOOKS = {"PreToolUse", "UserPromptSubmit"}
 
 # A marker we embed in the command string so we can later detect "is
@@ -411,9 +404,8 @@ def main(argv: list[str] | None = None) -> int:
     existing = load_settings(settings_path)
     if args.unwire:
         new = merge_unwire(existing,
-                            hook_names if args.hooks else ACS_CORE_HOOKS + [
-                                "Stop", "SubagentStop", "PreCompact",
-                            ])
+                            (hook_names if args.hooks else ACS_CORE_HOOKS + ["SubagentStop", "PreCompact"])
+                            + [h for h in RETIRED_HOOKS if h not in hook_names])
     else:
         # Build one command per hook. Each hook gets the deny posture
         # that matches its safety category:
@@ -442,7 +434,8 @@ def main(argv: list[str] | None = None) -> int:
                 host_allowlist=args.host_allowlist,
                 audit_file=args.audit_file,
             )
-        new = merge_wire(existing, hook_names, commands_by_hook, frozenset(blocking))
+        retired = [h for h in RETIRED_HOOKS if h not in hook_names]
+        new = merge_wire(merge_unwire(existing, retired), hook_names, commands_by_hook, frozenset(blocking))
 
     # Render
     warnings = validate_inputs(args)

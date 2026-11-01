@@ -166,13 +166,9 @@ Notice the shape: `acs_version` / `request_id` / `timestamp` / `metadata` live i
 }
 ```
 
-**Step 5.** The adapter translates back to Claude Code's expected shape:
+**Step 5.** The adapter prints nothing. An allow leaves Claude Code's own permission rules in charge; a `permissionDecision` of `"allow"` would skip the user's permission prompt.
 
-```json
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
-```
-
-**Step 6.** Claude Code reads stdout, sees `permissionDecision: "allow"`, executes the Bash tool. You see `hello` printed.
+**Step 6.** Claude Code applies its own permission rules. `echo` is one of its read-only commands, which run without a prompt, so the Bash tool runs and you see `hello` printed.
 
 **What this costs, measured honestly.** For the shell-spawned adapters (Claude Code, Cursor), the dominant cost is NOT the Guardian round-trip — it's the per-event Python process spawn: interpreter start plus imports. Measured on an M-series MacBook (warm cache, local Guardian): ~60–90 ms per hook event end-to-end, of which the Guardian's policy evaluation is single-digit milliseconds. Your numbers will differ with hardware and Python version; measure with `/usr/bin/time` before quoting any. The first event of a session additionally pays the `handshake/hello` round-trip (cached afterward). NAT's adapter runs in-process and pays no spawn cost — its overhead is the HTTP round-trip alone.
 
@@ -195,8 +191,8 @@ The general pattern is identical. The framework-specific translation differs:
 | **Where the adapter lives** | Separate shell process spawned per hook | Separate shell process spawned per hook | In-process Python class, same memory space as the agent |
 | **How the framework sends the event** | JSON on stdin; event type is a field inside the JSON (`hook_event_name`) | JSON on stdin; event type passed as a CLI argument (one command per event in `hooks.json`) | Python method call: `pre_invoke(context)` with `context.function_context.name` |
 | **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, `context.modified_kwargs` |
-| **Native allow/deny output** | `{"hookSpecificOutput": {"permissionDecision": "allow"|"deny"}}` on stdout | `{"permission": "allow"|"deny"}` on stdout, or `exit 2` to block | Set `context.action = InvocationAction.SKIP` to block, or raise `ACSGuardianDenied` |
-| **Native modify mechanism** | `hookSpecificOutput.updatedInput` | `updated_input` | Mutate `context.modified_kwargs` (input) or `context.output` (output) |
+| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{"permission": "allow"|"deny"}` on stdout, or `exit 2` to block | Set `context.action = InvocationAction.SKIP` to block, or raise `ACSGuardianDenied` |
+| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `updated_input` | Mutate `context.modified_kwargs` (input) or `context.output` (output) |
 | **Process model** | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | Zero IPC; everything in the same Python interpreter |
 
 The Guardian-side wire format is **the same** for all three. The adapter is bilingual: it knows the framework's protocol on one side and ACS on the other.

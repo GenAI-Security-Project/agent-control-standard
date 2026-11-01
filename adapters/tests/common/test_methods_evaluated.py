@@ -186,6 +186,17 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 self.assertTrue(calls[0]["params"]["metadata"].get("turn_id"))
 
+    def test_an_unevaluated_claude_reply_is_not_sent(self) -> None:
+        guardian, h = self._session(["steps/turnStart", "steps/userMessage", "steps/turnEnd"])
+        h.run("claude-code", *PROMPT["claude-code"])
+        p = h.run("claude-code", "Stop", {"last_assistant_message": "the reply", "permission_mode": "default"})
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, ""), p.stderr)
+        self.assertNotIn("steps/agentResponse", guardian.methods_received())
+        self.assertEqual(guardian.methods_received()[-1], "steps/turnEnd")
+        skipped = [a.get("method") for a in h.audits() if a.get("acs_audit_event") == "method_not_evaluated"]
+        self.assertIn("steps/agentResponse", skipped)
+        self.assertFalse(FAILURE_EVENTS & set(h.audit_names()), h.audit_names())
+
     def _sent_result(self, guardian: SubsetGuardian, h: Harness) -> dict:
         results = [r for r in guardian.received if r.get("method") == "steps/toolCallResult"]
         self.assertEqual(len(results), 1)

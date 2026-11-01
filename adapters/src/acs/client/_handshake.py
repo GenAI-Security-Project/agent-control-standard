@@ -162,7 +162,7 @@ def session_start_outcome(decision: Negotiated, result: Decided | Resolution | N
         return Negotiated(decision.server_hello, {"cause": result.cause, "fields": dict(result.fields)})
     verdict = normalize_decision((result.response or {}).get("result"))
     if verdict.disposition == "allow":
-        return decision
+        return Negotiated(decision.server_hello, start_context=verdict.reasoning) if verdict.reasoning else decision
     refusal = SessionRefused("session_start_denied", {"decision": verdict.disposition, "reasoning": verdict.reasoning})
     audit_event("session_refused", **{**refusal.fields, "cause": refusal.cause, **common})
     return refusal
@@ -322,6 +322,8 @@ def _encode(decision: Handshake, session_id: str, guardian_url: str) -> dict[str
         negotiated = {**body, "decision": "negotiated", "server_hello": dict(decision.server_hello)}
         if decision.start_failure is not None:
             negotiated["start_failure"] = dict(decision.start_failure)
+        if decision.start_context:
+            negotiated["start_context"] = decision.start_context
         return negotiated
     kind = "refused" if isinstance(decision, SessionRefused) else "no_answer"
     return {**body, "decision": kind, "cause": decision.cause, "fields": dict(decision.fields)}
@@ -330,11 +332,13 @@ def _encode(decision: Handshake, session_id: str, guardian_url: str) -> dict[str
 def _decode(body: Mapping[str, Any]) -> Handshake | None:
     kind = body.get("decision")
     if kind == "negotiated" and isinstance(body.get("server_hello"), dict):
-        failure = body.get("start_failure")
+        failure, context = body.get("start_failure"), body.get("start_context", "")
+        if not isinstance(context, str):
+            return None
         if failure is None:
-            return Negotiated(body["server_hello"])
+            return Negotiated(body["server_hello"], start_context=context)
         if isinstance(failure, dict) and isinstance(failure.get("cause"), str) and isinstance(failure.get("fields"), dict):
-            return Negotiated(body["server_hello"], failure)
+            return Negotiated(body["server_hello"], failure, context)
         return None
     if kind in ("refused", "no_answer") and isinstance(body.get("cause"), str) \
             and isinstance(body.get("fields"), dict):
@@ -363,7 +367,7 @@ def _read_record(path: Path, ikm: bytes, session_id: str, guardian_url: str) -> 
         return body
     decision = _decode(body)
     # Only the startup record says how a sessionStart went.
-    if decision is None or isinstance(decision, Negotiated) and decision.start_failure is not None:
+    if decision is None or isinstance(decision, Negotiated) and (decision.start_failure is not None or decision.start_context):
         return SessionRefused("session_record_invalid", {"record": str(path)})
     return decision
 

@@ -469,10 +469,32 @@ class SessionGateThroughHooks(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stderr[-300:])
             outputs.append(json.loads(p.stdout) if p.stdout.strip() else None)
         self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"])
-        self.assertEqual(outputs, [{"hookSpecificOutput": {"hookEventName": "SessionStart",
-                                                           "additionalContext": "context from the Guardian"}}, None, None])
+        context = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "context from the Guardian"}}
+        # Resume and compact start Claude's context again, so the Guardian's context is given each time.
+        self.assertEqual(outputs, [context, context, context])
         self.assertEqual(guardian.envelopes_for("steps/sessionStart")[0]["params"]["payload"]["platform_context"]["source"],
                          "startup")
+
+    def test_the_session_start_context_reaches_claude_when_another_hook_opened_the_session(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.handlers["steps/sessionStart"] = lambda req: {
+            "type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+            "decision": "allow", "reasoning": "context from the Guardian", "chain_hash": "0" * 64}
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        session = str(uuid.uuid4())
+        first = {"session_id": session, "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "prompt": "hi"}
+        later = {"session_id": session, "cwd": "/tmp", "hook_event_name": "SessionStart", "source": "startup"}
+        outputs = []
+        for event in (first, later):
+            p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(event), capture_output=True,
+                               text=True, env=self._env(guardian.url()), timeout=30)
+            self.assertEqual(p.returncode, 0, p.stderr[-300:])
+            outputs.append(p.stdout.strip())
+        self.assertEqual(guardian.methods_seen().count("steps/sessionStart"), 1)
+        self.assertEqual(guardian.methods_seen()[:2], ["handshake/hello", "steps/sessionStart"])
+        self.assertEqual(json.loads(outputs[1]), {"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": "context from the Guardian"}})
 
     def test_the_session_start_decision_governs_every_hook_of_the_session(self) -> None:
         # sessionStart answer, the negotiated on_decision_failure, and whether the session's tool calls proceed.
@@ -580,6 +602,31 @@ class SessionGateThroughHooks(unittest.TestCase):
                 [end] = guardian.envelopes_for("steps/sessionEnd")
                 self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
                 self.assertNotIn("steps/toolCallRequest", guardian.methods_seen(), "the fail-closed step was not sent")
+
+    def test_a_claude_reply_without_a_decision_is_counted_and_the_turn_still_ends(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+        def hello(req, base=guardian._default_handshake):
+            return {**base(req), "timeout_config": {"default_ms": 300}}
+
+        def late(req, allow=guardian._default_allow):
+            time.sleep(0.6)
+            return allow(req)
+        guardian.handlers.update({"handshake/hello": hello, "steps/agentResponse": late})
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        session = str(uuid.uuid4())
+        for event in ({"hook_event_name": "UserPromptSubmit", "prompt": "hi"},
+                      {"hook_event_name": "Stop", "last_assistant_message": "the reply"}):
+            p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps({"session_id": session, "cwd": "/tmp", **event}),
+                               capture_output=True, text=True, env=self._env(guardian.url(), ACS_DEFAULT_DENY="1"), timeout=30)
+            self.assertEqual(p.returncode, 0, p.stderr[-300:])
+        self.assertEqual(p.stdout.strip(), "", "a block on Stop would tell Claude Code to keep going")
+        self.assertIn('"failure_class": "timeout"', p.stderr)
+        self.assertEqual(guardian.methods_seen()[-1], "steps/turnEnd")
+        self.assertEqual(self._end("claude-code", guardian.url(), session).returncode, 0)
+        [end] = guardian.envelopes_for("steps/sessionEnd")
+        self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
 
     def test_a_gate_step_the_signer_refuses_is_denied_whatever_the_posture(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
