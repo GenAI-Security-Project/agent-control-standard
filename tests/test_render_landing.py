@@ -20,8 +20,8 @@ from publish_schemas import BASE
 from roadmap_model import RosterError, parse_governance
 from render_landing import (
     RenderError, page_url, parse_priority_scope, parse_workstreams, read_nav_config, render,
-    render_csp, render_nav, render_priority_scope, render_workstreams, schema_count,
-    spec_version,
+    release_version, render_csp, render_nav, render_priority_scope, render_workstreams,
+    schema_count, spec_version,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -30,6 +30,8 @@ NAV = read_nav_config(REPO / "mkdocs.yml")
 # style body to hash.
 STARBURST = "<svg><style>a{}</style></svg>"
 REPAIR_HINT = "Edit `mkdocs.yml` on a branch from `integration`"
+# Unlike the spec tree's v0.1.0, so a test cannot pass on the wrong number.
+RELEASE_FILE = "9.8.7\n"
 
 CONTRIBUTING = """# Contributing to ACS
 
@@ -327,14 +329,51 @@ def test_render_priority_scope_escapes_raw_html():
 # --- placeholders ---------------------------------------------------------
 
 def test_render_fills_every_placeholder(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV)
+    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
     assert "v0.1.0" in out and "Identity" in out and STARBURST in out
     assert 'aria-label="Navigation"' in out and "Content-Security-Policy" in out
     assert CONTRIBUTING_SCOPE in out
 
 
+def test_render_fills_the_release_from_version_txt(spec_tree):
+    template = FULL_TEMPLATE + "<!--ACS:RELEASE_VERSION-->"
+    out = render(template, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+    assert out.count("9.8.7") == 2
+    assert "<!--ACS:" not in out
+
+
+def test_render_fails_when_the_template_drops_the_release(spec_tree):
+    without = FULL_TEMPLATE.replace("<!--ACS:RELEASE_VERSION-->", "")
+    with pytest.raises(RenderError, match="RELEASE_VERSION"):
+        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+
+
+@pytest.mark.parametrize("text", ["", "0.1", "v0.1.4", '0.1.4"><script>', "0.1.4\n0.1.5\n"])
+def test_release_version_refuses_anything_but_a_semantic_version(text):
+    with pytest.raises(RenderError, match="version.txt"):
+        release_version(text)
+
+
+@pytest.mark.parametrize("text, expected", [("0.1.4\n", "0.1.4"), (" 1.2.3-rc.1 ", "1.2.3-rc.1")])
+def test_release_version_trims_the_file(text, expected):
+    assert release_version(text) == expected
+
+
+def test_main_fails_when_version_txt_is_missing(tmp_path, monkeypatch, capsys):
+    real_read_text = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.name == "version.txt":
+            raise FileNotFoundError(str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 1
+    assert "version.txt" in capsys.readouterr().err
+
+
 def test_render_derives_the_schema_href_from_the_version(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV)
+    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
     assert "schema/v0.1.0/acs_schema.json" in out
 
 
@@ -342,12 +381,12 @@ def test_render_fails_when_the_template_drops_a_placeholder(spec_tree):
     """A template missing the hero would otherwise ship a blank div with no error."""
     without = FULL_TEMPLATE.replace("<!--ACS:STARBURST-->", "")
     with pytest.raises(RenderError, match="STARBURST"):
-        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV)
+        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
 def test_render_fails_when_an_unknown_placeholder_survives(spec_tree):
     with pytest.raises(RenderError, match="unfilled placeholder"):
-        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV)
+        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
 def test_main_does_not_republish_the_inlined_diagram(tmp_path):
@@ -625,6 +664,7 @@ def test_inline_bodies_match_conftests_rule_on_the_real_page():
         (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         (REPO / "landing" / "assets" / "starburst.svg").read_text(encoding="utf-8"),
         NAV,
+        (REPO / "version.txt").read_text(encoding="utf-8"),
     )
     bodies = render_landing._inline_bodies(page)
     assert bodies == _element_bodies(page)

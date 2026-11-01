@@ -39,8 +39,12 @@ ANY_HEADING = re.compile(r"^#{2,6}\s")
 MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 PLACEHOLDER = re.compile(r"<!--ACS:[A-Z_]+-->")
 ALLOWED_SCHEMES = ("https://", "http://", "mailto:")
+# The pattern tag-release.yml validates against. version.txt reaches an href, so a value
+# outside it stops the build rather than reaching the page.
+RELEASE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?")
 
 REQUIRED_PLACEHOLDERS = (
+    "<!--ACS:RELEASE_VERSION-->",
     "<!--ACS:SPEC_VERSION-->",
     "<!--ACS:SCHEMA_COUNT-->",
     "<!--ACS:SCHEMA_HREF-->",
@@ -108,6 +112,14 @@ def spec_version(source: Path) -> str:
 
 def schema_count(source: Path) -> int:
     return _schema_facts(source)[1]
+
+
+def release_version(text: str) -> str:
+    """Read the release number from the text of version.txt."""
+    version = text.strip()
+    if not RELEASE.fullmatch(version):
+        raise RenderError(f"version.txt: {version!r} is not a semantic version")
+    return version
 
 
 def parse_workstreams(text: str) -> list[tuple[str, str]]:
@@ -425,7 +437,13 @@ def render_csp(page: str) -> str:
 
 
 def render(
-    template: str, source: Path, governance: str, contributing: str, starburst: str, nav: NavConfig
+    template: str,
+    source: Path,
+    governance: str,
+    contributing: str,
+    starburst: str,
+    nav: NavConfig,
+    version_text: str,
 ) -> str:
     """Replace every placeholder. Fail if one is missing from the template or survives it.
 
@@ -439,6 +457,7 @@ def render(
 
     version, count = _schema_facts(source)
     out = template.replace("<!--ACS:SPEC_VERSION-->", html.escape(version))
+    out = out.replace("<!--ACS:RELEASE_VERSION-->", html.escape(release_version(version_text)))
     out = out.replace("<!--ACS:SCHEMA_COUNT-->", str(count))
     out = out.replace("<!--ACS:SCHEMA_HREF-->", html.escape(f"schema/{version}/acs_schema.json"))
     out = out.replace("<!--ACS:WORKSTREAMS-->", render_workstreams(parse_workstreams(governance)))
@@ -471,6 +490,7 @@ def main(argv: list[str]) -> int:
             (repo / "CONTRIBUTING.md").read_text(encoding="utf-8"),
             (landing / "assets" / "starburst.svg").read_text(encoding="utf-8"),
             read_nav_config(repo / "mkdocs.yml"),
+            (repo / "version.txt").read_text(encoding="utf-8"),
         )
     except (RenderError, SchemaError) as error:
         print(f"error: {error}", file=sys.stderr)

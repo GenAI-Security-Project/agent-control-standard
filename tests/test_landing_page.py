@@ -31,6 +31,13 @@ def test_the_hero_diagram_is_present(page):
         assert label in page
 
 
+def test_the_page_shows_the_release_in_version_txt(page):
+    release = (REPO / "version.txt").read_text(encoding="utf-8").strip()
+    link = f'/releases/tag/v{release}"><code>v{release}</code></a>'
+    assert link in page
+    assert "<!--ACS:" not in page
+
+
 def test_no_root_relative_links(page):
     """Links stay relative, so the page also works on the github.io project subpath."""
     assert not re.search(r"""(href|src)\s*=\s*['"]/(?!/)""", page)
