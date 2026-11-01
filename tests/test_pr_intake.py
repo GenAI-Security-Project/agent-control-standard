@@ -132,7 +132,12 @@ def test_no_second_comment_and_no_label_after_a_lead_clears_it(monkeypatch):
 
 
 def test_an_author_quoting_the_phrase_or_another_bot_comment_does_not_suppress(monkeypatch):
-    comments = [["newcomer", BOT_COMMENT[1]], ["github-actions[bot]", "Roadmap note."], [None, None]]
+    comments = [
+        ["newcomer", BOT_COMMENT[1]],
+        ["github-actions1", BOT_COMMENT[1]],
+        ["github-actions[bot]", "Roadmap note."],
+        [None, None],
+    ]
     assert run(FakeGh(comments=comments), monkeypatch) == FLAGGED
 
 

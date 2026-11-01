@@ -11,7 +11,7 @@ name: PR intake
 on:
   # zizmor flags every pull_request_target. The paragraph above is why this one is safe.
   pull_request_target: # zizmor: ignore[dangerous-triggers]
-    types: [opened, edited, reopened]
+    types: [opened, edited]
 
 permissions: {}
 
@@ -74,7 +74,7 @@ jobs:
           # cannot suppress the warning by commenting the marker themselves.
           MARK="<!-- acs-closing-keyword:$(printf '%s' "$HITS" | tr -d '#' | xargs | tr ' ' ',') -->"
           if gh pr view "$PR_NUMBER" --repo "$REPO" --json comments \
-             --jq '.comments[] | select(.author.login | startswith("github-actions")) | .body' \
+             --jq '.comments[] | select(.author.login | IN("github-actions","github-actions[bot]")) | .body' \
              | grep -qF "$MARK"; then
             exit 0
           fi

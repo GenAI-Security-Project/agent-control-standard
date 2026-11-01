@@ -301,7 +301,7 @@ def desired_labels() -> list[Label]:
         # Stock GitHub defaults. Not created by Step 2, but relied on by Step 12.
         Label(
             name="help wanted", color="008672",
-            description="Already accepted work. Safe to start without waiting on triage.",
+            description="Already accepted work. Ask a lead to assign it to you.",
         ),
         Label(name="good first issue", color="7057ff", description="Good for newcomers"),
     ]

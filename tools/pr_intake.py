@@ -25,9 +25,10 @@ LABEL = "status:needs-triage"
 # this check existed is not commented on again, and a lead's removal of the label sticks.
 SEEN = "queued rather than ignored"
 COMMENT = (
-    f"Thanks for this. It is {SEEN}. No lead has assigned you to a referenced issue or "
-    "reviewed this pull request yet, so a lead will pick it up in triage. You don't need "
-    "to do anything, and nothing here is rejected."
+    f"Thanks for this. It is {SEEN}. A lead has not reviewed this pull request yet. A lead "
+    "will read it when they have time, and we can't promise a date. Nothing here is "
+    "rejected. If a check below fails, please fix it. A pull request that waits a long "
+    "time may be closed, and you can reopen it later."
 )
 REFERENCE = re.compile(r"(?:#|/issues/)(\d{1,7})\b")
 HANDLE = re.compile(r"github\.com/([A-Za-z0-9-]+)")
@@ -87,7 +88,7 @@ def asked_for(repo: str, number: str, author: str, body: str, roster: set[str]) 
 def already_commented(repo: str, number: str) -> bool:
     comments = rows(f"repos/{repo}/issues/{number}/comments?per_page=100", "[.user.login, .body]")
     # Only the bot's comments count, so an author cannot suppress the flag by quoting it.
-    return any((login or "").startswith("github-actions") and SEEN in (text or "") for login, text in comments)
+    return any(login == "github-actions[bot]" and SEEN in (text or "") for login, text in comments)
 
 
 def run(env: dict[str, str], governance: str) -> None:
