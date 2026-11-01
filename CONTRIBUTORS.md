@@ -10,6 +10,7 @@ If you've contributed and aren't listed here, open a PR. We'd rather over-credit
 - **Almog Langleben** ([@almogbhl](https://github.com/almogbhl))
 - **Ariel Fogel** ([@afogel](https://github.com/afogel))
 - **Bar Kaduri** ([@bar-capsule](https://github.com/bar-capsule))
+- **Boris Abuzov** ([@boris-ai-sec](https://github.com/boris-ai-sec))
 - **Eva Benn** ([@evabenn](https://github.com/evabenn))
 - **Evgeniy Kokuykin** ([@artmaro](https://github.com/artmaro))
 - **Fred Wilmot** ([@fewdisc](https://github.com/fewdisc))
