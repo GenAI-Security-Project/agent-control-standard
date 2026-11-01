@@ -8,6 +8,7 @@ name: DCO
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions: {}
 
@@ -32,9 +33,13 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         # The checkout is GitHub's test merge: HEAD^1 is the base and HEAD^2 is the pull
         # request, so a base branch that moved on since the last push changes nothing here.
+        # rev-list runs in a plain assignment because set -e ignores a failure inside a for
+        # list, and that failure would pass a pull request nothing had checked.
         run: |
+          set -e
+          commits="$(git rev-list --no-merges HEAD^1..HEAD^2)"
           unsigned=""
-          for sha in $(git rev-list --no-merges HEAD^1..HEAD^2); do
+          for sha in $commits; do
             git log -1 --format=%B "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>' || unsigned="$unsigned $sha"
           done
           [ -n "$unsigned" ] || exit 0
