@@ -198,6 +198,9 @@ export function toRepoRelativeMessage(error: unknown): string {
   }
 }
 
+/** JSON-RPC's own code, not an ACS one: the body is not a Request at all (#130, #163). */
+const INVALID_REQUEST_CODE = -32600;
+
 /**
  * ACS reserves -32000..-32099 for application errors (Specification §17),
  * but only enumerates named codes -32000..-32007 in the §17.1 registry
@@ -876,9 +879,18 @@ async function dispatch(
 ): Promise<Dispatched> {
   const rpcId = extractId(raw);
 
+  // JSON-RPC 2.0 request framing boundary (#130, #163): array-shaped batch
+  // requests (unsupported by this Guardian) and non-JSON-RPC objects (missing
+  // or non-"2.0" jsonrpc, or missing/non-string method) are rejected as
+  // standard JSON-RPC -32600 Invalid Request before dispatch acts on ACS envelope validation
+  // or denyOnInvalidEnvelope runs.
+  if (!isValidJsonRpcRequest(raw)) {
+    return { response: errorResponse(rpcId, INVALID_REQUEST_CODE, "Invalid Request"), rejection: "envelope_invalid" };
+  }
+
   // validateEnvelope checked the general request-envelope.json shape for
   // every method, plus -- only for steps/toolCallRequest -- the hook-specific
-  // payload schema (validateForDispatch, above). An invalid steps/* envelope
+  // payload schema (validateForDispatch, above). A valid JSON-RPC request with an invalid steps/* envelope
   // becomes an honoured ACS `deny` decision rather than a bare JSON-RPC error,
   // since there is an identifiable step to answer for. A handshake failure
   // and an undispatched method are not steps/*, so they always fall through
@@ -1108,6 +1120,33 @@ function extractMethod(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+/** Whether the parsed JSON is a JSON-RPC 2.0 Request object, before ACS
+ * schema validation runs. Rejects array-shaped batch inputs (#130) and
+ * objects with a missing or non-"2.0" jsonrpc version, a missing/non-string
+ * method, an id that is not a string, number or null, or scalar params (#163). */
+function isValidJsonRpcRequest(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return false;
+  }
+  const obj = raw as Record<string, unknown>;
+  if (obj.jsonrpc !== "2.0") {
+    return false;
+  }
+  if (typeof obj.method !== "string" || obj.method.length === 0) {
+    return false;
+  }
+  // JSON-RPC 2.0 section 4: id is a string, a number, or null. A missing id is
+  // a notification, which is valid JSON-RPC, so ACS validation answers it.
+  if ("id" in obj && obj.id !== null && typeof obj.id !== "string" && typeof obj.id !== "number") {
+    return false;
+  }
+  // JSON-RPC 2.0 section 4.2: params, when present, is an object or an array.
+  if ("params" in obj && (typeof obj.params !== "object" || obj.params === null)) {
+    return false;
+  }
+  return true;
 }
 
 /** Whether the raw envelope names a `steps/*` method -- read before
