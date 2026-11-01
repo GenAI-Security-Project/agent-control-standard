@@ -165,7 +165,7 @@ def _volunteers(text: str) -> tuple[Person, ...]:
 
 
 def workstream_rows(text: str) -> list[tuple[str, str]]:
-    """The workstream table as GitHub renders it, for the roster and the landing page.
+    """The workstream table as GitHub renders it, for the roster.
 
     One reader keeps the page from naming someone the trust code does not treat as a lead.
     Any heading level ends the section, and every table line must be accounted for,

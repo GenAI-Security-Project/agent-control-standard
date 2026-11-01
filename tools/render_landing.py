@@ -4,10 +4,6 @@
 Injection happens at build time, so the published page stays static and renders with
 JavaScript disabled.
 
-GOVERNANCE.md is a build input and its contents reach an HTML attribute position. Treat
-every value from it as untrusted text, because a roster pull request is reviewed for
-names and handles rather than for quoting.
-
 mkdocs.yml is a build input too. Its nav and its extra.acs_nav block become the page's
 left pane, so every value from it is validated against the patterns in site_nav and then
 escaped. A value that fails stops the build. Dropping one link would ship a pane that
@@ -30,15 +26,12 @@ from mkdocs.exceptions import ConfigurationError
 from mkdocs.utils.yaml import yaml_load
 
 from publish_schemas import SchemaError, load_schemas, target_for
-from roadmap_model import RosterError, workstream_rows
 from site_nav import ANCHOR, DOC_PATH, EXTERNAL, EXTERNAL_URL, TITLE
 
 # Tolerant of case and spacing so a formatter cannot break the build.
 PRIORITY_SCOPE_HEADING = re.compile(r"^##\s+current\s+priority\s+scope\s*$", re.IGNORECASE)
 ANY_HEADING = re.compile(r"^#{2,6}\s")
-MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 PLACEHOLDER = re.compile(r"<!--ACS:[A-Z_]+-->")
-ALLOWED_SCHEMES = ("https://", "http://", "mailto:")
 # The pattern tag-release.yml validates against. version.txt reaches an href, so a value
 # outside it stops the build rather than reaching the page.
 RELEASE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?")
@@ -48,7 +41,6 @@ REQUIRED_PLACEHOLDERS = (
     "<!--ACS:SPEC_VERSION-->",
     "<!--ACS:SCHEMA_COUNT-->",
     "<!--ACS:SCHEMA_HREF-->",
-    "<!--ACS:WORKSTREAMS-->",
     "<!--ACS:PRIORITY_SCOPE-->",
     "<!--ACS:STARBURST-->",
     "<!--ACS:NAV-->",
@@ -122,14 +114,6 @@ def release_version(text: str) -> str:
     return version
 
 
-def parse_workstreams(text: str) -> list[tuple[str, str]]:
-    """Read the two-column table under the Workstream leads heading."""
-    try:
-        return workstream_rows(text)
-    except RosterError as error:
-        raise RenderError(str(error)) from error
-
-
 def parse_priority_scope(text: str) -> str:
     """Read the committed-outcome blockquote under the Current Priority Scope heading.
 
@@ -158,28 +142,9 @@ def parse_priority_scope(text: str) -> str:
     return " ".join(quote_lines)
 
 
-def _to_html(markdown: str) -> str:
-    """Escape everything, then rebuild links from an allowlisted scheme."""
-
-    def link(match: re.Match[str]) -> str:
-        label, url = match.group(1), match.group(2)
-        if not url.startswith(ALLOWED_SCHEMES):
-            return label  # drop the link, keep the text
-        return f'<a href="{url}">{label}</a>'
-
-    # quote=True so a quote in the source cannot break out of the href attribute.
-    return MD_LINK.sub(link, html.escape(markdown, quote=True))
-
-
-def render_workstreams(rows: list[tuple[str, str]]) -> str:
-    return "".join(
-        f"<tr><td>{_to_html(name)}</td><td>{_to_html(leads)}</td></tr>" for name, leads in rows
-    )
-
-
 def render_priority_scope(scope: str) -> str:
     # The blockquote sits in a text position in the template, not an attribute, but
-    # it is a build input like GOVERNANCE.md, so it is escaped for the same reason.
+    # it is a build input reviewed for wording, so it is escaped as untrusted text.
     return html.escape(scope)
 
 
@@ -439,7 +404,6 @@ def render_csp(page: str) -> str:
 def render(
     template: str,
     source: Path,
-    governance: str,
     contributing: str,
     starburst: str,
     nav: NavConfig,
@@ -460,7 +424,6 @@ def render(
     out = out.replace("<!--ACS:RELEASE_VERSION-->", html.escape(release_version(version_text)))
     out = out.replace("<!--ACS:SCHEMA_COUNT-->", str(count))
     out = out.replace("<!--ACS:SCHEMA_HREF-->", html.escape(f"schema/{version}/acs_schema.json"))
-    out = out.replace("<!--ACS:WORKSTREAMS-->", render_workstreams(parse_workstreams(governance)))
     out = out.replace(
         "<!--ACS:PRIORITY_SCOPE-->", render_priority_scope(parse_priority_scope(contributing))
     )
@@ -486,7 +449,6 @@ def main(argv: list[str]) -> int:
         page = render(
             (landing / "index.html").read_text(encoding="utf-8"),
             repo / "specification",
-            (repo / "GOVERNANCE.md").read_text(encoding="utf-8"),
             (repo / "CONTRIBUTING.md").read_text(encoding="utf-8"),
             (landing / "assets" / "starburst.svg").read_text(encoding="utf-8"),
             read_nav_config(repo / "mkdocs.yml"),

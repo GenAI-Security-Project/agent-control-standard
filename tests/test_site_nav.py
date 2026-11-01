@@ -262,11 +262,11 @@ def test_landing_sections_anchors_match_the_landing_sections_in_order():
     sections = acs_nav()["landing_sections"]
     assert [s["anchor"] for s in sections] == [
         "problem", "solution", "architecture", "why-now",
-        "built-with", "status", "workstreams", "contribute",
+        "built-with", "status", "contribute",
     ]
     assert [s["title"] for s in sections] == [
         "The problem", "The solution", "How it works", "Why now",
-        "Built with the community", "Spec status", "Workstreams", "Contribute",
+        "Built with the community", "Spec status", "Contribute",
     ]
     ids = re.findall(r'<section[^>]*\bid="([^"]+)"', LANDING.read_text())
     assert [a for a in ids if a in {s["anchor"] for s in sections}] == [s["anchor"] for s in sections]

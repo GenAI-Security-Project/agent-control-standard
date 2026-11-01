@@ -1,7 +1,6 @@
 """Tests for build-time content injection.
 
-GOVERNANCE.md reaches an HTML attribute position, so the escaping cases are the point.
-A roster pull request is reviewed for names and handles, not for quoting.
+Build inputs reach the page, so the escaping cases are the point.
 """
 import base64
 import dataclasses
@@ -17,10 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import render_landing
 import site_nav
 from publish_schemas import BASE
-from roadmap_model import RosterError, parse_governance
 from render_landing import (
-    RenderError, page_url, parse_priority_scope, parse_workstreams, read_nav_config, render,
-    release_version, render_csp, render_nav, render_priority_scope, render_workstreams,
+    RenderError, page_url, parse_priority_scope, read_nav_config, render,
+    release_version, render_csp, render_nav, render_priority_scope, 
     schema_count, spec_version,
 )
 
@@ -60,29 +58,7 @@ CONTRIBUTING_SCOPE = (
     "kick-off."
 )
 
-GOVERNANCE = """# Governance
 
-## Project lead
-
-| Role | Name |
-| --- | --- |
-| Project Lead | Rock Lambros ([@rocklambros](https://github.com/rocklambros)) |
-
-## Workstream leads
-
-Prose that must not be parsed as a row.
-
-| Workstream | Leads |
-| --- | --- |
-| Identity | Eva Benn ([@evabenn](https://github.com/evabenn)) |
-| Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)) |
-
-## Origins
-
-Not a workstream.
-"""
-
-COMMENTED_ROW = GOVERNANCE.replace("| Spec |", "<!--\n| Spec |").replace("\n\n## Origins", "\n-->\n\n## Origins")
 
 FULL_TEMPLATE = "".join(render_landing.REQUIRED_PLACEHOLDERS) + "<script>var x=1;</script>"
 
@@ -168,73 +144,6 @@ def test_main_reports_a_copy_failure_without_a_traceback(tmp_path, monkeypatch, 
     assert "assets unreadable" in capsys.readouterr().err
 
 
-# --- governance parsing ---------------------------------------------------
-
-def test_parse_workstreams_reads_only_the_workstream_table():
-    assert [name for name, _ in parse_workstreams(GOVERNANCE)] == ["Identity", "Spec"]
-
-
-def test_parse_workstreams_accepts_heading_case_and_spacing():
-    """A formatter or a title-case edit must not take the site down."""
-    for heading in ("## Workstream Leads", "## Workstream leads ", "##  Workstream leads"):
-        text = GOVERNANCE.replace("## Workstream leads", heading)
-        assert len(parse_workstreams(text)) == 2
-
-
-def test_parse_workstreams_stops_at_any_heading_level():
-    text = GOVERNANCE.replace("## Origins", "### Emeritus\n\n| Old | Thing |\n| --- | --- |\n| A | B |\n\n## Origins")
-    assert [name for name, _ in parse_workstreams(text)] == ["Identity", "Spec"]
-
-
-def test_parse_workstreams_keeps_an_escaped_pipe():
-    text = GOVERNANCE.replace("| Identity |", r"| Identity \| IAM |")
-    assert [name for name, _ in parse_workstreams(text)] == ["Identity | IAM", "Spec"]
-
-
-def test_parse_workstreams_raises_on_a_wrong_width_row():
-    """A silently dropped workstream is worse than a loud failure."""
-    text = GOVERNANCE.replace("| Spec |", "| Spec | extra |")
-    with pytest.raises(RenderError, match="cells"):
-        parse_workstreams(text)
-
-
-def test_parse_workstreams_drops_a_row_inside_a_comment():
-    assert [name for name, _ in parse_workstreams(COMMENTED_ROW)] == ["Identity"]
-
-
-def test_parse_workstreams_drops_an_inline_comment_from_a_cell():
-    text = GOVERNANCE.replace("| Identity |", "| Identity <!-- hidden --> |")
-    assert [name for name, _ in parse_workstreams(text)] == ["Identity", "Spec"]
-
-
-@pytest.mark.parametrize("text", [
-    (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
-    GOVERNANCE,
-    COMMENTED_ROW,
-    GOVERNANCE.replace("| Identity |", r"| Identity \| IAM |"),
-    GOVERNANCE.replace("## Origins", "### Emeritus\n\n| Old | Thing |\n| --- | --- |\n| A | B |\n\n## Origins"),
-], ids=["real", "plain", "commented-row", "escaped-pipe", "lower-heading"])
-def test_the_page_and_the_roster_read_the_same_rows(text):
-    assert [name for name, _ in parse_workstreams(text)] == list(parse_governance(text).workstreams)
-
-
-def test_the_page_and_the_roster_refuse_the_same_row():
-    text = GOVERNANCE.replace("| Identity |", "|  |")
-    with pytest.raises(RenderError, match="table lines"):
-        parse_workstreams(text)
-    with pytest.raises(RosterError, match="table lines"):
-        parse_governance(text)
-
-
-def test_parse_workstreams_fails_without_the_section():
-    with pytest.raises(RenderError, match="Workstream leads"):
-        parse_workstreams("# Governance\n\nNothing here.\n")
-
-
-def test_parse_workstreams_handles_the_real_file():
-    assert len(parse_workstreams((REPO / "GOVERNANCE.md").read_text(encoding="utf-8"))) == 7
-
-
 # --- priority scope parsing ------------------------------------------------
 
 def test_parse_priority_scope_reads_the_committed_outcome():
@@ -267,11 +176,6 @@ def test_parse_priority_scope_handles_the_real_file():
 
 # --- escaping -------------------------------------------------------------
 
-def test_render_workstreams_converts_markdown_links_to_html():
-    html = render_workstreams([("Identity", "Eva Benn ([@evabenn](https://example.com))")])
-    assert '<a href="https://example.com">@evabenn</a>' in html
-
-
 def parse_attributes(markup: str) -> list[tuple[str, list[tuple[str, str | None]]]]:
     """Return (tag, attributes) for every start tag.
 
@@ -294,29 +198,8 @@ def parse_attributes(markup: str) -> list[tuple[str, list[tuple[str, str | None]
     return collector.tags
 
 
-def test_render_workstreams_blocks_attribute_breakout():
-    html = render_workstreams([("X", '[@ok](https://x" autofocus onfocus="alert(1))')])
-    attributes = [name for _, attrs in parse_attributes(html) for name, _ in attrs]
-    assert not [name for name in attributes if name.startswith("on")]
-    assert "autofocus" not in attributes
-    # The quote survives as an entity inside the value rather than as a delimiter.
-    assert "&quot;" in html
-
-
-def test_render_workstreams_drops_a_javascript_scheme():
-    html = render_workstreams([("X", "[@x](javascript:alert(1))")])
-    assert "javascript:" not in html
-    assert "@x" in html  # the label survives, the link does not
-
-
-def test_render_workstreams_escapes_raw_html():
-    html = render_workstreams([("<script>alert(1)</script>", "safe")])
-    assert "<script>" not in html
-    assert "&lt;script&gt;" in html
-
-
 def test_render_priority_scope_escapes_raw_html():
-    """The blockquote is a build input like GOVERNANCE.md, reviewed for wording, not markup."""
+    """The blockquote is a build input, reviewed for wording, not markup."""
     scope = parse_priority_scope(CONTRIBUTING.replace(
         "A runnable Guardian Agent reference implementation,",
         "A runnable Guardian Agent <script>alert(1)</script> reference implementation,",
@@ -329,7 +212,7 @@ def test_render_priority_scope_escapes_raw_html():
 # --- placeholders ---------------------------------------------------------
 
 def test_render_fills_every_placeholder(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+    out = render(FULL_TEMPLATE, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
     assert "v0.1.0" in out and "Identity" in out and STARBURST in out
     assert 'aria-label="Navigation"' in out and "Content-Security-Policy" in out
     assert CONTRIBUTING_SCOPE in out
@@ -337,7 +220,7 @@ def test_render_fills_every_placeholder(spec_tree):
 
 def test_render_fills_the_release_from_version_txt(spec_tree):
     template = FULL_TEMPLATE + "<!--ACS:RELEASE_VERSION-->"
-    out = render(template, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+    out = render(template, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
     assert out.count("9.8.7") == 2
     assert "<!--ACS:" not in out
 
@@ -345,7 +228,7 @@ def test_render_fills_the_release_from_version_txt(spec_tree):
 def test_render_fails_when_the_template_drops_the_release(spec_tree):
     without = FULL_TEMPLATE.replace("<!--ACS:RELEASE_VERSION-->", "")
     with pytest.raises(RenderError, match="RELEASE_VERSION"):
-        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+        render(without, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
 @pytest.mark.parametrize("text", ["", "0.1", "v0.1.4", '0.1.4"><script>', "0.1.4\n0.1.5\n"])
@@ -373,7 +256,7 @@ def test_main_fails_when_version_txt_is_missing(tmp_path, monkeypatch, capsys):
 
 
 def test_render_derives_the_schema_href_from_the_version(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+    out = render(FULL_TEMPLATE, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
     assert "schema/v0.1.0/acs_schema.json" in out
 
 
@@ -381,12 +264,12 @@ def test_render_fails_when_the_template_drops_a_placeholder(spec_tree):
     """A template missing the hero would otherwise ship a blank div with no error."""
     without = FULL_TEMPLATE.replace("<!--ACS:STARBURST-->", "")
     with pytest.raises(RenderError, match="STARBURST"):
-        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+        render(without, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
 def test_render_fails_when_an_unknown_placeholder_survives(spec_tree):
     with pytest.raises(RenderError, match="unfilled placeholder"):
-        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, GOVERNANCE, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
 def test_main_does_not_republish_the_inlined_diagram(tmp_path):
@@ -469,7 +352,7 @@ def test_render_nav_emits_the_pane_in_order():
     expected += [(2, r["title"], r["url"]) for r in NAV.external_resources]
     assert [(depth, label, url) for depth, label, url, _group, _section in rows] == expected
     # The design's count, so a walker and a renderer that drop the same row still fail.
-    assert len(rows) == 53
+    assert len(rows) == 52
     by_label = {row[1]: row for row in rows}
     assert by_label["Trustworthy Agents"][2] == LANDING_ROOT + "docs/"
     assert by_label["FAQ"][2] == LANDING_ROOT + "docs/topics/faq/"
@@ -668,7 +551,6 @@ def test_inline_bodies_match_conftests_rule_on_the_real_page():
     page = render(
         (REPO / "landing" / "index.html").read_text(encoding="utf-8"),
         REPO / "specification",
-        (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
         (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         (REPO / "landing" / "assets" / "starburst.svg").read_text(encoding="utf-8"),
         NAV,
