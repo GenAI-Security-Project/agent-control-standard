@@ -42,24 +42,19 @@ states plainly which ACS-Core requirements it does not yet meet, including reque
 and replay protection, and a report that restates a documented gap is better filed as an
 issue where the discussion is public.
 
-## Response commitments
+## Response times
 
-| Stage | Target |
-| --- | --- |
-| Acknowledge your report | 3 business days |
-| Initial triage and severity assessment | 10 business days |
-| Fix or documented mitigation for high and critical findings | 90 days from triage |
-| Public advisory | Coordinated with you, at or before day 90 |
+We try to acknowledge reports within about a week, and we work with you on timing from there. We will publish response SLAs with version 1.0.
 
 We use [CVSS v3.1](https://www.first.org/cvss/calculator/3.1) for severity. Specification flaws get scored against a reference implementation, since the specification itself has no runtime.
 
 ## Coordinated disclosure
 
-We publish an advisory once a fix ships, or at 90 days from triage, whichever comes first. If a fix needs longer, we tell you why and agree a new date rather than letting the clock run out quietly.
+We publish an advisory once a fix ships, and we agree the timing with you. If a fix takes longer than expected, we tell you why.
 
 Tell us how you want to be credited, including if you prefer not to be. We credit reporters in the advisory by default.
 
-If you believe a finding is being actively exploited, say so in the report. That moves it to the front of the queue and shortens every window above.
+If you believe a finding is being actively exploited, say so in the report. That moves it to the front of the queue.
 
 ## Safe harbor
 
