@@ -361,31 +361,39 @@ export const DECISION_DETAIL_NAMES = [
  * `derived_from`, say) would be a value nobody sent.
  */
 export const PROVENANCE_ATTRIBUTE_SOURCES: Record<string, (provenance: JsonObject) => string | undefined> = {
+  "acs.provenance.ids": (p) => asString(p.provenance_id),
   "acs.provenance.origin": (p) => asString(p.origin),
   "acs.provenance.source_id": (p) => asString(p.source_id),
 };
 
-/** The Provenance objects a payload carries, in wire order: one per
- * argument that has one, in the order the parsed object holds them, then one
- * per output that has one, in array order. "Parsed" order rather than the
- * bytes' order because `JSON.parse` has already hoisted integer-like
- * argument names ahead of the rest (envelope-log-sink.ts notes `{"0": ...}`
- * is a real shape), so this is the order every reader of the envelope log
- * sees too. The two never meet on one payload (the request gate carries
- * `arguments`, the result gate `outputs`), and an argument or output
- * without one contributes nothing. */
+/** The Provenance objects a payload carries, in deterministic order:
+ * arguments visited by key in code-point order, then outputs by array index,
+ * with a Provenance object reached more than once emitted once at its first
+ * occurrence (deduplicated by `provenance_id`). */
 export function provenanceObjects(payload: JsonObject): JsonObject[] {
+  const args = asObject(payload.arguments) ?? {};
+  const argCarriers = Object.keys(args)
+    .sort()
+    .map((key) => args[key]);
   const carriers: unknown[] = [
-    ...Object.values(asObject(payload.arguments) ?? {}),
+    ...argCarriers,
     ...(Array.isArray(payload.outputs) ? payload.outputs : []),
   ];
   const found: JsonObject[] = [];
+  const seenIds = new Set<string>();
   for (const carrier of carriers) {
     if (found.length === PROVENANCE_COLUMN_LIMIT) {
       break;
     }
     const provenance = asObject(asObject(carrier)?.provenance);
     if (provenance !== undefined) {
+      const id = asString(provenance.provenance_id);
+      if (id !== undefined) {
+        if (seenIds.has(id)) {
+          continue;
+        }
+        seenIds.add(id);
+      }
       found.push(provenance);
     }
   }
