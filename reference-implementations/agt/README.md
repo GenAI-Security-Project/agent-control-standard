@@ -1,6 +1,6 @@
 # ACS reference implementation with Microsoft's Agent Governance Toolkit
 
-This tree shows what Microsoft's [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (AGT) looks like when it talks to agent clients over the [Agent Control Standard](../../README.md) (ACS) wire contract.
+This tree shows what Microsoft's [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (AGT) looks like when it talks to agent clients over the [OWASP Agent Control Standard](../../README.md) (ACS) wire contract.
 
 ### NOTE: This current work represents a Proof of Concept, not a production system
 

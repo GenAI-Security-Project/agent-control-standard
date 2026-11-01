@@ -10,7 +10,7 @@ Before finalizing any text, review against the Editorial Checklist in STYLE.md.
 
 ## Project Overview
 
-ACS (Agent Control Standard) is the industry standard for building secure, observable AI agents. It delivers three core capabilities:
+ACS (OWASP Agent Control Standard) is the industry standard for building secure, observable AI agents. It delivers three core capabilities:
 - **Inspectability**: Complete visibility into agent components and capabilities
 - **Traceability**: Full trace trail with reasoning chains
 - **Instrumentability**: Hard controls and policy enforcement
