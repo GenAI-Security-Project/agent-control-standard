@@ -106,7 +106,7 @@ resolve, fragment included.
 `mkdocs.yml` is a landing build input, and its values are escaped as untrusted text.
 
 The site serves from **owaspacs.org**, at the domain root, and it is the project's only
-site. Never name or link an earlier project domain in this repository, an issue, a pull
+site. Never name or link a legacy project domain in this repository, an issue, a pull
 request, or a discussion. The custom domain makes GitHub 301 the `github.io` URIs to owaspacs.org,
 which schema tooling follows. Do not rebase `$id` onto any domain.
 
