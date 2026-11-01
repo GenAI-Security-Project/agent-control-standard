@@ -85,6 +85,14 @@ class NATMiddlewareIntegration(unittest.TestCase):
         except subprocess.TimeoutExpired:
             cls.guardian_proc.kill()
 
+    def setUp(self) -> None:
+        # Per-test handshake records, so no record left in the user's cache decides a session here.
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        patcher = mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(records.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _make_middleware(self, default_deny: bool = True) -> ACSMiddleware:
         cfg = ACSMiddlewareConfig(
             guardian_url=self.guardian_url,

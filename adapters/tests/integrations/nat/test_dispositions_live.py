@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 try:
     from nat.middleware.middleware import (  # type: ignore[import-not-found]
@@ -41,6 +43,7 @@ from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied  # noq
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
 
+from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.testing.harness import ProgrammableGuardian  # noqa: E402
 
 
@@ -103,6 +106,12 @@ class DispositionsLive(unittest.TestCase):
 
     def setUp(self) -> None:
         self.guardian.reset()
+        # Per-test handshake records, so no record left in the user's cache decides a session here.
+        records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
+        self.addCleanup(records.cleanup)
+        patcher = mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(records.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _set_response(self, method: str, response: dict) -> None:
         def handler(req):
