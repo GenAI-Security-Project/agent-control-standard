@@ -201,3 +201,16 @@ tools:
     type: Tool
     id: webfetch
     security_labels: [shell]
+  # "run_terminal_command" is Grok Build TUI's own real tool name for shell
+  # execution -- measured on 1.0.25, distinct from Claude Code's "Bash" and
+  # OpenCode's "bash" above -- and pre_tool_call's policy_target is evaluated
+  # by AGT before any rule runs: an unregistered tool_call.name fails closed
+  # on runtime_error:tool_unknown, the identical mechanism the "Bash" and
+  # "bash" entries exist to avoid. Additive: registering it changes nothing
+  # for any existing caller. security_labels: [shell] is inert under this
+  # manifest's own policy/lib/data.json config for the same reason the
+  # WebFetch entry's comment records.
+  run_terminal_command:
+    type: Tool
+    id: run_terminal_command
+    security_labels: [shell]
