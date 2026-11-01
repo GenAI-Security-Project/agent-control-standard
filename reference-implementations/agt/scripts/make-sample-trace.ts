@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { convertAuditLog } from "../packages/guardian/src/audit-to-otlp.ts";
 import { createDeploymentBridge } from "../packages/guardian/src/deployment-bridge.ts";
 import { buildServerHello } from "../packages/guardian/src/handshake.ts";
-import { startGuardian } from "../packages/guardian/src/index.ts";
+import { createMemorySessionContextStore, startGuardian } from "../packages/guardian/src/index.ts";
 import { createOtelTraceExporter } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 export const SAMPLE_PATH = fileURLToPath(new URL("../samples/trace/acs-trace-sample.jsonl", import.meta.url));
@@ -170,7 +170,16 @@ export async function generateSampleTrace(outPath: string = SAMPLE_PATH): Promis
       timeoutConfig: { default_ms: TIMEOUT_MS },
       posture: "fail_open",
     });
-    const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST_PATH, bridge, traceExporter });
+    const sessionContextStore = createMemorySessionContextStore({
+      now: () => new Date("2026-09-15T12:00:00.000Z"),
+    });
+    const guardian = await startGuardian({
+      port: 0,
+      manifestPath: MANIFEST_PATH,
+      bridge,
+      sessionContextStore,
+      traceExporter,
+    });
     try {
       for (const request of requests()) {
         await fetch(guardian.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });

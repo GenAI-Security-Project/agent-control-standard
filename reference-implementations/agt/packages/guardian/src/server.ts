@@ -1020,7 +1020,7 @@ async function evaluateStep<E extends SteppedEnvelope>(
     // step that is later denied is still a step this session took, and a
     // chain that recorded only permitted steps would be a chain an incident
     // review cannot use.
-    appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
+    const entry = appendContextEntry(sessionContextStore, envelope.params.metadata.session_id, {
       method: envelope.method,
       request_id: envelope.params.request_id,
       tool_name: envelope.params.payload.tool.name,
@@ -1048,7 +1048,7 @@ async function evaluateStep<E extends SteppedEnvelope>(
     // keeps those apart deliberately -- see its own doc comment.
     persistIfcLabels(sessionContextStore, envelope.params.metadata.session_id, verdict.result_labels);
 
-    return successResponse(envelope.id, finalResult(envelope.params, decision));
+    return successResponse(envelope.id, finalResult(envelope.params, decision, entry.hash));
   } catch (error) {
     // This produces a parseable JSON-RPC error rather than an HTML 500.
     // denyOnInvalidEnvelope goes one step further: AGT's evaluation layer
