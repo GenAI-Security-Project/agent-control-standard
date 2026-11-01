@@ -30,7 +30,7 @@ Rock Lambros ([rock.lambros@owasp.org](mailto:rock.lambros@owasp.org)) is the pr
 | The build and publish tooling in `tools/` and the GitHub Actions workflows in `.github/workflows/` | Automated scanner output with no demonstrated impact |
 | Hook or event definitions that leak sensitive data by design | Missing security headers on sites we do not operate |
 | Supply-chain issues in this repository's dependencies | Social engineering of maintainers or contributors |
-| The published site at genai-security-project.github.io/agent-control-standard, including the landing page, the documentation, and the schema endpoints | Missing security response headers on the Pages site, which GitHub Pages does not allow us to set |
+| The published site at owaspacs.org, including the landing page, the documentation, and the schema endpoints | Missing security response headers on the Pages site, which GitHub Pages does not allow us to set |
 | The reference implementation under `reference-implementations/`, which is runnable code people install and wire into a live development environment | Gaps the reference implementation documents about itself, which are tracked as issues rather than handled as reports |
 
 Specification flaws are welcome here too. If a hook definition forces implementers to log secrets, or an event schema makes an authorization bypass easy to write, please tell us, even though no code here executes.

@@ -34,8 +34,11 @@ def test_monitor_pages_has_two_jobs_each_checking_out_main():
     runs = [step["run"].strip() for step in jobs["navigation"]["steps"] if "run" in step]
     assert runs == ['python3 tools/verify_site_nav.py "$PAGE_URL"']
     verify = next(step for step in jobs["navigation"]["steps"] if "run" in step)
-    assert verify["env"] == {"PAGE_URL": "https://genai-security-project.github.io/agent-control-standard/"}
+    assert verify["env"] == {"PAGE_URL": "https://owaspacs.org/"}
     assert "continue-on-error" not in verify
+    schemas = next(step for step in jobs["check"]["steps"] if "run" in step)
+    # The $id URIs stay on github.io. Moving this to the domain fails every schema.
+    assert schemas["env"] == {"PAGE_URL": "https://genai-security-project.github.io/agent-control-standard/"}
     assert all("verify_site_nav" not in step.get("run", "") for step in jobs["check"]["steps"])
 
 

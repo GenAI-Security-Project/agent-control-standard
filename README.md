@@ -158,7 +158,7 @@ once, which is why a `$ref` inside one schema can resolve against the same base 
 other schema in the set uses.
 
 ```bash
-curl -s https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json
+curl -sL https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json
 ```
 
 That fetches the schema behind the `toolCallRequest` payload above, published from
@@ -372,7 +372,7 @@ What is in focus right now lives in one place, the Current Priority Scope in
 ## Where to go next
 
 - [AGT reference implementation](reference-implementations/agt/README.md): the deep tutorial behind the walkthrough above, the Guardian, both host shims, and the full limits list.
-- [Documentation site](https://genai-security-project.github.io/agent-control-standard/docs/): the specification, concepts, and topic guides.
+- [Documentation site](https://owaspacs.org/docs/): the specification, concepts, and topic guides.
 - [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification): the JSON Schemas and normative prose in this repository.
 - [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions): questions and design conversation.
 - Slack: [owasp.slack.com](https://owasp.slack.com), channel `#team-genai-asi-acs-general`.

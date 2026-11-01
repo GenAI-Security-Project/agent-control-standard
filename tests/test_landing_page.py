@@ -32,7 +32,7 @@ def test_the_hero_diagram_is_present(page):
 
 
 def test_no_root_relative_links(page):
-    """A project Pages site serves from /agent-control-standard/, so /docs/ would 404."""
+    """Links stay relative, so the page also works on the github.io project subpath."""
     assert not re.search(r"""(href|src)\s*=\s*['"]/(?!/)""", page)
 
 
