@@ -67,11 +67,13 @@ In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` befo
 the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
 advances, because the roadmap counts a closed issue as delivered.
 
-If you open a pull request against an issue that is not accepted yet, it will not be
-reviewed and nothing about it is rejected. It waits, and a comment will say so. A pull
-request that sits untriaged for a long time may be closed with an invitation to reopen
-once its issue is accepted. Start from an issue labeled `help wanted` if you want work
-that is already accepted.
+If you open a pull request nobody asked for, it waits and nothing about it is rejected. A
+bot adds `status:needs-triage` and one comment unless you are a lead in
+[GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull request
+references, or a lead has reviewed it. A pull request that sits untriaged for a long time
+may be closed with an invitation to reopen once a lead asks for the work. Start from an
+issue labeled `help wanted`, and ask a lead to assign it to you, if you want work that is
+already accepted.
 
 We try to reply to new issues within about a week.
 
@@ -168,8 +170,7 @@ what an agent did to its own commits.
 ## What We Need
 
 Start with [issues labeled `help wanted`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
-Every one of them is already accepted, which means you can open a pull request against it
-without waiting on triage.
+Every one of them is already accepted. Ask a lead to assign one to you before you start.
 
 The highest-value contribution right now is running ACS against a real harness and
 documenting where it fails. Install the reference implementation, wire it to a coding
