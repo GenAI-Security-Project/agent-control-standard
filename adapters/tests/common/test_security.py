@@ -584,12 +584,7 @@ def _audit_records(text: str) -> list[dict]:
 
 
 class Item21_AdapterDegradedBootstrap(unittest.TestCase):
-    """§10 makes rfc8785 mandatory, so its absence is not a degraded mode
-    the adapter may take silently. Claude Code and Cursor proceed on any
-    nonzero exit except 2, so a bare ImportError is an ungoverned step.
-    §6.4:158 requires an audit event for it, and §6.4:156 puts it under the
-    deployment's posture. Users run the installed console scripts, so those
-    are tested alongside the module form."""
+    """§10 makes rfc8785 mandatory and the hosts proceed on a nonzero exit, so its absence is audited and follows the posture (§6.4)."""
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -622,13 +617,13 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
         file_records = _audit_records(audit_file.read_text()) if audit_file.exists() else []
         self.assertEqual(file_records, records,
             "every ACS_AUDIT record must also reach ACS_AUDIT_FILE, the durable "
-            "sink §6.4:158 relies on")
+            "sink §6.4 relies on")
         return p, records
 
     def _unavailable_record(self, records: list[dict], key: str, event: str,
                             posture: str) -> None:
         self.assertEqual([r["acs_audit_event"] for r in records], ["adapter_unavailable"],
-            "§6.4:158 requires every step that proceeds without a decision to "
+            "§6.4 requires every step that proceeds without a decision to "
             "be recorded; this path must not be silent")
         record = records[0]
         self.assertEqual(record[key], event)
@@ -649,7 +644,7 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, p.stderr)
                 decision = json.loads(p.stdout)["hookSpecificOutput"]
                 self.assertEqual(decision["permissionDecision"], "deny",
-                    "the deployment set the posture to deny per §6.4:156, so an "
+                    "the deployment set the posture to deny per §6.4, so an "
                     "unloadable adapter must not let the tool run")
                 self._unavailable_record(records, "hook", "PreToolUse", "deny")
 
@@ -774,10 +769,7 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
 
 
 class Item22_StoredSessionDecisionIsAuthenticated(unittest.TestCase):
-    """§4.1:75 says on_decision_failure is negotiated in the handshake, and
-    the session's decision is stored at a predictable path the observed
-    agent can write. The record carries an HMAC under the session key, and
-    a record that fails it refuses the session."""
+    """The stored decision sits where the agent can write, so it carries an HMAC under the session key; a record that fails it refuses the session (§4.1)."""
 
     SESSION = "55555555-5555-4555-8555-555555555555"
 

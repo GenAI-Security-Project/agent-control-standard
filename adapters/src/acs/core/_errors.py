@@ -38,21 +38,7 @@ def guardian_error_cause(code: object) -> str:
     return GUARDIAN_ERROR_CAUSE.get(code, "guardian_error_response")
 
 
-# ----- Guardian refusals fail closed -----
-#
-# DELIBERATELY STRICTER THAN v0.1 SPEC TEXT (tracked as spec issue #32).
-# §6.4:156 as written routes ANY "error response instead of a decision"
-# to the fail posture (default proceed). We do NOT do that for the codes
-# below: the Guardian is ALIVE and REFUSED the envelope, and every one of
-# them is attacker-reachable — oversize the body past the Guardian's cap
-# (-32600 before policy runs), replay a request_id the adapter derives
-# deterministically (-32005), strip or corrupt the signature (-32004),
-# present a stale captured envelope (-32006). Routing those through a
-# fail-OPEN posture turns each into a policy-bypass primitive. So we fail
-# CLOSED on them regardless of ACS_DEFAULT_DENY / on_decision_failure.
-# This is deliberate hardening ahead of the spec, NOT a claim that v0.1
-# mandates it — #32 proposes the normative text; until it lands, treat
-# this as adapter behavior, not a conformance requirement.
+# Stricter than §6.4 as written (issue #32): each refusal is attacker-reachable, so it fails closed under either posture.
 GUARDIAN_REFUSAL_CODES = frozenset({
     -32000,  # SESSION_REFUSED — policy refuses this session
     -32004,  # SIGNATURE_INVALID

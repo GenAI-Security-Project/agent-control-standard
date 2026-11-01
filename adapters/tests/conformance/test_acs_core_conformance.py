@@ -866,8 +866,8 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
             self.assertIn('"unenforceable_decision"', r["stderr"])
 
     def test_unusable_disposition_denies_regardless_of_posture(self) -> None:
-        """§6.4:158 requires an arrived decision to be honored regardless of
-        the posture. §6.3:146 makes one whose intent cannot be determined a
+        """§6.4 requires an arrived decision to be honored regardless of
+        the posture. §6.3 makes one whose intent cannot be determined a
         DENY plus an audit event. Posture stays at the shipped fail-open default on
         purpose: it must have no effect on a decision that arrived."""
         for bad, unreadable in (("deny ", False), (" deny", False),
@@ -880,18 +880,18 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
                 hso = r["out"].get("hookSpecificOutput", {})
                 self.assertEqual(hso.get("permissionDecision"), "deny",
                     f"{bad!r} must deny: normalization handles a padded verdict, "
-                    f"§6.3:146 handles one that cannot be read. Got {r['out']!r}, "
+                    f"§6.3 handles one that cannot be read. Got {r['out']!r}, "
                     f"and empty output runs the tool.")
                 if unreadable:
                     self.assertIn("unusable_disposition", r["stderr"],
-                        f"{bad!r} cannot be read at all, so §6.3:146's audit "
+                        f"{bad!r} cannot be read at all, so §6.3's audit "
                         f"event is required")
 
     def test_non_string_and_non_object_verdicts_fail_closed(self) -> None:
         """A hostile/buggy Guardian can send a NON-STRING decision or a
         NON-OBJECT modifications; reading them with .strip()/.get()
         raises, and an uncaught raise is exit 1 = the host PROCEEDS.
-        §6.3:146 requires fail-closed DENY when intent can't be
+        §6.3 requires fail-closed DENY when intent can't be
         determined. Posture stays at the fail-open default."""
         cases = [
             {"decision": 5},
@@ -912,7 +912,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
                     f"Claude Code proceeds. stderr={r['stderr'][:300]}")
                 hso = r["out"].get("hookSpecificOutput", {})
                 self.assertEqual(hso.get("permissionDecision"), "deny",
-                    f"{result!r} must fail closed to deny (§6.3:146); "
+                    f"{result!r} must fail closed to deny (§6.3); "
                     f"got {r['out']!r} — empty/allow output runs the tool")
                 with self._scripted_guardian(result) as g:
                     rc = self._run_cursor(g)
@@ -985,10 +985,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
                     f"stdout={proc.stdout!r}")
 
     def test_contradictory_modify_fails_closed(self) -> None:
-        """§6.3:146 / modifications.json: a modify carrying BOTH wholesale
-        `modified_content` AND structured edits, or overlapping structured
-        targets, is un-interpretable and MUST fail closed to DENY — not be
-        half-applied."""
+        """§6.3: a modify with both shapes, or overlapping targets, fails closed to DENY."""
         from jsonschema import Draft202012Validator
         schema = json.loads((SPEC_DIR / "modifications.json").read_text())
         validator = Draft202012Validator(schema)

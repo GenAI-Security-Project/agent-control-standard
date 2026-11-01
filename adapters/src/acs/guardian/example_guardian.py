@@ -386,8 +386,7 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
         raise GuardianError(-32600,
             f"Invalid Request: ClientHello missing required field(s): {missing}")
 
-    # §4 'Accept X.Y.Z matching major version': accept any client sharing
-    # the Guardian's MAJOR version; negotiate to the Guardian's own version.
+    # §3: accept a client sharing the Guardian's major version, and negotiate the Guardian's own version.
     client_versions = client_hello.get("acs_versions_supported") or []
     our_major = _major(ACS_VERSION)
     if not any(_major(v) == our_major for v in client_versions):
@@ -505,10 +504,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
 
 def _error_envelope(request_id, session_id: str, code: int, message: str, *, signed: bool = True) -> dict:
-    """Build a SIGNED JSON-RPC error envelope — conformance.md:23 covers
-    error responses too (an unsigned spoofable error under fail-open is
-    an allow). Signed whenever session_id makes the per-session key
-    derivable; earlier failures surface as HTTP refusals in do_POST."""
+    """A JSON-RPC error, signed whenever the session key is derivable, since Baseline integrity covers errors."""
     envelope = {"jsonrpc": "2.0", "id": request_id,
                 "error": {"code": code, "message": message}}
     if signed and session_id:
@@ -550,10 +546,7 @@ def handle_request(request: dict) -> dict:
                                    f"Invalid Request: envelope failed schema: {paths}")
 
     if method == "handshake/hello":
-        # NOT signature-exempt: §10 / conformance.md:23 cover every
-        # request, and the per-session key (pre-shared secret +
-        # session_id) is known before the handshake. Chain/replay don't
-        # apply — the chain roots at sessionStart, after negotiation.
+        # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
         try:
             check_signature(request, session_id)
             result = evaluate_handshake(params, acs_request_id)

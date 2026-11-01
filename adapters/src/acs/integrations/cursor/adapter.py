@@ -23,11 +23,9 @@ v0.1.0 hook schemas require.
   - `preCompact` — both required fields are real: `entries_to_compact` is
     the list of step_ids the adapter has observed in this session;
     `triggered_by` comes from Cursor's `trigger` field.
-  - `subagentStop` — NOT forwarded. `final_chain_hash` is genuinely
-    unknowable (Cursor maintains no chain); better to omit than
-    fabricate. A separate schema PR proposes making the field optional
-    for chain-less frameworks; honest wiring resumes when the spec
-    owners approve it.
+  - `subagentStop` — NOT forwarded. Its event carries no identifier of
+    the subagentStart it ends, so it cannot name the subagent_session_id
+    steps/subagentStop requires (mapping.md).
 
 See the README per-hook honesty table for the full mapping.
 
@@ -138,12 +136,7 @@ HOOK_MAP: dict[str, str] = {
 # HOOK_MAP and this set gets an `unmapped_hook_event` audit line so a
 # renamed upstream hook surfaces as ungoverned rather than quiet.
 KNOWN_UNMAPPED: dict[str, str] = {
-    # `final_chain_hash` is schema-required and unknowable (Cursor keeps
-    # no chain); wiring resumes when the separate schema PR making the
-    # field optional lands.
-    "subagentStop": "final_chain_hash unknowable (no chain on Cursor side)",
-    # Blockable read gates (permission allow|deny per Cursor docs) with no
-    # v0.1 wiring; candidate steps/knowledgeRetrieval mapping (mapping.md).
+    "subagentStop": "its event carries no identifier of the subagentStart it ends",
     "beforeReadFile": "read gate not wired in this adapter (candidate steps/knowledgeRetrieval)",
     "beforeTabFileRead": "Tab read gate not wired in this adapter (candidate steps/knowledgeRetrieval)",
     # Fires outside any agent session (no conversation_id), so there is
@@ -682,15 +675,13 @@ def _translate_permission(decision: Decision, event_name: str, original_input: d
     if decision.disposition in PERMISSION_MAP:
         return _permission_response(PERMISSION_MAP[decision.disposition], decision.reasoning)
     if decision.disposition == "modify":
-        # §6.3:146 — refuse an un-interpretable modifications object
-        # (both shapes, or overlapping structured targets) rather than
-        # half-apply it.
+        # §6.3: a modifications object that breaks the composition rules is a DENY, never half-applied.
         violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", event=event_name,
                         detail=violation)
             return _permission_response(
-                "deny", f"MODIFY refused ({violation}); failing closed per §6.3:146")
+                "deny", f"MODIFY refused ({violation}); failing closed per §6.3")
         if decision.modifications.get("redactions"):
             # updated_input cannot express redactions, so the override half is never applied alone.
             audit_modify_unsupported("redactions", event=event_name)
@@ -793,7 +784,7 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
     original_input = original_input or {}
 
     # An arrived-but-uninterpretable decision fails closed; the exact
-    # spec basis is unsettled (§6.4:156 vs. arrived-and-unusable),
+    # spec basis is unsettled (§6.4 vs. arrived-and-unusable),
     # tracked in issue #32.
     if not decision.known:
         audit_event("unusable_disposition",
@@ -828,8 +819,7 @@ def main() -> int:
         print(f"acs-adapter (cursor) {ADAPTER_VERSION}")
         return 0
     if config.disabled:
-        # Incident kill switch — a structured audit event so the bypass
-        # reaches the durable sink (§6.4:158).
+        # Every step proceeds ungoverned, so the bypass goes to the durable audit sink (§6.4).
         audit_event("acs_disabled_bypass",
                     detail="ACS_DISABLED=1 — hook bypassed with no Guardian "
                            "traffic; every step proceeds ungoverned")
@@ -870,7 +860,6 @@ def main() -> int:
         # The session's sessionStart went out when the session opened, from this hook or an earlier one.
         return 0
     server_hello = session.server_hello
-    # §6.4:154: the negotiated posture and default timeout govern every round trip below.
     posture = config.posture.negotiated(server_hello)
 
     try:

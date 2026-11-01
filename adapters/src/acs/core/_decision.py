@@ -24,7 +24,7 @@ class Decision:
       non-string, so it can go into a `reason` field unchanged).
     - modifications: always a dict ({} when the Guardian sent a
       non-object, which makes a MODIFY with no usable mutation
-      substitute to DENY per §6.3:146).
+      substitute to DENY per §6.3).
     """
 
     disposition: str = ""
@@ -38,16 +38,7 @@ class Decision:
 
 
 def normalize_decision(result: Any) -> Decision:
-    """Coerce a Guardian result's decision fields to safe types, never
-    raising.
-
-    Reading `decision`/`reasoning`/`modifications` must never throw:
-    §6.3:146 requires failing closed on an undeterminable Guardian
-    intent, and an uncaught AttributeError exits 1, which the shell
-    hosts treat as proceed (fail-open).
-
-    Returns a Decision with every field set.
-    """
+    """Coerce a Guardian result's decision fields without raising: an exception exits 1, which the hosts treat as proceed."""
     if not isinstance(result, dict):
         return Decision()
     raw_decision = result.get("decision")
@@ -61,14 +52,7 @@ def normalize_decision(result: Any) -> Decision:
 
 
 def modify_composition_violation(modifications: dict) -> str | None:
-    """Return a reason string if a MODIFY's `modifications` object violates
-    the §6.3 / modifications.json composition rules, else None.
-
-    The two shapes are mutually exclusive (modifications.json `oneOf`):
-    wholesale `modified_content`, OR structured edits (`redactions` and/or
-    `parameter_overrides`) whose targets are DISJOINT — never both shapes,
-    never overlapping structured targets. Per §6.3:146 the receiver MUST
-    fail closed (DENY) rather than half-apply one branch."""
+    """Why a MODIFY breaks the §6.3 composition rules (both shapes, or overlapping targets), or None."""
     if not isinstance(modifications, dict):
         return None  # caller treats empty/absent as no-usable-mutation
     has_content = "modified_content" in modifications

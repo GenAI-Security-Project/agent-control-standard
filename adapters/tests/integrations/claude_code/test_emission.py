@@ -124,8 +124,6 @@ class ClaudeEmission(unittest.TestCase):
                                    "steps/subagentStart")
 
     def test_subagent_stop_not_forwarded(self):
-        # steps/subagentStop requires final_chain_hash and Claude Code
-        # has no chain to hash, so the event is KNOWN_UNMAPPED.
         g = self._emit(_event("SubagentStop",
                               transcript_path="/tmp/sub.jsonl",
                               stop_hook_active=False))

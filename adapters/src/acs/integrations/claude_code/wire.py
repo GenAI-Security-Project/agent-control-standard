@@ -88,10 +88,7 @@ from acs.integrations._settings_file import write_atomically
 
 HOOK_SCRIPT = "acs-claude-code-hook"
 
-# ACS-Core minimum hook set per conformance.md:19, plus Stop
-# (steps/turnEnd). SubagentStop is not wired: steps/subagentStop requires
-# final_chain_hash, which Claude Code cannot supply (no chain); a separate
-# schema PR proposes making it optional. --hooks wires a subset, warned.
+# conformance.md's ACS-Core hook taxonomy plus Stop; SubagentStop cannot name the subagent_session_id it needs (mapping.md).
 ACS_CORE_HOOKS = [
     "SessionStart",
     "UserPromptSubmit",

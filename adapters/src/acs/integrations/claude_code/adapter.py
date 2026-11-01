@@ -125,11 +125,7 @@ KNOWN_UNMAPPED: dict[str, str] = {
     # steps/preCompact requires entries_to_compact (minItems 1) and the
     # PreCompact event carries no entry list, so no honest payload exists.
     "PreCompact": "platform exposes no entry list for steps/preCompact",
-    # steps/subagentStop requires final_chain_hash and Claude Code keeps
-    # no chain; wired once the schema PR making it optional lands (mapping.md).
-    "SubagentStop": "final_chain_hash required by current schema and unknowable (no chain)",
-    # Notification fires on permission and idle prompts, not on the model's reply; steps/agentResponse
-    # carries Stop's last_assistant_message instead.
+    "SubagentStop": "its event carries the subagent's agent_id, not the tool_use_id its subagentStart's subagent_session_id comes from",
     "Notification": "fires on permission and idle prompts, not on the model's reply",
 }
 
@@ -141,9 +137,7 @@ ENFORCEABLE_BLOCK_HOOKS = frozenset({
     "PostToolUse", "UserPromptSubmit",
 })
 
-# Claude Code reads {"decision":"block"} on Stop as "do not stop, keep
-# going" (hooks.md:290 — the turn already happened), so a DENY here is
-# recorded and nothing is emitted.
+# Claude Code reads a block on Stop as "keep going", so a DENY there is recorded and nothing is emitted.
 AUDIT_ONLY_HOOKS = frozenset({
     "Stop",
 })
@@ -495,15 +489,13 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
         return _pretool_response(
             "deny", f"DEFER substituted to DENY (no native defer): {decision.reasoning}")
     if decision.disposition == "modify":
-        # §6.3:146 — a modifications object that breaks the composition
-        # rules (both shapes, or overlapping structured targets) is
-        # un-interpretable; fail closed to DENY rather than half-apply it.
+        # §6.3: a modifications object that breaks the composition rules is a DENY, never half-applied.
         violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", hook="PreToolUse",
                         detail=violation)
             return _pretool_response(
-                "deny", f"MODIFY refused ({violation}); failing closed per §6.3:146")
+                "deny", f"MODIFY refused ({violation}); failing closed per §6.3")
         if decision.modifications.get("redactions"):
             # updatedInput has no redaction operation, and dropping the redactions would change the decision, so the MODIFY is a DENY.
             audit_modify_unsupported("redactions", hook="PreToolUse")
@@ -511,7 +503,7 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
                 "deny", "MODIFY refused: Claude Code cannot apply the "
                 "requested redactions without dropping part of the decision")
         overrides = decision.modifications.get("parameter_overrides")
-        # A non-dict override cannot be applied as updatedInput; §6.3:146
+        # A non-dict override cannot be applied as updatedInput; §6.3
         # fails an unrealizable modification closed to DENY.
         if isinstance(overrides, dict):
             # updatedInput REPLACES the whole input, so merge the per-
@@ -560,7 +552,7 @@ def _translate_posttool(decision: Decision, original_input: dict, tool_name: str
         if violation:
             audit_event("modify_composition_invalid", hook="PostToolUse",
                         detail=violation)
-            return _withhold(tool_name, f"MODIFY refused ({violation}); failing closed per §6.3:146")
+            return _withhold(tool_name, f"MODIFY refused ({violation}); failing closed per §6.3")
         updated = decision.modifications.get("modified_content")
         replacement = _replacement_output(tool_name, str(updated)) if updated is not None else None
         if replacement is not None:
@@ -592,11 +584,6 @@ def _translate_user_prompt(decision: Decision, original_input: dict, tool_name: 
 
 
 def _translate_session_stop(decision: Decision, original_input: dict, tool_name: str = "") -> dict[str, Any]:
-    """Stop (steps/turnEnd) is not decision-eligible — the turn has
-    already happened (hooks.md:290). A DENY cannot be enforced here, and
-    Claude Code reads {"decision":"block"} on Stop as "do not stop,
-    continue the conversation", so emitting one would turn a denial into
-    an instruction to keep working. Record it and emit nothing."""
     if decision.disposition in ("deny", "ask", "defer"):
         audit_event("unenforceable_decision", decision=decision.disposition,
                     reason=decision.reasoning or "(none)")
@@ -619,7 +606,7 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
     decision = normalize_decision(acs_response.get("result"))
 
     # An arrived decision outside the five dispositions fails closed;
-    # whether §6.4:156 (posture) or §6.3:146 (fail closed) governs is
+    # whether §6.4 (posture) or §6.3 (fail closed) governs is
     # unsettled and tracked in issue #32 — deny is the safe reading.
     if not decision.known:
         audit_event("unusable_disposition",
@@ -657,8 +644,7 @@ def main() -> int:
         print(f"acs-adapter (claude-code) {ADAPTER_VERSION}")
         return 0
     if config.disabled:
-        # Incident kill switch: every step proceeds ungoverned, so the
-        # bypass must land in the durable audit sink (§6.4:158).
+        # Every step proceeds ungoverned, so the bypass goes to the durable audit sink (§6.4).
         audit_event("acs_disabled_bypass",
                     detail="ACS_DISABLED=1 — hook bypassed with no Guardian "
                            "traffic; every step proceeds ungoverned")
@@ -698,7 +684,6 @@ def main() -> int:
             _emit({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": session.start_context}})
         return 0
     server_hello = session.server_hello
-    # §6.4:154: the negotiated posture and default timeout govern every round trip below.
     posture = config.posture.negotiated(server_hello)
 
     try:

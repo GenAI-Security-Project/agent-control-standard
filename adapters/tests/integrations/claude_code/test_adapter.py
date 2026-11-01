@@ -234,12 +234,7 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertIn("fail_open_bypass", err)
 
     def test_audit_only_hooks_never_emit_a_block(self) -> None:
-        """Stop (→ steps/turnEnd) is not decision-eligible — the turn has
-        already happened (hooks.md:290). Claude Code reads
-        {"decision":"block"} on it as "do not stop, continue", so a block
-        inverts fail-closed into unbounded activity. Neither a Guardian DENY
-        nor a decision failure may produce one. (SubagentStop is
-        KNOWN_UNMAPPED — covered by test_subagent_stop_is_unmapped_silent.)"""
+        """Claude Code reads a block on Stop as "keep going", so neither a DENY nor a decision failure may produce one."""
         for hook in ("Stop",):
             with self.subTest(hook=hook, case="guardian denies"):
                 g = ProgrammableGuardian()
@@ -296,9 +291,6 @@ class AdapterRoundTrip(unittest.TestCase):
                 self.assertIn("ACS_AUDIT", err)
 
     def test_subagent_stop_is_unmapped_silent(self) -> None:
-        """SubagentStop is KNOWN_UNMAPPED (steps/subagentStop requires
-        final_chain_hash and Claude Code has no chain to hash): the
-        adapter must emit nothing and exit 0."""
         rc, out, err = self._run_adapter(
             _claude_code_event("SubagentStop"),
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs",

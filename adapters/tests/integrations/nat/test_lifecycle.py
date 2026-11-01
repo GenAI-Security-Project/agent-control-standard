@@ -8,7 +8,7 @@ sessionEnd) in addition to the function-level toolCallRequest/Result.
 
 Without this middleware, NAT alone emits only function-call hooks and
 does not satisfy ACS-Core's 6-hook taxonomy minimum
-(`conformance.md:19`). This test proves the lifecycle middleware closes
+(`conformance.md, ACS-Core: Hook taxonomy`). This test proves the lifecycle middleware closes
 that gap.
 
 Requires nvidia-nat-core 1.7.0+ for IntermediateStepManager.

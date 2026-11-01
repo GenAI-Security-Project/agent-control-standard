@@ -49,7 +49,7 @@ The server logs every received request to stderr in one line:
 
 ## How to extend
 
-The policy is in the `evaluate(method, params)` function. To add a new rule, either add to the destructive regex, add a new branch in the toolCallRequest handler, or add a method to the allow-list.
+The policy is in the `evaluate_step(method, params, request_id, chain_hash)` function. To add a new rule, either add to the destructive regex, add a new branch in the toolCallRequest handler, or add a method to the allow-list.
 
 Production deployments replace this whole file with their actual policy engine. The wire shape (request format, response format) stays the same.
 

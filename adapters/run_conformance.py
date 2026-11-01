@@ -1,46 +1,5 @@
 #!/usr/bin/env python3
-"""
-The one authoritative command for this suite's checks — ACS v0.1.0
-EMISSION conformance plus the summary-level Guardian checks. NOT a full
-ACS-Core conformance gate (that spans the Guardian, framework wiring,
-and deployment config, and is tracked separately — see the README's
-scope note and milestone #33).
-
-Runs, in order, and reports passed / skipped / failed SEPARATELY:
-  1. Guardian conformance suite (test_acs_core_conformance).
-  2. Shared-library tests (_common, core, client, package) — signing,
-     protocol invariants, outcome classification and fail posture,
-     packaging, the capture-oracle self-checks.
-  3. The selected adapter suites — including the emission matrix that
-     captures real adapter bytes against the canonical schemas.
-
-Every skip is printed by NAME + REASON and classified expected vs
-unexpected against the EXACT EXPECTED_SKIPS allowlist (below).
-
-Exit status:
-  - non-zero if ANY suite has a failure/error.
-  - non-zero if ANY UNEXPECTED skip occurred — a skip not on the
-    allowlist. A dependency-gated test (e.g. NAT when nvidia-nat IS
-    installed) that silently skips is therefore a build failure, never
-    banked as green.
-  - the allowlist tolerates only the manual Cursor GUI procedure and
-    the live Claude Code tests, which call the real `claude` CLI and run
-    only with ACS_LIVE_CLAUDE=1.
-  - with --strict: non-zero on ANY skip at all, including the allowlisted
-    ones — for a fully-provisioned gate that demands every test run.
-
-Usage:
-  python3 run_conformance.py cursor
-  python3 run_conformance.py claude cursor
-  python3 run_conformance.py claude cursor nat
-  python3 run_conformance.py cursor --strict
-
-At least one platform is required; there is no implicit "run all"
-default. `claude-code` is accepted as an alias for `claude`. Shared
-Guardian and _common checks run for every selection. When selecting NAT,
-run under an interpreter that has nvidia-nat-core (e.g. the NAT
-adapter's venv) or the NAT suite's skips count as unexpected and fail.
-"""
+"""Run the selected adapter suites; any failure, or any skip outside EXPECTED_SKIPS (any skip with --strict), fails the run."""
 from __future__ import annotations
 
 import argparse

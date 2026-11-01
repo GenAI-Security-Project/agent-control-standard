@@ -49,8 +49,9 @@ session A's derived key fails verification under session B's key.
 **T3 — Replay within a session.**
 Same envelope re-sent within the same session_id.
 *Mitigation:* Guardian tracks `request_id` per session and rejects
-duplicates with `REPLAY_DETECTED` (-32005, §10.3). Per-session,
-in-memory; bounded by session lifetime.
+duplicates with `REPLAY_DETECTED` (-32005, §10.3). Per session, persisted
+under `ACS_GUARDIAN_STATE_DIR` so a Guardian restart keeps it; setting it
+to "" keeps it in memory only, for development.
 *Test:* `ReplayRejection::test_duplicate_request_id_rejected`
 
 **T4 — Stale or future-dated envelope.**
@@ -96,7 +97,12 @@ between adapter invocations. For session-state, this would let them
 inject a fake `parent_step_id` into the next `subagentStart` payload.
 *Mitigation:* Both cache directories created mode 0700; cache files
 created mode 0600 via `os.open(...O_CREAT, 0o600)`. A local attacker
-without same-uid privileges cannot read or write the state. Each
+without same-uid privileges cannot read or write the state. These
+modes do not separate the agent from the developer: the agent runs as
+the developer, so it can read the HMAC key file, the handshake cache
+and the audit file, and write the cache. The record's HMAC makes a
+written record refuse the session rather than pass; keeping the key
+from the agent needs a separate user or a sandbox. Each
 session-state update is one read-modify-write under an exclusive lock on
 a sidecar file, published through a temp file of its own with
 `os.replace`, so parallel hook processes neither lose updates nor read a
@@ -139,15 +145,14 @@ whatever `signature_algorithms_supported` the handshake advertised,
 and a hook with no secret refuses its session and sends nothing. The
 handshake's advertised algorithm list does not control signing.
 *No test* — this is an absence of behavior. Verified by reading the
-code: `sign_envelope()` consults `load_hmac_secret()` only.
+code: `sign_envelope()` consults `load_signing_material()` only.
 
 **T12 — Guardian-side signature stripping.**
 Attacker MITMs the Guardian's response and removes the `signature`
 field, hoping the adapter's response verification silently accepts.
-*Mitigation:* `verify_signature()` returns False if a signature is
-absent AND the adapter has `ACS_HMAC_SECRET` configured. The adapter
-rejects the response and fails per `ACS_DEFAULT_DENY` posture (audit
-event in either case).
+*Mitigation:* `verify_signature()` returns False for a response with no
+signature, and every request is signed. The adapter rejects the response
+and denies the step whatever the posture, with an audit event.
 *No dedicated test* — covered indirectly by the conformance suite's
 signed round-trip tests (Core07_BaselineIntegrity), which would fail
 if signature absence were silently accepted.
@@ -188,7 +193,7 @@ non-repudiation against the Guardian itself.
 *Posture:* That's what the ACS-Crypto profile (asymmetric / PQC
 signatures) and the ACS-Audit profile (`request_hash` per
 ContextEntry) are for. v0.1 baseline acknowledges this tradeoff
-(`conformance.md:30`); we don't implement those profiles.
+(`conformance.md, ACS-Core: Baseline integrity`); we don't implement those profiles.
 
 **O5 — Compromised secret-file storage.**
 A reader of the storage volume (cloud snapshot, backup, etc.) gets

@@ -119,9 +119,7 @@ except ImportError:
     FunctionMiddlewareBaseConfig = object  # type: ignore[assignment, misc]
     _NAT_AVAILABLE = False
 
-# Lifecycle observer: NAT's IntermediateStepManager fires the workflow-
-# boundary hooks; FunctionMiddleware alone covers only toolCallRequest/
-# toolCallResult of ACS-Core's 6-hook minimum (conformance.md:19).
+# FunctionMiddleware covers only toolCallRequest and toolCallResult; a run's lifecycle hooks come from NAT's step stream.
 try:
     from nat.data_models.intermediate_step import IntermediateStepType  # type: ignore[import-not-found]
     from nat.builder.context import Context as _NATContext  # type: ignore[import-not-found]
@@ -883,7 +881,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
     async def pre_invoke(self, context):
         """Gate the function call. Block via raising or InvocationAction.SKIP; modify args in place."""
         if self._acs.disabled:
-            # Incident kill switch: pass through ungoverned, audited per §6.4:158.
+            # Kill switch: pass through ungoverned, audited (§6.4).
             audit_event("acs_disabled_bypass", session_id=self._session_id,
                         method="steps/toolCallRequest",
                         detail="ACS_DISABLED=1 — pre_invoke bypassed ungoverned")
@@ -933,7 +931,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                             method="steps/toolCallRequest", detail=violation)
                 return self._block(
                     context,
-                    f"MODIFY refused ({violation}); failing closed per §6.3:146")
+                    f"MODIFY refused ({violation}); failing closed per §6.3")
             if decision.modifications.get("redactions"):
                 # NAT has no redaction primitive, and applying only the overrides would drop part of the decision.
                 audit_modify_unsupported("redactions", session_id=step.session_id,
