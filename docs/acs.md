@@ -245,78 +245,77 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
         // > Error: Denied: Request exceeds cost threshold ($50 limit)
         ```
 
-    === "MCP"
+    === "ACS wire (JSON-RPC)"
+
+        Before a tool runs, the agent sends the call to the Guardian as [`steps/toolCallRequest`](./spec/instrument/hooks.md#toolcallrequest) and waits for the decision. Here the agent wants to run `SELECT * FROM customers`:
 
         ```json
         {
           "jsonrpc": "2.0",
-          "method": "acs/registerHook",
+          "method": "steps/toolCallRequest",
+          "id": "rpc-42",
           "params": {
-            "hook": "toolCallRequest",
-            "guardianEndpoint": "https://guardian.example.com/evaluate",
-            "policies": ["data-protection", "cost-control"]
-          }
-        }
-        
-        // Example hook evaluation request from Guardian
-        {
-          "jsonrpc": "2.0",
-          "method": "guardian/evaluate",
-          "params": {
-            "hook": "toolCallRequest",
-            "context": {
-              "tool": "database_query",
-              "parameters": {
-                "query": "SELECT * FROM customers"
-              },
-              "session": "sess_123"
+            "acs_version": "0.1.0",
+            "request_id": "c329d5a4-97ae-44c8-986d-77d1da194ab7",
+            "timestamp": "2026-10-13T09:15:00Z",
+            "metadata": {
+              "agent_id": "research-assistant",
+              "session_id": "17a301f1-6d17-4941-8bea-92320f0773aa"
+            },
+            "payload": {
+              "tool": { "name": "database_query" },
+              "capability": "datastore.read",
+              "arguments": {
+                "query": { "value": "SELECT * FROM customers" }
+              }
+            },
+            "signature": {
+              "algorithm": "HMAC-SHA256",
+              "value": "<base64 HMAC-SHA256 over UTF-8 JCS(envelope without params.signature)>",
+              "key_id": "acs-hmac-key-1"
             }
           }
         }
-        
-        // Guardian response
+        ```
+
+        The Guardian answers `modify`. Its `parameter_overrides` replaces the `query` argument, so the agent runs the narrowed query instead of the original:
+
+        ```json
         {
           "jsonrpc": "2.0",
+          "id": "rpc-42",
           "result": {
-            "action": "MODIFY",
+            "type": "final",
+            "acs_version": "0.1.0",
+            "request_id": "c329d5a4-97ae-44c8-986d-77d1da194ab7",
+            "decision": "modify",
+            "reasoning": "Narrowed the query to two columns and 100 rows. A full customer export violates the data-protection policy.",
+            "reason_codes": ["pii_detected"],
+            "policy_references": [
+              { "policy_id": "data-protection", "rule_id": "limit-customer-export" }
+            ],
             "modifications": {
-              "query": "SELECT id, name FROM customers LIMIT 100"
+              "parameter_overrides": {
+                "query": "SELECT id, name FROM customers LIMIT 100"
+              }
             },
-            "reason": "Limited query to prevent full data exposure"
+            "chain_hash": "25d878e6726ecf3bd9ee823d7642bdd78f148c0db5c06a585d16bc23494e2175",
+            "metadata": { "evaluator": "deterministic" },
+            "signature": {
+              "algorithm": "HMAC-SHA256",
+              "value": "<base64 HMAC-SHA256 over UTF-8 JCS(envelope without result.signature)>",
+              "key_id": "acs-hmac-key-1"
+            }
           }
         }
         ```
 
-    === "A2A"
+        The exchange follows four rules:
 
-        ```yaml
-        # Available ACS hooks for instrumentation
-        
-        agentTrigger:
-          description: Fires when agent starts processing
-          can_modify: true
-          can_deny: true
-          
-        message:
-          description: Fires for each message in conversation
-          can_modify: true
-          can_deny: true
-          
-        toolCallRequest:
-          description: Fires before tool execution
-          can_modify: true
-          can_deny: true
-          
-        knowledgeRetrieval:
-          description: Fires when accessing knowledge bases
-          can_modify: false
-          can_deny: true
-          
-        memoryStore:
-          description: Fires when storing to memory
-          can_modify: true
-          can_deny: true
-        ```
+        - **Signatures.** ACS-Core requires signatures on this request and response. Remove `params.signature` from the request or `result.signature` from the response, canonicalize the remaining envelope with JCS, and encode it as UTF-8 before signing ([§10](./spec/instrument/specification.md#10-cryptographic-signatures)). The `value` fields above are placeholders. The identifiers and `chain_hash` are sample values.
+        - **Chain head.** The Guardian publishes `chain_hash` on every content-bearing step, so an observer can detect a rewritten audit chain ([§8.6](./spec/instrument/specification.md#86-chain-head-publication-normative)).
+        - **MODIFY support.** `modify` is SHOULD-support. A client that doesn't implement it receives `deny` with `reason_codes: ["modify_unsupported"]` instead ([§6.5](./spec/instrument/specification.md#65-modify-incapable-clients-normative)).
+        - **Protocols.** An MCP `tools/call` can travel through this same hook ([Instrument MCP](./spec/instrument/extend_mcp.md)). A2A wrapping is reserved for v0.2.
 
 ### Traceable
 
