@@ -69,28 +69,8 @@ jobs:
           PAGE_URL: https://owaspacs.org/
         run: python3 tools/verify_site_nav.py "$PAGE_URL"
 
-  origin-cert:
-    runs-on: ubuntu-latest
-    # Five origin and edge connections at ten seconds apiece.
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Nothing here pushes with git, so the checkout's token has no reason to
-          # stay behind in .git/config.
-          persist-credentials: false
-          # Unlike the jobs above, this one reads no site file, so main's copy has no
-          # claim on it. The run's own ref means the alarm works from the merge onward
-          # instead of skipping until the next promotion.
-
-      - name: Verify the origin certificate and the public edge
-        run: python3 -I -S tools/check_origin_cert.py
-
   report-failure:
-    needs: [check, navigation, origin-cert]
+    needs: [check, navigation]
     # A job that hits its timeout reports cancelled, which only a real outage causes here.
     # cancelled() itself is true only when someone cancels the whole run, which is no alarm.
     if: "!cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))"
@@ -107,8 +87,8 @@ jobs:
           # Nothing here pushes with git, so the checkout's token has no reason to
           # stay behind in .git/config.
           persist-credentials: false
-          # A scheduled run is always the default branch's own code. The origin-cert job
-          # explains why this does not wait for main.
+          # A scheduled run is always the default branch's own code, so the alarm works
+          # from the merge onward instead of skipping until the next promotion.
 
       - name: Open or update the alarm issue
         env:

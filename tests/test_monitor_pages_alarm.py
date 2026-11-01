@@ -12,7 +12,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-import check_origin_cert  # noqa: E402
 import monitor_pages_alarm as alarm  # noqa: E402
 from roadmap_model import REPO  # noqa: E402
 
@@ -46,8 +45,8 @@ def bot_issue(number, title=alarm.TITLE, **extra):
 
 
 def test_failed_jobs_counts_a_timeout_as_failed():
-    results = {"check": {"result": "cancelled"}, "navigation": {"result": "success"}, "origin-cert": {"result": "failure"}}
-    assert alarm.failed_jobs(json.dumps(results)) == ["check", "origin-cert"]
+    results = {"check": {"result": "cancelled"}, "navigation": {"result": "success"}}
+    assert alarm.failed_jobs(json.dumps(results)) == ["check"]
     assert alarm.failed_jobs(json.dumps({"check": {"result": "skipped"}})) == []
 
 
@@ -64,14 +63,9 @@ def test_the_first_failure_opens_one_unlabeled_issue_that_mentions_the_leads():
     body = gh.field("body")
     assert body.startswith("@rocklambros @afogel ")
     assert "Failed jobs: check." in body and RUN in body
-    assert check_origin_cert.REMEDY not in body
     assert not any("label" in arg for arg in gh.writes()[0])
 
 
-def test_the_remedy_appears_only_for_the_certificate_job():
-    text = alarm.report(["check", "origin-cert"], RUN)
-    assert "Failed jobs: check, origin-cert." in text and check_origin_cert.REMEDY in text
-    assert check_origin_cert.REMEDY not in alarm.report(["navigation"], RUN)
 
 
 def test_an_open_issue_gets_a_comment_without_mentions():
