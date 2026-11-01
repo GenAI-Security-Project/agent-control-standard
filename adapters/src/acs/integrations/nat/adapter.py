@@ -244,15 +244,25 @@ def _stringify_step_data(data: Any) -> str:
     return str(data)
 
 
-def _extract_arguments(context: Any) -> dict[str, Any]:
-    """Build a flat {arg_name: value} dict from NAT's invocation context.
+def _json_safe(value: Any) -> Any:
+    """The value in JSON form the signer can canonicalize: a model dumped in JSON mode, and anything json cannot encode, such as a datetime, as its string."""
+    if hasattr(value, "model_dump"):
+        try:
+            value = value.model_dump(mode="json")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return str(value)
 
-    NAT captures the function input as `modified_args[0]` (a Pydantic
-    model from `_convert_input`); `modified_kwargs` is only populated when
-    the caller passes named kwargs directly, so both slots must be read.
-    Pydantic models / dataclasses / dicts in args are flattened; scalars
-    take the input-schema field name at their position (else `argN`).
-    """
+
+def _extract_arguments(context: Any) -> dict[str, Any]:
+    return _json_safe(_collect_arguments(context))
+
+
+def _collect_arguments(context: Any) -> dict[str, Any]:
+    """Flat {name: value} arguments from modified_args[0] and modified_kwargs; a scalar takes the input schema's field name at its position, else argN."""
     out: dict[str, Any] = {}
 
     # 1. kwargs first — already named, no inference needed
@@ -281,7 +291,7 @@ def _extract_arguments(context: Any) -> dict[str, Any]:
         # Pydantic model — best case: dump and merge
         if hasattr(arg, "model_dump"):
             try:
-                out.update(arg.model_dump())
+                out.update(arg.model_dump(mode="json"))
                 continue
             except Exception:  # noqa: BLE001
                 pass
@@ -314,10 +324,7 @@ def _extract_arguments(context: Any) -> dict[str, Any]:
 
 
 def _redact_output(context: Any) -> None:
-    """Clear context.output as the post_invoke redaction signal —
-    InvocationContext is a strict Pydantic model, so `output=None` plus
-    the accompanying audit event is the whole signal (ad-hoc attributes
-    raise ValidationError)."""
+    """InvocationContext is a strict Pydantic model, so output=None with its audit event is the whole redaction signal."""
     try:
         context.output = None
     except Exception:  # noqa: BLE001
@@ -325,59 +332,56 @@ def _redact_output(context: Any) -> None:
         pass
 
 
-def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> None:
-    """Apply Guardian's MODIFY parameter_overrides to wherever NAT will
-    actually read the function input.
+def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> bool:
+    """Apply Guardian's MODIFY parameter_overrides to the slot NAT reads the function input from; False when it cannot.
 
     NAT executes `await call_next(*context.modified_args,
-    **context.modified_kwargs)`, so the override must land in whichever
-    slot holds the input: `modified_args[0]` (Pydantic model / dataclass /
-    dict) or `modified_kwargs` for the direct keyword-arg path.
+    **context.modified_kwargs)`. An input passed positionally, a Pydantic
+    model, dataclass or dict in `modified_args[0]`, is rewritten there and
+    only there: the same fields as keywords as well would reach the function
+    twice and raise TypeError. An input passed as keywords is rewritten in
+    `modified_kwargs`.
     """
-    # 1. Mutate modified_args[0] when it holds the input
     args = list(getattr(context, "modified_args", ()) or ())
-    if args:
-        head = args[0]
-        new_head: Any = None
-        # Pydantic v2
-        if hasattr(head, "model_copy"):
-            try:
-                new_head = head.model_copy(update=dict(overrides))
-            except Exception:  # noqa: BLE001
-                new_head = None
-        # Pydantic v1
-        if new_head is None and hasattr(head, "copy") and callable(getattr(head, "copy", None)):
-            try:
-                new_head = head.copy(update=dict(overrides))  # type: ignore[call-arg]
-            except Exception:  # noqa: BLE001
-                new_head = None
-        # Dataclass
-        if new_head is None and is_dataclass(head):
-            try:
-                from dataclasses import replace as _dc_replace
-                new_head = _dc_replace(head, **overrides)
-            except Exception:  # noqa: BLE001
-                new_head = None
-        # Plain dict
-        if new_head is None and isinstance(head, dict):
-            new_head = {**head, **overrides}
-        if new_head is not None:
-            args[0] = new_head
-            # Tuple field with validate_assignment=True — assign a new tuple.
-            try:
-                context.modified_args = tuple(args)
-            except Exception:  # noqa: BLE001
-                # Write-back failed; in-place mutation already took effect by reference.
-                pass
-
-    # 2. Also write modified_kwargs — call_next reads exactly one of the
-    # two slots depending on the function signature, so update both.
+    if not args:
+        try:
+            context.modified_kwargs = {**dict(getattr(context, "modified_kwargs", None) or {}), **overrides}
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+    head = args[0]
+    new_head: Any = None
+    # Pydantic v2
+    if hasattr(head, "model_copy"):
+        try:
+            new_head = head.model_copy(update=dict(overrides))
+        except Exception:  # noqa: BLE001
+            new_head = None
+    # Pydantic v1
+    if new_head is None and hasattr(head, "copy") and callable(getattr(head, "copy", None)):
+        try:
+            new_head = head.copy(update=dict(overrides))  # type: ignore[call-arg]
+        except Exception:  # noqa: BLE001
+            new_head = None
+    # Dataclass
+    if new_head is None and is_dataclass(head):
+        try:
+            from dataclasses import replace as _dc_replace
+            new_head = _dc_replace(head, **overrides)
+        except Exception:  # noqa: BLE001
+            new_head = None
+    # Plain dict
+    if new_head is None and isinstance(head, dict):
+        new_head = {**head, **overrides}
+    if new_head is None:
+        return False
+    args[0] = new_head
     try:
-        kwargs = dict(getattr(context, "modified_kwargs", None) or {})
-        kwargs.update(overrides)
-        context.modified_kwargs = kwargs
+        # Tuple field with validate_assignment=True — assign a new tuple.
+        context.modified_args = tuple(args)
     except Exception:  # noqa: BLE001
-        pass
+        return False
+    return True
 
 
 # ----- Middleware class -----
@@ -939,10 +943,12 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                     "redactions without dropping part of the decision")
             overrides = decision.modifications.get("parameter_overrides")
             if isinstance(overrides, dict):
-                _apply_overrides_to_context(context, overrides)
-                return context
-            audit_modify_unsupported("no parameter_overrides object", session_id=step.session_id,
-                                     method="steps/toolCallRequest")
+                if _apply_overrides_to_context(context, overrides):
+                    return context
+                unsupported = "the overrides fit no slot NAT reads the function input from"
+            else:
+                unsupported = "no parameter_overrides object"
+            audit_modify_unsupported(unsupported, session_id=step.session_id, method="steps/toolCallRequest")
             return self._block(context, f"MODIFY substituted to DENY: {decision.reasoning}")
         if decision.disposition in ("ask", "defer"):
             # No pause primitive here, so ask and defer block; NAT's HITL middleware composes for approvals.
@@ -985,7 +991,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 method="steps/toolCallResult",
                 tool_name=context.function_context.name,
                 tool_arguments=_extract_arguments(context),
-                result=context.output,
+                result=_json_safe(context.output),
                 request_id_ref=correlation_id if request_sent else None,
                 session_id=step.session_id,
             )
@@ -1045,6 +1051,15 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         session_id=step.session_id,
                         method="steps/toolCallResult",
                         decision=decision.disposition)
+            return context
+        if decision.disposition in ("ask", "defer"):
+            # The tool already ran and nothing can pause the output for a person: withhold what the Guardian did not release.
+            _redact_output(context)
+            audit_event("post_invoke_redacted",
+                        cause=f"{decision.disposition}_substituted_to_deny",
+                        session_id=step.session_id,
+                        method="steps/toolCallResult",
+                        reasoning=decision.reasoning)
             return context
         return None
 

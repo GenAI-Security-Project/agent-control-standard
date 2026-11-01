@@ -11,8 +11,8 @@ NAT exposes a `FunctionMiddleware` abstraction that wraps any function — tools
 3. Signs it with HMAC-SHA256 (`ACS_HMAC_SECRET` or `ACS_HMAC_SECRET_FILE`, under the label `ACS_HMAC_KEY_ID`).
 4. POSTs to the Guardian.
 5. Verifies the response signature and the JSON-RPC error/result shape.
-6. Applies the verdict: `allow` passes through; `deny` raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP` on NAT releases that expose it); `modify` mutates `context.modified_kwargs`; `ask`/`defer` substitute to deny at the middleware boundary.
-7. Records a `steps/toolCallResult` envelope in `post_invoke` and redacts the output on deny.
+6. Applies the verdict: `allow` passes through; `deny` raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP` on NAT releases that expose it); `modify` rewrites the input where NAT reads it, the input model in `context.modified_args[0]` or the keyword arguments in `context.modified_kwargs`, and is denied when it fits neither; `ask`/`defer` substitute to deny at the middleware boundary.
+7. Records a `steps/toolCallResult` envelope in `post_invoke` and redacts the output on deny, and on ask or defer, since nothing can pause the output for a person. Inputs and outputs go to the Guardian in JSON form: a model dumped in JSON mode, and a value such as a `datetime` as its string.
 
 Each NAT run is its own ACS session, with a `session_id` derived from the configured one and the run; its `handshake/hello` fires once, at the run's start, and the decision is kept in process state for the run's calls. A call outside any NAT run uses the configured `session_id`, which gets its own `sessionStart` before the first such call and its `sessionEnd` when NAT shuts the middleware down (`mapping.md`).
 
@@ -246,7 +246,7 @@ The adapter shares `acs.core` (signing, decision rules, JSON-RPC error code → 
 | Configuration | `settings.json` / `hooks.json` | NAT workflow YAML `middleware:` block |
 | Coverage default | Framework-wide (every hook event fires) | Opt-in per attachment point (YAML must wire each) |
 | Block mechanism | JSON stdout deny shape, or `exit 2` | Raise `ACSGuardianDenied` (NAT 1.7.0) or set `InvocationAction.SKIP` (NAT dev) |
-| Modify mechanism | Updated input field in JSON response | Mutate `context.modified_kwargs` / `context.output` |
+| Modify mechanism | Updated input field in JSON response | Rewrite `context.modified_args[0]` or `context.modified_kwargs`, whichever carries the input / `context.output` |
 | Lifecycle coverage | Whatever events the framework's hook surface exposes | Every function NAT wraps — tools, LLMs, retrievers, memory, sub-workflows — **for observability**; enforcement still per-attachment-point |
 | Headless CLI for tests | `claude --print` (Claude); none (Cursor — semi-automated) | None needed — NAT runs in-process; `test_live.py` is fully automated |
 

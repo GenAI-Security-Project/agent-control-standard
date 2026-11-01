@@ -176,6 +176,91 @@ class DispositionsLive(unittest.TestCase):
             "uses modified_args[0]. The agent would run the ORIGINAL "
             "(unsafe) command, defeating the purpose of MODIFY.")
 
+    def test_modify_reaches_the_function_once_through_nats_call_path(self) -> None:
+        """NAT runs call_next(*modified_args, **modified_kwargs): the override must reach the function once, in the slot its input travels in."""
+        from nat.middleware.middleware import FunctionMiddlewareContext
+
+        class ShellInput(BaseModel):
+            command: str
+        self._set_response("steps/toolCallRequest", {
+            "decision": "modify", "reasoning": "use the safe command",
+            "modifications": {"parameter_overrides": {"command": "ls"}}})
+        context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=ShellInput,
+                                            single_output_schema=str, stream_output_schema=str)
+        received: list[str] = []
+
+        async def positional(value: ShellInput) -> str:
+            received.append(value.command)
+            return "ran"
+
+        async def keywords(command: str) -> str:
+            received.append(command)
+            return "ran"
+        mw = self._mw(default_deny=True)
+        asyncio.run(mw.function_middleware_invoke(ShellInput(command="rm -rf /"), call_next=positional, context=context))
+        asyncio.run(mw.function_middleware_invoke(command="rm -rf /", call_next=keywords, context=context))
+        self.assertEqual(received, ["ls", "ls"])
+
+        async def plain(command: str) -> str:
+            received.append(command)
+            return "ran"
+        with self.assertRaises(ACSGuardianDenied, msg="an override that fits no input slot is a DENY (§6.5)"):
+            asyncio.run(mw.function_middleware_invoke("rm -rf /", call_next=plain, context=context))
+        self.assertEqual(received, ["ls", "ls"])
+
+    def test_a_datetime_input_and_a_dict_output_reach_the_guardian_and_its_deny_applies(self) -> None:
+        import datetime
+        stamp = datetime.datetime(2026, 11, 1, 12, 0, tzinfo=datetime.timezone.utc)
+
+        class Window(BaseModel):
+            since: datetime.datetime
+        deny = {"decision": "deny", "reasoning": "not in this window"}
+        self._set_response("steps/toolCallRequest", deny)
+        mw = self._mw(default_deny=False)
+        self.guardian.reset()
+        with self.assertRaises(ACSGuardianDenied):
+            asyncio.run(mw.pre_invoke(_make_ctx_with_pydantic_input("query", Window, Window(since=stamp))))
+        sent = self.guardian.envelopes_for("steps/toolCallRequest")
+        self.assertEqual(sent[0]["params"]["payload"]["arguments"]["since"]["value"], "2026-11-01T12:00:00Z")
+
+        # The same value passed as a keyword argument, through NAT's call path.
+        from nat.middleware.middleware import FunctionMiddlewareContext
+        calls: list = []
+
+        async def query(since):
+            calls.append(since)
+            return "rows"
+        context = FunctionMiddlewareContext(name="query", config=None, description=None, input_schema=None,
+                                            single_output_schema=str, stream_output_schema=str)
+        self.guardian.reset()
+        with self.assertRaises(ACSGuardianDenied):
+            asyncio.run(mw.function_middleware_invoke(since=stamp, call_next=query, context=context))
+        self.assertEqual(calls, [])
+        sent = self.guardian.envelopes_for("steps/toolCallRequest")
+        self.assertEqual(sent[0]["params"]["payload"]["arguments"]["since"]["value"], "2026-11-01 12:00:00+00:00")
+
+        self._set_response("steps/toolCallResult", deny)
+        ctx = _make_ctx_with_pydantic_input("query", Window, Window(since=stamp))
+        ctx.output = {"rows": 3, "fetched": stamp}
+        asyncio.run(mw.post_invoke(ctx))
+        self.assertIsNone(ctx.output, "the Guardian saw the output and denied it, so it never reaches the model")
+        self.assertTrue(self.guardian.envelopes_for("steps/toolCallResult"))
+
+    def test_ask_or_defer_on_a_result_withholds_the_output_and_audits_it(self) -> None:
+        class ShellInput(BaseModel):
+            command: str
+        for disposition in ("ask", "defer"):
+            with self.subTest(disposition):
+                self._set_response("steps/toolCallResult", {"decision": disposition, "reasoning": "needs a person"})
+                mw = self._mw(default_deny=False)
+                ctx = _make_ctx_with_pydantic_input("Bash", ShellInput, ShellInput(command="ls"))
+                ctx.output = "secret listing"
+                with mock.patch("acs.integrations.nat.adapter.audit_event") as audit:
+                    asyncio.run(mw.post_invoke(ctx))
+                self.assertIsNone(ctx.output)
+                self.assertIn(("post_invoke_redacted", f"{disposition}_substituted_to_deny"),
+                              [(c.args[0], c.kwargs.get("cause")) for c in audit.call_args_list])
+
     def test_modify_with_unapplied_redaction_blocks_instead_of_half_applying(self) -> None:
         """NAT must not apply overrides while dropping a sibling redaction."""
         class ShellInput(BaseModel):

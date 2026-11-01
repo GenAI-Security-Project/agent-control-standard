@@ -41,9 +41,9 @@ The adapter's `_on_intermediate_step` callback emits `steps/sessionStart` + `ste
 |---|---|
 | `allow` | `pre_invoke` returns `None` (proceed unchanged) |
 | `deny` | `pre_invoke` raises `ACSGuardianDenied` (NAT 1.7.0) or sets `context.action = InvocationAction.SKIP` (NAT dev). NAT's runtime documents both: *"Raises: Any exception to abort execution"* and the action-based equivalent. |
-| `modify` | If `modifications.parameter_overrides` is present and is a dict, the adapter updates `context.modified_kwargs` in place and returns the context. NAT's runtime invokes the function with the modified kwargs. If `modified_content` is present on a post-tool result, the adapter sets `context.output`. Redactions, a call's MODIFY without a `parameter_overrides` object, and structured edits on a result cannot be applied: the call is blocked or the output withheld, recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5). |
+| `modify` | If `modifications.parameter_overrides` is present and is a dict, the adapter rewrites the input in the one slot NAT reads it from: the model in `context.modified_args[0]`, or `context.modified_kwargs` when the input travels as keywords. NAT runs `call_next(*modified_args, **modified_kwargs)`, so writing both would pass the fields twice. If `modified_content` is present on a post-tool result, the adapter sets `context.output`. Overrides that fit neither slot, redactions, a call's MODIFY without a `parameter_overrides` object, and structured edits on a result cannot be applied: the call is blocked or the output withheld, recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5). |
 | `ask` | Substituted to block at the middleware boundary in v1 (NAT has no native pause primitive at the function-middleware layer). Deployments wanting ASK should compose with NAT's HITL middleware (`nat.middleware.hitl`) and have the Guardian resolve before responding. |
-| `defer` | Substituted to block in v1 (same reason). |
+| `defer` | Substituted to block in v1 (same reason). On a tool result, `ask` and `defer` both withhold the output (`context.output = None`) and are audited as `post_invoke_redacted`: the tool already ran, and nothing can pause its output for a person. |
 
 ## Configuration
 
