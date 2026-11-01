@@ -480,10 +480,7 @@ class Item13_LaunchGuardianOwnsThePort(unittest.TestCase):
             self._stop(proc)
 
     def test_child_that_exits_before_binding_raises(self) -> None:
-        """A Guardian that refuses to start (no secret, no dev mode) must
-        surface as RuntimeError, never as someone else's port."""
         env = os.environ.copy()
-        env.pop("ACS_DEV_MODE", None)
         env.pop("ACS_HMAC_SECRET", None)
         env.pop("ACS_HMAC_SECRET_FILE", None)
         with self.assertRaises(RuntimeError) as ctx:

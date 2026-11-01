@@ -60,6 +60,7 @@ from acs.testing.harness import (  # noqa: E402
 
 
 HMAC_SECRET = "e2e-test-shared-secret-not-for-production"
+KEY_ID = "test-key"
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 PER_CALL_TIMEOUT_S = 120.0
 
@@ -90,6 +91,7 @@ def write_settings(workdir: Path, port: int) -> None:
     command = (
         f"ACS_GUARDIAN_URL=http://127.0.0.1:{port}/acs "
         f"ACS_HMAC_SECRET={HMAC_SECRET} "
+        f"ACS_HMAC_KEY_ID={KEY_ID} "
         f"ACS_GUARDIAN_HOST_ALLOWLIST= "
         f"python3 {ADAPTER}"
     )
@@ -458,10 +460,7 @@ def main() -> int:
         width=68,
     )
 
-    # Programmable Guardian — records every envelope, signs every response
-    # with the same HMAC secret the adapter uses, can be configured per
-    # scenario to return specific dispositions.
-    guardian = ProgrammableGuardian(hmac_secret=HMAC_SECRET)
+    guardian = ProgrammableGuardian(hmac_secret=HMAC_SECRET, key_id=KEY_ID)
     guardian.start()
 
     workdir = Path(tempfile.mkdtemp(prefix="acs-e2e-real-"))

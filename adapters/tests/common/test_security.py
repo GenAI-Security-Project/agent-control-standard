@@ -524,8 +524,7 @@ class Item18_AuditFileSink(unittest.TestCase):
 
 
 class Item19_SecretFileUnreadableRaises(unittest.TestCase):
-    """A configured-but-unreadable ACS_HMAC_SECRET_FILE must raise,
-    never silently downgrade to unsigned mode."""
+    """A configured-but-unreadable ACS_HMAC_SECRET_FILE must raise, not read as a missing secret."""
 
     def test_missing_secret_file_raises(self) -> None:
         os.environ["ACS_HMAC_SECRET_FILE"] = "/nonexistent-secret-file"
@@ -536,13 +535,15 @@ class Item19_SecretFileUnreadableRaises(unittest.TestCase):
         finally:
             os.environ.pop("ACS_HMAC_SECRET_FILE", None)
 
-    def test_no_secret_at_all_is_still_devmode_empty(self) -> None:
-        """No configuration at all stays dev-mode (b\"\") — only a
-        CONFIGURED-and-broken path is an incident."""
+    def test_no_secret_at_all_reads_as_empty_and_is_refused(self) -> None:
+        """No configuration reads as an empty secret, which load_signing_material refuses (secret_missing)."""
         os.environ.pop("ACS_HMAC_SECRET_FILE", None)
         old = os.environ.pop("ACS_HMAC_SECRET", None)
         try:
             self.assertEqual(client.load_hmac_secret(), b"")
+            with self.assertRaises(client.SigningMaterialMissing) as refused:
+                client.load_signing_material()
+            self.assertEqual(refused.exception.cause, "secret_missing")
         finally:
             if old is not None:
                 os.environ["ACS_HMAC_SECRET"] = old

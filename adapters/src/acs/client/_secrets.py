@@ -62,7 +62,7 @@ def load_hmac_secret() -> bytes:
         except SecretFilePermissionsError:
             raise
         except OSError as e:
-            # Configured-but-unreadable is an incident, not dev mode.
+            # Configured-but-unreadable is an incident, not a missing secret.
             audit_event("hmac_secret_file_unreadable", path=path, error=str(e))
             raise SecretFileUnreadableError(
                 f"ACS_HMAC_SECRET_FILE {path!r} is configured but cannot "

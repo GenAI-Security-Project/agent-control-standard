@@ -87,11 +87,7 @@ class DispositionsLive(unittest.TestCase):
 
     def _mw(self, *, default_deny: bool = True) -> ACSMiddleware:
         import os
-        # Restore env after the test — adapter reads ACS_HMAC_SECRET at
-        # call time, and leaking this into adjacent tests (test_live's
-        # ACS_DEV_MODE=1 no-signing setup) makes the next test pass
-        # signed envelopes to an unsigned Guardian → response signature
-        # invalid. addCleanup runs even on test failure.
+        # The adapter reads ACS_HMAC_SECRET at call time, so it is restored for the next test; addCleanup runs even on failure.
         prior = os.environ.get("ACS_HMAC_SECRET")
         os.environ["ACS_HMAC_SECRET"] = HMAC
         os.environ["ACS_HMAC_KEY_ID"] = "test-key"

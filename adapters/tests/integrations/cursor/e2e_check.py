@@ -76,6 +76,7 @@ from acs.testing.harness import (  # noqa: E402
 from acs.guardian.example_guardian import evaluate_step  # noqa: E402
 
 HMAC_SECRET = "e2e-test-shared-secret-not-for-production"
+KEY_ID = "test-key"
 
 
 # Shared pretty-printer + helpers; see src/acs/testing/e2e_report.py.
@@ -116,6 +117,7 @@ def write_project_hooks(workdir: Path, port: int) -> Path:
         env_vars = (
             f"ACS_GUARDIAN_URL=http://127.0.0.1:{port}/acs "
             f"ACS_HMAC_SECRET={HMAC_SECRET} "
+            f"ACS_HMAC_KEY_ID={KEY_ID} "
             f"ACS_GUARDIAN_HOST_ALLOWLIST= "
             f"ACS_HANDSHAKE_CACHE={handshake_cache}"
         )
@@ -468,9 +470,7 @@ def main() -> int:
         return 1
 
     workdir = Path(tempfile.mkdtemp(prefix="acs-cursor-e2e-"))
-    guardian = ProgrammableGuardian(hmac_secret=HMAC_SECRET)
-    # Real example-Guardian policy as the default handler; scenarios
-    # never swap it out.
+    guardian = ProgrammableGuardian(hmac_secret=HMAC_SECRET, key_id=KEY_ID)
     guardian.handlers["__default__"] = real_policy_handler()
     guardian.start()
     write_project_hooks(workdir, guardian.port)
