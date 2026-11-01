@@ -31,6 +31,9 @@ against the conformance requirements it touches.
 | Reference Implementation | Evgeniy Kokuykin ([@artmaro](https://github.com/artmaro)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
 
+Eva Benn, Richard Bird, and Aruneesh Salhotra hold no write access, so a project lead
+assigns, labels, and owns review for Identity and Outreach.
+
 ## Triage authority
 
 Workstream leads and the project leads apply the decision labels `scope:`, `priority:`, and
