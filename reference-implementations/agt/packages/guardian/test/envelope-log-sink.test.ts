@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -168,6 +168,37 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
   it("NULL_ENVELOPE_LOG_SINK writes nothing and never throws", () => {
     expect(() => NULL_ENVELOPE_LOG_SINK.write("request", REQUEST, "steps/toolCallRequest")).not.toThrow();
     expect(NULL_ENVELOPE_LOG_SINK.path).toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")("creates the file 0600 and its directory 0700 (#71)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-envelope-log-mode-"));
+    const nested = join(dir, "nested");
+    const path = join(nested, "envelopes.jsonl");
+    const previous = process.umask(0);
+    try {
+      const sink = createEnvelopeLogSink({ path });
+      expect(sink.write("request", REQUEST, "steps/toolCallRequest")).toBe(true);
+      expect((statSync(nested).mode & 0o777).toString(8)).toBe("700");
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+      // A log an older version left behind, opened by a new sink.
+      chmodSync(path, 0o644);
+      expect(createEnvelopeLogSink({ path }).write("request", REQUEST, "steps/toolCallRequest")).toBe(true);
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+      expect(readFileSync(path, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      process.umask(previous);
+      try {
+        unlinkSync(path);
+        rmdirSync(nested);
+      } catch {
+        // ignore if failed before write
+      }
+      rmdirSync(dir);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("writes to a device without changing its mode (#71)", () => {
+    expect(createEnvelopeLogSink({ path: "/dev/null" }).write("request", REQUEST, "steps/toolCallRequest")).toBe(true);
   });
 });
 

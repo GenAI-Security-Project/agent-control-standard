@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -38,6 +38,21 @@ afterEach(() => {
 });
 
 describe("createFileSessionConfigStore — the session config store across processes", () => {
+  it.skipIf(process.platform === "win32")("writes the file 0600 and creates its directory 0700 (#71)", () => {
+    const dir = join(scratch(), "sessions");
+    const path = sessionConfigPath(dir, "sess-1");
+    const previous = process.umask(0);
+    try {
+      createFileSessionConfigStore({ dir, sessionId: "sess-1" }).set(HELLO);
+      expect((statSync(dir).mode & 0o777).toString(8)).toBe("700");
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+    } finally {
+      process.umask(previous);
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  });
+
   it("survives the process that wrote it: a second store reads the first's config", () => {
     const dir = scratch();
     createFileSessionConfigStore({ dir, sessionId: "sess-1" }).set(HELLO);

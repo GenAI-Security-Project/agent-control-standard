@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -1379,6 +1379,27 @@ describe("session state end to end", () => {
     } finally {
       await guardian.close();
       rmSync(path, { force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("keeps the session context log private, new or old (#71)", async () => {
+    const dir = join(tmpdir(), `acs-session-dir-${crypto.randomUUID()}`);
+    const path = join(dir, "session-context.jsonl");
+    const sessionId = crypto.randomUUID();
+    const previous = process.umask(0);
+    const guardian = await startGuardian({ ...baseOptions, sessionContextLog: path });
+    const step = () => postStep(guardian, toolCallRequest({ session_id: sessionId, request_id: crypto.randomUUID() }));
+    try {
+      await step();
+      expect((statSync(dir).mode & 0o777).toString(8)).toBe("700");
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+      chmodSync(path, 0o644);
+      await step();
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+    } finally {
+      process.umask(previous);
+      await guardian.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
