@@ -168,11 +168,22 @@ def build_command(*, hook_command: str, guardian_url: str,
     return f"{env_prefix} {shlex.quote(hook_command)} {WIRE_MARKER}"
 
 
-def build_hook_entry(command: str) -> dict:
-    """The Claude Code hook-entry shape under each hook type."""
+# Hooks on which Claude Code ignores onFailure: a failure there cannot block anything.
+_ON_FAILURE_IGNORED = frozenset({"Stop", "SubagentStop"})
+
+
+def build_inner_hook(command: str, *, block_on_failure: bool = False) -> dict:
+    """One wired command hook; block_on_failure makes Claude Code block the action when the hook fails or times out (v2.1.295+)."""
+    inner = {"type": "command", "command": command}
+    if block_on_failure:
+        inner["onFailure"] = "block"
+    return inner
+
+
+def build_hook_entry(command: str, *, block_on_failure: bool = False) -> dict:
     return {
         "matcher": "*",
-        "hooks": [{"type": "command", "command": command}],
+        "hooks": [build_inner_hook(command, block_on_failure=block_on_failure)],
     }
 
 
@@ -190,18 +201,8 @@ def load_settings(path: Path) -> dict:
 
 
 def merge_wire(existing: dict, hook_names: list[str],
-                commands_by_hook: dict[str, str]) -> dict:
-    """Return a new settings dict with ACS wiring merged in.
-
-    commands_by_hook is a map {hook_name: shell_command}, so the
-    caller can use a different command per hook type (typically:
-    fail-closed for gate hooks, fail-open for observational hooks).
-
-    Re-entrancy: we operate at the inner-hooks level (each entry has
-    {matcher, hooks: [...]}), so re-wiring REPLACES our inner hook
-    without touching any of the user's own hooks that share the same
-    matcher.
-    """
+                commands_by_hook: dict[str, str], blocking: frozenset[str] = frozenset()) -> dict:
+    """A copy of the settings with ACS wired in; only our inner hooks are replaced, so the user's hooks on the same matcher stay."""
     out = json.loads(json.dumps(existing))  # deep copy
     hooks = out.setdefault("hooks", {})
     for name in hook_names:
@@ -216,12 +217,12 @@ def merge_wire(existing: dict, hook_names: list[str],
                 matcher_star_seen = True
                 inner = [h for h in entry.get("hooks", [])
                           if WIRE_MARKER not in h.get("command", "")]
-                inner.append({"type": "command", "command": command})
+                inner.append(build_inner_hook(command, block_on_failure=name in blocking))
                 kept_entries.append({**entry, "hooks": inner})
             else:
                 kept_entries.append(entry)
         if not matcher_star_seen:
-            kept_entries.append(build_hook_entry(command))
+            kept_entries.append(build_hook_entry(command, block_on_failure=name in blocking))
         hooks[name] = kept_entries
     return out
 
@@ -449,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         #   - --all-fail-open:  ALL hooks fail-open.
         #   - (default):        gate hooks fail-closed, others fail-open.
         commands_by_hook: dict[str, str] = {}
+        blocking: set[str] = set()
         for hook in hook_names:
             if args.default_deny:
                 hook_deny = True
@@ -456,6 +458,9 @@ def main(argv: list[str] | None = None) -> int:
                 hook_deny = False
             else:
                 hook_deny = hook in GATE_HOOKS
+            if hook_deny and hook not in _ON_FAILURE_IGNORED:
+                # A fail-closed hook that crashes, times out or cannot start blocks too, not only its decision.
+                blocking.add(hook)
             commands_by_hook[hook] = build_command(
                 hook_command=hook_command,
                 guardian_url=args.guardian_url,
@@ -466,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                 host_allowlist=args.host_allowlist,
                 audit_file=args.audit_file,
             )
-        new = merge_wire(existing, hook_names, commands_by_hook)
+        new = merge_wire(existing, hook_names, commands_by_hook, frozenset(blocking))
 
     # Render
     warnings = validate_inputs(args)

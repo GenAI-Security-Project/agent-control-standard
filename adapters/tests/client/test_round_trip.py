@@ -30,7 +30,7 @@ def _request(**payload: Any) -> dict:
 
 @mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"})
 class RoundTrip(unittest.TestCase):
-    def _send(self, request: dict, answer, posture: FailPosture = PROCEED):
+    def _send(self, request: dict, answer, posture: FailPosture = PROCEED, gate: bool = False):
         sent: list[tuple[dict, float]] = []
 
         def urlopen(req: Any, timeout: float):
@@ -39,7 +39,7 @@ class RoundTrip(unittest.TestCase):
             return answer(body)
 
         with mock.patch.object(_exchange, "_open", side_effect=urlopen):
-            result = round_trip(request, guardian_url=URL, posture=posture, session_id=SESSION)
+            result = round_trip(request, guardian_url=URL, posture=posture, session_id=SESSION, gate=gate)
         return result, sent
 
     @staticmethod
@@ -73,11 +73,13 @@ class RoundTrip(unittest.TestCase):
                 self.assertEqual((result.proceed, result.audit_type, result.cause), (proceed, audit, "transport_failure"))
                 self.assertIn("Guardian unreachable", result.message)
 
-    def test_a_request_that_cannot_be_signed_is_an_adapter_error(self) -> None:
-        request = _request(note="\ud800")
-        result, sent = self._send(request, self._signed_allow, DENY)
-        self.assertEqual(sent, [], "nothing unsigned goes on the wire")
-        self.assertEqual((result.proceed, result.cause), (False, "adapter_exception"))
+    def test_a_request_that_cannot_be_signed_is_denied_at_a_gate_whatever_the_posture(self) -> None:
+        for gate, proceed in ((False, True), (True, False)):
+            with self.subTest(gate=gate):
+                result, sent = self._send(_request(note="\ud800"), self._signed_allow, PROCEED, gate=gate)
+                self.assertEqual(sent, [], "nothing unsigned goes on the wire")
+                self.assertEqual((result.proceed, result.cause, result.fields["failure_class"]),
+                                 (proceed, "envelope_not_signable", "observed_agent_error"))
 
 
 class Turns(unittest.TestCase):

@@ -758,7 +758,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             while state.in_flight:
                 state.idle.wait()
 
-    def _exchange(self, request: dict, step: _Step, run: str | None):
+    def _exchange(self, request: dict, step: _Step, run: str | None, gate: bool = False):
         """A call's round trip, counted so the run's sessionEnd goes out after it; refused once that sessionEnd has begun."""
         ended = Resolution(False, "session_ended_fail_closed", "session_ended",
                            {"session_id": step.session_id, "method": request.get("method", "")})
@@ -772,7 +772,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 return ended
             state.in_flight += 1
         try:
-            return self._round_trip(request, step)
+            return self._round_trip(request, step, gate)
         finally:
             with state.idle:
                 state.in_flight -= 1
@@ -910,7 +910,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                                      f"adapter error: {e}"))
         else:
             await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._exchange, request, step, run)
+            result = await asyncio.to_thread(self._exchange, request, step, run, True)
         if isinstance(result, Resolution):
             return self._settle_pre(context, result, step)
         response = result.response
@@ -1048,11 +1048,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return context
         return None
 
-    # ----- helpers -----
-
-    def _round_trip(self, request: dict, step: _Step):
+    def _round_trip(self, request: dict, step: _Step, gate: bool = False):
         return round_trip(request, guardian_url=self._acs.guardian_url, posture=step.posture,
-                          session_id=step.session_id)
+                          session_id=step.session_id, gate=gate)
 
     async def _step_of(self, run: str | None) -> _Step:
         """A call's session, opened off the event loop after the lifecycle hooks reported before the call, so a run's sessionStart carries its workflow's name."""

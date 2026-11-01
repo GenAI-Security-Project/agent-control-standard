@@ -133,6 +133,9 @@ KNOWN_UNMAPPED: dict[str, str] = {
 
 # Hooks whose deny shape is {"decision": "block", "reason": "..."} AND whose
 # block actually prevents the action.
+# Hooks that decide whether an action runs: the tool call and the prompt.
+_GATE_HOOKS = frozenset({"PreToolUse", "UserPromptSubmit"})
+
 ENFORCEABLE_BLOCK_HOOKS = frozenset({
     "PostToolUse", "UserPromptSubmit",
 })
@@ -697,7 +700,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     if hook_name == "UserPromptSubmit":
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
-            result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url,
+            result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url, gate=True,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
                 return _settle(result, "UserPromptSubmit", session_id, workspace=_turn_ws(event))
@@ -745,7 +748,8 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             # The originating request was never sent, so citing it would dangle.
             request["params"]["payload"].pop("request_id_ref", None)
 
-    result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
+    result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
+                        gate=hook_name in _GATE_HOOKS)
     if isinstance(result, Resolution):
         return _settle(result, hook_name, session_id, workspace=_turn_ws(event))
     response = result.response

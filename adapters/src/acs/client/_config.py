@@ -14,7 +14,7 @@ DEFAULT_TIMEOUT_S = 5.0
 FAILURE_CLASSES = ("timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error",
                    "signature_invalid", "handshake_failure", "other")
 
-_OBSERVED_AGENT_CAUSES = {"adapter_exception", "adapter_build_failed", "adapter_translate_exception",
+_OBSERVED_AGENT_CAUSES = {"adapter_exception", "adapter_build_failed", "adapter_translate_exception", "envelope_not_signable",
                           "invalid_stdin_json", "guardian_url_rejected", "request_exceeds_max_payload"}
 _SIGNATURE_CAUSES = {"response_signature_invalid", "error_signature_invalid", "response_unverifiable",
                      "server_hello_signature_invalid"}
@@ -89,6 +89,9 @@ class FailPosture:
         per_method = per_method if isinstance(per_method, Mapping) else {}
         overrides = {method: ms / 1000.0 for method, ms in per_method.items() if _positive(ms)}
         return replace(self, deny_on_failure=deny, timeout_s=timeout_s, per_method_timeout_s=overrides)
+
+    def closed(self) -> FailPosture:
+        return replace(self, deny_on_failure=True)
 
     def resolve(self, outcome: Undecided | Refused) -> Resolution:
         """The one place a step without a usable decision is settled: a refusal blocks, anything else follows the posture."""

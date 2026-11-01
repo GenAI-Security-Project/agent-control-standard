@@ -103,7 +103,8 @@ from acs.core import (
 )
 from acs.integrations.cursor.hook import PERMISSION_EVENTS
 
-# The acs-adapters package version; carried in request metadata and --version.
+_GATE_EVENTS = PERMISSION_EVENTS | {"beforeSubmitPrompt"}
+
 ADAPTER_VERSION = __version__
 
 
@@ -885,7 +886,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     if event_name == "beforeSubmitPrompt":
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
-            result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url,
+            result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url, gate=True,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
                 return _settle(result, "beforeSubmitPrompt", session_id, workspace=_workspace(event))
@@ -942,7 +943,8 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     except Exception:  # noqa: BLE001
         pass
 
-    result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
+    result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
+                        gate=event_name in _GATE_EVENTS)
     if isinstance(result, Resolution):
         return _settle(result, event_name, session_id, workspace=_workspace(event))
     response = result.response

@@ -259,6 +259,18 @@ class DispositionsLive(unittest.TestCase):
         except ACSGuardianDenied:
             pass  # Expected on NAT 1.7.0
 
+    def test_a_call_the_signer_refuses_is_denied_under_a_fail_open_posture(self) -> None:
+        class IdInput(BaseModel):
+            id: int
+        ctx = _make_ctx_with_pydantic_input("lookup", IdInput, IdInput(id=2 ** 53 + 1))
+        self._set_response("steps/toolCallRequest", {"decision": "allow", "reasoning": "fine"})
+        mw = self._mw(default_deny=False)
+        self.guardian.reset()
+        with self.assertRaises(ACSGuardianDenied):
+            asyncio.run(mw.pre_invoke(ctx))
+        self.assertNotIn("steps/toolCallRequest", self.guardian.methods_seen(),
+                         "an envelope the signer refuses never reaches the Guardian, so the call is denied")
+
     def test_defer_substituted_to_deny(self) -> None:
         class ShellInput(BaseModel):
             command: str

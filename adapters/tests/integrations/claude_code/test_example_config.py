@@ -46,6 +46,8 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
                 "asyncRewake, shell plus the common ones. There is no `env`, so "
                 "anything there is dropped and the hook runs with Claude Code's "
                 "own environment. Use wire.py's inline VAR=value form.")
+            self.assertEqual(entry.get("onFailure"), "block",
+                f"gate hook {hook} must block its action when the hook itself fails (Claude Code v2.1.295+)")
             cmd = entry["command"]
             self.assertIn("ACS_DEFAULT_DENY=1", cmd,
                 f"gate hook {hook} must set ACS_DEFAULT_DENY=1 in the command "
@@ -85,7 +87,8 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
                 host_allowlist=None,
                 audit_file="/path/to/.acs/audit.log",
             )
-            expected[hook] = [wire.build_hook_entry(cmd)]
+            gate = hook in wire.GATE_HOOKS
+            expected[hook] = [wire.build_hook_entry(cmd, block_on_failure=gate and hook not in wire._ON_FAILURE_IGNORED)]
         self.assertEqual(self.hooks, expected,
             "settings.json.example has drifted from wire.py's output for "
             "the documented placeholder arguments — regenerate it with "

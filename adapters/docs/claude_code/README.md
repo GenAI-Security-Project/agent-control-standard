@@ -88,7 +88,7 @@ What it wires by default:
 | `Notification` | fail-open |
 | `SessionEnd` | fail-open |
 
-Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere).
+Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere). Every fail-closed hook also carries `"onFailure": "block"`, so Claude Code v2.1.295 or later blocks the action when the hook itself crashes, times out or cannot start; Claude Code ignores it on `Stop`.
 
 To remove the wiring later: `acs-claude-code-wire --unwire --write`.
 

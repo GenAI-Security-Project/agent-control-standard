@@ -115,5 +115,27 @@ def _commands(config: dict) -> list[dict]:
     return [h for h in found if "command" in h]
 
 
+
+class ClaudeCodeGateHooksBlockOnFailure(unittest.TestCase):
+    """A fail-closed hook that crashes, times out or cannot start blocks its action too (onFailure, Claude Code v2.1.295+)."""
+
+    def _wire(self, *mode: str) -> dict[str, set[str]]:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), mock.patch.dict(os.environ, {"HOME": tmp}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            hook = _executable(Path(tmp) / "acs-claude-code-hook")
+            settings = Path(tmp) / "settings.json"
+            claude_wire.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                              f"--hook-command={hook}", "--write", *SECRET_ARGS, *mode])
+            hooks = json.loads(settings.read_text())["hooks"]
+        return {"block": {name for name, entries in hooks.items() if entries[0]["hooks"][0].get("onFailure") == "block"},
+                "all": set(hooks)}
+
+    def test_each_wiring_mode_blocks_exactly_its_fail_closed_hooks(self) -> None:
+        default = self._wire()
+        self.assertEqual(default["block"], {"PreToolUse", "UserPromptSubmit"})
+        strict = self._wire("--default-deny")
+        self.assertEqual(strict["block"], strict["all"] - {"Stop"}, "Claude Code ignores onFailure on Stop")
+        self.assertEqual(self._wire("--all-fail-open")["block"], set())
+
 if __name__ == "__main__":
     unittest.main()

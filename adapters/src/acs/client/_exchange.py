@@ -182,12 +182,18 @@ def _read(resp: Any, cancelled: threading.Event) -> bytes:
 
 
 def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPosture,
-               session_id: str | None) -> Decided | Resolution:
-    """Sign the request as the last step before sending, exchange it within its method's timeout, and resolve anything but a usable decision with the posture."""
+               session_id: str | None, gate: bool = False) -> Decided | Resolution:
+    """Sign the request as the last step before sending, exchange it within its method's timeout, and resolve anything but a usable decision with the posture.
+
+    gate marks a step that decides whether an action runs: a request the signer refuses
+    (an integer past 2**53, a lone surrogate) is denied there whatever the posture, since
+    the agent chooses the step's content and could otherwise keep it from the Guardian.
+    """
     try:
         sign_envelope(request, session_id=session_id)
     except Exception as e:  # noqa: BLE001
-        return posture.resolve(Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}"))
+        outcome = Undecided("envelope_not_signable", {"error": str(e)}, f"envelope not signable: {e}")
+        return (posture.closed() if gate else posture).resolve(outcome)
     outcome = exchange(request, guardian_url=guardian_url,
                        timeout_s=posture.timeout_for(request.get("method", "")), session_id=session_id)
     return outcome if isinstance(outcome, Decided) else posture.resolve(outcome)
