@@ -8,7 +8,7 @@ Search existing issues and pull requests to avoid duplicating efforts.
 
 ## Current Priority Scope
 
-Reviewed at each milestone. Current window: the open milestones on the [milestones page](https://github.com/GenAI-Security-Project/agent-control-standard/milestones). Next review October 9, 2026.
+Reviewed at each milestone. Current window: the open milestones on the [milestones page](https://github.com/GenAI-Security-Project/agent-control-standard/milestones). Next review December 9, 2026.
 
 The project has one committed outcome:
 
@@ -24,16 +24,16 @@ or a comment, this wins.
 **In focus.** Work that feeds the runnable Guardian, the interoperability benchmark, or
 the conformance evidence that makes either credible:
 
-- The mandatory floor decision in PR #21, which gates everything behind it
 - The Claude Code, Cursor, and NVIDIA NAT adapters in PR #22
 - The AGT reference implementation in `reference-implementations/agt/`
 - Ports of that reference implementation to other runtimes: Python, Go, Rust, Codex
 - Production-hardening it, including span batching and OpenTelemetry collection
-- Resolving the fail-open default, which issues #32 and #37 attack from opposite ends
-- The ACS-Core conformance claim template
-- The requirement ledger and behavioral tests in milestone #33
-- Closing the Cursor file-read gap
+- Resolving the fail-open default in issue #32
+- Conformance claims against the ACS-Core claim template, issues #106 and #136
+- The requirement ledger and behavioral tests in issue #33
+- Closing the Cursor file-read gap in issue #212
 - Conformance and dogfooding reports that document where ACS fails in practice
+- The public site, when a change helps an evaluator find, install, or run the Guardian
 
 **Deferred to v0.2.0.** Real work, tracked, landing in a later release: async and composition,
 streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
@@ -67,11 +67,15 @@ In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` befo
 the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
 advances, because the roadmap counts a closed issue as delivered.
 
-If you open a pull request against an issue that is not accepted yet, it will not be
-reviewed and nothing about it is rejected. It waits, and a comment will say so. A pull
-request that sits untriaged for a long time may be closed with an invitation to reopen
-once its issue is accepted. Start from an issue labeled `help wanted` if you want work
-that is already accepted.
+If you open a pull request nobody asked for, it waits and nothing about it is rejected. A
+bot adds `status:needs-triage` and one comment unless you are a lead in
+[GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull request
+references, or a lead has reviewed it. A pull request that sits untriaged for a long time
+may be closed with an invitation to reopen once a lead asks for the work. Start from an
+issue labeled `help wanted`, and ask a lead to assign it to you, if you want work that is
+already accepted.
+
+We try to reply to new issues within about a week.
 
 [Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who applies
 `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue form can apply them,
@@ -118,9 +122,14 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 3. **Make your changes** following the style guide
 4. **Sync with `integration` and run the guards** before you open anything. `uv run
    pytest -v` and `uv run mkdocs build --strict` both have to pass on your machine
-5. **Sign your commits** with `git commit -s` (required by the DCO below)
+5. **Sign your commits** with `git commit -s` (required by the DCO below). See
+   [How to sign your commits](#how-to-sign-your-commits)
 6. **Open a pull request against `integration`**
 7. **Address review feedback** to land your change
+
+A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
+targets `integration`, and the guard rejects a new page aimed at `main`. A page outside
+`nav` and outside the declared prefixes fails the guards, which the deploy runs before it builds.
 
 `integration` is the default branch, so a pull request opened from the GitHub interface
 already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
@@ -132,12 +141,84 @@ Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.m
 `README.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`,
 `SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`. Everything else goes to
 `integration`, including `docs/spec/`, `docs/concepts/`, `docs/identity/`, `mkdocs.yml`,
-`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`.
+`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`. A pull request that adds a
+page is the exception: it also adds a `nav` entry to `mkdocs.yml`, so it targets `integration`.
 
 For changes to the spec itself (`acs_schema.json`, hooks, events), open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
 before submitting a PR. These affect downstream implementers and warrant a longer
 conversation.
+
+## How to sign your commits
+
+Every commit in a pull request needs a sign-off, and the `dco` check fails the pull
+request if one is missing. A sign-off is a `Signed-off-by:` line in the commit message,
+where you state you have the right to submit the work under the
+[DCO](#developers-certificate-of-origin-11). It is not a GPG or SSH signature, so you need
+no keys.
+
+### Set your name and email
+
+Run these once on your computer. Git uses them to write the sign-off, and they become
+public in the commit history.
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+git config user.name
+```
+
+The last command prints your name, so you can check it.
+
+### Sign a new commit
+
+```bash
+git commit -s -m "Your message"
+```
+
+### Fix commits you already pushed
+
+Run these from your pull request branch. The first command connects your copy to the
+project, so skip it if Git says `upstream` already exists.
+
+```bash
+git remote add upstream https://github.com/GenAI-Security-Project/agent-control-standard.git
+git fetch upstream
+git rebase --signoff upstream/integration
+git push --force-with-lease
+```
+
+The rebase adds the line to each commit and moves your branch onto the latest
+`integration`. Merge commits on your branch go away, and that is fine. If your pull
+request targets `main`, use `upstream/main` instead. If Git says your branch has no
+upstream branch, run `git push --force-with-lease origin HEAD`.
+
+A rebase may stop on a conflict, which means you and the project changed the same lines.
+Open each file Git lists and fix those lines. Then run `git add <file>` and
+`git rebase --continue`, and repeat until the rebase finishes. To stop and go back to
+where you started, run `git rebase --abort`.
+
+### Sign automatically from now on
+
+```bash
+git config --global alias.cs 'commit -s'
+git cs -m "Your message"
+```
+
+In VS Code, turn on the `Git: Always Sign Off` setting (`git.alwaysSignOff`).
+
+Commits you make on the GitHub website get a sign-off for you, because this repository
+requires it.
+
+### Check that it worked
+
+```bash
+git log -1 --format=%B
+```
+
+The output is your last commit message, and it should end with
+`Signed-off-by: Your Name <you@example.com>`. To check every commit on your branch, run
+`git log --format=%B upstream/integration..HEAD`.
 
 ## Authorship and AI assistance
 
@@ -161,8 +242,7 @@ what an agent did to its own commits.
 ## What We Need
 
 Start with [issues labeled `help wanted`](https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
-Every one of them is already accepted, which means you can open a pull request against it
-without waiting on triage.
+Every one of them is already accepted. Ask a lead to assign one to you before you start.
 
 The highest-value contribution right now is running ACS against a real harness and
 documenting where it fails. Install the reference implementation, wire it to a coding
@@ -180,7 +260,7 @@ shipping.
 
 ## Reporting Security Issues
 
-**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. We'll acknowledge within 72 hours and coordinate a fix and disclosure timeline with you.
+**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. [SECURITY.md](./SECURITY.md) sets the response times, and we coordinate a fix and disclosure timeline with you.
 
 ## Developer's Certificate of Origin 1.1
 

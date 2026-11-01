@@ -1,6 +1,6 @@
 """Tests for the nightly health report.
 
-The report is the weekly call's triage agenda, so these pin both its content and the
+The report lists what needs attention, so these pin both its content and the
 contract the roadmap monitor parses: the status line, the marker, and that no fetched
 issue text or contributor login ever appears in it.
 """
@@ -113,6 +113,13 @@ def test_render_never_leaks_titles_or_mentions():
     assert "SECRET TITLE" not in body
     assert "@rocklambros" not in body and "`rocklambros`" in body
     assert "outsider" not in body
+
+
+def test_closed_nothing_done_links_the_milestone_not_an_issue():
+    body = render_health(report(), "ok", "t", "1", [])
+    section = body.split("## Closed with open work and nothing done")[1].split("##")[0]
+    assert f"- [milestone 5](https://github.com/{REPO}/milestone/5)" in section
+    assert "- #5" not in section
 
 
 def test_degraded_status_line_lists_sections():
@@ -315,7 +322,7 @@ def test_migrate_dry_run_prints_each_current_milestone(monkeypatch, tmp_path, ca
 
 
 def test_switches_heading_says_every_value_is_listed():
-    # The section lists every switch so the weekly call sees rendering turned off, and only
+    # The section lists every switch so a lead sees rendering turned off, and only
     # flags odd values. The heading must not claim it lists odd values alone.
     import roadmap_sync
     note = dict((key, note) for key, _title, note in roadmap_sync.SECTION_TITLES)["switches"]

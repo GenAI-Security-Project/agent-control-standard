@@ -1,0 +1,85 @@
+--- nav.html.upstream
++++ nav.html
+@@ -1,5 +1,23 @@
+ {#-
+-  This file was automatically generated - do not edit
++  Renders the docs site's left pane with the same rows as the landing page's pane.
++
++  This is Material's own partials/nav.html with two rows added around the stock loop.
++  Home links back to the landing page and opens to its sections. External resources
++  lists the project's outside links. Both read config.extra.acs_nav in mkdocs.yml, the
++  one source the landing renderer reads too, so the two panes cannot drift apart.
++
++  The two rows match the byte contract in tests/test_site_nav_walk.py, which the pane
++  walkers and the pane comparison read. External resources is a section, always open,
++  so its toggle stays unchecked. Home is never the current page on a docs page, so it
++  never carries aria-current.
++
++  The landing root is this page's base_url plus "/..". On 404.html base_url is a
++  rooted path that may end in a slash, which the replace folds. The theme environment
++  has autoescape off, so every emitted value carries the e filter. The template uses
++  filters only, never a Python method call, so it also renders under MiniJinja.
++
++  The installed partial and the diff to this file live in overrides/.upstream/partials.
++  After editing this file, run: uv run python tools/rederive_overrides.py --record
+ -#}
+ {% import "partials/nav-item.html" as item with context %}
+ {% set class = "md-nav md-nav--primary" %}
+@@ -9,6 +27,7 @@
+ {% if "toc.integrate" in features %}
+   {% set class = class ~ " md-nav--integrated" %}
+ {% endif %}
++{% set landing_root = (base_url ~ '/..') | replace('//..', '/..') %}
+ <nav class="{{ class }}" aria-label="{{ lang.t('nav') }}" data-md-level="0">
+   <label class="md-nav__title" for="__drawer">
+     <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-nav__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
+@@ -22,9 +41,49 @@
+     </div>
+   {% endif %}
+   <ul class="md-nav__list" data-md-scrollfix>
++    <li class="md-nav__item md-nav__item--nested">
++      <input class="md-nav__toggle md-toggle" type="checkbox" id="__nav_home">
++      <div class="md-nav__link md-nav__container">
++        <a href="{{ landing_root | e }}" class="md-nav__link">
++          <span class="md-ellipsis">Home</span>
++        </a>
++        <label class="md-nav__link" for="__nav_home" id="__nav_home_label" tabindex="0">
++          <span class="md-nav__icon md-icon"></span>
++        </label>
++      </div>
++      <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_home_label" aria-expanded="false">
++        <label class="md-nav__title" for="__nav_home">
++          <span class="md-nav__icon md-icon"></span>
++          Home
++        </label>
++        <ul class="md-nav__list" data-md-scrollfix>
++          {% for section in config.extra.acs_nav.landing_sections %}
++            <li class="md-nav__item"><a href="{{ (landing_root ~ '#' ~ section.anchor) | e }}" class="md-nav__link"><span class="md-ellipsis">{{ section.title | e }}</span></a></li>
++          {% endfor %}
++        </ul>
++      </nav>
++    </li>
+     {% for nav_item in nav.items %}
+       {% set path = "__nav_" ~ loop.index %}
+       {{ item.render(nav_item, path, 1) }}
+     {% endfor %}
++    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
++      <input class="md-nav__toggle md-toggle" type="checkbox" id="__nav_ext">
++      <label class="md-nav__link" for="__nav_ext" id="__nav_ext_label" tabindex="">
++        <span class="md-ellipsis">External resources</span>
++        <span class="md-nav__icon md-icon"></span>
++      </label>
++      <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_ext_label" aria-expanded="false">
++        <label class="md-nav__title" for="__nav_ext">
++          <span class="md-nav__icon md-icon"></span>
++          External resources
++        </label>
++        <ul class="md-nav__list" data-md-scrollfix>
++          {% for resource in config.extra.acs_nav.external_resources %}
++            <li class="md-nav__item"><a href="{{ resource.url | e }}" class="md-nav__link"><span class="md-ellipsis">{{ resource.title | e }}</span></a></li>
++          {% endfor %}
++        </ul>
++      </nav>
++    </li>
+   </ul>
+ </nav>

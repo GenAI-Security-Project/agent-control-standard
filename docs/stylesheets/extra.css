@@ -82,3 +82,7 @@
   width: auto;
   max-width: none;
 }
+
+/* Weight the current page's link in the left pane the way the landing page weights
+   its own. The nav-item override sets the attribute. */
+.md-nav__link[aria-current="page"] { font-weight: 600; }

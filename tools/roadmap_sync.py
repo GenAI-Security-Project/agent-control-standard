@@ -300,7 +300,7 @@ SECTION_TITLES = (
     ("off_quarter_dates", "Off-quarter dates", "Milestones whose due date is not the last day of a quarter."),
     ("missing_description_lines", "Missing description lines", "Open milestones without a valid Type line, which the OWASP report needs."),
     ("promotion", "Promotion", "Work on integration that main lacks. A project lead opens and merges the promotion."),
-    ("bypasses", "Bypasses", "Merges into integration or main in the last seven days with no approving review, and direct pushes. Admins can bypass the rulesets, so this is where a bypass shows."),
+    ("bypasses", "Bypasses", "Merges into integration or main in the last seven days with no approval that could satisfy the ruleset, and direct pushes. Admins can bypass the rulesets, so this is where a bypass shows."),
     ("switches", "Switches", "The current value of each roadmap variable, flagged when it is neither true nor false."),
 )
 
@@ -356,6 +356,7 @@ WATCHED_PATHS = frozenset({
     "tools/roadmap_model.py", "tools/fetch_roadmap.py", "tools/closing_choice.py",
 })
 _LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+WRITE_ACCESS = frozenset({"admin", "write"})
 _OID = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -366,8 +367,34 @@ def _merged_at(pull: dict) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _ruleset_approved(gh, base_path: str, reviews: list[dict], access: dict[str, object]) -> bool:
+    """Whether a reviewer with write access has an approval standing on the pull request.
+
+    A reviewer's last review that is not a comment is the one that stands. `access` caches
+    one read per login for the run, so the sweep stays inside its job limit. This asks what
+    could satisfy the ruleset, not what did: access is read today, and the code owner and
+    last-push rules are not modeled, so a real approval here can still be one the ruleset
+    refused. An access read that fails raises, so the section degrades rather than passing
+    a merge it could not check.
+    """
+    standing: dict[str, object] = {}
+    for review in reviews:
+        login = (review.get("user") or {}).get("login")
+        if isinstance(login, str) and _LOGIN.fullmatch(login) and review.get("state") != "COMMENTED":
+            standing[login] = review.get("state")
+    for login, state in standing.items():
+        if state != "APPROVED":
+            continue
+        if login not in access:
+            access[login] = gh.get(f"{base_path}/collaborators/{login}/permission").get("permission")
+        # The legacy field reports maintain as write and triage as read.
+        if access[login] in WRITE_ACCESS:
+            return True
+    return False
+
+
 def bypasses(gh, git, today: date) -> list[list]:
-    """Merges with no approving review and direct pushes, in the last seven days.
+    """Merges with no approval that could satisfy the ruleset and direct pushes, in seven days.
 
     Every ruleset here requires one approval, so a merge without one is an admin bypass.
     A first-parent commit that no pull request carries is a direct push. Only numbers,
@@ -378,15 +405,16 @@ def bypasses(gh, git, today: date) -> list[list]:
     base_path = f"repos/{model.REPO}"
     unapproved = 0
     lines: list[list] = []
+    access: dict[str, object] = {}
     for branch in ("integration", "main"):
-        pulls = gh.get(f"{base_path}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page=100")
+        pulls = gh.paginate(f"{base_path}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page=100")
         for pull in pulls:
             merged = _merged_at(pull)
             if merged is None or merged < cutoff:
                 continue
             number = int(pull["number"])
             reviews = gh.paginate(f"{base_path}/pulls/{number}/reviews?per_page=100")
-            if any(review.get("state") == "APPROVED" for review in reviews):
+            if _ruleset_approved(gh, base_path, reviews, access):
                 continue
             unapproved += 1
             files = gh.paginate(f"{base_path}/pulls/{number}/files?per_page=100")
@@ -495,7 +523,7 @@ def build_report(
     report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
     report["promotion"] = list(snapshot.get("promotion") or [])
     report["bypasses"] = [list(line) for line in snapshot.get("bypasses") or []]
-    # Every switch is listed, so the weekly call sees that rendering is off, not only that a
+    # Every switch is listed, so a lead sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
     report["unverified_closes"].sort()
@@ -516,8 +544,8 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
         status_line(status, stamp, run_id, failed),
         model.HEALTH_MARKER,
         "",
-        "This issue is rewritten every night by the roadmap sweep. It is the weekly call's "
-        "triage agenda. Fix what it lists in GitHub, and the next sweep clears the line.",
+        "This issue is rewritten every night by the roadmap sweep. It lists what needs "
+        "attention. Fix what it lists in GitHub, and the next sweep clears the line.",
         "",
         f"Written {stamp}, run [{run_id}]({repo_url}/actions/runs/{run_id}), rules {model.RULES_VERSION}.",
     ]
@@ -553,9 +581,9 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
         elif key == "bypasses":
             for line in items:
                 if line[0] == "count":
-                    lines.append(f"Merged without an approving review in the last seven days: {int(line[1])}.")
+                    lines.append(f"Merged without a qualifying approval in the last seven days: {int(line[1])}.")
                 elif line[0] == "pull":
-                    lines.append(f"- #{int(line[1])} into `{line[2]}` changed a roster file or roadmap trust code without an approving review.")
+                    lines.append(f"- #{int(line[1])} into `{line[2]}` changed a roster file or roadmap trust code without a qualifying approval.")
                 else:
                     who = f"`{line[2]}`" if line[2] else "an account this report does not name"
                     lines.append(f"- Direct push to `{line[1]}` by {who}.")
@@ -564,7 +592,7 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
                 f"- #{number} in [milestone {milestone}]({repo_url}/milestone/{milestone}): `{reason}`. {REMEDIES[reason]}"
                 for number, milestone, reason in items
             ]
-        elif key in ("ready_to_publish", "closed_with_open_work", "target_passed", "off_quarter_dates", "missing_description_lines"):
+        elif key in ("ready_to_publish", "closed_with_open_work", "closed_nothing_done", "target_passed", "off_quarter_dates", "missing_description_lines"):
             lines += [f"- [milestone {number}]({repo_url}/milestone/{number})" for number in items]
         else:
             lines += [f"- #{number}" for number in items]

@@ -396,6 +396,16 @@ policy, which is a hosting change with its own design.
 **`<svg:style>` in HTML.** Handled differently from `<style>`, and a browser does not apply
 it as CSS in an HTML document, so it is a divergence rather than exposure.
 
+**An attribute after a comment delimiter in a rarer text-only element.** Python's parser
+treats only `title` and `textarea` as text, so `<xmp><!--</xmp><img src="https://evil.tld/x"><!-- -->`
+hides the image from the attribute scan. `iframe`, `noembed`, `noframes`, and `noscript` behave
+the same. Script and style bodies after any of these are read. Making the parser treat them as
+text would hide `<noscript><img>`, which fetches for a reader with scripting off.
+
+**An abruptly closed comment.** A browser closes `<!-->` and `<!--->` at once, and the walker
+reads on to the next `-->`, so a script between them is missed. Found while fixing issue #392
+and left for its own change.
+
 **One claim in this document cannot be verified from history.** The guard shipped in a
 squashed commit, so "found incomplete five times before this work" rests on the docstring
 that recorded it rather than on five separate commits. The five corrections made during

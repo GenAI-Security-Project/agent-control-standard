@@ -6,7 +6,7 @@ ACS is a specification. Most of what lives here is prose and JSON Schema, so the
 
 **Do not open a public issue.**
 
-Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new). Reports land with the maintainers and stay private until we publish an advisory together.
+Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new). Reports land with the maintainers and stay private until a fix ships.
 
 Include what you have:
 
@@ -42,30 +42,25 @@ states plainly which ACS-Core requirements it does not yet meet, including reque
 and replay protection, and a report that restates a documented gap is better filed as an
 issue where the discussion is public.
 
-## Response commitments
+## Response times
 
-| Stage | Target |
-| --- | --- |
-| Acknowledge your report | 3 business days |
-| Initial triage and severity assessment | 10 business days |
-| Fix or documented mitigation for high and critical findings | 90 days from triage |
-| Public advisory | Coordinated with you, at or before day 90 |
+We try to acknowledge reports within about a week, and we work with you on timing from there. We will publish response SLAs with version 1.0.
 
 We use [CVSS v3.1](https://www.first.org/cvss/calculator/3.1) for severity. Specification flaws get scored against a reference implementation, since the specification itself has no runtime.
 
 ## Coordinated disclosure
 
-We publish an advisory once a fix ships, or at 90 days from triage, whichever comes first. If a fix needs longer, we tell you why and agree a new date rather than letting the clock run out quietly.
+We fix reports in a public pull request, and we agree the timing with you first. Starting at version 1.0, we publish an advisory when a finding needs one. If a fix takes longer than expected, we tell you why.
 
-Tell us how you want to be credited, including if you prefer not to be. We credit reporters in the advisory by default.
+Tell us if you want credit and how. If you say nothing, we leave your name out.
 
-If you believe a finding is being actively exploited, say so in the report. That moves it to the front of the queue and shortens every window above.
+If you believe a finding is being actively exploited, say so in the report. That moves it to the front of the queue.
 
 ## Safe harbor
 
 We will not pursue or support legal action against research conducted under this policy, provided you:
 
-- Report through the private channel above and give us a chance to fix the issue before disclosing it
+- Report through the private channel above and give us a reasonable chance to fix the issue before disclosing it. If we stop replying, you have given us that chance.
 - Avoid privacy violations, data destruction, and interruption of any service
 - Access only the minimum data needed to demonstrate the finding, and delete it once you have reported
 - Do not exploit a finding beyond what proving it requires

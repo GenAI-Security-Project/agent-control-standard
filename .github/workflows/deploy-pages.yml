@@ -132,6 +132,11 @@ jobs:
           GITHUB_PAGES_URL: ${{ steps.pages.outputs.base_url && format('{0}/docs/', steps.pages.outputs.base_url) || 'https://genai-security-project.github.io/agent-control-standard/docs/' }}
         run: uv run --no-dev mkdocs build --strict -d _site/docs
 
+      - name: Copy the 404 page to the site root
+        # Pages serves only a root-level 404.html, for a miss at any depth. The MkDocs
+        # page links from the site root, so it works from any address that missed.
+        run: cp _site/docs/404.html _site/404.html
+
       - name: Render the landing page
         run: uv run --no-dev python tools/render_landing.py landing _site
 
@@ -207,3 +212,13 @@ jobs:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
         run: |
           python3 tools/verify_published.py "${PAGE_URL%/}/schema" --from specification
+
+      - name: Verify the published navigation
+        # Its own step, so a navigation failure never hides a schema failure or the
+        # reverse. The verifier polls up to thirteen minutes because the Pages CDN caches
+        # for ten and no request header clears it. The cap leaves room for slow fetches.
+        timeout-minutes: 15
+        # Through env, never interpolated into the shell. sync_version.yml documents why.
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: python3 tools/verify_site_nav.py "$PAGE_URL"
