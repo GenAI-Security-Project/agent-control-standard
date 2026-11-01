@@ -1,6 +1,6 @@
 # ACS reference implementations
 
-This directory holds the reference implementations of the Agent Control Standard. A reference implementation is working code that shows the ACS wire contract in use.
+This directory holds the reference implementations of the OWASP Agent Control Standard. A reference implementation is working code that shows the ACS wire contract in use.
 
 ## Expectations for Guardian reference implementations
 

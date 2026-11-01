@@ -82,7 +82,7 @@ For a source file:
 For a document derived from ACS prose:
 
 ```markdown
-Adapted from the Agent Control Standard, licensed under CC BY-SA 4.0.
+Adapted from the OWASP Agent Control Standard, licensed under CC BY-SA 4.0.
 Source: https://github.com/GenAI-Security-Project/agent-control-standard
 ```
 
@@ -92,7 +92,7 @@ Contributions land under the license that governs the file you touch. Sign your 
 
 ## Trademarks
 
-These licenses cover copyright. They grant no rights to the OWASP name, the OWASP GenAI Security Project name, the Agent Control Standard name, or any associated logo. Describe your implementation as ACS-conformant. Do not imply endorsement.
+These licenses cover copyright. They grant no rights to the OWASP name, the OWASP GenAI Security Project name, the OWASP Agent Control Standard name, or any associated logo. Describe your implementation as ACS-conformant. Do not imply endorsement.
 
 ## License history
 
