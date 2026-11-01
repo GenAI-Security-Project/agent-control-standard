@@ -124,3 +124,19 @@ def test_navigation_verify_is_its_own_step_with_a_timeout_and_no_continue_on_err
     assert step["run"].strip() == 'python3 tools/verify_site_nav.py "$PAGE_URL"'
     assert "continue-on-error" not in step
     assert "verify_site_nav" not in steps[schemas]["run"]
+
+
+def test_schema_verify_reads_the_id_uris_not_the_page_url():
+    # verify_published.py requires a schema to serve the URL it was asked for. On the
+    # custom domain page_url names a host no $id declares, so it would fail all of them.
+    step = next(s for s in load()["jobs"]["deploy"]["steps"] if s.get("name") == "Verify the published schemas")
+    assert step["env"] == {"PAGE_URL": "https://genai-security-project.github.io/agent-control-standard/"}
+
+
+def test_the_custom_domain_file_lands_in_the_uploaded_artifact():
+    steps = load()["jobs"]["build"]["steps"]
+    names = [step.get("name") for step in steps]
+    write = names.index("Name the custom domain in the artifact")
+    assert steps[write]["run"] == "printf 'owaspacs.org\\n' > _site/CNAME"
+    # The last writer into _site before the upload, so no later step can drop it.
+    assert names.index("Upload the artifact") == write + 1

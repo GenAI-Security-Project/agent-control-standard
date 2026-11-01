@@ -72,7 +72,7 @@ EXPECTED = {
             {"name": "Check the roadmap outputs",
              "env": {
                  "GH_TOKEN": "${{ github.token }}",
-                 "PAGE_URL": "https://genai-security-project.github.io/agent-control-standard",
+                 "PAGE_URL": "https://owaspacs.org",
                  "ROADMAP_RENDER_ENABLED": "${{ vars.ROADMAP_RENDER_ENABLED }}",
                  "ROADMAP_SYNC_ENABLED": "${{ vars.ROADMAP_SYNC_ENABLED }}",
                  "ROADMAP_HEALTH_ISSUE": "${{ vars.ROADMAP_HEALTH_ISSUE }}",

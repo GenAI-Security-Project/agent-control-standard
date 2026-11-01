@@ -321,7 +321,7 @@ def render_nav(config: NavConfig) -> str:
         resources.append(f'<li><a href="{url}">{title}</a></li>\n')
     return (
         '<nav id="site-nav" aria-label="Navigation"><ul>\n'
-        # href="./" rather than "/": the site is served from a project subpath.
+        # href="./" rather than "/": it works at the domain root and on a project subpath.
         '<li><details open><summary><a href="./" aria-current="page">Home</a></summary><ul>\n'
         + "".join(sections)
         + "</ul></details></li>\n"
