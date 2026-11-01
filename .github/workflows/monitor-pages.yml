@@ -1,6 +1,7 @@
 # The published $id URIs are a machine-consumed contract, and every surface of the site
 # shares one navigation pane. Between merges nothing else checks either, so this does.
-# Each check is its own job, so each reports its own conclusion.
+# Each check is its own job, so each reports its own conclusion. A failed run emails only
+# whoever last changed this file's cron line, so report-failure opens the alarm issue.
 name: Monitor Pages
 
 on:
@@ -87,3 +88,31 @@ jobs:
 
       - name: Verify the origin certificate and the public edge
         run: python3 -I -S tools/check_origin_cert.py
+
+  report-failure:
+    needs: [check, navigation, origin-cert]
+    # A job that hits its timeout reports cancelled, which only a real outage causes here.
+    # cancelled() itself is true only when someone cancels the whole run, which is no alarm.
+    if: "!cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # No contents grant: this repository is public, so the clone needs none, and the token
+    # stays limited to the issue it writes.
+    permissions:
+      issues: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          # A scheduled run is always the default branch's own code. The origin-cert job
+          # explains why this does not wait for main.
+
+      - name: Open or update the alarm issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 -I -S tools/monitor_pages_alarm.py

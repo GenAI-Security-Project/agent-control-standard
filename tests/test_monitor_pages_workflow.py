@@ -1,8 +1,8 @@
-"""Pins the monitor workflow's three jobs, so each check keeps its own conclusion.
+"""Pins the monitor workflow's jobs, so each check keeps its own conclusion.
 
 The schema, navigation, and origin certificate checks fail for unrelated reasons. One job
 holding them all would hide the later ones behind the first and report one red mark for
-several problems.
+several problems. The fourth job holds the only write grant, so it is pinned key by key.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def test_monitor_pages_jobs_that_read_site_files_check_out_main():
     workflow = load()
     assert workflow["permissions"] == {}
     jobs = workflow["jobs"]
-    assert set(jobs) == {"check", "navigation", "origin-cert"}
+    assert set(jobs) == {"check", "navigation", "origin-cert", "report-failure"}
     for name in ("check", "navigation"):
         job = jobs[name]
         assert job["permissions"] == {"contents": "read"}, name
@@ -56,6 +56,29 @@ def test_origin_cert_job_runs_the_check_read_only_from_its_own_ref():
     assert verify["run"].strip() == "python3 -I -S tools/check_origin_cert.py"
     assert "if" not in verify
     assert "continue-on-error" not in verify
+
+
+def test_report_failure_runs_only_after_a_failed_scheduled_run_with_issues_write():
+    job = load()["jobs"]["report-failure"]
+    assert set(job) == {"needs", "if", "runs-on", "timeout-minutes", "permissions", "steps"}
+    assert job["needs"] == ["check", "navigation", "origin-cert"]
+    assert job["permissions"] == {"issues": "write"}
+    # A timed-out job reports cancelled, so this must count both results. cancelled() stops
+    # a run someone cancelled by hand from raising the alarm.
+    assert job["if"] == (
+        "!cancelled() && github.event_name == 'schedule' && "
+        "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))"
+    )
+    checkout, tool = job["steps"]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"] == {"persist-credentials": False}
+    assert set(tool) == {"name", "env", "run"}
+    assert tool["run"].strip() == "python3 -I -S tools/monitor_pages_alarm.py"
+    assert tool["env"] == {
+        "GH_TOKEN": "${{ github.token }}",
+        "JOB_RESULTS": "${{ toJSON(needs) }}",
+        "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+    }
 
 
 def test_monitor_runs_interpolate_nothing():
