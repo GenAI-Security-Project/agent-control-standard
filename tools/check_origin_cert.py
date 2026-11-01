@@ -29,8 +29,10 @@ REMEDY = "Turn the Cloudflare records to DNS only so GitHub can renew, then re-e
 
 def origin_cert(ip: str) -> dict:
     """The certificate at ip, validated against DOMAIN for chain and hostname."""
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     with socket.create_connection((ip, 443), TIMEOUT_SECONDS) as raw:
-        with ssl.create_default_context().wrap_socket(raw, server_hostname=DOMAIN) as tls:
+        with context.wrap_socket(raw, server_hostname=DOMAIN) as tls:
             return tls.getpeercert()
 
 
