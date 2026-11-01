@@ -45,12 +45,18 @@ Usage in NAT YAML:
 """
 from __future__ import annotations
 
+import asyncio
+import atexit
+import collections
 import hashlib
 import json
 import os
 import sys
 import threading
 import uuid
+import weakref
+from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import asdict, is_dataclass, replace
 from typing import Any, Optional
 
@@ -362,6 +368,86 @@ def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> None
 
 # ----- Middleware class -----
 
+class _LifecycleSender:
+    """Sends lifecycle hooks on one thread, in the order they are accepted.
+
+    close() waits until every accepted hook has gone out, still accepting
+    hooks that arrive meanwhile, and then accepts no more.
+    """
+
+    def __init__(self, send: Callable[[str, dict], None]) -> None:
+        self._send = send
+        self._pending: collections.deque = collections.deque()
+        self._changed = threading.Condition()
+        self._busy = False
+        self._closed = False
+        self._thread: threading.Thread | None = None
+        _OPEN_SENDERS.add(self)
+
+    def submit(self, method: str, payload: dict) -> bool:
+        """Queue a hook behind the ones already accepted; False once closed."""
+        with self._changed:
+            if self._closed:
+                return False
+            self._pending.append((method, payload))
+            self._wake()
+            return True
+
+    def sent(self) -> Future:
+        """A future that completes once every hook accepted so far has gone out."""
+        done: Future = Future()
+        with self._changed:
+            if self._pending or self._busy:
+                self._pending.append(done)
+                self._wake()
+                return done
+        done.set_result(None)
+        return done
+
+    def close(self) -> None:
+        with self._changed:
+            while self._pending or self._busy:
+                self._changed.wait()
+            self._closed = True
+            self._changed.notify_all()
+            thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+
+    def _wake(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name="acs-lifecycle", daemon=True)
+            self._thread.start()
+        self._changed.notify_all()
+
+    def _run(self) -> None:
+        while True:
+            with self._changed:
+                while not self._pending and not self._closed:
+                    self._changed.wait()
+                if not self._pending:
+                    return
+                item = self._pending.popleft()
+                self._busy = True
+            try:
+                if not isinstance(item, Future):
+                    self._send(*item)
+                elif item.set_running_or_notify_cancel():
+                    item.set_result(None)
+            except Exception:  # noqa: BLE001
+                # _send audits its own failures; nothing may stop the hooks queued behind this one.
+                pass
+            finally:
+                with self._changed:
+                    self._busy = False
+                    self._changed.notify_all()
+
+
+# The lifecycle thread is a daemon, so interpreter exit sends what is still queued first.
+_OPEN_SENDERS: weakref.WeakSet = weakref.WeakSet()
+atexit.register(lambda: [sender.close() for sender in list(_OPEN_SENDERS)])
+
+
 class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
     """NAT middleware that defers each call's allow/deny/modify decision to an ACS Guardian."""
 
@@ -382,8 +468,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         )
         target = getattr(config, "target_function_or_group", None) or "nat"
         self._agent_id = os.environ.get("ACS_AGENT_ID") or f"nat:{hashlib.sha256(target.encode()).hexdigest()[:8]}"
-        # The session's §4.1 decision, made by the first handshake and kept for the middleware's lifetime.
+        # The session's §4.1 decision, made by one handshake (in the builder, or on the first call) and reused by every call.
         self._session: Handshake | None = None
+        self._session_lock = threading.Lock()
+        # One thread sends lifecycle hooks off the event loop, in the order NAT reports them.
+        self._lifecycle = _LifecycleSender(self._send_lifecycle_hook)
         self._server_hello: dict | None = None
         self._lifecycle_subscribed = False
         self._lifecycle_subscription = None
@@ -397,8 +486,15 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         self._frozen_ctx_lock = threading.Lock()
 
     def _ensure_handshake(self) -> Handshake:
+        """The session's decision, opened once under a lock so concurrent first calls share one handshake."""
         if self._session is not None:
             return self._session
+        with self._session_lock:
+            if self._session is None:
+                self._session = self._open_session()
+        return self._session
+
+    def _open_session(self) -> Handshake:
         methods = ["steps/toolCallRequest", "steps/toolCallResult"]
         if _HAS_LIFECYCLE:
             methods += [
@@ -417,8 +513,21 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
             self._posture = self._posture.negotiated(session.server_hello)
             self._server_hello = dict(session.server_hello)
-        self._session = session
         return session
+
+    async def _session_decision(self) -> Handshake:
+        """The session's decision, opened off the event loop when the builder has not opened it yet."""
+        if self._session is not None:
+            return self._session
+        return await asyncio.to_thread(self._ensure_handshake)
+
+    async def _lifecycle_sent(self) -> None:
+        """Wait until the lifecycle hooks NAT reported earlier have gone out, so the Guardian sees steps in event order."""
+        await asyncio.wrap_future(self._lifecycle.sent())
+
+    def close(self) -> None:
+        """Send the lifecycle hooks still queued, including any that arrive meanwhile, then accept no more."""
+        self._lifecycle.close()
 
     def _ensure_lifecycle_subscribed(self) -> None:
         """Subscribe to NAT's IntermediateStepManager so workflow-boundary
@@ -462,29 +571,46 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         if event_type == IntermediateStepType.WORKFLOW_START:
             # Workflow input becomes both sessionStart (boundary marker)
             # and userMessage (the input itself).
-            self._emit_lifecycle_hook(
+            self._queue_lifecycle_hook(
                 "steps/sessionStart",
                 payload={"platform_context": {"workflow_name": payload.name or ""}})
             input_text = _stringify_step_data(payload.data)
             if input_text:
-                self._emit_lifecycle_hook(
+                self._queue_lifecycle_hook(
                     "steps/userMessage",
                     payload={"content": [{"type": "text", "value": input_text}]})
         elif event_type == IntermediateStepType.WORKFLOW_END:
             # Workflow output becomes agentResponse; sessionEnd closes the boundary.
             output_text = _stringify_step_data(payload.data)
             if output_text:
-                self._emit_lifecycle_hook(
+                self._queue_lifecycle_hook(
                     "steps/agentResponse",
                     payload={"content": [{"type": "text", "value": output_text}]})
-            self._emit_lifecycle_hook(
+            self._queue_lifecycle_hook(
                 "steps/sessionEnd",
                 payload={"reason": "completed"})
+
+    def _queue_lifecycle_hook(self, method: str, payload: dict) -> None:
+        """Hand a lifecycle hook to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
+        if not self._lifecycle.submit(method, payload):
+            audit_event("lifecycle_hook_not_sent", cause="middleware_closed", method=method,
+                        session_id=self._session_id)
+
+    def _send_lifecycle_hook(self, method: str, payload: dict) -> None:
+        try:
+            self._emit_lifecycle_hook(method, payload)
+        except Exception as e:  # noqa: BLE001
+            audit_event("lifecycle_hook_failed", cause="adapter_exception", error=str(e),
+                        method=method, session_id=self._session_id)
 
     def _emit_lifecycle_hook(self, method: str, payload: dict) -> None:
         """Build, sign, and POST a lifecycle hook; errors are audited but
         never interrupt the workflow (enforcement lives in
         pre_invoke/post_invoke)."""
+        if self._acs.disabled:
+            audit_event("acs_disabled_bypass", session_id=self._session_id, method=method,
+                        detail="ACS_DISABLED=1 — lifecycle hook not sent")
+            return
         gated = self._acs.gate(self._ensure_handshake())
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
@@ -544,7 +670,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallRequest",
                         detail="ACS_DISABLED=1 — pre_invoke bypassed ungoverned")
             return None
-        gated = self._acs.gate(self._ensure_handshake())
+        gated = self._acs.gate(await self._session_decision())
         self._ensure_lifecycle_subscribed()
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
@@ -566,7 +692,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             result = self._posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
         else:
-            result = self._round_trip(request)
+            await self._lifecycle_sent()
+            result = await asyncio.to_thread(self._round_trip, request)
         if isinstance(result, Resolution):
             return self._settle_pre(context, result)
         response = result.response
@@ -616,22 +743,13 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             f"interpreted; failing closed (see issue #32)")
 
     async def post_invoke(self, context):
-        """Record the result. Apply Guardian's verdict to the output.
-
-        - allow: pass through.
-        - modify (with modified_content): replace context.output.
-        - deny: clear context.output to None and tag with reasoning. The
-          tool already ran (post_invoke fires after execution), so the
-          side effect cannot be undone — but downstream consumers see no
-          output. This matches Specification §6.4's output-redaction gate.
-        - unknown: respect default_deny — drop output if true.
-        """
+        """Apply the verdict to the output: the tool already ran, so a deny or an unusable decision withholds the output (issue #32)."""
         if self._acs.disabled:
             audit_event("acs_disabled_bypass", session_id=self._session_id,
                         method="steps/toolCallResult",
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
-        gated = self._acs.gate(self._ensure_handshake())
+        gated = self._acs.gate(await self._session_decision())
         if gated is not None:
             return self._settle_post(context, gated)
         if not method_evaluated(self._server_hello, "steps/toolCallResult"):
@@ -655,7 +773,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             result = self._posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
         else:
-            result = self._round_trip(request)
+            await self._lifecycle_sent()
+            result = await asyncio.to_thread(self._round_trip, request)
         if isinstance(result, Resolution):
             return self._settle_post(context, result)
         response = result.response
@@ -784,5 +903,12 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 if _NAT_AVAILABLE and _HAS_REGISTRATION:
     @register_middleware(config_type=ACSMiddlewareConfig)  # type: ignore[misc]
     async def build_acs_middleware(config: "ACSMiddlewareConfig", builder):  # type: ignore[name-defined]
-        """NAT factory entry point. Yields the middleware instance for NAT to wire up."""
-        yield ACSMiddleware(config)
+        """NAT factory entry point: open the session off the event loop before NAT gets the middleware,
+        and send the queued lifecycle hooks when NAT shuts it down."""
+        middleware = ACSMiddleware(config)
+        if not middleware._acs.disabled:
+            await asyncio.to_thread(middleware._ensure_handshake)
+        try:
+            yield middleware
+        finally:
+            await asyncio.to_thread(middleware.close)

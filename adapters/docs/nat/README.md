@@ -122,7 +122,7 @@ NAT's middleware fires per-attachment-point: workflow, function_groups, and indi
 2. **Run `acs-nat-wire --check` in CI** on every workflow YAML you ship. It exits non-zero if any attachment point is missing `acs_guardian`. Treat that as a build failure.
 3. **Re-run `acs-nat-wire --write` after any YAML edit** that adds or restructures `function_groups`, `workflow`, or individual `functions`. The marker comments make it idempotent.
 
-What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` gives.** The middleware fires synchronously *before* the function executes; a Guardian deny raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP`) and NAT does not call the function.
+What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` gives.** The middleware runs *before* the function executes and waits for the Guardian's decision, off the event loop; a Guardian deny raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP`) and NAT does not call the function.
 
 **Backstop for the dynamic-registration caveat:** the adapter also subscribes to NAT's `IntermediateStepManager`, which fires for every call NAT routes regardless of middleware wiring. The Guardian therefore *observes* every call (audit trail + trace), even ones the middleware path missed. Subscribers can't *block* — they're notification-only — so this is detection, not enforcement. Audit Guardian logs for `toolCallRequest` envelopes that arrived via lifecycle but never via middleware; that delta is your coverage gap.
 

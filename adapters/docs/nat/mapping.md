@@ -76,7 +76,7 @@ NAT ships `nvidia-nat-security` with `defense_middleware` for content-level chec
 
 ## Concurrency
 
-NAT can invoke several wrapped functions at once in one process. The middleware correlates each call through its own invocation context and keeps no per-call file state; the session's handshake decision is shared by every call. The Guardian's rolling `chain_hash` orders steps by arrival, so the order of concurrent steps is the order they reach the Guardian.
+NAT can invoke several wrapped functions at once in one process. The builder opens the session off the event loop before NAT gets the middleware, unless `ACS_DISABLED=1`, and every call reuses that decision, a refusal or no answer included. Each step's Guardian round trip runs in a worker thread (`asyncio.to_thread`), so a slow Guardian leaves the event loop running while the call waits for its decision. Lifecycle hooks go out from one worker thread in the order NAT reports them, each step waits until the hooks reported before it have gone out, and when NAT shuts the middleware down, every queued hook goes out first, in order, including one reported during the shutdown. A hook reported after that is audited as `lifecycle_hook_not_sent`. The middleware correlates each call through its own invocation context and keeps no per-call file state. The Guardian's rolling `chain_hash` orders steps by arrival, so the order of concurrent steps is the order they reach the Guardian.
 
 ## Conformance posture
 
