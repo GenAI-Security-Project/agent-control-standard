@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { appendFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
 import {
   CONVERTER_SERVICE_NAME,
@@ -9,9 +10,10 @@ import {
   FAILURE_CLASS_BY_KIND,
   FAILURE_DETAIL_BY_KIND,
   failureClassOf,
+  reportConversion,
   sessionUuid as converterSessionUuid,
 } from "../packages/guardian/src/audit-to-otlp.ts";
-import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
+import { asClampedErrorCode, FAILURE_STATUS, loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
  * The converter's contract, measured with the Guardian down. The host
@@ -49,7 +51,7 @@ const payload = { session_id: "sess-1", tool_name: "Bash", tool_input: { command
 
 type OtlpAttribute = { key: string; value: { stringValue?: string } };
 type OtlpEvent = { name: string; attributes?: OtlpAttribute[] };
-type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[] };
+type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[]; status?: { code?: number; message?: string } };
 type OtlpRequest = { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] };
 
 function spansIn(path: string): OtlpSpan[] {
@@ -494,4 +496,361 @@ describe("audit-to-otlp: refuses an output that already exists", () => {
       expect(statSync(out).mode & 0o777).toBe(0o600);
       expect(statSync(join(dir, "new-dir")).mode & 0o777).toBe(0o700);
     }));
+});
+
+describe("audit-to-otlp: order checks, status sentences, and hardening (#284)", () => {
+  const CONVERTER_CLI = fileURLToPath(new URL("../packages/guardian/src/audit-to-otlp.ts", import.meta.url));
+
+  function makeLine(fields: Record<string, unknown>, omitSeq = false): string {
+    const record: Record<string, unknown> = {
+      seq: 1,
+      recorded_at: "2026-10-15T00:00:00.000Z",
+      session_id: "sess-1",
+      method: "steps/toolCallRequest",
+      rpc_id: crypto.randomUUID(),
+      outcome: "proceeded",
+      posture: "proceed",
+      posture_source: "negotiated",
+      failure: { kind: "transport", message: "connect ECONNREFUSED 127.0.0.1:1" },
+      ...fields,
+    };
+    if (omitSeq) delete record.seq;
+    return `${JSON.stringify(record)}\n`;
+  }
+
+  async function runCli(auditBody: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    let result: { exitCode: number; stdout: string; stderr: string } | undefined;
+    await withScratch(async (auditPath, otelPath) => {
+      writeFileSync(auditPath, auditBody);
+      const child = Bun.spawn([process.execPath, CONVERTER_CLI, auditPath, otelPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      result = { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+    });
+    return result!;
+  }
+
+  it("checks seq gaps, duplicates, backwards timestamps, and unnumbered lines from the CLI", async () => {
+    const seqLines = (seqs: number[]): string =>
+      seqs.map((seq, i) => makeLine({ seq, recorded_at: new Date(Date.UTC(2026, 9, 15, 0, 0, i)).toISOString() })).join("");
+
+    // [1, 2, 4, 5] -> 1 gap
+    const gapMiddle = await runCli(seqLines([1, 2, 4, 5]));
+    expect(gapMiddle.exitCode).toBe(1);
+    expect(gapMiddle.stderr).toBe(
+      "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // [2, 3, 4] -> 1 gap
+    const gapStart = await runCli(seqLines([2, 3, 4]));
+    expect(gapStart.exitCode).toBe(1);
+    expect(gapStart.stderr).toBe(
+      "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // [1, 2, 2, 3] -> 1 duplicate
+    const dup = await runCli(seqLines([1, 2, 2, 3]));
+    expect(dup.exitCode).toBe(1);
+    expect(dup.stderr).toBe(
+      "audit log order: 0 gap(s), 1 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // [1, 1, 3, 1, 1, 4, 6, 6] -> 0 gaps and 4 duplicates
+    const concurrent = await runCli(seqLines([1, 1, 3, 1, 1, 4, 6, 6]));
+    expect(concurrent.exitCode).toBe(1);
+    expect(concurrent.stderr).toBe(
+      "audit log order: 0 gap(s), 4 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
+    );
+
+    // Missing seq, "1", and 2.5 count as no usable seq; backwards recorded_at counts in backwards
+    const unnumberedAndBackwards = await runCli(
+      makeLine({ recorded_at: "2026-10-15T00:00:05.000Z" }, true) +
+        makeLine({ seq: "1", recorded_at: "2026-10-15T00:00:01.000Z" }) +
+        makeLine({ seq: 2.5, recorded_at: "2026-10-15T00:00:06.000Z" }),
+    );
+    expect(unnumberedAndBackwards.exitCode).toBe(1);
+    expect(unnumberedAndBackwards.stderr).toBe(
+      "audit log order: 0 gap(s), 0 duplicate(s), 1 recorded_at going backwards, 3 line(s) with no usable seq",
+    );
+
+    // A line that does not parse is not a gap, but it exits 1: it could stand
+    // in for a deleted entry.
+    const noUsableSeq = "audit log order: 0 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 1 line(s) with no usable seq";
+    const halfWritten = await runCli(`${makeLine({ seq: 1 })}half-written-json\n${makeLine({ seq: 3 })}`);
+    expect(halfWritten.exitCode).toBe(1);
+    expect(halfWritten.stderr).toBe(noUsableSeq);
+
+    const replacedByArray = await runCli(`${makeLine({ seq: 1 })}[]\n${makeLine({ seq: 3 })}`);
+    expect(replacedByArray.exitCode).toBe(1);
+    expect(replacedByArray.stderr).toBe(noUsableSeq);
+
+    // A recorded_at that cannot time a span exits 1, and the file stays valid OTLP
+    for (const recorded_at of ["garbage", "-271821-04-20T00:00:00.000Z", "+275760-09-13T00:00:00.000Z"]) {
+      const untimed = await runCli(makeLine({ seq: 1, recorded_at }));
+      expect(untimed.exitCode).toBe(1);
+      expect(untimed.stderr).toEndWith("audit log time: 1 line(s) with no usable recorded_at, timed at now");
+    }
+
+    // A seq past the safe range is no usable seq, and it does not hide the gap after it
+    const hugeSeq = await runCli(seqLines([1, 1e308, 9]));
+    expect(hugeSeq.exitCode).toBe(1);
+    expect(hugeSeq.stderr).toBe(
+      "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 1 line(s) with no usable seq",
+    );
+
+    // [1, 2, 3] exits 0
+    const clean = await runCli(seqLines([1, 2, 3]));
+    expect(clean.exitCode).toBe(0);
+    expect(clean.stderr).toBe("");
+  }, 30_000);
+
+  // Each check alone, so one condition of the exit cannot hide behind another.
+  it("exits non-zero for each order problem on its own", async () => {
+    const report = (gaps: number, duplicates: number, backwards: number, unnumbered: number): string =>
+      `audit log order: ${gaps} gap(s), ${duplicates} duplicate(s), ${backwards} recorded_at going backwards, ${unnumbered} line(s) with no usable seq`;
+
+    const backwards = await runCli(
+      makeLine({ seq: 1, recorded_at: "2026-10-15T00:00:09.000Z" }) +
+        makeLine({ seq: 2, recorded_at: "2026-10-15T00:00:01.000Z" }) +
+        makeLine({ seq: 3, recorded_at: "2026-10-15T00:00:02.000Z" }),
+    );
+    expect(backwards.exitCode).toBe(1);
+    expect(backwards.stderr).toBe(report(0, 0, 1, 0));
+
+    const unnumbered = await runCli(makeLine({}, true));
+    expect(unnumbered.exitCode).toBe(1);
+    expect(unnumbered.stderr).toBe(report(0, 0, 0, 1));
+
+    const zero = await runCli(makeLine({ seq: 0 }));
+    expect(zero.exitCode).toBe(1);
+    expect(zero.stderr).toBe(report(0, 0, 0, 1));
+
+    // The highest seq stays the bar after a lower one, so one lost run of
+    // lines reports one gap.
+    const sameTime = (seq: number): string => makeLine({ seq });
+    const oneGap = await runCli([1, 5, 1, 6].map(sameTime).join(""));
+    expect(oneGap.stderr).toBe(report(1, 1, 0, 0));
+  }, 30_000);
+
+  it("times each span at the entry's recorded_at", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      writeFileSync(auditPath, makeLine({ recorded_at: "2026-10-15T00:00:05.000Z" }));
+      await convertAuditLog(auditPath, otelPath);
+      const [span] = spansIn(otelPath) as (OtlpSpan & { startTimeUnixNano?: string; endTimeUnixNano?: string })[];
+      const instant = `${Date.parse("2026-10-15T00:00:05.000Z")}000000`;
+      expect(span?.startTimeUnixNano).toBe(instant);
+      expect(span?.endTimeUnixNano).toBe(instant);
+      expect((span?.events?.[0] as { timeUnixNano?: string } | undefined)?.timeUnixNano).toBe(instant);
+    });
+  });
+
+  it("drops the session id when the mapping stops listing it", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const mappingPath = `${otelPath}.mapping.json`;
+      const schema = JSON.parse(
+        readFileSync(new URL("../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url), "utf8"),
+      ) as { properties: { step_span_attributes: { properties: { required_attributes: { default: string[] } } } } };
+      schema.properties.step_span_attributes.properties.required_attributes.default = ["acs.request_id"];
+      writeFileSync(mappingPath, JSON.stringify(schema));
+      try {
+        writeFileSync(auditPath, makeLine({ request_id: "req-1" }));
+        await convertAuditLog(auditPath, otelPath, mappingPath);
+        const [span] = spansIn(otelPath);
+        expect(attribute(span, "acs.session.id")).toBeUndefined();
+        expect(attribute(span, "acs.request_id")).toBe("req-1");
+      } finally {
+        unlinkSync(mappingPath);
+      }
+    });
+  });
+
+  // Written out, because a test that compares the table with itself cannot
+  // notice two classes trading sentences.
+  it("keeps each failure class's own status sentence", () => {
+    expect(FAILURE_STATUS).toEqual({
+      timeout: "No decision arrived before the host's timeout.",
+      unreachable: "The host could not reach the Guardian.",
+      malformed_response: "An answer arrived that could not be used.",
+      guardian_error: "The Guardian returned an error instead of a decision.",
+      observed_agent_error: "The host could not build a request for this hook.",
+      signature_invalid: "A reply arrived that failed verification.",
+      handshake_failure: "The handshake did not complete.",
+      other: "The step ended without a usable decision.",
+    });
+  });
+
+  it("gives no error code for a value that is not a number", () => {
+    expect(asClampedErrorCode(Number.NaN)).toBeUndefined();
+    expect(asClampedErrorCode("-32005")).toBeUndefined();
+    expect(asClampedErrorCode(undefined)).toBeUndefined();
+  });
+
+  // Written out, because a test that computes its expected value the way the
+  // code does cannot notice a wrong sentence. The Guardian's sentences for
+  // these classes are pinned the same way in otel-trace-exporter.test.ts.
+  it("gives every host failure kind its status and detail sentence", async () => {
+    const noDecision = "The Guardian returned an error instead of a decision.";
+    const noUsableDecision = "The step ended without a usable decision.";
+    const sentences: Record<string, { status: string; detail: string }> = {
+      timeout: {
+        status: "No decision arrived before the host's timeout.",
+        detail: "No decision arrived before the host's timeout.",
+      },
+      transport: {
+        status: "The host could not reach the Guardian.",
+        detail: "The host could not reach the Guardian.",
+      },
+      error_without_decision: { status: noDecision, detail: noDecision },
+      refused: { status: noDecision, detail: "The Guardian refused the request, and this host blocked the step." },
+      host_configuration: {
+        status: "The host could not build a request for this hook.",
+        detail: "The host could not build a request for this hook.",
+      },
+      decision_unrenderable: {
+        status: noUsableDecision,
+        detail: "A decision arrived, and this host could not express it in its hook output.",
+      },
+      unknown: { status: noUsableDecision, detail: "The host recorded a failure this converter does not classify." },
+    };
+    const kinds = Object.keys(sentences);
+    // A kind added to the table has to get its sentences written here.
+    expect(kinds).toEqual([...Object.keys(FAILURE_DETAIL_BY_KIND), "unknown"]);
+    await withScratch(async (auditPath, otelPath) => {
+      const body = kinds.map((kind, i) => makeLine({ seq: i + 1, failure: { kind, message: "err" } })).join("");
+      writeFileSync(auditPath, body);
+      await convertAuditLog(auditPath, otelPath);
+      const spans = spansIn(otelPath);
+      expect(spans).toHaveLength(kinds.length);
+      for (let i = 0; i < kinds.length; i += 1) {
+        const kind = kinds[i]!;
+        const failure = spans[i]?.events?.find((event) => event.name === "acs.decision.failure");
+        expect({
+          kind,
+          status: spans[i]?.status?.message,
+          detail: attribute(failure, "acs.failure.detail"),
+        }).toEqual({ kind, ...sentences[kind]! });
+      }
+    });
+  });
+
+  it("handles prototype-named failure kinds like toString with and without a method, and clamps every oversized code the host can write", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const lines =
+        makeLine({
+          seq: 1,
+          method: "steps/toolCallRequest",
+          failure: { kind: "toString", message: `guardian refused the envelope with error ${String(Number(`-${"9".repeat(400)}`))}: overflow` },
+        }) +
+        makeLine({
+          seq: 2,
+          method: "steps/toolCallRequest",
+          failure: { kind: "refused", message: `guardian refused the envelope with error ${String(1e21)}: overflow` },
+        }) +
+        makeLine({
+          seq: 3,
+          method: null,
+          rpc_id: null,
+          outcome: "blocked",
+          posture: "deny",
+          failure: { kind: "toString", message: "no method" },
+        });
+      writeFileSync(auditPath, lines);
+      const summary = await convertAuditLog(auditPath, otelPath);
+      expect(summary.skippedNoMethod).toEqual({ other: 1 });
+      const spans = spansIn(otelPath);
+      expect(spans).toHaveLength(2);
+      const firstFailure = spans[0]?.events?.find((e) => e.name === "acs.decision.failure");
+      expect(attribute(firstFailure, "acs.failure.class")).toBe("other");
+      expect(attribute(firstFailure, "acs.failure.detail")).toBe("The host recorded a failure this converter does not classify.");
+      const firstCode = (firstFailure?.attributes?.find((a) => a.key === "acs.failure.error_code")?.value as { intValue?: string | number } | undefined)?.intValue;
+      const secondFailure = spans[1]?.events?.find((e) => e.name === "acs.decision.failure");
+      const secondCode = (secondFailure?.attributes?.find((a) => a.key === "acs.failure.error_code")?.value as { intValue?: string | number } | undefined)?.intValue;
+      expect(Number(firstCode)).toBe(Number.MIN_SAFE_INTEGER);
+      expect(Number(secondCode)).toBe(Number.MAX_SAFE_INTEGER);
+    });
+  });
+
+  // The host writes String(code), so each of these is the text of a code the
+  // Guardian's own exporter keeps.
+  it.each([
+    ["-1e+21", -1e21, Number.MIN_SAFE_INTEGER],
+    ["1e+21", 1e21, Number.MAX_SAFE_INTEGER],
+    ["-Infinity", Number.NEGATIVE_INFINITY, Number.MIN_SAFE_INTEGER],
+    ["Infinity", Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER],
+    ["-32005.5", -32005.5, -32005.5],
+    ["1e-7", 1e-7, 1e-7],
+    ["-32603", -32603, -32603],
+  ])("keeps the error code the host wrote as %s", async (text, code, expected) => {
+    expect(String(code)).toBe(text);
+    expect(asClampedErrorCode(code)).toBe(expected);
+    await withScratch(async (auditPath, otelPath) => {
+      for (const message of [`guardian returned error ${text}: boom`, `guardian refused the envelope with error ${text}: boom`]) {
+        rmSync(otelPath, { force: true });
+        writeFileSync(auditPath, makeLine({ failure: { kind: "error_without_decision", message } }));
+        await convertAuditLog(auditPath, otelPath);
+        const [span] = spansIn(otelPath);
+        const failure = span?.events?.find((event) => event.name === "acs.decision.failure");
+        const value = failure?.attributes?.find((a) => a.key === "acs.failure.error_code")?.value as
+          | { intValue?: string | number; doubleValue?: number }
+          | undefined;
+        expect(Number(value?.intValue ?? value?.doubleValue)).toBe(expected);
+      }
+    });
+  });
+
+  it("takes no error code from a message that does not end the number at a colon", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      writeFileSync(auditPath, makeLine({ failure: { kind: "error_without_decision", message: "guardian returned error 1e+: boom" } }));
+      await convertAuditLog(auditPath, otelPath);
+      const [span] = spansIn(otelPath);
+      const failure = span?.events?.find((event) => event.name === "acs.decision.failure");
+      expect(failure?.attributes?.map((a) => a.key)).not.toContain("acs.failure.error_code");
+    });
+  });
+
+  // No real disk fails on demand, so a lost span is handed in as a summary.
+  describe("reportConversion", () => {
+    const summary = {
+      converted: 2,
+      written: 2,
+      skippedUnmapped: 0,
+      skippedNoMethod: {},
+      skippedReplay: 0,
+      skippedUngoverned: 0,
+      skippedUnreadable: 0,
+    };
+    const order = { gaps: 1, duplicates: 0, backwards: 0, unnumbered: 0, untimed: 0 };
+    const orderLine = "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq";
+    const lostLine = "only 1 of 2 span(s) reached out.jsonl";
+
+    function report(given: Parameters<typeof reportConversion>[0]): { status: number; errors: unknown[] } {
+      const log = spyOn(console, "log").mockImplementation(() => undefined);
+      const error = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const status = reportConversion(given, "out.jsonl");
+        return { status, errors: error.mock.calls.map(([line]) => line) };
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+      }
+    }
+
+    it("exits 0 and says nothing on stderr for a clean run", () => {
+      expect(report(summary)).toEqual({ status: 0, errors: [] });
+    });
+
+    it("exits 1 for a span that never reached the file, even when the log's order is clean", () => {
+      expect(report({ ...summary, written: 1 })).toEqual({ status: 1, errors: [lostLine] });
+    });
+
+    it("reports both problems when a run has both", () => {
+      expect(report({ ...summary, written: 1, sequence: order })).toEqual({ status: 1, errors: [orderLine, lostLine] });
+    });
+  });
 });

@@ -118,7 +118,7 @@ Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked 
 - replay rejections;
 - lines it cannot read.
 
-It prints how many spans reached the file and exits non-zero when that is fewer than it built.
+It prints how many spans reached the file and exits non-zero when that is fewer than it built, when the log's order is wrong, when a line does not parse, or when an entry has no usable `recorded_at`.
 
 ### Sample trace
 
@@ -139,6 +139,8 @@ These are the messages export can print, with what each one means. None of them 
 - `otel trace exporter shutdown disabled after failure: did not finish within 3000 ms; unexported spans were dropped`. An output stalled at shutdown. The spans still in its queue are lost.
 - `otel trace export to <URL>: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt <host>, so on some Bun versions these spans go through the proxy.` at startup. Your shell has `HTTP_PROXY` set, and the loopback host isn't in the proxy exemption list Bun reads. The Guardian adds the host itself, which takes effect on Bun 1.3.14 and later. On older versions, start the Guardian with the host in both `NO_PROXY` and `no_proxy`, as step 1 of [Produce a trace](../../README.md#produce-a-trace) does.
 - `refusing to write <path>: it already exists, perhaps from an earlier or failed run.` from the converter, which then exits with status 1. It never appends. Delete the old output or name a new file.
+- `audit log order: <N> gap(s), <N> duplicate(s), <N> recorded_at going backwards, <N> line(s) with no usable seq` from the converter, which then exits with status 1. A line that does not parse counts as a line with no usable seq. The output file is still complete for the lines that remain. A gap means a line is missing. Duplicates or timestamps going backwards can come from hooks that ran at the same time. Deleting the last lines cannot be detected, because nothing comes after them to compare. `seq` carries no signature, so anyone who can edit the log can renumber it and pass this check. It finds lost writes, not tampering.
+- `audit log time: <N> line(s) with no usable recorded_at, timed at now` from the converter, which then exits with status 1. The host always writes `recorded_at`, so such a span's time means nothing.
 - An empty `.acs/otel-collector-traces.jsonl` in the first five seconds after you send a step. That's normal: spans leave in batches about every five seconds, and stopping the Guardian with Ctrl-C sends the last one. If the file still hasn't appeared after about ten seconds, the collector isn't running [`otel-collector.yaml`](../../otel-collector.yaml), or the Guardian printed the `disabled after failure` line above.
 
 ## Use it in-process
