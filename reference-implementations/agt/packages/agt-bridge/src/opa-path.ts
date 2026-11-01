@@ -40,11 +40,54 @@
  * The one path that skips FFI entirely: a libc this file cannot open, on a
  * process whose real environment already names the resolved binary. Bun
  * seeds `process.env` from the real environment at startup, so
- * `ACS_OPA_PATH=<binary> bun test` is the escape hatch for such a platform,
- * and is honoured without touching the environment.
+ * `ACS_OPA_PATH=<binary> ACS_OPA_SHA256=<digest> bun test` is the escape hatch
+ * for such a platform, and is honoured without touching the environment.
  */
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { dlopen, FFIType } from "bun:ffi";
-import { ensureOpaResolvable, OPA_PATH_ENV } from "agent-control-specification/integrations/opa-binary";
+import { ensureOpaResolvable, OPA_PATH_ENV, resolveBundledOpa } from "agent-control-specification/integrations/opa-binary";
+
+export const OPA_SHA256_ENV = "ACS_OPA_SHA256";
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function verifyOpaBinaryIntegrity(resolved: string): void {
+  const actual = sha256File(resolved);
+  const configured = process.env[OPA_SHA256_ENV];
+  if (configured !== undefined && configured !== "") {
+    const expected = configured.trim().toLowerCase();
+    if (!SHA256_HEX_RE.test(expected)) {
+      throw new Error(
+        `agt-bridge: ${OPA_SHA256_ENV} must be a 64-character hex SHA-256 digest, got ${JSON.stringify(configured)}`,
+      );
+    }
+    if (actual !== expected) {
+      throw new Error(
+        `agt-bridge: opa binary at ${resolved} failed SHA-256 integrity check (expected ${expected}, got ${actual})`,
+      );
+    }
+    return;
+  }
+
+  const bundled = resolveBundledOpa();
+  if (bundled === undefined) {
+    throw new Error(
+      `agt-bridge: unverified opa binary at ${resolved} (sha256 ${actual}): no bundled opa binary to compare it with. ` +
+        `Set ${OPA_SHA256_ENV}=${actual} to authorize an external opa binary.`,
+    );
+  }
+  const bundledDigest = bundled === resolved ? actual : sha256File(bundled);
+  if (actual !== bundledDigest) {
+    throw new Error(
+      `agt-bridge: unverified opa binary at ${resolved} (sha256 ${actual}) does not match the bundled opa binary (${bundledDigest}). ` +
+        `Set ${OPA_SHA256_ENV}=${actual} to authorize an external opa binary.`,
+    );
+  }
+}
 
 /**
  * Where the C library lives, by platform. Tried in order; the first that
@@ -76,6 +119,7 @@ export function publishOpaPath(): string {
   // the loud failure this file wants: an explicit hint that names nothing
   // stops here, before any setenv, and never falls back to another opa.
   const resolved = ensureOpaResolvable();
+  verifyOpaBinaryIntegrity(resolved);
 
   const libc = openLibc();
   if (libc === undefined) {
