@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = "GenAI-Security-Project/agent-control-standard"
 # Changes whenever any rule in this module changes, so a health report or a roadmap.json
 # names the rules that produced it.
-RULES_VERSION = "2026-10-04.2"
+RULES_VERSION = "2026-10-31.1"
 SCHEMA_VERSION = 1
 
 # Spec decision 4. The creators named under Origins hold read access today, so trusting
@@ -38,6 +38,7 @@ _LINK = re.compile(r"\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)")
 # The group refuses a parenthesis that opens the handle link, so the name ends there.
 _PERSON = re.compile(r"((?:[^,()|]|\((?!\[@)[^()|]*\))+?)\s*\(\[@([^\]]+)\]\(https://github\.com/([^)/\s]+)\)\)")
 _SPLIT_CELLS = re.compile(r"(?<!\\)\|")
+_ANY_HEADING = re.compile(r"^#{2,6}\s")
 
 
 def parse_codeowners_logins(text: str) -> set[str]:
@@ -163,23 +164,51 @@ def _volunteers(text: str) -> tuple[Person, ...]:
     return tuple(people)
 
 
+def workstream_rows(text: str) -> list[tuple[str, str]]:
+    """The workstream table as GitHub renders it, for the roster and the landing page.
+
+    One reader keeps the page from naming someone the trust code does not treat as a lead.
+    Any heading level ends the section, and every table line must be accounted for,
+    because a silently dropped row is worse than a loud failure.
+    """
+    rows: list[tuple[str, str]] = []
+    table_lines = 0
+    for line in _section(_HTML_COMMENT.sub("", text), "Workstream leads"):
+        if _ANY_HEADING.match(line):
+            break
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        table_lines += 1
+        cells = [cell.strip() for cell in _SPLIT_CELLS.split(stripped.strip("|"))]
+        if cells[0].lower() == "workstream" or set(cells[0]) <= set("-: "):
+            continue
+        if len(cells) != 2:
+            raise RosterError(f"GOVERNANCE.md: workstream row has {len(cells)} cells, expected 2: {stripped!r}")
+        rows.append((cells[0].replace("\\|", "|"), cells[1].replace("\\|", "|")))
+    if not rows:
+        raise RosterError("GOVERNANCE.md: the workstream table is empty")
+    if len(rows) != table_lines - 2:
+        raise RosterError(
+            f"GOVERNANCE.md: parsed {len(rows)} workstreams from {table_lines} table lines. "
+            "Expected a header, a separator, then one line per workstream."
+        )
+    return rows
+
+
 def parse_governance(text: str) -> Roster:
     """Read the project leads, workstream leads, and triage volunteer tables, and Origins.
 
     "Project leads" is the heading since the October 2026 leadership change. "Project lead"
     is still read, so an older checkout of GOVERNANCE.md keeps parsing.
     """
+    workstreams = {name: _people(cell) for name, cell in workstream_rows(text)}
     text = _HTML_COMMENT.sub("", text)
     leads: list[Person] = []
     for cells in _table_rows(_first_section(text, "Project leads", "Project lead"), "Project leads"):
         if len(cells) != 2:
             raise RosterError(f"GOVERNANCE.md: project lead row has {len(cells)} cells")
         leads.extend(_people(cells[1]))
-    workstreams: dict[str, tuple[Person, ...]] = {}
-    for cells in _table_rows(_section(text, "Workstream leads"), "Workstream leads"):
-        if len(cells) != 2:
-            raise RosterError(f"GOVERNANCE.md: workstream row has {len(cells)} cells")
-        workstreams[cells[0]] = _people(cells[1])
     origins = tuple(
         (re.sub(r"^(and|&)\s+", "", name.strip(), flags=re.IGNORECASE), url_login)
         for name, _text_login, url_login in _PERSON.findall(" ".join(_section(text, "Origins")))

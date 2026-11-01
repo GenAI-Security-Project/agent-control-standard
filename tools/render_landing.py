@@ -30,15 +30,14 @@ from mkdocs.exceptions import ConfigurationError
 from mkdocs.utils.yaml import yaml_load
 
 from publish_schemas import SchemaError, load_schemas, target_for
+from roadmap_model import RosterError, workstream_rows
 from site_nav import ANCHOR, DOC_PATH, EXTERNAL, EXTERNAL_URL, TITLE
 
 # Tolerant of case and spacing so a formatter cannot break the build.
-WORKSTREAM_HEADING = re.compile(r"^##\s+workstream\s+leads\s*$", re.IGNORECASE)
 PRIORITY_SCOPE_HEADING = re.compile(r"^##\s+current\s+priority\s+scope\s*$", re.IGNORECASE)
 ANY_HEADING = re.compile(r"^#{2,6}\s")
 MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 PLACEHOLDER = re.compile(r"<!--ACS:[A-Z_]+-->")
-SPLIT_CELLS = re.compile(r"(?<!\\)\|")
 ALLOWED_SCHEMES = ("https://", "http://", "mailto:")
 
 REQUIRED_PLACEHOLDERS = (
@@ -113,38 +112,10 @@ def schema_count(source: Path) -> int:
 
 def parse_workstreams(text: str) -> list[tuple[str, str]]:
     """Read the two-column table under the Workstream leads heading."""
-    lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines) if WORKSTREAM_HEADING.match(line)), None)
-    if start is None:
-        raise RenderError("GOVERNANCE.md: no '## Workstream leads' section")
-
-    rows: list[tuple[str, str]] = []
-    table_lines = 0
-    for line in lines[start + 1 :]:
-        if ANY_HEADING.match(line):
-            break  # any heading level ends the section, not only level two
-        stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        table_lines += 1
-        cells = [cell.strip() for cell in SPLIT_CELLS.split(stripped.strip("|"))]
-        if cells[0].lower() == "workstream" or set(cells[0]) <= set("-: "):
-            continue
-        if len(cells) != 2:
-            raise RenderError(
-                f"GOVERNANCE.md: workstream row has {len(cells)} cells, expected 2: {stripped!r}"
-            )
-        rows.append((cells[0].replace("\\|", "|"), cells[1].replace("\\|", "|")))
-
-    if not rows:
-        raise RenderError("GOVERNANCE.md: the workstream table is empty")
-    # A silently dropped row is worse than a loud failure, so account for every line.
-    if len(rows) != table_lines - 2:
-        raise RenderError(
-            f"GOVERNANCE.md: parsed {len(rows)} workstreams from {table_lines} table lines. "
-            "Expected a header, a separator, then one line per workstream."
-        )
-    return rows
+    try:
+        return workstream_rows(text)
+    except RosterError as error:
+        raise RenderError(str(error)) from error
 
 
 def parse_priority_scope(text: str) -> str:
