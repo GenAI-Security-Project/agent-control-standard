@@ -267,6 +267,18 @@ def test_render_fails_when_the_template_drops_a_placeholder(spec_tree):
         render(without, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
+def test_header_values_are_escaped_and_validated(spec_tree):
+    """site_name reaches attributes, so a quote must not end one, and a markup character
+    stops the build rather than reaching the page."""
+    quoted = dataclasses.replace(NAV, site_name='A"B')
+    template = FULL_TEMPLATE + '<a title="<!--ACS:SITE_NAME-->">'
+    assert '<a title="A&quot;B">' in render(template, spec_tree, CONTRIBUTING, STARBURST, quoted, RELEASE_FILE)
+    for field, value in (("site_name", "<b>"), ("repo_name", "a&b"), ("repo_url", "https://evil.example/")):
+        with pytest.raises(RenderError, match=field):
+            render(FULL_TEMPLATE, spec_tree, CONTRIBUTING, STARBURST,
+                   dataclasses.replace(NAV, **{field: value}), RELEASE_FILE)
+
+
 def test_render_fails_when_an_unknown_placeholder_survives(spec_tree):
     with pytest.raises(RenderError, match="unfilled placeholder"):
         render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)

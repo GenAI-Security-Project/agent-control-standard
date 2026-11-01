@@ -1,11 +1,12 @@
 --- nav.html.upstream
 +++ nav.html
-@@ -1,5 +1,23 @@
+@@ -1,5 +1,24 @@
  {#-
 -  This file was automatically generated - do not edit
 +  Renders the docs site's left pane with the same rows as the landing page's pane.
 +
-+  This is Material's own partials/nav.html with two rows added around the stock loop.
++  This is Material's own partials/nav.html with two rows added around the stock loop
++  and the drawer logo pointed at the landing page, as the header's logo is.
 +  Home links back to the landing page and opens to its sections. External resources
 +  lists the project's outside links. Both read config.extra.acs_nav in mkdocs.yml, the
 +  one source the landing renderer reads too, so the two panes cannot drift apart.
@@ -25,15 +26,19 @@
  -#}
  {% import "partials/nav-item.html" as item with context %}
  {% set class = "md-nav md-nav--primary" %}
-@@ -9,6 +27,7 @@
+@@ -9,9 +28,10 @@
  {% if "toc.integrate" in features %}
    {% set class = class ~ " md-nav--integrated" %}
  {% endif %}
 +{% set landing_root = (base_url ~ '/..') | replace('//..', '/..') %}
  <nav class="{{ class }}" aria-label="{{ lang.t('nav') }}" data-md-level="0">
    <label class="md-nav__title" for="__drawer">
-     <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-nav__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
-@@ -22,9 +41,49 @@
+-    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-nav__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
++    <a href="{{ landing_root | e }}" title="{{ config.site_name | e }}" class="md-nav__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
+       {% include "partials/logo.html" %}
+     </a>
+     {{ config.site_name }}
+@@ -22,9 +42,49 @@
      </div>
    {% endif %}
    <ul class="md-nav__list" data-md-scrollfix>
