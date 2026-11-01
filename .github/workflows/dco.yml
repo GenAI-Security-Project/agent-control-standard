@@ -48,4 +48,5 @@ jobs:
           echo "  git fetch https://github.com/$REPO.git $BASE_REF"
           echo "  git rebase --signoff FETCH_HEAD"
           echo "  git push --force-with-lease"
+          echo "Full steps: https://github.com/$REPO/blob/integration/CONTRIBUTING.md#how-to-sign-your-commits"
           exit 1
