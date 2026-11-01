@@ -115,6 +115,78 @@ def test_render_never_leaks_titles_or_mentions():
     assert "outsider" not in body
 
 
+class RunsGitHub:
+    def __init__(self, runs):
+        self.runs = runs
+        self.paths = []
+
+    def get(self, path):
+        self.paths.append(path)
+        if isinstance(self.runs, Exception):
+            raise self.runs
+        return {"workflow_runs": self.runs}
+
+
+FAILED_RUN = {"id": 77, "conclusion": "failure", "created_at": "2026-11-01T00:17:00Z", "display_title": "SECRET TITLE"}
+
+
+def test_site_monitor_reads_only_the_latest_scheduled_run():
+    from roadmap_sync import site_monitor_failure
+    gh = RunsGitHub([FAILED_RUN])
+    assert site_monitor_failure(gh) == ["2026-11-01T00:17:00Z", 77]
+    assert gh.paths == [f"repos/{REPO}/actions/workflows/monitor-pages.yml/runs?event=schedule&status=completed&per_page=1"]
+    assert site_monitor_failure(RunsGitHub([dict(FAILED_RUN, conclusion="success")])) == []
+    assert site_monitor_failure(RunsGitHub([])) == []
+    assert site_monitor_failure(RunsGitHub([dict(FAILED_RUN, conclusion="cancelled")])) == ["2026-11-01T00:17:00Z", 77]
+    with pytest.raises(SyncError):
+        site_monitor_failure(RunsGitHub([dict(FAILED_RUN, created_at="<b>soon</b>")]))
+
+
+def test_site_monitor_line_shows_a_failure_and_nothing_when_it_passed():
+    passed = render_health(report(), "ok", "t", "1", [])
+    assert "site monitor" not in passed.lower()
+    assert build_report(SNAPSHOT, TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)["site_monitor"] == []
+    failing = build_report(dict(SNAPSHOT, site_monitor=["2026-11-01T00:17:00Z", 77]), TRUSTED, LEADS, {"Spec"}, date(2026, 11, 1), SWITCHES)
+    body = render_health(failing, "ok", "t", "1", [])
+    assert f"The site monitor last failed at 2026-11-01T00:17:00Z, run [77](https://github.com/{REPO}/actions/runs/77)." in body
+    # The line sits outside the sections, so the status line and the marker do not change.
+    assert body.splitlines()[:2] == ["<!-- acs-sweep: ok t run 1 -->", "<!-- acs-roadmap-health -->"]
+    assert body.index("site monitor") < body.index("## Ready to publish")
+
+
+def test_an_unreadable_site_monitor_degrades_and_never_reads_as_passing():
+    failed = ["site_monitor"]
+    body = render_health(report(), "degraded", "2026-11-01T04:12:09Z", "9", failed)
+    assert body.splitlines()[0] == "<!-- acs-sweep: degraded 2026-11-01T04:12:09Z run 9 site_monitor -->"
+    assert "could not be read" in body
+
+
+@pytest.mark.parametrize("error", [SyncError("boom"), KeyError("workflow_runs"), TypeError("x")])
+def test_snapshot_records_a_failed_site_monitor_read(monkeypatch, error):
+    import roadmap_sync
+
+    class Reads(RunsGitHub):
+        call_list = None
+
+        def paginate(self, path):
+            return []
+
+    monkeypatch.setattr(roadmap_sync.fetch_roadmap, "fetch", lambda *a: {"status": "ok", "milestones": []})
+    monkeypatch.setattr(roadmap_sync.fetch_roadmap, "attach_facts", lambda fetched, *a: fetched)
+    monkeypatch.setattr(roadmap_sync, "promotion_pending", lambda git: None)
+    monkeypatch.setattr(roadmap_sync, "bypasses", lambda gh, git, today: [])
+    failed = []
+    snapshot = roadmap_sync._snapshot(Reads(error), None, date(2026, 11, 1), failed)
+    assert failed == ["site_monitor"] and snapshot["site_monitor"] == []
+
+
+def test_a_full_degrade_says_the_site_monitor_was_not_read():
+    import roadmap_sync
+    failed, rows = roadmap_sync._degraded()
+    assert "site_monitor" in failed
+    assert "could not be read" in render_health(rows, "degraded", "t", "1", failed).split("## Ready to publish")[0]
+
+
 def test_closed_nothing_done_links_the_milestone_not_an_issue():
     body = render_health(report(), "ok", "t", "1", [])
     section = body.split("## Closed with open work and nothing done")[1].split("##")[0]
