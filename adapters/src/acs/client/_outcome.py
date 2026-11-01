@@ -34,6 +34,8 @@ Outcome = Decided | Undecided | Refused
 class Negotiated:
     """The Guardian answered the handshake with a verified ServerHello; the session's steps go to it."""
     server_hello: Mapping[str, Any]
+    # The session's sessionStart got no decision ({"cause", "fields"}); each hook's fail posture settles its steps.
+    start_failure: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

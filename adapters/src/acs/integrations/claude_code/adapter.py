@@ -67,6 +67,7 @@ from acs import __version__
 
 from acs.client import (
     Config,
+    Decided,
     FailPosture,
     Handshake,
     Negotiated,
@@ -454,22 +455,21 @@ def _open_session(event: dict[str, Any], config: Config, started: list | None = 
     )
 
 
-def _send_session_start(event: dict[str, Any], session: Negotiated, config: Config, started: list | None) -> None:
+def _send_session_start(event: dict[str, Any], session: Negotiated, config: Config,
+                        started: list | None) -> Decided | Resolution | None:
     """The session's one sessionStart, built from whichever hook opened the session; the session chain roots there (§8)."""
     session_id = event.get("session_id")
     if not method_evaluated(session.server_hello, "steps/sessionStart"):
         audit_event("method_not_evaluated", method="steps/sessionStart",
                     hook=event.get("hook_event_name"), session_id=session_id)
-        return
+        return None
     opening = {k: event[k] for k in ("session_id", "cwd", "transcript_path", "model", "source") if k in event}
     result = round_trip(build_request({**opening, "hook_event_name": "SessionStart"}),
                         guardian_url=config.guardian_url, posture=config.posture.negotiated(session.server_hello),
                         session_id=session_id)
-    if isinstance(result, Resolution):
-        audit_event(result.audit_type, **{**result.fields, "cause": result.cause,
-                                          "method": "steps/sessionStart", "session_id": session_id})
-    elif started is not None:
+    if isinstance(result, Decided) and started is not None:
         started.append(result)
+    return result
 
 
 # ─── Response translation — dispatch table, one function per hook ─────────

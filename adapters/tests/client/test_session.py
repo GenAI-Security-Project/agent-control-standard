@@ -5,6 +5,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 import urllib.error
 from pathlib import Path
@@ -13,6 +14,8 @@ from unittest import mock
 
 from acs.client import _exchange
 from acs.client import Config, Negotiated, NoAnswer, SessionRefused, open_session
+from acs.client._config import Resolution
+from acs.client._outcome import Decided
 from acs.client import _handshake
 from acs.core import derive_session_key, sign_with_key
 
@@ -380,7 +383,14 @@ class Records(_SessionTest):
 
 
 class Startup(_SessionTest):
-    """The process that opens a negotiated session starts it, once; the startup lock's concurrency is in test_session_gate."""
+    """The opening process starts a negotiated session once and records how."""
+
+    @staticmethod
+    def _decided(decision: str) -> Decided:
+        return Decided({"jsonrpc": "2.0", "id": "1", "result": {"decision": decision, "reasoning": "start policy"}})
+
+    def _started(self, session_id: str) -> Path:
+        return Path(f"{self._record(session_id)}.started")
 
     def test_a_negotiated_session_starts_once(self) -> None:
         starts: list = []
@@ -396,6 +406,36 @@ class Startup(_SessionTest):
                 self._open(session_id=f"start-{name}", start=starts.append)
                 self.assertEqual(starts, [])
 
+    def test_a_denied_or_refused_start_refuses_the_session_for_every_later_hook(self) -> None:
+        answers = {"deny": (lambda s: self._decided("deny"), "session_start_denied"),
+                   "unknown decision": (lambda s: self._decided("maybe"), "session_start_denied"),
+                   "signed refusal": (lambda s: Resolution(False, "guardian_refusal_fail_closed",
+                                                           "session_refused_response", {}), "session_start_refused")}
+        for name, (start, cause) in answers.items():
+            with self.subTest(name):
+                self.audit.reset_mock()
+                first, _ = self._open(session_id=f"start-{name}", start=start)
+                starts: list = []
+                again, calls = self._open(session_id=f"start-{name}", start=starts.append)
+                self.assertEqual((first.cause, again.cause), (cause, cause))
+                self.assertEqual((starts, calls), ([], 0))
+                self.assertEqual([c.kwargs["cause"] for c in self.audit.call_args_list
+                                  if c.args[0] == "session_refused"], [cause])
+
+    def test_a_start_without_a_decision_is_recorded_for_each_hook_posture(self) -> None:
+        def start(session: Negotiated) -> Resolution:
+            return Resolution(True, "fail_open_bypass", "decision_timeout", {"method": "steps/sessionStart"})
+        first, _ = self._open(session_id="start-timeout", start=start)
+        again, _ = self._open(session_id="start-timeout", start=lambda s: self.fail("started twice"))
+        self.assertEqual(first, again)
+        self.assertEqual(first.start_failure["cause"], "decision_timeout")
+        proceed = Config.from_env({"ACS_GUARDIAN_URL": URL})
+        deny = Config.from_env({"ACS_GUARDIAN_URL": URL, "ACS_DEFAULT_DENY": "1"})
+        self.assertIsNone(proceed.gate(again))
+        self.assertEqual((deny.gate(again).proceed, deny.gate(again).cause), (False, "decision_timeout"))
+        self.assertEqual([c.args[0] for c in self.audit.call_args_list if c.kwargs.get("method") == "steps/sessionStart"],
+                         ["fail_open_bypass"])
+
     def test_a_failed_start_is_audited_once_and_not_retried(self) -> None:
         def fail(session: Negotiated) -> None:
             raise RuntimeError("boom")
@@ -404,16 +444,66 @@ class Startup(_SessionTest):
         self._open(session_id="start-fails", start=starts.append)
         self.assertIsInstance(decision, Negotiated)
         self.assertEqual(starts, [])
-        self.assertEqual([c.kwargs["error"] for c in self.audit.call_args_list if c.args[0] == "session_start_failed"],
-                         ["boom"])
+        self.assertEqual([(c.args[0], c.kwargs["error"]) for c in self.audit.call_args_list
+                          if c.kwargs.get("method") == "steps/sessionStart"], [("fail_open_bypass", "boom")])
 
-    def test_a_session_without_a_startup_lock_still_starts_once(self) -> None:
+    def test_a_hook_refused_by_its_own_profile_requirement_still_starts_the_session(self) -> None:
         starts: list = []
-        with mock.patch.object(_handshake, "_locked", side_effect=PermissionError(13, "Permission denied")):
-            first, _ = self._open(session_id="start-unlocked", start=starts.append)
-            self._open(session_id="start-unlocked", start=starts.append)
-        self.assertEqual(starts, [first])
-        self.assertIsInstance(first, Negotiated)
+        strict, _ = self._open(session_id="start-profile", start=starts.append, ACS_REQUIRE_PROFILES="acs-other")
+        later, calls = self._open(session_id="start-profile", start=starts.append)
+        self.assertEqual(strict.cause, "required_profile_not_accepted")
+        self.assertIsInstance(later, Negotiated)
+        self.assertEqual((len(starts), calls), (1, 0))
+
+    def test_a_startup_record_the_start_did_not_write_refuses_the_session(self) -> None:
+        for name in ("empty", "copied"):
+            with self.subTest(name):
+                session = f"forged-{name}"
+                # The session's own signed record, which must not pass for a recorded start.
+                self._open(session_id=session)
+                self._started(session).write_bytes(b"" if name == "empty" else self._record(session).read_bytes())
+                starts: list = []
+                decision, calls = self._open(session_id=session, start=starts.append)
+                self.assertEqual((decision.cause, starts, calls), ("session_record_invalid", [], 0))
+
+    def test_a_start_whose_outcome_is_not_recorded_refuses_the_session_and_is_not_repeated(self) -> None:
+        starts: list = []
+        with mock.patch.object(_handshake.os, "replace", side_effect=OSError(28, "No space left on device")):
+            first, _ = self._open(session_id="start-unrecorded", start=starts.append)
+        again, calls = self._open(session_id="start-unrecorded", start=starts.append)
+        self.assertEqual((first.cause, again.cause), ("session_record_unwritable", "session_start_incomplete"))
+        self.assertEqual((len(starts), calls), (1, 0))
+        self.assertIn("session_record_unwritable", [c.args[0] for c in self.audit.call_args_list])
+
+    def test_a_start_that_cannot_be_claimed_sends_nothing(self) -> None:
+        link = os.link
+        def no_claim(source, destination):
+            if str(destination).endswith(".started"):
+                raise OSError(28, "No space left on device")
+            return link(source, destination)
+        starts: list = []
+        with mock.patch.object(_handshake.os, "link", side_effect=no_claim):
+            decision, _ = self._open(session_id="start-unclaimed", start=starts.append)
+        self.assertEqual((decision.cause, starts), ("session_record_unwritable", []))
+
+    def test_concurrent_hooks_without_a_startup_lock_are_refused_before_any_handshake(self) -> None:
+        Path(f"{self._record('start-unlocked')}.lock").mkdir(parents=True)
+        starts: list = []
+        results: list = []
+        barrier = threading.Barrier(2)
+
+        def hook() -> None:
+            barrier.wait(timeout=5)
+            results.append(self._open(session_id="start-unlocked", start=starts.append))
+        threads = [threading.Thread(target=hook) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        self.assertEqual(sorted((d.cause, calls) for d, calls in results),
+                         [("session_startup_lock_unavailable", 0)] * 2)
+        self.assertEqual(starts, [])
+        self.assertEqual([c.args[0] for c in self.audit.call_args_list], ["session_record_unwritable"] * 2)
 
 
 class UnsignedMode(_SessionTest):

@@ -72,6 +72,7 @@ from acs import __version__
 
 from acs.client import (
     Config,
+    Decided,
     FailPosture,
     Handshake,
     Negotiated,
@@ -655,18 +656,14 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
     )
 
 
-def _send_session_start(event: dict[str, Any], session: Negotiated, config: Config) -> None:
-    """The session's one sessionStart, built from whichever hook opened the session; Cursor runs
-    sessionStart and beforeSubmitPrompt at the same time, and the session chain roots here (§8)."""
+def _send_session_start(event: dict[str, Any], session: Negotiated, config: Config) -> Decided | Resolution | None:
+    """The session's one sessionStart, from whichever hook opened it; Cursor runs sessionStart and beforeSubmitPrompt concurrently."""
     session_id = _session_id(event)
     if not method_evaluated(session.server_hello, "steps/sessionStart"):
         audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session_id)
-        return
-    result = round_trip(build_request("sessionStart", event), guardian_url=config.guardian_url,
-                        posture=config.posture.negotiated(session.server_hello), session_id=session_id)
-    if isinstance(result, Resolution):
-        audit_event(result.audit_type, **{**result.fields, "cause": result.cause,
-                                          "method": "steps/sessionStart", "session_id": session_id})
+        return None
+    return round_trip(build_request("sessionStart", event), guardian_url=config.guardian_url,
+                      posture=config.posture.negotiated(session.server_hello), session_id=session_id)
 
 
 # ─── Response translation — dispatch table by event category ──────────────

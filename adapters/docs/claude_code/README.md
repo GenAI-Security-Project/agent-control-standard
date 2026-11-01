@@ -81,7 +81,7 @@ What it wires by default:
 |---|---|
 | `PreToolUse` | **fail-CLOSED** (gate — silent fail-open is a policy hole) |
 | `UserPromptSubmit` | **fail-CLOSED** (gate) |
-| `SessionStart` | fail-open (observational; §6.4 default) |
+| `SessionStart` | fail-open (§6.4 default); a Guardian `deny` refuses the session |
 | `PostToolUse` | fail-open |
 | `Notification` | fail-open |
 | `SessionEnd` | fail-open |

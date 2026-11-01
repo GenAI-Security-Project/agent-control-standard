@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from acs.client._audit import audit_event
-from acs.client._config import Config
+from acs.client._config import Config, Resolution
 from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, post
-from acs.client._outcome import Handshake, Negotiated, NoAnswer, SessionRefused
+from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import load_hmac_secret
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._store import _locked
@@ -30,6 +30,7 @@ from acs.core import (
     is_session_refusal,
     iso8601_now,
     jcs_canonicalize,
+    normalize_decision,
     server_hello_problem,
 )
 
@@ -45,6 +46,9 @@ _HANDSHAKE_CACHE_DIR = Path(
 _HANDSHAKE_TIMEOUT_S = float(os.environ.get("ACS_HANDSHAKE_TIMEOUT_SECONDS", "5"))
 
 _RECORD_VERSION = 1
+_STARTUP_VERSION = 1
+# A startup record whose sessionStart was claimed but whose outcome was never recorded.
+_PENDING = "pending"
 
 
 def _handshake_cache_path(session_id: str, guardian_url: str, directory: Path | None = None) -> Path:
@@ -57,7 +61,7 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
                  methods_implemented: list[str], wrapped_protocols: list[str] | None = None,
                  timeout: float | None = None, profiles_supported: list[str] | None = None,
                  transports_supported: list[str] | None = None,
-                 start: Callable[[Negotiated], None] | None = None) -> Handshake:
+                 start: Callable[[Negotiated], Decided | Resolution | None] | None = None) -> Handshake:
     """Return the session's decision: the stored one, or the result of one handshake, stored for the session's lifetime; never raises.
 
     The record sits where the observed agent can write, so it carries an
@@ -66,10 +70,13 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     endpoint, or cannot be stored refuses the session.
 
     With start, the hook process that opens a negotiated session also sends
-    the session's sessionStart through it, once. Hooks of one session can run
-    at the same time, so every hook process of the session waits for that
-    handshake and that sessionStart under the session's startup lock: the
-    Guardian sees one handshake, then sessionStart, then the other steps.
+    the session's sessionStart through it, once, and records the outcome in a
+    signed startup record next to the session record. Hooks of one session can
+    run at the same time, so every hook process of the session waits for that
+    handshake and that sessionStart under the session's startup lock, then
+    follows the recorded outcome: a deny or a refusal refuses the session, and
+    a sessionStart without a decision is settled by each hook's fail posture.
+    A startup that cannot be locked or recorded refuses the session.
     """
     if not session_id:
         return NoAnswer("missing_session_id")
@@ -81,33 +88,67 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     hello = dict(config=config, session_id=session_id, agent_id=agent_id, platform=platform,
                  methods_implemented=methods_implemented, wrapped_protocols=wrapped_protocols, timeout=timeout,
                  profiles_supported=profiles_supported, transports_supported=transports_supported)
+    if start is None:
+        return _required_profiles(_decide(path, ikm, **hello), config)
     started = Path(f"{path}.started")
-    if start is None or started.exists():
-        return _decide(path, ikm, **hello)
+    stored = _read_record(path, ikm, session_id, config.guardian_url)
+    if stored is not None and not isinstance(stored, Negotiated):
+        # A refused or unanswered session, or a record that fails its checks: there is nothing to start.
+        return _required_profiles(stored, config)
+    if stored is not None:
+        recorded = _read_startup(started, ikm, session_id, config.guardian_url)
+        if recorded is not None and recorded != _PENDING:
+            return _required_profiles(recorded, config)
     with contextlib.ExitStack() as startup:
         try:
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             startup.enter_context(_locked(path))
-        except OSError:
-            pass  # No startup lock: this process decides and starts the session on its own.
+        except OSError as e:
+            audit_event("session_record_unwritable", session_id=session_id, guardian_url=config.guardian_url,
+                        record=f"{path}.lock", error=str(e))
+            return SessionRefused("session_startup_lock_unavailable", {"error": str(e)})
         decision = _decide(path, ikm, **hello)
-        if not started.exists():
-            if isinstance(decision, Negotiated):
-                try:
-                    start(decision)
-                except Exception as e:  # noqa: BLE001
-                    audit_event("session_start_failed", cause="adapter_exception", error=str(e),
-                                session_id=session_id)
-            _mark(started)
-        return decision
+        if not isinstance(decision, Negotiated):
+            return _required_profiles(decision, config)
+        recorded = _read_startup(started, ikm, session_id, config.guardian_url)
+        if recorded == _PENDING:
+            # The process that claimed the sessionStart released the lock without recording its outcome.
+            return SessionRefused("session_start_incomplete", {"record": str(started)})
+        if recorded is not None:
+            return _required_profiles(recorded, config)
+        claim = _write_startup(started, None, ikm, session_id, config.guardian_url)
+        if claim is not None:
+            return claim
+        outcome = _start_session(decision, start, config, session_id)
+        unrecorded = _write_startup(started, outcome, ikm, session_id, config.guardian_url)
+        return _required_profiles(unrecorded or outcome, config)
 
 
-def _mark(path: Path) -> None:
-    """Record that the session's startup is done, so later hook processes skip the startup lock."""
+def _start_session(decision: Negotiated, start: Callable[[Negotiated], Decided | Resolution | None],
+                   config: Config, session_id: str) -> Handshake:
     try:
-        os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))
-    except OSError:
-        pass
+        result = start(decision)
+    except Exception as e:  # noqa: BLE001
+        result = config.posture.negotiated(decision.server_hello).resolve(
+            Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}"))
+    if result is None:
+        # The Guardian does not evaluate sessionStart.
+        return decision
+    common = {"method": "steps/sessionStart", "session_id": session_id, "guardian_url": config.guardian_url}
+    if isinstance(result, Resolution):
+        audit_event(result.audit_type, **{**result.fields, "cause": result.cause, **common})
+        if result.audit_type == "guardian_refusal_fail_closed":
+            refusal = SessionRefused("session_start_refused", {**result.fields, "refusal": result.cause})
+            audit_event("session_refused", **{**refusal.fields, "cause": refusal.cause, **common})
+            return refusal
+        # No decision arrived: recorded once, and each hook's fail posture settles its own steps.
+        return Negotiated(decision.server_hello, {"cause": result.cause, "fields": dict(result.fields)})
+    verdict = normalize_decision((result.response or {}).get("result"))
+    if verdict.disposition == "allow":
+        return decision
+    refusal = SessionRefused("session_start_denied", {"decision": verdict.disposition, "reasoning": verdict.reasoning})
+    audit_event("session_refused", **{**refusal.fields, "cause": refusal.cause, **common})
+    return refusal
 
 
 def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id: str, platform: str,
@@ -115,7 +156,7 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
             profiles_supported: list[str] | None, transports_supported: list[str] | None) -> Handshake:
     stored = _read_record(path, ikm, session_id, config.guardian_url)
     if stored is not None:
-        return _required_profiles(stored, config)
+        return stored
     # An unsigned session does not meet acs-core's signed-envelope floor (§10), so it claims no profile.
     claimed = (profiles_supported if profiles_supported is not None else ["acs-core"]) if ikm else []
     if not config.handshake_enabled:
@@ -131,7 +172,7 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
     decision, ours = _store_first(path, decision, ikm, session_id, config.guardian_url)
     if ours:
         _audit_start(decision, config, session_id, claimed)
-    return _required_profiles(decision, config)
+    return decision
 
 
 def _required_profiles(decision: Handshake, config: Config) -> Handshake:
@@ -260,7 +301,10 @@ def _encode(decision: Handshake, session_id: str, guardian_url: str) -> dict[str
     body: dict[str, Any] = {"acs_session_record": _RECORD_VERSION, "session_id": session_id,
                             "guardian_url": guardian_url}
     if isinstance(decision, Negotiated):
-        return {**body, "decision": "negotiated", "server_hello": dict(decision.server_hello)}
+        negotiated = {**body, "decision": "negotiated", "server_hello": dict(decision.server_hello)}
+        if decision.start_failure is not None:
+            negotiated["start_failure"] = dict(decision.start_failure)
+        return negotiated
     kind = "refused" if isinstance(decision, SessionRefused) else "no_answer"
     return {**body, "decision": kind, "cause": decision.cause, "fields": dict(decision.fields)}
 
@@ -268,7 +312,12 @@ def _encode(decision: Handshake, session_id: str, guardian_url: str) -> dict[str
 def _decode(body: Mapping[str, Any]) -> Handshake | None:
     kind = body.get("decision")
     if kind == "negotiated" and isinstance(body.get("server_hello"), dict):
-        return Negotiated(body["server_hello"])
+        failure = body.get("start_failure")
+        if failure is None:
+            return Negotiated(body["server_hello"])
+        if isinstance(failure, dict) and isinstance(failure.get("cause"), str) and isinstance(failure.get("fields"), dict):
+            return Negotiated(body["server_hello"], failure)
+        return None
     if kind in ("refused", "no_answer") and isinstance(body.get("cause"), str) \
             and isinstance(body.get("fields"), dict):
         cls = SessionRefused if kind == "refused" else NoAnswer
@@ -291,6 +340,30 @@ def _is_legacy(record: Any) -> bool:
 
 def _read_record(path: Path, ikm: bytes, session_id: str, guardian_url: str) -> Handshake | None:
     """The stored decision, None only when no record exists, and a refusal for any record that fails its checks."""
+    body = _verified(path, ikm, session_id, guardian_url, "acs_session_record", _RECORD_VERSION)
+    if body is None or isinstance(body, SessionRefused):
+        return body
+    decision = _decode(body)
+    # Only the startup record says how a sessionStart went.
+    if decision is None or isinstance(decision, Negotiated) and decision.start_failure is not None:
+        return SessionRefused("session_record_invalid", {"record": str(path)})
+    return decision
+
+
+def _read_startup(path: Path, ikm: bytes, session_id: str, guardian_url: str) -> Handshake | str | None:
+    """The session's decision after its sessionStart, None when none is recorded, _PENDING while it is claimed, and a refusal for a record that fails its checks."""
+    body = _verified(path, ikm, session_id, guardian_url, "acs_session_startup", _STARTUP_VERSION)
+    if body is None or isinstance(body, SessionRefused):
+        return body
+    if body.get("state") == _PENDING:
+        return _PENDING
+    decision = _decode(body)
+    return decision if decision is not None else SessionRefused("session_record_invalid", {"record": str(path)})
+
+
+def _verified(path: Path, ikm: bytes, session_id: str, guardian_url: str, marker: str,
+              version: int) -> Mapping[str, Any] | SessionRefused | None:
+    """A record's body once its MAC, session and Guardian URL check out; None when no record exists, a refusal otherwise."""
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -302,21 +375,56 @@ def _read_record(path: Path, ikm: bytes, session_id: str, guardian_url: str) -> 
     except Exception:  # noqa: BLE001
         # Any parse failure counts, including RecursionError from deep nesting.
         record = None
-    if _is_legacy(record):
+    if marker == "acs_session_record" and _is_legacy(record):
         # Its signature covers the session but not the Guardian URL, so it cannot vouch for this endpoint.
         return SessionRefused("session_record_legacy", {"record": str(path)})
-    if not isinstance(record, dict) or record.get("acs_session_record") != _RECORD_VERSION:
+    # The marker keeps one kind of record from standing in for the other under the same session key.
+    if not isinstance(record, dict) or record.get(marker) != version:
         return SessionRefused("session_record_invalid", {"record": str(path)})
     body = {k: v for k, v in record.items() if k != "mac"}
     try:
         authentic = not ikm or hmac.compare_digest(str(record.get("mac")), _mac(body, ikm, session_id))
     except Exception:  # noqa: BLE001
         authentic = False
-    bound = body.get("session_id") == session_id and body.get("guardian_url") == guardian_url
-    decision = _decode(body) if authentic and bound else None
-    if decision is None:
+    if not (authentic and body.get("session_id") == session_id and body.get("guardian_url") == guardian_url):
         return SessionRefused("session_record_invalid", {"record": str(path)})
-    return decision
+    return body
+
+
+def _write_startup(path: Path, outcome: Handshake | None, ikm: bytes, session_id: str,
+                   guardian_url: str) -> SessionRefused | None:
+    """Claim the session's sessionStart (outcome None), or record its outcome; a refusal, audited, when the record cannot be written."""
+    temporary = None
+    try:
+        body: dict[str, Any] = {"acs_session_startup": _STARTUP_VERSION, "session_id": session_id,
+                                "guardian_url": guardian_url}
+        if outcome is None:
+            body["state"] = _PENDING
+        else:
+            decision = _encode(outcome, session_id, guardian_url)
+            body.update({k: v for k, v in decision.items() if k not in body and k != "acs_session_record"},
+                        state="done")
+        record = {**body, "mac": _mac(body, ikm, session_id) if ikm else None}
+        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".startup-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(record, f)
+        if outcome is None:
+            # link() fails if any startup record already exists.
+            os.link(temporary, path)
+        else:
+            os.replace(temporary, path)
+            temporary = None
+        return None
+    except Exception as e:  # noqa: BLE001
+        audit_event("session_record_unwritable", session_id=session_id, guardian_url=guardian_url,
+                    record=str(path), stage="claim" if outcome is None else "outcome", error=str(e))
+        return SessionRefused("session_record_unwritable", {"error": str(e)})
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def _store_first(path: Path, decision: Handshake, ikm: bytes, session_id: str,

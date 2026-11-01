@@ -186,10 +186,11 @@ class SessionGateThroughHooks(unittest.TestCase):
         url = "http://127.0.0.1:1/acs"
         hello = {"negotiated_version": "0.1.0", "on_decision_failure": "deny",
                  "timeout_config": {"default_ms": 2000}}
-        # Claude Code signs transcript_path into its turnStart; Cursor, with turnStart not
-        # evaluated, first touches the workspace root when it opens the turn.
+        # Neither Guardian evaluates sessionStart, so the prompt's own step fails. Claude Code signs
+        # transcript_path into its turnStart; Cursor, with turnStart not evaluated, first touches the
+        # workspace root when it opens the turn.
         cases = {
-            "claude-code": (self._claude_prompt, hello,
+            "claude-code": (self._claude_prompt, {**hello, "methods_evaluated": ["steps/turnStart", "steps/userMessage"]},
                             lambda p: json.loads(p.stdout).get("decision") == "block"),
             "cursor": (self._cursor_prompt, {**hello, "methods_evaluated": ["steps/userMessage"]},
                        lambda p: p.returncode == 0 and json.loads(p.stdout)["continue"] is False),
@@ -470,6 +471,37 @@ class SessionGateThroughHooks(unittest.TestCase):
                                                            "additionalContext": "context from the Guardian"}}, None, None])
         self.assertEqual(guardian.envelopes_for("steps/sessionStart")[0]["params"]["payload"]["platform_context"]["source"],
                          "startup")
+
+    def test_the_session_start_decision_governs_every_hook_of_the_session(self) -> None:
+        # sessionStart answer, the negotiated on_decision_failure, and whether the session's tool calls proceed.
+        cases = {"allow": ("allow", "deny", True), "deny": ("deny", "proceed", False),
+                 "signed refusal": ("refusal", "proceed", False),
+                 "timeout under deny": ("timeout", "deny", False),
+                 "timeout under proceed": ("timeout", "proceed", True)}
+        for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
+            for name, (answer, on_failure, proceeds) in cases.items():
+                with self.subTest(host, case=name):
+                    guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+                    def hello(req, base=guardian._default_handshake, on_failure=on_failure):
+                        return {**base(req), "on_decision_failure": on_failure, "timeout_config": {"default_ms": 300}}
+
+                    def start(req, answer=answer, allow=guardian._default_allow):
+                        if answer == "refusal":
+                            return {"code": -32000, "message": "session start refused"}
+                        if answer == "timeout":
+                            time.sleep(0.6)
+                        return {**allow(req), "decision": "deny" if answer == "deny" else "allow",
+                                "reasoning": "start policy"}
+                    guardian.handlers.update({"handshake/hello": hello, "steps/sessionStart": start})
+                    guardian.start()
+                    self.addCleanup(guardian.stop)
+                    session = str(uuid.uuid4())
+                    for process in (1, 2):
+                        p, denied, audits = run(guardian.url(), session)
+                        self.assertEqual(denied, not proceeds, (process, p.stdout, audits))
+                    self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"]
+                                     + (["steps/toolCallRequest"] * 2 if proceeds else []))
 
     def test_parallel_startup_hooks_follow_one_refusal(self) -> None:
         guardian = self._slow_hello(0.5, lambda req: {"code": -32000, "message": "agent not permitted"})

@@ -92,7 +92,7 @@ What it wires by default: the six unconditional hooks of the ACS-Core minimum se
 
 | Cursor event | ACS step method | Posture |
 |---|---|---|
-| `sessionStart` | sessionStart | fail-open (observational) |
+| `sessionStart` | sessionStart | fail-open (§6.4 default); a Guardian `deny` refuses the session |
 | `beforeSubmitPrompt` | userMessage | **fail-CLOSED** (gate) |
 | `preToolUse` | toolCallRequest | **fail-CLOSED** (gate) |
 | `postToolUse` | toolCallResult | fail-open |
@@ -317,7 +317,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Profiles (`profiles_supported` / `profiles_accepted`) | ✓ claims `acs-core` when a signing secret is configured and no profile without one. A ServerHello accepting a profile the adapter did not claim is not a valid answer, a claimed profile the Guardian leaves out is audited as `profile_not_accepted`, and a hook's `ACS_REQUIRE_PROFILES` turns a left-out profile into a refusal of that hook's steps. |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema for every mapped hook (emission suite), with format checking |
 | Hook taxonomy (Core minimum set) | ✓ the six unconditional hooks are covered, and so is `subagentStart`, which ACS-Core requires of a subagent-capable client. Cursor exposes the spawn boundary, and the default wiring gates it fail-closed. Seventeen Cursor events are mapped in total; `subagentStop` is intentionally omitted — see the honesty table below. |
-| Dispositions | ALLOW / DENY / ASK supported on **permission (pre-execution) events** (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeSubmitPrompt`, `subagentStart`). DEFER substituted to ASK (Cursor has no defer). MODIFY supported on `preToolUse` via `updated_input`. **Lifecycle / post-execution hooks (`afterAgentResponse → steps/agentResponse`, `sessionStart`, `sessionEnd`, `afterShellExecution`, etc.) are observation-only** — Cursor fires them after the message / side effect has occurred; a Guardian `deny` cannot undo it. See `mapping.md`. |
+| Dispositions | ALLOW / DENY / ASK supported on **permission (pre-execution) events** (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeSubmitPrompt`, `subagentStart`). DEFER substituted to ASK (Cursor has no defer). MODIFY supported on `preToolUse` via `updated_input`. A `deny` on `sessionStart` refuses the session, so every later step of it is denied. **Lifecycle / post-execution hooks (`afterAgentResponse → steps/agentResponse`, `sessionEnd`, `afterShellExecution`, etc.) are observation-only** — Cursor fires them after the message / side effect has occurred; a Guardian `deny` cannot undo it. See `mapping.md`. |
 | Unknown-disposition fail posture | ✓ |
 | SessionContext + published `chain_hash` | ✓ session_id coerced to UUID; Guardian computes rolling SHA-256 chain |
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006) |

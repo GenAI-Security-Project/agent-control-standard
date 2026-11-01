@@ -103,9 +103,13 @@ class Config:
         return self.startup_posture == "proceed"
 
     def gate(self, handshake: Handshake) -> Resolution | None:
-        """None when the session's steps go to the Guardian; otherwise how this step ends without one (§4.1)."""
+        """None when this step goes to the Guardian; otherwise how it ends without one (§4.1), a session whose sessionStart got no decision included."""
         if isinstance(handshake, Negotiated):
-            return None
+            failure = handshake.start_failure
+            if failure is None or not self.posture.negotiated(handshake.server_hello).deny_on_failure:
+                return None
+            return Resolution(False, "decision_failure_fail_closed", failure["cause"],
+                              {**failure["fields"], "method": "steps/sessionStart"})
         if isinstance(handshake, SessionRefused):
             return Resolution(False, "session_refused_fail_closed", handshake.cause, handshake.fields)
         if self.startup_proceeds:
