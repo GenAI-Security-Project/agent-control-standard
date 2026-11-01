@@ -38,7 +38,6 @@ def render_landing_page() -> str:
     return render(
         (landing / "index.html").read_text(encoding="utf-8"),
         REPO / "specification",
-        (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
         (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
         (landing / "assets" / "starburst.svg").read_text(encoding="utf-8"),
         read_nav_config(REPO / "mkdocs.yml"),

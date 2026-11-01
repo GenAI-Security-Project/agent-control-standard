@@ -61,7 +61,6 @@ extra:
       - {title: Why now, anchor: why-now}
       - {title: Built with the community, anchor: built-with}
       - {title: Spec status, anchor: status}
-      - {title: Workstreams, anchor: workstreams}
       - {title: Contribute, anchor: contribute}
     external_resources:
       - {title: GitHub, url: "https://github.com/GenAI-Security-Project/agent-control-standard"}
