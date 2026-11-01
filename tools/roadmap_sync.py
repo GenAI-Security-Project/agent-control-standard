@@ -564,7 +564,7 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
                 f"- #{number} in [milestone {milestone}]({repo_url}/milestone/{milestone}): `{reason}`. {REMEDIES[reason]}"
                 for number, milestone, reason in items
             ]
-        elif key in ("ready_to_publish", "closed_with_open_work", "target_passed", "off_quarter_dates", "missing_description_lines"):
+        elif key in ("ready_to_publish", "closed_with_open_work", "closed_nothing_done", "target_passed", "off_quarter_dates", "missing_description_lines"):
             lines += [f"- [milestone {number}]({repo_url}/milestone/{number})" for number in items]
         else:
             lines += [f"- #{number}" for number in items]

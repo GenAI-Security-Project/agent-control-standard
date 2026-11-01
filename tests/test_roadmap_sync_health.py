@@ -115,6 +115,13 @@ def test_render_never_leaks_titles_or_mentions():
     assert "outsider" not in body
 
 
+def test_closed_nothing_done_links_the_milestone_not_an_issue():
+    body = render_health(report(), "ok", "t", "1", [])
+    section = body.split("## Closed with open work and nothing done")[1].split("##")[0]
+    assert f"- [milestone 5](https://github.com/{REPO}/milestone/5)" in section
+    assert "- #5" not in section
+
+
 def test_degraded_status_line_lists_sections():
     line = status_line("degraded", "2026-11-01T04:12:09Z", "9", ["accepted_this_week"])
     assert line == "<!-- acs-sweep: degraded 2026-11-01T04:12:09Z run 9 accepted_this_week -->"
