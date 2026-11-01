@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -196,6 +197,33 @@ class CursorAdapter(unittest.TestCase):
         self.assertIn("transport_failure", err,
             "audit event must carry cause=transport_failure when Guardian unreachable")
 
+
+
+class UnenforceableDecisions(unittest.TestCase):
+    """A decision Cursor cannot hold is denied before the tool runs, and recorded after it."""
+
+    def _audits(self, call) -> tuple[dict, list]:
+        from acs.integrations.cursor import adapter as cursor_adapter
+        with mock.patch.object(cursor_adapter, "audit_event") as audit:
+            out = call(cursor_adapter)
+        return out, [(c.args[0], c.kwargs.get("decision")) for c in audit.call_args_list]
+
+    def test_ask_holds_where_cursor_enforces_it(self) -> None:
+        from acs.core import Decision
+        for event in ("beforeShellExecution", "beforeMCPExecution"):
+            with self.subTest(event):
+                out, audits = self._audits(lambda a: a._translate_permission(Decision("ask", "check"), event, {}))
+                self.assertEqual((out["permission"], audits), ("ask", []))
+
+    def test_a_result_decision_cursor_cannot_apply_is_audited(self) -> None:
+        from acs.core import Decision
+        # §6.5: a MODIFY Cursor cannot apply is a DENY, which on a delivered result is recorded as one.
+        cases = {"ask": (Decision("ask", "check"), "ask"), "defer": (Decision("defer", "later"), "defer"),
+                 "modify": (Decision("modify", "trim", {"redactions": [{"path": "/x"}]}), "deny")}
+        for name, (decision, recorded) in cases.items():
+            with self.subTest(name):
+                _, audits = self._audits(lambda a: a._translate_post_tool(decision, "postToolUse"))
+                self.assertEqual(audits, [("unenforceable_decision", recorded)])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

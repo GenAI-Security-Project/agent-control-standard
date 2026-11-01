@@ -156,10 +156,7 @@ POST_TOOL_EVENTS = frozenset({
     "afterShellExecution", "afterFileEdit", "afterTabFileEdit",
 })
 
-# Deployment substitution, not spec-mandated (§9.2 puts substitution on
-# the Guardian): Cursor has no native "defer", so defer→ask. Cursor
-# documents `ask` on preToolUse as accepted-but-not-yet-enforced — a soft
-# signal, not a hard hold.
+# Cursor has no defer, so defer asks; preToolUse does not enforce ask, so _translate_permission denies ask and defer there.
 PERMISSION_MAP: dict[str, str] = {
     "allow": "allow", "deny": "deny", "ask": "ask", "defer": "ask",  # no native defer
 }
@@ -676,6 +673,12 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
 
 def _translate_permission(decision: Decision, event_name: str, original_input: dict,
                           tool_name: str = "") -> dict[str, Any]:
+    if decision.disposition in ("ask", "defer") and event_name == "preToolUse":
+        # Cursor accepts ask on preToolUse but does not enforce it, so the tool would run: deny instead.
+        audit_event("unenforceable_decision", decision=decision.disposition, event=event_name,
+                    reason=decision.reasoning or "(none)", substituted="deny")
+        return _permission_response("deny", f"ACS Guardian asked for approval Cursor cannot hold here: "
+                                            f"{decision.reasoning or '(no reasoning)'}")
     if decision.disposition in PERMISSION_MAP:
         return _permission_response(PERMISSION_MAP[decision.disposition], decision.reasoning)
     if decision.disposition == "modify":
@@ -761,6 +764,10 @@ def _translate_post_tool(decision: Decision, event_name: str, tool_name: str = "
         audit_modify_unsupported("structured edits on a tool result" if updated is None
                                  else "updated_mcp_tool_output on this tool", event=event_name, tool=tool_name)
         return _post_tool_deny(event_name, f"MODIFY substituted to DENY: {decision.reasoning}")
+    if decision.disposition in ("ask", "defer"):
+        # The tool already ran and its result is delivered: nothing can hold it for a person.
+        audit_event("unenforceable_decision", decision=decision.disposition, event=event_name,
+                    reason=decision.reasoning or "(none)")
     if decision.reasoning:
         return _post_tool_response(additional_context=decision.reasoning)
     return {}

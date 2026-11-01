@@ -854,17 +854,17 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         self.assertIn("defer_substituted_deny", r["stderr"],
             "the DEFER→deny substitution must be audited")
 
-    def test_defer_substitutes_ask_cursor(self) -> None:
-        """Cursor documents DEFER → ask (no native defer). Assert it."""
-        with self._scripted_guardian({
-            "decision": "defer", "reasoning": "pending",
-            "defer_details": {"resolution_method": "retry",
-                              "resolution_timeout_ms": 1000,
-                              "timeout_decision": "deny"},
-        }) as g:
-            r = self._run_cursor(g)
-        self.assertEqual(r["out"].get("permission"), "ask",
-            f"cursor maps defer→ask per mapping.md; got {r['out']!r}")
+    def test_ask_and_defer_deny_on_cursor_pre_tool_use(self) -> None:
+        """Cursor accepts ask on preToolUse without enforcing it, so ask and defer would let the tool run: both deny, audited."""
+        for disposition in ("ask", "defer"):
+            with self.subTest(disposition), self._scripted_guardian({
+                "decision": disposition, "reasoning": "pending",
+                **({"defer_details": {"resolution_method": "retry", "resolution_timeout_ms": 1000,
+                                      "timeout_decision": "deny"}} if disposition == "defer" else {}),
+            }) as g:
+                r = self._run_cursor(g)
+            self.assertEqual(r["out"].get("permission"), "deny", r["out"])
+            self.assertIn('"unenforceable_decision"', r["stderr"])
 
     def test_unusable_disposition_denies_regardless_of_posture(self) -> None:
         """§6.4:158 requires an arrived decision to be honored regardless of
