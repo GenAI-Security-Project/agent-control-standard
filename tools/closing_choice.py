@@ -38,8 +38,9 @@ DEPENDABOT = "dependabot[bot]"
 _LINK = re.compile(r"\[([^\[\]\n]{0,500})\]\([^()\s]{0,2048}\)")
 _REF = re.compile(
     r"(?<![A-Za-z0-9_/#.-])"
-    r"(?:https://github\.com/(?P<url_owner>[A-Za-z0-9-]{1,39})/(?P<url_repo>[A-Za-z0-9.-]{1,100})"
+    r"(?:https?://(?:www\.)?github\.com/(?P<url_owner>[A-Za-z0-9-]{1,39})/(?P<url_repo>[A-Za-z0-9.-]{1,100})"
     r"/issues/(?P<url_number>[0-9]{1,9})"
+    r"|[Gg][Hh]-(?P<gh_number>[0-9]{1,9})"
     r"|(?:(?P<owner>[A-Za-z0-9-]{1,39})/(?P<repo>[A-Za-z0-9.-]{1,100}))?#(?P<number>[0-9]{1,9}))"
     r"(?![0-9A-Za-z])"
 )
@@ -80,7 +81,7 @@ def normalize(text: str | None) -> str:
 def _ours(match: re.Match[str]) -> tuple[bool, int]:
     owner = match.group("url_owner") or match.group("owner")
     repo = match.group("url_repo") or match.group("repo")
-    number = int(match.group("url_number") or match.group("number"))
+    number = int(match.group("url_number") or match.group("gh_number") or match.group("number"))
     if owner is None:
         return True, number
     return f"{owner}/{repo}".casefold() == REPO.casefold(), number
