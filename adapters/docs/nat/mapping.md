@@ -80,7 +80,7 @@ NAT can invoke several wrapped functions at once in one process. The builder ope
 
 ## Conformance posture
 
-The NAT adapter implements ACS-Core's mandatory floor:
+The NAT adapter covers ACS-Core's mandatory floor. This is the floor the tests check, not a full ACS-Core conformance claim (see `adapters/README.md`). Three ACS-Core requirements from later specification changes follow in separate PRs: the `key_id` taken from configuration (§10, #272); decision failures recorded with their failure class and counted at `sessionEnd` (§6.4, #273); and a signature on every request, where today an adapter with no secret configured sends unsigned requests (§10). The floor it covers:
 
 - Hook taxonomy: every wrapped function call surfaces as `toolCallRequest` + `toolCallResult`.
 - Dispositions: ALLOW / DENY / MODIFY supported normatively; ASK / DEFER substituted to DENY with audit (HITL composition is the recommended path).
