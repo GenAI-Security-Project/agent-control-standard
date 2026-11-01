@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import json  # noqa: E402
 import os  # noqa: E402
 
-import check_origin_cert  # noqa: E402
 import monitor_roadmap  # noqa: E402
 import roadmap_model as model  # noqa: E402
 
@@ -42,9 +41,6 @@ def failed_jobs(results: str) -> list[str]:
 
 def report(failed: list[str], run_url: str) -> str:
     lines = [f"Failed jobs: {', '.join(failed)}.", f"Run: {run_url}"]
-    if "origin-cert" in failed:
-        # The check also fails when the edge is down, and the proxy is not the fix for that.
-        lines.append(f"If the `origin-cert` log reports the certificate: {check_origin_cert.REMEDY}")
     return "\n\n".join(lines)
 
 
