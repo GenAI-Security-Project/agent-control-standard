@@ -70,7 +70,8 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     endpoint, or cannot be stored refuses the session.
 
     With start, the hook process that opens a negotiated session also sends
-    the session's sessionStart through it, once, and records the outcome in a
+    the session's sessionStart through it, once, unless this hook's
+    ACS_REQUIRE_PROFILES refuses it, and records the outcome in a
     signed startup record next to the session record. Hooks of one session can
     run at the same time, so every hook process of the session waits for that
     handshake and that sessionStart under the session's startup lock, then
@@ -93,8 +94,7 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     started = Path(f"{path}.started")
     stored = _read_record(path, ikm, session_id, config.guardian_url)
     if stored is not None and not isinstance(stored, Negotiated):
-        # A refused or unanswered session, or a record that fails its checks: there is nothing to start.
-        return _required_profiles(stored, config)
+        return stored
     if stored is not None:
         recorded = _read_startup(started, ikm, session_id, config.guardian_url)
         if recorded is not None and recorded != _PENDING:
@@ -108,8 +108,9 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
                         record=f"{path}.lock", error=str(e))
             return SessionRefused("session_startup_lock_unavailable", {"error": str(e)})
         decision = _decide(path, ikm, **hello)
-        if not isinstance(decision, Negotiated):
-            return _required_profiles(decision, config)
+        own = _required_profiles(decision, config)
+        if not isinstance(own, Negotiated):
+            return own
         recorded = _read_startup(started, ikm, session_id, config.guardian_url)
         if recorded == _PENDING:
             # The process that claimed the sessionStart released the lock without recording its outcome.

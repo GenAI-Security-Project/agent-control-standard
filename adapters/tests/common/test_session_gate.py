@@ -503,6 +503,22 @@ class SessionGateThroughHooks(unittest.TestCase):
                     self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"]
                                      + (["steps/toolCallRequest"] * 2 if proceeds else []))
 
+    def test_a_hook_its_own_profile_requirement_refuses_leaves_the_start_to_the_next_hook(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.handlers["handshake/hello"] = lambda req: {**guardian._default_handshake(req), "profiles_accepted": []}
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
+            with self.subTest(host):
+                guardian.reset()
+                session = str(uuid.uuid4())
+                p, denied, audits = run(guardian.url(), session, ACS_REQUIRE_PROFILES="acs-core")
+                self.assertTrue(denied, p.stdout)
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello"])
+                p, denied, _ = run(guardian.url(), session)
+                self.assertFalse(denied, p.stdout)
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest"])
+
     def test_parallel_startup_hooks_follow_one_refusal(self) -> None:
         guardian = self._slow_hello(0.5, lambda req: {"code": -32000, "message": "agent not permitted"})
         for host in self.STARTUP:

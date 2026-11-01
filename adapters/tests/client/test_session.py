@@ -447,13 +447,19 @@ class Startup(_SessionTest):
         self.assertEqual([(c.args[0], c.kwargs["error"]) for c in self.audit.call_args_list
                           if c.kwargs.get("method") == "steps/sessionStart"], [("fail_open_bypass", "boom")])
 
-    def test_a_hook_refused_by_its_own_profile_requirement_still_starts_the_session(self) -> None:
-        starts: list = []
-        strict, _ = self._open(session_id="start-profile", start=starts.append, ACS_REQUIRE_PROFILES="acs-other")
-        later, calls = self._open(session_id="start-profile", start=starts.append)
-        self.assertEqual(strict.cause, "required_profile_not_accepted")
-        self.assertIsInstance(later, Negotiated)
-        self.assertEqual((len(starts), calls), (1, 0))
+    def test_a_hook_refused_by_its_own_profile_requirement_leaves_the_start_to_a_later_hook(self) -> None:
+        for name, stored_first in (("opens the session", False), ("joins a stored session", True)):
+            with self.subTest(name):
+                session = f"start-profile-{stored_first}"
+                if stored_first:
+                    self._open(session_id=session)
+                starts: list = []
+                strict, _ = self._open(session_id=session, start=starts.append, ACS_REQUIRE_PROFILES="acs-other")
+                self.assertEqual((strict.cause, starts), ("required_profile_not_accepted", []))
+                self.assertFalse(self._started(session).exists())
+                later, calls = self._open(session_id=session, start=starts.append)
+                self.assertIsInstance(later, Negotiated)
+                self.assertEqual((len(starts), calls), (1, 0), "the negotiation is stored once; the later hook starts")
 
     def test_a_startup_record_the_start_did_not_write_refuses_the_session(self) -> None:
         for name in ("empty", "copied"):
