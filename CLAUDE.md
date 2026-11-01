@@ -103,10 +103,7 @@ contained because `$id` is a pull-request-writable string used to build a filesy
 path. The build fails on an unsafe or duplicated `$id` and on any `$ref` that does not
 resolve, fragment included.
 
-`GOVERNANCE.md` is a build input. Its workstream table renders into the published page,
-so a change to its shape can fail the deploy, and its contents are escaped as untrusted
-text. `mkdocs.yml` is also a landing build input, and its values are escaped as untrusted
-text too.
+`mkdocs.yml` is a landing build input, and its values are escaped as untrusted text.
 
 The site serves from **owaspacs.org**, at the domain root. **agentcontrolstandard.org**
 is a separate site, built and deployed from a separate repository, and nothing here
