@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import render_landing
 import site_nav
 from publish_schemas import BASE
+from roadmap_model import RosterError, parse_governance
 from render_landing import (
     RenderError, page_url, parse_priority_scope, parse_workstreams, read_nav_config, render,
     render_csp, render_nav, render_priority_scope, render_workstreams, schema_count,
@@ -78,6 +79,8 @@ Prose that must not be parsed as a row.
 
 Not a workstream.
 """
+
+COMMENTED_ROW = GOVERNANCE.replace("| Spec |", "<!--\n| Spec |").replace("\n\n## Origins", "\n-->\n\n## Origins")
 
 FULL_TEMPLATE = "".join(render_landing.REQUIRED_PLACEHOLDERS) + "<script>var x=1;</script>"
 
@@ -191,6 +194,34 @@ def test_parse_workstreams_raises_on_a_wrong_width_row():
     text = GOVERNANCE.replace("| Spec |", "| Spec | extra |")
     with pytest.raises(RenderError, match="cells"):
         parse_workstreams(text)
+
+
+def test_parse_workstreams_drops_a_row_inside_a_comment():
+    assert [name for name, _ in parse_workstreams(COMMENTED_ROW)] == ["Identity"]
+
+
+def test_parse_workstreams_drops_an_inline_comment_from_a_cell():
+    text = GOVERNANCE.replace("| Identity |", "| Identity <!-- hidden --> |")
+    assert [name for name, _ in parse_workstreams(text)] == ["Identity", "Spec"]
+
+
+@pytest.mark.parametrize("text", [
+    (REPO / "GOVERNANCE.md").read_text(encoding="utf-8"),
+    GOVERNANCE,
+    COMMENTED_ROW,
+    GOVERNANCE.replace("| Identity |", r"| Identity \| IAM |"),
+    GOVERNANCE.replace("## Origins", "### Emeritus\n\n| Old | Thing |\n| --- | --- |\n| A | B |\n\n## Origins"),
+], ids=["real", "plain", "commented-row", "escaped-pipe", "lower-heading"])
+def test_the_page_and_the_roster_read_the_same_rows(text):
+    assert [name for name, _ in parse_workstreams(text)] == list(parse_governance(text).workstreams)
+
+
+def test_the_page_and_the_roster_refuse_the_same_row():
+    text = GOVERNANCE.replace("| Identity |", "|  |")
+    with pytest.raises(RenderError, match="table lines"):
+        parse_workstreams(text)
+    with pytest.raises(RosterError, match="table lines"):
+        parse_governance(text)
 
 
 def test_parse_workstreams_fails_without_the_section():
