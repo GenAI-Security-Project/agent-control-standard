@@ -87,6 +87,7 @@ TEST_HMAC_SECRET = "acs-core-conformance-test-secret-not-for-production"
 # =============================================================================
 
 from acs.testing.harness import (  # noqa: E402
+    signing_env,
     launch_guardian,
     seed_negotiated_session,
     build_local_resolver as _build_local_resolver,
@@ -104,7 +105,7 @@ class CoreHarness(unittest.TestCase):
     cross-contaminate.
     """
 
-    HMAC_SECRET: str | None = TEST_HMAC_SECRET  # subclass can null to disable
+    HMAC_SECRET: str = TEST_HMAC_SECRET
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -132,13 +133,8 @@ class CoreHarness(unittest.TestCase):
         env = os.environ.copy()
         cls.statedir = tempfile.mkdtemp(prefix="acs-core-conformance-")
         env["ACS_GUARDIAN_STATE_DIR"] = cls.statedir
-        if cls.HMAC_SECRET:
-            env["ACS_HMAC_SECRET"] = cls.HMAC_SECRET
-            env["ACS_HMAC_KEY_ID"] = "test-key"
-            env.pop("ACS_DEV_MODE", None)
-        else:
-            env["ACS_DEV_MODE"] = "1"
-            env.pop("ACS_HMAC_SECRET", None)
+        env["ACS_HMAC_SECRET"] = cls.HMAC_SECRET
+        env["ACS_HMAC_KEY_ID"] = "test-key"
         env.pop("ACS_HMAC_SECRET_FILE", None)
         cls.guardian_proc, cls.port = launch_guardian(env=env)
         cls.url = f"http://127.0.0.1:{cls.port}/acs"
@@ -1471,7 +1467,8 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
                              env_overrides: dict | None = None,
                              timeout: float = 10.0) -> subprocess.CompletedProcess:
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
-        env = os.environ.copy()
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         env["ACS_GUARDIAN_URL"] = guardian_url
         env.pop("ACS_DEFAULT_DENY", None)
         if env_overrides:
@@ -1502,13 +1499,16 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
                 length = int(self_h.headers.get("Content-Length", "0"))
                 body = json.loads(self_h.rfile.read(length).decode())
                 time.sleep(delay_s)
-                reply = json.dumps({
+                reply = {
                     "jsonrpc": "2.0", "id": body.get("id"),
                     "result": {"type": "final", "acs_version": "0.1.0",
                                "request_id": body.get("params", {}).get("request_id", ""),
                                "decision": "deny",
                                "reasoning": "slow guardian denied"},
-                }).encode()
+                }
+                session = body["params"]["metadata"]["session_id"]
+                key = core.derive_session_key(signing_env()["ACS_HMAC_SECRET"].encode(), session)
+                reply = json.dumps(core.sign_with_key(reply, key, key_id=signing_env()["ACS_HMAC_KEY_ID"])).encode()
                 self_h.send_response(200)
                 self_h.send_header("Content-Length", str(len(reply)))
                 self_h.send_header("Content-Type", "application/json")
@@ -1538,25 +1538,18 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
             srv.server_close()
 
     def test_guardian_error_response_carries_distinct_cause(self) -> None:
-        """A Guardian-returned JSON-RPC error must be distinguishable in
-        the audit log from 'Guardian unreachable' — same §6.4 fail
-        posture, but a signature error is a client bug while an
-        unreachable Guardian is an ops issue.
-
-        Setup: Guardian REQUIRES signing; the adapter runs WITHOUT a
-        secret, so the Guardian responds -32004 SIGNATURE_INVALID.
-        """
+        """A Guardian's JSON-RPC error is told apart from an unreachable Guardian in the audit."""
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
         env_g = os.environ.copy()
-        env_g["ACS_HMAC_SECRET"] = "regression-test-secret"
+        env_g["ACS_HMAC_SECRET"] = "regression-test-secret-padded-to-32-bytes"
         env_g["ACS_HMAC_KEY_ID"] = "test-key"
-        env_g.pop("ACS_DEV_MODE", None)
         env_g["ACS_GUARDIAN_STATE_DIR"] = tempfile.mkdtemp()
         guardian, port = launch_guardian(env=env_g)
         try:
             env_a = os.environ.copy()
             env_a["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{port}/acs"
-            env_a.pop("ACS_HMAC_SECRET", None)
+            env_a["ACS_HMAC_SECRET"] = "a-secret-this-guardian-does-not-hold-0123456789"
+            env_a["ACS_HMAC_KEY_ID"] = "test-key"
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
             env_a.pop("ACS_DEFAULT_DENY", None)  # default fail-open
             _negotiated(env_a, "00000000-0000-4000-8000-000000000001")
@@ -1600,20 +1593,18 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
             except subprocess.TimeoutExpired: guardian.kill()
 
     def test_guardian_error_under_fail_closed_emits_deny(self) -> None:
-        """Same unsigned-adapter setup with ACS_DEFAULT_DENY=1: the
-        adapter MUST emit a deny AND audit the specific cause."""
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
         env_g = os.environ.copy()
-        env_g["ACS_HMAC_SECRET"] = "regression-test-secret-2"
+        env_g["ACS_HMAC_SECRET"] = "regression-test-secret-2-padded-to-32-bytes"
         env_g["ACS_HMAC_KEY_ID"] = "test-key"
-        env_g.pop("ACS_DEV_MODE", None)
         env_g["ACS_GUARDIAN_STATE_DIR"] = tempfile.mkdtemp()
         guardian, port = launch_guardian(env=env_g)
         try:
             env_a = os.environ.copy()
             env_a["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{port}/acs"
             env_a["ACS_DEFAULT_DENY"] = "1"
-            env_a.pop("ACS_HMAC_SECRET", None)
+            env_a["ACS_HMAC_SECRET"] = "a-secret-this-guardian-does-not-hold-0123456789"
+            env_a["ACS_HMAC_KEY_ID"] = "test-key"
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
             _negotiated(env_a, "00000000-0000-4000-8000-000000000002")
 
@@ -1661,8 +1652,7 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
         deny AND log cause=malformed_envelope_response."""
         adapter = INTEGRATIONS_DIR / "claude_code" / "adapter.py"
         env_g = os.environ.copy()
-        env_g["ACS_DEV_MODE"] = "1"  # no signing for this test
-        env_g.pop("ACS_HMAC_SECRET", None)
+        env_g.update(signing_env())
         env_g.pop("ACS_HMAC_SECRET_FILE", None)
         env_g["ACS_GUARDIAN_STATE_DIR"] = tempfile.mkdtemp()
         guardian, port = launch_guardian(env=env_g)
@@ -1670,7 +1660,7 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
             env_a = os.environ.copy()
             env_a["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{port}/acs"
             env_a["ACS_DEFAULT_DENY"] = "1"
-            env_a.pop("ACS_HMAC_SECRET", None)
+            env_a.update(signing_env())
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
 
             _negotiated(env_a, "test-sess")

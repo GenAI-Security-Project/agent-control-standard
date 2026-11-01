@@ -321,13 +321,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
                 "WARNING: --secret-env-inline embeds the secret directly in "
                 "settings.json (visible in `ps aux`). For production, prefer "
                 "--secret-file with a 0600 key file.")
-        else:
-            warnings.append(
-                "WARNING: no HMAC secret configured (neither --secret-file "
-                "nor --secret-env-inline). Adapter will run unsigned — Guardian "
-                "will reject every request unless it's also unconfigured "
-                "(ACS_DEV_MODE=1). ACS-Core baseline integrity (§10) "
-                "REQUIRES signing.")
 
         if not args.guardian_url.startswith(("http://", "https://")):
             warnings.append(
@@ -422,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--guardian-url is required (unless --unwire)")
     if args.secret_file and args.secret_env_inline:
         p.error("provide --secret-file OR --secret-env-inline, not both")
+    if not args.unwire and not (args.secret_file or args.secret_env_inline):
+        p.error("a secret is required (--secret-file or --secret-env-inline): ACS-Core signs every request (§10)")
     if (args.secret_file or args.secret_env_inline) and not (args.key_id or "").strip():
         p.error("--key-id is required with a secret: it names the secret, and the Guardian must hold the same label")
 

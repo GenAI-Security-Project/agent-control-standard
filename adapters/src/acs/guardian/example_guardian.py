@@ -1,58 +1,5 @@
 #!/usr/bin/env python3
-"""
-Minimal local Guardian for testing the reference adapters.
-
-Implements the ACS v0.1.0 spec features the adapters exercise:
-
-- Wire envelope per `request-envelope.json` / `response-envelope.json`.
-- HMAC-SHA256 baseline signing (§10) with HKDF-derived per-session key.
-- Rolling SHA-256 audit chain per §8.2 (`entry_hash = sha256(JCS(entry) || previous_hash)`).
-- Replay rejection on duplicate `request_id` (§10.3, error -32005).
-- Timestamp skew rejection (§10.3, error -32006).
-- `handshake/hello` with ClientHello/ServerHello (§4).
-- `system/ping` always returns allow, never enters the chain (§13).
-- Subagent gating: blocks `Task` tool by default.
-- Destructive-Bash regex + protected-system-path Write blocks.
-
-This is NOT a production Guardian. It is a teaching artifact and a test
-substrate for the reference adapters.
-
-Wire format ground truth:
-  `specification/v0.1.0/request-envelope.json`
-  `specification/v0.1.0/response-envelope.json`
-  `specification/v0.1.0/handshake.json`
-  `specification/v0.1.0/hooks/*.json`
-
-Usage:
-  python3 example_guardian.py [--port 8787]
-
-Environment variables:
-  ACS_HMAC_SECRET / ACS_HMAC_SECRET_FILE
-                      Shared secret for HMAC-SHA256 signing per §10. The
-                      Guardian verifies every signed request and signs
-                      every response. **The Guardian refuses to start
-                      unless one of these is set, or `ACS_DEV_MODE=1`.**
-                      File path is preferred for production (no exposure
-                      in `ps aux`); use `chmod 600`.
-                      Generate: `openssl rand -hex 32 > /etc/acs/hmac.key`
-  ACS_HMAC_KEY_ID     The label that names the secret (§10), the same one
-                      the adapters send. A request under another label
-                      gets an unsigned SIGNATURE_INVALID. Required with a
-                      secret.
-  ACS_DEV_MODE        "1" allows starting without a signing secret. Local
-                      development only. ACS-Core baseline integrity (§10)
-                      is not satisfied in dev mode.
-  ACS_SKEW_WINDOW_MS  Timestamp skew tolerance (default 300_000 = 5 min).
-  ACS_ALLOW_SUBAGENT  "1" allows the Task tool. Default "0" gates it.
-  ACS_GUARDIAN_STATE_DIR
-                      Directory where per-session state (chain head +
-                      seen request_ids) is persisted. Survives Guardian
-                      restart so §10.3 replay protection isn't reset by
-                      crashes / deploys / autoscaling. Defaults to
-                      ~/.cache/acs-guardian-state/. Set to "" to disable
-                      persistence (RAM-only; dev/test only — opens a
-                      replay window across restarts).
-"""
+"""Example Guardian for testing the reference adapters, not a production Guardian; docs/guardian/README.md describes it."""
 from __future__ import annotations
 
 import argparse
@@ -69,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from acs.client import audit_event, load_hmac_secret, load_key_id, sign_envelope, verify_signature  # noqa: E402
+from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature  # noqa: E402
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash  # noqa: E402
 from acs.core import (  # noqa: E402
     ACS_VERSION,
@@ -136,18 +83,9 @@ SKEW_WINDOW_MS = int(os.environ.get("ACS_SKEW_WINDOW_MS", str(DEFAULT_SKEW_WINDO
 ALLOW_SUBAGENT = os.environ.get("ACS_ALLOW_SUBAGENT", "0") == "1"
 
 
-def _hmac_secret() -> bytes:
-    """Re-read on every call so operators can rotate the secret without
-    restarting the Guardian."""
-    return load_hmac_secret()
-
-
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/")
 
-# Methods this teaching policy acknowledges with unconditional allow.
-# steps/subagentStart is deliberately NOT here — it is the confused-deputy
-# gate and gets a real policy branch in evaluate_step; steps/subagentStop
-# is audit-only per hooks.md.
+# Acknowledged with an unconditional allow; subagentStart is absent because it is the confused-deputy gate.
 INFORMATIONAL_METHODS = {
     "steps/sessionStart", "steps/sessionEnd", "steps/userMessage",
     "steps/toolCallResult", "steps/agentResponse",
@@ -425,12 +363,6 @@ def check_skew(timestamp: str) -> None:
 
 
 def check_signature(envelope: dict, session_id: str) -> None:
-    if not _hmac_secret():
-        return  # local-dev mode
-    signature = (envelope.get("params") or {}).get("signature")
-    if isinstance(signature, dict) and signature.get("key_id") != load_key_id():
-        # §10: reject an unknown key_id without trying another secret.
-        raise GuardianError(-32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
     if not verify_signature(envelope, session_id=session_id):
         raise GuardianError(-32004, "SIGNATURE_INVALID")
 
@@ -472,7 +404,7 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
         "negotiated_version": ACS_VERSION,
         "methods_evaluated": client_hello.get("methods_implemented") or [],
         "selected_transport": transport,
-        "signature_algorithms_supported": (["HMAC-SHA256"] if _hmac_secret() else []),
+        "signature_algorithms_supported": ["HMAC-SHA256"],
         "timeout_config": {"default_ms": 5000},
         "skew_window_ms": SKEW_WINDOW_MS,
         "on_decision_failure": "proceed",  # spec default per §6.4
@@ -579,7 +511,7 @@ def _error_envelope(request_id, session_id: str, code: int, message: str, *, sig
     derivable; earlier failures surface as HTTP refusals in do_POST."""
     envelope = {"jsonrpc": "2.0", "id": request_id,
                 "error": {"code": code, "message": message}}
-    if signed and _hmac_secret() and session_id:
+    if signed and session_id:
         sign_envelope(envelope, session_id=session_id)
     return envelope
 
@@ -593,8 +525,19 @@ def handle_request(request: dict) -> dict:
     acs_request_id = params.get("request_id", "")
     timestamp = params.get("timestamp", "")
 
-    # Schema-validate before policy code; system/ping and handshake/hello
-    # have their own payload shapes and are exempt.
+    # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
+    if method == "system/ping":
+        result = evaluate_ping(params, acs_request_id)
+        envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
+        return envelope
+
+    # §10: a request under a key_id this Guardian holds no secret for gets an unsigned
+    # SIGNATURE_INVALID before any other check, since no response to it can be signed.
+    signature = params.get("signature")
+    if isinstance(signature, dict) and signature.get("key_id") != load_key_id():
+        return _error_envelope(request_id, session_id, -32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
+
+    # Validated before policy; ping and handshake have their own payload shapes.
     if (_SPEC_VALIDATION_AVAILABLE
             and method not in ("system/ping", "handshake/hello")):
         errors = list(_REQUEST_ENVELOPE_VALIDATOR.iter_errors(request))
@@ -605,13 +548,6 @@ def handle_request(request: dict) -> dict:
             )
             return _error_envelope(request_id, session_id, -32600,
                                    f"Invalid Request: envelope failed schema: {paths}")
-
-    # system/ping is the ONLY signature-exempt method (§13), so liveness
-    # probing survives key-resolution outages.
-    if method == "system/ping":
-        result = evaluate_ping(params, acs_request_id)
-        envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        return envelope
 
     if method == "handshake/hello":
         # NOT signature-exempt: §10 / conformance.md:23 cover every
@@ -624,8 +560,7 @@ def handle_request(request: dict) -> dict:
         except GuardianError as e:
             return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
         envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        if _hmac_secret():
-            sign_envelope(envelope, session_id=session_id)
+        sign_envelope(envelope, session_id=session_id)
         return envelope
 
     # Standard hook traffic — full pipeline
@@ -646,8 +581,7 @@ def handle_request(request: dict) -> dict:
         return _error_envelope(request_id, session_id, e.code, e.message)
 
     envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-    if _hmac_secret():
-        sign_envelope(envelope, session_id=session_id)
+    sign_envelope(envelope, session_id=session_id)
     return envelope
 
 
@@ -729,32 +663,19 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
 
-    # §10 baseline integrity: refuse to start without a signing secret
-    # unless the operator explicitly opted into dev mode.
-    if not load_hmac_secret() and os.environ.get("ACS_DEV_MODE", "0") != "1":
+    # §10: every request and response is signed, so the Guardian starts only with a usable secret and label.
+    try:
+        load_signing_material()
+    except Exception as e:  # noqa: BLE001
         sys.stderr.write(
-            "[guardian] REFUSING TO START: no signing secret configured.\n"
-            "  Configure one of:\n"
+            f"[guardian] REFUSING TO START: {e}\n"
+            "  Configure a secret of at least 32 bytes and the label that names it:\n"
             "    ACS_HMAC_SECRET_FILE=/path/to/key   (preferred; chmod 600)\n"
-            "    ACS_HMAC_SECRET=<hex>               (env-var fallback)\n"
+            "    ACS_HMAC_KEY_ID=<label>             (the same label the adapters use)\n"
             "  Generate a key:\n"
             "    openssl rand -hex 32 > /etc/acs/hmac.key && chmod 600 /etc/acs/hmac.key\n"
-            "  For local development without a secret (NON-CONFORMANT per §10):\n"
-            "    ACS_DEV_MODE=1\n"
         )
         return 1
-    if load_hmac_secret() and not load_key_id():
-        sys.stderr.write(
-            "[guardian] REFUSING TO START: ACS_HMAC_KEY_ID is not set.\n"
-            "  It names the signing secret (§10); set the same label the adapters use, e.g. ACS_HMAC_KEY_ID=2026-11\n"
-        )
-        return 1
-
-    if not load_hmac_secret():
-        sys.stderr.write(
-            "[guardian] WARNING: running in ACS_DEV_MODE — envelope signing disabled.\n"
-            "  ACS-Core baseline integrity (§10) is NOT satisfied.\n"
-        )
 
     class ReusableServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True

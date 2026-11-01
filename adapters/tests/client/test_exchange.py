@@ -14,7 +14,7 @@ from acs.client import Decided, FailPosture, Refused, Undecided, exchange
 from acs.client import _exchange
 from acs.core import MAX_REQUEST_BODY_BYTES, derive_session_key, sign_with_key
 
-SECRET = "exchange-test-secret"
+SECRET = "exchange-test-secret-padded-to-32-bytes"
 SESSION = "session-exchange"
 URL = "http://127.0.0.1:8787/acs"
 

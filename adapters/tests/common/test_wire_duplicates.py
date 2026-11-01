@@ -15,6 +15,9 @@ from acs.integrations._duplicates import claude_code_plugins, hook_files, wired_
 from acs.integrations.claude_code import wire as claude_wire
 from acs.integrations.cursor import wire as cursor_wire
 
+# The wire tools refuse to wire without a secret and its label (§10).
+SECRET_ARGS = ["--secret-env-inline=" + "0" * 64, "--key-id=test-key"]
+
 
 def _claude_hook(command: str) -> dict:
     return {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]}}
@@ -55,7 +58,7 @@ class _WireTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
             try:
                 rc = self.MODULE.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
-                                       f"--hook-command={self.hook}", "--write", *extra])
+                                       f"--hook-command={self.hook}", "--write", *SECRET_ARGS, *extra])
             except SystemExit as e:
                 rc = int(e.code or 0)
         return rc, err.getvalue()

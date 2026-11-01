@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,7 +21,7 @@ LIVE = os.environ.get("ACS_LIVE_CLAUDE") == "1"
 LIVE_SKIP_REASON = "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"
 
 
-from acs.testing.harness import launch_guardian  # noqa: E402
+from acs.testing.harness import launch_guardian, signing_env  # noqa: E402
 
 
 @unittest.skipUnless(LIVE, LIVE_SKIP_REASON)
@@ -34,8 +35,7 @@ class LiveClaudeCodeRoundTrip(unittest.TestCase):
         # Launch first: settings.json below needs the OS-assigned port
         # launch_guardian returns.
         env = os.environ.copy()
-        env["ACS_DEV_MODE"] = "1"
-        env.pop("ACS_HMAC_SECRET", None)
+        env.update(signing_env())
         env.pop("ACS_HMAC_SECRET_FILE", None)
         cls.guardian_proc, cls.port = launch_guardian(env=env)
 
@@ -52,6 +52,7 @@ class LiveClaudeCodeRoundTrip(unittest.TestCase):
                         "type": "command",
                         "command": (
                             f"ACS_GUARDIAN_URL=http://127.0.0.1:{cls.port}/acs "
+                            + " ".join(f"{k}={shlex.quote(v)}" for k, v in signing_env().items()) + " "
                             f"python3 {ADAPTER}"
                         ),
                     }],

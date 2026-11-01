@@ -22,7 +22,7 @@ from acs.testing.harness import ProgrammableGuardian
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig
 
-SECRET = "nat-session-gate-secret"
+SECRET = "nat-session-gate-secret-padded-to-32-bytes"
 
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")

@@ -33,7 +33,7 @@ from acs.client import _exchange
 from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.client import _store as client_store  # noqa: E402
 from acs.examples import destructive_bash  # noqa: E402
-from acs.testing.harness import launch_guardian  # noqa: E402
+from acs.testing.harness import launch_guardian, signing_env  # noqa: E402
 
 
 HERE = Path(__file__).resolve().parent
@@ -134,8 +134,7 @@ class GuardianBodySizeCap(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         env = os.environ.copy()
-        env["ACS_DEV_MODE"] = "1"
-        env.pop("ACS_HMAC_SECRET", None)
+        env.update(signing_env())
         env.pop("ACS_HMAC_SECRET_FILE", None)
         cls.proc, cls.port = launch_guardian(env=env)
         cls.url = f"http://127.0.0.1:{cls.port}/acs"
@@ -556,7 +555,8 @@ class Item20_DeadGuardianCostsOneTimeoutPerSession(unittest.TestCase):
 
     def test_second_event_of_the_session_is_fast(self) -> None:
         import time as _time
-        with tempfile.TemporaryDirectory() as d, \
+        signing = {**{k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}, **signing_env()}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, signing, clear=True), \
                 mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(d)):
             kw = dict(config=client.Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs"}),
                       session_id="cache-test", agent_id="a", platform="test",
@@ -870,15 +870,9 @@ class Item22_StoredSessionDecisionIsAuthenticated(unittest.TestCase):
 # ----- 23. ClientHello advertises only earned integrity capabilities -----
 
 class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
-    """An unsigned session must not advertise the signed ACS-Core floor.
+    """The captured ClientHello claims the signed ACS-Core floor and is signed; a hook with no secret sends none."""
 
-    Capture the actual serialized ClientHello at the network boundary.  The
-    fake transport deliberately refuses after capture because the behavior
-    under test is the adapter's outbound capability claim, not a cooperative
-    Guardian fixture repeating the same expectation.
-    """
-
-    def _capture_client_hello(self, secret: str | None) -> dict:
+    def _capture_client_hello(self, secret: str | None) -> tuple[client.Handshake, list[dict]]:
         saved = {name: os.environ.get(name) for name in
                  ("ACS_HMAC_SECRET", "ACS_HMAC_SECRET_FILE")}
         try:
@@ -907,9 +901,7 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
                     platform="test",
                     methods_implemented=["steps/toolCallRequest"],
                 )
-            self.assertEqual(result, client.NoAnswer("transport_failure", {"error": "<urlopen error capture complete>"}))
-            self.assertEqual(len(captured), 1)
-            return captured[0]
+            return result, captured
         finally:
             for name, value in saved.items():
                 if value is None:
@@ -917,10 +909,11 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
                 else:
                     os.environ[name] = value
 
-    def test_signed_and_unsigned_client_hello_claims_match_the_wire(self) -> None:
-        signed = self._capture_client_hello("capability-secret")
-        unsigned = self._capture_client_hello(None)
-
+    def test_the_client_hello_claims_acs_core_and_is_signed(self) -> None:
+        result, captured = self._capture_client_hello("capability-secret-0123456789abcdef")
+        self.assertEqual(result, client.NoAnswer("transport_failure", {"error": "<urlopen error capture complete>"}))
+        self.assertEqual(len(captured), 1)
+        signed = captured[0]
         signed_payload = signed["params"]["payload"]
         self.assertEqual(signed_payload["profiles_supported"], ["acs-core"])
         self.assertEqual(signed_payload["signature_algorithms_supported"],
@@ -929,11 +922,10 @@ class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
             "a session advertising the Core integrity floor must actually "
             "sign its ClientHello")
 
-        unsigned_payload = unsigned["params"]["payload"]
-        self.assertEqual(unsigned_payload["profiles_supported"], [])
-        self.assertEqual(unsigned_payload["signature_algorithms_supported"], [])
-        self.assertNotIn("signature", unsigned["params"],
-            "unsigned development mode must be explicit on the wire")
+    def test_a_hook_with_no_secret_sends_no_client_hello(self) -> None:
+        result, captured = self._capture_client_hello(None)
+        self.assertEqual((result.cause, captured), ("secret_missing", []),
+                         "ACS-Core signs every request (§10), so nothing goes out unsigned")
 
 
 if __name__ == "__main__":

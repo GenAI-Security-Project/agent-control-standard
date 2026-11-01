@@ -39,7 +39,8 @@ HERE = Path(__file__).resolve().parent
 GUARDIAN_SCRIPT = HERE.parents[2] / "src" / "acs" / "guardian" / "example_guardian.py"
 
 
-from acs.testing.harness import launch_guardian, seed_negotiated_session  # noqa: E402
+from acs.core import derive_session_key, sign_with_key  # noqa: E402
+from acs.testing.harness import launch_guardian, seed_negotiated_session, sign_for_test, signing_env  # noqa: E402
 
 
 class RecordingGuardian(BaseHTTPRequestHandler):
@@ -61,20 +62,22 @@ class RecordingGuardian(BaseHTTPRequestHandler):
             RecordingGuardian.recorded.append({"method": method, "session_id": sid, "request_id": rid})
             seen = RecordingGuardian.seen_per_session.setdefault(sid, set())
             if rid in seen and rid:
-                # Simulate the real Guardian's REPLAY_DETECTED behavior
-                reply = json.dumps({
+                reply = {
                     "jsonrpc": "2.0", "id": body.get("id"),
                     "error": {"code": -32005, "message": f"REPLAY_DETECTED: {rid}"},
-                }).encode("utf-8")
+                }
             else:
                 if rid:
                     seen.add(rid)
-                reply = json.dumps({
+                reply = {
                     "jsonrpc": "2.0", "id": body.get("id"),
                     "result": {"type": "final", "acs_version": "0.1.0",
                                "request_id": rid, "decision": "allow",
                                "chain_hash": "0" * 64},
-                }).encode("utf-8")
+                }
+        # Signed with the test secret under its label, as a Guardian signs every response (§10).
+        key = derive_session_key(signing_env()["ACS_HMAC_SECRET"].encode(), sid)
+        reply = json.dumps(sign_with_key(reply, key, key_id=signing_env()["ACS_HMAC_KEY_ID"])).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(reply)))
@@ -113,7 +116,7 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
         self.addCleanup(records.cleanup)
         self.records = Path(records.name)
         for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
-                        mock.patch.dict(os.environ)):
+                        mock.patch.dict(os.environ, signing_env())):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -140,7 +143,7 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
         )
         mw = ACSMiddleware(cfg)
         seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=self.url,
-                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
+                                hmac_secret=signing_env()["ACS_HMAC_SECRET"])
 
         ctx1 = self._ctx("list_files", {})
         r1 = asyncio.run(mw.pre_invoke(ctx1))
@@ -183,8 +186,7 @@ class FailureMode2_GuardianRestartReplayWindow(unittest.TestCase):
     def _start_guardian(self):
         # Replay durability lives in the shared state dir, not the port.
         env = os.environ.copy()
-        env["ACS_DEV_MODE"] = "1"
-        env.pop("ACS_HMAC_SECRET", None)
+        env.update(signing_env())
         env.pop("ACS_HMAC_SECRET_FILE", None)
         env["ACS_GUARDIAN_STATE_DIR"] = str(self.tmpdir)
         proc, port = launch_guardian(env=env)
@@ -195,7 +197,7 @@ class FailureMode2_GuardianRestartReplayWindow(unittest.TestCase):
         import urllib.request
         import uuid as _uuid
         from datetime import datetime, timezone
-        body = json.dumps({
+        body = json.dumps(sign_for_test({
             "jsonrpc": "2.0", "id": str(_uuid.uuid4()),
             "method": "steps/sessionStart",
             "params": {
@@ -205,7 +207,7 @@ class FailureMode2_GuardianRestartReplayWindow(unittest.TestCase):
                 "metadata": {"agent_id": "test", "session_id": sid, "platform": "test"},
                 "payload": {},
             },
-        }).encode()
+        })).encode()
         req = urllib.request.Request(self.url, data=body,
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=5.0) as resp:

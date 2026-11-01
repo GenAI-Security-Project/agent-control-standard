@@ -47,7 +47,7 @@ from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.testing.harness import ProgrammableGuardian  # noqa: E402
 
 
-HMAC = "dispositions-live-shared-secret"
+HMAC = "dispositions-live-shared-secret-padded-to-32-bytes"
 
 
 def _make_ctx_with_pydantic_input(tool_name: str, model_cls, model_instance):

@@ -134,10 +134,10 @@ adding a test would be checking stdlib behavior.
 **T11 — Handshake downgrade.**
 Attacker MITMs the handshake response to claim the Guardian doesn't
 support signing, hoping the adapter then sends unsigned envelopes.
-*Mitigation:* The adapter signs iff its own `ACS_HMAC_SECRET` /
-`_FILE` is set, regardless of what `signature_algorithms_supported`
-the handshake advertised. The handshake's advertised algorithm list
-is informational; it does not control the adapter's signing behavior.
+*Mitigation:* The adapter signs every request with its own secret,
+whatever `signature_algorithms_supported` the handshake advertised,
+and a hook with no secret refuses its session and sends nothing. The
+handshake's advertised algorithm list does not control signing.
 *No test* — this is an absence of behavior. Verified by reading the
 code: `sign_envelope()` consults `load_hmac_secret()` only.
 

@@ -176,53 +176,44 @@ Claude should refuse and surface the Guardian's `reasoning` field. The example G
 
 ### Smoke #4 — audit-cause differentiation
 
-Verifies that the adapter's audit log distinguishes "Guardian unreachable" (ops issue) from "Guardian rejected the envelope" (client/operator bug).
+Verifies that the adapter's audit log distinguishes a Guardian that rejected the request (a configuration error) from a Guardian it could not reach (an ops issue). Both commands run against the Guardian started above, on `127.0.0.1:8787` under the label `2026-11`.
 
-Unsigned envelope to a signing-required Guardian:
+A secret the Guardian does not hold, under the Guardian's label:
 
 ```bash
 ACS_GUARDIAN_URL="http://127.0.0.1:8787/acs" \
-ACS_HMAC_SECRET="" \
+ACS_HMAC_SECRET="$(openssl rand -hex 32)" ACS_HMAC_KEY_ID=2026-11 \
 acs-claude-code-hook 2>&1 <<'EOF'
 {"session_id":"11111111-1111-4111-8111-111111111111","transcript_path":"/tmp/t","cwd":"/tmp","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo test"}}
 EOF
 ```
 
-Expected stderr — note the `cause` field, and that a signature refusal
-fails CLOSED regardless of posture (a refusal is an alive Guardian
-rejecting the envelope; spec issue #32):
+Expected: the Guardian answers the handshake with `-32004 SIGNATURE_INVALID`, signed with its own secret. The hook cannot verify that answer, so it refuses the session whatever the posture (spec issue #32), and stdout carries a deny:
 
 ```
-acs-adapter: Guardian returned JSON-RPC error -32004 (signature_invalid_response): SIGNATURE_INVALID
-ACS_AUDIT {"acs_audit_event": "guardian_refusal_fail_closed", "cause": "signature_invalid_response", ...}
+ACS_AUDIT {"acs_audit_event": "session_refused", "cause": "error_signature_invalid", "claimed_cause": "signature_invalid_response", "claimed_error_code": -32004, ...}
+ACS_AUDIT {"acs_audit_event": "session_refused_fail_closed", "cause": "error_signature_invalid", ..., "hook": "PreToolUse", ...}
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session refused (error_signature_invalid)"}}
 ```
 
-And stdout carries a real deny:
-
-```
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", ...}}
-```
-
-Guardian unreachable (different cause, same disposition):
+Guardian unreachable, with the Guardian's secret and label:
 
 ```bash
 ACS_GUARDIAN_URL="http://127.0.0.1:1/dead" \
+ACS_HMAC_SECRET_FILE=~/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 \
 acs-claude-code-hook 2>&1 <<'EOF'
 {"session_id":"11111111-1111-4111-8111-111111111111","transcript_path":"/tmp/t","cwd":"/tmp","permission_mode":"default","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo test"}}
 EOF
 ```
 
-Expected:
+Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (fail-open when the hook sets no `ACS_DEFAULT_DENY`); stdout is empty, which Claude Code reads as proceed:
 
 ```
-acs-adapter: Guardian unreachable: <urlopen error ...>
-ACS_AUDIT {"acs_audit_event": "fail_open_bypass", "cause": "transport_failure", ...}
+ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_open", ...}
+ACS_AUDIT {"acs_audit_event": "unguarded_session_bypass", "cause": "transport_failure", ..., "hook": "PreToolUse", ...}
 ```
 
-Distinct `acs_audit_event` AND distinct `cause`: refusals are always
-`guardian_refusal_fail_closed`; failures carry the posture
-(`fail_open_bypass` / `decision_failure_fail_closed`). Operators grep
-on either to triage.
+Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`unguarded_session_bypass`, or `session_not_started_fail_closed` under a deny posture). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
 
 ### Smoke #5 — pre-flight inventory (paranoid)
 
@@ -298,7 +289,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Unknown-disposition fail posture | ✓ default-deny honored on unknown verdicts when `ACS_DEFAULT_DENY=1`; spec-default fail-open path emits audit event. |
 | SessionContext + published `chain_hash` | ✓ session_id propagated; Guardian computes rolling SHA-256 chain per §8.2 (`adapters/test_acs_core_conformance.py::Core05_SessionContext`). |
 | Replay protection (`request_id` + `timestamp`) | ✓ adapter sends both; Guardian rejects duplicate `request_id` (REPLAY_DETECTED -32005) and timestamps outside skew window (TIMESTAMP_OUT_OF_WINDOW -32006) per §10.3. |
-| Baseline integrity (HMAC-SHA256 signature) | ✓ HKDF-derived per-session key signs every request and response when `ACS_HMAC_SECRET[_FILE]` is set; Guardian rejects unsigned/tampered with SIGNATURE_INVALID -32004. |
+| Baseline integrity (HMAC-SHA256 signature) | ✓ HKDF-derived per-session key signs every request and response under `ACS_HMAC_KEY_ID`; a hook with no secret of at least 32 bytes, or no label, refuses its session and sends nothing. The Guardian rejects an unsigned or tampered request with SIGNATURE_INVALID -32004. |
 | Decision honoring (§6.4) | ✓ adapter blocks on subprocess return; spec-default fail-open posture emits structured `ACS_AUDIT` event on every bypass; audit `cause` field distinguishes failure modes. |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1. |

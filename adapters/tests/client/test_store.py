@@ -101,10 +101,8 @@ class McpUse(unittest.TestCase):
             _profiles.record_mcp_use(session, tool=tool)
         return audit.call_args_list
 
-    def test_a_signed_session_records_its_degraded_claim_once(self) -> None:
-        calls = self._record({"ACS_HMAC_SECRET": "s", "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"})
+    def test_a_session_records_its_degraded_claim_once(self) -> None:
+        calls = self._record({})
         self.assertEqual([c.args[0] for c in calls], ["profile_claim_degraded"])
         self.assertEqual((calls[0].kwargs["profile"], calls[0].kwargs["tool"]), ("acs-core", "mcp__srv__tool"))
 
-    def test_an_unsigned_session_claims_nothing_to_degrade(self) -> None:
-        self.assertEqual(self._record({"ACS_HMAC_SECRET": "", "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": "", "ACS_HMAC_KEY_ID": "test-key"}), [])

@@ -15,6 +15,9 @@ from acs.integrations._hook_command import resolve_hook_command
 from acs.integrations.claude_code import wire as claude_wire
 from acs.integrations.cursor import wire as cursor_wire
 
+# The wire tools refuse to wire without a secret and its label (§10).
+SECRET_ARGS = ["--secret-env-inline=" + "0" * 64, "--key-id=test-key"]
+
 
 def _executable(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +87,8 @@ class WireRefusesUnusableCommands(unittest.TestCase):
             with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as tmp:
                 settings = Path(tmp) / name
                 rc = self._main(module, ["--guardian-url=http://127.0.0.1:8787/acs",
-                                         f"--settings={settings}", f"--hook-command={tmp}/absent", "--write"])
+                                         f"--settings={settings}", f"--hook-command={tmp}/absent", "--write",
+                                         *SECRET_ARGS])
                 self.assertEqual(rc, 2)
                 self.assertFalse(settings.exists())
 
@@ -94,7 +98,8 @@ class WireRefusesUnusableCommands(unittest.TestCase):
                 hook = _executable(Path(tmp) / "dir with space" / script)
                 settings = Path(tmp) / name
                 rc = self._main(module, ["--guardian-url=http://127.0.0.1:8787/acs",
-                                         f"--settings={settings}", f"--hook-command={hook}", "--write"])
+                                         f"--settings={settings}", f"--hook-command={hook}", "--write",
+                                         *SECRET_ARGS])
                 self.assertEqual(rc, 0)
                 commands = [h["command"] for h in _commands(json.loads(settings.read_text()))]
                 self.assertTrue(commands)

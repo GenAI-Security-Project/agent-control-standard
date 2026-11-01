@@ -12,10 +12,19 @@ class SecretFilePermissionsError(RuntimeError):
 
 
 class SecretFileUnreadableError(RuntimeError):
-    """ACS_HMAC_SECRET_FILE is configured but cannot be read.
+    """ACS_HMAC_SECRET_FILE is configured but cannot be read, or is empty."""
 
-    Raised loudly: silently downgrading to unsigned mode would turn
-    off the only integrity control ACS-Core mandates."""
+
+class SigningMaterialMissing(RuntimeError):
+    """No usable secret or label, so nothing may be sent: ACS-Core signs every request (§10)."""
+
+    def __init__(self, cause: str, message: str) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+# §10: the secret MUST be at least 32 bytes from a cryptographically secure random source.
+MIN_SECRET_BYTES = 32
 
 
 def _check_secret_file_perms(path: str) -> None:
@@ -40,28 +49,16 @@ def _check_secret_file_perms(path: str) -> None:
 
 
 def load_hmac_secret() -> bytes:
-    """Read the HMAC input keying material.
-
-    Resolution order (first hit wins):
-    1. `ACS_HMAC_SECRET_FILE` — path to a file containing the secret.
-       Preferred for production. Permissions MUST be 0600 (or 0400) and
-       the file MUST be owned by the running user. The file's content
-       (stripped of trailing whitespace) is the secret. Symlinks are
-       rejected. Insecure permissions raise SecretFilePermissionsError —
-       the adapter refuses to use a leaked secret rather than silently
-       proceed.
-    2. `ACS_HMAC_SECRET` — env-var fallback. Quick for dev, less secure
-       (visible in `ps eauxw`, child-process envs, core dumps).
-    3. Empty bytes — caller decides whether that means dev-mode or fail.
-
-    Generate a secret: `openssl rand -hex 32 > /etc/acs/hmac.key && chmod 600 /etc/acs/hmac.key`
-    """
+    """The input keying material from ACS_HMAC_SECRET_FILE (owner-only, no symlink) or ACS_HMAC_SECRET; b"" when neither is set."""
     path = os.environ.get("ACS_HMAC_SECRET_FILE", "").strip()
     if path:
         try:
             _check_secret_file_perms(path)
             with open(path, "rb") as f:
-                return f.read().rstrip(b"\r\n\t ")
+                secret = f.read().rstrip(b"\r\n\t ")
+            if not secret:
+                raise OSError(f"{path} is empty")
+            return secret
         except SecretFilePermissionsError:
             raise
         except OSError as e:
@@ -69,7 +66,7 @@ def load_hmac_secret() -> bytes:
             audit_event("hmac_secret_file_unreadable", path=path, error=str(e))
             raise SecretFileUnreadableError(
                 f"ACS_HMAC_SECRET_FILE {path!r} is configured but cannot "
-                f"be read ({e}); refusing to continue unsigned"
+                f"be read ({e})"
             ) from e
     env_val = os.environ.get("ACS_HMAC_SECRET", "")
     return env_val.encode("utf-8") if env_val else b""
@@ -78,3 +75,18 @@ def load_hmac_secret() -> bytes:
 def load_key_id() -> str:
     """ACS_HMAC_KEY_ID, the deployment's label for the secret (§10); "" when unset."""
     return os.environ.get("ACS_HMAC_KEY_ID", "").strip()
+
+
+def load_signing_material() -> tuple[bytes, str]:
+    """The secret and the label that names it; raises SigningMaterialMissing when either is missing or the secret is under 32 bytes (§10)."""
+    secret = load_hmac_secret()
+    if not secret:
+        raise SigningMaterialMissing("secret_missing", "no ACS_HMAC_SECRET_FILE or ACS_HMAC_SECRET is configured; "
+                                                       "ACS-Core signs every request (§10)")
+    if len(secret) < MIN_SECRET_BYTES:
+        raise SigningMaterialMissing("secret_too_short", f"the secret is {len(secret)} bytes; "
+                                                         f"§10 requires at least {MIN_SECRET_BYTES}")
+    label = load_key_id()
+    if not label:
+        raise SigningMaterialMissing("key_id_missing", "ACS_HMAC_KEY_ID is not set; it names the configured secret (§10)")
+    return secret, label

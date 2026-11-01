@@ -24,13 +24,14 @@ ADAPTER = ADAPTER_DIR / "adapter.py"
 
 
 from acs.core import coerce_uuid  # noqa: E402
-from acs.testing.harness import launch_guardian, seed_negotiated_session  # noqa: E402
+from acs.testing.harness import launch_guardian, seed_negotiated_session, signing_env  # noqa: E402
 
 
 class CursorAdapter(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        env = os.environ.copy(); env["ACS_DEV_MODE"] = "1"; env.pop("ACS_HMAC_SECRET", None); env.pop("ACS_HMAC_SECRET_FILE", None)
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         cls.guardian_proc, cls.port = launch_guardian(env=env)
 
     @classmethod
@@ -50,11 +51,12 @@ class CursorAdapter(unittest.TestCase):
     def _negotiated(self, url: str, session_id: str) -> dict[str, str]:
         """Env overrides in which the session already negotiated with url, so the test exercises a step-level failure."""
         seed_negotiated_session(self._handshake_dir, session_id=session_id, guardian_url=url,
-                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
+                                hmac_secret=signing_env()["ACS_HMAC_SECRET"])
         return {"ACS_HANDSHAKE_CACHE": self._handshake_dir}
 
     def _run(self, event_name: str, event: dict, env_overrides: dict | None = None) -> tuple[int, str, str]:
-        env = os.environ.copy()
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         env["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{self.port}/acs"
         env["ACS_HANDSHAKE_CACHE"] = self._handshake_dir
         # Turn state is per test, so earlier runs cannot leak into this one.

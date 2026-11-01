@@ -29,7 +29,7 @@ from acs.testing.harness import ProgrammableGuardian
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig, build_acs_middleware
 
-SECRET = "nat-event-loop-secret"
+SECRET = "nat-event-loop-secret-padded-to-32-bytes"
 SLOW_S = 0.5
 
 

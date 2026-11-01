@@ -32,7 +32,7 @@ if _NAT_OK:
     from acs.integrations.nat.adapter import (ACSLifecycleExporterConfig, ACSMiddleware, ACSMiddlewareConfig,
                                               build_acs_middleware)
 
-SECRET = "nat-runner-lifecycle-secret"
+SECRET = "nat-runner-lifecycle-secret-padded-to-32-bytes"
 RUN = ["steps/sessionStart", "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
        "steps/agentResponse", "steps/sessionEnd"]
 

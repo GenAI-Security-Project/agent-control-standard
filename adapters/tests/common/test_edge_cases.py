@@ -29,7 +29,7 @@ from acs.client import _exchange
 from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.client import _store as client_store  # noqa: E402
 
-from acs.testing.harness import launch_guardian  # noqa: E402
+from acs.testing.harness import launch_guardian, sign_for_test, signing_env  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 GUARDIAN = HERE.parent.parent / "src" / "acs" / "guardian" / "example_guardian.py"
@@ -82,8 +82,7 @@ class Item02_GuardianRegexInputCap(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         env = os.environ.copy()
-        env["ACS_DEV_MODE"] = "1"
-        env.pop("ACS_HMAC_SECRET", None)
+        env.update(signing_env())
         env.pop("ACS_HMAC_SECRET_FILE", None)
         # Use a unique state dir per run to avoid leftover replay state
         cls.statedir = tempfile.mkdtemp(prefix="acs-guardian-state-")
@@ -105,7 +104,7 @@ class Item02_GuardianRegexInputCap(unittest.TestCase):
         NOT iterate the destructive-bash patterns over the full input."""
         # 500 KiB command; would burn CPU on naive regex matching
         huge = "a " * (250 * 1024)
-        body = json.dumps({
+        body = json.dumps(sign_for_test({
             "jsonrpc": "2.0", "id": "ed1",
             "method": "steps/toolCallRequest",
             "params": {
@@ -116,8 +115,7 @@ class Item02_GuardianRegexInputCap(unittest.TestCase):
                 "payload": {"tool": {"name": "Bash"},
                             "arguments": {"command": {"value": huge}}},
             },
-        }).encode()
-        # Send under a strict time bound
+        })).encode()
         req = urllib.request.Request(self.url, data=body,
             headers={"Content-Type": "application/json"}, method="POST")
         start = time.monotonic()
@@ -184,10 +182,11 @@ class Item05_SessionDecisionLifetime(unittest.TestCase):
 
         def respond(request, timeout=None):
             incoming = json.loads(request.data)
-            return io.BytesIO(json.dumps({"jsonrpc": "2.0", "id": incoming["id"],
-                                          "result": next(hellos)}).encode())
+            answer = {"jsonrpc": "2.0", "id": incoming["id"], "result": next(hellos)}
+            client.sign_envelope(answer, session_id=incoming["params"]["metadata"]["session_id"])
+            return io.BytesIO(json.dumps(answer).encode())
 
-        env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+        env = {**{k: v for k, v in os.environ.items() if not k.startswith("ACS_")}, **signing_env()}
         config = client.Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:1/acs"})
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, env, clear=True), \
@@ -393,8 +392,7 @@ class Item03_HaGuardianFileLock(unittest.TestCase):
 
     def _start(self, statedir: str) -> tuple[subprocess.Popen, int]:
         env = os.environ.copy()
-        env["ACS_DEV_MODE"] = "1"
-        env.pop("ACS_HMAC_SECRET", None)
+        env.update(signing_env())
         env.pop("ACS_HMAC_SECRET_FILE", None)
         env["ACS_GUARDIAN_STATE_DIR"] = statedir
         return launch_guardian(env=env)
@@ -409,14 +407,14 @@ class Item03_HaGuardianFileLock(unittest.TestCase):
             return json.loads(resp.read().decode())
 
     def _envelope(self, sid, rid):
-        return {"jsonrpc": "2.0", "id": str(uuid.uuid4()),
+        return sign_for_test({"jsonrpc": "2.0", "id": str(uuid.uuid4()),
                 "method": "steps/sessionStart",
                 "params": {
                     "acs_version": "0.1.0", "request_id": rid,
                     "timestamp": core.iso8601_now(),
                     "metadata": {"agent_id": "ha", "session_id": sid, "platform": "t"},
                     "payload": {},
-                }}
+                }})
 
     def test_second_guardian_sees_first_guardians_replay_state(self) -> None:
         with tempfile.TemporaryDirectory() as statedir:
@@ -452,8 +450,7 @@ class Item13_LaunchGuardianOwnsThePort(unittest.TestCase):
     @staticmethod
     def _dev_env() -> dict:
         env = os.environ.copy()
-        env["ACS_DEV_MODE"] = "1"
-        env.pop("ACS_HMAC_SECRET", None)
+        env.update(signing_env())
         env.pop("ACS_HMAC_SECRET_FILE", None)
         return env
 

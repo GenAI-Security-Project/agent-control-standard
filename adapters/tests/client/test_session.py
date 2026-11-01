@@ -19,7 +19,7 @@ from acs.client._outcome import Decided
 from acs.client import _handshake
 from acs.core import derive_session_key, sign_with_key
 
-SECRET = "session-gate-test-secret"
+SECRET = "session-gate-test-secret-padded-to-32-bytes"
 URL = "http://127.0.0.1:8787/acs"
 HELLO = {"negotiated_version": "0.1.0", "methods_evaluated": ["steps/toolCallRequest"],
          "selected_transport": "http", "timeout_config": {"default_ms": 5000},
@@ -515,18 +515,13 @@ class Startup(_SessionTest):
         self.assertEqual([c.args[0] for c in self.audit.call_args_list], ["session_record_unwritable"] * 2)
 
 
-class UnsignedMode(_SessionTest):
+class NoSecret(_SessionTest):
     ENV: dict = {}
 
-    def test_an_unsigned_client_claims_no_profile_so_a_required_one_refuses(self) -> None:
-        unsigned_hello = _answer(lambda h: _result(h, {**HELLO, "profiles_accepted": []}, sign=False))
-        decision, _ = self._open(unsigned_hello, session_id="dev-required", ACS_REQUIRE_PROFILES="acs-core")
-        self.assertEqual(decision.cause, "required_profile_not_accepted")
-
-    def test_records_carry_no_mac_and_still_hold_the_session(self) -> None:
-        first, _ = self._open(_raises(urllib.error.URLError("down")), session_id="dev")
-        self.assertIsNone(json.loads(self._record("dev").read_text())["mac"])
-        self.assertEqual(self._open(session_id="dev"), (first, 0))
+    def test_a_session_with_no_secret_is_refused_sends_nothing_and_stores_nothing(self) -> None:
+        decision, calls = self._open(session_id="no-secret")
+        self.assertEqual((decision.cause, calls), ("secret_missing", 0))
+        self.assertFalse(self._record("no-secret").exists())
 
 
 if __name__ == "__main__":

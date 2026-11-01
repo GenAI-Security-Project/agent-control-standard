@@ -48,6 +48,7 @@ HERE = Path(__file__).resolve().parent
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     launch_guardian,
+    signing_env,
 )
 
 
@@ -73,7 +74,8 @@ def _make_context(tool_name: str, args: dict) -> "InvocationContext":
 class NATMiddlewareIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        env = os.environ.copy(); env["ACS_DEV_MODE"] = "1"; env.pop("ACS_HMAC_SECRET", None); env.pop("ACS_HMAC_SECRET_FILE", None)
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         cls.guardian_proc, cls.port = launch_guardian(env=env)
         cls.guardian_url = f"http://127.0.0.1:{cls.port}/acs"
 
@@ -89,9 +91,10 @@ class NATMiddlewareIntegration(unittest.TestCase):
         # Per-test handshake records, so no record left in the user's cache decides a session here.
         records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
         self.addCleanup(records.cleanup)
-        patcher = mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(records.name))
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(records.name)),
+                        mock.patch.dict(os.environ, signing_env())):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _make_middleware(self, default_deny: bool = True) -> ACSMiddleware:
         cfg = ACSMiddlewareConfig(

@@ -292,6 +292,18 @@ NEGOTIATED_HELLO = {
 }
 
 
+def signing_env() -> dict[str, str]:
+    """The test secret and the label that names it, as the adapters and the example Guardian read them (§10)."""
+    return {"ACS_HMAC_SECRET": ProgrammableGuardian.DEFAULT_TEST_HMAC_SECRET, "ACS_HMAC_KEY_ID": TEST_KEY_ID}
+
+
+def sign_for_test(envelope: dict) -> dict:
+    """Sign a hand-built request with the test secret under its label, as an adapter would (§10)."""
+    session_id = envelope["params"]["metadata"]["session_id"]
+    key = core.derive_session_key(ProgrammableGuardian.DEFAULT_TEST_HMAC_SECRET.encode(), session_id)
+    return core.sign_with_key(envelope, key, key_id=TEST_KEY_ID)
+
+
 def seed_negotiated_session(cache_dir: str | Path, *, session_id: str, guardian_url: str,
                             hmac_secret: str | None = None,
                             server_hello: dict | None = None) -> None:

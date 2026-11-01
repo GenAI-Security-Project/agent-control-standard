@@ -24,6 +24,7 @@ ADAPTER = ADAPTER_DIR / "adapter.py"
 from acs.testing.harness import (  # noqa: E402
     ProgrammableGuardian,
     launch_guardian,
+    signing_env,
     seed_negotiated_session,
 )
 
@@ -46,7 +47,8 @@ def _claude_code_event(name: str, **extra) -> dict:
 class AdapterRoundTrip(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        env = os.environ.copy(); env["ACS_DEV_MODE"] = "1"; env.pop("ACS_HMAC_SECRET", None); env.pop("ACS_HMAC_SECRET_FILE", None)
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         cls.guardian_proc, cls.port = launch_guardian(env=env)
 
     @classmethod
@@ -66,7 +68,7 @@ class AdapterRoundTrip(unittest.TestCase):
     def _negotiated(self, url: str, session_id: str) -> dict[str, str]:
         """Env overrides in which the session already negotiated with url, so the test exercises a step-level failure."""
         seed_negotiated_session(self._handshake_dir, session_id=session_id, guardian_url=url,
-                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
+                                hmac_secret=signing_env()["ACS_HMAC_SECRET"])
         return {"ACS_HANDSHAKE_CACHE": self._handshake_dir}
 
     def _run_adapter(
@@ -74,7 +76,8 @@ class AdapterRoundTrip(unittest.TestCase):
         event: dict,
         env_overrides: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
-        env = os.environ.copy()
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         env["ACS_GUARDIAN_URL"] = f"http://127.0.0.1:{self.port}/acs"
         env["ACS_HANDSHAKE_CACHE"] = self._handshake_dir
         # Turn state is per test unless the test passes its own ACS_SESSION_STATE_DIR.

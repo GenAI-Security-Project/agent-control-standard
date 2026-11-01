@@ -45,14 +45,15 @@ if _NAT_OK:
 HERE = Path(__file__).resolve().parent
 
 
-from acs.testing.harness import launch_guardian  # noqa: E402
+from acs.testing.harness import launch_guardian, signing_env  # noqa: E402
 
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
 class LiveNATWorkflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        env = os.environ.copy(); env["ACS_DEV_MODE"] = "1"; env.pop("ACS_HMAC_SECRET", None); env.pop("ACS_HMAC_SECRET_FILE", None)
+        env = {k: v for k, v in os.environ.items() if k != "ACS_HMAC_SECRET_FILE"}
+        env.update(signing_env())
         cls.guardian_proc, cls.port = launch_guardian(env=env)
         cls.guardian_url = f"http://127.0.0.1:{cls.port}/acs"
 
@@ -70,7 +71,7 @@ class LiveNATWorkflow(unittest.TestCase):
         self.addCleanup(records.cleanup)
         self.records = Path(records.name)
         for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
-                        mock.patch.dict(os.environ)):
+                        mock.patch.dict(os.environ, signing_env())):
             patcher.start()
             self.addCleanup(patcher.stop)
 

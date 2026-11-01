@@ -1,43 +1,14 @@
-"""Signing and verifying with the configured secret, and the one-time unsigned-mode warning."""
 from __future__ import annotations
 
-from acs.client._audit import audit_event
-from acs.client._secrets import load_hmac_secret, load_key_id
+from acs.client._secrets import load_hmac_secret, load_key_id, load_signing_material
 from acs.core import container_key, derive_session_key, sign_with_key, verify_with_key
-
-
-_warned_unsigned_mode = False
-
-
-def _warn_unsigned_once() -> None:
-    """One loud warning per process when operating without key material.
-
-    Unsigned mode is an authentication failure, not just a
-    confidentiality one: any local process that binds the Guardian port
-    first becomes the Guardian and allows everything.
-    Fine for a first local experiment; never fine silently."""
-    global _warned_unsigned_mode
-    if not _warned_unsigned_mode:
-        _warned_unsigned_mode = True
-        audit_event(
-            "unsigned_mode",
-            detail=(
-                "no ACS_HMAC_SECRET / ACS_HMAC_SECRET_FILE configured — "
-                "envelopes are UNSIGNED and any local process that binds "
-                "the Guardian address is trusted"
-            ),
-        )
 
 
 def sign_envelope(envelope: dict, *, key: bytes | None = None,
                   session_id: str | None = None, key_id: str | None = None) -> dict:
-    """Add a signature under key_id, the configured ACS_HMAC_KEY_ID unless given. Returns the envelope
-    unchanged (after a loud one-time audit event) if no key material is available."""
+    """Add a signature under key_id, the configured ACS_HMAC_KEY_ID unless given; raises SigningMaterialMissing without a usable secret and label."""
     if key is None:
-        ikm = load_hmac_secret()
-        if not ikm:
-            _warn_unsigned_once()
-            return envelope
+        ikm, _ = load_signing_material()
         if not session_id:
             params = envelope.get("params") or envelope.get("result") or {}
             meta = params.get("metadata") or {}
@@ -51,17 +22,13 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 
 def verify_signature(envelope: dict, *, key: bytes | None = None,
                      session_id: str | None = None, key_id: str | None = None) -> bool:
-    """Verify a signed envelope (request, decision response, or error
-    response) made under key_id, the configured ACS_HMAC_KEY_ID unless
-    given. Returns True if valid (or if no signature present and no
-    key material configured — local-dev mode)."""
+    """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid."""
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False
     sig = container.get("signature")
     if sig is None:
-        # No signature on the wire; valid only if local-dev (no key configured)
-        return not bool(load_hmac_secret())
+        return False
 
     if not isinstance(sig, dict) or sig.get("algorithm") != "HMAC-SHA256":
         return False

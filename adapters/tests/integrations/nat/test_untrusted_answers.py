@@ -27,7 +27,7 @@ from acs.testing.harness import seed_negotiated_session
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig
 
-SECRET = "nat-untrusted-answers"
+SECRET = "nat-untrusted-answers-padded-to-32-bytes"
 FORGED = {"algorithm": "HMAC-SHA256", "value": "AAAA"}
 
 

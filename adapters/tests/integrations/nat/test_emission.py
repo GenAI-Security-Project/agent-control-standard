@@ -43,7 +43,7 @@ if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
 from acs.testing.capture_guardian import CaptureGuardian  # noqa: E402
 
-HMAC = "nat-emission-shared-secret"
+HMAC = "nat-emission-shared-secret-padded-to-32-bytes"
 
 
 if _NAT_OK:

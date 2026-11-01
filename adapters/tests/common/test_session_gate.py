@@ -16,7 +16,7 @@ from pathlib import Path
 from acs.testing.harness import ProgrammableGuardian
 
 BIN = Path(sys.executable).parent
-SECRET = "session-gate-hook-secret"
+SECRET = "session-gate-hook-secret-padded-to-32-bytes"
 
 
 def _audit_records(text: str) -> list[dict]:

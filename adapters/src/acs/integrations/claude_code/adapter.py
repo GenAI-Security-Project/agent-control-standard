@@ -27,9 +27,9 @@ Environment variables:
                       is attacker-reachable (see GUARDIAN_REFUSAL_CODES).
   ACS_HMAC_SECRET     Shared secret for baseline HMAC-SHA256 envelope
                       signing per §10 (or ACS_HMAC_SECRET_FILE, preferred
-                      for production). If unset, requests are unsigned
-                      (local-dev mode, loud audit event). ACS-Core
-                      conformance requires one of these to be set.
+                      for production), at least 32 bytes, named by
+                      ACS_HMAC_KEY_ID. Without both, the session is refused
+                      and every step denied: ACS-Core signs every request.
   ACS_AGENT_ID        Explicit agent_id for metadata. If unset, derived
                       from cwd as `claude-code:<sha8(cwd)>`.
   ACS_STARTUP_POSTURE "proceed" or "refuse": what this hook does in a

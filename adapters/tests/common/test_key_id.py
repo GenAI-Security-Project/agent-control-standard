@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from acs import client
-from acs.client import Config, SessionRefused, _exchange
+from acs.client import Config, SigningMaterialMissing, _exchange
 from acs.client import _handshake
 from acs.core import derive_session_key, sign_with_key
 from acs.integrations.claude_code import wire as claude_wire
@@ -63,7 +63,7 @@ class ConfiguredLabel(unittest.TestCase):
         with self.assertRaises(TypeError):
             sign_with_key({"jsonrpc": "2.0", "id": "x", "result": {}}, self.key)  # type: ignore[call-arg]
         del os.environ["ACS_HMAC_KEY_ID"]
-        with self.assertRaisesRegex(ValueError, "ACS_HMAC_KEY_ID"):
+        with self.assertRaisesRegex(SigningMaterialMissing, "ACS_HMAC_KEY_ID"):
             client.sign_envelope(make_envelope("steps/toolCallRequest", session_id=self.session),
                                  session_id=self.session)
 
@@ -74,16 +74,41 @@ class ConfiguredLabel(unittest.TestCase):
         del os.environ["ACS_HMAC_KEY_ID"]
         self.assertFalse(client.verify_signature(self._response("2026-11"), session_id=self.session))
 
-    def test_a_secret_without_a_label_refuses_the_session_and_sends_nothing(self) -> None:
-        del os.environ["ACS_HMAC_KEY_ID"]
-        with tempfile.TemporaryDirectory() as records, \
-                mock.patch.object(_handshake, "_HANDSHAKE_CACHE_DIR", Path(records)), \
+    def _open(self, records: str) -> tuple[client.Handshake, int]:
+        with mock.patch.object(_handshake, "_HANDSHAKE_CACHE_DIR", Path(records)), \
                 mock.patch.object(_exchange, "_open") as network:
             session = client.open_session(config=Config.from_env({"ACS_GUARDIAN_URL": "http://127.0.0.1:9/acs"}),
                                           session_id=self.session, agent_id="key-id", platform="test",
                                           methods_implemented=["steps/toolCallRequest"])
-        network.assert_not_called()
-        self.assertEqual(session, SessionRefused("key_id_missing"))
+        return session, network.call_count
+
+    def test_a_secret_without_a_label_refuses_the_session_and_sends_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as records:
+            del os.environ["ACS_HMAC_KEY_ID"]
+            session, calls = self._open(records)
+            self.assertEqual((session.cause, calls), ("key_id_missing", 0))
+
+    def test_a_stored_session_is_refused_once_its_label_is_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as records:
+            _handshake.store_session_decision(Path(records), self.session, "http://127.0.0.1:9/acs",
+                                              client.Negotiated({"negotiated_version": "0.1.0"}), SECRET.encode())
+            del os.environ["ACS_HMAC_KEY_ID"]
+            session, calls = self._open(records)
+            self.assertEqual((session.cause, calls), ("key_id_missing", 0),
+                             "the label is checked before a stored session is followed")
+
+    def test_a_missing_short_or_empty_secret_refuses_the_session_and_sends_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            empty = Path(d) / "empty.key"
+            empty.write_text("")
+            empty.chmod(0o600)
+            cases = {"secret_missing": {"ACS_HMAC_SECRET": ""},
+                     "secret_too_short": {"ACS_HMAC_SECRET": "x" * 31},
+                     "secret_unavailable": {"ACS_HMAC_SECRET": "", "ACS_HMAC_SECRET_FILE": str(empty)}}
+            for cause, env in cases.items():
+                with self.subTest(cause), mock.patch.dict(os.environ, env), tempfile.TemporaryDirectory() as records:
+                    session, calls = self._open(records)
+                    self.assertEqual((session.cause, calls), (cause, 0))
 
     def test_an_unknown_label_at_the_guardian_never_runs_a_tool(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET, key_id="2026-10")
@@ -129,6 +154,16 @@ class ExampleGuardianLabel(unittest.TestCase):
         self.assertEqual(answer["error"]["code"], -32004)
         self.assertNotIn("signature", answer["error"], "no configured secret matches, so the error is unsigned")
 
+    def test_a_malformed_step_under_an_unknown_label_still_gets_an_unsigned_signature_invalid(self) -> None:
+        envelope = make_envelope("steps/toolCallRequest", {"not": "a toolCallRequest payload"},
+                                 sign_with_secret=SECRET, key_id="2026-10")
+        request = urllib.request.Request(self._guardian(), data=json.dumps(envelope).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            answer = json.loads(response.read())
+        self.assertEqual(answer["error"]["code"], -32004, "the label is settled before the envelope's schema")
+        self.assertNotIn("signature", answer["error"])
+
     def test_a_response_carries_the_requests_label(self) -> None:
         answer = self._post(self._guardian(), "2026-11")
         self.assertEqual(answer["result"]["signature"]["key_id"], "2026-11")
@@ -139,6 +174,19 @@ class ExampleGuardianLabel(unittest.TestCase):
 
 
 class WireToolsNameTheSecret(unittest.TestCase):
+    def test_wiring_needs_a_secret(self) -> None:
+        for name, module in (("claude-code", claude_wire), ("cursor", cursor_wire)):
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                hook = Path(d) / "hook"
+                hook.write_text("#!/bin/sh\n")
+                hook.chmod(0o755)
+                with mock.patch.dict(os.environ, {"HOME": d}), mock.patch("sys.stderr"), \
+                        self.assertRaises(SystemExit) as stop:
+                    module.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={d}/settings.json",
+                                 f"--hook-command={hook}", "--write"])
+                self.assertEqual(stop.exception.code, 2)
+                self.assertFalse((Path(d) / "settings.json").exists())
+
     def test_a_secret_needs_a_label_and_the_command_carries_it(self) -> None:
         for name, module in (("claude-code", claude_wire), ("cursor", cursor_wire)):
             with self.subTest(name), tempfile.TemporaryDirectory() as d:

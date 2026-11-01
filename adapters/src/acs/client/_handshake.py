@@ -18,7 +18,7 @@ from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
 from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, key_id_rejected, post
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
-from acs.client._secrets import load_hmac_secret, load_key_id
+from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
@@ -81,8 +81,11 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     """
     if not session_id:
         return NoAnswer("missing_session_id")
+    # §10: every request is signed, so a session with no usable secret and label is refused before any stored one is read.
     try:
-        ikm = load_hmac_secret()
+        ikm, _ = load_signing_material()
+    except SigningMaterialMissing as e:
+        return SessionRefused(e.cause, {"error": str(e)})
     except Exception as e:  # noqa: BLE001
         return SessionRefused("secret_unavailable", {"error": str(e)})
     path = _handshake_cache_path(session_id, config.guardian_url)
@@ -158,18 +161,15 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
     stored = _read_record(path, ikm, session_id, config.guardian_url)
     if stored is not None:
         return stored
-    # An unsigned session does not meet acs-core's signed-envelope floor (§10), so it claims no profile.
-    claimed = (profiles_supported if profiles_supported is not None else ["acs-core"]) if ikm else []
-    if ikm and not load_key_id():
-        decision: Handshake = SessionRefused("key_id_missing")
-    elif not config.handshake_enabled:
-        decision = NoAnswer("handshake_disabled")
+    claimed = profiles_supported if profiles_supported is not None else ["acs-core"]
+    if not config.handshake_enabled:
+        decision: Handshake = NoAnswer("handshake_disabled")
     else:
         decision = _hello(
             guardian_url=config.guardian_url, session_id=session_id, agent_id=agent_id,
             platform=platform, methods_implemented=methods_implemented,
             wrapped_protocols=wrapped_protocols, profiles_supported=claimed,
-            transports_supported=transports_supported, signed=bool(ikm),
+            transports_supported=transports_supported,
             timeout=_HANDSHAKE_TIMEOUT_S if timeout is None else timeout,
         )
     decision, ours = _store_first(path, decision, ikm, session_id, config.guardian_url)
@@ -198,7 +198,7 @@ def store_session_decision(directory: Path, session_id: str, guardian_url: str,
 def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
            methods_implemented: list[str], wrapped_protocols: list[str] | None,
            profiles_supported: list[str], transports_supported: list[str] | None,
-           signed: bool, timeout: float) -> Handshake:
+           timeout: float) -> Handshake:
     # The client POSTs to the Guardian URL, so that URL's scheme is the one transport it offers.
     scheme = urllib.parse.urlsplit(guardian_url).scheme
     client_hello = {
@@ -219,7 +219,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
                 "provenance_producer": "none",
                 "wrapped_protocols": wrapped_protocols or [],
                 "profiles_supported": profiles_supported,
-                "signature_algorithms_supported": ["HMAC-SHA256"] if signed else [],
+                "signature_algorithms_supported": ["HMAC-SHA256"],
             },
         },
     }
@@ -388,7 +388,7 @@ def _verified(path: Path, ikm: bytes, session_id: str, guardian_url: str, marker
         return SessionRefused("session_record_invalid", {"record": str(path)})
     body = {k: v for k, v in record.items() if k != "mac"}
     try:
-        authentic = not ikm or hmac.compare_digest(str(record.get("mac")), _mac(body, ikm, session_id))
+        authentic = hmac.compare_digest(str(record.get("mac")), _mac(body, ikm, session_id))
     except Exception:  # noqa: BLE001
         authentic = False
     if not (authentic and body.get("session_id") == session_id and body.get("guardian_url") == guardian_url):
@@ -409,7 +409,7 @@ def _write_startup(path: Path, outcome: Handshake | None, ikm: bytes, session_id
             decision = _encode(outcome, session_id, guardian_url)
             body.update({k: v for k, v in decision.items() if k not in body and k != "acs_session_record"},
                         state="done")
-        record = {**body, "mac": _mac(body, ikm, session_id) if ikm else None}
+        record = {**body, "mac": _mac(body, ikm, session_id)}
         fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".startup-")
         with os.fdopen(fd, "w") as f:
             json.dump(record, f)
@@ -438,7 +438,7 @@ def _store_first(path: Path, decision: Handshake, ikm: bytes, session_id: str,
     temporary = None
     try:
         body = _encode(decision, session_id, guardian_url)
-        record = {**body, "mac": _mac(body, ikm, session_id) if ikm else None}
+        record = {**body, "mac": _mac(body, ikm, session_id)}
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(path.parent, 0o700)
         fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".record-")

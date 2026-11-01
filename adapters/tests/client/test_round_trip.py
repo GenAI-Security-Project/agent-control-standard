@@ -15,7 +15,7 @@ from acs.client import (Decided, FailPosture, Resolution, close_turn, current_tu
 from acs.client import _exchange, _store
 from acs.core import derive_session_key, request_envelope, sign_with_key
 
-SECRET = "round-trip-secret"
+SECRET = "round-trip-secret-padded-to-32-bytes"
 SESSION = "44444444-4444-4444-8444-444444444444"
 URL = "http://127.0.0.1:8787/acs"
 PROCEED = FailPosture(deny_on_failure=False, timeout_s=2.0, per_method_timeout_s={"steps/toolCallResult": 0.3})

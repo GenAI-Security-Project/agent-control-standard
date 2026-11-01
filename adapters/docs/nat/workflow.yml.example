@@ -7,9 +7,9 @@
 #   ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key
 #   ACS_HMAC_KEY_ID=2026-11
 #       REQUIRED with the secret: the label that names it (§10); the Guardian holds the same one.
-#       REQUIRED for ACS-Core baseline integrity (§10). Without a secret
-#       both ends run unsigned and any local process that binds the
-#       Guardian port becomes the Guardian. Generate:
+#       REQUIRED for ACS-Core baseline integrity (§10), at least 32 bytes.
+#       Without a secret and its label the middleware refuses its session
+#       and denies every call. Generate:
 #         mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key
 #       and give the SAME file to the Guardian.
 #   ACS_AUDIT_FILE=/path/to/.acs/audit.log
