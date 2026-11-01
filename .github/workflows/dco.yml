@@ -1,0 +1,51 @@
+# Fails a pull request that has a commit with no Signed-off-by line, which CONTRIBUTING.md
+# requires. pull_request gives a fork a read-only token, and the job reads commit messages
+# with git, so nothing from the pull request runs. It prints commit hashes only, because a
+# commit message could carry a workflow command. Bots cannot certify the DCO. main and
+# integration are skipped as heads because their commits already landed and cannot be
+# rewritten, so one old commit would block the sync and promotion pull requests for good.
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions: {}
+
+jobs:
+  dco:
+    if: >-
+      github.event.pull_request.user.type != 'Bot' &&
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.head.ref == 'main' || github.event.pull_request.head.ref == 'integration'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check every commit for a Signed-off-by line
+        env:
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+        # The checkout is GitHub's test merge: HEAD^1 is the base and HEAD^2 is the pull
+        # request, so a base branch that moved on since the last push changes nothing here.
+        # rev-list runs in a plain assignment because set -e ignores a failure inside a for
+        # list, and that failure would pass a pull request nothing had checked.
+        run: |
+          set -e
+          commits="$(git rev-list --no-merges HEAD^1..HEAD^2)"
+          unsigned=""
+          for sha in $commits; do
+            git log -1 --format=%B "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>' || unsigned="$unsigned $sha"
+          done
+          [ -n "$unsigned" ] || exit 0
+          for sha in $unsigned; do echo "::error::Commit $sha has no Signed-off-by line."; done
+          echo "To sign off every commit, run these on your branch:"
+          echo "  git fetch https://github.com/$REPO.git $BASE_REF"
+          echo "  git rebase --signoff FETCH_HEAD"
+          echo "  git push --force-with-lease"
+          exit 1
