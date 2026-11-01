@@ -4,7 +4,7 @@ A drop-in adapter that wires [Cursor](https://cursor.com) hooks to an ACS Guardi
 
 ## How it works
 
-Cursor fires a hook (e.g. `preToolUse`) by running a shell command from `hooks.json`. The command receives the hook event as JSON on stdin and emits Cursor-shaped JSON on stdout (or exit code 2 for some events).
+Cursor fires a hook (e.g. `preToolUse`) by running a shell command from `hooks.json`. The command receives the hook event as JSON on stdin and emits Cursor-shaped JSON on stdout.
 
 This adapter is that command. On every hook event Cursor spawns it as a subprocess; the adapter:
 
@@ -272,7 +272,7 @@ Same architectural pattern (shell-stdin/stdout, JSON in, JSON out), different pr
 | Event dispatch | Single command, event type in `hook_event_name` field | One command per event, event name passed as `argv[1]` |
 | Allow/deny field | `hookSpecificOutput.permissionDecision` | `permission` (top-level) |
 | Modify input field | `hookSpecificOutput.updatedInput` | `updated_input` |
-| Block via exit code | Optional (`exit 2`) | Supported (`exit 2`); `beforeSubmitPrompt` uses exit code rather than JSON output |
+| Block via exit code | Optional (`exit 2`) | Supported (`exit 2`); the adapter answers `beforeSubmitPrompt` with `{"continue": false, "user_message"}` and exit 0 instead, so Cursor shows the message |
 | Fail-closed flag | env var `ACS_DEFAULT_DENY` | hook-level `failClosed: true` in `hooks.json`, PLUS env var |
 | Per-event output keys | Mostly uniform via `hookSpecificOutput` | Event-specific (`permission`, `additional_context`, `updated_mcp_tool_output`, `followup_message`, ...) |
 | Headless CLI for tests | `claude --print` | None — Cursor is a desktop GUI; e2e is semi-automated |
@@ -322,7 +322,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | SessionContext + published `chain_hash` | ✓ session_id coerced to UUID; Guardian computes rolling SHA-256 chain |
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006) |
 | Baseline integrity (HMAC-SHA256) | ✓ when `ACS_HMAC_SECRET[_FILE]` is set; SIGNATURE_INVALID -32004 on tamper |
-| Decision honoring (§6.4) | ✓ Cursor blocks on permission deny; adapter uses exit-2 where stdout JSON is not available; fail-open emits `ACS_AUDIT` event; audit `cause` field distinguishes failure modes (transport vs signature vs malformed envelope vs replay vs skew) |
+| Decision honoring (§6.4) | ✓ Cursor blocks on permission deny; adapter answers every decided step in Cursor's documented JSON; fail-open emits `ACS_AUDIT` event; audit `cause` field distinguishes failure modes (transport vs signature vs malformed envelope vs replay vs skew) |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1 |
 | Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: it maps `beforeMCPExecution` to `steps/toolCallRequest` and `afterMCPExecution` to `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. The first MCP tool a signed session uses records `profile_claim_degraded` once, whether it arrives through the MCP hooks or through `preToolUse` and `postToolUse` as `MCP:<tool>`. Known limitation. |

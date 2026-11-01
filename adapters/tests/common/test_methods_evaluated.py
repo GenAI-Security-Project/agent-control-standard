@@ -228,7 +228,7 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 if adapter == "claude-code":
                     self.assertEqual(json.loads(p.stdout)["decision"], "block")
                 else:
-                    self.assertEqual(p.returncode, 2, p.stderr)
+                    self.assertEqual((p.returncode, json.loads(p.stdout)["continue"]), (0, False), p.stderr)
                 start = [a for a in h.audits() if a.get("acs_audit_event") == "session_without_negotiated_guardian"]
                 self.assertEqual([(a["cause"], a["problem"]) for a in start],
                                  [("invalid_server_hello", "methods_evaluated is not a list of method names")])

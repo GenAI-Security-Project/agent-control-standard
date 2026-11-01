@@ -673,7 +673,7 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
 
     def test_cursor_hook_that_cannot_load_audits_and_honors_the_posture(self) -> None:
         """Gate events deny via {"permission": "deny"}; beforeSubmitPrompt
-        blocks via {"continue": false} and exit code 2."""
+        blocks via {"continue": false} and exit code 0."""
         event = json.dumps({"conversation_id": "c-1", "workspace_roots": ["/tmp"],
                             "tool_name": "Bash", "tool_input": {"command": "rm -rf /home/u"}})
 
@@ -689,9 +689,8 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
 
             with self.subTest(form=form, ACS_DEFAULT_DENY="1", event="beforeSubmitPrompt"):
                 p, records = self._run(argv + ["beforeSubmitPrompt"], event, ACS_DEFAULT_DENY="1")
-                self.assertEqual(p.returncode, 2,
-                    "beforeSubmitPrompt blocks via exit code 2; anything else "
-                    "lets the prompt through on adapter load failure")
+                self.assertEqual(p.returncode, 0,
+                    "beforeSubmitPrompt blocks with continue: false and exit code 0, which Cursor reads")
                 self.assertIs(json.loads(p.stdout)["continue"], False)
                 self._unavailable_record(records, "event", "beforeSubmitPrompt", "deny")
 

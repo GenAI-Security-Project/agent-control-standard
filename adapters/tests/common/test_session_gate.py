@@ -191,7 +191,7 @@ class SessionGateThroughHooks(unittest.TestCase):
             "claude-code": (self._claude_prompt, hello,
                             lambda p: json.loads(p.stdout).get("decision") == "block"),
             "cursor": (self._cursor_prompt, {**hello, "methods_evaluated": ["steps/userMessage"]},
-                       lambda p: p.returncode == 2 and json.loads(p.stdout)["continue"] is False),
+                       lambda p: p.returncode == 0 and json.loads(p.stdout)["continue"] is False),
         }
         for name, (run, server_hello, blocked) in cases.items():
             for case, text in (("lone surrogate fails inside the step", "\\ud800"), ("control", "/tmp")):
@@ -291,7 +291,7 @@ class SessionGateThroughHooks(unittest.TestCase):
                                    env=self._env(guardian.url()), timeout=30)
                 out = json.loads(p.stdout or "{}")
                 blocked = (out.get("decision") == "block" if name == "claude-code"
-                           else p.returncode == 2 and out.get("continue") is False)
+                           else p.returncode == 0 and out.get("continue") is False)
                 self.assertTrue(blocked, (p.returncode, p.stdout, p.stderr[-300:]))
                 self.assertIn("turn_start_blocked", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
                 self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/turnStart"],

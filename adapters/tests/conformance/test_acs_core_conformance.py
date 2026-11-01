@@ -984,9 +984,9 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
                                           "workspace_roots": ["/tmp"],
                                           "prompt": "do a thing"}),
                         capture_output=True, text=True, env=self._env(g), timeout=15)
-                self.assertEqual(proc.returncode, 2,
-                    f"{disp} on a Cursor prompt must block via exit 2, not "
-                    f"proceed (exit 0); got rc={proc.returncode}")
+                self.assertEqual((proc.returncode, json.loads(proc.stdout).get("continue")), (0, False),
+                    f"{disp} on a Cursor prompt must block with continue: false; got rc={proc.returncode} "
+                    f"stdout={proc.stdout!r}")
 
     def test_contradictory_modify_fails_closed(self) -> None:
         """§6.3:146 / modifications.json: a modify carrying BOTH wholesale

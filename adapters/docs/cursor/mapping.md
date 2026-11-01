@@ -61,12 +61,12 @@ Cursor's documented response keys are event-specific. The adapter translates ACS
 
 ### `beforeSubmitPrompt`
 
-Cursor's documented output is `{"continue": bool, "user_message": str}`; exit code 2 also blocks (documented as Claude Code-compatible behavior). The adapter emits BOTH — the native JSON and the exit code — so either mechanism suffices:
+Cursor's documented output is `{"continue": bool, "user_message": str}`. The adapter answers in that shape with exit code 0, so Cursor reads it and shows `user_message`. Exit code 2 also blocks, but Cursor then shows the raw output instead of the message:
 
 | ACS disposition | Adapter behavior |
 |---|---|
 | `allow` | `{"continue": true}`, exit 0 |
-| `deny` | `{"continue": false, "user_message": reasoning}`, exit 2 |
+| `deny` | `{"continue": false, "user_message": reasoning}`, exit 0 |
 | `ask` / `defer` / `modify` | same as deny (substituted to block + audit; the prompt hook can't pause or edit) |
 
 ### Lifecycle events (`sessionStart`, `sessionEnd`, `stop`, `preCompact`, `afterAgentResponse`, `afterAgentThought`)
@@ -104,4 +104,4 @@ The Cursor adapter covers ACS-Core's mandatory floor in the same shape as the Cl
 - SessionContext: session_id sent every request (non-UUID `conversation_id` coerced deterministically).
 - Replay protection: ✓
 - Baseline integrity: HMAC-SHA256 per §10 over the RFC 8785 (JCS) canonical envelope, HKDF per-session key (`ACS_HMAC_SECRET_FILE` / `ACS_HMAC_SECRET`); `rfc8785` is a hard dependency. Responses signature-verified and bound to their request under any HTTP status; refusals, binding mismatches, bad response signatures, and responses that cannot be verified fail closed regardless of posture (deliberately stricter than the current §6.4 text — spec issue #32). Unsigned mode is announced with a loud `unsigned_mode` audit event.
-- Decision honoring: ✓ (Cursor enforces the permission verdict; the prompt gate emits the documented `continue:false` JSON plus exit 2)
+- Decision honoring: ✓ (Cursor enforces the permission verdict; the prompt gate emits the documented `continue:false` JSON with exit code 0)

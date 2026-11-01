@@ -638,10 +638,6 @@ def _metadata(event_name: str, event: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
-    """steps/turnStart opening the turn for a beforeSubmitPrompt. turn_id
-    SHOULD equal the envelope's request_id (turn-start.json), so we use it
-    for both. Decision-eligible: a Guardian MAY deny to block the turn
-    (blocks the prompt via exit code 2)."""
     return turn_start_envelope(_metadata("beforeSubmitPrompt", event), turn_id)
 
 
@@ -668,7 +664,7 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
 #   - post-tool events (postToolUse, postToolUseFailure, afterShellExecution,
 #     afterMCPExecution, afterFileEdit, afterTabFileEdit): {"additional_context": ...,
 #     "updated_mcp_tool_output": ...}
-#   - beforeSubmitPrompt: uses exit code 2 (not stdout) to block; carries
+#   - beforeSubmitPrompt: blocks with {"continue": false, "user_message"}; carries
 #     internal __exit_code/_reasoning keys consumed by main()
 #   - everything else: no response shape (Stop, SessionStart, SessionEnd, etc.)
 
@@ -745,9 +741,7 @@ def _translate_post_tool(decision: Decision, event_name: str) -> dict[str, Any]:
 
 
 def _translate_before_submit_prompt(decision: Decision, event_name: str) -> dict[str, Any]:
-    """The prompt hook can only allow (exit 0) or block (exit 2), so every
-    non-allow decision fails closed per §6.4; returns internal
-    __exit_code/_reasoning keys for main()."""
+    """The prompt hook can only allow or block, so every other decision blocks (§6.4)."""
     if decision.disposition == "allow":
         return {"__exit_code": 0, "_reasoning": None}
     if decision.disposition != "deny":
@@ -858,9 +852,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     if event_name in ("beforeMCPExecution", "afterMCPExecution") or (
             isinstance(tool_name, str) and tool_name.startswith("MCP:")):
         record_mcp_use(session_id, tool=str(tool_name or ""), workspace=_workspace(event))
-    # Turn tracking: beforeSubmitPrompt OPENS a turn with an explicit,
-    # decision-eligible steps/turnStart BEFORE the userMessage. A Guardian
-    # MAY deny to block the whole turn — which blocks the prompt (exit 2).
+    # A prompt opens its turn with a decision-eligible turnStart before the userMessage, and a deny blocks the prompt.
     if event_name == "beforeSubmitPrompt":
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
@@ -870,8 +862,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
                 return _settle(result, "beforeSubmitPrompt", session_id)
             turn_start = normalize_decision(result.response.get("result"))
             if turn_start.disposition != "allow":
-                # A turn boundary can't be modify/ask'd — any non-allow
-                # blocks the prompt (exit 2).
+                # Only allow applies to a turn start, so any other disposition blocks the prompt.
                 audit_event("turn_start_blocked", turn_id=turn_id,
                             disposition=turn_start.disposition or "(unusable)",
                             event="beforeSubmitPrompt")
@@ -880,7 +871,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
                 sys.stderr.write(f"acs-adapter: {msg}\n")
                 sys.stdout.write(json.dumps({"continue": False,
                                              "user_message": msg}) + "\n")
-                return 2
+                return 0
         else:
             audit_event("method_not_evaluated", method="steps/turnStart",
                         event=event_name, session_id=session_id)
@@ -944,10 +935,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     if event_name == "beforeSubmitPrompt":
         exit_code = out.pop("__exit_code", 0)
         reasoning = out.pop("_reasoning", None)
-        # Documented output is {"continue": bool, "user_message": str}
-        # (docs 2026-08-22): emit the native shape and keep exit 2 as
-        # belt-and-braces; on allow, {"continue": true} keeps
-        # failClosed:true from misreading the hook as failed.
+        # Exit 0 so Cursor shows user_message; an allow says continue true, so failClosed reads the hook as answered.
         if exit_code == 0:
             sys.stdout.write(json.dumps({"continue": True}) + "\n")
             return 0
@@ -956,7 +944,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
             "continue": False,
             "user_message": reasoning or "blocked by ACS Guardian",
         }) + "\n")
-        return exit_code
+        return 0
 
     _emit(out)
     return 0
@@ -1003,7 +991,7 @@ def _deny_with_audit(audit_type: str, event_name: str,
             "continue": False,
             "user_message": f"ACS adapter: prompt blocked ({cause})",
         }) + "\n")
-        return 2
+        return 0
     return 0
 
 

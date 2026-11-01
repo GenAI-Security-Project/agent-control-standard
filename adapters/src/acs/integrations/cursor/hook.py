@@ -19,10 +19,10 @@ def _deny(event_name: str, reason: str) -> int:
         print(json.dumps({"permission": "deny", "user_message": reason, "agent_message": reason}))
         return 0
     if event_name == "beforeSubmitPrompt":
-        # The documented native block, plus exit code 2.
+        # The documented native block, read with exit code 0 so Cursor shows the message.
         sys.stderr.write(f"acs-adapter: {reason}\n")
         print(json.dumps({"continue": False, "user_message": reason}))
-        return 2
+        return 0
     return 0
 
 

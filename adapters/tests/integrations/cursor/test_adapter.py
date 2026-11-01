@@ -179,16 +179,16 @@ class CursorAdapter(unittest.TestCase):
         self.assertIn("ACS_AUDIT", err, "fail-open MUST emit an audit event per §6.4")
         self.assertIn("fail_open_bypass", err)
 
-    def test_before_submit_prompt_block_via_exit_code(self) -> None:
-        """beforeSubmitPrompt blocks via exit code 2, not stdout (fail-closed mode).
-        Audit log carries cause=transport_failure since the Guardian is unreachable."""
-        rc, _, err = self._run("beforeSubmitPrompt",
+    def test_before_submit_prompt_block_with_readable_message(self) -> None:
+        rc, out, err = self._run("beforeSubmitPrompt",
             {"session_id": "cur-12", "prompt": "anything"},
             env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
                            "ACS_DEFAULT_DENY": "1",
                            **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-12", namespace_prefix="cursor"))},
         )
-        self.assertEqual(rc, 2)
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), {"continue": False,
+                                           "user_message": "ACS adapter: prompt blocked (transport_failure)"})
         self.assertIn("prompt blocked", err.lower())
         self.assertIn("ACS_AUDIT", err)
         self.assertIn("transport_failure", err,

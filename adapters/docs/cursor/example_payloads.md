@@ -156,9 +156,13 @@ Per-event output keys differ. See the [mapping table](../mapping.md#disposition-
 {"additional_context": "audit: tool ran in 19ms; output 142 bytes"}
 ```
 
-### beforeSubmitPrompt (block via exit code, not stdout)
+### beforeSubmitPrompt (blocked)
 
-The adapter writes nothing to stdout and exits with code 2. Cursor treats exit-2 as a block.
+```json
+{"continue": false, "user_message": "ACS adapter: prompt blocked (transport_failure)"}
+```
+
+The adapter exits with code 0, so Cursor reads the JSON and shows the message.
 
 ---
 
