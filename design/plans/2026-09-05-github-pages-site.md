@@ -568,7 +568,7 @@ Record the printed checksum in `CHECKSUMS.txt` and commit it alongside the font.
 Create `landing/assets/acs.css`. Token values come from the live site, except the five that failed a measured contrast check. Each replacement is annotated with its computed ratio.
 
 ```css
-/* ACS landing page. Tokens mirror the project's earlier website, except where the source
+/* ACS landing page. Tokens mirror the project's legacy website, except where the source
    value failed a WCAG contrast measurement. Those five carry their ratio inline. */
 
 @font-face {
@@ -1080,7 +1080,7 @@ Create `landing/index.html`. The title carries no em dash. The contact list sepa
 git add landing/
 git commit -m "Add the landing page, its design tokens, and the starburst diagram
 
-Tokens mirror the project's earlier website, except five that failed a
+Tokens mirror the project's legacy website, except five that failed a
 measured contrast check and are annotated with their computed ratios.
 The focus ring was a translucent overlay compositing to 1.48:1 against
 the page where WCAG SC 1.4.11 requires 3:1, and the hexagon stroke at
@@ -2172,7 +2172,7 @@ build; placing one in `landing/` does not reach the artifact.
 - [ ] **Step 3: Bring the site into disclosure scope**
 
 In `SECURITY.md`, the out-of-scope column currently reads "The documentation site at
-a retired domain, which is built from a separate repository". That names the wrong
+a deprecated domain, which is built from a separate repository". That names the wrong
 domain, and it stops being true when this workflow ships. Replace that cell with:
 
 ```markdown
@@ -2209,7 +2209,7 @@ scope table:
 
 - [ ] **Step 5: Record the provenance of the reused design**
 
-The tokens, the diagram geometry, and the favicon come from the project's earlier website,
+The tokens, the diagram geometry, and the favicon come from the project's legacy website,
 whose source this project has said it cannot read. Add to `LICENSING.md`:
 
 ```markdown
@@ -2217,7 +2217,7 @@ whose source this project has said it cannot read. Add to `LICENSING.md`:
 
 The design tokens in `landing/assets/acs.css`, the diagram geometry in
 `landing/assets/starburst.svg`, and the mark in `landing/assets/icon.svg` derive from
-the project's earlier website, which the OWASP GenAI Security Project operates and which is
+the project's legacy website, which the OWASP GenAI Security Project operates and which is
 built from a separate repository. They are used here as the project's own work.
 
 If any part of that site was produced by a party outside the project, confirm in writing
@@ -2287,7 +2287,7 @@ The only steps that change state outside the repository.
 ```bash
 git push -u origin feat/github-pages-site
 gh pr create --title "Publish the ACS site and schemas from this repository" \
-  --body "Enables GitHub Pages and publishes three things on every merge to main: a landing page matching the design of the project's earlier website, the existing MkDocs specification site, and all 44 JSON schemas at the URIs their \$id values declare.
+  --body "Enables GitHub Pages and publishes three things on every merge to main: a landing page matching the design of the project's legacy website, the existing MkDocs specification site, and all 44 JSON schemas at the URIs their \$id values declare.
 
 Design: design/2026-09-05-github-pages-landing.md
 Plan: design/plans/2026-09-05-github-pages-site.md
