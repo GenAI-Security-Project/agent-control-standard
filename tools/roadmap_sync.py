@@ -305,6 +305,10 @@ SECTION_TITLES = (
 )
 
 
+# A line under the header, not a section: a section would print "None." on a healthy night.
+SITE_MONITOR = "site_monitor"
+
+
 # The title and body open-promotion.yml uses, so a promotion opened from the health issue
 # reads the same as one opened by dispatching that workflow.
 PROMOTION_TITLE = "Promote integration to main"
@@ -523,12 +527,13 @@ def build_report(
     report["accepted_this_week"] = [list(pair) for pair in snapshot["bot_accepted"]]
     report["promotion"] = list(snapshot.get("promotion") or [])
     report["bypasses"] = [list(line) for line in snapshot.get("bypasses") or []]
+    report[SITE_MONITOR] = list(snapshot.get(SITE_MONITOR) or [])
     # Every switch is listed, so a lead sees that rendering is off, not only that a
     # value is odd. The third element flags anything other than true or false.
     report["switches"] = [[name, value, value not in ("true", "false")] for name, value in sorted(switches.items())]
     report["unverified_closes"].sort()
     for key in report:
-        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses"):
+        if key not in ("accepted_this_week", "switches", "unverified_closes", "promotion", "bypasses", SITE_MONITOR):
             report[key] = sorted(set(report[key]))
     return report
 
@@ -549,6 +554,11 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
         "",
         f"Written {stamp}, run [{run_id}]({repo_url}/actions/runs/{run_id}), rules {model.RULES_VERSION}.",
     ]
+    if SITE_MONITOR in failed:
+        lines += ["", "The site monitor's last scheduled run could not be read on this run."]
+    elif report.get(SITE_MONITOR):
+        when, monitor_run = report[SITE_MONITOR]
+        lines += ["", f"The site monitor last failed at {when}, run [{monitor_run}]({repo_url}/actions/runs/{monitor_run})."]
     for key, title, note in SECTION_TITLES:
         lines += ["", f"## {title}", "", note, ""]
         if key in failed:
@@ -616,7 +626,7 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     base = f"repos/{model.REPO}"
     snapshot = {
         "milestones": [], "milestoned": [], "unmilestoned_open": [], "facts": {}, "bot_accepted": [], "promotion": [],
-        "bypasses": [],
+        "bypasses": [], SITE_MONITOR: [],
     }
     snapshot["milestones"] = gh.paginate(f"{base}/milestones?state=all&per_page=100")
     snapshot["milestoned"] = [i for i in gh.paginate(f"{base}/issues?milestone=*&state=all&per_page=100") if "pull_request" not in i]
@@ -654,6 +664,10 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
         snapshot["bypasses"] = bypasses(gh, git, today)
     except (SyncError, KeyError, ValueError, TypeError, AttributeError):
         failed.append("bypasses")
+    try:
+        snapshot[SITE_MONITOR] = site_monitor_failure(gh)
+    except (SyncError, KeyError, IndexError, ValueError, TypeError):
+        failed.append(SITE_MONITOR)
     cutoff = datetime.combine(today - timedelta(days=8), datetime.min.time(), timezone.utc)
     try:
         for raw in snapshot["milestoned"]:
@@ -676,6 +690,24 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     return snapshot
 
 
+# Scheduled runs only. A dispatched run on a feature branch says nothing about the live site.
+SITE_MONITOR_RUNS = (
+    f"repos/{model.REPO}/actions/workflows/monitor-pages.yml/runs?event=schedule&status=completed&per_page=1"
+)
+_STAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+
+
+def site_monitor_failure(gh) -> list:
+    """When and in which run the latest scheduled site monitor failed, or empty if it passed."""
+    runs = gh.get(SITE_MONITOR_RUNS)["workflow_runs"]
+    if not runs or runs[0]["conclusion"] == "success":
+        return []
+    stamp = runs[0]["created_at"]
+    if not _STAMP.fullmatch(stamp):
+        raise SyncError("GitHub did not report a run time")
+    return [stamp, int(runs[0]["id"])]
+
+
 # The creator filter must be spelled exactly. A wrong value returns an empty list with
 # status 200, which would create a duplicate health issue every night.
 HEALTH_LISTING = f"repos/{model.REPO}/issues?creator=github-actions%5Bbot%5D&state=all&per_page=100"
@@ -684,7 +716,7 @@ HEALTH_LISTING = f"repos/{model.REPO}/issues?creator=github-actions%5Bbot%5D&sta
 def _degraded() -> tuple[list[str], dict]:
     # The switches come from the environment, not from GitHub, so they still render.
     rows = [[name, value, value not in ("true", "false")] for name, value in sorted(_switches().items())]
-    failed = [key for key, _title, _note in SECTION_TITLES if key != "switches"]
+    failed = [key for key, _title, _note in SECTION_TITLES if key != "switches"] + [SITE_MONITOR]
     return failed, {"switches": rows}
 
 
