@@ -17,6 +17,12 @@ The shipped `settings.json` names the hook as `bun run "$CLAUDE_PROJECT_DIR/host
 
 It registers two events. `PreToolUse` fires for `Bash` and `WebFetch`, before the tool runs. `PostToolUse` fires for `Bash`, after the tool has run. Both matchers are anchored, so no other tool is intercepted.
 
+The `PreToolUse` command sets `"onFailure": "block"`. Claude Code's hooks reference requires v2.1.295 or later for that field. From that version on, a hook that cannot start, exits with a code other than 0 or 2, prints JSON that does not parse, or reaches its timeout blocks the tool call. A missing file, a missing `bun`, or a script that throws while loading fails inside `bun`, before `acs-hook.ts` reaches `main`, so the shim's exit 2 and the negotiated `on_decision_failure` posture never see it. A timeout is Claude Code cancelling the process, and `onFailure` is what makes that cancellation block the tool call. A wrong path in a copied `settings.json` is a missing file, so fix the path if you want a decision rather than a block.
+
+A client older than v2.1.295 does not implement `onFailure`. A failed or timed-out hook stays non-blocking on those versions, and the tool runs with no decision and no audit entry. Install v2.1.295 or later before you rely on this file as a gate.
+
+`PostToolUse` leaves the field unset. Exit 2 on that event only shows stderr to Claude, because the tool has already run. `onFailure` cannot withhold the output, so it does not replace the result gate.
+
 3. Start `claude` and ask it to run `echo rm -rf /`. The hook sends the call to the Guardian, AGT's stock pattern rule denies it, and Claude Code shows the reason in the transcript. `ls -la` in the same session runs.
 
 ## Drive it by hand
@@ -52,7 +58,7 @@ Claude Code reads the exit code before it reads stdout, so the shim uses exactly
 | `0`, with a decision on stdout | Every real outcome, including `deny`. The deny travels in the JSON body, not the exit code. A Guardian that is down, a timeout, or a decision the host cannot render are all resolved by the negotiated `on_decision_failure` posture and audited |
 | `2`, with stderr only | The shim cannot trust its own input or configuration: stdin is not JSON, the payload has no string `hook_event_name` or `session_id`, the session id is unsafe as a path segment, the hookmap fails to load, or the hookmap declares an output Claude Code does not accept |
 
-Exit `1` never appears. Claude Code reads it as "the hook did not fire" and proceeds ungoverned.
+Exit `1` does not come from this shim. The process Claude Code starts is the `bun run` command in `settings.json`, and `bun` exits 1 when it cannot load the script. On Claude Code v2.1.295 or later the shipped `PreToolUse` hook's `onFailure` turns that exit into a blocked tool call. On an older client the same exit is non-blocking, and the tool runs.
 
 ## The result gate
 
@@ -76,4 +82,4 @@ At `PostToolUse` the tool has already run, and Claude Code's `block` alone withh
 bun test hosts/claude-code
 ```
 
-Four files. `hook.test.ts` drives the shim as a real subprocess against a live Guardian and the pinned bundle. `post-tool-use.test.ts` covers the result gate. `posture.test.ts` covers every failure and its audit entry. `wire-shape.test.ts` pins the exact output shape Claude Code accepts at each event.
+`hook.test.ts` drives the shim as a real subprocess against a live Guardian and the pinned bundle. `post-tool-use.test.ts` covers the result gate. `posture.test.ts` covers every failure inside the shim and its audit entry. `wire-shape.test.ts` pins the exact output shape Claude Code accepts at each event. `pairing.test.ts` checks that a result names the request it answers. `hook-failure.test.ts` runs the shipped `PreToolUse` command and checks that a hook which cannot start, crashes, exits unexpectedly, times out, or prints malformed JSON denies the tool call.
