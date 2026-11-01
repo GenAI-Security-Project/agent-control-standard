@@ -1,0 +1,83 @@
+# Runs the AGT supply-chain checks that nothing else invokes.
+#
+# verify-pin.sh clones agt.lock's pinned commit and byte-diffs the vendored policy
+# bundle against it. A mismatch fails the job.
+#
+# run-upstream-watch.sh diffs AGT's contract surfaces between the pinned commit and
+# upstream main, and prints a report. Drift exits 0 because moving the pin is a human
+# call. The job fails only when the watch could not run. The report goes to the job
+# summary.
+#
+# verify:zero-diff is left out. It compares against a branch that does not exist in
+# this repository and exits 1 by design here.
+#
+# Both scripts clone from GitHub, so this is its own workflow. The test job in
+# reference-implementation.yml should not depend on the network.
+#
+# No workflow expression appears inside a `run:` block.
+name: Reference implementation supply chain
+
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/agt/agt.lock"
+      - "reference-implementations/agt/policy/**"
+      - "reference-implementations/agt/scripts/verify-pin.sh"
+      - "reference-implementations/agt/scripts/run-upstream-watch.sh"
+      - ".github/workflows/reference-implementation-supply-chain.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "reference-implementations/agt/agt.lock"
+      - "reference-implementations/agt/policy/**"
+      - "reference-implementations/agt/scripts/verify-pin.sh"
+      - "reference-implementations/agt/scripts/run-upstream-watch.sh"
+      - ".github/workflows/reference-implementation-supply-chain.yml"
+  schedule:
+    # Weekly, an hour after zizmor. Upstream moves whether or not this tree changes.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reference-implementation-supply-chain-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same pin as reference-implementation.yml.
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: "1.3.11"
+
+      - name: Install dependencies from the lockfile
+        run: bun install --frozen-lockfile
+
+      # Both scripts clean up with `trash` and refuse to start without it. Same pin
+      # as reference-implementation.yml.
+      - name: Install the trash CLI the scripts require
+        run: bun add --global trash-cli@7.2.0
+
+      - name: Verify the vendored bundle against the pinned commit
+        run: bash scripts/verify-pin.sh
+
+      # pipefail so a failed watch fails the step instead of tee's exit status.
+      - name: Report drift against upstream main
+        run: |
+          set -euo pipefail
+          bash scripts/run-upstream-watch.sh | tee -a "$GITHUB_STEP_SUMMARY"
