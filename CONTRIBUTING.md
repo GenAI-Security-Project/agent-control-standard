@@ -122,7 +122,8 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 3. **Make your changes** following the style guide
 4. **Sync with `integration` and run the guards** before you open anything. `uv run
    pytest -v` and `uv run mkdocs build --strict` both have to pass on your machine
-5. **Sign your commits** with `git commit -s` (required by the DCO below)
+5. **Sign your commits** with `git commit -s` (required by the DCO below). See
+   [How to sign your commits](#how-to-sign-your-commits)
 6. **Open a pull request against `integration`**
 7. **Address review feedback** to land your change
 
@@ -147,6 +148,77 @@ For changes to the spec itself (`acs_schema.json`, hooks, events), open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
 before submitting a PR. These affect downstream implementers and warrant a longer
 conversation.
+
+## How to sign your commits
+
+Every commit in a pull request needs a sign-off, and the `dco` check fails the pull
+request if one is missing. A sign-off is a `Signed-off-by:` line in the commit message,
+where you state you have the right to submit the work under the
+[DCO](#developers-certificate-of-origin-11). It is not a GPG or SSH signature, so you need
+no keys.
+
+### Set your name and email
+
+Run these once on your computer. Git uses them to write the sign-off, and they become
+public in the commit history.
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+git config user.name
+```
+
+The last command prints your name, so you can check it.
+
+### Sign a new commit
+
+```bash
+git commit -s -m "Your message"
+```
+
+### Fix commits you already pushed
+
+Run these from your pull request branch. The first command connects your copy to the
+project, so skip it if Git says `upstream` already exists.
+
+```bash
+git remote add upstream https://github.com/GenAI-Security-Project/agent-control-standard.git
+git fetch upstream
+git rebase --signoff upstream/integration
+git push --force-with-lease
+```
+
+The rebase adds the line to each commit and moves your branch onto the latest
+`integration`. Merge commits on your branch go away, and that is fine. If your pull
+request targets `main`, use `upstream/main` instead. If Git says your branch has no
+upstream branch, run `git push --force-with-lease origin HEAD`.
+
+A rebase may stop on a conflict, which means you and the project changed the same lines.
+Open each file Git lists and fix those lines. Then run `git add <file>` and
+`git rebase --continue`, and repeat until the rebase finishes. To stop and go back to
+where you started, run `git rebase --abort`.
+
+### Sign automatically from now on
+
+```bash
+git config --global alias.cs 'commit -s'
+git cs -m "Your message"
+```
+
+In VS Code, turn on the `Git: Always Sign Off` setting (`git.alwaysSignOff`).
+
+Commits you make on the GitHub website get a sign-off for you, because this repository
+requires it.
+
+### Check that it worked
+
+```bash
+git log -1 --format=%B
+```
+
+The output is your last commit message, and it should end with
+`Signed-off-by: Your Name <you@example.com>`. To check every commit on your branch, run
+`git log --format=%B upstream/integration..HEAD`.
 
 ## Authorship and AI assistance
 
