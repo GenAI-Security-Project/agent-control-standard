@@ -108,11 +108,15 @@ so a change to its shape can fail the deploy, and its contents are escaped as un
 text. `mkdocs.yml` is also a landing build input, and its values are escaped as untrusted
 text too.
 
-The marketing site at **agentcontrolstandard.org** is still built and deployed from a
-separate repository. It will redirect here later. Adding the custom domain makes GitHub
-301 the `github.io` URIs to it, which schema tooling follows. Do not rebase `$id` onto
-the marketing domain during that cutover. A `CNAME` must be written into `_site` by the
-build. Placing one in `landing/` does not reach the artifact.
+The site serves from **owaspacs.org**, at the domain root. **agentcontrolstandard.org**
+is a separate site, built and deployed from a separate repository, and nothing here
+publishes to it. The custom domain makes GitHub 301 the `github.io` URIs to owaspacs.org,
+which schema tooling follows. Do not rebase `$id` onto any domain.
+
+The build writes `CNAME` into `_site`, because a copy in `landing/` does not reach the
+artifact. GitHub ignores that file on a site published by Actions, so the repository's
+Pages setting is what binds the domain. Verify schemas at their `$id` URIs, never at
+`page_url`, and verify navigation at the domain, never through the redirect.
 
 Rollback: before re-running an older deploy, run `gh variable set ROADMAP_REFRESH_ENABLED --body false`, or the 05:15 UTC nightly redeploys main. Expect the navigation job in `monitor-pages.yml` to stay red until the revert reaches main, since it checks out main's verifier against the rolled-back site. Re-enable the variable once the revert deploys. A red navigation verify after a green Deploy to Pages means the site is live and the edge may be stale. Re-run once, then read the step summary.
 
@@ -134,7 +138,7 @@ Example addresses in specification documents must use the RFC 2606 reserved doma
 and are correct.
 
 ### Schema namespace
-Schema `$id` values are based at `https://genai-security-project.github.io/agent-control-standard/schema/<spec-version>/`, not at any of the project domains. The namespace follows the org and repo so that schema identity survives a domain or hosting change. Do not rebase `$id` onto a marketing domain.
+Schema `$id` values are based at `https://genai-security-project.github.io/agent-control-standard/schema/<spec-version>/`, not at owaspacs.org or any other project domain. The namespace follows the org and repo so that schema identity survives a domain or hosting change. Do not rebase `$id` onto a marketing domain.
 
 `$id` is identity, not a fetch target. Every `$ref` in the package is relative and resolves against the enclosing `$id` base, so the whole set must share one base. Two bases means the relative refs resolve to URIs no `$id` declares, which is the defect fixed in `4fb84c1`. If you add a subschema, give it an `$id` under the same base and keep its refs relative.
 

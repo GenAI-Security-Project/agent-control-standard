@@ -34,6 +34,8 @@ jobs:
           ref: main
 
       - name: Verify the published schemas still resolve
+        # The $id URIs stay on github.io and 301 to the custom domain, so this proves the
+        # redirect too. Do not move it to the domain. deploy-pages.yml explains why.
         env:
           PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
         run: |
@@ -60,6 +62,8 @@ jobs:
         # main has no verifier until the first promotion after this job lands, and a
         # scheduled run reads this file from integration, so the check waits for it.
         if: hashFiles('tools/verify_site_nav.py') != ''
+        # The domain itself, never a URL that redirects to it. The verifier resolves
+        # links against the address it asked for, so a redirect makes the rows differ.
         env:
-          PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
+          PAGE_URL: https://owaspacs.org/
         run: python3 tools/verify_site_nav.py "$PAGE_URL"
