@@ -227,8 +227,8 @@ class CursorEmission(unittest.TestCase):
         # nothing and audits it (full lifecycle: CursorSequentialSession).
         g = self._emit("stop", {"status": "completed"})
         content = [m for m in g.methods() if m.startswith("steps/")]
-        self.assertEqual(content, [],
-            f"a stop with no open turn must emit no step; got {content}")
+        self.assertEqual(content, ["steps/sessionStart"],
+            f"a stop that opens the session sends sessionStart and, with no open turn, no turnEnd; got {content}")
 
     def test_unknown_event_emits_no_core_hook(self):
         g = self._emit("someRenamedUpstreamHook", {})

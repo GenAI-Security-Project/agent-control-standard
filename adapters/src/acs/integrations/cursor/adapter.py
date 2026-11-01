@@ -74,6 +74,7 @@ from acs.client import (
     Config,
     FailPosture,
     Handshake,
+    Negotiated,
     Refused,
     Resolution,
     Undecided,
@@ -642,8 +643,6 @@ def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, A
 
 
 def _open_session(event: dict[str, Any], config: Config) -> Handshake:
-    """The session's §4.1 decision. The first event of a session handshakes and stores
-    the decision; every later hook process of that session reads it without a network call."""
     return open_session(
         config=config,
         session_id=_session_id(event),
@@ -652,7 +651,22 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
         # steps/turnStart is emitted on beforeSubmitPrompt but is not a
         # HOOK_MAP value; advertise it so advertised == emitted.
         methods_implemented=list(HOOK_MAP.values()) + ["steps/turnStart"],
+        start=lambda session: _send_session_start(event, session, config),
     )
+
+
+def _send_session_start(event: dict[str, Any], session: Negotiated, config: Config) -> None:
+    """The session's one sessionStart, built from whichever hook opened the session; Cursor runs
+    sessionStart and beforeSubmitPrompt at the same time, and the session chain roots here (§8)."""
+    session_id = _session_id(event)
+    if not method_evaluated(session.server_hello, "steps/sessionStart"):
+        audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session_id)
+        return
+    result = round_trip(build_request("sessionStart", event), guardian_url=config.guardian_url,
+                        posture=config.posture.negotiated(session.server_hello), session_id=session_id)
+    if isinstance(result, Resolution):
+        audit_event(result.audit_type, **{**result.fields, "cause": result.cause,
+                                          "method": "steps/sessionStart", "session_id": session_id})
 
 
 # ─── Response translation — dispatch table by event category ──────────────
@@ -832,6 +846,9 @@ def main() -> int:
     gated = config.gate(session)
     if gated is not None:
         return _settle(gated, event_name, session_id)
+    if event_name == "sessionStart":
+        # The session's sessionStart went out when the session opened, from this hook or an earlier one.
+        return 0
     server_hello = session.server_hello
     # §6.4:154: the negotiated posture and default timeout govern every round trip below.
     posture = config.posture.negotiated(server_hello)

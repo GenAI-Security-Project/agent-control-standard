@@ -52,11 +52,12 @@ EOF
 
 A benign prompt that triggers tool use should produce, in order, on the Guardian's stderr:
 
-1. `steps/sessionStart` (Cursor's `sessionStart` event)
-2. `steps/userMessage` (Cursor's `beforeSubmitPrompt`)
-3. `steps/toolCallRequest` (Cursor's `preToolUse` for the first tool)
-4. `steps/toolCallResult` (Cursor's `postToolUse`)
-5. Additional `toolCallRequest` / `toolCallResult` pairs for each subsequent tool the agent invokes
+1. `handshake/hello`, once for the session
+2. `steps/sessionStart`, from whichever of Cursor's first hooks opens the session
+3. `steps/turnStart`, then `steps/userMessage` (Cursor's `beforeSubmitPrompt`)
+4. `steps/toolCallRequest` (Cursor's `preToolUse` for the first tool)
+5. `steps/toolCallResult` (Cursor's `postToolUse`)
+6. Additional `toolCallRequest` / `toolCallResult` pairs for each subsequent tool the agent invokes
 
 The Cursor UI should show the agent's tool calls proceeding normally; no policy block messages because the example Guardian's policy only denies destructive Bash patterns and writes to system paths.
 

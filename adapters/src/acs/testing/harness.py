@@ -312,7 +312,7 @@ class ProgrammableGuardian:
     DEFAULT_TEST_HMAC_SECRET = "shared-test-harness-secret-not-for-production"
 
     def __init__(self, *, hmac_secret: str | None = None,
-                  sign_responses: bool = True, port: int = 0) -> None:
+                  sign_responses: bool = True, port: int = 0, threaded: bool = False) -> None:
         import http.server
         self.hmac_secret = hmac_secret or self.DEFAULT_TEST_HMAC_SECRET
         self.sign_responses = sign_responses
@@ -333,8 +333,9 @@ class ProgrammableGuardian:
         self.on_request_errors: list[str] = []
         self._http = http.server
         # Port 0 takes an OS-assigned port; a fixed port brings a stopped Guardian back at the same URL.
-        self._server = self._http.HTTPServer(
-            ("127.0.0.1", port), self._make_handler_cls())
+        # threaded serves requests concurrently, as a deployed Guardian does.
+        server = self._http.ThreadingHTTPServer if threaded else self._http.HTTPServer
+        self._server = server(("127.0.0.1", port), self._make_handler_cls())
         self.port: int = self._server.server_address[1]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 

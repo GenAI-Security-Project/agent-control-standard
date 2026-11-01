@@ -140,7 +140,7 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertEqual(guardian.methods_received(), ["handshake/hello"])
                 skipped = [a.get("method") for a in h.audits()
                            if a.get("acs_audit_event") == "method_not_evaluated"]
-                self.assertEqual(skipped, ["steps/turnStart", "steps/userMessage"])
+                self.assertEqual(skipped, ["steps/sessionStart", "steps/turnStart", "steps/userMessage"])
                 self.assertFalse(FAILURE_EVENTS & set(h.audit_names()), h.audit_names())
 
     def test_unevaluated_gate_resolves_as_allow(self) -> None:

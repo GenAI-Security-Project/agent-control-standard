@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from acs.testing.harness import ProgrammableGuardian
@@ -100,7 +101,7 @@ class SessionGateThroughHooks(unittest.TestCase):
             with self.subTest(name, phase="Guardian restored, new session"):
                 guardian.reset()
                 p, denied, audits = run(url, str(uuid.uuid4()), **expired)
-                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/toolCallRequest"])
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest"])
                 self.assertFalse(denied, p.stdout)
 
     def test_a_refused_session_sends_no_step_in_any_hook_process(self) -> None:
@@ -134,7 +135,7 @@ class SessionGateThroughHooks(unittest.TestCase):
         self.assertEqual(guardian.methods_seen(), [])
         p, denied, _ = self._claude(url, str(uuid.uuid4()), ACS_STARTUP_POSTURE="refuse")
         self.assertFalse(denied, p.stdout)
-        self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/toolCallRequest"])
+        self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest"])
 
     def test_a_deeply_nested_record_refuses_through_the_installed_hooks(self) -> None:
         """A record nested past Python's recursion limit must refuse natively, not crash the hook (exit 1 proceeds)."""
@@ -202,7 +203,8 @@ class SessionGateThroughHooks(unittest.TestCase):
                     p = run(url, session, text, ACS_DEFAULT_DENY="0")
                     self.assertTrue(blocked(p), f"stdout={p.stdout!r} stderr={p.stderr[-300:]!r}")
                     audits = [(r["acs_audit_event"], r.get("cause")) for r in _audit_records(p.stderr)
-                              if r["acs_audit_event"] != "method_not_evaluated"]
+                              if r["acs_audit_event"] != "method_not_evaluated"
+                              and r.get("method") != "steps/sessionStart"]
                     cause = "adapter_exception" if case.startswith("lone") else "transport_failure"
                     self.assertEqual(audits, [("decision_failure_fail_closed", cause)],
                         "the surrogate must fail signing inside the step, and the control must reach the transport")
@@ -249,7 +251,7 @@ class SessionGateThroughHooks(unittest.TestCase):
         self.addCleanup(guardian.stop)
         p, denied, audits = self._claude(guardian.url(), str(uuid.uuid4()), ACS_STARTUP_POSTURE="proceed")
         self.assertTrue(denied, p.stderr[-300:])
-        self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/toolCallRequest"])
+        self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest"])
         self.assertNotIn("session_without_negotiated_guardian", audits)
 
     def test_a_later_hooks_required_profile_refuses_a_stored_negotiation(self) -> None:
@@ -294,7 +296,7 @@ class SessionGateThroughHooks(unittest.TestCase):
                            else p.returncode == 0 and out.get("continue") is False)
                 self.assertTrue(blocked, (p.returncode, p.stdout, p.stderr[-300:]))
                 self.assertIn("turn_start_blocked", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
-                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/turnStart"],
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/turnStart"],
                                  "a blocked prompt's userMessage is never sent")
 
     def test_mcp_use_records_the_degraded_claim_once_per_session(self) -> None:
@@ -378,7 +380,124 @@ class SessionGateThroughHooks(unittest.TestCase):
         p, denied, audits = self._claude(guardian.url(), session)
         self.assertTrue(denied, "the second step reached the Guardian and its deny applied")
         self.assertEqual(guardian.methods_seen(),
-                         ["handshake/hello", "steps/toolCallRequest", "steps/toolCallRequest"])
+                         ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest", "steps/toolCallRequest"])
+
+
+    # One session's first-prompt hooks per host, the session hook last, the order Cursor ran them live.
+    STARTUP = {
+        "claude-code": [([str(BIN / "acs-claude-code-hook")], {"hook_event_name": "UserPromptSubmit", "prompt": "hello"}),
+                        ([str(BIN / "acs-claude-code-hook")], {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                                               "tool_input": {"command": "echo hi"}}),
+                        ([str(BIN / "acs-claude-code-hook")], {"hook_event_name": "SessionStart", "source": "startup"})],
+        "cursor": [([str(BIN / "acs-cursor-hook"), "beforeSubmitPrompt"], {"prompt": "hello"}),
+                   ([str(BIN / "acs-cursor-hook"), "preToolUse"], {"tool_name": "Bash", "tool_input": {"command": "echo hi"}}),
+                   ([str(BIN / "acs-cursor-hook"), "sessionStart"], {})],
+    }
+
+    def _startup(self, host: str, url: str, *, together: bool, **extra: str) -> list[tuple[str, subprocess.CompletedProcess]]:
+        """Runs a new session's startup hooks: in parallel, the session hook 0.2 s after the others, or one by one, the session hook first."""
+        session = str(uuid.uuid4())
+        key = ({"session_id": session, "cwd": "/tmp"} if host == "claude-code"
+               else {"conversation_id": session, "workspace_roots": ["/tmp"]})
+
+        def run(argv: list[str], event: dict) -> subprocess.CompletedProcess:
+            return subprocess.run(argv, input=json.dumps({**key, **event}), capture_output=True, text=True,
+                                  env=self._env(url, **extra), timeout=30)
+
+        hooks = self.STARTUP[host]
+        names = [event.get("hook_event_name") or argv[1] for argv, event in hooks]
+        if not together:
+            return [(names[-1], run(*hooks[-1]))] + [(n, run(*h)) for n, h in zip(names[:-1], hooks[:-1])]
+        with ThreadPoolExecutor(len(hooks)) as pool:
+            futures = [pool.submit(run, *hook) for hook in hooks[:-1]]
+            time.sleep(0.2)
+            futures.append(pool.submit(run, *hooks[-1]))
+            return [(n, f.result()) for n, f in zip(names, futures)]
+
+    @staticmethod
+    def _blocked(name: str, p: subprocess.CompletedProcess) -> bool | None:
+        """Whether a hook process blocked its step, in that hook's own shape; None for the session hooks, which decide nothing."""
+        out = json.loads(p.stdout or "{}")
+        return {"UserPromptSubmit": out.get("decision") == "block",
+                "PreToolUse": out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                "beforeSubmitPrompt": out.get("continue") is False,
+                "preToolUse": out.get("permission") == "deny"}.get(name)
+
+    def _slow_hello(self, seconds: float, answer=None) -> ProgrammableGuardian:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+        answer = answer or guardian._default_handshake
+        guardian.handlers["handshake/hello"] = lambda req: (time.sleep(seconds), answer(req))[1]
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        return guardian
+
+    def test_parallel_startup_hooks_send_one_handshake_then_session_start(self) -> None:
+        guardian = self._slow_hello(0.5)
+        for host in self.STARTUP:
+            with self.subTest(host):
+                guardian.reset()
+                self._startup(host, guardian.url(), together=False)
+                one_by_one = guardian.methods_seen()
+                guardian.reset()
+                results = self._startup(host, guardian.url(), together=True)
+                seen = guardian.methods_seen()
+                self.assertEqual((seen.count("handshake/hello"), seen.count("steps/sessionStart")), (1, 1), seen)
+                self.assertEqual(seen[:2], ["handshake/hello", "steps/sessionStart"],
+                                 "every step of the session follows its one handshake and its sessionStart (§8)")
+                self.assertEqual(sorted(seen), sorted(one_by_one), "parallel hooks send what the same hooks send one by one")
+                self.assertEqual(len({r["params"]["metadata"]["session_id"] for r in guardian.received}), 1)
+                for name, p in results:
+                    self.assertEqual((name, p.returncode, self._blocked(name, p)),
+                                     (name, 0, None if self._blocked(name, p) is None else False), p.stderr[-300:])
+
+    def test_a_resumed_or_compacted_claude_session_keeps_its_one_session_start(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.handlers["steps/sessionStart"] = lambda req: {
+            "type": "final", "acs_version": "0.1.0", "request_id": req["params"]["request_id"],
+            "decision": "allow", "reasoning": "context from the Guardian", "chain_hash": "0" * 64}
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        session = str(uuid.uuid4())
+        outputs = []
+        for source in ("startup", "resume", "compact"):
+            event = {"session_id": session, "cwd": "/tmp", "hook_event_name": "SessionStart", "source": source}
+            p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(event), capture_output=True,
+                               text=True, env=self._env(guardian.url()), timeout=30)
+            self.assertEqual(p.returncode, 0, p.stderr[-300:])
+            outputs.append(json.loads(p.stdout) if p.stdout.strip() else None)
+        self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"])
+        self.assertEqual(outputs, [{"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                           "additionalContext": "context from the Guardian"}}, None, None])
+        self.assertEqual(guardian.envelopes_for("steps/sessionStart")[0]["params"]["payload"]["platform_context"]["source"],
+                         "startup")
+
+    def test_parallel_startup_hooks_follow_one_refusal(self) -> None:
+        guardian = self._slow_hello(0.5, lambda req: {"code": -32000, "message": "agent not permitted"})
+        for host in self.STARTUP:
+            with self.subTest(host):
+                guardian.reset()
+                results = self._startup(host, guardian.url(), together=True)
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello"])
+                audits = [a for _, p in results for a in (r["acs_audit_event"] for r in _audit_records(p.stderr))]
+                self.assertEqual(audits.count("session_refused"), 1, audits)
+                for name, p in results:
+                    self.assertEqual(p.returncode, 0, (name, p.stderr[-300:]))
+                    self.assertIn(self._blocked(name, p), (True, None), (name, p.stdout))
+
+    def test_parallel_startup_hooks_follow_one_unanswered_handshake(self) -> None:
+        guardian = self._slow_hello(3)
+        for host in self.STARTUP:
+            with self.subTest(host):
+                guardian.reset()
+                results = self._startup(host, guardian.url(), together=True, ACS_HANDSHAKE_TIMEOUT_SECONDS="1")
+                self.assertEqual(guardian.methods_seen(), ["handshake/hello"])
+                audits = {name: [r["acs_audit_event"] for r in _audit_records(p.stderr)] for name, p in results}
+                self.assertEqual(sum(a.count("session_without_negotiated_guardian") for a in audits.values()), 1, audits)
+                for name, p in results:
+                    self.assertEqual(p.returncode, 0, (name, p.stderr[-300:]))
+                    if self._blocked(name, p) is not None:
+                        self.assertFalse(self._blocked(name, p), (name, p.stdout))
+                        self.assertIn("unguarded_session_bypass", audits[name])
 
 
 if __name__ == "__main__":

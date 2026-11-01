@@ -107,12 +107,12 @@ class _SessionTest(unittest.TestCase):
         self.audit = mock.patch.object(_handshake, "audit_event").start()
         self.addCleanup(mock.patch.stopall)
 
-    def _open(self, urlopen=None, *, session_id: str = "session-1", **env: str):
+    def _open(self, urlopen=None, *, session_id: str = "session-1", start=None, **env: str):
         config = Config.from_env({"ACS_GUARDIAN_URL": URL, **env})
         with mock.patch.object(_exchange, "_open",
                                side_effect=urlopen or _answer(lambda h: _result(h, HELLO))) as network:
             decision = open_session(config=config, session_id=session_id, agent_id="test",
-                                    platform="test", methods_implemented=["steps/toolCallRequest"])
+                                    platform="test", methods_implemented=["steps/toolCallRequest"], start=start)
         return decision, network.call_count
 
     def _record(self, session_id: str = "session-1") -> Path:
@@ -377,6 +377,43 @@ class Records(_SessionTest):
         _handshake.store_session_decision(self.cache, "unsigned", URL, NoAnswer("transport_failure"), b"")
         decision, calls = self._open(session_id="unsigned")
         self.assertEqual((decision.cause, calls), ("session_record_invalid", 0))
+
+
+class Startup(_SessionTest):
+    """The process that opens a negotiated session starts it, once; the startup lock's concurrency is in test_session_gate."""
+
+    def test_a_negotiated_session_starts_once(self) -> None:
+        starts: list = []
+        first, _ = self._open(session_id="start", start=starts.append)
+        again, calls = self._open(session_id="start", start=starts.append)
+        self.assertEqual((starts, again, calls), ([first], first, 0))
+
+    def test_a_session_that_did_not_negotiate_never_starts(self) -> None:
+        for name in ("refused", "no answer"):
+            with self.subTest(name):
+                starts: list = []
+                self._open(Lifetime.ANSWERS[name], session_id=f"start-{name}", start=starts.append)
+                self._open(session_id=f"start-{name}", start=starts.append)
+                self.assertEqual(starts, [])
+
+    def test_a_failed_start_is_audited_once_and_not_retried(self) -> None:
+        def fail(session: Negotiated) -> None:
+            raise RuntimeError("boom")
+        decision, _ = self._open(session_id="start-fails", start=fail)
+        starts: list = []
+        self._open(session_id="start-fails", start=starts.append)
+        self.assertIsInstance(decision, Negotiated)
+        self.assertEqual(starts, [])
+        self.assertEqual([c.kwargs["error"] for c in self.audit.call_args_list if c.args[0] == "session_start_failed"],
+                         ["boom"])
+
+    def test_a_session_without_a_startup_lock_still_starts_once(self) -> None:
+        starts: list = []
+        with mock.patch.object(_handshake, "_locked", side_effect=PermissionError(13, "Permission denied")):
+            first, _ = self._open(session_id="start-unlocked", start=starts.append)
+            self._open(session_id="start-unlocked", start=starts.append)
+        self.assertEqual(starts, [first])
+        self.assertIsInstance(first, Negotiated)
 
 
 class UnsignedMode(_SessionTest):

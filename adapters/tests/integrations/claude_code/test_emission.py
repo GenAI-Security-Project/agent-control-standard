@@ -110,8 +110,8 @@ class ClaudeEmission(unittest.TestCase):
         # and emits nothing (full lifecycle: ClaudeSequentialSession).
         g = self._emit(_event("Stop", permission_mode="default"))
         content = [m for m in g.methods() if m.startswith("steps/")]
-        self.assertEqual(content, [],
-            f"a Stop with no open turn must emit no step; got {content}")
+        self.assertEqual(content, ["steps/sessionStart"],
+            f"a Stop that opens the session sends sessionStart and, with no open turn, no turnEnd; got {content}")
 
     def test_subagent_start_via_agent_tool(self):
         # The spawn tool is `Agent` (docs 2026-08-22), legacy `Task`;

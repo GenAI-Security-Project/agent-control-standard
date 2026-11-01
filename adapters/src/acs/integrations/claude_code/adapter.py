@@ -69,6 +69,7 @@ from acs.client import (
     Config,
     FailPosture,
     Handshake,
+    Negotiated,
     Refused,
     Resolution,
     Undecided,
@@ -436,9 +437,10 @@ def build_turn_start_request(event: dict[str, Any], turn_id: str) -> dict[str, A
     return turn_start_envelope(_metadata(event), turn_id)
 
 
-def _open_session(event: dict[str, Any], config: Config) -> Handshake:
-    """The session's §4.1 decision. The first event of a session_id handshakes and stores
-    the decision; every later hook process of that session reads it without a network call."""
+def _open_session(event: dict[str, Any], config: Config, started: list | None = None) -> Handshake:
+    """The session's §4.1 decision. The first event of a session_id handshakes, stores
+    the decision and sends sessionStart; every later hook process of that session reads
+    the decision without a network call."""
     return open_session(
         config=config,
         session_id=event.get("session_id"),
@@ -448,7 +450,26 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
         # values, so advertise them explicitly.
         methods_implemented=(list(HOOK_MAP.values())
                              + ["steps/subagentStart", "steps/turnStart"]),
+        start=lambda session: _send_session_start(event, session, config, started),
     )
+
+
+def _send_session_start(event: dict[str, Any], session: Negotiated, config: Config, started: list | None) -> None:
+    """The session's one sessionStart, built from whichever hook opened the session; the session chain roots there (§8)."""
+    session_id = event.get("session_id")
+    if not method_evaluated(session.server_hello, "steps/sessionStart"):
+        audit_event("method_not_evaluated", method="steps/sessionStart",
+                    hook=event.get("hook_event_name"), session_id=session_id)
+        return
+    opening = {k: event[k] for k in ("session_id", "cwd", "transcript_path", "model", "source") if k in event}
+    result = round_trip(build_request({**opening, "hook_event_name": "SessionStart"}),
+                        guardian_url=config.guardian_url, posture=config.posture.negotiated(session.server_hello),
+                        session_id=session_id)
+    if isinstance(result, Resolution):
+        audit_event(result.audit_type, **{**result.fields, "cause": result.cause,
+                                          "method": "steps/sessionStart", "session_id": session_id})
+    elif started is not None:
+        started.append(result)
 
 
 # ─── Response translation — dispatch table, one function per hook ─────────
@@ -634,10 +655,16 @@ def main() -> int:
     session_id = event.get("session_id")
 
     # §4.1: a refused or unanswered session sends the Guardian nothing; each step is settled here.
-    session = _open_session(event, config)
+    started: list = []
+    session = _open_session(event, config, started)
     gated = config.gate(session)
     if gated is not None:
         return _settle(gated, hook_name, session_id)
+    if hook_name == "SessionStart":
+        # The session's sessionStart went out when the session opened, from this hook or an earlier one.
+        if started:
+            _emit(translate_response(started[0].response, hook_name))
+        return 0
     server_hello = session.server_hello
     # §6.4:154: the negotiated posture and default timeout govern every round trip below.
     posture = config.posture.negotiated(server_hello)

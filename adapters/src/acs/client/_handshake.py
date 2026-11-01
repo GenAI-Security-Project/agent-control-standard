@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, post
 from acs.client._outcome import Handshake, Negotiated, NoAnswer, SessionRefused
 from acs.client._secrets import load_hmac_secret
 from acs.client._signing import sign_envelope, verify_signature
+from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
 from acs.core import (
     ACS_VERSION,
@@ -54,13 +56,20 @@ def _handshake_cache_path(session_id: str, guardian_url: str, directory: Path | 
 def open_session(*, config: Config, session_id: str | None, agent_id: str, platform: str,
                  methods_implemented: list[str], wrapped_protocols: list[str] | None = None,
                  timeout: float | None = None, profiles_supported: list[str] | None = None,
-                 transports_supported: list[str] | None = None) -> Handshake:
+                 transports_supported: list[str] | None = None,
+                 start: Callable[[Negotiated], None] | None = None) -> Handshake:
     """Return the session's decision: the stored one, or the result of one handshake, stored for the session's lifetime; never raises.
 
     The record sits where the observed agent can write, so it carries an
     HMAC under the session key over the decision, the session and the
     Guardian URL: a record that is modified, corrupted, copied from another
     endpoint, or cannot be stored refuses the session.
+
+    With start, the hook process that opens a negotiated session also sends
+    the session's sessionStart through it, once. Hooks of one session can run
+    at the same time, so every hook process of the session waits for that
+    handshake and that sessionStart under the session's startup lock: the
+    Guardian sees one handshake, then sessionStart, then the other steps.
     """
     if not session_id:
         return NoAnswer("missing_session_id")
@@ -69,6 +78,41 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     except Exception as e:  # noqa: BLE001
         return SessionRefused("secret_unavailable", {"error": str(e)})
     path = _handshake_cache_path(session_id, config.guardian_url)
+    hello = dict(config=config, session_id=session_id, agent_id=agent_id, platform=platform,
+                 methods_implemented=methods_implemented, wrapped_protocols=wrapped_protocols, timeout=timeout,
+                 profiles_supported=profiles_supported, transports_supported=transports_supported)
+    started = Path(f"{path}.started")
+    if start is None or started.exists():
+        return _decide(path, ikm, **hello)
+    with contextlib.ExitStack() as startup:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            startup.enter_context(_locked(path))
+        except OSError:
+            pass  # No startup lock: this process decides and starts the session on its own.
+        decision = _decide(path, ikm, **hello)
+        if not started.exists():
+            if isinstance(decision, Negotiated):
+                try:
+                    start(decision)
+                except Exception as e:  # noqa: BLE001
+                    audit_event("session_start_failed", cause="adapter_exception", error=str(e),
+                                session_id=session_id)
+            _mark(started)
+        return decision
+
+
+def _mark(path: Path) -> None:
+    """Record that the session's startup is done, so later hook processes skip the startup lock."""
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))
+    except OSError:
+        pass
+
+
+def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id: str, platform: str,
+            methods_implemented: list[str], wrapped_protocols: list[str] | None, timeout: float | None,
+            profiles_supported: list[str] | None, transports_supported: list[str] | None) -> Handshake:
     stored = _read_record(path, ikm, session_id, config.guardian_url)
     if stored is not None:
         return _required_profiles(stored, config)
