@@ -67,11 +67,13 @@ In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` befo
 the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
 advances, because the roadmap counts a closed issue as delivered.
 
-If you open a pull request against an issue that is not accepted yet, it will not be
-reviewed and nothing about it is rejected. It waits, and a comment will say so. A pull
-request that sits untriaged for a long time may be closed with an invitation to reopen
-once its issue is accepted. Start from an issue labeled `help wanted` if you want work
-that is already accepted.
+If you open a pull request nobody asked for, it waits and nothing about it is rejected. A
+bot adds `status:needs-triage` and one comment unless you are a lead in
+[GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull request
+references, or a lead has reviewed it. A pull request that sits untriaged for a long time
+may be closed with an invitation to reopen once its issue is accepted. Start from an issue
+labeled `help wanted`, and ask a lead to assign it to you, if you want work that is
+already accepted.
 
 [Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who applies
 `scope:`, `priority:`, `workstream:`, and `status:accepted`. No issue form can apply them,
