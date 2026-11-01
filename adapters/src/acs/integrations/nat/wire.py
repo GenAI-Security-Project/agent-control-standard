@@ -11,12 +11,10 @@ attachment point, and either reports gaps (`--check`) or fills them in
 `# acs-adapter-wired` comment so a re-run is a no-op and `--unwire`
 removes exactly what we added (and nothing else).
 
-NAT's framework-wide lifecycle stream (`IntermediateStepManager`,
-subscribed in acs_adapter.py:_ensure_lifecycle_subscribed) gives the
-Guardian observability of every call even when middleware wiring is
-incomplete — that's a backstop, not a substitute for wire+lint, because
-lifecycle subscribers can only OBSERVE calls, not BLOCK them. Enforcement
-still needs the middleware wired.
+The adapter's lifecycle observer reports workflow start and end only,
+never tool calls, so a function this tool does not wire reaches the
+Guardian neither as a decision nor as an observation. Wire every
+function, and lint in CI.
 
 Modes
 =====
@@ -42,9 +40,8 @@ close:
   - Sub-workflows loaded at runtime from other files.
   - Custom middleware classes that fork their own call path.
 
-For those, rely on the lifecycle-subscription backstop the adapter
-emits and audit the Guardian for "saw call via lifecycle but never via
-middleware" findings.
+Move those into the YAML, so this tool can wire them and --check can
+see them.
 """
 from __future__ import annotations
 

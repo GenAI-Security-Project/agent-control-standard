@@ -122,13 +122,24 @@ except ImportError:
 try:
     from nat.data_models.intermediate_step import IntermediateStepType  # type: ignore[import-not-found]
     from nat.builder.context import Context as _NATContext  # type: ignore[import-not-found]
+    from nat.builder.context import ContextState as _NATContextState  # type: ignore[import-not-found]
     _HAS_LIFECYCLE = True
 except ImportError:
     IntermediateStepType = None  # type: ignore[assignment]
     _NATContext = None  # type: ignore[assignment]
+    _NATContextState = None  # type: ignore[assignment]
     _HAS_LIFECYCLE = False
 
-# InvocationAction.SKIP is on the dev branch; not in NAT 1.7.0 release.
+# A telemetry exporter is the hook NAT starts for each run, subscribed before the run's WORKFLOW_START.
+try:
+    from nat.cli.register_workflow import register_telemetry_exporter  # type: ignore[import-not-found]
+    from nat.data_models.telemetry_exporter import TelemetryExporterBaseConfig  # type: ignore[import-not-found]
+    from nat.observability.exporter.base_exporter import BaseExporter  # type: ignore[import-not-found]
+    _HAS_EXPORTER = True
+except ImportError:
+    _HAS_EXPORTER = False
+
+# InvocationAction.SKIP is absent from NAT 1.7.0.
 try:
     from nat.middleware.middleware import InvocationAction  # type: ignore[attr-defined]
     _HAS_INVOCATION_ACTION = True
@@ -474,14 +485,15 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         # One thread sends lifecycle hooks off the event loop, in the order NAT reports them.
         self._lifecycle = _LifecycleSender(self._send_lifecycle_hook)
         self._server_hello: dict | None = None
-        self._lifecycle_subscribed = False
-        self._lifecycle_subscription = None
+        # Set when the builder registered a lifecycle exporter, which NAT starts for every run.
+        self._lifecycle_exported = False
+        # The run streams this middleware subscribed to itself, one subscription each; a stream leaves with its run.
+        self._lifecycle_streams: weakref.WeakSet = weakref.WeakSet()
         # Locks the check-then-set in _ensure_lifecycle_subscribed
         # against double subscription from parallel pre_invoke calls.
         self._lifecycle_lock = threading.Lock()
         # WeakKeyDictionary fallback for frozen contexts — id(context)
         # would collide once GC recycles addresses.
-        import weakref
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
 
@@ -530,30 +542,36 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         self._lifecycle.close()
 
     def _ensure_lifecycle_subscribed(self) -> None:
-        """Subscribe to NAT's IntermediateStepManager so workflow-boundary
-        events fire ACS sessionStart / userMessage / agentResponse /
-        sessionEnd; idempotent and locked against double subscription.
+        """Without the builder's exporter, subscribe to the current run's step stream on the run's first call.
+
+        NAT builds a new stream for each run and pushes WORKFLOW_START before
+        any call, so such a run reports from its first call on; the builder's
+        exporter subscribes before the start. Locked against double subscription.
         """
-        if self._lifecycle_subscribed or not _HAS_LIFECYCLE:
+        if self._lifecycle_exported or not _HAS_LIFECYCLE:
+            return
+        try:
+            stream = _NATContextState.get().event_stream.get()
+        except Exception:  # noqa: BLE001
+            return
+        if stream in self._lifecycle_streams:
             return
         with self._lifecycle_lock:
-            # Re-check inside the lock.
-            if self._lifecycle_subscribed:
+            if stream in self._lifecycle_streams:
                 return
             try:
-                ctx = _NATContext.get()
-                mgr = ctx.intermediate_step_manager
+                mgr = _NATContext.get().intermediate_step_manager
             except Exception:  # noqa: BLE001
                 # No active Context; function-call hooks still fire via FunctionMiddleware.
                 return
             try:
-                self._lifecycle_subscription = mgr.subscribe(
+                mgr.subscribe(
                     on_next=self._on_intermediate_step,
                     on_error=lambda e: audit_event(
                         "lifecycle_subscription_error",
                         session_id=self._session_id, error=str(e)),
                 )
-                self._lifecycle_subscribed = True
+                self._lifecycle_streams.add(stream)
             except Exception as e:  # noqa: BLE001
                 audit_event("lifecycle_subscribe_failed",
                             session_id=self._session_id, error=str(e))
@@ -908,7 +926,42 @@ if _NAT_AVAILABLE and _HAS_REGISTRATION:
         middleware = ACSMiddleware(config)
         if not middleware._acs.disabled:
             await asyncio.to_thread(middleware._ensure_handshake)
+            add_exporter = getattr(builder, "add_telemetry_exporter", None)
+            if add_exporter is not None and _HAS_EXPORTER and _HAS_LIFECYCLE:
+                key = str(uuid.uuid4())
+                _LIFECYCLE_MIDDLEWARES[key] = middleware
+                await add_exporter(f"acs_lifecycle_{key}", ACSLifecycleExporterConfig(middleware_key=key))
+                middleware._lifecycle_exported = True
         try:
             yield middleware
         finally:
             await asyncio.to_thread(middleware.close)
+
+
+# ----- Per-run lifecycle exporter -----
+
+# The middleware each registered lifecycle exporter feeds, by the key in its config.
+_LIFECYCLE_MIDDLEWARES: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+
+if _NAT_AVAILABLE and _HAS_REGISTRATION and _HAS_EXPORTER and _HAS_LIFECYCLE:
+    class ACSLifecycleExporterConfig(TelemetryExporterBaseConfig, name="acs_lifecycle"):  # type: ignore[misc, valid-type, call-arg]
+        """Added by `acs_guardian` for its own middleware; it is not configured in YAML."""
+        middleware_key: str
+
+    class _LifecycleExporter(BaseExporter):  # type: ignore[misc, valid-type]
+        """Hands every step of a run to the middleware's lifecycle callback; NAT subscribes it before WORKFLOW_START."""
+
+        def __init__(self, middleware: ACSMiddleware) -> None:
+            super().__init__()
+            self._middleware = middleware
+
+        def export(self, event) -> None:
+            self._middleware._on_intermediate_step(event)
+
+    @register_telemetry_exporter(config_type=ACSLifecycleExporterConfig)  # type: ignore[misc]
+    async def build_acs_lifecycle_exporter(config: "ACSLifecycleExporterConfig", builder):  # type: ignore[name-defined]
+        """Build the exporter that feeds one `acs_guardian` middleware."""
+        middleware = _LIFECYCLE_MIDDLEWARES.get(config.middleware_key)
+        if middleware is None:
+            raise ValueError("acs_lifecycle is added by the acs_guardian middleware; it is not configured on its own")
+        yield _LifecycleExporter(middleware)

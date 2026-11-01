@@ -16,7 +16,7 @@ NAT exposes a `FunctionMiddleware` abstraction that wraps any function — tools
 
 The handshake/hello fires once per session, cached in process state so subsequent events skip the round-trip.
 
-Independently of the middleware path, the adapter subscribes to NAT's `IntermediateStepManager` for `WORKFLOW_START` / `WORKFLOW_END` events and emits `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). The observer is auto-subscribed on the first `pre_invoke` call. **The lifecycle stream is observation-only; it cannot block calls.** Enforcement is the middleware path's job.
+Independently of the middleware path, the adapter reports each run's `WORKFLOW_START` / `WORKFLOW_END` events as `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). When NAT builds the middleware, it registers an `acs_lifecycle` telemetry exporter, which NAT starts for every run before `WORKFLOW_START`. A middleware built without NAT's builder subscribes on each run's first call instead, so it reports that run from the call on. **The lifecycle stream is observation-only; it cannot block calls.** Enforcement is the middleware path's job.
 
 ### Decision honoring (§6.4)
 
@@ -124,7 +124,7 @@ NAT's middleware fires per-attachment-point: workflow, function_groups, and indi
 
 What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` gives.** The middleware runs *before* the function executes and waits for the Guardian's decision, off the event loop; a Guardian deny raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP`) and NAT does not call the function.
 
-**Backstop for the dynamic-registration caveat:** the adapter also subscribes to NAT's `IntermediateStepManager`, which fires for every call NAT routes regardless of middleware wiring. The Guardian therefore *observes* every call (audit trail + trace), even ones the middleware path missed. Subscribers can't *block* — they're notification-only — so this is detection, not enforcement. Audit Guardian logs for `toolCallRequest` envelopes that arrived via lifecycle but never via middleware; that delta is your coverage gap.
+**The lifecycle observer reports workflow boundaries only.** It sends `sessionStart`, `userMessage`, `agentResponse` and `sessionEnd` for each run and no tool calls, so a function the middleware is not wired to reaches the Guardian neither as a decision nor as an observation. Steps 1 and 2 close that gap: define every function in YAML, and run `acs-nat-wire --check` in CI.
 
 ## Smoke tests
 

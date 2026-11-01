@@ -5,6 +5,7 @@ production scenario and asserts the safe behavior.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 import socket
@@ -278,16 +279,21 @@ class FailureMode3_LifecycleSubscriptionRace(unittest.TestCase):
 
         # Patch Context.get() so both threads see our FakeCtx
         import unittest.mock as mock
+        from nat.utils.reactive.subject import Subject
         with mock.patch.object(adapter_mod, "_NATContext") as patched_ctx:
             patched_ctx.get.return_value = FakeCtx()
+            # Both calls belong to one run, so both see that run's step stream.
+            token = ContextState.get().event_stream.set(Subject())
+            self.addCleanup(ContextState.get().event_stream.reset, token)
+            runs = [contextvars.copy_context(), contextvars.copy_context()]
 
             barrier = threading.Barrier(2)
-            def runner():
+            def runner(run):
                 barrier.wait()  # release both threads simultaneously
-                mw._ensure_lifecycle_subscribed()
+                run.run(mw._ensure_lifecycle_subscribed)
 
-            t1 = threading.Thread(target=runner)
-            t2 = threading.Thread(target=runner)
+            t1 = threading.Thread(target=runner, args=(runs[0],))
+            t2 = threading.Thread(target=runner, args=(runs[1],))
             t1.start(); t2.start()
             t1.join(); t2.join()
 
