@@ -6,14 +6,20 @@ If you've contributed and aren't listed here, open a PR. We'd rather over-credit
 
 ## People
 
+- **Aaron Ormerod** ([@aaronormerod](https://github.com/aaronormerod))
 - **Almog Langleben** ([@almogbhl](https://github.com/almogbhl))
 - **Ariel Fogel** ([@afogel](https://github.com/afogel))
 - **Bar Kaduri** ([@bar-capsule](https://github.com/bar-capsule))
 - **Eva Benn** ([@evabenn](https://github.com/evabenn))
+- **Evgeniy Kokuykin** ([@artmaro](https://github.com/artmaro))
 - **Fred Wilmot** ([@fewdisc](https://github.com/fewdisc))
+- **Imran Siddique** ([@imran-siddique](https://github.com/imran-siddique))
+- **Mayur Agnihotri** ([@Mayur021](https://github.com/Mayur021))
 - **narko4u** ([@narko4u](https://github.com/narko4u))
 - **ossumpossum** ([@ossumpossum](https://github.com/ossumpossum))
 - **Prem Methuku** ([@Premmethuku75](https://github.com/Premmethuku75))
+- **Raghuvar Karthik Durga** ([@drk-ram](https://github.com/drk-ram))
+- **Rock Lambros** ([@rocklambros](https://github.com/rocklambros))
 - **Saba Siddique** ([@sabasiddique1](https://github.com/sabasiddique1))
 - **Sankalp Gilda** ([@astrogilda](https://github.com/astrogilda))
 - **Stefano Amorelli** ([@stefanoamorelli](https://github.com/stefanoamorelli))
