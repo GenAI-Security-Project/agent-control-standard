@@ -39,7 +39,8 @@
     "timeout_disposition": {
       "type": "string",
       "enum": ["allow", "deny"],
-      "default": "deny"
+      "default": "deny",
+      "description": "Disposition applied when timeout_seconds elapses without a verified approver decision. A timeout resolved as 'allow' records a deployment-policy timeout outcome and MUST NOT attribute an approval or intent_extension grant to the named approver (Specification §9.1)."
     },
     "intent_extension": {
       "type": "object",
