@@ -16,7 +16,7 @@ NAT exposes a `FunctionMiddleware` abstraction that wraps any function — tools
 
 The handshake/hello fires once per session, cached in process state so subsequent events skip the round-trip.
 
-Independently of the middleware path, the adapter reports each run's `WORKFLOW_START` / `WORKFLOW_END` events as `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). When NAT builds the middleware, it registers an `acs_lifecycle` telemetry exporter, which NAT starts for every run before `WORKFLOW_START`. A middleware built without NAT's builder subscribes on each run's first call instead, so it reports that run from the call on. **The lifecycle stream is observation-only; it cannot block calls.** Enforcement is the middleware path's job.
+Independently of the middleware path, the adapter reports each run's `WORKFLOW_START` / `WORKFLOW_END` events as `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). A run that raises or is cancelled reaches no workflow end, so it sends no `agentResponse` or `sessionEnd` (see `mapping.md`). When NAT builds the middleware, it registers an `acs_lifecycle` telemetry exporter, which NAT starts for every run before `WORKFLOW_START`. A middleware built without NAT's builder subscribes on each run's first call instead, so it reports that run from the call on. **The lifecycle stream is observation-only; it cannot block calls.** Enforcement is the middleware path's job.
 
 ### Decision honoring (§6.4)
 
@@ -124,7 +124,7 @@ NAT's middleware fires per-attachment-point: workflow, function_groups, and indi
 
 What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` gives.** The middleware runs *before* the function executes and waits for the Guardian's decision, off the event loop; a Guardian deny raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP`) and NAT does not call the function.
 
-**The lifecycle observer reports workflow boundaries only.** It sends `sessionStart`, `userMessage`, `agentResponse` and `sessionEnd` for each run and no tool calls, so a function the middleware is not wired to reaches the Guardian neither as a decision nor as an observation. Steps 1 and 2 close that gap: define every function in YAML, and run `acs-nat-wire --check` in CI.
+**The lifecycle observer reports workflow boundaries only.** It sends `sessionStart` and `userMessage` for each run, `agentResponse` and `sessionEnd` for each run that returns, and no tool calls, so a function the middleware is not wired to reaches the Guardian neither as a decision nor as an observation. Steps 1 and 2 close that gap: define every function in YAML, and run `acs-nat-wire --check` in CI.
 
 ## Smoke tests
 

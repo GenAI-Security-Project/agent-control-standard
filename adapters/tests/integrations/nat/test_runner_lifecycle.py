@@ -3,6 +3,7 @@ WORKFLOW_START, so a run's first events and a later run's events all reach the G
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import os
 import tempfile
@@ -54,6 +55,18 @@ class _Entry:
         return await self.middleware.function_middleware_invoke(command=message, call_next=target, context=context)
 
 
+class _RunFailed(Exception):
+    pass
+
+
+class _Failing(_Entry):
+    """A workflow entry function that fails after its wrapped call."""
+
+    async def ainvoke(self, message: str, to_type=None) -> str:
+        await super().ainvoke(message, to_type)
+        raise _RunFailed(message)
+
+
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
 class EveryRunReportsItsLifecycle(unittest.TestCase):
     def setUp(self) -> None:
@@ -68,7 +81,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.guardian.start()
         self.addCleanup(self.guardian.stop)
 
-    def _runs(self, *messages: str, with_builder: bool = True) -> list[str]:
+    def _runs(self, *messages: str, with_builder: bool = True, entry: type[_Entry] = _Entry) -> list[str]:
         """Run each message through NAT's Runner with the exporters the middleware's builder registered."""
         executed: list[str] = []
         self.exporters: list[str] = []
@@ -83,8 +96,9 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                 self.exporters = [name.split("_")[0] + "_" + name.split("_")[1] for name in exporters]
                 manager = ExporterManager.from_exporters(exporters)
                 for message in messages:
-                    async with Runner(message, _Entry(middleware, executed), ContextState.get(), manager) as runner:
-                        await runner.result()
+                    async with Runner(message, entry(middleware, executed), ContextState.get(), manager) as runner:
+                        with contextlib.suppress(_RunFailed):
+                            await runner.result()
                     await middleware._lifecycle_sent()
         asyncio.run(run())
         return executed
@@ -93,6 +107,11 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.assertEqual(self._runs("first", "second"), ["first", "second"])
         self.assertEqual(self.exporters, ["acs_lifecycle"])
         self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN + RUN)
+
+    def test_a_failed_run_reports_no_end(self) -> None:
+        """NAT pushes WORKFLOW_END only once the workflow returns, so a failed run sends no agentResponse or sessionEnd."""
+        self.assertEqual(self._runs("first", "second", entry=_Failing), ["first", "second"])
+        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN[:4] + RUN[:4])
 
     def test_without_the_builder_each_run_reports_from_its_first_call(self) -> None:
         self.assertEqual(self._runs("first", "second", with_builder=False), ["first", "second"])
