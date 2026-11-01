@@ -1332,7 +1332,7 @@ Delete the `font-family="Inter, sans-serif"` attribute from all fifteen `<text>`
 ```markdown
 | In scope | Out of scope |
 | --- | --- |
-| Flaws in the ACS specification that lead implementers into insecure designs | The marketing site at agentcontrolstandard.org, which is built and deployed from a separate repository |
+| Flaws in the ACS specification that lead implementers into insecure designs | The project's earlier marketing site, which is built and deployed from a separate repository |
 | Errors in the JSON Schemas under `specification/` | Findings against third-party agent frameworks that happen to implement ACS |
 | The build and publish tooling in `tools/` and the GitHub Actions workflows in `.github/workflows/` | Automated scanner output with no demonstrated impact |
 | Hook or event definitions that leak sensitive data by design | Missing security headers on sites we do not operate |
