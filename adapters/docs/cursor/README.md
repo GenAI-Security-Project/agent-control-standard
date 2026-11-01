@@ -73,13 +73,15 @@ Cursor runs the hooks from every source below and merges their answers, with any
 acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
-  --key-id=2026-11
+  --key-id=2026-11 \
+  --audit-file=~/.acs/audit.log
 
 # Apply user-level wiring
 acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
   --key-id=2026-11 \
+  --audit-file=~/.acs/audit.log \
   --write
 
 # OR — project-level wiring for a specific workspace
@@ -87,6 +89,7 @@ acs-cursor-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
   --key-id=2026-11 \
+  --audit-file=~/.acs/audit.log \
   --settings=./.cursor/hooks.json \
   --write
 ```

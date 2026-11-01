@@ -67,13 +67,15 @@ Keep this terminal open. You should see `[guardian] listening on 127.0.0.1:8787`
 acs-claude-code-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
-  --key-id=2026-11
+  --key-id=2026-11 \
+  --audit-file=~/.acs/audit.log
 
 # Apply it (creates ~/.claude/settings.json.bak.<timestamp>)
 acs-claude-code-wire \
   --guardian-url=http://127.0.0.1:8787/acs \
   --secret-file=~/.acs/hmac.key \
   --key-id=2026-11 \
+  --audit-file=~/.acs/audit.log \
   --write
 ```
 

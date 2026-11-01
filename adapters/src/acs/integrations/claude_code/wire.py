@@ -63,12 +63,10 @@ What this tool does NOT do
 from __future__ import annotations
 
 import argparse
-import datetime
 import difflib
 import json
 import os
 import shlex
-import shutil
 import stat
 import sys
 from pathlib import Path
@@ -85,6 +83,7 @@ from acs.integrations._duplicates import (
     wired_copies,
 )
 from acs.integrations._hook_command import resolve_hook_command
+from acs.integrations._settings_file import write_atomically
 
 
 HOOK_SCRIPT = "acs-claude-code-hook"
@@ -140,30 +139,22 @@ def build_command(*, hook_command: str, guardian_url: str,
                    default_deny: bool,
                    host_allowlist: str | None,
                    audit_file: str | None = None) -> str:
-    """Compose the hook command string used inside settings.json.
-
-    All filesystem paths are written as absolute paths so the hook
-    command doesn't rely on shell tilde-expansion (which varies by
-    shell) or current-working-directory (which is wherever Claude
-    Code happens to be run from).
-    """
-    env_pairs: list[str] = [f"ACS_GUARDIAN_URL={guardian_url}"]
+    """The settings.json hook command, with absolute paths, since the hook's shell and working directory vary."""
+    env_pairs: list[str] = [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
     if secret_file:
         # Resolve ~ and $VAR ahead of time — Python's open() doesn't
         # expand tildes and POSIX sh tilde-after-= is not guaranteed.
-        env_pairs.append(f"ACS_HMAC_SECRET_FILE={_expand(secret_file)}")
+        env_pairs.append(f"ACS_HMAC_SECRET_FILE={shlex.quote(str(_expand(secret_file)))}")
     elif secret_env:
-        env_pairs.append(f"ACS_HMAC_SECRET={secret_env}")
+        env_pairs.append(f"ACS_HMAC_SECRET={shlex.quote(secret_env)}")
     if key_id:
         env_pairs.append(f"ACS_HMAC_KEY_ID={shlex.quote(key_id)}")
     if default_deny:
         env_pairs.append("ACS_DEFAULT_DENY=1")
     if host_allowlist:
-        env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={host_allowlist}")
+        env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={shlex.quote(host_allowlist)}")
     if audit_file:
-        # Durable audit sink — §6.4's audit half of the fail-open trade
-        # only exists if the events land somewhere collected.
-        env_pairs.append(f"ACS_AUDIT_FILE={_expand(audit_file)}")
+        env_pairs.append(f"ACS_AUDIT_FILE={shlex.quote(str(_expand(audit_file)))}")
     env_prefix = " ".join(env_pairs)
     return f"{env_prefix} {shlex.quote(hook_command)} {WIRE_MARKER}"
 
@@ -274,26 +265,6 @@ def render_diff(before: dict, after: dict, label: str) -> str:
                                           tofile=f"{label} (proposed)",
                                           n=3))
 
-
-def write_atomically(path: Path, content: str) -> Path:
-    """Write content to path atomically, with a timestamped backup of any
-    existing file. Returns the backup path (or None if no original existed).
-    """
-    backup = None
-    if path.exists():
-        ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-        backup = path.with_suffix(path.suffix + f".bak.{ts}")
-        shutil.copy2(path, backup)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content)
-    os.replace(tmp, path)
-    return backup
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Validation helpers
-# ──────────────────────────────────────────────────────────────────────
 
 def _expand(p: str) -> Path:
     return Path(os.path.expanduser(os.path.expandvars(p)))

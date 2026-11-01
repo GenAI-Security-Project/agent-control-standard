@@ -61,12 +61,10 @@ What this tool does NOT do
 from __future__ import annotations
 
 import argparse
-import datetime
 import difflib
 import json
 import os
 import shlex
-import shutil
 import stat
 import sys
 from pathlib import Path
@@ -81,6 +79,7 @@ from acs.integrations._duplicates import (
     wired_copies,
 )
 from acs.integrations._hook_command import resolve_hook_command
+from acs.integrations._settings_file import write_atomically
 
 
 HOOK_SCRIPT = "acs-cursor-hook"
@@ -140,23 +139,22 @@ def build_command(*, hook_command: str, event_name: str,
                    secret_env: str | None,
                    key_id: str | None = None,
                    default_deny: bool,
-                   host_allowlist: str | None) -> str:
-    """Compose the hook command string used inside hooks.json.
-
-    Cursor passes the event name as argv[1], so the command line ends
-    with `acs-cursor-hook <event_name>`.
-    """
-    env_pairs: list[str] = [f"ACS_GUARDIAN_URL={guardian_url}"]
+                   host_allowlist: str | None,
+                   audit_file: str | None = None) -> str:
+    env_pairs: list[str] = [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
     if secret_file:
-        env_pairs.append(f"ACS_HMAC_SECRET_FILE={_expand(secret_file)}")
+        env_pairs.append(f"ACS_HMAC_SECRET_FILE={shlex.quote(str(_expand(secret_file)))}")
     elif secret_env:
-        env_pairs.append(f"ACS_HMAC_SECRET={secret_env}")
+        env_pairs.append(f"ACS_HMAC_SECRET={shlex.quote(secret_env)}")
     if key_id:
         env_pairs.append(f"ACS_HMAC_KEY_ID={shlex.quote(key_id)}")
     if default_deny:
         env_pairs.append("ACS_DEFAULT_DENY=1")
     if host_allowlist:
-        env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={host_allowlist}")
+        env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={shlex.quote(host_allowlist)}")
+    if audit_file:
+        # A durable audit sink: hook stderr is not kept by Cursor.
+        env_pairs.append(f"ACS_AUDIT_FILE={shlex.quote(str(_expand(audit_file)))}")
     env_prefix = " ".join(env_pairs)
     return f"{env_prefix} {shlex.quote(hook_command)} {event_name} {WIRE_MARKER}"
 
@@ -251,22 +249,6 @@ def render_diff(before: dict, after: dict, label: str) -> str:
                                           fromfile=f"{label} (current)",
                                           tofile=f"{label} (proposed)",
                                           n=3))
-
-
-def write_atomically(path: Path, content: str) -> Path:
-    """Write content to path atomically, with a timestamped backup of any
-    existing file. Returns the backup path (or None if no original existed).
-    """
-    backup = None
-    if path.exists():
-        ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-        backup = path.with_suffix(path.suffix + f".bak.{ts}")
-        shutil.copy2(path, backup)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content)
-    os.replace(tmp, path)
-    return backup
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -372,6 +354,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Force fail-OPEN on EVERY wired hook, including gates. NOT "
                          "RECOMMENDED — strict §6.4 default but a Guardian outage on a "
                          "gate hook lets the action run unguarded.")
+    p.add_argument("--audit-file",
+                    help="Durable ACS_AUDIT sink appended by every hook process "
+                         "(created 0600). RECOMMENDED: without it, §6.4 audit "
+                         "events land on hook stderr, which nothing collects.")
     p.add_argument("--host-allowlist", default=None,
                     help="Comma-separated hostnames the adapter will accept as Guardian URLs.")
     p.add_argument("--unwire", action="store_true",
@@ -443,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
                 key_id=args.key_id,
                 default_deny=hook_deny,
                 host_allowlist=args.host_allowlist,
+                audit_file=args.audit_file,
             )
             entries_by_hook[hook] = build_hook_entry(cmd, fail_closed=hook_deny)
         new = merge_wire(existing, hook_names, entries_by_hook)

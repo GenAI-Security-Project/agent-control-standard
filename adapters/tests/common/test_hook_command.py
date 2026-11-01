@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -136,6 +137,63 @@ class ClaudeCodeGateHooksBlockOnFailure(unittest.TestCase):
         strict = self._wire("--default-deny")
         self.assertEqual(strict["block"], strict["all"] - {"Stop"}, "Claude Code ignores onFailure on Stop")
         self.assertEqual(self._wire("--all-fail-open")["block"], set())
+
+
+class WrittenCommandsAndFiles(unittest.TestCase):
+    """A path with a space stays one argument, and the settings file keeps its link and mode."""
+
+    CASES = ((claude_wire, "settings.json", "acs-claude-code-hook"), (cursor_wire, "hooks.json", "acs-cursor-hook"))
+
+    def _wire(self, module, tmp: Path, settings: Path, *extra: str) -> None:
+        with contextlib.chdir(tmp), mock.patch.dict(os.environ, {"HOME": str(tmp)}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            module.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}", "--write", *extra])
+
+    def test_a_secret_and_audit_path_with_spaces_reach_the_hook_whole(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                seen = tmp / "seen.json"
+                hook = tmp / "bin dir" / script
+                hook.parent.mkdir()
+                hook.write_text(f"#!/bin/sh\nprintf '%s\\n%s\\n' \"$ACS_HMAC_SECRET_FILE\" \"$ACS_AUDIT_FILE\" > '{seen}'\n")
+                hook.chmod(0o755)
+                key = tmp / "My Keys" / "hmac.key"
+                key.parent.mkdir()
+                key.write_text("0" * 64)
+                key.chmod(0o600)
+                audit = tmp / "My Logs" / "audit.log"
+                settings = tmp / name
+                self._wire(module, tmp, settings, f"--hook-command={hook}", f"--secret-file={key}",
+                           "--key-id=test-key", f"--audit-file={audit}")
+                for command in (h["command"] for h in _commands(json.loads(settings.read_text()))):
+                    p = subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=10)
+                    self.assertEqual(p.returncode, 0, (command, p.stderr))
+                    self.assertEqual(seen.read_text().splitlines(), [str(key), str(audit)])
+
+    def test_a_symlinked_settings_file_keeps_its_link_and_mode(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                hook = _executable(tmp / script)
+                real = tmp / "dotfiles" / name
+                real.parent.mkdir()
+                real.write_text("{}")
+                real.chmod(0o600)
+                link = tmp / name
+                link.symlink_to(real)
+                self._wire(module, tmp, link, f"--hook-command={hook}", *SECRET_ARGS)
+                self.assertTrue(link.is_symlink(), "the wire tool replaced the symlink with a plain file")
+                self.assertIn("acs-adapter-wired", real.read_text())
+                self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o600, "the secret-bearing file lost its mode")
+
+    def test_a_new_settings_file_is_private(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                settings = tmp / name
+                self._wire(module, tmp, settings, f"--hook-command={_executable(tmp / script)}", *SECRET_ARGS)
+                self.assertEqual(stat.S_IMODE(settings.stat().st_mode), 0o600)
 
 if __name__ == "__main__":
     unittest.main()
