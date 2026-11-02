@@ -86,10 +86,9 @@
  * With no destination the gate's `destination(rules)` resolves nothing, is
  * undefined, and the call ALLOWS. Ambiguity only denies if this module hands
  * over a string the allowlist cannot match. `{}` is kept for the cases that
- * genuinely carry no URL -- no match at all, a non-string `raw_command`, a
- * destination argument the gate already reads, an input shape this function
- * cannot read -- because those mean "this module has no opinion", which is a
- * different thing from "this module cannot tell".
+ * genuinely carry no URL -- no match at all, a non-string `raw_command`, an
+ * input shape this function cannot read -- because those mean "this module
+ * has no opinion", which is a different thing from "this module cannot tell".
  *
  * WHAT THE OPERATOR SEES. For an ambiguous input the gate's message reads
  * `destination unresolved.invalid not in allowlist [...]` -- less informative
@@ -163,27 +162,21 @@
  */
 
 /**
- * The tool-argument names AGT's own gate already reads a destination out of --
- * `default_destination_paths` in `policy/lib/egress.rego`, minus the
- * annotation path this module writes.
+ * Does the text after a URL match end the shell word the URL sits in?
  *
- * When one of them is already a string on the snapshot, this module answers
- * nothing. `destination(rules)` is a COMPLETE Rego rule over every configured
- * path, so two paths resolving to different strings has no single answer:
- * measured, that is `deny runtime_error:policy_invocation_failed` -- a total
- * deny wearing a runtime-error reason, on a call nobody decided about. The
- * tool's own argument is the better evidence anyway: it is what the tool will
- * actually reach for, where a command line is what someone typed.
+ * The match stops at a quote, but a quote is not always the end of the word:
+ * `curl https://docs.anthropic.com"@evil.test/x` reaches `evil.test`, because
+ * the shell deletes the quote and joins what follows onto the URL (#373). So a
+ * quote ends the word only when what follows it is itself a word end -- the
+ * closing quote of `curl "https://docs.anthropic.com/x"`. A quote followed by
+ * anything else, including another quote, means the word goes on past the
+ * match, and a URL read out of half a word is one this module cannot vouch for.
  *
- * The coupling is a copy, and it is only correct while the gate runs on its
- * defaults: `cfg.egress.destination_paths` replaces `default_destination_paths`
- * outright rather than extending it, so a deployment that sets that key
- * desynchronises this list in whichever direction it moved -- a path it adds is
- * one this module will not stand down for, and a path it drops is one this
- * module stands down for needlessly. The shipped `policy/lib/data.json` sets no
- * such key. A deployment that sets one has to revisit this list.
+ * Costs one over-block, in the direction this module chooses to fail in: a URL
+ * closed by a quote inside a larger quoted word, as in a JSON body
+ * `-d '{"u":"https://docs.anthropic.com"}'`, answers the sentinel.
  */
-const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as const;
+const WORD_END_AFTER_MATCH = /^["'`]?(?:$|[\t\n\v\f\r ;|&()<>])/;
 
 /**
  * The first absolute http(s) URL in a command line.
@@ -200,11 +193,15 @@ const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as con
  * answered the allowed host. Kept in the match, the character fails
  * UNAMBIGUOUS_AUTHORITY below and the command gets the unresolvable sentinel.
  *
+ * Case-insensitive (#373): `curl` reads the scheme without regard to case, so
+ * `HTTPS://evil.test/x` is a request to `evil.test`, and a pattern that missed
+ * it answered `{}`, which the gate allows.
+ *
  * First match, not every match: the gate takes one destination. A command
  * reaching two hosts has its first examined and the rest unexamined, which is
  * this module's stated miss direction rather than a hidden one.
  */
-const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\t\n\v\f\r '"`;|&()<>]+/;
+const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\t\n\v\f\r '"`;|&()<>]+/i;
 
 /**
  * The authority shapes on which no parser disagrees: a plain host, optionally a
@@ -222,7 +219,7 @@ const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\t\n\v\f\r '"`;|&()<>]+/;
  * Anchored at the start, so it tests the whole match rather than searching
  * inside it: a match that begins unambiguously and then turns ambiguous fails.
  */
-const UNAMBIGUOUS_AUTHORITY = /^https?:\/\/[A-Za-z0-9.\-]+(?::\d+)?(?:[/?#]|$)/;
+const UNAMBIGUOUS_AUTHORITY = /^https?:\/\/[A-Za-z0-9.\-]+(?::\d+)?(?:[/?#]|$)/i;
 
 /**
  * What this module answers when it cannot tell which host a command reaches.
@@ -247,8 +244,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  *     command carries a URL whose authority no parser could read two ways;
  *   - `{destination}` carrying `AMBIGUOUS_DESTINATION` when it carries a URL
  *     this module cannot vouch for, so the gate denies rather than allows;
- *   - `{}` when it carries no URL for this module to have an opinion about, or
- *     when a destination the gate already reads is on the snapshot.
+ *   - `{}` when it carries no URL for this module to have an opinion about.
+ *
+ * It does NOT stand down for a destination argument (`url`, `endpoint`, `host`,
+ * `domain`) the gate already reads (#373). It once did, to avoid two paths
+ * resolving to different strings, which is a complete-rule conflict and
+ * measures as deny runtime_error:policy_invocation_failed. But standing down
+ * let a command reaching `evil.test` ride through on a `url` argument set to an
+ * allowlisted URL: the gate read only the argument. A conflict denies and a
+ * stand-down allows, so answering is the fail-closed side. The cost is that a
+ * call carrying both an argument and a command URL always denies.
  *
  * Never a throw and never `null`, and both halves are load-bearing. AGT turns
  * any annotator failure -- thrown or rejected -- into its own
@@ -271,11 +276,6 @@ export function annotateEgressDestination(_name: string, _config: unknown, preli
   const toolCall = snapshot.tool_call;
   if (!isPlainObject(toolCall)) return {};
 
-  const args = isPlainObject(toolCall.args) ? toolCall.args : {};
-  for (const argument of ARGUMENTS_AGT_ALREADY_READS) {
-    if (typeof args[argument] === "string") return {};
-  }
-
   const rawCommand = toolCall.raw_command;
   if (typeof rawCommand !== "string") return {};
 
@@ -287,6 +287,7 @@ export function annotateEgressDestination(_name: string, _config: unknown, preli
   // Everything past this point is a URL, and from here `{}` would be an ALLOW.
   // A shape the unambiguous test rejects gets the sentinel, not silence.
   if (!UNAMBIGUOUS_AUTHORITY.test(found[0])) return { destination: AMBIGUOUS_DESTINATION };
+  if (!WORD_END_AFTER_MATCH.test(rawCommand.slice(found.index + found[0].length))) return { destination: AMBIGUOUS_DESTINATION };
 
   // `new URL` throws on input it cannot parse, and this function may not: a
   // throw here becomes AGT's own `runtime_error:annotation_failed` deny on
