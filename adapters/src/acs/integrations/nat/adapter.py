@@ -381,7 +381,7 @@ def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> None
 
 # ----- Middleware class -----
 
-# Runs whose decision failures are kept until their sessionEnd; a run that never ends ages out past this many.
+# Untracked runs whose decision failures wait for a sessionEnd; past this many, the oldest of them ages out.
 _MAX_COUNTED_RUNS = 256
 
 
@@ -511,10 +511,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
         # §6.4: decision failures per run and failure class; each run's sessionEnd reports its own run's.
-        # Calls and the lifecycle thread both count, and a run that ends without sessionEnd ages out.
+        # Calls and the lifecycle thread both count; a run no sessionEnd will report ages out once it is no longer tracked.
         self._decision_failures: collections.OrderedDict = collections.OrderedDict()
         self._decision_failures_lock = threading.Lock()
-        # The runs whose WORKFLOW_START was seen; a run that never stops ages out like its failure counts.
+        # The runs whose WORKFLOW_START was seen, each kept until its sessionEnd has been handled.
         self._runs: collections.OrderedDict = collections.OrderedDict()
         self._runs_lock = threading.Lock()
 
@@ -642,8 +642,6 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             task = None
         with self._runs_lock:
             self._runs[run] = _Run(task=task)
-            while len(self._runs) > _MAX_COUNTED_RUNS:
-                self._runs.popitem(last=False)
 
     def _end_run(self, run: str | None) -> bool:
         """Mark the run's sessionEnd as queued; False only when a tracked run's already was."""
@@ -671,11 +669,19 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             outcome = state.outcome if state is not None else None
         return self._acs.gate(outcome) if outcome is not None else None
 
+    def _forget_run(self, run: str | None) -> None:
+        """Drop a run once its sessionEnd has been handled, sent or not; no step of it follows."""
+        with self._runs_lock:
+            self._runs.pop(run, None)
+        self._take_failure_counts(run)
+
     def _queue_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         """Hand a lifecycle hook of a run to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
         if not self._lifecycle.submit(method, payload, run):
             audit_event("lifecycle_hook_not_sent", cause="middleware_closed", method=method,
                         session_id=self._session_id)
+            if method == "steps/sessionEnd":
+                self._forget_run(run)
 
     def _send_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         try:
@@ -683,6 +689,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         except Exception as e:  # noqa: BLE001
             audit_event("lifecycle_hook_failed", cause="adapter_exception", error=str(e),
                         method=method, session_id=self._session_id)
+        finally:
+            if method == "steps/sessionEnd":
+                self._forget_run(run)
 
     def _emit_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         """Build, sign, and POST a lifecycle hook; errors are audited but
@@ -958,11 +967,15 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         """Count a step's own decision failure under its run and failure class (§6.4)."""
         if not resolution.decision_failure:
             return
+        with self._runs_lock:
+            tracked = set(self._runs)
         with self._decision_failures_lock:
             counts = self._decision_failures.setdefault(run, collections.Counter())
             counts[resolution.fields.get("failure_class", "other")] += 1
-            while len(self._decision_failures) > _MAX_COUNTED_RUNS:
-                self._decision_failures.popitem(last=False)
+            # A tracked run keeps its counts until its sessionEnd; only untracked runs age out.
+            untracked = [r for r in self._decision_failures if r not in tracked]
+            for stale in untracked[:max(0, len(untracked) - _MAX_COUNTED_RUNS)]:
+                del self._decision_failures[stale]
 
     def _take_failure_counts(self, run: str | None) -> dict[str, int]:
         """The run's decision failures per failure class, removed now that its sessionEnd reports them."""
@@ -990,8 +1003,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return None if resolution.proceed else context
 
     def _block(self, context, reason: str):
-        """Block the invocation. Prefer InvocationAction when available,
-        fall back to raising for NAT releases that don't expose it."""
+        """Block with InvocationAction when NAT has it, else raise."""
         if _HAS_INVOCATION_ACTION:
             context.action = InvocationAction.SKIP  # type: ignore[attr-defined]
             context.acs_block_reason = reason

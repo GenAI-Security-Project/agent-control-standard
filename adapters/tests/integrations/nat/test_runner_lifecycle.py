@@ -77,6 +77,26 @@ class _Hangs(_Entry):
         return message
 
 
+class _DeniedThenRetries(_Entry):
+    """The "long" run makes a call, waits until released, and calls again; other runs make one call."""
+
+    def __init__(self, middleware: ACSMiddleware, executed: list[str], started: asyncio.Event,
+                 release: asyncio.Event) -> None:
+        super().__init__(middleware, executed)
+        self.started, self.release = started, release
+
+    async def ainvoke(self, message: str, to_type=None) -> str:
+        if message != "long":
+            return await super().ainvoke(message, to_type)
+        with contextlib.suppress(ACSGuardianDenied):
+            await super().ainvoke("long-first", to_type)
+        self.started.set()
+        await self.release.wait()
+        with contextlib.suppress(ACSGuardianDenied):
+            await super().ainvoke("long-retry", to_type)
+        return message
+
+
 class _TwoCalls(_Entry):
     """A workflow entry function that makes two wrapped calls, message-1 then message-2."""
 
@@ -235,6 +255,59 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         asyncio.run(post())
         self.assertIsNone(context.output)
         self.assertNotIn("steps/toolCallResult", self.guardian.methods_seen())
+
+    def test_a_refused_run_stays_refused_while_other_runs_come_and_go(self) -> None:
+        """A run's decision lasts until its sessionEnd, however many runs start and end meanwhile."""
+        allow = self.guardian._default_allow
+        answers = iter(["deny"] + ["allow"] * 10)
+        self.guardian.handlers["steps/sessionStart"] = lambda req: {**allow(req), "decision": next(answers)}
+        executed: list[str] = []
+        tracked: list[int] = []
+
+        async def run() -> None:
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
+                exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
+                started, release = asyncio.Event(), asyncio.Event()
+
+                async def one(message: str) -> None:
+                    entry = _DeniedThenRetries(middleware, executed, started, release)
+                    async with Runner(message, entry, ContextState.get(), ExporterManager.from_exporters(exporters)) as runner:
+                        await runner.result()
+                long = asyncio.create_task(one("long"))
+                await asyncio.wait_for(started.wait(), timeout=10)
+                for i in range(3):
+                    await one(f"short-{i}")
+                await middleware._lifecycle_sent()
+                tracked.append(len(middleware._runs))
+                release.set()
+                await asyncio.wait_for(long, timeout=10)
+                await middleware._lifecycle_sent()
+                tracked.append(len(middleware._runs))
+        with mock.patch("acs.integrations.nat.adapter._MAX_COUNTED_RUNS", 2):
+            asyncio.run(run())
+        self.assertEqual(executed, ["short-0", "short-1", "short-2"], "neither call of the refused run ran")
+        self.assertEqual(tracked, [1, 0], "a run is forgotten once its sessionEnd is handled")
+
+    def test_a_running_runs_failure_counts_never_age_out(self) -> None:
+        from acs.client import Resolution
+        from acs.integrations.nat.adapter import _Run
+        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
+        self.addCleanup(middleware.close)
+        middleware._runs["running"] = _Run()
+        timeout = Resolution(True, "fail_open_bypass", "decision_timeout", {"failure_class": "timeout"},
+                             decision_failure=True)
+        with mock.patch("acs.integrations.nat.adapter._MAX_COUNTED_RUNS", 2):
+            for run in ("running", "a", "b", "c"):
+                middleware._count_failure(timeout, run)
+        self.assertEqual(list(middleware._decision_failures), ["running", "b", "c"],
+                         "only runs no sessionEnd will report age out")
+        middleware._forget_run("running")
+        self.assertEqual(list(middleware._decision_failures), ["b", "c"], "a forgotten run's counts go with it")
+        middleware.close()
+        middleware._runs["late"] = _Run()
+        middleware._queue_lifecycle_hook("steps/sessionEnd", {"reason": "error"}, "late")
+        self.assertEqual(middleware._runs, {}, "a sessionEnd the closed middleware cannot send is still handled")
 
     def test_a_session_start_without_a_decision_follows_the_posture(self) -> None:
         for default_deny, executed, sent in ((False, ["first"], RUN), (True, [], ["steps/sessionStart"])):
