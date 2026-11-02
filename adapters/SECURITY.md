@@ -100,18 +100,19 @@ created mode 0600 via `os.open(...O_CREAT, 0o600)`. A local attacker
 without same-uid privileges cannot read or write the state. These
 modes do not separate the agent from the developer: the agent runs as
 the developer, so it can read the HMAC key file, the handshake cache
-and the audit file, and write the cache. The record's HMAC makes a
-written record refuse the session rather than pass; keeping the key
-from the agent needs a separate user or a sandbox. Each
+and the audit file, and write the cache. The record's HMAC stops a
+writer that cannot read the key; the agent can, so it can also write a
+record that passes, and only a separate user or a sandbox keeps the key
+from the agent. Each
 session-state update is one read-modify-write under an exclusive lock on
 a sidecar file, published through a temp file of its own with
 `os.replace`, so parallel hook processes neither lose updates nor read a
 partial file. The
 handshake record carries an HMAC under the session key over the
-decision, the session and the Guardian URL, so a record that is
-modified, damaged, copied from another endpoint or left by an earlier
-adapter refuses the session, and so does a decision that cannot be
-stored; a deleted record makes the next event handshake again.
+decision, the session and the Guardian URL, so a record modified,
+damaged or copied from another endpoint by a writer without the key, or
+left by an earlier adapter, refuses the session, and so does a decision
+that cannot be stored; a deleted record makes the next event handshake again.
 *Test:* `CacheDirPermissions::{test_session_state_dir_is_0700,
 test_session_state_file_is_0600}`,
 `Item22_StoredSessionDecisionIsAuthenticated`

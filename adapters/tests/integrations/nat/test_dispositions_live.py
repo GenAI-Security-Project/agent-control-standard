@@ -208,6 +208,38 @@ class DispositionsLive(unittest.TestCase):
             asyncio.run(mw.function_middleware_invoke("rm -rf /", call_next=plain, context=context))
         self.assertEqual(received, ["ls", "ls"])
 
+    def test_an_override_the_input_does_not_take_is_denied(self) -> None:
+        """§6.5: a computed field reads its own value back, so the MODIFY cannot be applied and is a DENY."""
+        from nat.middleware.middleware import FunctionMiddlewareContext
+        from pydantic import computed_field
+
+        class Derived(BaseModel):
+            raw: str
+
+            @computed_field
+            @property
+            def command(self) -> str:
+                return self.raw
+        self._set_response("steps/toolCallRequest", {
+            "decision": "modify", "reasoning": "use the safe command",
+            "modifications": {"parameter_overrides": {"command": "safe"}}})
+        context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=Derived,
+                                            single_output_schema=str, stream_output_schema=str)
+        received: list[str] = []
+
+        async def target(value: Derived) -> str:
+            received.append(value.command)
+            return "ran"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(ACSGuardianDenied):
+            asyncio.run(self._mw(default_deny=False).function_middleware_invoke(Derived(raw="unsafe"),
+                                                                               call_next=target, context=context))
+        self.assertEqual(received, [], "the function ran with the input the Guardian rewrote")
+        audits = [json.loads(line.removeprefix("ACS_AUDIT ")) for line in err.getvalue().splitlines()
+                  if line.startswith("ACS_AUDIT ")]
+        self.assertEqual([a["reason_codes"] for a in audits if a["acs_audit_event"] == "modify_unsupported"],
+                         [["modify_unsupported"]])
+
     def test_a_datetime_input_and_a_dict_output_reach_the_guardian_and_its_deny_applies(self) -> None:
         import datetime
         stamp = datetime.datetime(2026, 11, 1, 12, 0, tzinfo=datetime.timezone.utc)

@@ -330,6 +330,18 @@ def _redact_output(context: Any) -> None:
         pass
 
 
+def _reads_back(value: Any, overrides: dict[str, Any]) -> bool:
+    """Whether the function reads every override back from the rewritten input; a computed field keeps its own value."""
+    for key, expected in overrides.items():
+        try:
+            actual = value[key] if isinstance(value, dict) else getattr(value, key)
+        except Exception:  # noqa: BLE001
+            return False
+        if actual != expected:
+            return False
+    return True
+
+
 def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> bool:
     """Apply Guardian's MODIFY parameter_overrides to the slot NAT reads the function input from; False when it cannot.
 
@@ -371,7 +383,7 @@ def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> bool
     # Plain dict
     if new_head is None and isinstance(head, dict):
         new_head = {**head, **overrides}
-    if new_head is None:
+    if new_head is None or not _reads_back(new_head, overrides):
         return False
     args[0] = new_head
     try:
@@ -943,7 +955,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             if isinstance(overrides, dict):
                 if _apply_overrides_to_context(context, overrides):
                     return context
-                unsupported = "the overrides fit no slot NAT reads the function input from"
+                unsupported = "the function input does not take the overrides"
             else:
                 unsupported = "no parameter_overrides object"
             audit_modify_unsupported(unsupported, session_id=step.session_id, method="steps/toolCallRequest")
