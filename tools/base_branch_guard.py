@@ -1,19 +1,26 @@
-"""Keep everything off the publishing branch except promotions.
+"""Let only promotions reach the publishing branch.
 
 `main` publishes the site and all 44 schema $id URIs on every merge. Every change lands on
-`integration` first, and reaches `main` only as a promotion. Two kinds exist:
+`integration` first and reaches `main` only as a promotion, so `main` never holds content
+`integration` lacks. The guard checks the result of the merge, not the branch's own
+history, because that result is what publishes:
 
-- A full promotion, a pull request from `integration` (or a `release/*` branch) in this
-  repository.
-- A single pull request promotion, from a `promote/*` branch in this repository whose every
-  changed path is byte-for-byte identical to `integration`. `tools/promote_pr.py` builds
-  one. It cannot carry anything `integration` does not already hold, so `main` never gets
-  ahead of `integration`.
+- A full promotion, from `integration` or from a `promote/full-*` branch that
+  tools/promote_pr.py builds when the plain merge would conflict. After the merge,
+  `main`'s whole tree must equal `integration`'s. That also catches a change reverted on
+  `integration` after it reached `main` some other way, because the merge would keep it.
+- A single pull request promotion, from a `promote/*` or `release/*` branch. Every path
+  the merge changes must equal `integration`, and release files are refused, because a
+  release goes through a full promotion.
 
-Nothing else may target `main`. There used to be a documentation lane that let editorial
-pull requests go straight to `main`. It was removed on 2026-11-01 because every change
+Every other pull request into `main` fails, forks included. The documentation lane that
+once let editorial pull requests target `main` was removed on 2026-11-01: every change
 merged that way left `integration` behind, and the workflow meant to sync it back cannot
 open a pull request under the organization's Actions policy.
+
+The workflow runs this from `main`'s own checkout under pull_request_target and treats
+the pull request's head as data, so a pull request cannot change the check that judges
+it. Nothing here executes code from the pull request.
 """
 
 from __future__ import annotations
@@ -21,114 +28,84 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 PUBLISHING_BRANCH = "main"
 
-# Branches a full promotion comes from.
-PROMOTION_HEADS = frozenset({"integration"})
-PROMOTION_HEAD_PREFIXES = ("release/",)
+FULL_HEADS = frozenset({"integration"})
+FULL_PREFIX = "promote/full-"
+SINGLE_PREFIXES = ("promote/", "release/")
 
-# Branches a single pull request promotion comes from. tools/promote_pr.py names them.
-SINGLE_PROMOTION_PREFIX = "promote/"
-
-# The ref the content check compares against when the workflow does not name one.
-DEFAULT_INTEGRATION_REF = "origin/integration"
+# A release bumps these together, and tag-release.yml tags main when version.txt changes.
+# Promoting them alone would tag a main that lacks the release's other work.
+RELEASE_FILES = frozenset({"version.txt", "pyproject.toml", "uv.lock"})
 
 GitRunner = Callable[[list[str]], tuple[int, bytes]]
 
 
-def is_promotion(head_ref: str, head_repo: str, base_repo: str) -> bool:
-    """True when this is a full promotion from a branch inside this repository.
-
-    The repository test is not optional and runs first. A pull request's head ref is a
-    branch name the contributor chose, and a fork may name a branch anything, so
-    exempting on the ref alone would let somebody fork, create a branch called
-    `integration`, and walk a specification change onto the publishing branch.
-    """
-    if head_repo != base_repo:
-        return False
-    return head_ref in PROMOTION_HEADS or head_ref.startswith(PROMOTION_HEAD_PREFIXES)
-
-
-def is_single_promotion(head_ref: str, head_repo: str, base_repo: str) -> bool:
-    """True when the head is a `promote/*` branch inside this repository."""
-    return head_repo == base_repo and head_ref.startswith(SINGLE_PROMOTION_PREFIX)
-
-
-# Statuses from `git diff --name-status` that put a path into the tree. A rename or copy
-# carries a similarity score after its letter, as in R100. The workflow passes
-# --no-renames, so a rename reaches this script as a delete plus an add and both paths
-# are compared. R and C stay here so a listing produced without that flag still counts
-# the new path as an addition.
-ADDING_STATUSES = ("A", "R", "C")
-
-
-def parse_name_status(lines: Iterable[str]) -> tuple[list[str], list[str]]:
-    """Split `git diff --name-status` output into changed paths and added paths.
-
-    Each line is a status, a tab, and a path. A rename or copy names the old path and
-    then the new one, and only the new path is a change here, the same path
-    `--name-only` reports. A line with no tab is a bare path from an older listing and
-    counts as changed, not added.
-    """
-    changed: list[str] = []
-    added: list[str] = []
-    for line in lines:
-        line = line.rstrip("\r\n")
-        if not line.strip():
-            continue
-        if "\t" not in line:
-            changed.append(line.strip())
-            continue
-        fields = line.split("\t")
-        status, path = fields[0].strip(), fields[-1]
-        changed.append(path)
-        if status.startswith(ADDING_STATUSES):
-            added.append(path)
-    return changed, added
-
-
 def git_runner(args: list[str]) -> tuple[int, bytes]:
-    """Run git and return its exit status and raw stdout."""
-    completed = subprocess.run(["git", *args], capture_output=True, check=False)
+    """Run git with replace refs ignored, and return its exit status and raw stdout.
+
+    GIT_NO_REPLACE_OBJECTS stops a refs/replace object from changing what a commit
+    appears to contain while it is being compared.
+    """
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    completed = subprocess.run(["git", *args], capture_output=True, check=False, env=env)
     return completed.returncode, completed.stdout
 
 
-def tree_entries(ref: str, paths: list[str], run: GitRunner) -> dict[str, tuple[str, str]]:
-    """Map each path that exists at `ref` to its (mode, object id).
+def promotion_kind(head_ref: str, head_repo: str, base_repo: str) -> str | None:
+    """Return "full", "single", or None when the head is not a promotion.
 
-    --literal-pathspecs makes git read every path as a file name. Without it, a path that
-    starts with a colon or holds a glob character is a pattern, and a crafted file name
-    could make the listing match files the pull request never touched. -z keeps a file
-    name with a newline or a quote intact.
+    The repository test runs first and is not optional. A head ref is a branch name the
+    contributor chose, and a fork may name a branch anything.
     """
-    if not paths:
-        return {}
-    code, out = run(["--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree", ref, "--", *paths])
+    if head_repo != base_repo:
+        return None
+    if head_ref in FULL_HEADS or head_ref.startswith(FULL_PREFIX):
+        return "full"
+    if head_ref.startswith(SINGLE_PREFIXES):
+        return "single"
+    return None
+
+
+def _nul_paths(out: bytes) -> list[str]:
+    return [p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p]
+
+
+@dataclass(frozen=True)
+class Verdict:
+    conflicted: bool
+    differing: list[str]
+    release_files: list[str]
+
+
+def check(kind: str, main: str, head: str, integration: str, run: GitRunner) -> Verdict:
+    """Merge `head` into `main` in memory and compare the result with `integration`.
+
+    Paths come from git with -z, never from a quoted listing, so a file name with a
+    non-ASCII character, a tab, or a quote is compared like any other.
+    """
+    code, out = run(["merge-tree", "--write-tree", main, head])
+    if code not in (0, 1):
+        raise RuntimeError("git merge-tree failed")
+    if code == 1:
+        return Verdict(True, [], [])
+    merged = out.split(b"\n", 1)[0].decode("ascii").strip()
+
+    code, out = run(["diff", "-z", "--name-only", "--no-renames", merged, integration])
     if code != 0:
-        raise RuntimeError(f"git ls-tree {ref} failed")
-    entries: dict[str, tuple[str, str]] = {}
-    for record in out.split(b"\0"):
-        if not record:
-            continue
-        meta, _, path = record.partition(b"\t")
-        mode, _kind, oid = meta.decode("ascii").split(" ")
-        entries[path.decode("utf-8", "surrogateescape")] = (mode, oid)
-    return entries
+        raise RuntimeError("git diff against integration failed")
+    against_integration = set(_nul_paths(out))
+    if kind == "full":
+        return Verdict(False, sorted(against_integration), [])
 
-
-def paths_differing_from(paths: Iterable[str], head: str, integration: str, run: GitRunner) -> list[str]:
-    """Return every path whose file at `head` is not identical to `integration`.
-
-    A path absent from both is identical, which is how a deletion that already happened
-    on `integration` passes. The mode counts, so promoting a file can't change whether it
-    is executable.
-    """
-    wanted = sorted(set(paths))
-    at_head = tree_entries(head, wanted, run)
-    at_integration = tree_entries(integration, wanted, run)
-    return [path for path in wanted if at_head.get(path) != at_integration.get(path)]
+    code, out = run(["diff", "-z", "--name-only", "--no-renames", main, merged])
+    if code != 0:
+        raise RuntimeError("git diff against main failed")
+    changed = set(_nul_paths(out))
+    return Verdict(False, sorted(changed & against_integration), sorted(changed & RELEASE_FILES))
 
 
 RETARGET = (
@@ -140,66 +117,80 @@ RETARGET = (
 )
 
 
+def listing(paths: list[str]) -> str:
+    return "\n".join(f"  {path!r}" if not path.isprintable() else f"  {path}" for path in paths)
+
+
 def decide(
-    paths: Iterable[str],
     base_ref: str,
     head_ref: str,
     head_repo: str,
     base_repo: str,
-    differing: Callable[[list[str]], list[str]] | None = None,
+    verdict: Callable[[str], Verdict] | None,
 ) -> tuple[int, str]:
     """Return an exit status and the message to print.
 
-    `differing` takes the changed paths and returns the ones whose content differs from
-    `integration`. It is consulted only for a single pull request promotion, and a
-    promotion with no way to check its content fails rather than passing unchecked.
+    `verdict` takes the promotion kind and returns the result of `check`. A promotion
+    with no way to check its content fails rather than passing unchecked.
     """
     if base_ref != PUBLISHING_BRANCH:
         return 0, f"Base branch is {base_ref!r}, not {PUBLISHING_BRANCH!r}. Nothing to check."
-    if is_promotion(head_ref, head_repo, base_repo):
-        return 0, f"Promotion from {head_ref!r}."
-    if not is_single_promotion(head_ref, head_repo, base_repo):
+    kind = promotion_kind(head_ref, head_repo, base_repo)
+    if kind is None:
         return 1, f"Only promotions may target `{PUBLISHING_BRANCH}`. {RETARGET}"
-    changed = sorted(set(paths))
-    if differing is None:
+    if verdict is None:
         return 1, "This promotion could not be checked against `integration`, so it does not pass."
-    offenders = differing(changed)
-    if offenders:
-        listing = "\n".join(f"  {path}" for path in offenders)
+    result = verdict(kind)
+    if result.conflicted:
         return 1, (
-            f"A single pull request promotion may carry only content `integration` already "
-            f"holds. These paths differ from `integration`:\n{listing}\n\n"
-            "Rebuild the branch with tools/promote_pr.py, which copies each file from "
-            "`integration`, or land the change on `integration` first."
+            f"This promotion conflicts with `{PUBLISHING_BRANCH}`. A project lead runs "
+            "`uv run python tools/promote_pr.py --full`, which builds a promotion whose tree "
+            "is exactly `integration`'s. See CONTRIBUTING.md."
         )
-    return 0, f"Promotion from {head_ref!r}. Every changed path matches `integration`."
+    if result.release_files:
+        return 1, (
+            "A single pull request promotion may not change release files, because a release "
+            f"goes through a full promotion:\n{listing(result.release_files)}"
+        )
+    if result.differing:
+        if kind == "full":
+            return 1, (
+                f"After this merge `{PUBLISHING_BRANCH}` would still differ from "
+                f"`integration` at:\n{listing(result.differing)}\n\n"
+                f"`{PUBLISHING_BRANCH}` holds content `integration` lacks there, usually a "
+                "change reverted on `integration` after it was promoted. A project lead runs "
+                "`uv run python tools/promote_pr.py --full`, which makes `integration` win."
+            )
+        return 1, (
+            "A single pull request promotion may carry only content `integration` already "
+            f"holds. These paths would differ from `integration`:\n{listing(result.differing)}\n\n"
+            "Rebuild the branch with tools/promote_pr.py, or land the change on `integration` first."
+        )
+    if kind == "full":
+        return 0, f"Promotion from {head_ref!r}. After the merge, `{PUBLISHING_BRANCH}` equals `integration`."
+    return 0, f"Promotion from {head_ref!r}. Every path it changes matches `integration`."
 
 
 def main(argv: list[str]) -> int:
-    """Read the changed paths from a file and the refs from the environment."""
-    if len(argv) != 2:
-        print("usage: base_branch_guard.py <git-diff-name-status-listing>", file=sys.stderr)
+    """Read the refs from the environment and judge the pull request."""
+    if len(argv) != 1:
+        print("usage: base_branch_guard.py  (reads BASE_REF, HEAD_REF, HEAD_REPO, BASE_REPO, "
+              "MAIN_REF, HEAD_SHA, INTEGRATION_REF)", file=sys.stderr)
         return 2
-    with open(argv[1], encoding="utf-8") as handle:
-        paths, _added = parse_name_status(handle)
-    head_sha = os.environ.get("HEAD_SHA", "")
-    integration = os.environ.get("INTEGRATION_REF", DEFAULT_INTEGRATION_REF)
+    env = os.environ
+    head_sha = env.get("HEAD_SHA", "")
+    main_ref = env.get("MAIN_REF", "origin/main")
+    integration = env.get("INTEGRATION_REF", "origin/integration")
 
-    def differing(changed: list[str]) -> list[str]:
+    def verdict(kind: str) -> Verdict:
         if not head_sha:
             raise RuntimeError("HEAD_SHA is not set")
-        return paths_differing_from(changed, head_sha, integration, git_runner)
+        return check(kind, main_ref, head_sha, integration, git_runner)
 
     try:
-        status, message = decide(
-            paths,
-            os.environ.get("BASE_REF", ""),
-            os.environ.get("HEAD_REF", ""),
-            os.environ.get("HEAD_REPO", ""),
-            os.environ.get("BASE_REPO", ""),
-            differing,
-        )
-    except RuntimeError as error:
+        status, message = decide(env.get("BASE_REF", ""), env.get("HEAD_REF", ""),
+                                 env.get("HEAD_REPO", ""), env.get("BASE_REPO", ""), verdict)
+    except (RuntimeError, ValueError) as error:
         status, message = 1, f"The content check could not run ({error}), so this does not pass."
     print(message, file=sys.stderr if status else sys.stdout)
     return status
