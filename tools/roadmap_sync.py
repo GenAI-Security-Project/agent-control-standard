@@ -333,19 +333,15 @@ def _git(git, args: list[str], what: str, ok: tuple[int, ...] = (0,)) -> str:
 
 def promotion_pending(git) -> tuple[str, int] | None:
     """The committer date of the oldest commit integration holds that main lacks, and how
-    many there are. None when main already has integration's content.
+    many there are. None when every integration commit is already on main.
 
-    A squashed sync from main leaves integration holding commits main lacks while the trees
-    match, so the tree comparison, not the commit count, decides.
+    Commits decide, not trees. A single pull request promotion (tools/promote_pr.py) puts
+    integration's content on main without its commits, and delivery is counted by commit
+    ancestry, so the promotion that records delivery is still pending until a full one
+    lands.
     """
     pending = _git(git, ["rev-list", "--reverse", f"{fetch_roadmap.MAIN_REF}..{INTEGRATION_REF}"], "git rev-list").split()
     if not pending:
-        return None
-    # merge-tree exits 1 on a conflict and still prints the tree first, which differs from
-    # main's tree, so a conflicted promotion still reads as pending.
-    merged = _git(git, ["merge-tree", "--write-tree", fetch_roadmap.MAIN_REF, INTEGRATION_REF], "git merge-tree", (0, 1))
-    tree = _git(git, ["rev-parse", f"{fetch_roadmap.MAIN_REF}^{{tree}}"], "git rev-parse")
-    if merged.split("\n", 1)[0].strip() == tree.strip():
         return None
     day = _git(git, ["show", "-s", "--format=%cs", pending[0]], "git show").strip()
     if not _DAY.fullmatch(day):
@@ -588,6 +584,8 @@ def render_health(report: dict, status: str, stamp: str, run_id: str, failed: li
                     f"--title '{PROMOTION_TITLE}' --body '{body}'",
                     "```",
                 ]
+            lines.append("If it conflicts, or the base-branch guard says `main` differs from `integration`, "
+                         "run `uv run python tools/promote_pr.py --full` instead.")
         elif key == "bypasses":
             for line in items:
                 if line[0] == "count":

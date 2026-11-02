@@ -59,7 +59,7 @@ quarter is not a finding without value.
 Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
 A pull request that changes behavior, alters normative text, or adds code references an
-accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
+accepted issue. An editorial correction does not: a typo, a grammar
 fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
 issue.
 
@@ -135,15 +135,27 @@ default branch, so a pull request opened from the GitHub interface already targe
 `main` publishes the site and all 44 schema `$id` URIs on merge, so it takes promotions
 only, and a guard rejects anything else:
 
-- A full promotion merges `integration` into `main`. A project lead opens it.
+- A full promotion merges all of `integration` into `main`. A project lead opens it from
+  the roadmap health issue or the Open promotion pull request workflow. The guard passes
+  it only when `main` would equal `integration` afterwards. If it conflicts, or the guard
+  says `main` differs, the lead runs `uv run python tools/promote_pr.py --full` instead. That
+  builds `promote/full-<sha>`, which is `integration` with `main` merged in so that
+  `integration` wins every difference.
 - A single pull request promotion publishes one merged pull request before the next full
   promotion. A project lead runs `uv run python tools/promote_pr.py <number>`, which cuts
   `promote/pr-<number>` from `main`, copies the `integration` version of every file that
   pull request changed, and opens a pull request into `main`. The guard passes it only
-  when every changed file matches `integration` exactly, so `main` never holds anything
+  when every path it changes matches `integration` exactly, so `main` never holds anything
   `integration` lacks. When a later pull request edited the same file, its change
-  publishes too, and the promotion's description names it. The roadmap counts the
-  promoted work's issues as delivered at the next full promotion.
+  publishes too, and the promotion's description names it. Release files
+  (`version.txt`, `pyproject.toml`, `uv.lock`) and `.gitattributes`, `.gitmodules`, and
+  `.lfsconfig` publish only through a full promotion. The roadmap counts the promoted
+  work's issues as delivered at the next full promotion.
+
+Every promotion merges with a merge commit. Whoever pushed its branch last cannot approve
+it, so a different code owner of the changed paths does. To take something off the site,
+revert it on `integration` and promote the revert the same way. A full promotion also
+restores anything a single promotion published that `integration` has since reverted.
 
 For changes to the spec itself (`acs_schema.json`, hooks, events), open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
@@ -190,8 +202,7 @@ git push --force-with-lease
 ```
 
 The rebase adds the line to each commit and moves your branch onto the latest
-`integration`. Merge commits on your branch go away, and that is fine. If your pull
-request targets `main`, use `upstream/main` instead. If Git says your branch has no
+`integration`. Merge commits on your branch go away, and that is fine. If Git says your branch has no
 upstream branch, run `git push --force-with-lease origin HEAD`.
 
 A rebase may stop on a conflict, which means you and the project changed the same lines.

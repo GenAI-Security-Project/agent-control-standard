@@ -331,8 +331,8 @@ Pull requests fork from and target `integration`, the default branch, documentat
 included. `main` takes promotions only: all of `integration` at once, or one merged pull
 request ahead of the next full promotion. `release/*` branches stabilize a
 specification version between `integration` and a tag. Merging to `main` is what
-republishes the site and every schema `$id` under it, which is why specification and
-code changes go through `integration` first.
+republishes the site and every schema `$id` under it, which is why every change goes
+through `integration` first.
 
 ```mermaid
 flowchart LR

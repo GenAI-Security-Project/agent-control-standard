@@ -1,10 +1,9 @@
 """Guards for the rule that only promotions reach the publishing branch.
 
-Two kinds of promotion pass: a full one from `integration` in this repository, and a
-single pull request promotion from a `promote/*` branch in this repository whose every
-changed path matches `integration` byte for byte. The interesting cases are the ones a
-contributor controls: a fork can name its branch anything, and a file can be named
-anything, so neither a branch name nor a path may be trusted on its own.
+The guard judges the result of merging a pull request into `main`, compared with
+`integration`. Every content case below runs against a real repository, because the
+failures that matter live in git's own behavior: how it names unusual files, what a
+three-way merge keeps, and what a conflict looks like.
 """
 
 import subprocess
@@ -18,274 +17,280 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from base_branch_guard import (  # noqa: E402
     PUBLISHING_BRANCH,
+    Verdict,
+    check,
     decide,
-    git_runner,
-    is_promotion,
-    is_single_promotion,
     main,
-    parse_name_status,
-    paths_differing_from,
+    promotion_kind,
 )
 
 REPO = "GenAI-Security-Project/agent-control-standard"
 FORK = "someone/agent-control-standard"
-WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pr-base-guard.yml"
+
+CLEAN = Verdict(False, [], [])
 
 
-def same(_paths):
-    return []
-
-
-def test_promotion_from_integration_in_this_repository():
-    assert is_promotion("integration", REPO, REPO)
-
-
-def test_promotion_from_a_release_branch_in_this_repository():
-    assert is_promotion("release/v0.2.0", REPO, REPO)
+def test_promotion_kinds_inside_this_repository():
+    assert promotion_kind("integration", REPO, REPO) == "full"
+    assert promotion_kind("promote/full-abc123", REPO, REPO) == "full"
+    assert promotion_kind("promote/pr-7", REPO, REPO) == "single"
+    assert promotion_kind("release/v0.2.0", REPO, REPO) == "single"
+    assert promotion_kind("docs/faq", REPO, REPO) is None
 
 
 def test_a_fork_branch_named_like_a_promotion_is_not_one():
     """head.ref is a name the contributor chose. Only the repository check is trustworthy."""
-    assert not is_promotion("integration", FORK, REPO)
-    assert not is_promotion("release/v0.2.0", FORK, REPO)
-    assert not is_single_promotion("promote/pr-1", FORK, REPO)
-
-
-def test_full_promotion_passes_with_any_paths():
-    status, message = decide(["specification/a.json"], PUBLISHING_BRANCH, "integration", REPO, REPO)
-    assert status == 0
-    assert "Promotion" in message
+    for ref in ("integration", "promote/full-x", "promote/pr-1", "release/v1"):
+        assert promotion_kind(ref, FORK, REPO) is None
 
 
 def test_any_other_base_passes_without_checking():
-    status, message = decide(["specification/a.json"], "integration", "spec/x", FORK, REPO)
+    status, message = decide("integration", "spec/x", FORK, REPO, None)
     assert status == 0
     assert "Nothing to check" in message
 
 
-def test_a_documentation_pull_request_to_main_now_fails():
+def test_a_documentation_pull_request_to_main_fails():
     """The documentation lane is gone. Docs land on integration like everything else."""
-    status, message = decide(["docs/topics/faq.md"], PUBLISHING_BRANCH, "docs/faq", FORK, REPO)
+    status, message = decide(PUBLISHING_BRANCH, "docs/faq", FORK, REPO, None)
     assert status == 1
-    assert "integration" in message
-    assert "promote_pr.py" in message
+    assert "integration" in message and "promote_pr.py" in message
 
 
-def test_an_in_repository_branch_that_is_not_a_promotion_fails():
-    status, _ = decide(["CONTRIBUTORS.md"], PUBLISHING_BRANCH, "docs/contributors", REPO, REPO, same)
-    assert status == 1
-
-
-def test_an_empty_diff_from_a_feature_branch_still_fails():
-    status, _ = decide([], PUBLISHING_BRANCH, "empty", FORK, REPO)
-    assert status == 1
-
-
-def test_a_fork_promote_branch_fails_without_consulting_content():
-    def explode(_paths):
+def test_a_fork_promotion_fails_without_consulting_content():
+    def explode(_kind):
         raise AssertionError("content must not be consulted for a fork")
-    status, _ = decide(["CONTRIBUTORS.md"], PUBLISHING_BRANCH, "promote/pr-1", FORK, REPO, explode)
-    assert status == 1
+    assert decide(PUBLISHING_BRANCH, "integration", FORK, REPO, explode)[0] == 1
 
 
-def test_single_promotion_passes_when_every_path_matches():
-    status, message = decide(["CONTRIBUTORS.md", "docs/a.md"], PUBLISHING_BRANCH, "promote/pr-7", REPO, REPO, same)
-    assert status == 0
-    assert "matches `integration`" in message
+def test_a_promotion_without_a_content_check_fails_closed():
+    assert decide(PUBLISHING_BRANCH, "promote/pr-1", REPO, REPO, None)[0] == 1
 
 
-def test_single_promotion_fails_and_lists_only_the_differing_paths():
-    status, message = decide(
-        ["CONTRIBUTORS.md", "specification/a.json"], PUBLISHING_BRANCH, "promote/pr-7", REPO, REPO,
-        lambda paths: [p for p in paths if p.startswith("specification/")],
-    )
-    listing = message.split("\n\n")[0]
-    assert status == 1
-    assert "specification/a.json" in listing
-    assert "CONTRIBUTORS.md" not in listing
+def test_verdicts_map_to_messages():
+    single = lambda v: decide(PUBLISHING_BRANCH, "promote/pr-1", REPO, REPO, lambda _k: v)  # noqa: E731
+    full = lambda v: decide(PUBLISHING_BRANCH, "integration", REPO, REPO, lambda _k: v)  # noqa: E731
+    assert single(CLEAN)[0] == 0
+    assert full(CLEAN)[0] == 0
+    status, message = single(Verdict(True, [], []))
+    assert status == 1 and "--full" in message
+    status, message = single(Verdict(False, [], ["version.txt"]))
+    assert status == 1 and "version.txt" in message
+    status, message = single(Verdict(False, ["a.md"], []))
+    assert status == 1 and "a.md" in message
+    status, message = full(Verdict(False, ["a.md"], []))
+    assert status == 1 and "--full" in message and "a.md" in message
 
 
-def test_single_promotion_without_a_content_check_fails_closed():
-    status, _ = decide(["CONTRIBUTORS.md"], PUBLISHING_BRANCH, "promote/pr-7", REPO, REPO, None)
-    assert status == 1
-
-
-def test_name_status_marks_adds_renames_and_copies_as_added():
-    lines = [
-        "M\tdocs/topics/faq.md\n",
-        "A\tdocs/topics/new.md\n",
-        "R100\tdocs/topics/old.md\tdocs/topics/moved.md\n",
-        "C075\tdesign/a.md\tdesign/b.md\n",
-        "D\tdocs/topics/gone.md\n",
-        "\n",
-    ]
-    changed, added = parse_name_status(lines)
-    assert changed == [
-        "docs/topics/faq.md",
-        "docs/topics/new.md",
-        "docs/topics/moved.md",
-        "design/b.md",
-        "docs/topics/gone.md",
-    ]
-    assert added == ["docs/topics/new.md", "docs/topics/moved.md", "design/b.md"]
-
-
-def test_name_status_accepts_a_bare_path_as_changed():
-    assert parse_name_status(["CONTRIBUTORS.md\n"]) == (["CONTRIBUTORS.md"], [])
-
-
-# ---- the content check, against real repositories ----------------------------------
+# ---- content, against real repositories ------------------------------------------------
 
 
 def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def write(repo: Path, files: dict[str, str | None], message: str) -> None:
+    for name, content in files.items():
+        if content is None:
+            git(repo, "rm", "-q", "--", name)
+        else:
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text(content)
+            git(repo, "add", "--", name)
+    git(repo, "commit", "-q", "-m", message)
 
 
 @pytest.fixture
 def repo(tmp_path):
-    """A repository with an `integration` branch and a `promote` branch cut from it."""
+    """main has a.md and keep.md. integration is one commit ahead: a.md edited, b.md added."""
     root = tmp_path / "repo"
     root.mkdir()
-    git(root, "init", "-q", "-b", "integration")
+    git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.email", "t@example.com")
     git(root, "config", "user.name", "t")
-    (root / "a.md").write_text("one\n")
-    (root / "a.md.bak").write_text("backup\n")
-    (root / "gone.md").write_text("old\n")
-    (root / "docs").mkdir()
-    (root / "docs" / "page.md").write_text("page\n")
-    git(root, "add", "-A")
-    git(root, "commit", "-q", "-m", "base")
-    git(root, "rm", "-q", "gone.md")
-    git(root, "commit", "-q", "-m", "delete on integration")
-    git(root, "checkout", "-q", "-b", "promote")
+    write(root, {"a.md": "one\n", "keep.md": "keep\n", "version.txt": "0.1.4\n"}, "base")
+    git(root, "checkout", "-q", "-b", "integration")
+    write(root, {"a.md": "two\n", "b.md": "b\n"}, "integration work")
+    git(root, "checkout", "-q", "main")
     return root
 
 
-def differing_in(repo: Path, paths: list[str]) -> list[str]:
+def run_in(repo: Path):
     def run(args):
         completed = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False)
         return completed.returncode, completed.stdout
-    return paths_differing_from(paths, "promote", "integration", run)
+    return run
 
 
-def test_identical_files_and_a_shared_deletion_match(repo):
-    assert differing_in(repo, ["a.md", "docs/page.md", "gone.md"]) == []
+def promote_branch(repo: Path, files: dict[str, str | None], name: str = "promote/pr-1") -> str:
+    git(repo, "checkout", "-q", "-b", name, "main")
+    write(repo, files, "promote")
+    git(repo, "checkout", "-q", "main")
+    return name
 
 
-def test_an_edited_file_differs(repo):
-    (repo / "a.md").write_text("two\n")
-    git(repo, "commit", "-q", "-am", "edit")
-    assert differing_in(repo, ["a.md"]) == ["a.md"]
+def verdict(repo: Path, kind: str, head: str) -> Verdict:
+    return check(kind, "main", head, "integration", run_in(repo))
 
 
-def test_a_matching_prefix_does_not_hide_a_differing_file(repo):
-    """a.md must not be compared through a.md.bak, or the other way round."""
-    (repo / "a.md.bak").write_text("changed\n")
-    git(repo, "commit", "-q", "-am", "edit backup")
-    assert differing_in(repo, ["a.md"]) == []
-    assert differing_in(repo, ["a.md.bak"]) == ["a.md.bak"]
+def test_a_full_promotion_from_integration_passes(repo):
+    assert verdict(repo, "full", "integration") == CLEAN
 
 
-def test_a_mode_change_differs(repo):
-    git(repo, "update-index", "--chmod=+x", "a.md")
-    git(repo, "commit", "-q", "-m", "make executable")
-    assert differing_in(repo, ["a.md"]) == ["a.md"]
+def test_a_single_promotion_of_integration_content_passes(repo):
+    head = promote_branch(repo, {"a.md": "two\n"})
+    assert verdict(repo, "single", head) == CLEAN
 
 
-def test_a_deletion_integration_does_not_have_differs(repo):
-    git(repo, "rm", "-q", "a.md")
-    git(repo, "commit", "-q", "-m", "delete")
-    assert differing_in(repo, ["a.md"]) == ["a.md"]
+def test_a_single_promotion_with_content_integration_lacks_fails(repo):
+    head = promote_branch(repo, {"a.md": "two\n", "extra.md": "not on integration\n"})
+    assert verdict(repo, "single", head).differing == ["extra.md"]
 
 
-def test_a_file_only_the_promotion_adds_differs(repo):
-    (repo / "new.md").write_text("new\n")
-    git(repo, "add", "new.md")
-    git(repo, "commit", "-q", "-m", "add")
-    assert differing_in(repo, ["new.md"]) == ["new.md"]
+@pytest.mark.parametrize("name", ["café.md", "tab\tname.md", 'quo"te.md', "back\\slash.md"])
+def test_a_file_name_git_would_quote_is_still_compared(repo, name):
+    """Without -z git writes these names in quotes, and a quoted name matches no file, so a
+    check built on that listing compared nothing and passed. This reproduces the bypass."""
+    head = promote_branch(repo, {"a.md": "two\n", name: "smuggled\n"})
+    assert verdict(repo, "single", head).differing == [name]
 
 
-def test_a_directory_path_is_not_a_wildcard_for_its_files(repo):
-    """Naming `docs` must not compare, and so excuse, every file under it."""
-    (repo / "docs" / "page.md").write_text("edited\n")
-    git(repo, "commit", "-q", "-am", "edit page")
-    assert differing_in(repo, ["docs/page.md"]) == ["docs/page.md"]
+def test_a_mode_change_integration_lacks_fails(repo):
+    git(repo, "checkout", "-q", "-b", "promote/mode", "main")
+    (repo / "keep.md").chmod(0o755)
+    git(repo, "add", "keep.md")
+    git(repo, "commit", "-q", "-m", "chmod")
+    git(repo, "checkout", "-q", "main")
+    assert verdict(repo, "single", "promote/mode").differing == ["keep.md"]
 
 
-@pytest.mark.parametrize("name", ["*.md", ":(glob)**", "[a].md"])
-def test_a_crafted_file_name_is_read_literally(repo, name):
-    """A pathspec pattern as a file name must match only itself, never other files."""
-    (repo / name).write_text("crafted\n")
-    git(repo, "add", "--", name)
-    git(repo, "commit", "-q", "-m", "crafted name")
-    (repo / "a.md").write_text("two\n")
-    git(repo, "commit", "-q", "-am", "edit a")
-    assert differing_in(repo, [name]) == [name]
+def test_a_deletion_integration_lacks_fails(repo):
+    head = promote_branch(repo, {"keep.md": None})
+    assert verdict(repo, "single", head).differing == ["keep.md"]
 
 
-def test_main_runs_the_content_check_end_to_end(repo, monkeypatch, capsys):
-    """The workflow's environment, run against a real repository."""
-    listing = repo.parent / "changed.txt"
-    listing.write_text("M\ta.md\nD\tgone.md\n", encoding="utf-8")
+def test_a_single_promotion_may_not_carry_release_files(repo):
+    git(repo, "checkout", "-q", "integration")
+    write(repo, {"version.txt": "0.1.5\n"}, "release")
+    git(repo, "checkout", "-q", "main")
+    head = promote_branch(repo, {"version.txt": "0.1.5\n"})
+    assert verdict(repo, "single", head).release_files == ["version.txt"]
+
+
+def test_a_promotion_behind_main_is_judged_on_the_merge_result(repo):
+    """main's checks are not strict, so a branch can be behind main when it merges. Only
+    the paths the merge itself changes count."""
+    head = promote_branch(repo, {"a.md": "two\n"})
+    git(repo, "checkout", "-q", "integration")
+    write(repo, {"keep.md": "kept\n"}, "more integration work")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "checkout", "-q", "integration", "--", "keep.md")
+    git(repo, "commit", "-q", "-m", "keep.md promoted separately")
+    assert verdict(repo, "single", head) == CLEAN
+
+
+def test_a_full_promotion_fails_when_main_kept_a_change_integration_reverted(repo):
+    """A single promotion publishes a.md, integration then reverts it, and a plain merge
+    keeps main's copy because integration's side looks unchanged. The full check sees it."""
+    head = promote_branch(repo, {"a.md": "two\n"})
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", head)
+    git(repo, "checkout", "-q", "integration")
+    write(repo, {"a.md": "one\n"}, "revert a")
+    git(repo, "checkout", "-q", "main")
+    assert verdict(repo, "full", "integration").differing == ["a.md"]
+
+
+def test_a_full_promotion_that_conflicts_is_reported_as_a_conflict(repo):
+    head = promote_branch(repo, {"a.md": "two\n"})
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", head)
+    git(repo, "checkout", "-q", "integration")
+    write(repo, {"a.md": "three\n"}, "edit a again")
+    git(repo, "checkout", "-q", "main")
+    assert verdict(repo, "full", "integration").conflicted
+
+
+def test_a_full_promotion_built_with_ours_passes_where_the_plain_one_conflicts(repo):
+    """promote_pr.py --full merges main into integration with -s ours. The result is
+    integration's tree with main as an ancestor, so the merge into main is clean."""
+    head = promote_branch(repo, {"a.md": "two\n"})
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", head)
+    git(repo, "checkout", "-q", "integration")
+    write(repo, {"a.md": "three\n"}, "edit a again")
+    git(repo, "checkout", "-q", "-b", "promote/full-x")
+    git(repo, "merge", "-q", "-s", "ours", "--no-edit", "main")
+    git(repo, "checkout", "-q", "main")
+    assert verdict(repo, "full", "promote/full-x") == CLEAN
+
+
+def environment(monkeypatch, repo, head_ref, head_sha, integration="integration"):
     monkeypatch.chdir(repo)
-    for name, value in {"BASE_REF": PUBLISHING_BRANCH, "HEAD_REF": "promote/pr-1",
-                        "HEAD_REPO": REPO, "BASE_REPO": REPO, "HEAD_SHA": "promote",
-                        "INTEGRATION_REF": "integration"}.items():
+    for name, value in {"BASE_REF": PUBLISHING_BRANCH, "HEAD_REF": head_ref, "HEAD_REPO": REPO,
+                        "BASE_REPO": REPO, "HEAD_SHA": head_sha, "MAIN_REF": "main",
+                        "INTEGRATION_REF": integration}.items():
         monkeypatch.setenv(name, value)
-    assert main(["base_branch_guard.py", str(listing)]) == 0
-    (repo / "a.md").write_text("two\n")
-    git(repo, "commit", "-q", "-am", "edit")
-    assert main(["base_branch_guard.py", str(listing)]) == 1
-    assert "a.md" in capsys.readouterr().err
 
 
-def test_main_fails_closed_when_the_head_is_missing(repo, monkeypatch, capsys):
-    listing = repo.parent / "changed.txt"
-    listing.write_text("M\ta.md\n", encoding="utf-8")
-    monkeypatch.chdir(repo)
-    for name, value in {"BASE_REF": PUBLISHING_BRANCH, "HEAD_REF": "promote/pr-1",
-                        "HEAD_REPO": REPO, "BASE_REPO": REPO, "HEAD_SHA": "",
-                        "INTEGRATION_REF": "integration"}.items():
-        monkeypatch.setenv(name, value)
-    assert main(["base_branch_guard.py", str(listing)]) == 1
+def test_main_passes_and_fails_end_to_end(repo, monkeypatch, capsys):
+    good = promote_branch(repo, {"a.md": "two\n"}, "promote/pr-1")
+    environment(monkeypatch, repo, good, git(repo, "rev-parse", good))
+    assert main(["base_branch_guard.py"]) == 0
+    bad = promote_branch(repo, {"café.md": "x\n"}, "promote/pr-2")
+    environment(monkeypatch, repo, bad, git(repo, "rev-parse", bad))
+    assert main(["base_branch_guard.py"]) == 1
+    assert "caf" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("head_sha,integration", [("", "integration"), (None, "origin/missing")])
+def test_main_fails_closed_when_the_check_cannot_run(repo, monkeypatch, capsys, head_sha, integration):
+    head = promote_branch(repo, {"a.md": "two\n"})
+    sha = git(repo, "rev-parse", head) if head_sha is None else head_sha
+    environment(monkeypatch, repo, head, sha, integration)
+    assert main(["base_branch_guard.py"]) == 1
     assert "could not run" in capsys.readouterr().err
-
-
-def test_git_runner_reports_failure_rather_than_raising():
-    code, _ = git_runner(["rev-parse", "--verify", "refs/heads/does-not-exist-anywhere"])
-    assert code != 0
 
 
 # ---- the workflow wiring ----------------------------------------------------------------
 
 
-def test_workflow_lists_a_rename_as_a_delete_plus_an_add():
-    """With rename detection on, moving a file lists only its new path, so the old one
-    would never reach the content check. The workflow turns it off."""
-    workflow = (WORKFLOWS / "pr-base-guard.yml").read_text(encoding="utf-8")
-    diff_lines = [line for line in workflow.splitlines() if "git diff --name-status" in line]
-    assert len(diff_lines) == 1
-    assert "--no-renames" in diff_lines[0]
+def workflow() -> str:
+    return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_workflow_passes_the_head_and_integration_to_the_guard():
-    workflow = (WORKFLOWS / "pr-base-guard.yml").read_text(encoding="utf-8")
-    assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in workflow
-    assert "INTEGRATION_REF: origin/integration" in workflow
+def test_workflow_runs_mains_guard_not_the_pull_requests():
+    """A pull request must not be able to rewrite the check that judges it."""
+    text = workflow()
+    assert "pull_request_target:" in text
+    assert "\n          ref: main\n" in text
+    assert "persist-credentials: false" in text
+
+
+def test_workflow_reruns_when_a_base_is_changed_to_main():
+    assert "types: [opened, edited, synchronize, reopened]" in workflow()
+
+
+def test_workflow_passes_live_tips_and_the_head_to_the_guard():
+    text = workflow()
+    for line in ("HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+                 "MAIN_REF: origin/main", "INTEGRATION_REF: origin/integration"):
+        assert line in text
+
+
+def test_workflow_never_lists_paths_in_quoted_form():
+    """The guard computes paths itself with -z. A text listing is how the bypass got in."""
+    assert "--name-status" not in workflow()
+    assert "--name-only" not in workflow()
 
 
 def test_workflow_keeps_the_required_check_name():
     """protect-main requires a check named base-branch-guard. Renaming the job leaves a
     required check that never reports, which blocks every pull request to main."""
-    workflow = (WORKFLOWS / "pr-base-guard.yml").read_text(encoding="utf-8")
-    assert "\n  base-branch-guard:\n" in workflow
+    assert "\n  base-branch-guard:\n" in workflow()
 
 
 def test_the_sync_workflow_is_gone():
     """It opened a pull request from main into integration, which the organization's
     Actions policy forbids, so it failed on every run. Nothing reaches main except a
     promotion now, so there is nothing to sync back."""
-    assert not (WORKFLOWS / "sync-integration.yml").exists()
+    assert not (WORKFLOW.parent / "sync-integration.yml").exists()

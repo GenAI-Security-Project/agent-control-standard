@@ -1,5 +1,11 @@
-# Lets only promotions reach the branch that publishes on merge: a full promotion from
-# integration, or a promote/* branch whose every changed path matches integration.
+# Lets only promotions reach the branch that publishes on merge. tools/base_branch_guard.py
+# says what counts as a promotion and why.
+#
+# pull_request_target runs this workflow and the guard as they stand on main, so a pull
+# request cannot rewrite the check that judges it. That trigger is dangerous only when a
+# job runs code from the pull request, and this one never does: it checks out main, fetches
+# the pull request's head as git objects, and compares trees with git plumbing. The token is
+# read-only and is not persisted.
 #
 # The job id below is the check run name the protect-main ruleset requires. Renaming the
 # job without renaming the required check leaves a required status check that never
@@ -7,8 +13,11 @@
 name: PR base guard
 
 on:
-  pull_request:
+  # zizmor flags every pull_request_target. The paragraph above is why this one is safe.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
     branches: ["main"]
+    # edited covers a pull request whose base is changed to main after it was opened.
+    types: [opened, edited, synchronize, reopened]
 
 permissions: {}
 
@@ -22,29 +31,26 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the repository
+      - name: Check out main's guard
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           # Nothing here pushes with git, so the checkout's token has no reason to
           # stay behind in .git/config.
           persist-credentials: false
-          # Both endpoints of the diff have to be present to compute a merge base.
+          # main and integration both have to be present to merge and compare.
           fetch-depth: 0
 
-      - name: List the changed paths
+      - name: Fetch the pull request's head as data
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Three-dot compares against the merge base, so commits that landed on the
-          # base branch after this pull request opened do not count as its changes.
-          # Name and status, so the guard can tell a new page from an edited one.
-          # No rename detection, because a rename lists only its new path, so a file
-          # moved out of a protected tree would be invisible to the path rule. A
-          # rename arrives here as a delete plus an add, and both paths are judged.
-          git diff --name-status --no-renames "${BASE_SHA}...${HEAD_SHA}" > changed.txt
-          cat changed.txt
+          git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          # A force push after this event can make its head unreachable. The event for
+          # that push runs the guard again, so failing here costs nothing.
+          git cat-file -e "${HEAD_SHA}^{commit}"
 
       - name: Allow only promotions
         env:
@@ -54,9 +60,10 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
-          # The content check compares the pull request's own head, not the merge ref
-          # checked out above, against integration. fetch-depth: 0 fetched every branch,
-          # so origin/integration is present.
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The live tips, not the event's base, because the merge happens against
+          # whatever main is when it lands.
+          MAIN_REF: origin/main
           INTEGRATION_REF: origin/integration
-        run: python3 tools/base_branch_guard.py changed.txt
+          GIT_NO_REPLACE_OBJECTS: "1"
+        run: python3 tools/base_branch_guard.py
