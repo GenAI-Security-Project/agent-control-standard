@@ -1,67 +1,45 @@
-"""Keep specification and code changes off the publishing branch.
+"""Keep everything off the publishing branch except promotions.
 
-`main` publishes the site and all 44 schema $id URIs on every merge. A change to
-normative content lands on `integration` first, so those URIs move only on a deliberate
-promotion. GitHub rulesets cannot express "the paths in the diff decide the base
-branch", so this does. A page added under docs/ also needs `integration`, because its
-`nav` entry lives in mkdocs.yml, which is outside the lane.
+`main` publishes the site and all 44 schema $id URIs on every merge. Every change lands on
+`integration` first, and reaches `main` only as a promotion. Two kinds exist:
 
-The allowlist is positive. Anything it does not name requires `integration`, which makes
-a directory nobody anticipated a failure rather than a silent pass.
+- A full promotion, a pull request from `integration` (or a `release/*` branch) in this
+  repository.
+- A single pull request promotion, from a `promote/*` branch in this repository whose every
+  changed path is byte-for-byte identical to `integration`. `tools/promote_pr.py` builds
+  one. It cannot carry anything `integration` does not already hold, so `main` never gets
+  ahead of `integration`.
+
+Nothing else may target `main`. There used to be a documentation lane that let editorial
+pull requests go straight to `main`. It was removed on 2026-11-01 because every change
+merged that way left `integration` behind, and the workflow meant to sync it back cannot
+open a pull request under the organization's Actions policy.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 PUBLISHING_BRANCH = "main"
 
-# Directory prefixes that may target the publishing branch. The trailing slash is load
-# bearing: without it, a prefix test reads docs/specimen.md as a match for docs/spec.
-DOCS_LANE_DIRECTORIES = (
-    "docs/topics/",
-    "design/",
-)
-
-# Exact files that may target the publishing branch.
-#
-# mkdocs.yml, overrides/, landing/, docs/stylesheets/, and docs/assets/ are deliberately
-# absent even though a reader would call all five documentation. CODEOWNERS treats them
-# as privilege-escalation surfaces and says why: mkdocs.yml accepts a hooks: key that
-# executes Python inside the build job, overrides holds templates the build renders into
-# every page, and a stylesheet or asset reaches a third party through url(), @font-face,
-# or @import with no script at all. A lane that deploys on merge is the wrong lane for
-# any of them.
-DOCS_LANE_FILES = frozenset({
-    "docs/README.md",
-    "README.md",
-    "CONTRIBUTORS.md",
-    "CODE_OF_CONDUCT.md",
-    "CONTRIBUTING.md",
-    "GOVERNANCE.md",
-    "SECURITY.md",
-    "STYLE.md",
-    "LICENSING.md",
-    "NOTICE",
-})
-
-# Branches a promotion pull request comes from. These carry specification paths by
-# definition.
+# Branches a full promotion comes from.
 PROMOTION_HEADS = frozenset({"integration"})
 PROMOTION_HEAD_PREFIXES = ("release/",)
 
+# Branches a single pull request promotion comes from. tools/promote_pr.py names them.
+SINGLE_PROMOTION_PREFIX = "promote/"
 
-def in_docs_lane(path: str) -> bool:
-    """True when a path may target the publishing branch directly."""
-    if path in DOCS_LANE_FILES:
-        return True
-    return path.startswith(DOCS_LANE_DIRECTORIES)
+# The ref the content check compares against when the workflow does not name one.
+DEFAULT_INTEGRATION_REF = "origin/integration"
+
+GitRunner = Callable[[list[str]], tuple[int, bytes]]
 
 
 def is_promotion(head_ref: str, head_repo: str, base_repo: str) -> bool:
-    """True when this is a promotion from a branch inside this repository.
+    """True when this is a full promotion from a branch inside this repository.
 
     The repository test is not optional and runs first. A pull request's head ref is a
     branch name the contributor chose, and a fork may name a branch anything, so
@@ -73,27 +51,17 @@ def is_promotion(head_ref: str, head_repo: str, base_repo: str) -> bool:
     return head_ref in PROMOTION_HEADS or head_ref.startswith(PROMOTION_HEAD_PREFIXES)
 
 
-def paths_requiring_integration(paths: Iterable[str]) -> list[str]:
-    """Return every changed path that may not target the publishing branch."""
-    return sorted({path for path in paths if not in_docs_lane(path)})
+def is_single_promotion(head_ref: str, head_repo: str, base_repo: str) -> bool:
+    """True when the head is a `promote/*` branch inside this repository."""
+    return head_repo == base_repo and head_ref.startswith(SINGLE_PROMOTION_PREFIX)
 
-
-# A path added under this prefix is a new page. The deploy runs the test suite before it
-# builds, and a page with no `nav` entry fails it, so a new page merged straight to the
-# publishing branch stops every deploy until a `mkdocs.yml` change arrives by promotion.
-NEW_PAGE_PREFIX = "docs/"
 
 # Statuses from `git diff --name-status` that put a path into the tree. A rename or copy
 # carries a similarity score after its letter, as in R100. The workflow passes
-# --no-renames, so a rename reaches this script as a delete plus an add and the old
-# path stays visible to the path rule. R and C stay here so a listing produced without
-# that flag still counts the new path as an addition.
+# --no-renames, so a rename reaches this script as a delete plus an add and both paths
+# are compared. R and C stay here so a listing produced without that flag still counts
+# the new path as an addition.
 ADDING_STATUSES = ("A", "R", "C")
-
-
-def added_pages_requiring_integration(added: Iterable[str]) -> list[str]:
-    """Return every added path under docs/, which needs a `nav` entry from `integration`."""
-    return sorted({path for path in added if path.startswith(NEW_PAGE_PREFIX)})
 
 
 def parse_name_status(lines: Iterable[str]) -> tuple[list[str], list[str]]:
@@ -121,49 +89,90 @@ def parse_name_status(lines: Iterable[str]) -> tuple[list[str], list[str]]:
     return changed, added
 
 
+def git_runner(args: list[str]) -> tuple[int, bytes]:
+    """Run git and return its exit status and raw stdout."""
+    completed = subprocess.run(["git", *args], capture_output=True, check=False)
+    return completed.returncode, completed.stdout
+
+
+def tree_entries(ref: str, paths: list[str], run: GitRunner) -> dict[str, tuple[str, str]]:
+    """Map each path that exists at `ref` to its (mode, object id).
+
+    --literal-pathspecs makes git read every path as a file name. Without it, a path that
+    starts with a colon or holds a glob character is a pattern, and a crafted file name
+    could make the listing match files the pull request never touched. -z keeps a file
+    name with a newline or a quote intact.
+    """
+    if not paths:
+        return {}
+    code, out = run(["--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree", ref, "--", *paths])
+    if code != 0:
+        raise RuntimeError(f"git ls-tree {ref} failed")
+    entries: dict[str, tuple[str, str]] = {}
+    for record in out.split(b"\0"):
+        if not record:
+            continue
+        meta, _, path = record.partition(b"\t")
+        mode, _kind, oid = meta.decode("ascii").split(" ")
+        entries[path.decode("utf-8", "surrogateescape")] = (mode, oid)
+    return entries
+
+
+def paths_differing_from(paths: Iterable[str], head: str, integration: str, run: GitRunner) -> list[str]:
+    """Return every path whose file at `head` is not identical to `integration`.
+
+    A path absent from both is identical, which is how a deletion that already happened
+    on `integration` passes. The mode counts, so promoting a file can't change whether it
+    is executable.
+    """
+    wanted = sorted(set(paths))
+    at_head = tree_entries(head, wanted, run)
+    at_integration = tree_entries(integration, wanted, run)
+    return [path for path in wanted if at_head.get(path) != at_integration.get(path)]
+
+
+RETARGET = (
+    f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on merge, so every "
+    "change lands on `integration` first and reaches it only as a promotion. Retarget this "
+    "pull request at `integration`. To publish one merged pull request before the next full "
+    "promotion, a project lead runs `uv run python tools/promote_pr.py <number>`. "
+    "See CONTRIBUTING.md."
+)
+
+
 def decide(
     paths: Iterable[str],
     base_ref: str,
     head_ref: str,
     head_repo: str,
     base_repo: str,
-    added: Iterable[str] = (),
+    differing: Callable[[list[str]], list[str]] | None = None,
 ) -> tuple[int, str]:
     """Return an exit status and the message to print.
 
-    `added` names the paths the pull request adds. It defaults to empty so a caller that
-    knows only the changed paths gets the path rule alone.
+    `differing` takes the changed paths and returns the ones whose content differs from
+    `integration`. It is consulted only for a single pull request promotion, and a
+    promotion with no way to check its content fails rather than passing unchecked.
     """
     if base_ref != PUBLISHING_BRANCH:
         return 0, f"Base branch is {base_ref!r}, not {PUBLISHING_BRANCH!r}. Nothing to check."
     if is_promotion(head_ref, head_repo, base_repo):
-        return 0, f"Promotion from {head_ref!r}. Specification paths are expected here."
-    offenders = paths_requiring_integration(paths)
-    new_pages = [path for path in added_pages_requiring_integration(added)
-                 if path not in offenders]
-    if not offenders and not new_pages:
-        return 0, "Every changed path is in the documentation lane."
-    parts = []
+        return 0, f"Promotion from {head_ref!r}."
+    if not is_single_promotion(head_ref, head_repo, base_repo):
+        return 1, f"Only promotions may target `{PUBLISHING_BRANCH}`. {RETARGET}"
+    changed = sorted(set(paths))
+    if differing is None:
+        return 1, "This promotion could not be checked against `integration`, so it does not pass."
+    offenders = differing(changed)
     if offenders:
         listing = "\n".join(f"  {path}" for path in offenders)
-        parts.append(
-            f"These paths may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
-            f"request at `integration`:\n{listing}\n\n"
-            f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on "
-            "merge, so specification and code changes land on `integration` and "
-            "publish on a promotion."
+        return 1, (
+            f"A single pull request promotion may carry only content `integration` already "
+            f"holds. These paths differ from `integration`:\n{listing}\n\n"
+            "Rebuild the branch with tools/promote_pr.py, which copies each file from "
+            "`integration`, or land the change on `integration` first."
         )
-    if new_pages:
-        listing = "\n".join(f"  {path}" for path in new_pages)
-        parts.append(
-            f"These new pages may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
-            f"request at `integration`:\n{listing}\n\n"
-            "A new page needs a titled `nav` entry in `mkdocs.yml`, and `mkdocs.yml` "
-            "reaches the publishing branch only through `integration`. The deploy runs "
-            "the guards before it builds, so a page without its `nav` entry stops every "
-            f"deploy of `{PUBLISHING_BRANCH}`."
-        )
-    return 1, "\n\n".join(parts) + " See CONTRIBUTING.md."
+    return 0, f"Promotion from {head_ref!r}. Every changed path matches `integration`."
 
 
 def main(argv: list[str]) -> int:
@@ -172,15 +181,26 @@ def main(argv: list[str]) -> int:
         print("usage: base_branch_guard.py <git-diff-name-status-listing>", file=sys.stderr)
         return 2
     with open(argv[1], encoding="utf-8") as handle:
-        paths, added = parse_name_status(handle)
-    status, message = decide(
-        paths,
-        os.environ.get("BASE_REF", ""),
-        os.environ.get("HEAD_REF", ""),
-        os.environ.get("HEAD_REPO", ""),
-        os.environ.get("BASE_REPO", ""),
-        added,
-    )
+        paths, _added = parse_name_status(handle)
+    head_sha = os.environ.get("HEAD_SHA", "")
+    integration = os.environ.get("INTEGRATION_REF", DEFAULT_INTEGRATION_REF)
+
+    def differing(changed: list[str]) -> list[str]:
+        if not head_sha:
+            raise RuntimeError("HEAD_SHA is not set")
+        return paths_differing_from(changed, head_sha, integration, git_runner)
+
+    try:
+        status, message = decide(
+            paths,
+            os.environ.get("BASE_REF", ""),
+            os.environ.get("HEAD_REF", ""),
+            os.environ.get("HEAD_REPO", ""),
+            os.environ.get("BASE_REPO", ""),
+            differing,
+        )
+    except RuntimeError as error:
+        status, message = 1, f"The content check could not run ({error}), so this does not pass."
     print(message, file=sys.stderr if status else sys.stdout)
     return status
 

@@ -1,4 +1,5 @@
-# Keeps specification and code changes off the branch that publishes on merge.
+# Lets only promotions reach the branch that publishes on merge: a full promotion from
+# integration, or a promote/* branch whose every changed path matches integration.
 #
 # The job id below is the check run name the protect-main ruleset requires. Renaming the
 # job without renaming the required check leaves a required status check that never
@@ -45,7 +46,7 @@ jobs:
           git diff --name-status --no-renames "${BASE_SHA}...${HEAD_SHA}" > changed.txt
           cat changed.txt
 
-      - name: Enforce the documentation lane
+      - name: Allow only promotions
         env:
           # Passed through the environment rather than interpolated into the shell. A
           # head ref is contributor-controlled text and ${{ }} inside run: executes.
@@ -53,4 +54,9 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
+          # The content check compares the pull request's own head, not the merge ref
+          # checked out above, against integration. fetch-depth: 0 fetched every branch,
+          # so origin/integration is present.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INTEGRATION_REF: origin/integration
         run: python3 tools/base_branch_guard.py changed.txt
