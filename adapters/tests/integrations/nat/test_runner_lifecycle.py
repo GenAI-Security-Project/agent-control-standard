@@ -388,6 +388,102 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.assertEqual(session[-1], "steps/sessionEnd", "nothing goes out after the session's end")
         self.assertEqual(session.count("handshake/hello"), 1, "the ended session's id is not opened again")
 
+    def test_a_worker_that_starts_after_the_runs_end_sends_nothing(self) -> None:
+        """A cancelled call's worker may start only after the run's sessionEnd; it finds the run ended and sends nothing."""
+        for held in ("steps/toolCallRequest", "steps/toolCallResult"):
+            with self.subTest(held):
+                self.guardian.reset()
+                entered, release, done = threading.Event(), threading.Event(), threading.Event()
+
+                async def run() -> None:
+                    config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+                    async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
+                        exporters = {name: c.instance for name, c in builder._telemetry_exporters.items()}
+                        exchange = middleware._exchange
+
+                        def late(request, step, run, *rest, held=held):
+                            try:
+                                if request.get("method") == held:
+                                    entered.set()
+                                    release.wait(5)
+                                return exchange(request, step, run, *rest)
+                            finally:
+                                done.set()
+                        middleware._exchange = late
+
+                        async def one() -> None:
+                            manager = ExporterManager.from_exporters(exporters)
+                            async with Runner("first", _Entry(middleware, []), ContextState.get(), manager) as runner:
+                                await runner.result()
+                        task = asyncio.create_task(one())
+                        for _ in range(500):
+                            if entered.is_set() or task.done():
+                                break
+                            await asyncio.sleep(0.01)
+                        self.assertTrue(entered.is_set(), self.guardian.methods_seen())
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                        await asyncio.wait_for(middleware._lifecycle_sent(), 10)
+                        release.set()
+                        for _ in range(500):
+                            if done.is_set():
+                                break
+                            await asyncio.sleep(0.01)
+                        await asyncio.wait_for(middleware._lifecycle_sent(), 10)
+                asyncio.run(run())
+                [session] = self._sessions()[1:]
+                self.assertEqual(session[-1], "steps/sessionEnd", session)
+                self.assertNotIn(held, session, "the late worker sent its step")
+
+    def test_a_late_step_of_an_ended_run_does_not_open_it_again(self) -> None:
+        from acs.client import SessionRefused
+        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
+        self.addCleanup(middleware.close)
+        middleware._run_state("ended")
+        middleware._forget_run("ended")
+        self.assertIsInstance(middleware._step("ended").decision, SessionRefused)
+        self.assertNotIn("ended", middleware._runs)
+        self.assertEqual(self.guardian.methods_seen(), [], "nothing was opened for the ended run")
+
+    def test_shutdown_waits_for_the_middlewares_own_session_still_opening(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        send = _exchange._open
+
+        def hold(request, timeout):
+            if json.loads(request.data).get("method") == "steps/sessionStart":
+                entered.set()
+                release.wait(5)
+            return send(request, timeout=timeout)
+        session = str(uuid.uuid4())
+
+        async def run() -> None:
+            context = FunctionMiddlewareContext(name="Read", config=None, description=None, input_schema=None,
+                                                single_output_schema=str, stream_output_schema=str)
+
+            async def target(command: str) -> str:
+                return command
+            with mock.patch.object(_exchange, "_open", hold):
+                async with build_acs_middleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=session),
+                                                None) as middleware:
+                    task = asyncio.create_task(middleware.function_middleware_invoke(
+                        command="hello", call_next=target, context=context))
+                    for _ in range(500):
+                        if entered.is_set() or task.done():
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertTrue(entered.is_set(), self.guardian.methods_seen())
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                    # Released while NAT shuts the middleware down, which waits for the session to open.
+                    threading.Timer(0.3, release.set).start()
+        asyncio.run(run())
+        self.assertEqual(self._sessions(), [["handshake/hello", "steps/sessionStart", "steps/sessionEnd"]])
+        record = _handshake._handshake_cache_path(session, self.guardian.url())
+        self.assertEqual([path.name for path in (record, Path(f"{record}.started"), Path(f"{record}.lock"))
+                          if path.exists()], [], "the ended session leaves no records")
+
     def test_a_denied_session_start_refuses_that_run(self) -> None:
         """hooks.md sessionStart: ALLOW / DENY. A denied run's calls are blocked and nothing more of it is sent."""
         allow = self.guardian._default_allow

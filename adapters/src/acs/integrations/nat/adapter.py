@@ -384,6 +384,8 @@ def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> None
 
 # Untracked runs whose decision failures wait for a sessionEnd; past this many, the oldest of them ages out.
 _MAX_COUNTED_RUNS = 256
+# Ended runs remembered so a late step of one is refused; past this many, the oldest is forgotten.
+_MAX_ENDED_RUNS = 4096
 
 
 class _LifecycleSender:
@@ -534,6 +536,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         self._decision_failures_lock = threading.Lock()
         # The runs whose WORKFLOW_START was seen, each kept until its sessionEnd has been handled.
         self._runs: collections.OrderedDict = collections.OrderedDict()
+        # Runs whose sessionEnd has been handled, so a late step of one is refused rather than opening its id again.
+        self._ended_runs: collections.OrderedDict = collections.OrderedDict()
         self._runs_lock = threading.Lock()
 
     def _ensure_handshake(self) -> Handshake:
@@ -579,8 +583,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         including any that arrive meanwhile, then accept no more."""
         with self._runs_lock:
             own = self._runs.get(None)
-        if own is not None and own.decision is not None and self._end_run(None):
-            self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "completed"}, run=None)
+        if own is not None:
+            # A session still opening finishes first, so its sessionStart is not left without a sessionEnd.
+            with own.lock:
+                opened = own.decision is not None
+                if not opened:
+                    own.finished = True
+            if opened and self._end_run(None):
+                self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "completed"}, run=None)
         self._lifecycle.close()
 
     def _ensure_lifecycle_subscribed(self) -> None:
@@ -669,6 +679,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         except RuntimeError:
             task = None
         with self._runs_lock:
+            if run in self._ended_runs:
+                return _Run(session_id=self._run_session_id(run), finished=True)
             state = self._runs.get(run)
             if state is None:
                 state = self._runs[run] = _Run(session_id=self._run_session_id(run))
@@ -684,10 +696,12 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
     def _step(self, run: str | None, workflow_name: str = "") -> _Step:
         """The session a step belongs to, opened with its sessionStart: the run's own, or the middleware's for a step outside any run."""
         state = self._run_state(run)
-        if state.finished:
-            return _Step(state.session_id, SessionRefused("session_ended", {"session_id": state.session_id}), None,
-                         self._acs.posture)
+        ended = _Step(state.session_id, SessionRefused("session_ended", {"session_id": state.session_id}), None,
+                      self._acs.posture)
         with state.lock:
+            # Checked under the lock, so a session that shutdown found unopened is never opened after it.
+            if state.finished:
+                return ended
             if state.decision is None:
                 state.decision = open_session(
                     config=self._acs, session_id=state.session_id, agent_id=self._agent_id, platform="nat",
@@ -746,14 +760,16 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
     def _exchange(self, request: dict, step: _Step, run: str | None):
         """A call's round trip, counted so the run's sessionEnd goes out after it; refused once that sessionEnd has begun."""
+        ended = Resolution(False, "session_ended_fail_closed", "session_ended",
+                           {"session_id": step.session_id, "method": request.get("method", "")})
         with self._runs_lock:
             state = self._runs.get(run)
-        if state is None:
-            return self._round_trip(request, step)
+        # A worker that starts after the session's end finds its state gone or finished.
+        if state is None or state.finished:
+            return ended
         with state.idle:
             if state.closed:
-                return Resolution(False, "session_ended_fail_closed", "session_ended",
-                                  {"session_id": step.session_id, "method": request.get("method", "")})
+                return ended
             state.in_flight += 1
         try:
             return self._round_trip(request, step)
@@ -768,6 +784,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             state = self._runs.get(run) if run is None else self._runs.pop(run, None)
             if state is not None:
                 state.finished = True
+            if run is not None:
+                self._ended_runs[run] = None
+                while len(self._ended_runs) > _MAX_ENDED_RUNS:
+                    self._ended_runs.popitem(last=False)
         self._take_failure_counts(run)
         if state is not None:
             discard_session(state.session_id, self._acs.guardian_url)
