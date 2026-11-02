@@ -343,6 +343,51 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                 self.assertEqual(session[-1], "steps/sessionEnd", session)
                 self.assertIn(held, session)
 
+    def _outside_a_run(self, *commands: str, end_first: bool = False) -> tuple[list[str], list[bool]]:
+        """Calls made straight through the middleware, outside any NAT run; whether each was blocked."""
+        executed: list[str] = []
+        blocked: list[bool] = []
+
+        async def run() -> None:
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            async with build_acs_middleware(config, None) as middleware:
+                context = FunctionMiddlewareContext(name="Read", config=None, description=None, input_schema=None,
+                                                    single_output_schema=str, stream_output_schema=str)
+
+                async def target(command: str) -> str:
+                    executed.append(command)
+                    return f"ran {command}"
+                for n, command in enumerate(commands):
+                    if end_first and n == len(commands) - 1:
+                        middleware._on_intermediate_step(SimpleNamespace(payload=IntermediateStepPayload(
+                            event_type=IntermediateStepType.WORKFLOW_END, name="wf", data=StreamEventData(output="a"))))
+                        await middleware._lifecycle_sent()
+                    try:
+                        await middleware.function_middleware_invoke(command=command, call_next=target, context=context)
+                        blocked.append(False)
+                    except ACSGuardianDenied:
+                        blocked.append(True)
+        asyncio.run(run())
+        return executed, blocked
+
+    def test_a_call_outside_any_run_opens_and_ends_the_middlewares_own_session(self) -> None:
+        self.assertEqual(self._outside_a_run("first", "second"), (["first", "second"], [False, False]))
+        own = ["handshake/hello", "steps/sessionStart"] + ["steps/toolCallRequest", "steps/toolCallResult"] * 2
+        self.assertEqual(self._sessions(), [own + ["steps/sessionEnd"]], "sessionStart first, sessionEnd at shutdown")
+        session = self.guardian.envelopes_for("steps/sessionEnd")[0]["params"]["metadata"]["session_id"]
+        record = _handshake._handshake_cache_path(session, self.guardian.url())
+        self.assertFalse(record.exists(), "the ended session's record is removed")
+
+    def test_a_middleware_with_no_call_outside_a_run_sends_only_its_handshake(self) -> None:
+        self.assertEqual(self._outside_a_run(), ([], []))
+        self.assertEqual(self._sessions(), [BUILD])
+
+    def test_a_call_after_the_middlewares_own_session_ended_is_refused(self) -> None:
+        self.assertEqual(self._outside_a_run("first", "late", end_first=True), (["first"], [False, True]))
+        [session] = self._sessions()
+        self.assertEqual(session[-1], "steps/sessionEnd", "nothing goes out after the session's end")
+        self.assertEqual(session.count("handshake/hello"), 1, "the ended session's id is not opened again")
+
     def test_a_denied_session_start_refuses_that_run(self) -> None:
         """hooks.md sessionStart: ALLOW / DENY. A denied run's calls are blocked and nothing more of it is sent."""
         allow = self.guardian._default_allow

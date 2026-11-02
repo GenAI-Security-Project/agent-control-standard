@@ -208,9 +208,10 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
                 await mw.function_middleware_invoke(command="echo hi", call_next=target, context=context)
                 return True
         self.assertTrue(asyncio.run(run()))
+        # The call opens the middleware's own session, so its sessionStart goes first; NAT's shutdown ends it.
         self.assertEqual(self.guardian.methods_seen(),
-                         ["handshake/hello", "steps/toolCallRequest", "steps/sessionStart", "steps/userMessage",
-                          "steps/toolCallResult"])
+                         ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest", "steps/userMessage",
+                          "steps/toolCallResult", "steps/sessionEnd"])
 
     def test_a_hook_that_arrives_while_closing_waits_its_turn(self) -> None:
         """close() drains in order: a late hook neither blocks NAT nor overtakes the hooks queued before it."""

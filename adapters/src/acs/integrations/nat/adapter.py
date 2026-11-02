@@ -71,6 +71,7 @@ try:
         Handshake,
         Negotiated,
         Resolution,
+        SessionRefused,
         Undecided,
         audit_event,
         audit_modify_unsupported,
@@ -477,6 +478,8 @@ class _Run:
     in_flight: int = 0
     closed: bool = False
     idle: threading.Condition = field(default_factory=threading.Condition)
+    # Set once the sessionEnd has been handled; only the middleware's own session is kept after it.
+    finished: bool = False
 
 
 @dataclass(frozen=True)
@@ -572,7 +575,12 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         await asyncio.wrap_future(self._lifecycle.sent())
 
     def close(self) -> None:
-        """Send the lifecycle hooks still queued, including any that arrive meanwhile, then accept no more."""
+        """End the middleware's own session if a step outside any run started it, send the lifecycle hooks still queued,
+        including any that arrive meanwhile, then accept no more."""
+        with self._runs_lock:
+            own = self._runs.get(None)
+        if own is not None and own.decision is not None and self._end_run(None):
+            self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "completed"}, run=None)
         self._lifecycle.close()
 
     def _ensure_lifecycle_subscribed(self) -> None:
@@ -648,11 +656,13 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 "steps/sessionEnd",
                 payload={"reason": "completed"}, run=run)
 
-    def _run_session_id(self, run: str) -> str:
-        """Each NAT run is its own ACS session, named from the configured session and the run."""
+    def _run_session_id(self, run: str | None) -> str:
+        """Each NAT run is its own ACS session, named from the configured session and the run; a step outside any run uses the configured one."""
+        if run is None:
+            return self._session_id
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"acs-nat-run:{self._session_id}:{run}"))
 
-    def _run_state(self, run: str) -> _Run:
+    def _run_state(self, run: str | None) -> _Run:
         """The run's state, created by its WORKFLOW_START or, for a run seen from its first call, by that call."""
         try:
             task = asyncio.current_task()
@@ -672,11 +682,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             self._run_state(run)
 
     def _step(self, run: str | None, workflow_name: str = "") -> _Step:
-        """The session a step belongs to: the run's own, opened with its sessionStart, or the middleware's for a step outside any run."""
-        if run is None:
-            decision = self._ensure_handshake()
-            return _Step(self._session_id, decision, self._server_hello, self._posture)
+        """The session a step belongs to, opened with its sessionStart: the run's own, or the middleware's for a step outside any run."""
         state = self._run_state(run)
+        if state.finished:
+            return _Step(state.session_id, SessionRefused("session_ended", {"session_id": state.session_id}), None,
+                         self._acs.posture)
         with state.lock:
             if state.decision is None:
                 state.decision = open_session(
@@ -690,7 +700,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                          self._acs.posture.negotiated(decision.server_hello))
         return _Step(state.session_id, decision, None, self._acs.posture)
 
-    def _send_session_start(self, run: str, session_id: str, session: Negotiated, workflow_name: str):
+    def _send_session_start(self, run: str | None, session_id: str, session: Negotiated, workflow_name: str):
         """The run's one sessionStart, sent as its session opens (hooks.md sessionStart: ALLOW / DENY)."""
         if not method_evaluated(session.server_hello, "steps/sessionStart"):
             audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session_id)
@@ -723,7 +733,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         cancelled = task is not None and (task.cancelled() or task.cancelling() > 0)
         self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "cancelled" if cancelled else "error"}, run=run)
 
-    def _close_run(self, run: str) -> None:
+    def _close_run(self, run: str | None) -> None:
         """Before the run's sessionEnd: refuse its exchanges from now on, and wait for those already running, which a cancelled call leaves behind."""
         with self._runs_lock:
             state = self._runs.get(run)
@@ -737,7 +747,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
     def _exchange(self, request: dict, step: _Step, run: str | None):
         """A call's round trip, counted so the run's sessionEnd goes out after it; refused once that sessionEnd has begun."""
         with self._runs_lock:
-            state = self._runs.get(run) if run is not None else None
+            state = self._runs.get(run)
         if state is None:
             return self._round_trip(request, step)
         with state.idle:
@@ -753,9 +763,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 state.idle.notify_all()
 
     def _forget_run(self, run: str | None) -> None:
-        """Drop a run once its sessionEnd has been handled, sent or not; no step of it follows."""
+        """Drop a run once its sessionEnd has been handled, sent or not; the middleware's own session stays, ended, so a later step outside a run cannot open its id again."""
         with self._runs_lock:
-            state = self._runs.pop(run, None)
+            state = self._runs.get(run) if run is None else self._runs.pop(run, None)
+            if state is not None:
+                state.finished = True
         self._take_failure_counts(run)
         if state is not None:
             discard_session(state.session_id, self._acs.guardian_url)
@@ -786,11 +798,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             audit_event("acs_disabled_bypass", session_id=self._session_id, method=method,
                         detail="ACS_DISABLED=1 — lifecycle hook not sent")
             return
-        if method == "steps/sessionStart" and run is not None:
-            # The run's session opens here, and its sessionStart goes out as it does.
+        if method == "steps/sessionStart":
+            # The session opens here, and its sessionStart goes out as it does.
             self._step(run, (payload.get("platform_context") or {}).get("workflow_name", ""))
             return
-        if method == "steps/sessionEnd" and run is not None:
+        if method == "steps/sessionEnd":
             self._close_run(run)
         step = self._step(run)
         gated = self._acs.gate(step.decision, method)
@@ -1023,16 +1035,12 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                           session_id=step.session_id)
 
     async def _step_of(self, run: str | None) -> _Step:
-        """A call's session, opened off the event loop after the run's lifecycle hooks reported before the call, so the run's sessionStart carries its workflow's name."""
-        if run is not None:
-            self._run_state(run)
-            await self._lifecycle_sent()
-        elif self._session is not None:
-            return _Step(self._session_id, self._session, self._server_hello, self._posture)
+        """A call's session, opened off the event loop after the lifecycle hooks reported before the call, so a run's sessionStart carries its workflow's name."""
+        self._run_state(run)
+        await self._lifecycle_sent()
         return await asyncio.to_thread(self._step, run)
 
     def _metadata(self, session_id: str | None = None) -> dict[str, Any]:
-        """The envelope metadata every step of this middleware carries."""
         return {"agent_id": self._agent_id, "session_id": session_id or self._session_id,
                 "platform": "nat", "adapter_version": ADAPTER_VERSION}
 

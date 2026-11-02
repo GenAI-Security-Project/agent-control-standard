@@ -75,7 +75,7 @@ class SessionGateThroughNat(unittest.TestCase):
 
         self.assertEqual(self._run(guardian.url(), str(uuid.uuid4())), (1, False))
         self.assertEqual(guardian.methods_seen(),
-                         ["handshake/hello", "steps/toolCallRequest", "steps/toolCallResult",
+                         ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest", "steps/toolCallResult",
                           "steps/sessionEnd"])
 
     def test_a_refused_session_never_runs_the_function(self) -> None:
