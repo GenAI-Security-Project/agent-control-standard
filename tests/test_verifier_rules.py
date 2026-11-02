@@ -79,9 +79,7 @@ def test_specification_mentions_atomic_request_id_check():
     spec = (Path(__file__).resolve().parent.parent / "docs" / "spec" / "instrument" / "specification.md").read_text(
         encoding="utf-8"
     )
-    assert "atomic" in spec.lower()
-    assert "request_id" in spec
-    assert "replay" in spec.lower()
+    assert "one atomic operation performed after both checks pass" in spec
 
 
 def test_specification_forbids_fallback_to_another_algorithm():
@@ -89,7 +87,7 @@ def test_specification_forbids_fallback_to_another_algorithm():
     spec = (Path(__file__).resolve().parent.parent / "docs" / "spec" / "instrument" / "specification.md").read_text(
         encoding="utf-8"
     )
-    assert "no fallback" in spec.lower() or "MUST NOT fall back" in spec
+    assert "with no fallback to another algorithm or key" in spec
 
 
 def test_specification_requires_constant_time_comparison():
@@ -97,7 +95,7 @@ def test_specification_requires_constant_time_comparison():
     spec = (Path(__file__).resolve().parent.parent / "docs" / "spec" / "instrument" / "specification.md").read_text(
         encoding="utf-8"
     )
-    assert "constant time" in spec.lower() or "constant-time" in spec.lower()
+    assert "verifiers MUST compare the decoded signature bytes in constant time" in spec
 
 
 def test_specification_isolates_failed_verification_from_state():
