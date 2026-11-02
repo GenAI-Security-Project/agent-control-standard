@@ -51,8 +51,8 @@ def test_jobs_are_exact():
     )
     assert jobs["dryrun"]["if"] == "github.event_name == 'workflow_dispatch' && inputs.mode != 'sweep'"
     assert jobs["event"]["permissions"] == {"contents": "read", "issues": "write"}
-    assert jobs["sweep"]["permissions"] == {"contents": "read", "issues": "write", "pull-requests": "read"}
-    assert jobs["dryrun"]["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
+    assert jobs["sweep"]["permissions"] == {"actions": "read", "contents": "read", "issues": "write", "pull-requests": "read"}
+    assert jobs["dryrun"]["permissions"] == {"actions": "read", "contents": "read", "issues": "read", "pull-requests": "read"}
     # Keyed per issue. A newer pending run replacing an older one for the same issue loses
     # nothing, because each run re-reads the issue's live state. No `queue: max`: actionlint
     # 1.7.12 rejects it, zizmor does not validate it, and a stalled-dispatch report exists.
