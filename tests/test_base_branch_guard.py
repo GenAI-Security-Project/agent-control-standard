@@ -303,5 +303,7 @@ def test_the_guard_reruns_when_main_or_integration_moves():
     assert 'branches: ["main", "integration"]' in rerun
     assert "actions: write" in rerun and "contents: write" not in rerun
     assert "pr-base-guard.yml/runs?event=pull_request_target" in rerun
-    # The head branch is contributor text, so it may reach jq only as --arg data.
-    assert '--arg ref "$ref"' in rerun
+    # Runs are matched by head commit and repository, passed to jq only as --arg data.
+    assert '--arg sha "$sha"' in rerun and '--arg repo "$REPO"' in rerun
+    # A run GitHub will not re-run fails the job instead of passing it quietly.
+    assert "29 days ago" in rerun and "exit 1" in rerun and "|| echo" not in rerun

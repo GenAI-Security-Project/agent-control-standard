@@ -263,7 +263,7 @@ def promote_full(dry_run: bool, run: Runner = run_command, workdir: str | None =
     code, _ = run(["git", "merge-base", "--is-ancestor", MAIN, INTEGRATION], None)
     if code == 0:
         return ("integration already contains main, so the plain promotion from integration merges "
-                "cleanly. Open it from the health issue or the Open promotion pull request workflow.")
+                "cleanly. Open it with the command the roadmap health issue prints.")
     refuse_existing(branch, run)
     overridden = nul_paths(must(run, ["git", "diff", "-z", "--name-only", "--no-renames", INTEGRATION, MAIN],
                                 "listing where main differs"))

@@ -135,8 +135,9 @@ default branch, so a pull request opened from the GitHub interface already targe
 `main` publishes the site and all 44 schema `$id` URIs on merge, so it takes promotions
 only, and a guard rejects anything else:
 
-- A full promotion merges all of `integration` into `main`. A project lead opens it from
-  the roadmap health issue or the Open promotion pull request workflow. The guard passes
+- A full promotion merges all of `integration` into `main`. A project lead opens it with
+  the command the roadmap health issue prints, from their own machine, because the
+  organization does not let a workflow open a pull request. The guard passes
   it only when `main` would equal `integration` afterwards. If it conflicts, or the guard
   says `main` differs, the lead runs `uv run python tools/promote_pr.py --full` instead. That
   builds `promote/full-<sha>`, which is `integration` with `main` merged in so that
@@ -155,7 +156,8 @@ only, and a guard rejects anything else:
 Every promotion merges with a merge commit. Whoever pushed its branch last cannot approve
 it, so a different code owner of the changed paths does. The guard re-runs on its own when
 `main` or `integration` moves. If its last run predates the latest change to either one,
-re-run it before you merge. To take something off the site,
+re-run it before you merge, or close and reopen the pull request when GitHub no longer
+offers a re-run. To take something off the site,
 revert it on `integration` and promote the revert the same way. A full promotion also
 restores anything a single promotion published that `integration` has since reverted.
 
