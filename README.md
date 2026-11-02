@@ -327,9 +327,9 @@ committed outcome for the current window, then sorts every possible contribution
 in focus, deferred to the next specification release, or out of scope by design. Read it
 before opening an issue. Everything below assumes you have.
 
-Pull requests fork from and target `integration`, the default branch. `main` takes only
-two kinds of change: a promotion pull request from `integration`, and an editorial fix
-to a file on a short allowlist, this one included. `release/*` branches stabilize a
+Pull requests fork from and target `integration`, the default branch, documentation
+included. `main` takes promotions only: all of `integration` at once, or one merged pull
+request ahead of the next full promotion. `release/*` branches stabilize a
 specification version between `integration` and a tag. Merging to `main` is what
 republishes the site and every schema `$id` under it, which is why specification and
 code changes go through `integration` first.

@@ -127,22 +127,23 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 6. **Open a pull request against `integration`**
 7. **Address review feedback** to land your change
 
-A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
-targets `integration`, and the guard rejects a new page aimed at `main`. A page outside
-`nav` and outside the declared prefixes fails the guards, which the deploy runs before it builds.
+A new page needs a titled `nav` entry in `mkdocs.yml`. A page outside `nav` and outside
+the declared prefixes fails the guards, which the deploy runs before it builds.
 
-`integration` is the default branch, so a pull request opened from the GitHub interface
-already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
-it takes only two kinds of change: a promotion from `integration`, and an editorial
-change to a path on the allowlist below. A guard enforces this and will tell you to
-retarget if you get it wrong.
+Every pull request targets `integration`, documentation included. `integration` is the
+default branch, so a pull request opened from the GitHub interface already targets it.
+`main` publishes the site and all 44 schema `$id` URIs on merge, so it takes promotions
+only, and a guard rejects anything else:
 
-Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.md`,
-`README.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`,
-`SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`. Everything else goes to
-`integration`, including `docs/spec/`, `docs/concepts/`, `docs/identity/`, `mkdocs.yml`,
-`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`. A pull request that adds a
-page is the exception: it also adds a `nav` entry to `mkdocs.yml`, so it targets `integration`.
+- A full promotion merges `integration` into `main`. A project lead opens it.
+- A single pull request promotion publishes one merged pull request before the next full
+  promotion. A project lead runs `uv run python tools/promote_pr.py <number>`, which cuts
+  `promote/pr-<number>` from `main`, copies the `integration` version of every file that
+  pull request changed, and opens a pull request into `main`. The guard passes it only
+  when every changed file matches `integration` exactly, so `main` never holds anything
+  `integration` lacks. When a later pull request edited the same file, its change
+  publishes too, and the promotion's description names it. The roadmap counts the
+  promoted work's issues as delivered at the next full promotion.
 
 For changes to the spec itself (`acs_schema.json`, hooks, events), open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
