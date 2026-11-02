@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -25,7 +27,7 @@ try:
 except ImportError:
     _NAT_OK = False
 
-from acs.client import _handshake
+from acs.client import _exchange, _handshake
 from acs.testing.harness import ProgrammableGuardian, validate_hook_payload
 
 if _NAT_OK:
@@ -298,6 +300,48 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.assertEqual(self._sessions(), [BUILD, RUN[:3] + ["steps/sessionEnd"]])
         [end] = self.guardian.envelopes_for("steps/sessionEnd")
         self.assertEqual(end["params"]["payload"]["reason"], "cancelled")
+
+    def test_a_run_cancelled_during_an_exchange_ends_after_it(self) -> None:
+        """A cancelled call leaves its round trip running in a worker thread; the run's sessionEnd goes out after it."""
+        for held in ("steps/toolCallRequest", "steps/toolCallResult"):
+            with self.subTest(held):
+                self.guardian.reset()
+                entered, release = threading.Event(), threading.Event()
+                send = _exchange._open
+
+                def hold(request, timeout, held=held):
+                    if json.loads(request.data).get("method") == held:
+                        entered.set()
+                        release.wait(5)
+                    return send(request, timeout=timeout)
+
+                async def run() -> int:
+                    config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+                    async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
+                        exporters = {name: c.instance for name, c in builder._telemetry_exporters.items()}
+
+                        async def one() -> None:
+                            manager = ExporterManager.from_exporters(exporters)
+                            async with Runner("first", _Entry(middleware, []), ContextState.get(), manager) as runner:
+                                await runner.result()
+                        with mock.patch.object(_exchange, "_open", hold):
+                            task = asyncio.create_task(one())
+                            for _ in range(500):
+                                if entered.is_set() or task.done():
+                                    break
+                                await asyncio.sleep(0.01)
+                            self.assertTrue(entered.is_set(), self.guardian.methods_seen())
+                            task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await task
+                            # Held past the cancel, so a sessionEnd that did not wait would reach the Guardian first.
+                            threading.Timer(0.3, release.set).start()
+                            await asyncio.wait_for(middleware._lifecycle_sent(), 10)
+                        return len(middleware._runs)
+                self.assertEqual(asyncio.run(run()), 0)
+                [session] = self._sessions()[1:]
+                self.assertEqual(session[-1], "steps/sessionEnd", session)
+                self.assertIn(held, session)
 
     def test_a_denied_session_start_refuses_that_run(self) -> None:
         """hooks.md sessionStart: ALLOW / DENY. A denied run's calls are blocked and nothing more of it is sent."""

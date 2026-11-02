@@ -473,6 +473,10 @@ class _Run:
     ended: bool = False
     decision: Handshake | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # The run's Guardian exchanges still running, and whether its sessionEnd has begun; both under `idle`.
+    in_flight: int = 0
+    closed: bool = False
+    idle: threading.Condition = field(default_factory=threading.Condition)
 
 
 @dataclass(frozen=True)
@@ -719,6 +723,35 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         cancelled = task is not None and (task.cancelled() or task.cancelling() > 0)
         self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "cancelled" if cancelled else "error"}, run=run)
 
+    def _close_run(self, run: str) -> None:
+        """Before the run's sessionEnd: refuse its exchanges from now on, and wait for those already running, which a cancelled call leaves behind."""
+        with self._runs_lock:
+            state = self._runs.get(run)
+        if state is None:
+            return
+        with state.idle:
+            state.closed = True
+            while state.in_flight:
+                state.idle.wait()
+
+    def _exchange(self, request: dict, step: _Step, run: str | None):
+        """A call's round trip, counted so the run's sessionEnd goes out after it; refused once that sessionEnd has begun."""
+        with self._runs_lock:
+            state = self._runs.get(run) if run is not None else None
+        if state is None:
+            return self._round_trip(request, step)
+        with state.idle:
+            if state.closed:
+                return Resolution(False, "session_ended_fail_closed", "session_ended",
+                                  {"session_id": step.session_id, "method": request.get("method", "")})
+            state.in_flight += 1
+        try:
+            return self._round_trip(request, step)
+        finally:
+            with state.idle:
+                state.in_flight -= 1
+                state.idle.notify_all()
+
     def _forget_run(self, run: str | None) -> None:
         """Drop a run once its sessionEnd has been handled, sent or not; no step of it follows."""
         with self._runs_lock:
@@ -757,6 +790,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             # The run's session opens here, and its sessionStart goes out as it does.
             self._step(run, (payload.get("platform_context") or {}).get("workflow_name", ""))
             return
+        if method == "steps/sessionEnd" and run is not None:
+            self._close_run(run)
         step = self._step(run)
         gated = self._acs.gate(step.decision, method)
         if gated is not None:
@@ -818,7 +853,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         detail="ACS_DISABLED=1 — pre_invoke bypassed ungoverned")
             return None
         self._ensure_lifecycle_subscribed()
-        step = await self._step_of(self._current_run())
+        run = self._current_run()
+        step = await self._step_of(run)
         gated = self._acs.gate(step.decision)
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
@@ -842,7 +878,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                                      f"adapter error: {e}"))
         else:
             await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._round_trip, request, step)
+            result = await asyncio.to_thread(self._exchange, request, step, run)
         if isinstance(result, Resolution):
             return self._settle_pre(context, result, step)
         response = result.response
@@ -898,7 +934,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallResult",
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
-        step = await self._step_of(self._current_run())
+        run = self._current_run()
+        step = await self._step_of(run)
         gated = self._acs.gate(step.decision)
         if gated is not None:
             return self._settle_post(context, gated, step)
@@ -925,7 +962,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                                      f"adapter error: {e}"))
         else:
             await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._round_trip, request, step)
+            result = await asyncio.to_thread(self._exchange, request, step, run)
         if isinstance(result, Resolution):
             return self._settle_post(context, result, step)
         response = result.response
