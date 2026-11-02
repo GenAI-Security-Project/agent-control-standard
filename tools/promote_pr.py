@@ -123,6 +123,14 @@ def read_pull(number: int, run: Runner) -> Pull:
     code, _ = run(["git", "merge-base", "--is-ancestor", merge, INTEGRATION], None)
     if not merge or code != 0:
         raise PromotionError(f"PR #{number}'s merge commit is not on integration.")
+    # integration merges by squash, so the merge commit is one commit holding the whole pull
+    # request, with a subject ending in (#N). Any other shape, a rebase merge for instance,
+    # would make merge^1..merge cover only part of the work, so it is refused.
+    subject = must(run, ["git", "log", "-1", "--format=%s", merge], "reading the merge commit").strip()
+    parents = must(run, ["git", "rev-list", "--parents", "-n", "1", merge], "reading the merge commit").split()
+    if not subject.endswith(f"(#{number})") or len(parents) != 2:
+        raise PromotionError(f"PR #{number} was not squash-merged, so its files cannot be read from one "
+                             "commit. Use a full promotion.")
     # The squash commit against its parent is exactly what the pull request changed, read
     # from git with -z so every file name survives intact. No API page limit applies.
     out = must(run, ["git", "diff", "-z", "--name-only", "--no-renames", f"{merge}^1", merge],
@@ -153,6 +161,13 @@ def other_changes(pull: Pull, run: Runner) -> list[str]:
     return subjects
 
 
+NAV_FILE = "mkdocs.yml"
+NAV_WARNING = (
+    "`mkdocs.yml` is copied whole, so its `nav` may list pages that exist only on `integration`. "
+    "The strict docs build on this pull request fails if it does. Then use a full promotion."
+)
+
+
 def single_body(pull: Pull, integration_sha: str, others: list[str]) -> str:
     files = "\n".join(pull.paths)
     carried = "\n".join(f"- {code_span(s)}" for s in others) or "- None"
@@ -167,7 +182,8 @@ def single_body(pull: Pull, integration_sha: str, others: list[str]) -> str:
         f"Files:\n\n```text\n{files}\n```\n\n"
         "Other unpromoted changes on `integration` to these same files, which publish with "
         f"this one:\n\n{carried}\n\n"
-        "The roadmap counts an issue as delivered when its own commit reaches `main` by "
+        + (f"{NAV_WARNING}\n\n" if NAV_FILE in pull.paths else "")
+        + "The roadmap counts an issue as delivered when its own commit reaches `main` by "
         "ancestry, so the issues this work closes show as delivered at the next full "
         "promotion, not at this merge.\n\n"
         "Merge with a merge commit. The person who ran tools/promote_pr.py pushed this "
@@ -265,8 +281,14 @@ def promote_full(dry_run: bool, run: Runner = run_command, workdir: str | None =
         return ("integration already contains main, so the plain promotion from integration merges "
                 "cleanly. Open it with the command the roadmap health issue prints.")
     refuse_existing(branch, run)
-    overridden = nul_paths(must(run, ["git", "diff", "-z", "--name-only", "--no-renames", INTEGRATION, MAIN],
-                                "listing where main differs"))
+    # Where main changed something itself, since the two last shared history, and
+    # integration does not match it. Ordinary new work on integration is not listed.
+    base = must(run, ["git", "merge-base", MAIN, INTEGRATION], "finding the shared history").strip()
+    changed_on_main = set(nul_paths(must(run, ["git", "diff", "-z", "--name-only", "--no-renames", base, MAIN],
+                                         "listing what main changed")))
+    differs = set(nul_paths(must(run, ["git", "diff", "-z", "--name-only", "--no-renames", INTEGRATION, MAIN],
+                                 "listing where main differs")))
+    overridden = sorted(changed_on_main & differs)
 
     with tempfile.TemporaryDirectory(dir=workdir) as scratch:
         tree = str(Path(scratch) / "promote")

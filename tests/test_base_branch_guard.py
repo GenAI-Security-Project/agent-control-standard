@@ -35,7 +35,8 @@ def test_promotion_kinds_inside_this_repository():
     assert promotion_kind("integration", REPO, REPO) == "full"
     assert promotion_kind("promote/full-abc123", REPO, REPO) == "full"
     assert promotion_kind("promote/pr-7", REPO, REPO) == "single"
-    assert promotion_kind("release/v0.2.0", REPO, REPO) == "single"
+    # A release is a pull request into integration plus a full promotion.
+    assert promotion_kind("release/v0.2.0", REPO, REPO) is None
     assert promotion_kind("docs/faq", REPO, REPO) is None
 
 

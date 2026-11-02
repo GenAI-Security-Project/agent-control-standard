@@ -329,16 +329,17 @@ before opening an issue. Everything below assumes you have.
 
 Pull requests fork from and target `integration`, the default branch, documentation
 included. `main` takes promotions only: all of `integration` at once, or one merged pull
-request ahead of the next full promotion. `release/*` branches stabilize a
-specification version between `integration` and a tag. Merging to `main` is what
+request ahead of the next full promotion. A release is a pull request into `integration`
+that bumps the version, then a full promotion, and the merge to `main` tags it. Merging to
+`main` is what
 republishes the site and every schema `$id` under it, which is why every change goes
 through `integration` first.
 
 ```mermaid
 flowchart LR
     FORK["Fork"] --> INT["integration<br/>default branch"]
-    INT --> REL["release/vX.Y.Z<br/>stabilization"]
-    INT -->|"promotion PR"| MAIN["main<br/>publishes site + schema URIs"]
+    REL["release PR<br/>version bump"] --> INT
+    INT -->|"promotion PR"| MAIN["main<br/>publishes site + schema URIs + tag"]
 ```
 
 Every issue starts from one of six forms. There are no blank issues. A form applies a
