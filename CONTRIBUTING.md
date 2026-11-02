@@ -153,7 +153,9 @@ only, and a guard rejects anything else:
   work's issues as delivered at the next full promotion.
 
 Every promotion merges with a merge commit. Whoever pushed its branch last cannot approve
-it, so a different code owner of the changed paths does. To take something off the site,
+it, so a different code owner of the changed paths does. The guard re-runs on its own when
+`main` or `integration` moves. If its last run predates the latest change to either one,
+re-run it before you merge. To take something off the site,
 revert it on `integration` and promote the revert the same way. A full promotion also
 restores anything a single promotion published that `integration` has since reverted.
 

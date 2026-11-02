@@ -294,3 +294,14 @@ def test_the_sync_workflow_is_gone():
     Actions policy forbids, so it failed on every run. Nothing reaches main except a
     promotion now, so there is nothing to sync back."""
     assert not (WORKFLOW.parent / "sync-integration.yml").exists()
+
+
+def test_the_guard_reruns_when_main_or_integration_moves():
+    """The guard reads live tips, so a promotion's green check goes stale when either one
+    moves. A revert on integration would otherwise publish behind that check."""
+    rerun = (WORKFLOW.parent / "rerun-base-guard.yml").read_text(encoding="utf-8")
+    assert 'branches: ["main", "integration"]' in rerun
+    assert "actions: write" in rerun and "contents: write" not in rerun
+    assert "pr-base-guard.yml/runs?event=pull_request_target" in rerun
+    # The head branch is contributor text, so it may reach jq only as --arg data.
+    assert '--arg ref "$ref"' in rerun

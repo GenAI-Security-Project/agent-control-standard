@@ -1,0 +1,53 @@
+# Re-runs the base-branch guard on every open pull request into main whenever main or
+# integration moves.
+#
+# The guard compares a promotion with the live tips of main and integration, so its answer
+# goes stale when either one moves: a change reverted on integration while its promotion
+# waits would otherwise publish behind a green check. The guard's own triggers fire only on
+# events of the pull request itself, and main's required checks are not strict, so nothing
+# else re-asks the question. This workflow does, and it needs only to re-run a workflow,
+# which the organization's Actions policy allows.
+name: Re-run base guard
+
+on:
+  push:
+    branches: ["main", "integration"]
+
+permissions: {}
+
+concurrency:
+  group: rerun-base-guard
+  cancel-in-progress: true
+
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Re-run the guard for each open pull request into main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pulls="$(gh pr list --repo "$REPO" --base main --state open --json number,headRefName \
+            --jq '.[] | [.number, .headRefName] | @tsv')"
+          if [ -z "$pulls" ]; then
+            echo "No open pull request into main."
+            exit 0
+          fi
+          # A pull_request_target run often lists no pull request, so match it by the head
+          # branch it ran for. The newest run comes first.
+          gh api "repos/${REPO}/actions/workflows/pr-base-guard.yml/runs?event=pull_request_target&per_page=100" > runs.json
+          while IFS=$'\t' read -r number ref; do
+            # The branch name is contributor-controlled, so it reaches jq only as --arg data.
+            run_id="$(jq -r --arg ref "$ref" 'first(.workflow_runs[] | select(.head_branch == $ref) | .id) // empty' runs.json)"
+            if [ -z "$run_id" ]; then
+              echo "::warning::No guard run found for pull request ${number}. Re-run its base-branch-guard check by hand before merging."
+              continue
+            fi
+            # A run still in progress cannot be re-run, and it already reads the new tips.
+            gh run rerun "$run_id" --repo "$REPO" || echo "Run ${run_id} for pull request ${number} is still running."
+          done <<< "$pulls"
