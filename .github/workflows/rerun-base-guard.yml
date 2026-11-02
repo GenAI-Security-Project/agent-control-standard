@@ -22,6 +22,8 @@ concurrency:
 jobs:
   rerun:
     runs-on: ubuntu-latest
+    # A guard run takes under a minute. Waiting on one must not hang the job.
+    timeout-minutes: 15
     permissions:
       actions: write
       pull-requests: read
@@ -40,7 +42,8 @@ jobs:
           fi
           # A pull_request_target run often lists no pull request, so match it by the head
           # commit it judged and the repository that commit came from. Newest run first.
-          gh api "repos/${REPO}/actions/workflows/pr-base-guard.yml/runs?event=pull_request_target&per_page=100" > runs.json
+          gh api --paginate "repos/${REPO}/actions/workflows/pr-base-guard.yml/runs?event=pull_request_target&per_page=100" \
+            --jq '.workflow_runs[]' | jq -s '{workflow_runs: .}' > runs.json
           # GitHub refuses to re-run a run older than 30 days. Leave a day of margin.
           cutoff="$(date -u -d '29 days ago' +%Y-%m-%dT%H:%M:%SZ)"
           stuck=""
@@ -49,13 +52,15 @@ jobs:
             run="$(jq -c --arg sha "$sha" --arg repo "$REPO" \
               'first(.workflow_runs[] | select(.head_sha == $sha and .head_repository.full_name == $repo)) // empty' runs.json)"
             if [ -z "$run" ]; then
-              echo "::warning::No guard run found for pull request ${number}. Close and reopen it to run the guard."
+              echo "::error::Pull request ${number}: no guard run exists for its head. Close and reopen it before merging, which runs the guard."
+              stuck="${stuck} ${number}"
               continue
             fi
             run_id="$(jq -r '.id' <<< "$run")"
+            # A run in progress may have read main and integration before this push. Let it
+            # finish, then re-run it so the answer reflects the new tips.
             if [ "$(jq -r '.status' <<< "$run")" != "completed" ]; then
-              echo "Run ${run_id} for pull request ${number} is still running, and it already reads the new tips."
-              continue
+              gh run watch "$run_id" --repo "$REPO" > /dev/null || true
             fi
             if [[ "$(jq -r '.run_started_at // .created_at' <<< "$run")" < "$cutoff" ]] || ! gh run rerun "$run_id" --repo "$REPO"; then
               echo "::error::Pull request ${number}: the guard could not be re-run. Close and reopen it before merging, which runs the guard again."

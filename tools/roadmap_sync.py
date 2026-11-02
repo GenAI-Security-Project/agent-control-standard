@@ -652,9 +652,16 @@ def _snapshot(gh: GitHub, git, today: date, failed: list[str]) -> dict:
     try:
         pending = promotion_pending(git)
         if pending is not None:
-            owner = model.REPO.split("/", 1)[0]
-            pulls = gh.get(f"{base}/pulls?state=open&base=main&head={owner}:integration&per_page=10")
-            numbers = sorted(int(pull["number"]) for pull in pulls if isinstance(pull, dict) and "number" in pull)
+            # A full promotion comes from integration itself or from a promote/full-*
+            # branch that tools/promote_pr.py --full builds when the plain merge conflicts.
+            pulls = gh.get(f"{base}/pulls?state=open&base=main&per_page=100")
+            numbers = sorted(
+                int(pull["number"]) for pull in pulls
+                if isinstance(pull, dict) and "number" in pull
+                and (pull.get("head") or {}).get("repo", {}).get("full_name", "").casefold() == model.REPO.casefold()
+                and ((pull.get("head") or {}).get("ref") == "integration"
+                     or str((pull.get("head") or {}).get("ref", "")).startswith("promote/full-"))
+            )
             snapshot["promotion"] = [pending[0], pending[1], numbers[0] if numbers else None]
     except (SyncError, ValueError, TypeError):
         failed.append("promotion")

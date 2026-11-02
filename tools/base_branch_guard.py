@@ -9,9 +9,12 @@ history, because that result is what publishes:
   tools/promote_pr.py builds when the plain merge would conflict. After the merge,
   `main`'s whole tree must equal `integration`'s. That also catches a change reverted on
   `integration` after it reached `main` some other way, because the merge would keep it.
-- A single pull request promotion, from a `promote/*` or `release/*` branch. Every path
-  the merge changes must equal `integration`, and release files are refused, because a
-  release goes through a full promotion.
+- A single pull request promotion, from a `promote/*` branch. Every path the merge
+  changes must equal `integration`, and release files are refused, because a release goes
+  through a full promotion.
+
+A release is a pull request into `integration` that bumps the version, then a full
+promotion, so no `release/*` branch targets `main`.
 
 Every other pull request into `main` fails, forks included. The documentation lane that
 once let editorial pull requests target `main` was removed on 2026-11-01: every change
@@ -35,7 +38,7 @@ PUBLISHING_BRANCH = "main"
 
 FULL_HEADS = frozenset({"integration"})
 FULL_PREFIX = "promote/full-"
-SINGLE_PREFIXES = ("promote/", "release/")
+SINGLE_PREFIX = "promote/"
 
 # A release bumps these together, and tag-release.yml tags main when version.txt changes.
 # Promoting them alone would tag a main that lacks the release's other work.
@@ -65,7 +68,7 @@ def promotion_kind(head_ref: str, head_repo: str, base_repo: str) -> str | None:
         return None
     if head_ref in FULL_HEADS or head_ref.startswith(FULL_PREFIX):
         return "full"
-    if head_ref.startswith(SINGLE_PREFIXES):
+    if head_ref.startswith(SINGLE_PREFIX):
         return "single"
     return None
 
@@ -157,9 +160,10 @@ def decide(
             return 1, (
                 f"After this merge `{PUBLISHING_BRANCH}` would still differ from "
                 f"`integration` at:\n{listing(result.differing)}\n\n"
-                f"`{PUBLISHING_BRANCH}` holds content `integration` lacks there, usually a "
-                "change reverted on `integration` after it was promoted. A project lead runs "
-                "`uv run python tools/promote_pr.py --full`, which makes `integration` win."
+                "Either `integration` moved after this branch was built, or "
+                f"`{PUBLISHING_BRANCH}` holds content `integration` has since changed or "
+                "reverted. A project lead runs `uv run python tools/promote_pr.py --full`, "
+                "which builds a fresh branch that makes `integration` win."
             )
         return 1, (
             "A single pull request promotion may carry only content `integration` already "

@@ -1,10 +1,9 @@
 # Fails a pull request that has a commit with no Signed-off-by line, which CONTRIBUTING.md
 # requires. pull_request gives a fork a read-only token, and the job reads commit messages
 # with git, so nothing from the pull request runs. It prints commit hashes only, because a
-# commit message could carry a workflow command. Bots cannot certify the DCO. main,
-# integration, and promote/full-* are skipped as heads because their commits already landed
-# on integration and cannot be rewritten, so one old commit would block a full promotion
-# for good. A promote/full-* branch adds one merge commit, which tools/promote_pr.py signs.
+# commit message could carry a workflow command. Bots cannot certify the DCO. main and
+# integration are skipped as heads because their commits already landed and cannot be
+# rewritten, so one old commit would block the sync and promotion pull requests for good.
 name: DCO
 
 on:
@@ -18,8 +17,7 @@ jobs:
     if: >-
       github.event.pull_request.user.type != 'Bot' &&
       !(github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.head.ref == 'main' || github.event.pull_request.head.ref == 'integration' ||
-      startsWith(github.event.pull_request.head.ref, 'promote/full-')))
+      (github.event.pull_request.head.ref == 'main' || github.event.pull_request.head.ref == 'integration'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -1,7 +1,7 @@
 """Promotions, against a real git origin with GitHub faked.
 
 GitHub is the only thing faked. Every git step runs for real against a local bare
-repository standing in for origin, so the tests show what the branch actually contains,
+repository standing in for origin, so the tests show what the branch contains,
 not what the script meant to do.
 """
 
@@ -280,6 +280,22 @@ def test_the_post_commit_check_catches_a_file_the_pull_request_never_touched(ori
     assert not any(c[1:3] == ["pr", "create"] for c in calls)
 
 
+def test_refuses_a_merge_commit_that_is_not_this_pull_requests_squash(origin):
+    """A rebase merge leaves the last commit as merge_commit_sha, which holds only part of
+    the work. Its subject does not end in the pull request number."""
+    sha = on_integration(origin["clone"], {"c.md": "c\n"}, "Part three of a rebase merge")
+    with pytest.raises(PromotionError, match="squash-merged"):
+        promote_single(18, False, fake_github({18: meta(sha)}, []))
+
+
+def test_warns_when_mkdocs_yml_is_copied_whole(origin):
+    sha = on_integration(origin["clone"], {"mkdocs.yml": "nav: []\n"}, "Add a nav (#19)")
+    calls = []
+    promote_single(19, False, fake_github({19: meta(sha)}, calls))
+    body = created(calls)[created(calls).index("--body") + 1]
+    assert promote_pr.NAV_WARNING in body
+
+
 # ---- full promotion ------------------------------------------------------------------------
 
 
@@ -296,7 +312,7 @@ def single_promoted_then_edited_again(origin) -> None:
     git(clone, "fetch", "-q", "origin")
     code = subprocess.run(["git", "-C", str(bare), "merge-tree", "--write-tree", "main", "integration"],
                           capture_output=True).returncode
-    assert code == 1  # the plain promotion really does conflict
+    assert code == 1  # the plain promotion conflicts
 
 
 def test_full_promotion_makes_main_equal_integration_where_the_plain_merge_conflicts(origin):
@@ -316,7 +332,9 @@ def test_full_promotion_makes_main_equal_integration_where_the_plain_merge_confl
         return done.returncode, done.stdout
     assert check("full", "main", branch, "integration", bare_run).differing == []
     body = created(calls)[created(calls).index("--body") + 1]
-    assert "a.md" in body
+    listed = body.split("```text\n", 1)[1].split("\n```", 1)[0].splitlines()
+    # Only where main changed something integration does not match, not new integration work.
+    assert listed == ["a.md"]
 
 
 def test_full_promotion_says_so_when_the_plain_promotion_is_enough(origin):
