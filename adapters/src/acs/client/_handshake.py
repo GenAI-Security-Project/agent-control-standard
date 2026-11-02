@@ -57,6 +57,13 @@ def _handshake_cache_path(session_id: str, guardian_url: str, directory: Path | 
     return (directory or _HANDSHAKE_CACHE_DIR) / f"{key}.json"
 
 
+def discard_session(session_id: str, guardian_url: str) -> None:
+    path = _handshake_cache_path(session_id, guardian_url)
+    for record in (path, Path(f"{path}.started"), Path(f"{path}.lock")):
+        with contextlib.suppress(OSError):
+            record.unlink()
+
+
 def open_session(*, config: Config, session_id: str | None, agent_id: str, platform: str,
                  methods_implemented: list[str], wrapped_protocols: list[str] | None = None,
                  timeout: float | None = None, profiles_supported: list[str] | None = None,

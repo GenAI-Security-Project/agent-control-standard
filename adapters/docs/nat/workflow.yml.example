@@ -25,7 +25,7 @@ middleware:
     guardian_url: http://127.0.0.1:8787/acs
     default_deny: true
     timeout_s: 5.0
-    # session_id is auto-generated per process if omitted
+    # session_id is auto-generated per process if omitted; each NAT run's session derives from it
     # target_function_or_group: my_tools
 
 function_groups:

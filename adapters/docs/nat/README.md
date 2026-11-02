@@ -14,7 +14,7 @@ NAT exposes a `FunctionMiddleware` abstraction that wraps any function — tools
 6. Applies the verdict: `allow` passes through; `deny` raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP` on NAT releases that expose it); `modify` mutates `context.modified_kwargs`; `ask`/`defer` substitute to deny at the middleware boundary.
 7. Records a `steps/toolCallResult` envelope in `post_invoke` and redacts the output on deny.
 
-The handshake/hello fires once per session, cached in process state so subsequent events skip the round-trip.
+Each NAT run is its own ACS session, with a `session_id` derived from the configured one and the run; its `handshake/hello` fires once, at the run's start, and the decision is kept in process state for the run's calls. A call outside any NAT run uses the configured `session_id` (`mapping.md`).
 
 Independently of the middleware path, the adapter reports each run's `WORKFLOW_START` / `WORKFLOW_END` events as `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). A run that raises or is cancelled reaches no workflow end, so it sends no `agentResponse`, and its `sessionEnd` carries `reason: error` or `cancelled` (see `mapping.md`). A Guardian that denies a run's `sessionStart` refuses that run's calls. When NAT builds the middleware, it registers an `acs_lifecycle` telemetry exporter, which NAT starts for every run before `WORKFLOW_START`. A middleware built without NAT's builder subscribes on each run's first call instead, so it reports that run from the call on. **Apart from the run's `sessionStart` decision, which the middleware applies to the run's calls, the lifecycle stream is observation-only.** Enforcement is the middleware path's job.
 
@@ -262,7 +262,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
 | `default_deny` | `false` | Fail-open with audit (§6.4 default). Set `true` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
 | `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config` replaces it for the session, per method where `per_method_ms` names one. |
-| `session_id` | (auto, per-process) | UUID; auto-generated and stable for the process lifetime. |
+| `session_id` | (auto, per-process) | UUID; auto-generated and stable for the process lifetime. Calls outside a NAT run use it; each run's own `session_id` is derived from it. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
 ### Environment variables (read by the adapter at runtime)
@@ -283,7 +283,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 
 ## On-disk state
 
-NAT runs the adapter in-process. The middleware keeps its session's handshake decision in memory and stores it in `~/.cache/acs-adapter-handshake/` like the other adapters, so a restarted process with the same `session_id` follows the same decision, and a new session handshakes again. The Guardian-side state (`~/.cache/acs-guardian-state/<sha256(session_id)>.json`) is the same as for the other adapters — chain head + replay set, survives Guardian restart.
+NAT runs the adapter in-process. The middleware keeps each session's handshake decision in memory and stores it in `~/.cache/acs-adapter-handshake/` like the other adapters, so a restarted process with the same `session_id` follows the same decision, and a new session handshakes again. A run's records are removed once its `sessionEnd` has been handled. The Guardian-side state (`~/.cache/acs-guardian-state/<sha256(session_id)>.json`) is the same as for the other adapters — chain head + replay set, survives Guardian restart.
 
 ## Conformance status
 
@@ -291,7 +291,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 
 | ACS-Core item | Status |
 |---|---|
-| Handshake (`handshake/hello`) | ✓ on the first `pre_invoke`; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1) |
+| Handshake (`handshake/hello`) | ✓ once per session: each NAT run's at its start, and the configured session's when NAT builds the middleware; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1) |
 | Profiles (`profiles_supported` / `profiles_accepted`) | ✓ always claims `acs-core`: the middleware refuses a session with no usable secret and label before the handshake. A ServerHello accepting a profile the adapter did not claim is not a valid answer, a claimed profile the Guardian leaves out is audited as `profile_not_accepted`, and a hook's `ACS_REQUIRE_PROFILES` turns a left-out profile into a refusal of that hook's steps. |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema (`test_envelope_schema.py`) |
 | Hook taxonomy (Core minimum set) | ⚠ emitted, but read the enforcement split. **Decision-eligible** coverage: `toolCallRequest` / `toolCallResult`, via the `FunctionMiddleware` path — these can actually block/redact. `sessionStart` (ALLOW / DENY) is applied too: a deny refuses the run's calls. The other three — `userMessage`, `agentResponse`, `sessionEnd` — are emitted **observation-only** from the `IntermediateStepManager` subscription (fire-and-forget; the Guardian's verdict is not applied), so they provide audit/trace coverage, **not** enforcement, and should not be counted as decision-eligible Core coverage. ACS-Core requires a subagent-capable client to emit `subagentStart` when it spawns a sub-agent, and a framework with no sub-agent abstraction has nothing to emit. The adapter emits no `subagentStart`: nested workflow functions reach the Guardian as generic tool calls. The Guardian decides by deployment-defined means whether a NAT deployment counts as subagent-capable. Where sub-workflows act as sub-agents, this is a known gap. See `mapping.md`. Verified in `test_lifecycle.py`. |

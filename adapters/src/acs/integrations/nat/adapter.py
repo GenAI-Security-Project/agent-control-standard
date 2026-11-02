@@ -57,7 +57,7 @@ import uuid
 import weakref
 from collections.abc import Callable
 from concurrent.futures import Future
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from typing import Any, Optional
 
 from acs import __version__
@@ -74,9 +74,9 @@ try:
         Undecided,
         audit_event,
         audit_modify_unsupported,
+        discard_session,
         open_session,
         round_trip,
-        session_start_outcome,
     )
     from acs.core import (
         method_evaluated,
@@ -188,7 +188,7 @@ if _NAT_AVAILABLE:
         )
         session_id: Optional[str] = Field(
             default=None,
-            description="Session id sent on every request. Auto-generated per-process if absent. Coerced to UUID format.",
+            description="Session id of calls outside a NAT run; each run's own session id derives from it. Auto-generated per-process if absent. Coerced to UUID format.",
         )
         timeout_s: float = Field(
             default=5.0,
@@ -467,10 +467,21 @@ atexit.register(lambda: [sender.close() for sender in list(_OPEN_SENDERS)])
 
 @dataclass
 class _Run:
-    """One NAT run: the task running it, whether its sessionEnd is queued, and its decision after sessionStart."""
+    """One NAT run, which is its own ACS session: the task running it, whether its sessionEnd is queued, and the session's decision."""
+    session_id: str
     task: asyncio.Task | None = None
     ended: bool = False
-    outcome: Handshake | None = None
+    decision: Handshake | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+@dataclass(frozen=True)
+class _Step:
+    """The session a step belongs to: its id, the handshake's decision, and what that handshake negotiated."""
+    session_id: str
+    decision: Handshake
+    server_hello: dict | None
+    posture: FailPosture
 
 
 class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
@@ -527,32 +538,30 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 self._session = self._open_session()
         return self._session
 
-    def _open_session(self) -> Handshake:
+    @staticmethod
+    def _methods() -> list[str]:
         methods = ["steps/toolCallRequest", "steps/toolCallResult"]
         if _HAS_LIFECYCLE:
             methods += [
                 "steps/sessionStart", "steps/userMessage",
                 "steps/agentResponse", "steps/sessionEnd",
             ]
+        return methods
+
+    def _open_session(self) -> Handshake:
         # The stored decision keeps the session's gate across middleware instances and processes.
         session = open_session(
             config=self._acs,
             session_id=self._session_id,
             agent_id=self._agent_id,
             platform="nat",
-            methods_implemented=methods,
+            methods_implemented=self._methods(),
         )
         if isinstance(session, Negotiated):
             # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
             self._posture = self._posture.negotiated(session.server_hello)
             self._server_hello = dict(session.server_hello)
         return session
-
-    async def _session_decision(self) -> Handshake:
-        """The session's decision, opened off the event loop when the builder has not opened it yet."""
-        if self._session is not None:
-            return self._session
-        return await asyncio.to_thread(self._ensure_handshake)
 
     async def _lifecycle_sent(self) -> None:
         """Wait until the lifecycle hooks NAT reported earlier have gone out, so the Guardian sees steps in event order."""
@@ -585,12 +594,15 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             except Exception:  # noqa: BLE001
                 # No active Context; function-call hooks still fire via FunctionMiddleware.
                 return
+            run = self._current_run()
             try:
+                # NAT completes a run's stream when the run ends, whether or not it pushed WORKFLOW_END.
                 mgr.subscribe(
                     on_next=self._on_intermediate_step,
                     on_error=lambda e: audit_event(
                         "lifecycle_subscription_error",
                         session_id=self._session_id, error=str(e)),
+                    on_complete=lambda: self._run_stopped(run),
                 )
                 self._lifecycle_streams.add(stream)
             except Exception as e:  # noqa: BLE001
@@ -632,16 +644,61 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 "steps/sessionEnd",
                 payload={"reason": "completed"}, run=run)
 
-    def _track_run(self, run: str | None) -> None:
-        """Record a run at its WORKFLOW_START, which NAT pushes in the task running it."""
-        if run is None:
-            return
+    def _run_session_id(self, run: str) -> str:
+        """Each NAT run is its own ACS session, named from the configured session and the run."""
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"acs-nat-run:{self._session_id}:{run}"))
+
+    def _run_state(self, run: str) -> _Run:
+        """The run's state, created by its WORKFLOW_START or, for a run seen from its first call, by that call."""
         try:
             task = asyncio.current_task()
         except RuntimeError:
             task = None
         with self._runs_lock:
-            self._runs[run] = _Run(task=task)
+            state = self._runs.get(run)
+            if state is None:
+                state = self._runs[run] = _Run(session_id=self._run_session_id(run))
+            if state.task is None:
+                state.task = task
+            return state
+
+    def _track_run(self, run: str | None) -> None:
+        """Record a run at its WORKFLOW_START, which NAT pushes in the task running it."""
+        if run is not None:
+            self._run_state(run)
+
+    def _step(self, run: str | None, workflow_name: str = "") -> _Step:
+        """The session a step belongs to: the run's own, opened with its sessionStart, or the middleware's for a step outside any run."""
+        if run is None:
+            decision = self._ensure_handshake()
+            return _Step(self._session_id, decision, self._server_hello, self._posture)
+        state = self._run_state(run)
+        with state.lock:
+            if state.decision is None:
+                state.decision = open_session(
+                    config=self._acs, session_id=state.session_id, agent_id=self._agent_id, platform="nat",
+                    methods_implemented=self._methods(),
+                    start=lambda session: self._send_session_start(run, state.session_id, session, workflow_name))
+            decision = state.decision
+        if isinstance(decision, Negotiated):
+            # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
+            return _Step(state.session_id, decision, dict(decision.server_hello),
+                         self._acs.posture.negotiated(decision.server_hello))
+        return _Step(state.session_id, decision, None, self._acs.posture)
+
+    def _send_session_start(self, run: str, session_id: str, session: Negotiated, workflow_name: str):
+        """The run's one sessionStart, sent as its session opens (hooks.md sessionStart: ALLOW / DENY)."""
+        if not method_evaluated(session.server_hello, "steps/sessionStart"):
+            audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session_id)
+            return None
+        request = request_envelope("steps/sessionStart", request_id=str(uuid.uuid4()),
+                                   metadata=self._metadata(session_id),
+                                   payload={"platform_context": {"workflow_name": workflow_name}})
+        result = round_trip(request, guardian_url=self._acs.guardian_url,
+                            posture=self._acs.posture.negotiated(session.server_hello), session_id=session_id)
+        if isinstance(result, Resolution):
+            self._count_failure(result, run)
+        return result
 
     def _end_run(self, run: str | None) -> bool:
         """Mark the run's sessionEnd as queued; False only when a tracked run's already was."""
@@ -662,18 +719,13 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         cancelled = task is not None and (task.cancelled() or task.cancelling() > 0)
         self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "cancelled" if cancelled else "error"}, run=run)
 
-    def _run_gate(self, run: str | None) -> Resolution | None:
-        """How a step of the run ends without the Guardian once its sessionStart was denied, refused, or got no decision."""
-        with self._runs_lock:
-            state = self._runs.get(run)
-            outcome = state.outcome if state is not None else None
-        return self._acs.gate(outcome) if outcome is not None else None
-
     def _forget_run(self, run: str | None) -> None:
         """Drop a run once its sessionEnd has been handled, sent or not; no step of it follows."""
         with self._runs_lock:
-            self._runs.pop(run, None)
+            state = self._runs.pop(run, None)
         self._take_failure_counts(run)
+        if state is not None:
+            discard_session(state.session_id, self._acs.guardian_url)
 
     def _queue_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
         """Hand a lifecycle hook of a run to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
@@ -701,43 +753,31 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             audit_event("acs_disabled_bypass", session_id=self._session_id, method=method,
                         detail="ACS_DISABLED=1 — lifecycle hook not sent")
             return
-        gated = self._acs.gate(self._ensure_handshake())
+        if method == "steps/sessionStart" and run is not None:
+            # The run's session opens here, and its sessionStart goes out as it does.
+            self._step(run, (payload.get("platform_context") or {}).get("workflow_name", ""))
+            return
+        step = self._step(run)
+        gated = self._acs.gate(step.decision, method)
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
             audit_event(gated.audit_type, **{**gated.fields, "cause": gated.cause,
-                                             "session_id": self._session_id, "method": method})
+                                             "session_id": step.session_id, "method": method})
             return
-        if not method_evaluated(self._server_hello, method):
+        if not method_evaluated(step.server_hello, method):
             audit_event("method_not_evaluated", method=method,
-                        session_id=self._session_id)
-            return
-        gated = self._run_gate(run)
-        if gated is not None:
-            audit_event(gated.audit_type, **{**gated.fields, "cause": gated.cause,
-                                             "session_id": self._session_id, "method": method})
+                        session_id=step.session_id)
             return
         if method == "steps/sessionEnd":
             # Built as it is sent, so it counts the failures of every hook sent before it.
             payload = {**payload, "summary": {"decision_failures": self._take_failure_counts(run)}}
-        request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(),
+        request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(step.session_id),
                                    payload=payload)
-        result = self._round_trip(request)
-        if method == "steps/sessionStart":
-            self._record_start(run, result)
-        elif isinstance(result, Resolution):
-            audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
-                                                    "method": method, "session_id": self._session_id})
+        result = self._round_trip(request, step)
         if isinstance(result, Resolution):
+            audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
+                                                    "method": method, "session_id": step.session_id})
             self._count_failure(result, run)
-
-    def _record_start(self, run: str | None, result) -> None:
-        """Keep the run's decision after its sessionStart, so the run's later steps follow it (hooks.md sessionStart: ALLOW / DENY)."""
-        outcome = session_start_outcome(Negotiated(self._server_hello or {}), result, session_id=self._session_id,
-                                        guardian_url=self._acs.guardian_url)
-        with self._runs_lock:
-            state = self._runs.get(run)
-            if state is not None:
-                state.outcome = outcome
 
     def _correlation_request_id(self, context) -> str:
         """A uuid4 per invocation, stable from pre_invoke to post_invoke: stashed on the context, else in a WeakKeyDictionary, since id() repeats after GC."""
@@ -777,19 +817,16 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallRequest",
                         detail="ACS_DISABLED=1 — pre_invoke bypassed ungoverned")
             return None
-        gated = self._acs.gate(await self._session_decision())
         self._ensure_lifecycle_subscribed()
-        if gated is None:
-            # The run's sessionStart, reported before this call, decides whether the run's calls go out.
-            await self._lifecycle_sent()
-            gated = self._run_gate(self._current_run())
+        step = await self._step_of(self._current_run())
+        gated = self._acs.gate(step.decision)
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
-            return self._settle_pre(context, gated, f"{gated.label} ({gated.cause})")
-        if not method_evaluated(self._server_hello, "steps/toolCallRequest"):
+            return self._settle_pre(context, gated, step, f"{gated.label} ({gated.cause})")
+        if not method_evaluated(step.server_hello, "steps/toolCallRequest"):
             # ALLOW-by-default (handshake.json): the call proceeds unsent.
             audit_event("method_not_evaluated", method="steps/toolCallRequest",
-                        session_id=self._session_id)
+                        session_id=step.session_id)
             return None
         correlation_id = self._correlation_request_id(context)
         try:
@@ -798,15 +835,16 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 tool_name=context.function_context.name,
                 tool_arguments=_extract_arguments(context),
                 request_id=correlation_id,
+                session_id=step.session_id,
             )
         except Exception as e:  # noqa: BLE001
-            result = self._posture.resolve(Undecided("adapter_exception", {"error": str(e)},
+            result = step.posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
         else:
             await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._round_trip, request)
+            result = await asyncio.to_thread(self._round_trip, request, step)
         if isinstance(result, Resolution):
-            return self._settle_pre(context, result)
+            return self._settle_pre(context, result, step)
         response = result.response
 
         decision = normalize_decision((response or {}).get("result"))
@@ -819,15 +857,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             violation = modify_composition_violation(decision.modifications)
             if violation:
                 audit_event("modify_composition_invalid",
-                            session_id=self._session_id,
+                            session_id=step.session_id,
                             method="steps/toolCallRequest", detail=violation)
                 return self._block(
                     context,
                     f"MODIFY refused ({violation}); failing closed per §6.3:146")
             if decision.modifications.get("redactions"):
-                # NAT has no JSON-Pointer redaction primitive; applying only
-                # parameter_overrides would drop part of the compound decision.
-                audit_modify_unsupported("redactions", session_id=self._session_id,
+                # NAT has no redaction primitive, and applying only the overrides would drop part of the decision.
+                audit_modify_unsupported("redactions", session_id=step.session_id,
                                          method="steps/toolCallRequest")
                 return self._block(
                     context, "MODIFY refused: NAT cannot apply the requested "
@@ -836,7 +873,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             if isinstance(overrides, dict):
                 _apply_overrides_to_context(context, overrides)
                 return context
-            audit_modify_unsupported("no parameter_overrides object", session_id=self._session_id,
+            audit_modify_unsupported("no parameter_overrides object", session_id=step.session_id,
                                      method="steps/toolCallRequest")
             return self._block(context, f"MODIFY substituted to DENY: {decision.reasoning}")
         if decision.disposition in ("ask", "defer"):
@@ -847,7 +884,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         # basis is tracked in issue #32.
         audit_event("unusable_disposition",
                     disposition=decision.disposition or "(missing)",
-                    session_id=self._session_id,
+                    session_id=step.session_id,
                     method="steps/toolCallRequest")
         return self._block(
             context,
@@ -861,21 +898,19 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallResult",
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
-        gated = self._acs.gate(await self._session_decision())
-        if gated is None:
-            await self._lifecycle_sent()
-            gated = self._run_gate(self._current_run())
+        step = await self._step_of(self._current_run())
+        gated = self._acs.gate(step.decision)
         if gated is not None:
-            return self._settle_post(context, gated)
-        if not method_evaluated(self._server_hello, "steps/toolCallResult"):
+            return self._settle_post(context, gated, step)
+        if not method_evaluated(step.server_hello, "steps/toolCallResult"):
             audit_event("method_not_evaluated", method="steps/toolCallResult",
-                        session_id=self._session_id)
+                        session_id=step.session_id)
             return None
         # request_id_ref correlates the result with its originating
         # toolCallRequest (tool-call-result.json:19-23); an unsent request
         # is never cited.
         correlation_id = self._correlation_request_id(context)
-        request_sent = method_evaluated(self._server_hello, "steps/toolCallRequest")
+        request_sent = method_evaluated(step.server_hello, "steps/toolCallRequest")
         try:
             request = self._build_request(
                 method="steps/toolCallResult",
@@ -883,15 +918,16 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 tool_arguments=_extract_arguments(context),
                 result=context.output,
                 request_id_ref=correlation_id if request_sent else None,
+                session_id=step.session_id,
             )
         except Exception as e:  # noqa: BLE001
-            result = self._posture.resolve(Undecided("adapter_exception", {"error": str(e)},
+            result = step.posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
         else:
             await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._round_trip, request)
+            result = await asyncio.to_thread(self._round_trip, request, step)
         if isinstance(result, Resolution):
-            return self._settle_post(context, result)
+            return self._settle_post(context, result, step)
         response = result.response
 
         decision = normalize_decision((response or {}).get("result"))
@@ -900,7 +936,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             _redact_output(context)
             audit_event("post_invoke_redacted",
                         cause="guardian_deny",
-                        session_id=self._session_id,
+                        session_id=step.session_id,
                         method="steps/toolCallResult",
                         reasoning=decision.reasoning or "output redacted by Guardian")
             return context
@@ -908,37 +944,36 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             violation = modify_composition_violation(decision.modifications)
             if violation:
                 audit_event("modify_composition_invalid",
-                            session_id=self._session_id,
+                            session_id=step.session_id,
                             method="steps/toolCallResult", detail=violation)
                 _redact_output(context)
                 audit_event("post_invoke_redacted",
                             cause="modify_composition_invalid",
-                            session_id=self._session_id,
+                            session_id=step.session_id,
                             method="steps/toolCallResult")
                 return context
             modified_content = decision.modifications.get("modified_content")
             if modified_content is not None:
                 context.output = modified_content
                 return context
-            # A structured MODIFY on a result cannot be realized generically;
-            # redact the whole result rather than silently ignore the Guardian.
-            audit_modify_unsupported("structured edits on a tool result", session_id=self._session_id,
+            # A structured MODIFY on a result has no generic form, so the whole result is withheld.
+            audit_modify_unsupported("structured edits on a tool result", session_id=step.session_id,
                                      method="steps/toolCallResult")
             _redact_output(context)
             audit_event("post_invoke_redacted",
                         cause="modify_unapplied_structured_edits",
-                        session_id=self._session_id,
+                        session_id=step.session_id,
                         method="steps/toolCallResult")
             return context
         if not decision.known:
             audit_event("unusable_disposition",
                         disposition=decision.disposition or "(missing)",
-                        session_id=self._session_id,
+                        session_id=step.session_id,
                         method="steps/toolCallResult")
             _redact_output(context)
             audit_event("post_invoke_redacted",
                         cause="unusable_disposition",
-                        session_id=self._session_id,
+                        session_id=step.session_id,
                         method="steps/toolCallResult",
                         decision=decision.disposition)
             return context
@@ -946,13 +981,22 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
     # ----- helpers -----
 
-    def _round_trip(self, request: dict):
-        return round_trip(request, guardian_url=self._acs.guardian_url, posture=self._posture,
-                          session_id=self._session_id)
+    def _round_trip(self, request: dict, step: _Step):
+        return round_trip(request, guardian_url=self._acs.guardian_url, posture=step.posture,
+                          session_id=step.session_id)
 
-    def _metadata(self) -> dict[str, Any]:
+    async def _step_of(self, run: str | None) -> _Step:
+        """A call's session, opened off the event loop after the run's lifecycle hooks reported before the call, so the run's sessionStart carries its workflow's name."""
+        if run is not None:
+            self._run_state(run)
+            await self._lifecycle_sent()
+        elif self._session is not None:
+            return _Step(self._session_id, self._session, self._server_hello, self._posture)
+        return await asyncio.to_thread(self._step, run)
+
+    def _metadata(self, session_id: str | None = None) -> dict[str, Any]:
         """The envelope metadata every step of this middleware carries."""
-        return {"agent_id": self._agent_id, "session_id": self._session_id,
+        return {"agent_id": self._agent_id, "session_id": session_id or self._session_id,
                 "platform": "nat", "adapter_version": ADAPTER_VERSION}
 
     @staticmethod
@@ -982,22 +1026,21 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         with self._decision_failures_lock:
             return dict(self._decision_failures.pop(run, {}))
 
-    def _settle_pre(self, context, resolution: Resolution, message: str = ""):
-        """Settle a pre_invoke step without a usable decision: block unless the resolution proceeds, and record why."""
+    def _settle_pre(self, context, resolution: Resolution, step: _Step, message: str = ""):
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
-                                              "session_id": self._session_id,
+                                              "session_id": step.session_id,
                                               "method": "steps/toolCallRequest"})
         self._count_failure(resolution, self._current_run())
         if resolution.proceed:
             return None
         return self._block(context, message or resolution.message or resolution.cause)
 
-    def _settle_post(self, context, resolution: Resolution):
+    def _settle_post(self, context, resolution: Resolution, step: _Step):
         """Settle a post_invoke step without a usable decision: redact the output the Guardian never vetted unless the resolution lets it through, and record why."""
         if not resolution.proceed:
             _redact_output(context)
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
-                                              "session_id": self._session_id,
+                                              "session_id": step.session_id,
                                               "method": "steps/toolCallResult"})
         self._count_failure(resolution, self._current_run())
         return None if resolution.proceed else context
@@ -1018,8 +1061,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         result: Any = None,
         request_id: str | None = None,
         request_id_ref: str | None = None,
+        session_id: str | None = None,
     ) -> dict:
-        """Build an ACS request envelope matching request-envelope.json; the round trip signs it."""
         if method == "steps/toolCallRequest":
             payload: dict[str, Any] = {
                 "tool": {"name": tool_name},
@@ -1041,9 +1084,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 payload["request_id_ref"] = request_id_ref
 
         return request_envelope(method, request_id=request_id or str(uuid.uuid4()),
-                                metadata=self._metadata(), payload=payload)
+                                metadata=self._metadata(session_id), payload=payload)
 
-# ----- NAT registration -----
 
 if _NAT_AVAILABLE and _HAS_REGISTRATION:
     @register_middleware(config_type=ACSMiddlewareConfig)  # type: ignore[misc]

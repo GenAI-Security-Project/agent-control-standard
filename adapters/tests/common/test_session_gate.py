@@ -556,6 +556,29 @@ class SessionGateThroughHooks(unittest.TestCase):
                     self.assertEqual(payload["summary"]["decision_failures"], {"timeout": 1})
                     self.assertEqual(validate_hook_payload(payload, "session-end.json"), [])
 
+    def test_a_fail_closed_session_end_still_reports_a_start_without_a_decision(self) -> None:
+        # sessionEnd is audit-only, so a fail-closed hook sends it with the start's timeout (§6.4).
+        for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
+            with self.subTest(host):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+                def hello(req, base=guardian._default_handshake):
+                    return {**base(req), "timeout_config": {"default_ms": 300}}
+
+                def late(req, allow=guardian._default_allow):
+                    time.sleep(0.6)
+                    return allow(req)
+                guardian.handlers.update({"handshake/hello": hello, "steps/sessionStart": late})
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                session = str(uuid.uuid4())
+                run(guardian.url(), session, ACS_DEFAULT_DENY="1")
+                p = self._end(host, guardian.url(), session, ACS_DEFAULT_DENY="1")
+                self.assertEqual(p.returncode, 0, p.stderr[-300:])
+                [end] = guardian.envelopes_for("steps/sessionEnd")
+                self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
+                self.assertNotIn("steps/toolCallRequest", guardian.methods_seen(), "the fail-closed step was not sent")
+
     def test_parallel_startup_hooks_follow_one_refusal(self) -> None:
         guardian = self._slow_hello(0.5, lambda req: {"code": -32000, "message": "agent not permitted"})
         for host in self.STARTUP:

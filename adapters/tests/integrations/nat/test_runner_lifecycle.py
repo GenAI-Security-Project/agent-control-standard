@@ -1,5 +1,4 @@
-"""Every NAT run reports its whole lifecycle: the builder registers an exporter that NAT starts for each run before
-WORKFLOW_START, so a run's first events and a later run's events all reach the Guardian."""
+"""Each NAT run is its own ACS session, reported from before its WORKFLOW_START by the exporter its builder registers."""
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +33,9 @@ if _NAT_OK:
                                               ACSMiddlewareConfig, build_acs_middleware)
 
 SECRET = "nat-runner-lifecycle-secret-padded-to-32-bytes"
-RUN = ["steps/sessionStart", "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
+# The middleware opens its own session when NAT builds it; each run is a session of its own after that.
+BUILD = ["handshake/hello"]
+RUN = ["handshake/hello", "steps/sessionStart", "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
        "steps/agentResponse", "steps/sessionEnd"]
 
 
@@ -73,6 +74,8 @@ class _Hangs(_Entry):
 
     async def ainvoke(self, message: str, to_type=None) -> str:
         await super().ainvoke(message, to_type)
+        # The call has returned, its result reported, before the run waits to be cancelled.
+        self.executed.append("returned")
         await asyncio.Event().wait()
         return message
 
@@ -94,6 +97,14 @@ class _DeniedThenRetries(_Entry):
         await self.release.wait()
         with contextlib.suppress(ACSGuardianDenied):
             await super().ainvoke("long-retry", to_type)
+        return message
+
+
+class _Waits(_Entry):
+    """A workflow entry function that waits, before any call, until the run is cancelled."""
+
+    async def ainvoke(self, message: str, to_type=None) -> str:
+        await asyncio.Event().wait()
         return message
 
 
@@ -119,8 +130,16 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.guardian.start()
         self.addCleanup(self.guardian.stop)
 
+    def _sessions(self) -> list[list[str]]:
+        """The methods the Guardian received for each session_id, sessions in the order they began."""
+        sessions: dict[str, list[str]] = {}
+        for request in self.guardian.received:
+            session = ((request.get("params") or {}).get("metadata") or {}).get("session_id", "")
+            sessions.setdefault(session, []).append(request.get("method", ""))
+        return list(sessions.values())
+
     def _runs(self, *messages: str, with_builder: bool = True, entry: type[_Entry] = _Entry,
-              default_deny: bool = False) -> list[str]:
+              default_deny: bool = False, prepare=None) -> list[str]:
         """Run each message through NAT's Runner with the exporters the middleware's builder registered."""
         executed: list[str] = []
         self.exporters: list[str] = []
@@ -130,6 +149,8 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                                          session_id=str(uuid.uuid4()))
             async with WorkflowBuilder() as builder, \
                     build_acs_middleware(config, builder if with_builder else None) as middleware:
+                if prepare is not None:
+                    prepare(middleware)
                 # Workflow.run hands each Runner the exporters its builder collected.
                 exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
                 self.exporters = [name.split("_")[0] + "_" + name.split("_")[1] for name in exporters]
@@ -145,7 +166,31 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
     def test_two_consecutive_runs_each_report_every_hook_in_order(self) -> None:
         self.assertEqual(self._runs("first", "second"), ["first", "second"])
         self.assertEqual(self.exporters, ["acs_lifecycle"])
-        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN + RUN)
+        # hooks.md sessionStart: once per session, before any other steps/* hook; sessionEnd seals it.
+        self.assertEqual(self._sessions(), [BUILD, RUN, RUN])
+
+    def test_a_runs_session_start_carries_its_workflow_name_however_late_it_goes_out(self) -> None:
+        def slow_lifecycle(middleware) -> None:
+            send = middleware._lifecycle._send
+
+            def late(method, payload, run=None):
+                time.sleep(0.3)
+                send(method, payload, run)
+            middleware._lifecycle._send = late
+        self.assertEqual(self._runs("first", prepare=slow_lifecycle), ["first"])
+        [start] = self.guardian.envelopes_for("steps/sessionStart")
+        self.assertEqual(start["params"]["payload"]["platform_context"]["workflow_name"], "lifecycle-workflow")
+        self.assertEqual(self._sessions(), [BUILD, RUN])
+
+    def test_a_finished_runs_session_records_are_removed(self) -> None:
+        self.assertEqual(self._runs("first", "second"), ["first", "second"])
+        runs = [((r.get("params") or {}).get("metadata") or {}).get("session_id")
+                for r in self.guardian.envelopes_for("steps/sessionStart")]
+        self.assertEqual(len(set(runs)), 2)
+        for session in runs:
+            record = _handshake._handshake_cache_path(session, self.guardian.url())
+            self.assertEqual([path.name for path in (record, Path(f"{record}.started"), Path(f"{record}.lock"))
+                              if path.exists()], [])
 
     def test_session_end_counts_the_runs_decision_failures(self) -> None:
         # Threaded, so only the slow call times out and nothing queues behind it.
@@ -200,8 +245,8 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
     def test_a_failed_run_still_reports_its_end(self) -> None:
         """NAT pushes WORKFLOW_END only once the workflow returns; a failed run's sessionEnd goes out when NAT stops its exporter."""
         self.assertEqual(self._runs("first", "second", entry=_Failing), ["first", "second"])
-        ended = RUN[:4] + ["steps/sessionEnd"]
-        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + ended + ended)
+        ended = RUN[:5] + ["steps/sessionEnd"]
+        self.assertEqual(self._sessions(), [BUILD, ended, ended])
         for end in self.guardian.envelopes_for("steps/sessionEnd"):
             payload = end["params"]["payload"]
             self.assertEqual((payload["reason"], payload["summary"]), ("error", {"decision_failures": {}}))
@@ -220,14 +265,37 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                     async with Runner("first", _Hangs(middleware, executed), ContextState.get(), manager) as runner:
                         await runner.result()
                 task = asyncio.create_task(one())
-                while not executed:
+                while "returned" not in executed:
                     await asyncio.sleep(0.01)
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
                 await middleware._lifecycle_sent()
         asyncio.run(run())
-        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN[:4] + ["steps/sessionEnd"])
+        self.assertEqual(self._sessions(), [BUILD, RUN[:5] + ["steps/sessionEnd"]])
+        [end] = self.guardian.envelopes_for("steps/sessionEnd")
+        self.assertEqual(end["params"]["payload"]["reason"], "cancelled")
+
+    def test_a_run_cancelled_before_its_first_call_ends_as_cancelled(self) -> None:
+        """The run's task is known from its WORKFLOW_START, so a run cancelled before any call is not reported as an error."""
+        async def run() -> None:
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
+                exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
+
+                async def one() -> None:
+                    manager = ExporterManager.from_exporters(exporters)
+                    async with Runner("first", _Waits(middleware, []), ContextState.get(), manager) as runner:
+                        await runner.result()
+                task = asyncio.create_task(one())
+                while "steps/userMessage" not in self.guardian.methods_seen():
+                    await asyncio.sleep(0.01)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                await middleware._lifecycle_sent()
+        asyncio.run(run())
+        self.assertEqual(self._sessions(), [BUILD, RUN[:3] + ["steps/sessionEnd"]])
         [end] = self.guardian.envelopes_for("steps/sessionEnd")
         self.assertEqual(end["params"]["payload"]["reason"], "cancelled")
 
@@ -238,14 +306,15 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         # Answered late, so a call that did not wait for its run's sessionStart would reach the Guardian first.
         self.guardian.handlers["steps/sessionStart"] = lambda req: (time.sleep(0.3), {**allow(req), "decision": next(answers)})[1]
         self.assertEqual(self._runs("first", "second"), ["second"], "the denied run's call did not run")
-        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"] + RUN)
+        self.assertEqual(self._sessions(), [BUILD, RUN[:2], RUN], "a refused run's session sends nothing more")
 
     def test_a_refused_run_withholds_a_result_and_sends_nothing(self) -> None:
         from acs.client import SessionRefused
         from acs.integrations.nat.adapter import _Run
         middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
         self.addCleanup(middleware.close)
-        middleware._runs["refused-run"] = _Run(outcome=SessionRefused("session_start_denied", {"decision": "deny"}))
+        middleware._runs["refused-run"] = _Run(session_id=str(uuid.uuid4()),
+                                               decision=SessionRefused("session_start_denied", {"decision": "deny"}))
         context = SimpleNamespace(function_context=SimpleNamespace(name="Read"), output="SECRET-OUTPUT",
                                   modified_args=("x",), modified_kwargs={})
 
@@ -294,7 +363,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         from acs.integrations.nat.adapter import _Run
         middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
         self.addCleanup(middleware.close)
-        middleware._runs["running"] = _Run()
+        middleware._runs["running"] = _Run(session_id=str(uuid.uuid4()))
         timeout = Resolution(True, "fail_open_bypass", "decision_timeout", {"failure_class": "timeout"},
                              decision_failure=True)
         with mock.patch("acs.integrations.nat.adapter._MAX_COUNTED_RUNS", 2):
@@ -305,12 +374,13 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         middleware._forget_run("running")
         self.assertEqual(list(middleware._decision_failures), ["b", "c"], "a forgotten run's counts go with it")
         middleware.close()
-        middleware._runs["late"] = _Run()
+        middleware._runs["late"] = _Run(session_id=str(uuid.uuid4()))
         middleware._queue_lifecycle_hook("steps/sessionEnd", {"reason": "error"}, "late")
         self.assertEqual(middleware._runs, {}, "a sessionEnd the closed middleware cannot send is still handled")
 
     def test_a_session_start_without_a_decision_follows_the_posture(self) -> None:
-        for default_deny, executed, sent in ((False, ["first"], RUN), (True, [], ["steps/sessionStart"])):
+        # The run's sessionEnd reports the start's timeout under either posture (§6.4): it is audit-only.
+        for default_deny, executed, sent in ((False, ["first"], RUN), (True, [], RUN[:2] + ["steps/sessionEnd"])):
             with self.subTest(default_deny=default_deny):
                 self.guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
                 self.guardian.start()
@@ -320,15 +390,23 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                     "handshake/hello": lambda req: {**hello(req), "timeout_config": {"default_ms": 300}},
                     "steps/sessionStart": lambda req: (time.sleep(0.6), allow(req))[1]})
                 self.assertEqual(self._runs("first", default_deny=default_deny), executed)
-                self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + sent)
-                if not default_deny:
-                    [end] = self.guardian.envelopes_for("steps/sessionEnd")
-                    self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
+                self.assertEqual(self._sessions(), [BUILD, sent])
+                [end] = self.guardian.envelopes_for("steps/sessionEnd")
+                self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
 
     def test_without_the_builder_each_run_reports_from_its_first_call(self) -> None:
         self.assertEqual(self._runs("first", "second", with_builder=False), ["first", "second"])
-        self.assertEqual(self.guardian.methods_seen(), ["handshake/hello"] + RUN[2:] + RUN[2:],
+        # The first call opens the run's session, so its sessionStart still comes first.
+        from_first_call = RUN[:2] + RUN[3:]
+        self.assertEqual(self._sessions(), [BUILD, from_first_call, from_first_call],
                          "the late subscription follows each run's new stream")
+
+    def test_without_the_builder_a_failed_run_still_ends(self) -> None:
+        """NAT completes a run's stream whether or not the run returns, so the late subscription ends a failed run."""
+        self.assertEqual(self._runs("first", with_builder=False, entry=_Failing), ["first"])
+        self.assertEqual(self._sessions(), [BUILD, RUN[:2] + RUN[3:5] + ["steps/sessionEnd"]])
+        [end] = self.guardian.envelopes_for("steps/sessionEnd")
+        self.assertEqual(end["params"]["payload"]["reason"], "error")
 
     def test_without_the_builder_overlapping_runs_are_each_subscribed_once(self) -> None:
         for order in ("AA", "ABA", "ABAB"):

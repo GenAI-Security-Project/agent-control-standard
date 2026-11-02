@@ -123,6 +123,15 @@ class FailureClasses(unittest.TestCase):
         gated = Config.from_env({"ACS_DEFAULT_DENY": "1"}).gate(session)
         self.assertEqual((gated.decision_failure, gated.fields["posture"]), (False, "fail_closed"))
 
+    def test_a_session_end_goes_out_after_a_start_without_a_decision(self) -> None:
+        """sessionEnd is audit-only and reports the session's decision failures (§6.4), so a fail-closed posture sends it."""
+        failed = Negotiated({"on_decision_failure": "deny"}, {"cause": "decision_timeout", "fields": {}})
+        deny = Config.from_env({"ACS_DEFAULT_DENY": "1"})
+        self.assertIsNone(deny.gate(failed, "steps/sessionEnd"))
+        self.assertFalse(deny.gate(failed, "steps/toolCallRequest").proceed)
+        self.assertFalse(deny.gate(SessionRefused("session_start_denied", {}), "steps/sessionEnd").proceed,
+                         "a refused session sends nothing, sessionEnd included (§4.1)")
+
 
 class Gate(unittest.TestCase):
     """§4.1: only a negotiated session reaches the Guardian; the others settle each step locally."""

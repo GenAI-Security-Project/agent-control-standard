@@ -15,7 +15,6 @@ import asyncio
 import os
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -115,7 +114,8 @@ class NatEmission(unittest.TestCase):
             mgr.push_intermediate_step(IntermediateStepPayload(
                 event_type=IntermediateStepType.WORKFLOW_END, name="wf",
                 data=StreamEventData(output="sunny"), UUID=wf_uuid))
-            time.sleep(0.3)
+            # close() returns once every queued lifecycle hook has gone out.
+            mw.close()
         finally:
             sub.unsubscribe()
         methods = self.guardian.methods()
@@ -151,7 +151,7 @@ class NatEmission(unittest.TestCase):
             mgr.push_intermediate_step(IntermediateStepPayload(
                 event_type=IntermediateStepType.WORKFLOW_END, name="wf",
                 data=StreamEventData(output="a"), UUID=wf))
-            time.sleep(0.3)
+            mw.close()
         finally:
             sub.unsubscribe()
 

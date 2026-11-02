@@ -664,7 +664,7 @@ def main() -> int:
     # §4.1: a refused or unanswered session sends the Guardian nothing; each step is settled here.
     started: list = []
     session = _open_session(event, config, started)
-    gated = config.gate(session)
+    gated = config.gate(session, HOOK_MAP.get(hook_name))
     if gated is not None:
         return _settle(gated, hook_name, session_id, workspace=_turn_ws(event))
     if hook_name == "SessionStart":

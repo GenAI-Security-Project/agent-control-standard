@@ -7,6 +7,7 @@ _EXPORTS = {
     "FAILURE_CLASSES": "_config",
     "failure_class": "_config",
     "decision_failure_counts": "_store",
+    "discard_session": "_handshake",
     "count_decision_failure": "_store",
     "Config": "_config",
     "Decided": "_outcome",
