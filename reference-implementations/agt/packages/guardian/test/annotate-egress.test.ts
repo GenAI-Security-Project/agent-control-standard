@@ -109,12 +109,14 @@ describe("pulling an egress destination out of a shell command", () => {
     });
   }
 
+  // Host only, no path: a `/` would end the authority before the tab and hide
+  // whether the tab ends the match.
   it("still ends the match at an ASCII tab, which the shell does split on", () => {
     expect(
       annotateEgressDestination(
         "egress",
         {},
-        preliminary({ name: "Bash", args: {}, raw_command: "curl https://docs.anthropic.com/x\t-o out" }),
+        preliminary({ name: "Bash", args: {}, raw_command: "curl https://docs.anthropic.com\t-o out" }),
       ),
     ).toEqual({ destination: "https://docs.anthropic.com" });
   });
