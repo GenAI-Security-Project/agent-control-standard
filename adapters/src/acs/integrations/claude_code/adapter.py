@@ -678,7 +678,10 @@ def main() -> int:
     if hook_name != "SessionEnd" or not host_session_id:
         return _hook(event, hook_name, config)
     # Marked before the exchange, so a hook the host cancels mid-exchange still leaves the next hook a new session.
-    mark_session_ended(event["session_id"], config.guardian_url)
+    if not mark_session_ended(event["session_id"], config.guardian_url):
+        # Unmarked, the next hook would reuse a sealed session, so the session stays open instead.
+        audit_event("session_end_not_sent", session_id=event["session_id"], cause="session_record_unwritable")
+        return 0
     try:
         return _hook(event, hook_name, config)
     finally:

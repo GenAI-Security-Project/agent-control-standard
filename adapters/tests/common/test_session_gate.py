@@ -328,6 +328,42 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertIn("steps/toolCallRequest", guardian.methods_seen())
                 self.assertNotIn("unmapped_hook_event", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
 
+    def test_a_session_end_that_cannot_be_marked_leaves_the_session_open_for_the_next_hook(self) -> None:
+        hosts = {
+            "claude-code": ([str(BIN / "acs-claude-code-hook")], "session_id",
+                            {"hook_event_name": "SessionEnd", "reason": "other", "cwd": "/tmp"},
+                            {"hook_event_name": "PreToolUse", "cwd": "/tmp", "tool_name": "Bash",
+                             "tool_input": {"command": "ls"}, "tool_use_id": "c1"}),
+            "cursor": ([str(BIN / "acs-cursor-hook"), "{event}"], "conversation_id",
+                       {"workspace_roots": ["/tmp"], "reason": "completed"},
+                       {"workspace_roots": ["/tmp"], "tool_name": "Shell", "tool_input": {"command": "ls"},
+                        "tool_use_id": "c1"}),
+        }
+        for name, (argv, key, end, tool) in hosts.items():
+            with self.subTest(name):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET)
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                env = self._env(guardian.url())
+                host_session = str(uuid.uuid4())
+
+                def run(event: dict, cursor_event: str) -> subprocess.CompletedProcess:
+                    command = [a.replace("{event}", cursor_event) for a in argv]
+                    return subprocess.run(command, input=json.dumps({key: host_session, **event}), capture_output=True,
+                                          text=True, env=env, timeout=30)
+                run(tool, "preToolUse")
+                cache = self.root / "handshake"
+                cache.chmod(0o500)
+                try:
+                    ended = run(end, "sessionEnd")
+                finally:
+                    cache.chmod(0o700)
+                self.assertNotIn("steps/sessionEnd", guardian.methods_seen())
+                self.assertIn("session_end_not_sent", [r["acs_audit_event"] for r in _audit_records(ended.stderr)])
+                guardian.reset()
+                p = run(tool, "preToolUse")
+                self.assertEqual(guardian.methods_seen(), ["steps/toolCallRequest"], p.stderr[-300:])
+
     def test_a_signed_refusal_written_as_an_integral_number_still_refuses_under_proceed(self) -> None:
         for method in ("handshake/hello", "steps/sessionStart", "steps/toolCallRequest"):
             with self.subTest(method=method):
