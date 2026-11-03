@@ -5,13 +5,13 @@
 #
 # Environment (set on the NAT process — the adapter is in-process):
 #   ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key
-#   ACS_HMAC_KEY_ID=2026-11
-#       REQUIRED with the secret: the label that names it (§10); the Guardian holds the same one.
 #       REQUIRED for ACS-Core baseline integrity (§10), at least 32 bytes.
-#       Without a secret and its label the middleware refuses its session
-#       and denies every call. Generate:
+#       Generate:
 #         mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key
 #       and give the SAME file to the Guardian.
+#   ACS_HMAC_KEY_ID=2026-11
+#       REQUIRED with the secret: the label that names it (§10); the Guardian holds the same one.
+#   Without a secret and its label the middleware refuses its sessions and denies every call.
 #   ACS_AUDIT_FILE=/path/to/.acs/audit.log
 #       Durable sink for §6.4 audit events (created 0600) in addition
 #       to stderr.
@@ -25,7 +25,8 @@ middleware:
     guardian_url: http://127.0.0.1:8787/acs
     default_deny: true
     timeout_s: 5.0
-    # session_id is auto-generated per process if omitted; each NAT run's session derives from it
+    # Each NAT run's session gets a fresh session_id; session_id, if set, names only the
+    # session of calls outside any run, and is the same in every process, so leave it unset.
     # target_function_or_group: my_tools
 
 function_groups:

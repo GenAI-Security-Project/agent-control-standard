@@ -54,7 +54,8 @@ class SessionGateThroughNat(unittest.TestCase):
             asyncio.run(mw.function_middleware_invoke(command="echo hi", call_next=target, context=context))
         except ACSGuardianDenied:
             return executed["count"], True
-        mw._emit_lifecycle_hook("steps/sessionEnd", payload={"reason": "completed"})
+        # Ends the session on the wire and keeps its records, as another process sharing the session would find them.
+        mw._emit_lifecycle_hook("steps/sessionEnd", {"reason": "completed"}, mw._own)
         return executed["count"], False
 
     def test_an_unguarded_session_never_contacts_a_restored_guardian(self) -> None:

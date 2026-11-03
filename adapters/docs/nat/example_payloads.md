@@ -55,25 +55,59 @@ NAT's runtime calls `function_middleware_invoke` which orchestrates: build conte
 
 The same ACS JSON-RPC shape as the other adapters. The adapter constructs this from the `InvocationContext`:
 
-### pre_invoke → `steps/toolCallRequest`
+### The run's start → `steps/sessionStart`
+
+The run's session opens with its own `handshake/hello` and then its `sessionStart`, before any call of the run:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": "00000000-0000-0000-0000-000000000001",
+  "method": "steps/sessionStart",
+  "params": {
+    "acs_version": "0.1.0",
+    "request_id": "00000000-0000-0000-0000-000000000002",
+    "timestamp": "2026-11-03T09:39:08.574Z",
+    "metadata": {
+      "agent_id": "nat:00000000",
+      "session_id": "00000000-0000-4000-8000-000000000000",
+      "platform": "nat",
+      "adapter_version": "0.2.0"
+    },
+    "payload": {
+      "platform_context": {
+        "workflow_name": "my_workflow",
+        "workflow_run_id": "00000000-0000-0000-0000-000000000003"
+      }
+    },
+    "signature": {"algorithm": "HMAC-SHA256", "value": "<base64 HMAC>", "key_id": "2026-11"}
+  }
+}
+```
+
+### pre_invoke → `steps/toolCallRequest`
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "00000000-0000-0000-0000-000000000004",
   "method": "steps/toolCallRequest",
   "params": {
-    "session_id": "nat-00000000000000",
-    "step_id": "00000000-0000-0000-0000-000000000002",
-    "tool": {
-      "name": "Bash",
-      "arguments": {"command": "echo hello"}
-    }
-  },
-  "acs_version": "0.1.0",
-  "request_id": "00000000-0000-0000-0000-000000000003",
-  "timestamp": 1718450000000,
-  "metadata": {"source": "acs-adapter-nat"}
+    "acs_version": "0.1.0",
+    "request_id": "00000000-0000-0000-0000-000000000005",
+    "timestamp": "2026-11-03T09:39:08.582Z",
+    "metadata": {
+      "agent_id": "nat:00000000",
+      "session_id": "00000000-0000-4000-8000-000000000000",
+      "platform": "nat",
+      "adapter_version": "0.2.0"
+    },
+    "payload": {
+      "tool": {"name": "Bash"},
+      "arguments": {"command": {"value": "echo hello"}}
+    },
+    "signature": {"algorithm": "HMAC-SHA256", "value": "<base64 HMAC>", "key_id": "2026-11"}
+  }
 }
 ```
 
@@ -82,22 +116,30 @@ The same ACS JSON-RPC shape as the other adapters. The adapter constructs this f
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "00000000-0000-0000-0000-000000000004",
+  "id": "00000000-0000-0000-0000-000000000006",
   "method": "steps/toolCallResult",
   "params": {
-    "session_id": "nat-00000000000000",
-    "step_id": "00000000-0000-0000-0000-000000000005",
-    "tool": {"name": "Bash", "arguments": {"command": "echo hello"}},
-    "result": "hello\n"
-  },
-  "acs_version": "0.1.0",
-  "request_id": "00000000-0000-0000-0000-000000000006",
-  "timestamp": 1718450001234,
-  "metadata": {"source": "acs-adapter-nat"}
+    "acs_version": "0.1.0",
+    "request_id": "00000000-0000-0000-0000-000000000007",
+    "timestamp": "2026-11-03T09:39:08.586Z",
+    "metadata": {
+      "agent_id": "nat:00000000",
+      "session_id": "00000000-0000-4000-8000-000000000000",
+      "platform": "nat",
+      "adapter_version": "0.2.0"
+    },
+    "payload": {
+      "tool": {"name": "Bash"},
+      "exit_status": "success",
+      "outputs": [{"value": "hello\n"}],
+      "request_id_ref": "00000000-0000-0000-0000-000000000005"
+    },
+    "signature": {"algorithm": "HMAC-SHA256", "value": "<base64 HMAC>", "key_id": "2026-11"}
+  }
 }
 ```
 
-`session_id` is auto-generated per process unless `session_id` is set in `workflow.yml`.
+`request_id_ref` is the `request_id` of the call's `toolCallRequest`, a uuid4 the adapter keeps on the call's invocation context. Each root NAT Runner's session gets a fresh `session_id`; a call outside any Runner uses the middleware's own.
 
 ---
 
@@ -149,10 +191,12 @@ return context
 
 | Field | Real value contains | Masked as |
 |---|---|---|
-| `session_id` | Auto-generated `nat-<hex16>` or deployment-defined | `nat-00000000000000` |
-| `step_id`, `request_id`, `id` | Real UUIDs (per-request) | `00000000-0000-0000-0000-00000000000X` |
-| `timestamp` | Real epoch ms | Synthetic value |
-| `tool.arguments.command` | Real command (sometimes preserved when benign) | Preserved or `<command>` |
-| `result` | Real tool output | Preserved or `<tool output>` |
+| `session_id` | A fresh UUID per session | `00000000-0000-4000-8000-000000000000` |
+| `agent_id` | `nat:` and 8 hex digits of the target's hash | `nat:00000000` |
+| `id`, `request_id`, `request_id_ref`, `workflow_run_id` | Real UUIDs (per request, per run) | `00000000-0000-0000-0000-00000000000X` |
+| `signature.value` | The envelope's HMAC | `<base64 HMAC>` |
+| `timestamp` | Real RFC 3339 time | Kept |
+| `arguments.command.value` | Real command (sometimes preserved when benign) | Preserved or `<command>` |
+| `outputs` | Real tool output | Preserved or `<tool output>` |
 
 No real session data is committed to this repo.

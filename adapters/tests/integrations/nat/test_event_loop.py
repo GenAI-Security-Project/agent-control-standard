@@ -1,5 +1,5 @@
-"""NAT's Guardian calls run off the event loop: the builder opens the session before it yields the middleware,
-every call reuses that decision, and lifecycle hooks go out in event order without blocking NAT."""
+"""NAT's Guardian calls run off the event loop: a session's calls share one handshake, and its lifecycle hooks go
+out in event order without blocking NAT."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,6 @@ import os
 import tempfile
 import threading
 import time
-import types
 import unittest
 import uuid
 from pathlib import Path
@@ -28,6 +27,7 @@ from acs.testing.harness import ProgrammableGuardian
 
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig, build_acs_middleware
+    from tests.integrations.nat._nat_runs import with_middleware
 
 SECRET = "nat-event-loop-secret-padded-to-32-bytes"
 SLOW_S = 0.5
@@ -89,15 +89,11 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
             return True
         return False
 
-    def test_the_builder_opens_the_session_off_the_loop_before_yielding(self) -> None:
-        self.guardian.handlers["handshake/hello"] = _slow(self.guardian._default_handshake)
-
+    def test_building_the_middleware_sends_nothing(self) -> None:
         async def build() -> list[str]:
             async with build_acs_middleware(self._config(), None):
                 return self.guardian.methods_seen()
-        seen, ticks = asyncio.run(_ticking(build()))
-        self.assertEqual(seen, ["handshake/hello"], "the session is open before NAT gets the middleware")
-        self.assertGreater(ticks, 10, "the event loop kept running during the handshake")
+        self.assertEqual(asyncio.run(build()), [])
 
     def test_concurrent_calls_share_one_handshake(self) -> None:
         self.guardian.handlers["handshake/hello"] = _slow(self.guardian._default_handshake)
@@ -161,122 +157,85 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
 
         async def run() -> tuple[list[str], bool]:
             async with build_acs_middleware(self._config(), None) as mw:
-                seen = self.guardian.methods_seen()
-                mw._on_intermediate_step(types.SimpleNamespace(payload=IntermediateStepPayload(
-                    event_type=IntermediateStepType.WORKFLOW_START, name="wf", data=StreamEventData(input="q"))))
-                return seen, await self._invoke(mw)
+                return self.guardian.methods_seen(), await self._invoke(mw)
         seen, blocked = asyncio.run(run())
         self.assertEqual((seen, blocked, self.executed), ([], False, 1))
         self.assertEqual(self.guardian.methods_seen(), [])
 
     def test_lifecycle_hooks_go_out_in_event_order_without_blocking_nat(self) -> None:
         self.guardian.handlers["steps/sessionStart"] = _slow(self.guardian._default_allow)
+        reached: list[float] = []
 
-        async def run() -> tuple[float, bool]:
-            async with build_acs_middleware(self._config(), None) as mw:
-                # NAT's step manager calls this callback with each step, on the thread that pushed it.
-                start = IntermediateStepPayload(event_type=IntermediateStepType.WORKFLOW_START, name="wf",
-                                                data=StreamEventData(input="q"))
-                began = time.monotonic()
-                mw._on_intermediate_step(types.SimpleNamespace(payload=start))
-                pushed = time.monotonic() - began
-                blocked = await self._invoke(mw)
-                mw._on_intermediate_step(types.SimpleNamespace(payload=IntermediateStepPayload(
-                    event_type=IntermediateStepType.WORKFLOW_END, name="wf",
-                    data=StreamEventData(output="a"), UUID=start.UUID)))
-            return pushed, blocked
-        pushed, blocked = asyncio.run(run())
-        self.assertFalse(blocked)
-        self.assertLess(pushed, SLOW_S / 2, "NAT's step callback returned without waiting on the Guardian")
+        async def body(mw, run) -> None:
+            async def entry(message: str) -> bool:
+                reached.append(time.monotonic() - began)
+                return await self._invoke(mw)
+            began = time.monotonic()
+            self.assertFalse(await run("wf", entry, "q"))
+        asyncio.run(with_middleware(self._config(), body))
+        self.assertLess(reached[0], SLOW_S / 2, "NAT's WORKFLOW_START returned without waiting on the Guardian")
         self.assertEqual(self.guardian.methods_seen(),
                          ["handshake/hello", "steps/sessionStart", "steps/userMessage", "steps/toolCallRequest",
                           "steps/toolCallResult", "steps/agentResponse", "steps/sessionEnd"],
                          "every hook reaches the Guardian in event order, sessionEnd included")
 
-
-    def test_a_hook_reported_during_a_call_goes_out_before_its_result(self) -> None:
-        self.guardian.handlers["steps/sessionStart"] = _slow(self.guardian._default_allow)
-
-        async def run() -> bool:
-            async with build_acs_middleware(self._config(), None) as mw:
-                async def target(command: str) -> str:
-                    mw._on_intermediate_step(types.SimpleNamespace(payload=IntermediateStepPayload(
-                        event_type=IntermediateStepType.WORKFLOW_START, name="wf", data=StreamEventData(input="q"))))
-                    return f"ran: {command}"
-                context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=None,
-                                                    single_output_schema=type(None), stream_output_schema=type(None))
-                await mw.function_middleware_invoke(command="echo hi", call_next=target, context=context)
-                return True
-        self.assertTrue(asyncio.run(run()))
-        # The call opens the middleware's own session, so its sessionStart goes first; NAT's shutdown ends it.
-        self.assertEqual(self.guardian.methods_seen(),
-                         ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest", "steps/userMessage",
-                          "steps/toolCallResult", "steps/sessionEnd"])
-
-    def test_a_hook_that_arrives_while_closing_waits_its_turn(self) -> None:
-        """close() drains in order: a late hook neither blocks NAT nor overtakes the hooks queued before it."""
+    def test_a_hook_that_arrives_while_closing_is_not_sent_after_the_sessions_end(self) -> None:
+        """close() drains each session in order; a hook reported after its session ended is audited, not sent."""
         mw = ACSMiddleware(self._config())
         started, release = threading.Event(), threading.Event()
         sent: list[tuple[str, str]] = []
 
-        def emit(method: str, payload: dict, run: str | None = None) -> None:
+        def emit(method: str, payload: dict, session) -> None:
             if method == "steps/sessionStart":
                 started.set()
                 release.wait(5)
             sent.append((method, threading.current_thread().name))
         mw._emit_lifecycle_hook = emit
-        start = IntermediateStepPayload(event_type=IntermediateStepType.WORKFLOW_START, name="wf",
-                                        data=StreamEventData(input="q"))
+        session = mw._new_session()
         end = IntermediateStepPayload(event_type=IntermediateStepType.WORKFLOW_END, name="wf",
-                                      data=StreamEventData(output="a"), UUID=start.UUID)
+                                      data=StreamEventData(output="a"))
 
-        async def run() -> tuple[float, bool]:
-            mw._on_intermediate_step(types.SimpleNamespace(payload=start))
+        async def run() -> float:
+            mw._queue(session, "steps/sessionStart", {})
             self.assertTrue(await asyncio.to_thread(started.wait, 5))
             closing = asyncio.create_task(asyncio.to_thread(mw.close))
             await asyncio.sleep(0.05)
             began = time.monotonic()
-            mw._on_intermediate_step(types.SimpleNamespace(payload=end))
+            mw._workflow_ended(session, end)
             callback = time.monotonic() - began
-            try:
-                await asyncio.wait_for(mw._lifecycle_sent(), 0.1)
-                barrier_waited = False
-            except asyncio.TimeoutError:
-                barrier_waited = True
             release.set()
             await closing
-            return callback, barrier_waited
+            return callback
         with mock.patch("acs.integrations.nat.adapter.audit_event") as audit:
-            callback, barrier_waited = asyncio.run(run())
-            mw._on_intermediate_step(types.SimpleNamespace(payload=end))
+            callback = asyncio.run(run())
         self.assertLess(callback, 0.05, "NAT's step callback returned without sending anything itself")
-        self.assertTrue(barrier_waited, "a step waits for the hooks still queued, even while closing")
-        self.assertEqual([method for method, _ in sent],
-                         ["steps/sessionStart", "steps/userMessage", "steps/agentResponse", "steps/sessionEnd"])
+        self.assertEqual([method for method, _ in sent], ["steps/sessionStart", "steps/sessionEnd"])
         self.assertTrue(all(thread == "acs-lifecycle" for _, thread in sent), sent)
-        self.assertEqual([c.args[0] for c in audit.call_args_list], ["lifecycle_hook_not_sent"] * 2,
-                         "a hook after close is audited, not sent")
+        self.assertEqual([c.args[0] for c in audit.call_args_list], ["lifecycle_hook_not_sent"],
+                         "a hook after the session's end is audited, not sent")
 
     def test_a_cancelled_wait_does_not_stop_the_hooks_behind_it(self) -> None:
         mw = ACSMiddleware(self._config())
+        session = mw._new_session()
         # A sender whose thread died would hold up interpreter exit; let this test fail instead.
-        self.addCleanup(nat_adapter._OPEN_SENDERS.discard, mw._lifecycle)
+        self.addCleanup(nat_adapter._OPEN_SENDERS.discard, session.lane)
         release, sent = threading.Event(), []
 
-        def emit(method: str, payload: dict, run: str | None = None) -> None:
+        def emit(method: str, payload: dict, session) -> None:
             if method == "first":
                 release.wait(5)
             sent.append(method)
         mw._emit_lifecycle_hook = emit
-        mw._queue_lifecycle_hook("first", {})
-        mw._lifecycle.sent().cancel()
-        mw._queue_lifecycle_hook("second", {})
+        mw._queue(session, "first", {})
+        session.lane.sent().cancel()
+        mw._queue(session, "second", {})
         release.set()
         closer = threading.Thread(target=mw.close, daemon=True)
         closer.start()
         closer.join(5)
         self.assertFalse(closer.is_alive(), "close() returns once the queue drains")
-        self.assertEqual(sent, ["first", "second"])
+        self.assertEqual(sent, ["first", "second", "steps/sessionEnd"])
+
 
 if __name__ == "__main__":
     unittest.main()

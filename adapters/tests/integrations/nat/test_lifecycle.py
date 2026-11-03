@@ -1,146 +1,62 @@
-"""
-Lifecycle-observer integration test.
-
-Subscribes the ACSMiddleware to NAT's IntermediateStepManager, pushes
-synthetic WORKFLOW_START / WORKFLOW_END events, and asserts the Guardian
-received ACS lifecycle hooks (sessionStart, userMessage, agentResponse,
-sessionEnd) in addition to the function-level toolCallRequest/Result.
-
-Without this middleware, NAT alone emits only function-call hooks and
-does not satisfy ACS-Core's 6-hook taxonomy minimum
-(`conformance.md, ACS-Core: Hook taxonomy`). This test proves the lifecycle middleware closes
-that gap.
-
-Requires nvidia-nat-core 1.7.0+ for IntermediateStepManager.
-"""
+"""A run's WORKFLOW_START and WORKFLOW_END become its four lifecycle hooks, which NAT's function calls alone do not cover (ACS-Core hook taxonomy)."""
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import socket
-import subprocess
-import sys
-import threading
 import tempfile
-import time
 import unittest
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
 try:
     from nat.builder.context import Context
-    from nat.builder.intermediate_step_manager import IntermediateStepManager
-    from nat.builder.context import ContextState
-    from nat.data_models.intermediate_step import (
-        IntermediateStepPayload, IntermediateStepType, StreamEventData,
-    )
+    from nat.data_models.intermediate_step import IntermediateStepPayload, IntermediateStepType, StreamEventData
     _NAT_OK = True
 except ImportError:
     _NAT_OK = False
 
 from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
-from acs.testing.harness import seed_negotiated_session  # noqa: E402
+from acs.testing.harness import ProgrammableGuardian  # noqa: E402
 
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
+    from tests.integrations.nat._nat_runs import with_middleware  # noqa: E402
 
-
-
-
-class RecordingGuardian(BaseHTTPRequestHandler):
-    """Tiny HTTP server that records every method it receives."""
-    recorded: list = []
-
-    def do_POST(self) -> None:  # noqa: N802
-        length = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(length).decode("utf-8"))
-        RecordingGuardian.recorded.append(body.get("method", ""))
-        reply = json.dumps({
-            "jsonrpc": "2.0", "id": body.get("id"),
-            "result": {
-                "type": "final",
-                "acs_version": "0.1.0",
-                "request_id": body.get("params", {}).get("request_id", ""),
-                "decision": "allow",
-                "chain_hash": "0" * 64,
-            },
-        }).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(reply)))
-        self.end_headers()
-        self.wfile.write(reply)
-
-    def log_message(self, *args, **kwargs):
-        return
+SECRET = "nat-lifecycle-test-secret-padded-to-32-bytes"
 
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
 class LifecycleObserver(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.server = HTTPServer(("127.0.0.1", 0), RecordingGuardian)
-        cls.port = cls.server.server_address[1]
-        cls.url = f"http://127.0.0.1:{cls.port}/acs"
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls.server.shutdown()
-        cls.server.server_close()
-
     def setUp(self) -> None:
-        RecordingGuardian.recorded.clear()
-        # Per-test handshake records, and environment changes undone after the test.
         records = tempfile.TemporaryDirectory(prefix="acs-handshake-")
         self.addCleanup(records.cleanup)
-        self.records = Path(records.name)
-        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", self.records),
-                        mock.patch.dict(os.environ)):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+        for patcher in (mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR", Path(records.name)),
+                        mock.patch.dict(os.environ, {**env, "ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key"},
+                                        clear=True)):
             patcher.start()
             self.addCleanup(patcher.stop)
+        self.guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        self.guardian.start()
+        self.addCleanup(self.guardian.stop)
 
-    def _push(self, mgr, event_type, name="test", input=None, output=None, uuid_=None):
-        data = StreamEventData(input=input, output=output) if (input or output) else None
-        kwargs = {"event_type": event_type, "name": name, "data": data}
-        if uuid_:
-            kwargs["UUID"] = uuid_
-        payload = IntermediateStepPayload(**kwargs)
-        mgr.push_intermediate_step(payload)
-        return payload.UUID
+    def test_function_and_llm_steps_inside_a_run_fire_no_lifecycle_hooks(self) -> None:
+        async def entry(message: str) -> str:
+            manager = Context.get().intermediate_step_manager
+            for start, end, name in ((IntermediateStepType.FUNCTION_START, IntermediateStepType.FUNCTION_END, "tool"),
+                                     (IntermediateStepType.LLM_START, IntermediateStepType.LLM_END, "llm")):
+                step = IntermediateStepPayload(event_type=start, name=name, data=StreamEventData(input="x"))
+                manager.push_intermediate_step(step)
+                manager.push_intermediate_step(IntermediateStepPayload(
+                    event_type=end, name=name, data=StreamEventData(output="y"), UUID=step.UUID))
+            return "done"
 
-    def test_intermediate_function_events_do_not_fire_lifecycle_hooks(self) -> None:
-        """FUNCTION_START / TOOL_START etc are covered by FunctionMiddleware's
-        pre_invoke, NOT by the lifecycle observer. Lifecycle observer must
-        ignore them."""
-        cfg = ACSMiddlewareConfig(
-            guardian_url=self.url, default_deny=False,
-            session_id="lifecycle-non-trigger-test",
-        )
-        mw = ACSMiddleware(cfg)
-        # A negotiated session, so a lifecycle hook fired here would reach the Guardian and be recorded.
-        seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=self.url,
-                                hmac_secret=os.environ.get("ACS_HMAC_SECRET"))
-        ctx_state = ContextState.get()
-        mgr = IntermediateStepManager(ctx_state)
-        sub = mgr.subscribe(on_next=mw._on_intermediate_step)
-        try:
-            fn_uuid = self._push(mgr, IntermediateStepType.FUNCTION_START, name="weather_tool", input="x")
-            self._push(mgr, IntermediateStepType.FUNCTION_END, name="weather_tool", output="sunny", uuid_=fn_uuid)
-            llm_uuid = self._push(mgr, IntermediateStepType.LLM_START, name="llm", input="prompt")
-            self._push(mgr, IntermediateStepType.LLM_END, name="llm", output="completion", uuid_=llm_uuid)
-            time.sleep(0.2)
-        finally:
-            sub.unsubscribe()
-
-        self.assertEqual(RecordingGuardian.recorded, [],
-            "function/llm-level events MUST NOT fire lifecycle hooks "
-            "(those events are FunctionMiddleware's responsibility); "
-            f"got {RecordingGuardian.recorded}")
+        async def body(middleware, run) -> None:
+            await run("wf", entry, "what is the weather?")
+        asyncio.run(with_middleware(ACSMiddlewareConfig(guardian_url=self.guardian.url()), body))
+        self.assertEqual(self.guardian.methods_seen(),
+                         ["handshake/hello", "steps/sessionStart", "steps/userMessage", "steps/agentResponse",
+                          "steps/sessionEnd"])
 
 
 if __name__ == "__main__":

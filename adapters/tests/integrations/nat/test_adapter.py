@@ -157,7 +157,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
             self.assertIsNone(result,
                 "the late DENY arrived after the negotiated deadline; the "
                 "configured fail-open posture should control the timeout")
-            self.assertAlmostEqual(mw._step(None).posture.timeout_s, 0.1)
+            self.assertAlmostEqual(mw._open(mw._own).posture.timeout_s, 0.1)
         finally:
             if saved_secret is None:
                 os.environ.pop("ACS_HMAC_SECRET", None)

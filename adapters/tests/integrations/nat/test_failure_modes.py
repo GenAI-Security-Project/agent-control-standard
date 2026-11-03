@@ -287,12 +287,15 @@ class FailureMode3_LifecycleSubscriptionRace(unittest.TestCase):
             # Both calls belong to one run, so both see that run's step stream.
             token = ContextState.get().event_stream.set(Subject())
             self.addCleanup(ContextState.get().event_stream.reset, token)
+            run_token = ContextState.get().workflow_run_id.set("race-run")
+            self.addCleanup(ContextState.get().workflow_run_id.reset, run_token)
             runs = [contextvars.copy_context(), contextvars.copy_context()]
+            sessions = []
 
             barrier = threading.Barrier(2)
             def runner(run):
                 barrier.wait()  # release both threads simultaneously
-                run.run(mw._ensure_lifecycle_subscribed)
+                sessions.append(run.run(mw._session_of_call))
 
             t1 = threading.Thread(target=runner, args=(runs[0],))
             t2 = threading.Thread(target=runner, args=(runs[1],))
@@ -300,12 +303,10 @@ class FailureMode3_LifecycleSubscriptionRace(unittest.TestCase):
             t1.join(); t2.join()
 
         self.assertEqual(subscribe_calls[0], 1,
-            f"BUG #3: lifecycle subscribe() was called {subscribe_calls[0]} "
-            f"times instead of 1. Two threads raced through "
-            f"_ensure_lifecycle_subscribed's check-then-set with no lock. "
-            f"Every subsequent WORKFLOW event will fire its ACS lifecycle "
-            f"hook {subscribe_calls[0]} times: duplicate sessionStart, "
-            f"duplicate sessionEnd, duplicated audit chain entries.")
+            f"lifecycle subscribe() was called {subscribe_calls[0]} times instead of 1; "
+            f"every later WORKFLOW event would report its hooks that many times.")
+        self.assertEqual(len({id(session) for session in sessions}), 1, "both calls are in one session")
+        mw.close()
 
 
 if __name__ == "__main__":

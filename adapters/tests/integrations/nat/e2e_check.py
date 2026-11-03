@@ -331,31 +331,18 @@ def scenario_handshake_once(report: Report, guardian: ProgrammableGuardian) -> N
 
 
 def scenario_lifecycle_observability(report: Report, guardian: ProgrammableGuardian) -> None:
-    """LIFECYCLE — confirms the IntermediateStepManager subscription
-    actually emits sessionStart + userMessage + agentResponse + sessionEnd
-    on WORKFLOW_START / WORKFLOW_END.
-
-    This is the OBSERVABILITY backstop we documented in the README: if
-    YAML wiring misses a function, the lifecycle stream still surfaces
-    the call to the Guardian. If THIS scenario fails, the backstop
-    doesn't actually backstop — we'd be lying in the docs.
-    """
+    """A Runner's WORKFLOW_START and WORKFLOW_END, reported by the middleware's exporter, send sessionStart, userMessage, agentResponse and sessionEnd."""
     report.case(5, TOTAL_SCENARIOS,
-                "LIFECYCLE — IntermediateStepManager emits boundary hooks")
+                "LIFECYCLE — a NAT run emits its boundary hooks")
     report.field("Expected:",
                   "WORKFLOW_START fires steps/sessionStart + steps/userMessage; "
                   "WORKFLOW_END fires steps/agentResponse + steps/sessionEnd")
 
     guardian.reset()
 
-    # Subscribe _on_intermediate_step directly via ContextState.get();
-    # Context._current_context is internal and unstable across NAT versions.
     try:
-        from nat.builder.intermediate_step_manager import IntermediateStepManager  # type: ignore[import-not-found]
-        from nat.builder.context import ContextState  # type: ignore[import-not-found]
-        from nat.data_models.intermediate_step import (  # type: ignore[import-not-found]
-            IntermediateStepPayload, IntermediateStepType, StreamEventData,
-        )
+        from tests.integrations.nat._nat_runs import with_middleware
+        from acs.integrations.nat.adapter import ACSMiddlewareConfig
     except ImportError as e:
         report.sub("nvidia-nat-core importable for lifecycle test",
                     False, f"missing: {e}")
@@ -364,36 +351,14 @@ def scenario_lifecycle_observability(report: Report, guardian: ProgrammableGuard
 
     workflow_input = f"hello-from-nat-e2e-{uuid.uuid4().hex[:6]}"
     workflow_output = f"acs-nat-output-{uuid.uuid4().hex[:6]}"
+    os.environ["ACS_HMAC_SECRET"] = HMAC_SECRET
+    os.environ["ACS_HMAC_KEY_ID"] = "test-key"
 
-    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs",
-                            session_id="nat-e2e-lifecycle")
-    ctx_state = ContextState.get()
-    mgr = IntermediateStepManager(ctx_state)
-    sub = mgr.subscribe(on_next=mw._on_intermediate_step)
-    try:
-        wf_uuid = str(uuid.uuid4())
-        # START and END of a span share the same UUID
-        mgr.push_intermediate_step(IntermediateStepPayload(
-            UUID=wf_uuid,
-            event_type=IntermediateStepType.WORKFLOW_START,
-            name="e2e-workflow",
-            data=StreamEventData(input=workflow_input),
-        ))
-        mgr.push_intermediate_step(IntermediateStepPayload(
-            UUID=wf_uuid,
-            event_type=IntermediateStepType.WORKFLOW_END,
-            name="e2e-workflow",
-            data=StreamEventData(output=workflow_output),
-        ))
-    finally:
-        try:
-            sub.dispose()
-        except Exception:  # noqa: BLE001
-            pass
-
-    # Give async pumps a moment to flush
-    import time as _time
-    _time.sleep(0.2)
+    async def body(middleware, run) -> None:
+        async def entry(message: str) -> str:
+            return workflow_output
+        await run("e2e-workflow", entry, workflow_input)
+    asyncio.run(with_middleware(ACSMiddlewareConfig(guardian_url=f"http://127.0.0.1:{guardian.port}/acs"), body))
 
     methods = [r.get("method", "") for r in guardian.received]
     session_start = [r for r in guardian.received

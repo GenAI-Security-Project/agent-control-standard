@@ -14,13 +14,13 @@ NAT exposes a `FunctionMiddleware` abstraction that wraps any function — tools
 6. Applies the verdict: `allow` passes through; `deny` raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP` on NAT releases that expose it); `modify` rewrites the input where NAT reads it, the input model in `context.modified_args[0]` or the keyword arguments in `context.modified_kwargs`, and is denied when it fits neither; `ask`/`defer` substitute to deny at the middleware boundary.
 7. Records a `steps/toolCallResult` envelope in `post_invoke` and redacts the output on deny, and on ask or defer, since nothing can pause the output for a person. Inputs and outputs go to the Guardian in JSON form: a model dumped in JSON mode, and a value such as a `datetime` as its string.
 
-Each NAT run is its own ACS session, with a `session_id` derived from the configured one and the run; its `handshake/hello` fires once, at the run's start, and the decision is kept in process state for the run's calls. A call outside any NAT run uses the configured `session_id`, which gets its own `sessionStart` before the first such call and its `sessionEnd` when NAT shuts the middleware down (`mapping.md`).
+Each root NAT Runner is its own ACS session, with a fresh `session_id`; its `handshake/hello` fires once, at the run's start, and the decision is kept in process state for the run's calls. A Runner started inside a run, a nested workflow or sub-agent, joins that run's session. A call outside any NAT Runner uses the middleware's own session, which gets its own `sessionStart` before the first such call and its `sessionEnd` when NAT shuts the middleware down (`mapping.md`).
 
-Independently of the middleware path, the adapter reports each run's `WORKFLOW_START` / `WORKFLOW_END` events as `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). A run that raises or is cancelled reaches no workflow end, so it sends no `agentResponse`, and its `sessionEnd` carries `reason: error` or `cancelled` (see `mapping.md`). A Guardian that denies a run's `sessionStart` refuses that run's calls. When NAT builds the middleware, it registers an `acs_lifecycle` telemetry exporter, which NAT starts for every run before `WORKFLOW_START`. A middleware built without NAT's builder subscribes on each run's first call instead, so it reports that run from the call on. **Apart from the run's `sessionStart` decision, which the middleware applies to the run's calls, the lifecycle stream is observation-only.** Enforcement is the middleware path's job.
+Independently of the middleware path, the adapter reports each run's `WORKFLOW_START` / `WORKFLOW_END` events as `steps/sessionStart` + `steps/userMessage` (on workflow start with input) and `steps/agentResponse` + `steps/sessionEnd` (on workflow end with output). A run that raises or is cancelled reaches no workflow end, so it sends no `agentResponse`, and its `sessionEnd` carries `reason: error` or `cancelled` (see `mapping.md`). A Guardian that denies a run's `sessionStart` refuses that run's calls. When NAT builds the middleware, it registers an `acs_lifecycle` telemetry exporter, which NAT starts for every Runner before its `WORKFLOW_START` and cleans up when the Runner ends. A middleware built without NAT's builder subscribes on each run's first call instead, so it reports that run from the call on. **Apart from the run's `sessionStart` decision, which the middleware applies to the run's calls, the lifecycle stream is observation-only.** Enforcement is the middleware path's job.
 
 ### Decision honoring (§6.4)
 
-ACS-Core §6.4 requires the framework to wait for the verdict and apply it before the action executes. NAT provides this through `function_middleware_invoke`: `pre_invoke` must complete before `call_next(...)` runs, so a Guardian deny (whether surfaced as `ACSGuardianDenied` or `InvocationAction.SKIP`) is applied before the wrapped function would execute. Verified in `tests/test_live.py` (deny tests assert `executed["count"] == 0`).
+ACS-Core §6.4 requires the framework to wait for the verdict and apply it before the action executes. NAT provides this through `function_middleware_invoke`: `pre_invoke` must complete before `call_next(...)` runs, so a Guardian deny (whether surfaced as `ACSGuardianDenied` or `InvocationAction.SKIP`) is applied before the wrapped function would execute. Verified in `tests/integrations/nat/test_live.py` (deny tests assert `executed["count"] == 0`).
 
 ## Install — five steps
 
@@ -124,7 +124,7 @@ NAT's middleware fires per attachment point: the workflow, each function group a
 
 What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` gives.** The middleware runs *before* the function executes and waits for the Guardian's decision, off the event loop; a Guardian deny raises `ACSGuardianDenied` (or sets `InvocationAction.SKIP`) and NAT does not call the function.
 
-**The lifecycle observer reports workflow boundaries only.** It sends `sessionStart` and `userMessage` for each run, `agentResponse` for each run that returns, `sessionEnd` for each run, and no tool calls, so a function the middleware is not wired to reaches the Guardian neither as a decision nor as an observation. Steps 1 and 2 close that gap: define every function in YAML, and run `acs-nat-wire --check` in CI.
+**The lifecycle observer reports workflow boundaries only.** It sends `sessionStart` and `userMessage` for each run, `agentResponse` for each run that returns, `sessionEnd` for each run whose session the Guardian did not refuse, and no tool calls, so a function the middleware is not wired to reaches the Guardian neither as a decision nor as an observation. Steps 1 and 2 close that gap: define every function in YAML, and run `acs-nat-wire --check` in CI.
 
 ## Smoke tests
 
@@ -164,7 +164,7 @@ Five fully-automated scenarios against the **real `example_guardian.evaluate_ste
 | 2 | DESTRUCTIVE | `rm -rf` on a victim dir with a canary file → real policy denies via `destructive_command` regex; `ACSGuardianDenied` raised; **canary file still on disk** (counterproof — the unit-test counter alone can false-pass if the function returns early for any reason) |
 | 3 | READ-TOOL | different tool, same wire contract; arguments wrapped per `tool-call-request.json:26-37`; envelope.arguments.file_path.value matches probe path |
 | 4 | HANDSHAKE-ONCE | 3 sequential invocations on the same middleware → exactly 1 `handshake/hello` envelope arrived |
-| 5 | LIFECYCLE | `WORKFLOW_START`/`WORKFLOW_END` pushed through `IntermediateStepManager` → emits `steps/sessionStart` + `steps/userMessage` + `steps/agentResponse` + `steps/sessionEnd` envelopes with the workflow input/output in the payload (the observability backstop must actually backstop) |
+| 5 | LIFECYCLE | A NAT Runner's `WORKFLOW_START`/`WORKFLOW_END`, reported by the middleware's exporter → emits `steps/sessionStart` + `steps/userMessage` + `steps/agentResponse` + `steps/sessionEnd` envelopes with the workflow input/output in the payload (the observability backstop must actually backstop) |
 
 The final line is `ACS-CORE SMOKE PASS (nat)` (exit 0) — a smoke verdict, not a conformance certification — or a per-scenario failure list (exit 1).
 
@@ -218,7 +218,7 @@ Same `acs_audit_event`; the `cause` field is what operators grep on.
 
 ### Smoke #7 — coverage-gap detection
 
-Have your Guardian log every received envelope's `method` and the source (middleware-routed via `steps/toolCallRequest` vs lifecycle-routed via `steps/toolCallRequest` from `WORKFLOW_START`). After a typical workflow run, every tool call should appear in both streams. A call appearing in lifecycle but not middleware → that function is not wired (re-run `acs-nat-wire --check` to locate it).
+Have your Guardian log the `tool.name` of every `steps/toolCallRequest` it receives. After a typical workflow run, every function the workflow calls should appear there; a function that never appears is not wired (run `acs-nat-wire --check` to locate it).
 
 ## Files
 
@@ -232,7 +232,9 @@ Have your Guardian log every received envelope's `method` and the source (middle
 - `tests/integrations/nat/test_live.py` — 5 live workflow tests exercising NAT's `function_middleware_invoke` orchestration end-to-end.
 - `tests/integrations/nat/test_dispositions_live.py` — every ACS disposition (ALLOW, DENY, MODIFY, ASK, DEFER, post_invoke DENY) verified on the `modified_args[0]` Pydantic-model path the LangChain react_agent uses in production.
 - `tests/integrations/nat/test_envelope_schema.py` — JSON-RPC envelope shape validation against canonical schemas.
-- `tests/integrations/nat/test_lifecycle.py` — `IntermediateStepManager` subscription emits the 6-minimum hooks.
+- `tests/integrations/nat/test_lifecycle.py`: a run's function and LLM steps add no lifecycle hooks.
+- `tests/integrations/nat/test_sessions.py`: each root Runner is one session, through NAT's builder, session manager, request path and Runner.
+- `tests/integrations/nat/test_runner_lifecycle.py`: each run's hooks, decisions, failure counts and end, through NAT's Runner.
 - `tests/integrations/nat/test_failure_modes.py` — transport failures, signature checks, replay, timestamp skew, JSON-RPC errors.
 - `docs/nat/example_payloads.md` — masked real-world payload examples showing the in-process `InvocationContext` shape and what the adapter sends.
 
@@ -262,7 +264,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
 | `default_deny` | `false` | Fail-open with audit (§6.4 default). Set `true` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
 | `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config` replaces it for the session, per method where `per_method_ms` names one. |
-| `session_id` | (auto, per-process) | UUID; auto-generated and stable for the process lifetime. Calls outside a NAT run use it; each run's own `session_id` is derived from it. |
+| `session_id` | (auto, per middleware) | UUID of the session for calls outside any NAT run; generated when unset. Each run's session gets a fresh `session_id` of its own. A configured value is the same in every process and after a restart, so leave it unset unless one process uses it once. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
 ### Environment variables (read by the adapter at runtime)
@@ -273,7 +275,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
 | `ACS_AGENT_ID` | derived from `target_function_or_group` | Stable agent identifier sent in `metadata.agent_id`. |
-| `ACS_SESSION_ID` | derived | Overrides the auto-generated session_id. |
+| `ACS_SESSION_ID` | (unset) | Sets `session_id` when the YAML leaves it unset. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: every call passes through with no Guardian traffic and an `acs_disabled_bypass` audit event. Read when NAT builds the middleware, so set it before the workflow starts. |
@@ -283,7 +285,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 
 ## On-disk state
 
-NAT runs the adapter in-process. The middleware keeps each session's handshake decision in memory and stores it in `~/.cache/acs-adapter-handshake/` like the other adapters, so a restarted process with the same `session_id` follows the same decision, and a new session handshakes again. A run's records are removed once its `sessionEnd` has been handled. The Guardian-side state (`~/.cache/acs-guardian-state/<sha256(session_id)>.json`) is the same as for the other adapters — chain head + replay set, survives Guardian restart.
+NAT runs the adapter in-process. The middleware keeps each session's handshake decision in memory and stores it in `~/.cache/acs-adapter-handshake/` like the other adapters, and removes a session's records once its `sessionEnd` has been handled. Each run's session has a fresh `session_id`, so a restarted process opens new sessions. The Guardian-side state (`~/.cache/acs-guardian-state/<sha256(session_id)>.json`) is the same as for the other adapters — chain head + replay set, survives Guardian restart.
 
 ## Conformance status
 
@@ -291,21 +293,21 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 
 | ACS-Core item | Status |
 |---|---|
-| Handshake (`handshake/hello`) | ✓ once per session: each NAT run's at its start, and the configured session's when NAT builds the middleware; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1) |
+| Handshake (`handshake/hello`) | ✓ once per session: each root Runner's at its start, and the middleware's own at its first call outside a run; the decision (negotiated, refused, or no answer under `ACS_STARTUP_POSTURE`) holds for the session's lifetime (§4.1) |
 | Profiles (`profiles_supported` / `profiles_accepted`) | ✓ always claims `acs-core`: the middleware refuses a session with no usable secret and label before the handshake. A ServerHello accepting a profile the adapter did not claim is not a valid answer, a claimed profile the Guardian leaves out is audited as `profile_not_accepted`, and a hook's `ACS_REQUIRE_PROFILES` turns a left-out profile into a refusal of that hook's steps. |
 | JSON-RPC envelope shape (`request-envelope.json`) | ✓ validates against canonical schema (`test_envelope_schema.py`) |
-| Hook taxonomy (Core minimum set) | ⚠ emitted, but read the enforcement split. **Decision-eligible** coverage: `toolCallRequest` / `toolCallResult`, via the `FunctionMiddleware` path — these can actually block/redact. `sessionStart` (ALLOW / DENY) is applied too: a deny refuses the run's calls. The other three — `userMessage`, `agentResponse`, `sessionEnd` — are emitted **observation-only** from the `IntermediateStepManager` subscription (fire-and-forget; the Guardian's verdict is not applied), so they provide audit/trace coverage, **not** enforcement, and should not be counted as decision-eligible Core coverage. ACS-Core requires a subagent-capable client to emit `subagentStart` when it spawns a sub-agent, and a framework with no sub-agent abstraction has nothing to emit. The adapter emits no `subagentStart`: nested workflow functions reach the Guardian as generic tool calls. The Guardian decides by deployment-defined means whether a NAT deployment counts as subagent-capable. Where sub-workflows act as sub-agents, this is a known gap. See `mapping.md`. Verified in `test_lifecycle.py`. |
-| Dispositions | ALLOW / DENY / MODIFY supported on **function-middleware (pre-execution)** hooks (`pre_invoke` for every wrapped function — tools, sub-workflows, LLM, retrievers). ASK/DEFER substituted to DENY at the middleware boundary; deployments wanting pause-and-resume should compose with NAT's HITL middleware (`nat.middleware.hitl`). **Lifecycle hooks from the `IntermediateStepManager` subscription (`steps/sessionStart`, `steps/userMessage`, `steps/agentResponse`, `steps/sessionEnd`) are observation-only** — subscription callbacks cannot veto a NAT event after it fires. See `mapping.md`. |
+| Hook taxonomy (Core minimum set) | ⚠ emitted, but read the enforcement split. **Decision-eligible** coverage: `toolCallRequest` / `toolCallResult`, via the `FunctionMiddleware` path — these can actually block/redact. `sessionStart` (ALLOW / DENY) is applied too: a deny refuses the run's calls. The other three — `userMessage`, `agentResponse`, `sessionEnd` — are emitted **observation-only** by the lifecycle exporter (fire-and-forget; the Guardian's verdict is not applied), so they provide audit/trace coverage, **not** enforcement, and should not be counted as decision-eligible Core coverage. ACS-Core requires a subagent-capable client to emit `subagentStart` when it spawns a sub-agent, and a framework with no sub-agent abstraction has nothing to emit. The adapter emits no `subagentStart`: a nested Runner's calls reach the Guardian as tool calls in its parent run's session. The Guardian decides by deployment-defined means whether a NAT deployment counts as subagent-capable. Where sub-workflows act as sub-agents, this is a known gap. See `mapping.md`. Verified in `test_lifecycle.py`. |
+| Dispositions | ALLOW / DENY / MODIFY supported on **function-middleware (pre-execution)** hooks (`pre_invoke` for every wrapped function — tools, sub-workflows, LLM, retrievers). ASK/DEFER substituted to DENY at the middleware boundary; deployments wanting pause-and-resume should compose with NAT's HITL middleware (`nat.middleware.hitl`). Of the lifecycle hooks, the run's `steps/sessionStart` verdict is applied: a deny refuses the run's calls. **`steps/userMessage`, `steps/agentResponse` and `steps/sessionEnd` are observation-only**: the exporter reports a NAT event after it fires and cannot veto it. See `mapping.md`. |
 | Unknown-disposition fail posture | ✓ |
-| Post-tool deny redaction | ✓ `post_invoke` clears `context.output = None` and emits an `ACS_AUDIT` `post_invoke_redacted` event per §6.4 output-redaction gate. (NAT's `InvocationContext` is a strict Pydantic model with `validate_assignment=True` — ad-hoc attributes like `acs_post_invoke_redacted` would crash; downstream consumers MUST read the audit event for the redaction signal, not an extra attribute.) |
-| SessionContext + published `chain_hash` | ✓ session_id coerced to UUID; Guardian computes rolling chain |
+| Post-tool deny redaction | ✓ `post_invoke` clears `context.output = None` and emits an `ACS_AUDIT` `post_invoke_redacted` event, so the caller never receives a result the Guardian denied (§6.4: the Observed Agent applies the verdict). (NAT's `InvocationContext` is a strict Pydantic model with `validate_assignment=True` — ad-hoc attributes like `acs_post_invoke_redacted` would crash; downstream consumers MUST read the audit event for the redaction signal, not an extra attribute.) |
+| SessionContext + published `chain_hash` | ✓ every session's `session_id` is a UUID; Guardian computes rolling chain |
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006); audit cause distinguishes both |
 | Baseline integrity (HMAC-SHA256) | ✓ every request and response signed under `ACS_HMAC_KEY_ID`; a middleware with no secret of at least 32 bytes, or no label, refuses its session and denies every call; signed responses verified by adapter (pre_invoke + post_invoke reject SIGNATURE_INVALID) |
 | Decision honoring (§6.4) | ✓ NAT's middleware contract guarantees the function will not execute if `pre_invoke` raises or sets SKIP — verified in `test_live.py` (deny tests assert `executed["count"] == 0`); fail-open emits `ACS_AUDIT` events |
 | `cause` field on every audit event | ✓ `transport_failure`, `adapter_exception`, `response_signature_invalid`, plus a cause for every §17 JSON-RPC error code (for example `session_refused_response`, `signature_invalid_response`, `replay_detected_response`, `internal_error_response`) with `guardian_error_response` as the catch-all fallback for unknown codes |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | Wrapped MCP `protocols/MCP/*` | ✗ not implemented. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter emits no `protocols/MCP/*` traffic. The function middleware sees an MCP tool only as an ordinary NAT function, so a wired MCP tool call can reach the Guardian only as `steps/toolCallRequest` and `steps/toolCallResult`. This suite does not exercise that path. No other MCP surface is wrapped, so a NAT session that uses MCP falls short of ACS-Core there. Known limitation. |
-| `request_id_ref` correlation | ✓ `post_invoke` populates with a deterministic uuid5 derived from session + function + kwargs, linking result to request |
+| `request_id_ref` correlation | ✓ `post_invoke` sets it to the `request_id` of the call's `toolCallRequest`, a uuid4 kept on the call's invocation context, linking result to request |
 | **Coverage of every tool call** | ⚠ **opt-in via YAML wiring** — see [Coverage discipline](#coverage-discipline-the-yaml-only-rule) above. `acs-nat-wire --check` is the CI gate that makes this enforceable. |
 
 ## How NAT's defense middleware composes with this

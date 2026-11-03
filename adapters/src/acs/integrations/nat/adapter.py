@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import collections
+import contextvars
 import hashlib
 import json
 import os
@@ -187,7 +188,7 @@ if _NAT_AVAILABLE:
         )
         session_id: Optional[str] = Field(
             default=None,
-            description="Session id of calls outside a NAT run; each run's own session id derives from it. Auto-generated per-process if absent. Coerced to UUID format.",
+            description="Session id of calls outside any NAT run, generated if absent and coerced to UUID format; each run's session gets a fresh id.",
         )
         timeout_s: float = Field(
             default=5.0,
@@ -394,22 +395,24 @@ def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> bool
     return True
 
 
-# ----- Middleware class -----
+def _current_stream() -> Any:
+    try:
+        return _NATContextState.get().event_stream.get() if _NATContextState is not None else None
+    except Exception:  # noqa: BLE001
+        return None
 
-# Untracked runs whose decision failures wait for a sessionEnd; past this many, the oldest of them ages out.
-_MAX_COUNTED_RUNS = 256
-# Ended runs remembered so a late step of one is refused; past this many, the oldest is forgotten.
-_MAX_ENDED_RUNS = 4096
+
+def _current_run_id() -> str | None:
+    try:
+        return _NATContextState.get().workflow_run_id.get() if _NATContextState is not None else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class _LifecycleSender:
-    """Sends lifecycle hooks on one thread, in the order they are accepted.
+    """Sends one session's lifecycle hooks in order on a thread that exits while idle; close() drains and stops, seal() stops at once."""
 
-    close() waits until every accepted hook has gone out, still accepting
-    hooks that arrive meanwhile, and then accepts no more.
-    """
-
-    def __init__(self, send: Callable[[str, dict, str | None], None]) -> None:
+    def __init__(self, send: Callable[..., None]) -> None:
         self._send = send
         self._pending: collections.deque = collections.deque()
         self._changed = threading.Condition()
@@ -418,12 +421,11 @@ class _LifecycleSender:
         self._thread: threading.Thread | None = None
         _OPEN_SENDERS.add(self)
 
-    def submit(self, method: str, payload: dict, run: str | None = None) -> bool:
-        """Queue a hook of a run behind the ones already accepted; False once closed."""
+    def submit(self, *item: Any) -> bool:
         with self._changed:
             if self._closed:
                 return False
-            self._pending.append((method, payload, run))
+            self._pending.append(item)
             self._wake()
             return True
 
@@ -438,12 +440,16 @@ class _LifecycleSender:
         done.set_result(None)
         return done
 
+    def seal(self) -> None:
+        with self._changed:
+            self._closed = True
+            self._changed.notify_all()
+
     def close(self) -> None:
         with self._changed:
             while self._pending or self._busy:
                 self._changed.wait()
             self._closed = True
-            self._changed.notify_all()
             thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join()
@@ -457,9 +463,9 @@ class _LifecycleSender:
     def _run(self) -> None:
         while True:
             with self._changed:
-                while not self._pending and not self._closed:
-                    self._changed.wait()
                 if not self._pending:
+                    self._thread = None
+                    self._changed.notify_all()
                     return
                 item = self._pending.popleft()
                 self._busy = True
@@ -477,25 +483,31 @@ class _LifecycleSender:
                     self._changed.notify_all()
 
 
-# The lifecycle thread is a daemon, so interpreter exit sends what is still queued first.
+# Lifecycle threads are daemons, so interpreter exit sends what is still queued first.
 _OPEN_SENDERS: weakref.WeakSet = weakref.WeakSet()
 atexit.register(lambda: [sender.close() for sender in list(_OPEN_SENDERS)])
 
 
-@dataclass
-class _Run:
-    """One NAT run, which is its own ACS session: the task running it, whether its sessionEnd is queued, and the session's decision."""
-    session_id: str
+@dataclass(eq=False)
+class _Session:
+    """One ACS session: a root NAT Runner's, a run's seen only from its calls, or the middleware's own."""
+    id: str
+    lane: _LifecycleSender
     task: asyncio.Task | None = None
-    ended: bool = False
+    # The WORKFLOW_START step of the Runner that owns the session.
+    root_step: str | None = None
+    # The run's step stream, for a run seen only from its calls.
+    stream: weakref.ref | None = None
+    platform_context: dict = field(default_factory=dict)
     decision: Handshake | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
-    # The run's Guardian exchanges still running, and whether its sessionEnd has begun; both under `idle`.
+    # in_flight, closed, ended and failures are read and written under idle.
+    idle: threading.Condition = field(default_factory=threading.Condition)
     in_flight: int = 0
     closed: bool = False
-    idle: threading.Condition = field(default_factory=threading.Condition)
-    # Set once the sessionEnd has been handled; only the middleware's own session is kept after it.
-    finished: bool = False
+    ended: bool = False
+    saw_end: bool = False
+    failures: collections.Counter = field(default_factory=collections.Counter)
 
 
 @dataclass(frozen=True)
@@ -508,7 +520,12 @@ class _Step:
 
 
 class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
-    """NAT middleware that defers each call's allow/deny/modify decision to an ACS Guardian."""
+    """NAT middleware that defers each call's allow/deny/modify decision to an ACS Guardian.
+
+    Each root NAT Runner is one ACS session with a fresh id: a Runner started while another of this middleware's
+    sessions is open in its context, a nested workflow, joins that session. Calls outside any Runner use the
+    middleware's own session, which ends at close().
+    """
 
     def __init__(self, config):
         if _NAT_AVAILABLE:
@@ -520,48 +537,21 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             guardian_url=config.guardian_url,
             posture=FailPosture(deny_on_failure=bool(config.default_deny), timeout_s=config.timeout_s),
         )
-        # Replaced, never mutated, once the handshake negotiates (§6.4).
-        self._posture = self._acs.posture
         self._session_id = _coerce_uuid(
             getattr(config, "session_id", None) or os.environ.get("ACS_SESSION_ID")
         )
         target = getattr(config, "target_function_or_group", None) or "nat"
         self._agent_id = os.environ.get("ACS_AGENT_ID") or f"nat:{hashlib.sha256(target.encode()).hexdigest()[:8]}"
-        # The session's §4.1 decision, made by one handshake (in the builder, or on the first call) and reused by every call.
-        self._session: Handshake | None = None
-        self._session_lock = threading.Lock()
-        # One thread sends lifecycle hooks off the event loop, in the order NAT reports them.
-        self._lifecycle = _LifecycleSender(self._send_lifecycle_hook)
-        self._server_hello: dict | None = None
-        # Set when the builder registered a lifecycle exporter, which NAT starts for every run.
-        self._lifecycle_exported = False
-        # The run streams this middleware subscribed to itself, one subscription each; a stream leaves with its run.
-        self._lifecycle_streams: weakref.WeakSet = weakref.WeakSet()
-        # Locks the check-then-set in _ensure_lifecycle_subscribed
-        # against double subscription from parallel pre_invoke calls.
-        self._lifecycle_lock = threading.Lock()
+        self._current: contextvars.ContextVar = contextvars.ContextVar(f"acs_nat_session_{id(self)}", default=None)
+        self._sessions_lock = threading.Lock()
+        self._open_sessions: set[_Session] = set()
+        self._stream_sessions: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self._own: _Session | None = None
+        self._closed = False
         # WeakKeyDictionary fallback for frozen contexts — id(context)
         # would collide once GC recycles addresses.
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
-        # §6.4: decision failures per run and failure class; each run's sessionEnd reports its own run's.
-        # Calls and the lifecycle thread both count; a run no sessionEnd will report ages out once it is no longer tracked.
-        self._decision_failures: collections.OrderedDict = collections.OrderedDict()
-        self._decision_failures_lock = threading.Lock()
-        # The runs whose WORKFLOW_START was seen, each kept until its sessionEnd has been handled.
-        self._runs: collections.OrderedDict = collections.OrderedDict()
-        # Runs whose sessionEnd has been handled, so a late step of one is refused rather than opening its id again.
-        self._ended_runs: collections.OrderedDict = collections.OrderedDict()
-        self._runs_lock = threading.Lock()
-
-    def _ensure_handshake(self) -> Handshake:
-        """The session's decision, opened once under a lock so concurrent first calls share one handshake."""
-        if self._session is not None:
-            return self._session
-        with self._session_lock:
-            if self._session is None:
-                self._session = self._open_session()
-        return self._session
 
     @staticmethod
     def _methods() -> list[str]:
@@ -573,272 +563,230 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             ]
         return methods
 
-    def _open_session(self) -> Handshake:
-        # The stored decision keeps the session's gate across middleware instances and processes.
-        session = open_session(
-            config=self._acs,
-            session_id=self._session_id,
-            agent_id=self._agent_id,
-            platform="nat",
-            methods_implemented=self._methods(),
-        )
-        if isinstance(session, Negotiated):
-            # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
-            self._posture = self._posture.negotiated(session.server_hello)
-            self._server_hello = dict(session.server_hello)
-        return session
-
-    async def _lifecycle_sent(self) -> None:
-        """Wait until the lifecycle hooks NAT reported earlier have gone out, so the Guardian sees steps in event order."""
-        await asyncio.wrap_future(self._lifecycle.sent())
-
     def close(self) -> None:
-        """End the middleware's own session if a step outside any run started it, send the lifecycle hooks still queued,
-        including any that arrive meanwhile, then accept no more."""
-        with self._runs_lock:
-            own = self._runs.get(None)
-        if own is not None:
-            # A session still opening finishes first, so its sessionStart is not left without a sessionEnd.
-            with own.lock:
-                opened = own.decision is not None
-                if not opened:
-                    own.finished = True
-            if opened and self._end_run(None):
-                self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "completed"}, run=None)
-        self._lifecycle.close()
+        """Refuse new sessions, then end every open one after the hooks it already queued: the middleware's own as
+        completed, a run still open as abandoned."""
+        with self._sessions_lock:
+            self._closed = True
+            sessions = list(self._open_sessions)
+        for session in sessions:
+            self._end_session(session, "completed" if session is self._own else "abandoned")
+        for session in sessions:
+            session.lane.close()
 
-    def _ensure_lifecycle_subscribed(self) -> None:
-        """Without the builder's exporter, subscribe to the current run's step stream on the run's first call.
-
-        NAT builds a new stream for each run and pushes WORKFLOW_START before
-        any call, so such a run reports from its first call on; the builder's
-        exporter subscribes before the start. Locked against double subscription.
-        """
-        if self._lifecycle_exported or not _HAS_LIFECYCLE:
-            return
-        try:
-            stream = _NATContextState.get().event_stream.get()
-        except Exception:  # noqa: BLE001
-            return
-        if stream in self._lifecycle_streams:
-            return
-        with self._lifecycle_lock:
-            if stream in self._lifecycle_streams:
-                return
-            try:
-                mgr = _NATContext.get().intermediate_step_manager
-            except Exception:  # noqa: BLE001
-                # No active Context; function-call hooks still fire via FunctionMiddleware.
-                return
-            run = self._current_run()
-            try:
-                # NAT completes a run's stream when the run ends, whether or not it pushed WORKFLOW_END.
-                mgr.subscribe(
-                    on_next=self._on_intermediate_step,
-                    on_error=lambda e: audit_event(
-                        "lifecycle_subscription_error",
-                        session_id=self._session_id, error=str(e)),
-                    on_complete=lambda: self._run_stopped(run),
-                )
-                self._lifecycle_streams.add(stream)
-            except Exception as e:  # noqa: BLE001
-                audit_event("lifecycle_subscribe_failed",
-                            session_id=self._session_id, error=str(e))
-
-    def _on_intermediate_step(self, step) -> None:
-        """Translate workflow-boundary IntermediateStepType events into ACS
-        hooks; function-level events are already covered by
-        pre_invoke/post_invoke."""
-        try:
-            payload = step.payload
-            event_type = payload.event_type
-        except AttributeError:
-            return
-
-        run = self._current_run()
-        if event_type == IntermediateStepType.WORKFLOW_START:
-            self._track_run(run)
-            # Workflow input becomes both sessionStart (boundary marker)
-            # and userMessage (the input itself).
-            self._queue_lifecycle_hook(
-                "steps/sessionStart",
-                payload={"platform_context": {"workflow_name": payload.name or ""}}, run=run)
-            input_text = _stringify_step_data(payload.data)
-            if input_text:
-                self._queue_lifecycle_hook(
-                    "steps/userMessage",
-                    payload={"content": [{"type": "text", "value": input_text}]}, run=run)
-        elif event_type == IntermediateStepType.WORKFLOW_END:
-            self._end_run(run)
-            # Workflow output becomes agentResponse; sessionEnd closes the boundary.
-            output_text = _stringify_step_data(payload.data)
-            if output_text:
-                self._queue_lifecycle_hook(
-                    "steps/agentResponse",
-                    payload={"content": [{"type": "text", "value": output_text}]}, run=run)
-            self._queue_lifecycle_hook(
-                "steps/sessionEnd",
-                payload={"reason": "completed"}, run=run)
-
-    def _run_session_id(self, run: str | None) -> str:
-        """Each NAT run is its own ACS session, named from the configured session and the run; a step outside any run uses the configured one."""
-        if run is None:
-            return self._session_id
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"acs-nat-run:{self._session_id}:{run}"))
-
-    def _run_state(self, run: str | None) -> _Run:
-        """The run's state, created by its WORKFLOW_START or, for a run seen from its first call, by that call."""
+    def _new_session(self, *, session_id: str | None = None, root_step: str | None = None, stream: Any = None,
+                     platform_context: dict | None = None) -> _Session | None:
         try:
             task = asyncio.current_task()
         except RuntimeError:
             task = None
-        with self._runs_lock:
-            if run in self._ended_runs:
-                return _Run(session_id=self._run_session_id(run), finished=True)
-            state = self._runs.get(run)
-            if state is None:
-                state = self._runs[run] = _Run(session_id=self._run_session_id(run))
-            if state.task is None:
-                state.task = task
-            return state
+        session = _Session(id=session_id or str(uuid.uuid4()), lane=_LifecycleSender(self._send_lifecycle_hook),
+                           task=task, root_step=root_step,
+                           stream=weakref.ref(stream) if stream is not None else None,
+                           platform_context=dict(platform_context or {}))
+        with self._sessions_lock:
+            if self._closed:
+                session.lane.seal()
+                return None
+            self._open_sessions.add(session)
+        return session
 
-    def _track_run(self, run: str | None) -> None:
-        """Record a run at its WORKFLOW_START, which NAT pushes in the task running it."""
-        if run is not None:
-            self._run_state(run)
+    def _workflow_started(self, payload) -> _Session | None:
+        current = self._current.get()
+        if current is not None and not current.ended:
+            return None
+        context = {"workflow_name": payload.name or ""}
+        provided = getattr(getattr(payload, "metadata", None), "provided_metadata", None) or {}
+        for key in ("workflow_run_id", "conversation_id"):
+            if provided.get(key):
+                context[key] = provided[key]
+        session = self._new_session(root_step=payload.UUID, platform_context=context)
+        if session is None:
+            return None
+        self._current.set(session)
+        self._queue(session, "steps/sessionStart", {"platform_context": context})
+        text = _stringify_step_data(payload.data)
+        if text:
+            self._queue(session, "steps/userMessage", {"content": [{"type": "text", "value": text}]})
+        return session
 
-    def _step(self, run: str | None, workflow_name: str = "") -> _Step:
-        """The session a step belongs to, opened with its sessionStart: the run's own, or the middleware's for a step outside any run."""
-        state = self._run_state(run)
-        ended = _Step(state.session_id, SessionRefused("session_ended", {"session_id": state.session_id}), None,
-                      self._acs.posture)
-        with state.lock:
-            # Checked under the lock, so a session that shutdown found unopened is never opened after it.
-            if state.finished:
-                return ended
-            if state.decision is None:
-                state.decision = open_session(
-                    config=self._acs, session_id=state.session_id, agent_id=self._agent_id, platform="nat",
-                    methods_implemented=self._methods(),
-                    start=lambda session: self._send_session_start(run, state.session_id, session, workflow_name))
-            decision = state.decision
+    def _workflow_ended(self, session: _Session, payload) -> None:
+        session.saw_end = True
+        text = _stringify_step_data(payload.data)
+        if text:
+            self._queue(session, "steps/agentResponse", {"content": [{"type": "text", "value": text}]})
+
+    def _runner_stopped(self, session: _Session) -> None:
+        task = session.task
+        if session.saw_end:
+            reason = "completed"
+        elif task is not None and (task.cancelled() or task.cancelling() > 0):
+            reason = "cancelled"
+        else:
+            reason = "error"
+        self._end_session(session, reason)
+
+    def _end_session(self, session: _Session, reason: str) -> None:
+        with session.idle:
+            if session.ended:
+                return
+            session.ended = True
+            queued = session.lane.submit("steps/sessionEnd", {"reason": reason}, session)
+        if not queued:
+            audit_event("lifecycle_hook_not_sent", cause="middleware_closed", method="steps/sessionEnd",
+                        session_id=session.id)
+            self._finish(session)
+
+    def _finish(self, session: _Session) -> None:
+        session.lane.seal()
+        with self._sessions_lock:
+            self._open_sessions.discard(session)
+        discard_session(session.id, self._acs.guardian_url)
+
+    def _session_of_call(self) -> _Session | None:
+        current = self._current.get()
+        stream = _current_stream()
+        if current is not None and (not current.ended or current.stream is None or current.stream() is stream):
+            return current
+        if stream is not None and _current_run_id() is not None:
+            return self._stream_session(stream)
+        return self._own_session()
+
+    def _stream_session(self, stream: Any) -> _Session | None:
+        with self._sessions_lock:
+            session = self._stream_sessions.get(stream)
+        if session is None:
+            stack = _NATContextState.get().active_span_id_stack.get()
+            session = self._new_session(root_step=stack[1] if len(stack) > 1 else None, stream=stream,
+                                        platform_context={"workflow_run_id": _current_run_id()})
+            if session is None:
+                return None
+            with self._sessions_lock:
+                existing = self._stream_sessions.setdefault(stream, session)
+            if existing is not session:
+                self._finish(session)
+                session = existing
+            else:
+                self._subscribe(session)
+        self._current.set(session)
+        return session
+
+    def _subscribe(self, session: _Session) -> None:
+        try:
+            _NATContext.get().intermediate_step_manager.subscribe(
+                on_next=lambda step: self._stream_step(session, step),
+                on_error=lambda e: audit_event("lifecycle_subscription_error", session_id=session.id, error=str(e)),
+                on_complete=lambda: self._runner_stopped(session),
+            )
+        except Exception as e:  # noqa: BLE001
+            audit_event("lifecycle_subscribe_failed", session_id=session.id, error=str(e))
+
+    def _stream_step(self, session: _Session, step) -> None:
+        payload = getattr(step, "payload", None)
+        if (getattr(payload, "event_type", None) == IntermediateStepType.WORKFLOW_END
+                and payload.UUID == session.root_step):
+            self._workflow_ended(session, payload)
+
+    def _own_session(self) -> _Session | None:
+        with self._sessions_lock:
+            if self._own is not None or self._closed:
+                return self._own
+        session = self._new_session(session_id=self._session_id)
+        with self._sessions_lock:
+            if self._own is None:
+                self._own = session
+                return session
+        if session is not None:
+            self._finish(session)
+        return self._own
+
+    def _open(self, session: _Session | None, lifecycle: bool = False) -> _Step:
+        if session is None:
+            return _Step(self._session_id, SessionRefused("middleware_closed", {}), None, self._acs.posture)
+        with session.lock:
+            if session.decision is None:
+                # A lifecycle hook queued before the session ended still goes out; a call after the end does not.
+                if session.ended and not lifecycle:
+                    return self._refused(session)
+                session.decision = open_session(
+                    config=self._acs, session_id=session.id, agent_id=self._agent_id, platform="nat",
+                    methods_implemented=self._methods(), start=lambda negotiated: self._send_session_start(session, negotiated))
+            decision = session.decision
         if isinstance(decision, Negotiated):
             # §6.4: deny wins over proceed, and a negotiated default timeout replaces the local one.
-            return _Step(state.session_id, decision, dict(decision.server_hello),
+            return _Step(session.id, decision, dict(decision.server_hello),
                          self._acs.posture.negotiated(decision.server_hello))
-        return _Step(state.session_id, decision, None, self._acs.posture)
+        return _Step(session.id, decision, None, self._acs.posture)
 
-    def _send_session_start(self, run: str | None, session_id: str, session: Negotiated, workflow_name: str):
-        """The run's one sessionStart, sent as its session opens (hooks.md sessionStart: ALLOW / DENY)."""
-        if not method_evaluated(session.server_hello, "steps/sessionStart"):
-            audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session_id)
+    def _refused(self, session: _Session) -> _Step:
+        return _Step(session.id, SessionRefused("session_ended", {"session_id": session.id}), None, self._acs.posture)
+
+    def _send_session_start(self, session: _Session, negotiated: Negotiated):
+        if not method_evaluated(negotiated.server_hello, "steps/sessionStart"):
+            audit_event("method_not_evaluated", method="steps/sessionStart", session_id=session.id)
             return None
         request = request_envelope("steps/sessionStart", request_id=str(uuid.uuid4()),
-                                   metadata=self._metadata(session_id),
-                                   payload={"platform_context": {"workflow_name": workflow_name}})
+                                   metadata=self._metadata(session.id),
+                                   payload={"platform_context": session.platform_context})
         result = round_trip(request, guardian_url=self._acs.guardian_url,
-                            posture=self._acs.posture.negotiated(session.server_hello), session_id=session_id)
+                            posture=self._acs.posture.negotiated(negotiated.server_hello), session_id=session.id)
         if isinstance(result, Resolution):
-            self._count_failure(result, run)
+            self._count_failure(session, result)
         return result
 
-    def _end_run(self, run: str | None) -> bool:
-        """Mark the run's sessionEnd as queued; False only when a tracked run's already was."""
-        with self._runs_lock:
-            state = self._runs.get(run)
-            if state is None or state.ended:
-                return state is None
-            state.ended = True
-            return True
+    async def _step_of(self, session: _Session | None) -> _Step:
+        if session is not None:
+            await asyncio.wrap_future(session.lane.sent())
+        return await asyncio.to_thread(self._open, session)
 
-    def _run_stopped(self, run: str | None) -> None:
-        """NAT stopped the run's exporter: a run that started and pushed no WORKFLOW_END failed or was cancelled."""
-        with self._runs_lock:
-            state = self._runs.get(run)
-            task = state.task if state is not None else None
-        if state is None or not self._end_run(run):
-            return
-        cancelled = task is not None and (task.cancelled() or task.cancelling() > 0)
-        self._queue_lifecycle_hook("steps/sessionEnd", payload={"reason": "cancelled" if cancelled else "error"}, run=run)
-
-    def _close_run(self, run: str | None) -> None:
-        """Before the run's sessionEnd: refuse its exchanges from now on, and wait for those already running, which a cancelled call leaves behind."""
-        with self._runs_lock:
-            state = self._runs.get(run)
-        if state is None:
-            return
-        with state.idle:
-            state.closed = True
-            while state.in_flight:
-                state.idle.wait()
-
-    def _exchange(self, request: dict, step: _Step, run: str | None, gate: bool = False):
-        """A call's round trip, counted so the run's sessionEnd goes out after it; refused once that sessionEnd has begun."""
-        ended = Resolution(False, "session_ended_fail_closed", "session_ended",
-                           {"session_id": step.session_id, "method": request.get("method", "")})
-        with self._runs_lock:
-            state = self._runs.get(run)
-        # A worker that starts after the session's end finds its state gone or finished.
-        if state is None or state.finished:
-            return ended
-        with state.idle:
-            if state.closed:
-                return ended
-            state.in_flight += 1
+    def _exchange(self, session: _Session, request: dict, step: _Step, gate: bool = False):
+        with session.idle:
+            if session.closed:
+                return Resolution(False, "session_ended_fail_closed", "session_ended",
+                                  {"session_id": step.session_id, "method": request.get("method", "")})
+            session.in_flight += 1
         try:
-            return self._round_trip(request, step, gate)
+            result = self._round_trip(request, step, gate)
+            if isinstance(result, Resolution):
+                self._count_failure(session, result)
+            return result
         finally:
-            with state.idle:
-                state.in_flight -= 1
-                state.idle.notify_all()
+            with session.idle:
+                session.in_flight -= 1
+                session.idle.notify_all()
 
-    def _forget_run(self, run: str | None) -> None:
-        """Drop a run once its sessionEnd has been handled, sent or not; the middleware's own session stays, ended, so a later step outside a run cannot open its id again."""
-        with self._runs_lock:
-            state = self._runs.get(run) if run is None else self._runs.pop(run, None)
-            if state is not None:
-                state.finished = True
-            if run is not None:
-                self._ended_runs[run] = None
-                while len(self._ended_runs) > _MAX_ENDED_RUNS:
-                    self._ended_runs.popitem(last=False)
-        self._take_failure_counts(run)
-        if state is not None:
-            discard_session(state.session_id, self._acs.guardian_url)
+    def _count_failure(self, session: _Session, resolution: Resolution) -> None:
+        if resolution.decision_failure:
+            with session.idle:
+                session.failures[resolution.fields.get("failure_class", "other")] += 1
 
-    def _queue_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
-        """Hand a lifecycle hook of a run to the lifecycle thread, so NAT's step callback returns without waiting on the Guardian."""
-        if not self._lifecycle.submit(method, payload, run):
-            audit_event("lifecycle_hook_not_sent", cause="middleware_closed", method=method,
-                        session_id=self._session_id)
-            if method == "steps/sessionEnd":
-                self._forget_run(run)
+    def _queue(self, session: _Session, method: str, payload: dict) -> None:
+        with session.idle:
+            queued = not session.ended and session.lane.submit(method, payload, session)
+        if not queued:
+            audit_event("lifecycle_hook_not_sent", cause="session_ended", method=method, session_id=session.id)
 
-    def _send_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
+    def _send_lifecycle_hook(self, method: str, payload: dict, session: _Session) -> None:
         try:
-            self._emit_lifecycle_hook(method, payload, run)
+            self._emit_lifecycle_hook(method, payload, session)
         except Exception as e:  # noqa: BLE001
             audit_event("lifecycle_hook_failed", cause="adapter_exception", error=str(e),
-                        method=method, session_id=self._session_id)
+                        method=method, session_id=session.id)
         finally:
             if method == "steps/sessionEnd":
-                self._forget_run(run)
+                self._finish(session)
 
-    def _emit_lifecycle_hook(self, method: str, payload: dict, run: str | None = None) -> None:
-        """Build, sign, and POST a lifecycle hook; errors are audited but
-        never interrupt the workflow (enforcement lives in
-        pre_invoke/post_invoke)."""
+    def _emit_lifecycle_hook(self, method: str, payload: dict, session: _Session) -> None:
         if self._acs.disabled:
-            audit_event("acs_disabled_bypass", session_id=self._session_id, method=method,
+            audit_event("acs_disabled_bypass", session_id=session.id, method=method,
                         detail="ACS_DISABLED=1 — lifecycle hook not sent")
             return
-        if method == "steps/sessionStart":
-            # The session opens here, and its sessionStart goes out as it does.
-            self._step(run, (payload.get("platform_context") or {}).get("workflow_name", ""))
-            return
         if method == "steps/sessionEnd":
-            self._close_run(run)
-        step = self._step(run)
+            self._send_session_end(session, payload)
+            return
+        step = self._open(session, lifecycle=True)
+        if method == "steps/sessionStart":
+            return
         gated = self._acs.gate(step.decision, method)
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
@@ -846,19 +794,41 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                              "session_id": step.session_id, "method": method})
             return
         if not method_evaluated(step.server_hello, method):
-            audit_event("method_not_evaluated", method=method,
-                        session_id=step.session_id)
+            audit_event("method_not_evaluated", method=method, session_id=step.session_id)
             return
-        if method == "steps/sessionEnd":
-            # Built as it is sent, so it counts the failures of every hook sent before it.
-            payload = {**payload, "summary": {"decision_failures": self._take_failure_counts(run)}}
         request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(step.session_id),
                                    payload=payload)
-        result = self._round_trip(request, step)
+        result = self._exchange(session, request, step)
         if isinstance(result, Resolution):
             audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
                                                     "method": method, "session_id": step.session_id})
-            self._count_failure(result, run)
+
+    def _send_session_end(self, session: _Session, payload: dict) -> None:
+        with session.idle:
+            session.closed = True
+            while session.in_flight:
+                session.idle.wait()
+            failures = dict(session.failures)
+        with session.lock:
+            decision = session.decision
+        if decision is None:
+            return
+        step = self._open(session, lifecycle=True)
+        gated = self._acs.gate(decision, "steps/sessionEnd")
+        if gated is not None:
+            audit_event(gated.audit_type, **{**gated.fields, "cause": gated.cause,
+                                             "session_id": session.id, "method": "steps/sessionEnd"})
+            return
+        if not method_evaluated(step.server_hello, "steps/sessionEnd"):
+            audit_event("method_not_evaluated", method="steps/sessionEnd", session_id=session.id)
+            return
+        request = request_envelope("steps/sessionEnd", request_id=str(uuid.uuid4()),
+                                   metadata=self._metadata(session.id),
+                                   payload={**payload, "summary": {"decision_failures": failures}})
+        result = self._round_trip(request, step)
+        if isinstance(result, Resolution):
+            audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
+                                                    "method": "steps/sessionEnd", "session_id": session.id})
 
     def _correlation_request_id(self, context) -> str:
         """A uuid4 per invocation, stable from pre_invoke to post_invoke: stashed on the context, else in a WeakKeyDictionary, since id() repeats after GC."""
@@ -891,16 +861,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return True
 
     async def pre_invoke(self, context):
-        """Gate the function call. Block via raising or InvocationAction.SKIP; modify args in place."""
         if self._acs.disabled:
             # Kill switch: pass through ungoverned, audited (§6.4).
             audit_event("acs_disabled_bypass", session_id=self._session_id,
                         method="steps/toolCallRequest",
                         detail="ACS_DISABLED=1 — pre_invoke bypassed ungoverned")
             return None
-        self._ensure_lifecycle_subscribed()
-        run = self._current_run()
-        step = await self._step_of(run)
+        session = self._session_of_call()
+        step = await self._step_of(session)
         gated = self._acs.gate(step.decision)
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
@@ -922,9 +890,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         except Exception as e:  # noqa: BLE001
             result = step.posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
+            self._count_failure(session, result)
         else:
-            await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._exchange, request, step, run, True)
+            result = await asyncio.to_thread(self._exchange, session, request, step, True)
         if isinstance(result, Resolution):
             return self._settle_pre(context, result, step)
         response = result.response
@@ -982,8 +950,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                         method="steps/toolCallResult",
                         detail="ACS_DISABLED=1 — post_invoke bypassed ungoverned")
             return None
-        run = self._current_run()
-        step = await self._step_of(run)
+        session = self._session_of_call()
+        step = await self._step_of(session)
         gated = self._acs.gate(step.decision)
         if gated is not None:
             return self._settle_post(context, gated, step)
@@ -1008,9 +976,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         except Exception as e:  # noqa: BLE001
             result = step.posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
+            self._count_failure(session, result)
         else:
-            await self._lifecycle_sent()
-            result = await asyncio.to_thread(self._exchange, request, step, run)
+            result = await asyncio.to_thread(self._exchange, session, request, step)
         if isinstance(result, Resolution):
             return self._settle_post(context, result, step)
         response = result.response
@@ -1077,48 +1045,14 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return round_trip(request, guardian_url=self._acs.guardian_url, posture=step.posture,
                           session_id=step.session_id, gate=gate)
 
-    async def _step_of(self, run: str | None) -> _Step:
-        """A call's session, opened off the event loop after the lifecycle hooks reported before the call, so a run's sessionStart carries its workflow's name."""
-        self._run_state(run)
-        await self._lifecycle_sent()
-        return await asyncio.to_thread(self._step, run)
-
     def _metadata(self, session_id: str | None = None) -> dict[str, Any]:
         return {"agent_id": self._agent_id, "session_id": session_id or self._session_id,
                 "platform": "nat", "adapter_version": ADAPTER_VERSION}
-
-    @staticmethod
-    def _current_run() -> str | None:
-        """The NAT run the current call or workflow event belongs to; None outside a Runner."""
-        try:
-            return _NATContextState.get().workflow_run_id.get() if _NATContextState is not None else None
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _count_failure(self, resolution: Resolution, run: str | None = None) -> None:
-        """Count a step's own decision failure under its run and failure class (§6.4)."""
-        if not resolution.decision_failure:
-            return
-        with self._runs_lock:
-            tracked = set(self._runs)
-        with self._decision_failures_lock:
-            counts = self._decision_failures.setdefault(run, collections.Counter())
-            counts[resolution.fields.get("failure_class", "other")] += 1
-            # A tracked run keeps its counts until its sessionEnd; only untracked runs age out.
-            untracked = [r for r in self._decision_failures if r not in tracked]
-            for stale in untracked[:max(0, len(untracked) - _MAX_COUNTED_RUNS)]:
-                del self._decision_failures[stale]
-
-    def _take_failure_counts(self, run: str | None) -> dict[str, int]:
-        """The run's decision failures per failure class, removed now that its sessionEnd reports them."""
-        with self._decision_failures_lock:
-            return dict(self._decision_failures.pop(run, {}))
 
     def _settle_pre(self, context, resolution: Resolution, step: _Step, message: str = ""):
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": step.session_id,
                                               "method": "steps/toolCallRequest"})
-        self._count_failure(resolution, self._current_run())
         if resolution.proceed:
             return None
         return self._block(context, message or resolution.message or resolution.cause)
@@ -1130,7 +1064,6 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,
                                               "session_id": step.session_id,
                                               "method": "steps/toolCallResult"})
-        self._count_failure(resolution, self._current_run())
         return None if resolution.proceed else context
 
     def _block(self, context, reason: str):
@@ -1178,24 +1111,20 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 if _NAT_AVAILABLE and _HAS_REGISTRATION:
     @register_middleware(config_type=ACSMiddlewareConfig)  # type: ignore[misc]
     async def build_acs_middleware(config: "ACSMiddlewareConfig", builder):  # type: ignore[name-defined]
-        """NAT factory entry point: open the session off the event loop before NAT gets the middleware,
-        and send the queued lifecycle hooks when NAT shuts it down."""
+        """NAT factory entry point: register the exporter that reports each Runner, and end every open session when
+        NAT shuts the middleware down."""
         middleware = ACSMiddleware(config)
         if not middleware._acs.disabled:
-            await asyncio.to_thread(middleware._ensure_handshake)
             add_exporter = getattr(builder, "add_telemetry_exporter", None)
             if add_exporter is not None and _HAS_EXPORTER and _HAS_LIFECYCLE:
                 key = str(uuid.uuid4())
                 _LIFECYCLE_MIDDLEWARES[key] = middleware
                 await add_exporter(f"acs_lifecycle_{key}", ACSLifecycleExporterConfig(middleware_key=key))
-                middleware._lifecycle_exported = True
         try:
             yield middleware
         finally:
             await asyncio.to_thread(middleware.close)
 
-
-# ----- Per-run lifecycle exporter -----
 
 # The middleware each registered lifecycle exporter feeds, by the key in its config.
 _LIFECYCLE_MIDDLEWARES: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
@@ -1206,23 +1135,32 @@ if _NAT_AVAILABLE and _HAS_REGISTRATION and _HAS_EXPORTER and _HAS_LIFECYCLE:
         middleware_key: str
 
     class _LifecycleExporter(BaseExporter):  # type: ignore[misc, valid-type]
-        """Hands every step of a run to the middleware's lifecycle callback; NAT subscribes it before WORKFLOW_START."""
+        """Reports one Runner's start and end to the middleware; NAT starts a copy of it for every Runner, before the
+        Runner's WORKFLOW_START, and cleans the copy up when the Runner ends, whether it completed, failed or was
+        cancelled."""
 
-        # The run this exporter instance reports; NAT copies the exporter for each run.
-        _run: str | None = None
+        _root_step: str | None = None
+        _session: _Session | None = None
 
         def __init__(self, middleware: ACSMiddleware) -> None:
             super().__init__()
             self._middleware = middleware
 
         def export(self, event) -> None:
-            if self._run is None:
-                self._run = self._middleware._current_run()
-            self._middleware._on_intermediate_step(event)
+            try:
+                payload = event.payload
+                if payload.event_type == IntermediateStepType.WORKFLOW_START and self._root_step is None:
+                    self._root_step = payload.UUID
+                    self._session = self._middleware._workflow_started(payload)
+                elif (payload.event_type == IntermediateStepType.WORKFLOW_END and self._session is not None
+                      and payload.UUID == self._root_step):
+                    self._middleware._workflow_ended(self._session, payload)
+            except Exception as e:  # noqa: BLE001
+                audit_event("lifecycle_export_failed", error=str(e))
 
         async def _cleanup(self) -> None:
-            # NAT stops a run's exporter when the run ends, whether or not it pushed WORKFLOW_END.
-            self._middleware._run_stopped(self._run)
+            if self._session is not None:
+                self._middleware._runner_stopped(self._session)
 
     @register_telemetry_exporter(config_type=ACSLifecycleExporterConfig)  # type: ignore[misc]
     async def build_acs_lifecycle_exporter(config: "ACSLifecycleExporterConfig", builder):  # type: ignore[name-defined]

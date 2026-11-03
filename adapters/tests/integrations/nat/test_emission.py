@@ -1,19 +1,8 @@
-"""
-Emission conformance — NAT (NVIDIA Agent Toolkit) middleware.
-
-NAT is in-process, so "the production entry point" is the real
-middleware lifecycle — pre_invoke / post_invoke and the
-IntermediateStepManager observer — not a subprocess. This drives those
-real paths against a validating CaptureGuardian whose oracle is the
-canonical schemas. Requires nvidia-nat-core;
-CI installs it and hard-fails on skips (see the authoritative runner),
-so a skip here is a local-only condition, never a silent pass.
-"""
+"""NAT emission: pre_invoke and post_invoke inside a real Runner, validated by CaptureGuardian against the canonical schemas."""
 from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,13 +11,6 @@ from unittest import mock
 try:
     from nat.middleware.middleware import (  # type: ignore[import-not-found]
         InvocationContext, FunctionMiddlewareContext,
-    )
-    from nat.builder.context import ContextState  # type: ignore[import-not-found]
-    from nat.builder.intermediate_step_manager import (  # type: ignore[import-not-found]
-        IntermediateStepManager,
-    )
-    from nat.data_models.intermediate_step import (  # type: ignore[import-not-found]
-        IntermediateStepPayload, IntermediateStepType, StreamEventData,
     )
     from pydantic import BaseModel
     _NAT_OK = True
@@ -40,6 +22,7 @@ from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
 if _NAT_OK:
     from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
+    from tests.integrations.nat._nat_runs import with_middleware  # noqa: E402
 from acs.testing.capture_guardian import CaptureGuardian  # noqa: E402
 
 HMAC = "nat-emission-shared-secret-padded-to-32-bytes"
@@ -101,23 +84,10 @@ class NatEmission(unittest.TestCase):
             f"captured {self.guardian.methods()}")
         self.guardian.assert_all_valid(self)
 
-    def test_lifecycle_observer_emits_session_hooks(self) -> None:
-        mw = self._mw()
-        mgr = IntermediateStepManager(ContextState.get())
-        sub = mgr.subscribe(on_next=mw._on_intermediate_step)
-        try:
-            payload = IntermediateStepPayload(
-                event_type=IntermediateStepType.WORKFLOW_START,
-                name="wf", data=StreamEventData(input="what is the weather?"))
-            wf_uuid = payload.UUID
-            mgr.push_intermediate_step(payload)
-            mgr.push_intermediate_step(IntermediateStepPayload(
-                event_type=IntermediateStepType.WORKFLOW_END, name="wf",
-                data=StreamEventData(output="sunny"), UUID=wf_uuid))
-            # close() returns once every queued lifecycle hook has gone out.
-            mw.close()
-        finally:
-            sub.unsubscribe()
+    def test_a_run_emits_each_session_hook_once(self) -> None:
+        async def body(mw, run) -> None:
+            await run("wf", lambda message: asyncio.sleep(0, "sunny"), "what is the weather?")
+        asyncio.run(with_middleware(self._mw()._config, body))
         methods = self.guardian.methods()
         for expected in ("steps/sessionStart", "steps/userMessage",
                          "steps/agentResponse", "steps/sessionEnd"):
@@ -128,32 +98,18 @@ class NatEmission(unittest.TestCase):
         self.guardian.assert_all_valid(self)
 
     def test_sequential_session_invariants(self) -> None:
-        """One middleware + one Guardian across a full sequence: handshake
-        fires once, request_ids are unique, toolCallResult links to its
-        request, and advertised == emitted in both directions. Covers the
-        enforcement path + lifecycle observer."""
-        mw = self._mw()
-        # One context across pre_invoke + post_invoke: the stashed
-        # correlation id makes request_id_ref equal the request's id.
-        ctx = _ctx("weather_tool")
-        asyncio.run(mw.pre_invoke(ctx))
-        ctx.output = "sunny"
-        asyncio.run(mw.post_invoke(ctx))
-        # lifecycle observer
-        mgr = IntermediateStepManager(ContextState.get())
-        sub = mgr.subscribe(on_next=mw._on_intermediate_step)
-        try:
-            payload = IntermediateStepPayload(
-                event_type=IntermediateStepType.WORKFLOW_START, name="wf",
-                data=StreamEventData(input="q"))
-            wf = payload.UUID
-            mgr.push_intermediate_step(payload)
-            mgr.push_intermediate_step(IntermediateStepPayload(
-                event_type=IntermediateStepType.WORKFLOW_END, name="wf",
-                data=StreamEventData(output="a"), UUID=wf))
-            mw.close()
-        finally:
-            sub.unsubscribe()
+        """One run: one handshake, unique request_ids, request_id_ref links, advertised equals emitted."""
+        async def body(mw, run) -> None:
+            async def entry(message: str) -> str:
+                # One context across pre_invoke + post_invoke: the stashed
+                # correlation id makes request_id_ref equal the request's id.
+                ctx = _ctx("weather_tool")
+                await mw.pre_invoke(ctx)
+                ctx.output = "sunny"
+                await mw.post_invoke(ctx)
+                return "a"
+            await run("wf", entry, "q")
+        asyncio.run(with_middleware(self._mw()._config, body))
 
         self.guardian.assert_all_valid(self)
         self.assertEqual(len(self.guardian.records_for("handshake/hello")), 1,
