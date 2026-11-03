@@ -197,6 +197,9 @@ export type SessionFailureKind =
  *           which is why guardian-client.ts's post() has to let an
  *           unaddressed error through before its id-correlation check, or
  *           this code could never reach classifyDeliveryFailure at all.
+ *   -32600  Invalid Request. The frame parsed as JSON but is not a JSON-RPC
+ *           request this Guardian will read (PR #334), so it is refused, and
+ *           usually answered with `id: null` for the same reason.
  *   -32010  The envelope failed schema validation and the Guardian could not
  *           address a deny decision to it (no top-level id, or an id it
  *           cannot put in a response), or the body exceeded the Guardian's
@@ -228,8 +231,10 @@ export type SessionFailureKind =
  * any code added after it was written, such as a retryable overload code: the
  * step would run because the host did not yet know the code. Codes outside
  * the range, like an intermediary's -32601 or -32603, stay
- * `error_without_decision` and keep the posture.
+ * `error_without_decision` and keep the posture. -32600 is the one exception
+ * besides -32700: the Guardian answers it for a JSON-RPC frame it cannot read
+ * (PR #334), which is a refusal of this request, not an unreachable Guardian.
  */
 export function isRefusalCode(code: unknown): boolean {
-  return typeof code === "number" && (code === -32700 || (code <= -32000 && code >= -32099));
+  return typeof code === "number" && (code === -32700 || code === -32600 || (code <= -32000 && code >= -32099));
 }
