@@ -26,11 +26,13 @@ import { startGuardian, type StartedGuardian } from "guardian";
  *   output shape; using original output. [{"expected":"object", ...}]
  *
  * on stderr while the model received the real secret. So a redaction is
- * only a redaction if every sibling field survives, and a test that
+ * only a redaction if every sibling field is still present, and a test that
  * asserted only `updatedToolOutput.output_for_prompt` would pass while the
- * replacement was declined and the token delivered. That single whole-object
- * assertion is what stands between this deployment and Grok quietly handing
- * the secret to the model.
+ * replacement was declined and the token delivered. `output` is present as
+ * the UTF-8 bytes of the replacement. Decoding those bytes is what shows a
+ * secret that never appears as the text `ghp_`. That whole object is what
+ * stands between this deployment and Grok quietly handing the secret to the
+ * model.
  *
  * The shape below is Grok 1.0.25's tagged `tool_response` for
  * `run_terminal_command`, captured in #107: `{type, output_for_prompt,
@@ -117,7 +119,25 @@ function toolResponse(outputForPrompt: string, command = "cat .env"): Record<str
 }
 
 function redactedOutput(original: string, replacement: string, command = "cat .env"): Record<string, unknown> {
-  return { ...toolResponse(original, command), output_for_prompt: replacement };
+  const output = Array.from(new TextEncoder().encode(replacement));
+  return {
+    ...toolResponse(original, command),
+    output,
+    output_for_prompt: replacement,
+    total_bytes: output.length,
+  };
+}
+
+/**
+ * The secret can survive as a list of byte numbers. `stdout` then has no
+ * `ghp_` substring, and a `not.toContain` check passes. Decode `output` and
+ * assert the secret is absent from the text those bytes encode.
+ */
+function expectOutputBytesHide(updatedToolOutput: unknown, secret: string): void {
+  const output = (updatedToolOutput as { output?: unknown } | undefined)?.output;
+  expect(Array.isArray(output)).toBe(true);
+  const text = new TextDecoder().decode(Uint8Array.from(output as number[]));
+  expect(text).not.toContain(secret);
 }
 
 /** The real `PostToolUse` payload shape, with `tool_name: "run_terminal_command"`. */
@@ -246,7 +266,8 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     // this string is composed from the rule that decided rather than copied
     // from upstream. Until it was, this literal recorded a redaction the model
     // read with nothing in the transcript explaining it.
-    expect(JSON.parse(out.stdout)).toEqual({
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed).toEqual({
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         additionalContext:
@@ -255,10 +276,12 @@ describe("the result gate, end to end through the real shim and a real Guardian"
         updatedToolOutput: redactedOutput("TOKEN=ghp_ABCDEF123456", "TOKEN=[REDACTED]"),
       },
     });
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_ABCDEF123456");
 
     // The redaction is only real if the original does not survive anywhere in
     // what the host is told to deliver -- including in a field nothing above
-    // names.
+    // names. The byte-array check above is the one that sees a secret stored
+    // as numbers. This one sees it in any other field.
     expect(out.stdout).not.toContain("ghp_ABCDEF123456");
   });
 
@@ -284,13 +307,15 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     );
 
     expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
-    expect(JSON.parse(out.stdout)).toEqual({
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed).toEqual({
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         updatedToolOutput: redactedOutput("TOKEN=ghp_ABCDEF123456", "TOKEN=[REDACTED]"),
         additionalContext: "token pattern matched in tool output",
       },
     });
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_ABCDEF123456");
     expect(out.stdout).not.toContain("ghp_ABCDEF123456");
   });
 
@@ -325,7 +350,8 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     );
 
     expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
-    expect(JSON.parse(out.stdout)).toEqual({
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed).toEqual({
       decision: "block",
       reason: "secret in output",
       hookSpecificOutput: {
@@ -333,6 +359,7 @@ describe("the result gate, end to end through the real shim and a real Guardian"
         updatedToolOutput: redactedOutput("TOKEN=ghp_ABCDEF123456", "[OUTPUT WITHHELD BY POLICY]"),
       },
     });
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_ABCDEF123456");
     expect(out.stdout).not.toContain("ghp_ABCDEF123456");
   });
 
@@ -368,7 +395,8 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     );
 
     expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
-    expect(JSON.parse(out.stdout)).toEqual({
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed).toEqual({
       decision: "block",
       // The policy's own sentence, not a substitution's: an ask that arrived
       // intact renders through the hookmap's `ask` entry, so what reaches the
@@ -379,6 +407,7 @@ describe("the result gate, end to end through the real shim and a real Guardian"
         updatedToolOutput: redactedOutput("TOKEN=ghp_ABCDEF123456", "[OUTPUT WITHHELD BY POLICY]"),
       },
     });
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_ABCDEF123456");
     expect(out.stdout).not.toContain("ghp_ABCDEF123456");
   });
 
@@ -409,7 +438,8 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     );
 
     expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
-    expect(JSON.parse(out.stdout)).toEqual({
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed).toEqual({
       decision: "block",
       reason: "waiting on an out-of-band approval",
       hookSpecificOutput: {
@@ -417,6 +447,7 @@ describe("the result gate, end to end through the real shim and a real Guardian"
         updatedToolOutput: redactedOutput("TOKEN=ghp_ABCDEF123456", "[OUTPUT WITHHELD BY POLICY]"),
       },
     });
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_ABCDEF123456");
     expect(out.stdout).not.toContain("ghp_ABCDEF123456");
   });
 
@@ -457,6 +488,7 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     expect(parsed.hookSpecificOutput.updatedToolOutput).toEqual(
       redactedOutput("TOKEN=ghp_ABCDEF123456", "[OUTPUT WITHHELD BY POLICY]"),
     );
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_ABCDEF123456");
     expect(out.stdout).not.toContain("ghp_ABCDEF123456");
   });
 
@@ -517,9 +549,12 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     expect(parsed.hookSpecificOutput.updatedToolOutput).toEqual(
       redactedOutput("TOKEN=ghp_ABCDEF123456", "[OUTPUT WITHHELD BY POLICY]"),
     );
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_");
     // The assertion that fails the moment the refusal becomes a
     // pass-through: a reported-as-applied `modified_content` renders no
     // replacement at all, so the host delivers the output the tool produced.
+    // `expectOutputBytesHide` is what sees the secret when it survives only
+    // as byte numbers. This line sees it in any other field.
     expect(out.stdout).not.toContain("ghp_");
   });
 
@@ -573,10 +608,13 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     expect(parsed.hookSpecificOutput.updatedToolOutput).toEqual(
       redactedOutput("TOKEN=ghp_ABCDEF123456", "[OUTPUT WITHHELD BY POLICY]"),
     );
+    expectOutputBytesHide(parsed.hookSpecificOutput.updatedToolOutput, "ghp_");
     // The load-bearing assertion: everything above it would already be true
     // of a `modify` whose projected replacement was identical to the
     // original, because a decision that changes nothing renders perfectly
     // well. This line is what actually depends on the refusal existing.
+    // A secret that survives only as byte numbers never appears in `stdout`
+    // as the text `ghp_`. `expectOutputBytesHide` is the check for that.
     expect(out.stdout).not.toContain("ghp_");
   });
 

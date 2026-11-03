@@ -71,13 +71,12 @@ hooks:
   # PATH. hooks.json matches `run_terminal_command` only. A second tool
   # shape belongs here once `outputs` can name a path per tool.
   #
-  # KNOWN AND PARKED: `tool_response.output` is a byte array of the raw
-  # output, a sibling of `output_for_prompt`. The adapter's `mirrors` replace
-  # a string copy of the leaf; a number array is not that, so this file does
-  # not declare a mirror. A redaction patches `output_for_prompt` (what the
-  # model reads) and leaves the byte array as it was. Same class of residual
-  # as OpenCode's parked session-record leak, weaker while this gate stays
-  # scoped to one tool whose model-facing leaf is the named path.
+  # `tool_response.output` is a byte array of the raw output, a sibling of
+  # `output_for_prompt`. The adapter's `mirrors` replace a string copy of the
+  # leaf. A number array is not that, so this file does not declare a mirror.
+  # Withhold and modify clear that byte array from the replacement leaf.
+  # The shim sets `output` to the UTF-8 bytes of `output_for_prompt` and
+  # sets `total_bytes` to that byte length.
   PostToolUse:
     acs_method: steps/toolCallResult
     tool_name: $.tool_name

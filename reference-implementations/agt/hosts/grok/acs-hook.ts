@@ -411,7 +411,24 @@ function asGrokOutput(rendered: HostOutput, hookEventName: string): HostOutput {
         `Grok to read a decision from, so there is no output this host could honestly write`,
     );
   }
-  return { ...rendered, [HOOK_SPECIFIC_OUTPUT]: { hookEventName, ...(wrapper as Record<string, unknown>) } };
+  const specific: Record<string, unknown> = { hookEventName, ...(wrapper as Record<string, unknown>) };
+  // The adapter rewrites the string `output_for_prompt` and does not mirror a
+  // byte array. `output` is that array. Copy the replacement and set `output`
+  // to the UTF-8 bytes of the string, with `total_bytes` equal to that length.
+  // Any decision that rendered `updatedToolOutput` takes this path.
+  const replacement = specific[UPDATED_TOOL_OUTPUT];
+  if (typeof replacement === "object" && replacement !== null && !Array.isArray(replacement)) {
+    const prompt = (replacement as Record<string, unknown>).output_for_prompt;
+    if (typeof prompt === "string") {
+      const output = Array.from(new TextEncoder().encode(prompt));
+      specific[UPDATED_TOOL_OUTPUT] = {
+        ...(replacement as Record<string, unknown>),
+        output,
+        total_bytes: output.length,
+      };
+    }
+  }
+  return { ...rendered, [HOOK_SPECIFIC_OUTPUT]: specific };
 }
 
 /**
