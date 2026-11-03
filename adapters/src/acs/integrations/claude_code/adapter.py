@@ -118,12 +118,10 @@ HOOK_MAP: dict[str, str] = {
     "StopFailure":      "steps/turnEnd",
 }
 
-# In-turn steps carry metadata.turn_id (request-envelope.json:69); session-
-# level steps (sessionStart/sessionEnd) and the spawn gate do not open under
-# the parent's turn. turnStart sets it; turnEnd echoes it.
+# request-envelope.json requires metadata.turn_id on every step between a turnStart and its turnEnd.
 _IN_TURN_METHODS = frozenset({
     "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
-    "steps/agentResponse", "steps/turnEnd",
+    "steps/agentResponse", "steps/subagentStart", "steps/turnEnd",
 })
 
 # Events deliberately not mapped, with the reason; anything outside

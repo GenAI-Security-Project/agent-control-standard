@@ -263,7 +263,7 @@ def _int_ms(raw: Any) -> int | None:
 # every in-turn step stamps metadata.turn_id and the turnEnd matches.
 _IN_TURN_METHODS = frozenset({
     "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
-    "steps/agentResponse", "steps/turnEnd",
+    "steps/agentResponse", "steps/subagentStart", "steps/preCompact", "steps/turnEnd",
 })
 
 

@@ -77,7 +77,7 @@ decision failure under the posture.
 Attacker POSTs a request with Content-Length > available RAM,
 expecting the Guardian to allocate.
 *Mitigation:* Guardian refuses Content-Length > `MAX_REQUEST_BODY_BYTES`
-(1 MiB, matches the handshake's `max_payload_size_bytes`) before
+(1 MiB, the `max_payload_size_bytes` every adapter's ClientHello declares) before
 reading the body. Returns 413 + JSON-RPC error -32600.
 *Test:* `GuardianBodySizeCap::test_oversized_request_rejected`
 

@@ -135,9 +135,17 @@ class ClaudeCodeGateHooksBlockOnFailure(unittest.TestCase):
         default = self._wire()
         self.assertEqual(default["block"], {"PreToolUse", "UserPromptSubmit"})
         strict = self._wire("--default-deny")
-        self.assertEqual(strict["block"], strict["all"] - {"Stop", "StopFailure"},
-                         "Claude Code ignores onFailure on Stop and StopFailure")
+        self.assertEqual(strict["block"], {"PreToolUse", "UserPromptSubmit"},
+                         "only on these does a blocking failure stop the action (exit code 2 behavior per event)")
         self.assertEqual(self._wire("--all-fail-open")["block"], set())
+
+
+class WiredPathsKeepADollarSign(unittest.TestCase):
+    def test_a_literal_dollar_in_a_path_is_written_as_given(self) -> None:
+        for module in (claude_wire, cursor_wire):
+            with self.subTest(wire=module.__name__), mock.patch.dict(os.environ, {"HOME": "/home/u"}):
+                self.assertEqual(str(module._expand("/keys/x $HOME/hmac.key")), "/keys/x $HOME/hmac.key")
+                self.assertEqual(str(module._expand("~/hmac.key")), "/home/u/hmac.key")
 
 
 class WrittenCommandsAndFiles(unittest.TestCase):

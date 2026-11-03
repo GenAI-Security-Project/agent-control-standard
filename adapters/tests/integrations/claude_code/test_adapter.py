@@ -498,6 +498,35 @@ class StopSendsTheReply(_GuardianRun):
         self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
         self.assertIn('"method": "steps/agentResponse"', err)
 
+    def test_a_modify_on_the_delivered_reply_is_recorded_as_modify_unsupported(self) -> None:
+        g = ProgrammableGuardian()
+        g.handlers["steps/agentResponse"] = _answer(decision="modify", reasoning="trim",
+                                                    modifications={"modified_content": "shorter"})
+        with g:
+            out, err = self._turn(g, _claude_code_event("Stop", last_assistant_message="the reply"))
+        self.assertEqual(out, "")
+        [record] = [json.loads(line[len("ACS_AUDIT "):]) for line in err.splitlines()
+                    if '"modify_unsupported"' in line]
+        self.assertEqual((record["reason_codes"], record["method"]), (["modify_unsupported"], "steps/agentResponse"))
+
+    def test_a_deny_on_the_turn_end_is_recorded_and_nothing_is_emitted(self) -> None:
+        g = ProgrammableGuardian()
+        g.handlers["steps/turnEnd"] = _answer(decision="deny", reasoning="policy hit")
+        with g:
+            out, err = self._turn(g, _claude_code_event("Stop"))
+        self.assertEqual(out, "", "a block on Stop would tell Claude Code to keep going")
+        self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
+
+    def test_a_subagent_spawn_inside_a_turn_carries_the_turn_id(self) -> None:
+        g = ProgrammableGuardian()
+        with g:
+            self._run(g, _claude_code_event("UserPromptSubmit", prompt="hi"),
+                      _claude_code_event("PreToolUse", tool_name="Agent", tool_use_id="t9",
+                                         tool_input={"prompt": "explore", "subagent_type": "Explore"}))
+            [turn_start] = g.envelopes_for("steps/turnStart")
+            [spawn] = g.envelopes_for("steps/subagentStart")
+        self.assertEqual(spawn["params"]["metadata"]["turn_id"], turn_start["params"]["payload"]["turn_id"])
+
     def test_a_stop_without_a_reply_sends_no_agent_response(self) -> None:
         g = ProgrammableGuardian()
         with g:

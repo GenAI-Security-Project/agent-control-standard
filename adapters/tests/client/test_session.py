@@ -195,6 +195,23 @@ class Negotiation(_SessionTest):
                                  platform="test", methods_implemented=["steps/toolCallRequest"])
                 self.assertEqual(sent[0]["params"]["payload"]["transports_supported"], [scheme])
 
+    def test_the_client_declares_the_largest_body_it_sends(self) -> None:
+        from acs.client._exchange import RequestTooLargeError, post
+        from acs.core import MAX_REQUEST_BODY_BYTES
+        sent: list[dict] = []
+
+        def urlopen(req, timeout):
+            sent.append(json.loads(req.data))
+            raise urllib.error.URLError("captured")
+
+        with mock.patch.object(_exchange, "_open", side_effect=urlopen):
+            open_session(config=Config.from_env({"ACS_GUARDIAN_URL": URL}), session_id="payload-size", agent_id="test",
+                         platform="test", methods_implemented=["steps/toolCallRequest"])
+        declared = sent[0]["params"]["payload"]["max_payload_size_bytes"]
+        self.assertEqual(declared, MAX_REQUEST_BODY_BYTES)
+        with self.assertRaises(RequestTooLargeError):
+            post({"pad": "x" * declared}, guardian_url=URL, timeout_s=1)
+
     def test_a_required_profile_the_guardian_does_not_accept_refuses_the_session(self) -> None:
         required = {"ACS_REQUIRE_PROFILES": "acs-core"}
         refused, _ = self._open(self._hello(profiles_accepted=[]), session_id="required-declined", **required)

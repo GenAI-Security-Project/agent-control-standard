@@ -94,7 +94,7 @@ acs-cursor-wire \
   --write
 ```
 
-What it wires by default: the six unconditional hooks of the ACS-Core minimum set, plus `subagentStart`, which ACS-Core requires of a subagent-capable client such as Cursor.
+What it wires by default: the six unconditional hooks of the ACS-Core minimum set, plus `subagentStart`, which ACS-Core requires of a subagent-capable client such as Cursor, `postToolUseFailure`, which carries a failed tool's error text, and `stop`, which closes the turn.
 
 | Cursor event | ACS step method | Posture |
 |---|---|---|
@@ -102,7 +102,9 @@ What it wires by default: the six unconditional hooks of the ACS-Core minimum se
 | `beforeSubmitPrompt` | userMessage | **fail-CLOSED** (gate) |
 | `preToolUse` | toolCallRequest | **fail-CLOSED** (gate) |
 | `postToolUse` | toolCallResult | fail-open |
+| `postToolUseFailure` | toolCallResult | fail-open |
 | `afterAgentResponse` | agentResponse | fail-open |
+| `stop` | turnEnd | fail-open |
 | `sessionEnd` | sessionEnd | fail-open |
 | `subagentStart` | subagentStart | **fail-CLOSED** (gate. The confused-deputy spawn gate, required by ACS-Core for subagent-capable clients.) |
 

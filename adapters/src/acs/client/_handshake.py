@@ -25,6 +25,7 @@ from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
 from acs.core import (
     ACS_VERSION,
+    MAX_REQUEST_BODY_BYTES,
     derive_session_key,
     guardian_error_cause,
     is_guardian_refusal,
@@ -261,7 +262,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
                 "methods_implemented": methods_implemented,
                 "transports_supported": (transports_supported if transports_supported is not None
                                          else [scheme]),
-                "max_payload_size_bytes": 1_000_000,
+                "max_payload_size_bytes": MAX_REQUEST_BODY_BYTES,
                 "provenance_producer": "none",
                 "wrapped_protocols": wrapped_protocols or [],
                 "profiles_supported": profiles_supported,

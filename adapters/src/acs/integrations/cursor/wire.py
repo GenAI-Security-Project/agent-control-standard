@@ -252,7 +252,7 @@ def render_diff(before: dict, after: dict, label: str) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _expand(p: str) -> Path:
-    return Path(os.path.expanduser(os.path.expandvars(p)))
+    return Path(os.path.expanduser(p))
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:

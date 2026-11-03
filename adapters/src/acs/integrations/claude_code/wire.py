@@ -134,8 +134,7 @@ def build_command(*, hook_command: str, guardian_url: str,
     """The settings.json hook command, with absolute paths, since the hook's shell and working directory vary."""
     env_pairs: list[str] = [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
     if secret_file:
-        # Resolve ~ and $VAR ahead of time — Python's open() doesn't
-        # expand tildes and POSIX sh tilde-after-= is not guaranteed.
+        # Resolve ~ ahead of time: Python's open() does not expand it, and POSIX sh tilde-after-= is not guaranteed.
         env_pairs.append(f"ACS_HMAC_SECRET_FILE={shlex.quote(str(_expand(secret_file)))}")
     elif secret_env:
         env_pairs.append(f"ACS_HMAC_SECRET={shlex.quote(secret_env)}")
@@ -151,8 +150,8 @@ def build_command(*, hook_command: str, guardian_url: str,
     return f"{env_prefix} {shlex.quote(hook_command)} {WIRE_MARKER}"
 
 
-# Hooks on which Claude Code ignores onFailure: a failure there cannot block anything.
-_ON_FAILURE_IGNORED = frozenset({"Stop", "StopFailure", "SubagentStop"})
+# Hooks where onFailure "block" stops the action; on the others it does what exit 2 does there, which stops nothing.
+_ON_FAILURE_BLOCKS = frozenset({"PreToolUse", "UserPromptSubmit"})
 
 
 def build_inner_hook(command: str, *, block_on_failure: bool = False) -> dict:
@@ -259,7 +258,7 @@ def render_diff(before: dict, after: dict, label: str) -> str:
 
 
 def _expand(p: str) -> Path:
-    return Path(os.path.expanduser(os.path.expandvars(p)))
+    return Path(os.path.expanduser(p))
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
@@ -420,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                 hook_deny = False
             else:
                 hook_deny = hook in GATE_HOOKS
-            if hook_deny and hook not in _ON_FAILURE_IGNORED:
+            if hook_deny and hook in _ON_FAILURE_BLOCKS:
                 # A fail-closed hook that crashes, times out or cannot start blocks too, not only its decision.
                 blocking.add(hook)
             commands_by_hook[hook] = build_command(

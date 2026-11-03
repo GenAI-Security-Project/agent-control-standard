@@ -88,7 +88,7 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
                 audit_file="/path/to/.acs/audit.log",
             )
             gate = hook in wire.GATE_HOOKS
-            expected[hook] = [wire.build_hook_entry(cmd, block_on_failure=gate and hook not in wire._ON_FAILURE_IGNORED)]
+            expected[hook] = [wire.build_hook_entry(cmd, block_on_failure=gate and hook in wire._ON_FAILURE_BLOCKS)]
         self.assertEqual(self.hooks, expected,
             "settings.json.example has drifted from wire.py's output for "
             "the documented placeholder arguments — regenerate it with "

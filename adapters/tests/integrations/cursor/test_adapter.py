@@ -242,6 +242,47 @@ class TheKillSwitchAllowsExplicitly(unittest.TestCase):
                 self.assertIn('"acs_audit_event": "acs_disabled_bypass"', proc.stderr)
 
 
+class DecisionsOnDeliveredStepsAreRecorded(unittest.TestCase):
+    def _run(self, events: list[tuple[str, dict]], handlers: dict) -> tuple[list[tuple[str, str]], object]:
+        from acs.testing.harness import ProgrammableGuardian
+        runs = []
+        with ProgrammableGuardian() as g, tempfile.TemporaryDirectory() as root:
+            g.handlers.update(handlers)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+            env.update(signing_env(), ACS_GUARDIAN_URL=g.url(), ACS_HANDSHAKE_CACHE=f"{root}/handshake",
+                       ACS_SESSION_STATE_DIR=f"{root}/state")
+            for name, event in events:
+                proc = subprocess.run([sys.executable, str(ADAPTER), name], input=json.dumps(event),
+                                      capture_output=True, text=True, env=env, timeout=15)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                runs.append((proc.stdout.strip(), proc.stderr))
+            received = list(g.received)
+        return runs, received
+
+    def test_a_deny_or_modify_on_an_agent_response_or_thought_is_recorded(self) -> None:
+        base = {"conversation_id": "conv-reply", "workspace_roots": ["/tmp"], "text": "the reply"}
+        for event in ("afterAgentResponse", "afterAgentThought"):
+            for result, audit in (({"decision": "deny", "reasoning": "policy hit"}, "unenforceable_decision"),
+                                  ({"decision": "modify", "reasoning": "trim",
+                                    "modifications": {"modified_content": "short"}}, "modify_unsupported")):
+                with self.subTest(event, decision=result["decision"]):
+                    [(out, err)], _ = self._run([(event, base)], {"steps/agentResponse": lambda req, r=result: r})
+                    self.assertEqual(out, "")
+                    self.assertIn(f'"acs_audit_event": "{audit}"', err)
+
+    def test_spawns_and_compactions_inside_a_turn_carry_the_turn_id(self) -> None:
+        base = {"conversation_id": "conv-turn", "workspace_roots": ["/tmp"]}
+        _, received = self._run([("beforeSubmitPrompt", {**base, "prompt": "hi"}),
+                                 ("subagentStart", {**base, "subagent_id": "s1", "subagent_type": "explore",
+                                                    "tool_call_id": "tc1"}),
+                                 ("preCompact", {**base, "trigger": "auto"})], {})
+        [turn_start] = [r for r in received if r["method"] == "steps/turnStart"]
+        turn_id = turn_start["params"]["payload"]["turn_id"]
+        for method in ("steps/subagentStart", "steps/preCompact"):
+            [step] = [r for r in received if r["method"] == method]
+            self.assertEqual(step["params"]["metadata"].get("turn_id"), turn_id, method)
+
+
 class MCPResultsAreWithheld(unittest.TestCase):
     """A decision that keeps a delivered MCP result from the model replaces it through updated_mcp_tool_output
     (hooks docs: "replaces the tool output seen by the model"), an object."""
