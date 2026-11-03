@@ -45,6 +45,8 @@ A session chain entry prints as one line: the step number within the session, th
 
 An audit entry prints with its outcome and the failure that caused it. The banner is reprinted whenever an audit entry changes it. It shows the last posture an audit entry carried, which is the observed posture and not the negotiated one, and the running count of fail-open proceeds.
 
+Every field read from a log is escaped before it is printed. The Guardian records an envelope's method and id before it validates them, and it is unauthenticated, so a request author chooses what those fields hold. Each C0 control (including newline), DEL and each C1 control prints as a visible `\xNN` escape, for example `\x1b[2J`, so a field cannot clear the screen, move the cursor, set the window title or start a second line. The Inspector's own colours are added after the escape and are unchanged. Characters that are not controls, such as bidirectional overrides, are printed as they are.
+
 The three logs are tailed independently. The audit log's raw session id is never matched against the envelope log's derived one; the [host adapter README](../host-adapter/README.md#the-audit-log) says why they differ.
 
 ## Files
@@ -54,6 +56,7 @@ The three logs are tailed independently. The audit log's raw session id is never
 | `src/main.ts` | The `bun run inspector` entry point, flag parsing, and the loop |
 | `src/tail-envelope-log.ts`, `src/tail-audit-log.ts`, `src/tail-session-context.ts` | One tailer per log |
 | `src/render.ts` | Every rendered line, the decision badge, the posture banner, and the chain check |
+| `src/terminal-safe.ts` | The control-character escape every logged field passes through |
 
 ## Tests
 
@@ -61,4 +64,4 @@ The three logs are tailed independently. The audit log's raw session id is never
 bun test packages/inspector
 ```
 
-Four files. They render fixed entries and tail fixed files.
+Five files. They render fixed entries, render hostile fields, and tail fixed files.
