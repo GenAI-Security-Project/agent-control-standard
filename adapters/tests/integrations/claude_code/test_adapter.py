@@ -443,6 +443,31 @@ class PostToolUseWithholdsOutput(_GuardianRun):
                 self.assertEqual(out["hookSpecificOutput"]["updatedToolOutput"], expected)
 
 
+class SubagentHandbackHasNoPrompt(_GuardianRun):
+    """Auto mode runs SubagentHandback without a prompt, so only a deny stops it (hooks reference, 2026-11-01)."""
+
+    def _pre(self, **decision) -> tuple[dict, str]:
+        g = ProgrammableGuardian()
+        g.handlers["steps/toolCallRequest"] = _answer(**decision)
+        with g:
+            [(out, err)] = self._run(g, _claude_code_event("PreToolUse", tool_name="SubagentHandback",
+                                                           permission_mode="auto", tool_input={"message": "report"},
+                                                           tool_use_id="t1"))
+        return json.loads(out), err
+
+    def test_an_ask_is_a_deny(self) -> None:
+        out, err = self._pre(decision="ask", reasoning="check", ask_details={
+            "approver": {"type": "human", "id": "owner"}, "question": "Deliver?", "timeout_seconds": 60})
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn('"substituted": "deny"', err)
+
+    def test_a_modify_applies_the_rewritten_input(self) -> None:
+        out, _ = self._pre(decision="modify", reasoning="redact",
+                           modifications={"parameter_overrides": {"message": "[redacted]"}})
+        self.assertEqual((out["hookSpecificOutput"]["permissionDecision"], out["hookSpecificOutput"]["updatedInput"]),
+                         ("allow", {"message": "[redacted]"}))
+
+
 class StopSendsTheReply(_GuardianRun):
     """Stop's last_assistant_message is the turn's reply (hooks reference, Stop input): it goes out as
     steps/agentResponse under the open turn, before steps/turnEnd."""

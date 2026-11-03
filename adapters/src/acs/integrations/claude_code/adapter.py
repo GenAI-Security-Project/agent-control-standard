@@ -513,12 +513,19 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
     return result
 
 
-# ─── Response translation — dispatch table, one function per hook ─────────
+# Auto mode's SubagentHandback runs without a prompt, so an ask lets it through (hooks reference, PreToolUse ask decisions in auto mode).
+_NO_PROMPT_TOOLS = frozenset({"SubagentHandback"})
+
 
 def _translate_pretool(decision: Decision, original_input: dict, tool_name: str = "") -> dict[str, Any]:
     if decision.disposition == "allow":
         # Nothing: "allow" would skip Claude Code's own permission prompt, so the user's rules still decide.
         return {}
+    if decision.disposition == "ask" and tool_name in _NO_PROMPT_TOOLS:
+        audit_event("unenforceable_decision", decision="ask", hook="PreToolUse", tool=tool_name,
+                    reason=decision.reasoning or "(none)", substituted="deny")
+        return _pretool_response("deny", f"ACS Guardian asked for approval {tool_name} cannot hold: "
+                                         f"{decision.reasoning or '(no reasoning)'}")
     if decision.disposition in PRETOOL_PERMISSION_MAP:
         return _pretool_response(PRETOOL_PERMISSION_MAP[decision.disposition], decision.reasoning)
     if decision.disposition == "defer":
@@ -550,7 +557,8 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
             # argument overrides (modifications.json) onto the original.
             merged = {**original_input, **overrides}
             # "ask" shows the rewritten call to the user; "allow" would also skip their permission prompt.
-            return _pretool_response("ask", decision.reasoning, updated_input=merged)
+            return _pretool_response("allow" if tool_name in _NO_PROMPT_TOOLS else "ask", decision.reasoning,
+                                     updated_input=merged)
         audit_modify_unsupported("no parameter_overrides object", hook="PreToolUse")
         return _pretool_response(
             "deny",
