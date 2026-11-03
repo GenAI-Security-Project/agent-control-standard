@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -243,6 +243,80 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         permissionDecisionReason: "waiting on an out-of-band approval",
       },
     });
+  });
+
+  it("creates the session directory and the audit parent at mode 0700", async () => {
+    const dir = scratch();
+    const sessions = join(dir, "sessions");
+    const auditParent = join(dir, "audit-parent");
+    const stub = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as { id: string | number; method: string };
+        if (body.method === "handshake/hello") {
+          return Response.json({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              negotiated_version: "0.1.0",
+              methods_evaluated: ["steps/toolCallRequest"],
+              selected_transport: "http",
+              timeout_config: { default_ms: 5000 },
+              on_decision_failure: "proceed",
+            },
+          });
+        }
+        return Response.json({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { decision: "allow", reason_codes: [], policy_references: [] },
+        });
+      },
+    });
+    try {
+      const proc = Bun.spawn(["bun", "run", SHIM], {
+        stdin: new TextEncoder().encode(
+          JSON.stringify({
+            session_id: "sess-1",
+            hook_event_name: "PreToolUse",
+            tool_name: "run_terminal_command",
+            tool_input: { command: "ls -la" },
+          }),
+        ),
+        env: {
+          ...process.env,
+          ACS_GUARDIAN_URL: `http://localhost:${stub.port}/acs`,
+          ACS_SESSION_DIR: sessions,
+          ACS_AUDIT_LOG: join(auditParent, "audit.jsonl"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      expect({ exitCode: await proc.exited, stderr, stdout: JSON.parse(stdout) }).toEqual({
+        exitCode: 0,
+        stderr: "",
+        stdout: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } },
+      });
+      expect(statSync(sessions).mode & 0o777).toBe(0o700);
+      expect(statSync(auditParent).mode & 0o777).toBe(0o700);
+    } finally {
+      stub.stop(true);
+      for (const file of [join(sessions, "sess-1.json"), join(auditParent, "audit.jsonl")]) {
+        if (existsSync(file)) {
+          unlinkSync(file);
+        }
+      }
+      if (existsSync(sessions)) {
+        rmdirSync(sessions);
+      }
+      if (existsSync(auditParent)) {
+        rmdirSync(auditParent);
+      }
+    }
   });
 
   it("renders a modify as an allow carrying the rewritten arguments and the reason they changed", async () => {

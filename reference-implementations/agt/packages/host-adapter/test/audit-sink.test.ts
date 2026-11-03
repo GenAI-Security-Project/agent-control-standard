@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAuditSink, NULL_AUDIT_SINK, type AuditEntry } from "../src/audit-sink.ts";
+import { createAuditSink, hashAuditEntry, NULL_AUDIT_SINK, type AuditEntry } from "../src/audit-sink.ts";
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -21,6 +21,15 @@ afterEach(() => {
     rmdirSync(dir);
   }
 });
+
+const GENESIS_HASH = "0".repeat(64);
+
+function withoutHash(entry: AuditEntry): Parameters<typeof hashAuditEntry>[0] {
+  const { hash: _hash, ...rest } = entry;
+  // Destructuring a union keeps only the keys both arms share. The value
+  // still has the arm's fields, which is what the digest covers.
+  return rest as Parameters<typeof hashAuditEntry>[0];
+}
 
 const EVENT = {
   session_id: "sess-1",
@@ -45,9 +54,8 @@ describe("createAuditSink", () => {
     const sink = createAuditSink({ path, now: () => new Date("2026-08-10T12:00:00.000Z") });
     sink.write(EVENT);
 
-    expect(readEntries(path)).toEqual([
-      { seq: 1, recorded_at: "2026-08-10T12:00:00.000Z", ...EVENT },
-    ]);
+    const body = { seq: 1, prev_hash: GENESIS_HASH, recorded_at: "2026-08-10T12:00:00.000Z", ...EVENT };
+    expect(readEntries(path)).toEqual([{ ...body, hash: hashAuditEntry(body) }]);
   });
 
   it("numbers entries from 1 and never reuses a seq", () => {
@@ -128,17 +136,17 @@ describe("createAuditSink", () => {
       outcome: "ungoverned",
       ungoverned: { tool: "read", tools: ["bash"] },
     });
-    expect(readEntries(path)).toEqual([
-      {
-        seq: 1,
-        recorded_at: "2026-08-10T12:00:00.000Z",
-        session_id: "sess-1",
-        method: "steps/toolCallResult",
-        rpc_id: null,
-        outcome: "ungoverned",
-        ungoverned: { tool: "read", tools: ["bash"] },
-      },
-    ]);
+    const body = {
+      seq: 1,
+      prev_hash: GENESIS_HASH,
+      recorded_at: "2026-08-10T12:00:00.000Z",
+      session_id: "sess-1",
+      method: "steps/toolCallResult",
+      rpc_id: null,
+      outcome: "ungoverned" as const,
+      ungoverned: { tool: "read", tools: ["bash"] },
+    };
+    expect(readEntries(path)).toEqual([{ ...body, hash: hashAuditEntry(body) }]);
   });
 
   // One counter, both arms: `seq` is per session and gaps mean lost writes,
@@ -190,6 +198,75 @@ describe("createAuditSink", () => {
     expect(entry.posture).toBe("proceed");
     expect(entry.failure.kind).toBe("refused");
     expect(entry.failure.message).toContain("-32020");
+  });
+
+  it("links each line to the line before it, starting from 64 zeroes", () => {
+    const path = join(scratch(), "audit.jsonl");
+    const sink = createAuditSink({ path, now: () => new Date("2026-08-10T12:00:00.000Z") });
+    sink.write(EVENT);
+    sink.write({ ...EVENT, outcome: "blocked", posture: "deny" });
+    const [first, second] = readEntries(path);
+    if (first === undefined || second === undefined) {
+      throw new Error("expected two audit lines");
+    }
+    expect(first.prev_hash).toBe(GENESIS_HASH);
+    expect(second.prev_hash).toBe(first.hash);
+    expect(hashAuditEntry(withoutHash(first))).toBe(first.hash);
+    expect(hashAuditEntry(withoutHash(second))).toBe(second.hash);
+  });
+
+  it("continues the chain from the last line when a new sink opens the same file", () => {
+    const path = join(scratch(), "audit.jsonl");
+    createAuditSink({ path }).write(EVENT);
+    createAuditSink({ path }).write(EVENT);
+    const [first, second] = readEntries(path);
+    if (first === undefined || second === undefined) {
+      throw new Error("expected two audit lines");
+    }
+    expect(second.prev_hash).toBe(first.hash);
+    expect(second.hash).not.toBe(first.hash);
+    expect(hashAuditEntry(withoutHash(second))).toBe(second.hash);
+  });
+
+  it("stops matching after a field in the line changes", () => {
+    const path = join(scratch(), "audit.jsonl");
+    createAuditSink({ path }).write(EVENT);
+    const [entry] = readEntries(path);
+    if (entry === undefined || entry.outcome === "ungoverned") {
+      throw new Error(`expected a posture-resolved entry, got ${JSON.stringify(entry)}`);
+    }
+    const { hash, ...rest } = entry;
+    expect(hashAuditEntry(rest)).toBe(hash);
+    const rewritten = { ...rest, failure: { ...rest.failure, message: "rewritten" } };
+    expect(hashAuditEntry(rewritten)).not.toBe(hash);
+  });
+
+  it("starts a new chain when the last line has no hash, and keeps a hash when a later line is not JSON", () => {
+    const path = join(scratch(), "audit.jsonl");
+    writeFileSync(path, `${JSON.stringify({ ...EVENT, seq: 4, recorded_at: "2026-08-10T12:00:00.000Z" })}\n`);
+    createAuditSink({ path }).write(EVENT);
+    const afterLegacy = readEntries(path);
+    expect(afterLegacy[1]?.seq).toBe(5);
+    expect(afterLegacy[1]?.prev_hash).toBe(GENESIS_HASH);
+
+    const hashed = join(scratch(), "audit.jsonl");
+    createAuditSink({ path: hashed }).write(EVENT);
+    const firstHash = readEntries(hashed)[0]?.hash;
+    if (firstHash === undefined) {
+      throw new Error("expected the first line to carry a hash");
+    }
+    writeFileSync(hashed, `${readFileSync(hashed, "utf8")}{not json\n`);
+    createAuditSink({ path: hashed }).write(EVENT);
+    const lines = readFileSync(hashed, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0);
+    const continuedLine = lines[2];
+    if (continuedLine === undefined) {
+      throw new Error("expected a line after the broken one");
+    }
+    const continued = JSON.parse(continuedLine) as AuditEntry;
+    expect(continued.seq).toBe(3);
+    expect(continued.prev_hash).toBe(firstHash);
   });
 
   it("creates the directory it was pointed at", () => {

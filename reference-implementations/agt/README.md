@@ -591,7 +591,7 @@ Everything above runs with no configuration. These are the variables each proces
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 
-**The Grok shim** (`hosts/grok/acs-hook.ts`) reads the same four variables as the Claude Code shim. Its hookmap default is `hosts/grok/grok.hookmap.yaml`. It also accepts a payload that only carries camelCase `sessionId` and `hookEventName`.
+**The Grok shim** (`hosts/grok/acs-hook.ts`) reads the same four variables. `ACS_SESSION_DIR` defaults to `~/.acs/sessions` and `ACS_AUDIT_LOG` defaults to `~/.acs/audit.jsonl`. The shim creates `~/.acs` and `~/.acs/sessions` at mode 0700. Its hookmap default is `hosts/grok/grok.hookmap.yaml`. It also accepts a payload that only carries camelCase `sessionId` and `hookEventName`.
 
 **The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG` and `ACS_HOOKMAP_PATH` with the same meanings. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.
 
