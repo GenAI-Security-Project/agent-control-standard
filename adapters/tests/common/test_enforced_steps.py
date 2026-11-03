@@ -70,6 +70,21 @@ class AnUnsignableResultIsWithheld(unittest.TestCase):
                       [(a["acs_audit_event"], a.get("cause")) for a in audits])
 
 
+    def test_every_cursor_gate_event_denies_a_step_it_cannot_sign_under_fail_open(self) -> None:
+        from acs.integrations.cursor import adapter
+        base = {"conversation_id": str(uuid.uuid4()), "workspace_roots": ["/tmp"]}
+        events = {"preToolUse": {"tool_name": "Shell", "tool_input": {"command": "ls"}},
+                  "beforeShellExecution": {"command": "ls", "cwd": "/tmp"},
+                  "beforeMCPExecution": {"tool_name": "fetch", "tool_input": "{}", "url": "https://example.com"},
+                  "subagentStart": {"subagent_id": "s1", "subagent_type": "explore", "tool_call_id": "tc1"}}
+        for name, fields in events.items():
+            with self.subTest(name), mock.patch.object(_exchange, "sign_envelope", _unsignable):
+                out, audits = run_in_process(adapter, ["acs-cursor-hook", name], {**base, **fields})
+            self.assertEqual(out["permission"], "deny", name)
+            self.assertIn(("decision_failure_fail_closed", "envelope_not_signable"),
+                          [(a["acs_audit_event"], a.get("cause")) for a in audits])
+
+
 class AStepErrorKeepsTheNegotiatedDeny(unittest.TestCase):
     HELLO = {**NEGOTIATED_HELLO, "on_decision_failure": "deny"}
 
