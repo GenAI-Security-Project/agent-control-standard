@@ -81,7 +81,7 @@ At `PostToolUse` the tool has already run, and Grok's `block` alone withholds no
 
 Grok validates `updatedToolOutput` against its tagged result object (`type: Bash`, `output_for_prompt`, `exit_code`, ...). A replacement that is only a string is dropped.
 
-`tool_response.output` is a byte array of the raw output. This hookmap does not declare a mirror for it, so a redaction patches `output_for_prompt` (what the model reads) and leaves the byte array as it was.
+`tool_response.output` is a byte array of the raw output. The hookmap does not declare a mirror for it, because a mirror rewrites a string leaf and this field is a number array. Withhold and modify clear that byte array from the replacement leaf. The shim sets `output` to the UTF-8 bytes of `output_for_prompt` and sets `total_bytes` to that byte length.
 
 ## The hookmap
 
