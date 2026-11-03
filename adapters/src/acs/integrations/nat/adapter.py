@@ -5,6 +5,7 @@ import asyncio
 import atexit
 import collections
 import contextvars
+import enum
 import hashlib
 import json
 import os
@@ -12,7 +13,8 @@ import sys
 import threading
 import uuid
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from concurrent.futures import Future
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from dataclasses import fields as dataclass_fields
@@ -171,17 +173,77 @@ def _stringify_step_data(data: Any) -> str:
     return str(data)
 
 
+class _LossyValue(ValueError):
+    """Part of a value would be lost from the Guardian's view of it."""
+
+
+def _json_key(key: Any) -> str:
+    if isinstance(key, str):
+        return key
+    if key is None or isinstance(key, (bool, int, float)):
+        return json.dumps(key)
+    return str(key)
+
+
+def _put(out: dict, key: Any, value: Any) -> None:
+    name = _json_key(key)
+    if name in out:
+        raise _LossyValue(f"{key!r} and another key are both {name!r} in JSON, so one value would be dropped")
+    out[name] = value
+
+
+def _model_json(model: Any) -> Any:
+    sent = model.model_dump(mode="json")
+    if not _keeps_entries(model.model_dump(mode="python"), sent):
+        raise _LossyValue("keys of the model that become the same JSON key would drop a value")
+    return sent
+
+
+def _keeps_entries(python: Any, sent: Any) -> bool:
+    """Whether the JSON form sent provably keeps every entry of the Python form; False when it cannot be shown."""
+    if isinstance(python, Mapping):
+        return (isinstance(sent, dict) and len(sent) == len(python)
+                and all(_keeps_entries(a, b) for a, b in zip(python.values(), sent.values())))
+    if isinstance(python, (str, bytes, bytearray)):
+        return not isinstance(sent, (dict, list))
+    if isinstance(python, Sequence):
+        return (isinstance(sent, list) and len(sent) == len(python)
+                and all(_keeps_entries(a, b) for a, b in zip(python, sent)))
+    if isinstance(python, AbstractSet):
+        # Nothing pairs a member with its JSON form, and a hashable member such as an enum can stand for a mapping.
+        return isinstance(sent, list) and len(sent) == len(python) and not _holds_mapping(sent)
+    return not isinstance(sent, (dict, list))
+
+
+def _holds_mapping(value: Any) -> bool:
+    if isinstance(value, dict):
+        return True
+    return isinstance(value, list) and any(_holds_mapping(item) for item in value)
+
+
 def _json_safe(value: Any) -> Any:
-    """The value in JSON form the signer can canonicalize: a model dumped in JSON mode, and anything json cannot encode, such as a datetime, as its string."""
+    """The value in JSON form the signer can canonicalize, with nothing dropped: keys that collide in JSON raise _LossyValue."""
     if hasattr(value, "model_dump"):
         try:
-            value = value.model_dump(mode="json")
+            return _model_json(value)
+        except _LossyValue:
+            raise
         except Exception:  # noqa: BLE001
-            pass
-    try:
-        return json.loads(json.dumps(value, default=str))
-    except (TypeError, ValueError):
-        return str(value)
+            return str(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_safe(asdict(value))
+    if isinstance(value, enum.Enum):
+        return _json_safe(value.value)
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, Mapping):
+        out: dict = {}
+        for key, item in value.items():
+            _put(out, key, _json_safe(item))
+        return out
+    if isinstance(value, (Sequence, AbstractSet)) and not isinstance(value, (bytes, bytearray)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def _extract_arguments(context: Any) -> dict[str, Any]:
@@ -194,7 +256,7 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
 
     kwargs = getattr(context, "modified_kwargs", None) or {}
     for k, v in kwargs.items():
-        out[str(k)] = v
+        _put(out, k, v)
 
     args = getattr(context, "modified_args", None) or []
     if not args:
@@ -205,30 +267,33 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
     for idx, arg in enumerate(args):
         if hasattr(arg, "model_dump"):
             try:
-                out.update(arg.model_dump(mode="json"))
-                continue
+                fields = _model_json(arg)
+            except _LossyValue:
+                raise
             except Exception:  # noqa: BLE001
-                pass
+                fields = None
+            if isinstance(fields, dict):
+                for k, v in fields.items():
+                    _put(out, k, v)
+                continue
         if hasattr(arg, "dict") and callable(getattr(arg, "dict", None)):
             try:
                 d = arg.dict()
-                if isinstance(d, dict):
-                    out.update(d)
-                    continue
             except Exception:  # noqa: BLE001
-                pass
-        if is_dataclass(arg):
-            try:
-                out.update(asdict(arg))
+                d = None
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    _put(out, k, v)
                 continue
-            except Exception:  # noqa: BLE001
-                pass
+        if is_dataclass(arg) and not isinstance(arg, type):
+            for k, v in asdict(arg).items():
+                _put(out, k, v)
+            continue
         if isinstance(arg, dict):
             for k, v in arg.items():
-                out[str(k)] = v
+                _put(out, k, v)
             continue
-        name = schema_fields[idx] if idx < len(schema_fields) else f"arg{idx}"
-        out[name] = arg
+        _put(out, schema_fields[idx] if idx < len(schema_fields) else f"arg{idx}", arg)
 
     return out
 
@@ -894,6 +959,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 request_id=correlation_id,
                 session_id=step.session_id,
             )
+        except _LossyValue as e:
+            result = step.posture.closed().resolve(Undecided("envelope_not_signable", {"error": str(e)},
+                                                              f"envelope not signable: {e}"))
+            self._count_failure(session, result)
         except Exception as e:  # noqa: BLE001
             result = step.posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
@@ -977,6 +1046,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 request_id_ref=correlation_id if request_sent else None,
                 session_id=step.session_id,
             )
+        except _LossyValue as e:
+            result = step.posture.closed().resolve(Undecided("envelope_not_signable", {"error": str(e)},
+                                                              f"envelope not signable: {e}"))
+            self._count_failure(session, result)
         except Exception as e:  # noqa: BLE001
             result = step.posture.resolve(Undecided("adapter_exception", {"error": str(e)},
                                                      f"adapter error: {e}"))
