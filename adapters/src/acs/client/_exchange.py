@@ -304,7 +304,8 @@ def result_problem(result: Any) -> str | None:
     errors = list(_result_validator().iter_errors(result))
     if not errors:
         return None
-    if (isinstance(result, dict) and all(e.absolute_path and e.absolute_path[0] == "modifications" for e in errors)
+    if (isinstance(result, dict) and result.get("decision") == "modify"
+            and all(e.absolute_path and e.absolute_path[0] == "modifications" for e in errors)
             and modify_composition_violation(result.get("modifications"))):
         # §6.3 makes this a DENY the adapter applies, which trace/otel-mapping.json does not count as a decision failure.
         return None

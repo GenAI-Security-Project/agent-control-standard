@@ -147,7 +147,9 @@ class ResultProblems(unittest.TestCase):
                      self._result(decision="modify", reasoning="r", modifications="x"), "x",
                      self._result(decision="allow", chain_hash={"x": 1}),
                      self._result(decision="allow", reason_codes="pii"),
-                     self._result(decision="allow", metadata={"evaluator": "oracle"})]
+                     self._result(decision="allow", metadata={"evaluator": "oracle"}),
+                     self._result(decision="allow",
+                                  modifications={"modified_content": "x", "parameter_overrides": {"a": 1}})]
         for result in conformant:
             with self.subTest(result=result):
                 self.assertIsNone(result_problem(result))
