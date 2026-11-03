@@ -164,7 +164,7 @@ Five fully-automated scenarios against the **real `example_guardian.evaluate_ste
 | 2 | DESTRUCTIVE | `rm -rf` on a victim dir with a canary file → real policy denies via `destructive_command` regex; `ACSGuardianDenied` raised; **canary file still on disk** (counterproof — the unit-test counter alone can false-pass if the function returns early for any reason) |
 | 3 | READ-TOOL | different tool, same wire contract; arguments wrapped per `tool-call-request.json:26-37`; envelope.arguments.file_path.value matches probe path |
 | 4 | HANDSHAKE-ONCE | 3 sequential invocations on the same middleware → exactly 1 `handshake/hello` envelope arrived |
-| 5 | LIFECYCLE | A NAT Runner's `WORKFLOW_START`/`WORKFLOW_END`, reported by the middleware's exporter → emits `steps/sessionStart` + `steps/userMessage` + `steps/agentResponse` + `steps/sessionEnd` envelopes with the workflow input/output in the payload (the observability backstop must actually backstop) |
+| 5 | LIFECYCLE | A NAT Runner's `WORKFLOW_START`/`WORKFLOW_END`, reported by the middleware's exporter → emits `steps/sessionStart` + `steps/userMessage` + `steps/agentResponse` + `steps/sessionEnd` envelopes with the workflow input/output in the payload (workflow boundaries only: the run's input and output, never its tool calls) |
 
 The final line is `ACS-CORE SMOKE PASS (nat)` (exit 0) — a smoke verdict, not a conformance certification — or a per-scenario failure list (exit 1).
 
@@ -324,7 +324,7 @@ The adapter works across multiple NAT releases by feature-detecting the block me
 | Symptom | Likely cause |
 |---|---|
 | `acs-nat-wire --check` reports gaps after wiring | YAML was edited after acs-nat-wire ran. Re-run `acs-nat-wire --write`. |
-| `acs-nat-wire --check` keeps reporting gaps for the same function | That function is defined in Python code, not YAML. acs-nat-wire can't reach it. Move the definition into YAML, or accept the coverage gap and rely on the lifecycle-stream backstop. |
+| `acs-nat-wire --check` keeps reporting gaps for the same function | That function is defined in Python code, not YAML, so acs-nat-wire can't reach it. Move the definition into YAML, or add `acs_guardian` to its `middleware` list in code; until then its calls reach the Guardian neither as a decision nor as an observation. |
 | `acs-nat-wire` errors out with "ruamel.yaml" missing | Install the `nat` extra: `pip install "$ACS_REPO/adapters[nat]"`. |
 | NAT runs functions as if no Guardian exists | NAT loaded the workflow before `acs-nat-wire --write` ran. **Restart your NAT process.** |
 | Every call gets denied | Likely `default_deny: true` in middleware config + Guardian down. Check the Guardian process is running. |
