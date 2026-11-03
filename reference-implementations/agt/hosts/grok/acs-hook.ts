@@ -88,6 +88,9 @@
  *     wherever the failure was caught, not something re-inferred afterwards
  *     from leftover variables.
  */
+import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createAuditSink,
@@ -115,6 +118,22 @@ const HOOKMAP_PATH = process.env.ACS_HOOKMAP_PATH ?? fileURLToPath(new URL("./gr
 // Override with ACS_GUARDIAN_URL when the Guardian runs on a different
 // host/port (e.g. in tests, which start a Guardian on an ephemeral port).
 const DEFAULT_GUARDIAN_URL = "http://localhost:8787/acs";
+
+// Home, not the project directory. A hook inherits the workspace as its cwd,
+// and a relative `.acs/` would write this user's session and audit into
+// whatever repository they had open.
+const DEFAULT_SESSION_DIR = join(homedir(), ".acs", "sessions");
+const DEFAULT_AUDIT_LOG = join(homedir(), ".acs", "audit.jsonl");
+
+function ensurePrivateDir(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch {
+    // A path that is a file, or that this process cannot create, is already
+    // the store's session_failure or the sink's disabled write. Throwing
+    // here would exit 2 and skip both.
+  }
+}
 
 /**
  * Grok's own output shape, which lives here and nowhere else. Grok honours
@@ -551,8 +570,10 @@ async function main(): Promise<void> {
   try {
     hookmap = loadHookmap(HOOKMAP_PATH);
     assertHostAcceptsEveryDecision(hookmap, HOOKMAP_PATH);
+    const sessionDir = process.env.ACS_SESSION_DIR ?? DEFAULT_SESSION_DIR;
+    ensurePrivateDir(sessionDir);
     store = createFileSessionConfigStore({
-      dir: process.env.ACS_SESSION_DIR ?? ".acs/sessions",
+      dir: sessionDir,
       sessionId,
     });
   } catch (error) {
@@ -562,7 +583,9 @@ async function main(): Promise<void> {
   // Step 3: the audit log -- total by construction, so building it cannot
   // itself throw, and a write to it never happens unless a fail-open
   // proceed (or a negotiated fail-closed deny) actually occurs below.
-  const audit = createAuditSink({ path: process.env.ACS_AUDIT_LOG ?? ".acs/audit.jsonl" });
+  const auditLog = process.env.ACS_AUDIT_LOG ?? DEFAULT_AUDIT_LOG;
+  ensurePrivateDir(dirname(auditLog));
+  const audit = createAuditSink({ path: auditLog });
 
   const guardianUrl = process.env.ACS_GUARDIAN_URL ?? DEFAULT_GUARDIAN_URL;
   const guardian = createGuardianClient(guardianUrl);

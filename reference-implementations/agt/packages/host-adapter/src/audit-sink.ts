@@ -35,6 +35,7 @@
  * because no gate asked. They record different things at different sides of
  * the wire, and this package stays free of the Guardian's imports.
  */
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { SessionFailureKind, StepFailureKind } from "./failure-kinds.ts";
@@ -52,6 +53,18 @@ type AuditEntryIdentity = {
    * headers that read as one entry repeated. Gaps mean lost writes.
    */
   seq: number;
+  /**
+   * Digest of the previous line. The first line uses 64 zeroes. A new process
+   * reads the last line's `hash` and continues, the same way `seq` continues.
+   * Two hooks that both read the file before either appends still name the
+   * same predecessor. The chain shows that fork. It does not prevent it.
+   */
+  prev_hash: string;
+  /**
+   * Digest of `prev_hash` and this line's own fields, in the order
+   * `hashAuditEntry` fixes. Rewriting a field breaks the digest.
+   */
+  hash: string;
   recorded_at: string;
   session_id: string;
   /**
@@ -217,7 +230,7 @@ export type AuditEntry = PostureResolvedAuditEntry | UngovernedAuditEntry;
  * silently erase both arms' own fields. Distributed, so each arm keeps them. */
 type OmitPerArm<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-export type AuditEvent = OmitPerArm<AuditEntry, "seq" | "recorded_at">;
+export type AuditEvent = OmitPerArm<AuditEntry, "seq" | "recorded_at" | "prev_hash" | "hash">;
 
 export type AuditSink = {
   /** Where entries land, or null for the null sink. */
@@ -251,36 +264,85 @@ export type CreateAuditSinkOptions = {
   onError?: (error: unknown) => void;
 };
 
+/** `prev_hash` of the first line in a file. */
+const GENESIS_HASH = "0".repeat(64);
+
+type AuditEntryWithoutHash = OmitPerArm<AuditEntry, "hash">;
+
 /**
- * The highest sequence number already in the log, so a fresh sink continues
- * the session rather than restarting it (see AuditEntry.seq). Falls back to
- * the line count when a line carries no usable `seq`, so an unparseable
- * entry still consumes its number instead of being overwritten in spirit by
- * the next one.
+ * Digest of one audit line. The array is the canonical form, so the order of
+ * keys in the stored object cannot change the digest. `Omit` over the union
+ * would drop each arm's own fields, so the parameter is distributed the same
+ * way `AuditEvent` is.
+ */
+export function hashAuditEntry(input: AuditEntryWithoutHash): string {
+  const canonical =
+    input.outcome === "ungoverned"
+      ? [
+          input.prev_hash,
+          input.session_id,
+          input.seq,
+          input.recorded_at,
+          input.method,
+          input.rpc_id,
+          input.request_id ?? null,
+          input.outcome,
+          null,
+          null,
+          [input.ungoverned.tool, input.ungoverned.tools],
+        ]
+      : [
+          input.prev_hash,
+          input.session_id,
+          input.seq,
+          input.recorded_at,
+          input.method,
+          input.rpc_id,
+          input.request_id ?? null,
+          input.outcome,
+          [input.posture, input.posture_source, input.failure.kind, input.failure.message],
+          input.session_failure === undefined ? null : [input.session_failure.kind, input.session_failure.message],
+          null,
+        ];
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+/**
+ * The highest sequence number already in the log, and the `hash` of the last
+ * entry, so a fresh sink continues both (see `seq` and `prev_hash`). Falls
+ * back to the line count when a line carries no usable `seq`, so an
+ * unparseable line still consumes a number. A last entry with no `hash`
+ * starts the chain at genesis. An unparseable line leaves the tip where the
+ * last entry put it.
  *
  * TOTAL, like everything else here: a missing or unreadable log means "start
- * from 1", never a throw. Losing the ability to continue the numbering must
+ * from 1" and genesis, never a throw. Losing the ability to continue must
  * not cost the entry itself, which is the thing §6.4 actually requires.
  */
-function highestSeqIn(path: string): number {
+function chainTipIn(path: string): { seq: number; prevHash: string } {
   try {
     const lines = readFileSync(path, "utf8")
       .split("\n")
       .filter((line) => line.trim() !== "");
     let highest = 0;
+    let prevHash = GENESIS_HASH;
     for (const line of lines) {
       try {
-        const { seq } = JSON.parse(line) as { seq?: unknown };
-        if (typeof seq === "number" && Number.isFinite(seq) && seq > highest) {
-          highest = seq;
+        const parsed = JSON.parse(line) as { seq?: unknown; hash?: unknown };
+        if (typeof parsed !== "object" || parsed === null) {
+          continue;
         }
+        if (typeof parsed.seq === "number" && Number.isFinite(parsed.seq) && parsed.seq > highest) {
+          highest = parsed.seq;
+        }
+        prevHash = typeof parsed.hash === "string" ? parsed.hash : GENESIS_HASH;
       } catch {
-        // Counted by `lines.length` below; nothing else to do with it.
+        // Counted by `lines.length` below. The tip stays on the last entry.
       }
     }
-    return Math.max(highest, lines.length);
+    return { seq: Math.max(highest, lines.length), prevHash };
   } catch {
-    return 0;
+    return { seq: 0, prevHash: GENESIS_HASH };
   }
 }
 
@@ -290,6 +352,7 @@ export function createAuditSink({ path, now = () => new Date(), onError }: Creat
   // to be delivered), and reading the log at construction would put an fs
   // read on the decision path of every one of them.
   let seq: number | undefined;
+  let prevHash: string | undefined;
   let disabled = false;
 
   function fail(error: unknown): void {
@@ -318,15 +381,29 @@ export function createAuditSink({ path, now = () => new Date(), onError }: Creat
         return false;
       }
       try {
-        if (seq === undefined) {
-          seq = highestSeqIn(path);
+        if (seq === undefined || prevHash === undefined) {
+          const tip = chainTipIn(path);
+          seq = tip.seq;
+          prevHash = tip.prevHash;
         }
-        const entry: AuditEntry = { seq: seq + 1, recorded_at: now().toISOString(), ...event };
+        const recorded_at = now().toISOString();
+        const nextSeq = seq + 1;
+        // Spread of `event` is a union. Naming the intermediate as the
+        // distributed omit keeps each arm's fields, which a plain `Omit`
+        // would drop.
+        const withoutHash = {
+          seq: nextSeq,
+          recorded_at,
+          ...event,
+          prev_hash: prevHash,
+        } as AuditEntryWithoutHash;
+        const entry: AuditEntry = { ...withoutHash, hash: hashAuditEntry(withoutHash) };
         mkdirSync(dirname(path), { recursive: true });
         appendFileSync(path, `${JSON.stringify(entry)}\n`);
         // Only after a successful append, so a failed write does not consume
-        // a sequence number and invent a gap that never happened.
+        // a sequence number or a link and invent a gap that never happened.
         seq += 1;
+        prevHash = entry.hash;
         return true;
       } catch (error) {
         fail(error);

@@ -39,7 +39,7 @@ A hook may carry a `tools` list. A tool outside that list is not governed, and `
 
 ## The audit log
 
-The shim tells `createAuditSink` where to write. Both shims default to `.acs/audit.jsonl` and read `ACS_AUDIT_LOG` to override it. One line is written per fail-open proceed, per posture-driven block, and per ungoverned skip. The entry keeps the host's raw session id. The envelope carries a UUID derived from it by `toSessionUuid`, because the ACS schema requires a UUID, so the two logs cannot be joined on that field.
+The shim tells `createAuditSink` where to write. `ACS_AUDIT_LOG` overrides the path. The Claude Code shim defaults to `.acs/audit.jsonl`. The Grok shim defaults to `~/.acs/audit.jsonl`. One line is written per fail-open proceed, per posture-driven block, and per ungoverned skip. Each line carries `prev_hash` and `hash`. The first line's `prev_hash` is 64 zeroes. Each later line sets `prev_hash` to the previous line's `hash`, and a new process continues that chain by reading the last line. The entry keeps the host's raw session id. The envelope carries a UUID derived from it by `toSessionUuid`, because the ACS schema requires a UUID, so the two logs cannot be joined on that field.
 
 ## Files
 

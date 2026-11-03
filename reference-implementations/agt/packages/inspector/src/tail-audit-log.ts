@@ -72,6 +72,10 @@ type AuditEntryIdentity = {
   rpc_id: string | number | null;
   /** The envelope's request_id. Absent on entries written before it existed. */
   request_id?: string | null;
+  /** Predecessor digest. Absent on entries written before the chain existed. */
+  prev_hash?: string;
+  /** Digest of this line. Absent on entries written before the chain existed. */
+  hash?: string;
 };
 
 /** A step the writer's negotiated posture answered, because no decision
@@ -139,7 +143,11 @@ function isAuditEntryShape(value: unknown): value is AuditEntry {
       typeof candidate.session_id === "string" &&
       (typeof candidate.method === "string" || candidate.method === null) &&
       (typeof candidate.rpc_id === "string" || typeof candidate.rpc_id === "number" || candidate.rpc_id === null) &&
-      (candidate.request_id === undefined || typeof candidate.request_id === "string" || candidate.request_id === null)
+      (candidate.request_id === undefined ||
+        typeof candidate.request_id === "string" ||
+        candidate.request_id === null) &&
+      (candidate.prev_hash === undefined || typeof candidate.prev_hash === "string") &&
+      (candidate.hash === undefined || typeof candidate.hash === "string")
     )
   ) {
     return false;
