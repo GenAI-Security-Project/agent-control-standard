@@ -9,7 +9,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api": "1.10.0",
     "@opentelemetry/core": "2.12.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.223.0",
     "@opentelemetry/otlp-transformer": "0.223.0",
