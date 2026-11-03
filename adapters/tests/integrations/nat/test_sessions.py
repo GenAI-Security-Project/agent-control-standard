@@ -160,6 +160,15 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertEqual(self._serve(("rm", None)), ["ACSGuardianDenied"])
         self.assertEqual(EXECUTED, [], "a denied call never reaches the function")
 
+    def test_nats_function_middleware_chain_applies_a_modify(self) -> None:
+        allow = self.guardian._default_allow
+        self.guardian.handlers["steps/toolCallRequest"] = lambda req: {
+            **allow(req), "decision": "modify", "modifications": {"parameter_overrides": {"command": "ls"}}}
+        self.assertEqual(self._serve(("rm -rf /", None)), ["ran ls"])
+        self.assertEqual(EXECUTED, ["ls"])
+        [request] = self.guardian.envelopes_for("steps/toolCallRequest")
+        self.assertEqual(request["params"]["payload"]["arguments"], {"command": {"value": "rm -rf /"}})
+
     def test_requests_sharing_a_run_id_header_are_separate_sessions(self) -> None:
         same = {"workflow-run-id": "client-chosen"}
         self.assertEqual(self._serve(("one", same), ("two", same)), ["ran one", "ran two"])

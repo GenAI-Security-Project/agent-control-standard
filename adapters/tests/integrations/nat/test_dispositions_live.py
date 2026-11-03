@@ -204,9 +204,9 @@ class DispositionsLive(unittest.TestCase):
         async def plain(command: str) -> str:
             received.append(command)
             return "ran"
-        with self.assertRaises(ACSGuardianDenied, msg="an override that fits no input slot is a DENY (§6.5)"):
-            asyncio.run(mw.function_middleware_invoke("rm -rf /", call_next=plain, context=context))
-        self.assertEqual(received, ["ls", "ls"])
+        # A scalar input is the field the schema names at its position, as the Guardian saw it.
+        asyncio.run(mw.function_middleware_invoke("rm -rf /", call_next=plain, context=context))
+        self.assertEqual(received, ["ls", "ls", "ls"])
 
     def test_an_override_the_input_does_not_take_is_denied(self) -> None:
         """§6.5: a computed field reads its own value back, so the MODIFY cannot be applied and is a DENY."""

@@ -231,17 +231,7 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
     if not args:
         return out
 
-    # Try to read field names from the function's input schema (Pydantic)
-    schema = None
-    fc = getattr(context, "function_context", None)
-    if fc is not None:
-        schema = getattr(fc, "input_schema", None)
-    schema_fields: list[str] = []
-    if schema is not None:
-        # Pydantic v2: model_fields. v1 / others: __fields__
-        fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", None)
-        if fields:
-            schema_fields = list(fields.keys())
+    schema_fields = _schema_fields(context)
 
     for idx, arg in enumerate(args):
         # Pydantic model — best case: dump and merge
@@ -277,6 +267,12 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
         out[name] = arg
 
     return out
+
+
+def _schema_fields(context: Any) -> list[str]:
+    schema = getattr(getattr(context, "function_context", None), "input_schema", None)
+    fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", None)
+    return list(fields) if fields else []
 
 
 def _redact_output(context: Any) -> None:
@@ -323,27 +319,33 @@ def _replaced(head: Any, overrides: dict[str, Any]) -> Any:
 
 
 def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> bool:
-    """Apply Guardian's MODIFY parameter_overrides to the slot NAT reads each overridden field from; False when it cannot.
-
-    NAT executes `await call_next(*context.modified_args,
-    **context.modified_kwargs)`. A field the input model, dataclass or dict
-    in `modified_args[0]` declares is rewritten there, and an existing
-    keyword argument in `modified_kwargs`. An override that names neither
-    would leave the function's input unchanged.
-    """
+    """Apply parameter_overrides where NAT reads each field (call_next(*modified_args, **modified_kwargs)); False when an override names no declared field, keyword or positional scalar."""
     args = list(getattr(context, "modified_args", ()) or ())
     kwargs = dict(getattr(context, "modified_kwargs", None) or {})
     declared = (_declared_fields(args[0]) if args else None) or set()
-    to_head = {key: value for key, value in overrides.items() if key in declared}
-    to_kwargs = {key: value for key, value in overrides.items() if key not in to_head and key in kwargs}
-    if len(to_head) + len(to_kwargs) != len(overrides):
-        return False
+    names = _schema_fields(context)
+    to_head: dict[str, Any] = {}
+    to_kwargs: dict[str, Any] = {}
+    to_args: dict[int, Any] = {}
+    for key, value in overrides.items():
+        position = names.index(key) if key in names else len(args)
+        if key in declared:
+            to_head[key] = value
+        elif key in kwargs:
+            to_kwargs[key] = value
+        elif position < len(args) and _declared_fields(args[position]) is None:
+            to_args[position] = value
+        else:
+            return False
     try:
         if to_head:
             head = _replaced(args[0], to_head)
             if not _reads_back(head, to_head):
                 return False
             args[0] = head
+        for position, value in to_args.items():
+            args[position] = value
+        if to_head or to_args:
             # Tuple field with validate_assignment=True — assign a new tuple.
             context.modified_args = tuple(args)
         if to_kwargs:

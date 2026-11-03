@@ -172,8 +172,9 @@ The adapter feature-detects which mechanism NAT exposes and prefers the action-b
 ### Modify input (Guardian returns `parameter_overrides`)
 
 ```python
-# A field the input in context.modified_args[0] declares is rewritten there;
-# an existing keyword argument is rewritten in context.modified_kwargs.
+# A field the input in context.modified_args[0] declares is rewritten there,
+# an existing keyword argument in context.modified_kwargs, and a scalar input
+# (a one-argument function's) in place, under its schema field name.
 context.modified_args = (ShellInput(command="echo hello # sanitized"),)
 return context
 # NAT runtime: invokes the function with call_next(*modified_args, **modified_kwargs)
