@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import math
 import os
 import tempfile
 import urllib.error
@@ -42,8 +43,8 @@ _HANDSHAKE_CACHE_DIR = Path(
     )
 )
 
-# Handshake network timeout — default 5s, configurable per deployment.
-_HANDSHAKE_TIMEOUT_S = float(os.environ.get("ACS_HANDSHAKE_TIMEOUT_SECONDS", "5"))
+_DEFAULT_HANDSHAKE_TIMEOUT_S = 5.0
+_HANDSHAKE_TIMEOUT_S: float | None = None
 
 _RECORD_VERSION = 1
 _STARTUP_VERSION = 1
@@ -183,12 +184,29 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
             platform=platform, methods_implemented=methods_implemented,
             wrapped_protocols=wrapped_protocols, profiles_supported=claimed,
             transports_supported=transports_supported,
-            timeout=_HANDSHAKE_TIMEOUT_S if timeout is None else timeout,
+            timeout=_handshake_timeout_s() if timeout is None else timeout,
         )
     decision, ours = _store_first(path, decision, ikm, session_id, config.guardian_url)
     if ours:
         _audit_start(decision, config, session_id, claimed)
     return decision
+
+
+def _handshake_timeout_s() -> float:
+    if _HANDSHAKE_TIMEOUT_S is not None:
+        return _HANDSHAKE_TIMEOUT_S
+    raw = os.environ.get("ACS_HANDSHAKE_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return _DEFAULT_HANDSHAKE_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if math.isfinite(value) and value > 0:
+        return value
+    audit_event("invalid_setting", setting="ACS_HANDSHAKE_TIMEOUT_SECONDS", value=raw,
+                used=_DEFAULT_HANDSHAKE_TIMEOUT_S)
+    return _DEFAULT_HANDSHAKE_TIMEOUT_S
 
 
 def _required_profiles(decision: Handshake, config: Config) -> Handshake:

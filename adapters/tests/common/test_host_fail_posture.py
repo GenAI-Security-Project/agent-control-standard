@@ -89,9 +89,13 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
                   else out.get("permission") == "deny")
         return p, denied
 
-    def _assert_settled(self, p, denied: bool, deny: str, label: str) -> None:
+    def _assert_settled(self, p, denied: bool, deny: str, label: str, audit: str | None = None) -> None:
         self.assertEqual(p.returncode, 0, f"{label}: a crash exits nonzero and the host runs the tool\n{p.stderr[-600:]}")
         self.assertIn("ACS_AUDIT ", p.stderr, f"{label}: settled with no audit line")
+        if audit is not None:
+            audits = [json.loads(line[len("ACS_AUDIT "):])["acs_audit_event"]
+                      for line in p.stderr.splitlines() if line.startswith("ACS_AUDIT ")]
+            self.assertIn(audit, audits, label)
         if deny == "1":
             self.assertTrue(denied, f"{label}: fail-closed posture must deny\n{p.stdout}")
 
@@ -111,16 +115,33 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
         loose = self.root / "loose.key"
         loose.write_text("0" * 64)
         loose.chmod(0o644)
-        cases = {"a key file with mode 0644": {"ACS_HMAC_SECRET": "", "ACS_HMAC_SECRET_FILE": str(loose)},
-                 "a missing key file": {"ACS_HMAC_SECRET": "", "ACS_HMAC_SECRET_FILE": str(self.root / "absent.key")},
-                 "an unparseable cache lifetime": {"ACS_HANDSHAKE_CACHE_TTL_SECONDS": "1h"}}
-        for name, overrides in cases.items():
+        cases = {"a key file with mode 0644": ({"ACS_HMAC_SECRET": "", "ACS_HMAC_SECRET_FILE": str(loose)},
+                                               "session_refused_fail_closed"),
+                 "a missing key file": ({"ACS_HMAC_SECRET": "", "ACS_HMAC_SECRET_FILE": str(self.root / "absent.key")},
+                                        "session_refused_fail_closed"),
+                 "an unparseable handshake timeout": ({"ACS_HANDSHAKE_TIMEOUT_SECONDS": "1h"}, "invalid_setting")}
+        for name, (overrides, audit) in cases.items():
             for host in ("claude-code", "cursor"):
                 for deny in ("0", "1"):
                     label = f"{host} deny={deny}: {name}"
                     with self.subTest(label):
                         p, denied = self._run(host, deny, seeded=False, env_overrides=overrides)
-                        self._assert_settled(p, denied, deny, label)
+                        self._assert_settled(p, denied, deny, label, audit)
+
+    def test_an_adapter_that_raises_while_loading_settles_closed(self) -> None:
+        package = self.root / "raising"
+        package.mkdir()
+        (package / "acs_raising_adapter.py").write_text("raise RuntimeError('broken at import')\n")
+        script = ("import sys; from acs.integrations._bootstrap import run_hook; "
+                  "sys.exit(run_hook('acs_raising_adapter', event_key='hook', event_name=lambda raw: 'PreToolUse', "
+                  "deny=lambda name, reason: print('DENIED', name) or 0))")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+        env["PYTHONPATH"] = str(package)
+        p = subprocess.run([sys.executable, "-c", script], input="{}", capture_output=True, text=True, env=env,
+                           timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr[-600:])
+        self.assertIn("DENIED PreToolUse", p.stdout)
+        self.assertIn('"acs_audit_event": "adapter_crashed"', p.stderr)
 
     def test_a_session_record_the_agent_wrote_settles_in_the_hooks_shape(self) -> None:
         _Stub.answer = (200, None)

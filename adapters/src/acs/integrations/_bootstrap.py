@@ -38,6 +38,10 @@ def run_hook(module: str, *, event_key: str, event_name: Callable[[str], str],
         return _settle(event_key, event_name(raw), deny, error, audit_type="adapter_unavailable",
                        reason=UNAVAILABLE_REASON, detail="adapter could not load; no envelope was sent",
                        fail_closed=False)
+    except Exception as error:  # noqa: BLE001
+        return _settle(event_key, event_name(raw), deny, error, audit_type="adapter_crashed",
+                       reason=CRASHED_REASON, detail="adapter raised while loading; no envelope was sent",
+                       fail_closed=True)
     try:
         return main()
     except Exception as error:  # noqa: BLE001
