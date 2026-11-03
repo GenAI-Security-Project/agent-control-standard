@@ -240,6 +240,81 @@ class DispositionsLive(unittest.TestCase):
         self.assertEqual([a["reason_codes"] for a in audits if a["acs_audit_event"] == "modify_unsupported"],
                          [["modify_unsupported"]])
 
+    def test_an_override_naming_no_field_of_the_input_is_denied(self) -> None:
+        """§6.5: an override the function's input does not declare would leave the input unchanged, so it is a DENY."""
+        from nat.middleware.middleware import FunctionMiddlewareContext
+
+        class ShellInput(BaseModel):
+            command: str
+        self._set_response("steps/toolCallRequest", {
+            "decision": "modify", "reasoning": "use the safe command",
+            "modifications": {"parameter_overrides": {"cmd": "ls"}}})
+        context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=ShellInput,
+                                            single_output_schema=str, stream_output_schema=str)
+        received: list = []
+
+        async def model_input(value: ShellInput) -> str:
+            received.append(value.command)
+            return "ran"
+
+        async def dict_input(value: dict) -> str:
+            received.append(value["command"])
+            return "ran"
+        mw = self._mw(default_deny=False)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            for target, value in ((model_input, ShellInput(command="rm -rf /")), (dict_input, {"command": "rm -rf /"})):
+                with self.assertRaises(ACSGuardianDenied):
+                    asyncio.run(mw.function_middleware_invoke(value, call_next=target, context=context))
+        self.assertEqual(received, [], "the function ran its original input")
+        audits = [json.loads(line.removeprefix("ACS_AUDIT ")) for line in err.getvalue().splitlines()
+                  if line.startswith("ACS_AUDIT ")]
+        self.assertEqual([a["acs_audit_event"] for a in audits].count("modify_unsupported"), 2)
+
+    def test_an_override_the_input_rewrites_when_rebuilt_is_denied(self) -> None:
+        from dataclasses import dataclass
+        from nat.middleware.middleware import FunctionMiddlewareContext
+
+        @dataclass
+        class Normalized:
+            command: str
+
+            def __post_init__(self) -> None:
+                self.command = self.command.replace("ls", "rm -rf /")
+        self._set_response("steps/toolCallRequest", {
+            "decision": "modify", "reasoning": "use the safe command",
+            "modifications": {"parameter_overrides": {"command": "ls"}}})
+        context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=None,
+                                            single_output_schema=str, stream_output_schema=str)
+        received: list = []
+
+        async def target(value: Normalized) -> str:
+            received.append(value.command)
+            return "ran"
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(ACSGuardianDenied):
+            asyncio.run(self._mw(default_deny=False).function_middleware_invoke(
+                Normalized(command="echo"), call_next=target, context=context))
+        self.assertEqual(received, [])
+
+    def test_an_override_of_a_keyword_argument_is_applied_to_it_beside_a_model_input(self) -> None:
+        from nat.middleware.middleware import FunctionMiddlewareContext
+
+        class ShellInput(BaseModel):
+            command: str
+        self._set_response("steps/toolCallRequest", {
+            "decision": "modify", "reasoning": "dry run only",
+            "modifications": {"parameter_overrides": {"mode": "dry-run"}}})
+        context = FunctionMiddlewareContext(name="Bash", config=None, description=None, input_schema=ShellInput,
+                                            single_output_schema=str, stream_output_schema=str)
+        received: list = []
+
+        async def mixed(value: ShellInput, *, mode: str) -> str:
+            received.append((value.command, mode))
+            return "ran"
+        asyncio.run(self._mw(default_deny=True).function_middleware_invoke(
+            ShellInput(command="rm -rf /"), call_next=mixed, context=context, mode="destructive"))
+        self.assertEqual(received, [("rm -rf /", "dry-run")])
+
     def test_a_datetime_input_and_a_dict_output_reach_the_guardian_and_its_deny_applies(self) -> None:
         import datetime
         stamp = datetime.datetime(2026, 11, 1, 12, 0, tzinfo=datetime.timezone.utc)

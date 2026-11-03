@@ -1,48 +1,4 @@
-"""
-ACS middleware for the NVIDIA Agent Toolkit (NAT / NeMo Agent Toolkit).
-
-Wires NAT's Middleware abstraction to an ACS Guardian. Intercepts every
-function (tool / sub-workflow / LLM / etc.) call configured to use this
-middleware, sends an ACS JSON-RPC request to the Guardian, and applies
-the verdict to NAT's invocation context.
-
-Schema sources:
-  - NAT public repo `packages/nvidia_nat_core/src/nat/middleware/`
-  - GenAI-Security-Project/agent-control-standard `specification/v0.1.0/`
-
-Requires:
-  pip install nvidia-nat-core
-  (and nvidia-nat-security if you also want to register alongside NAT's
-  defense middleware suite)
-
-Compatibility:
-  - nvidia-nat-core >= 1.7 (public release). Block via raising
-    ACSGuardianDenied; modify via setting context.modified_kwargs / output.
-  - Future versions that expose InvocationAction.SKIP are also supported:
-    if the symbol is importable, the adapter sets context.action instead
-    of raising, which produces cleaner traces.
-
-Environment variables:
-  ACS_AGENT_ID    Explicit agent_id for metadata. If unset, derived from
-                  config.target_function_or_group, falling back to "nat".
-
-Usage in NAT YAML:
-
-  middleware:
-    acs_guardian:
-      _type: acs_guardian
-      guardian_url: http://127.0.0.1:8787/acs
-      target_function_or_group: <tool-or-group-or-workflow-name>
-      default_deny: true
-
-  function_groups:
-    my_tools:
-      middleware: [acs_guardian]
-
-  workflow:
-    _type: react_agent
-    middleware: [acs_guardian]
-"""
+"""NAT middleware that sends each wrapped function call to an ACS Guardian and applies the verdict; each root Runner is one ACS session."""
 from __future__ import annotations
 
 import asyncio
@@ -59,6 +15,7 @@ import weakref
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
+from dataclasses import fields as dataclass_fields
 from typing import Any, Optional
 
 from acs import __version__
@@ -343,53 +300,54 @@ def _reads_back(value: Any, overrides: dict[str, Any]) -> bool:
     return True
 
 
+def _declared_fields(value: Any) -> set[str] | None:
+    if isinstance(value, dict):
+        return set(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return {f.name for f in dataclass_fields(value) if f.init}
+    for attribute in ("model_fields", "__fields__"):
+        declared = getattr(type(value), attribute, None)
+        if isinstance(declared, dict):
+            return set(declared)
+    return None
+
+
+def _replaced(head: Any, overrides: dict[str, Any]) -> Any:
+    if isinstance(head, dict):
+        return {**head, **overrides}
+    if is_dataclass(head):
+        return replace(head, **overrides)
+    if hasattr(head, "model_copy"):
+        return head.model_copy(update=dict(overrides))
+    return head.copy(update=dict(overrides))  # type: ignore[call-arg]
+
+
 def _apply_overrides_to_context(context: Any, overrides: dict[str, Any]) -> bool:
-    """Apply Guardian's MODIFY parameter_overrides to the slot NAT reads the function input from; False when it cannot.
+    """Apply Guardian's MODIFY parameter_overrides to the slot NAT reads each overridden field from; False when it cannot.
 
     NAT executes `await call_next(*context.modified_args,
-    **context.modified_kwargs)`. An input passed positionally, a Pydantic
-    model, dataclass or dict in `modified_args[0]`, is rewritten there and
-    only there: the same fields as keywords as well would reach the function
-    twice and raise TypeError. An input passed as keywords is rewritten in
-    `modified_kwargs`.
+    **context.modified_kwargs)`. A field the input model, dataclass or dict
+    in `modified_args[0]` declares is rewritten there, and an existing
+    keyword argument in `modified_kwargs`. An override that names neither
+    would leave the function's input unchanged.
     """
     args = list(getattr(context, "modified_args", ()) or ())
-    if not args:
-        try:
-            context.modified_kwargs = {**dict(getattr(context, "modified_kwargs", None) or {}), **overrides}
-            return True
-        except Exception:  # noqa: BLE001
-            return False
-    head = args[0]
-    new_head: Any = None
-    # Pydantic v2
-    if hasattr(head, "model_copy"):
-        try:
-            new_head = head.model_copy(update=dict(overrides))
-        except Exception:  # noqa: BLE001
-            new_head = None
-    # Pydantic v1
-    if new_head is None and hasattr(head, "copy") and callable(getattr(head, "copy", None)):
-        try:
-            new_head = head.copy(update=dict(overrides))  # type: ignore[call-arg]
-        except Exception:  # noqa: BLE001
-            new_head = None
-    # Dataclass
-    if new_head is None and is_dataclass(head):
-        try:
-            from dataclasses import replace as _dc_replace
-            new_head = _dc_replace(head, **overrides)
-        except Exception:  # noqa: BLE001
-            new_head = None
-    # Plain dict
-    if new_head is None and isinstance(head, dict):
-        new_head = {**head, **overrides}
-    if new_head is None or not _reads_back(new_head, overrides):
+    kwargs = dict(getattr(context, "modified_kwargs", None) or {})
+    declared = (_declared_fields(args[0]) if args else None) or set()
+    to_head = {key: value for key, value in overrides.items() if key in declared}
+    to_kwargs = {key: value for key, value in overrides.items() if key not in to_head and key in kwargs}
+    if len(to_head) + len(to_kwargs) != len(overrides):
         return False
-    args[0] = new_head
     try:
-        # Tuple field with validate_assignment=True — assign a new tuple.
-        context.modified_args = tuple(args)
+        if to_head:
+            head = _replaced(args[0], to_head)
+            if not _reads_back(head, to_head):
+                return False
+            args[0] = head
+            # Tuple field with validate_assignment=True — assign a new tuple.
+            context.modified_args = tuple(args)
+        if to_kwargs:
+            context.modified_kwargs = {**kwargs, **to_kwargs}
     except Exception:  # noqa: BLE001
         return False
     return True

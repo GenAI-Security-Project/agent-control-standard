@@ -172,10 +172,14 @@ The adapter feature-detects which mechanism NAT exposes and prefers the action-b
 ### Modify input (Guardian returns `parameter_overrides`)
 
 ```python
-context.modified_kwargs.update({"command": "echo hello # sanitized"})
+# A field the input in context.modified_args[0] declares is rewritten there;
+# an existing keyword argument is rewritten in context.modified_kwargs.
+context.modified_args = (ShellInput(command="echo hello # sanitized"),)
 return context
-# NAT runtime: invokes the function with the modified kwargs
+# NAT runtime: invokes the function with call_next(*modified_args, **modified_kwargs)
 ```
+
+An override that names no field of the input and no keyword argument the call has, or one the rebuilt input does not keep, cannot be applied: the call is blocked and the MODIFY recorded as `modify_unsupported` (§6.5).
 
 ### Modify output (Guardian returns `modified_content` in post_invoke)
 
