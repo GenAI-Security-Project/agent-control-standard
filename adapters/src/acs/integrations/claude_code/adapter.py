@@ -256,8 +256,12 @@ def _payload_pretool_use(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tool_response(event: dict[str, Any]) -> Any:
+    return event.get("tool_response", event.get("tool_output"))
+
+
 def _payload_post_tool_use(event: dict[str, Any]) -> dict[str, Any]:
-    tool_response = event.get("tool_response", event.get("tool_output"))
+    tool_response = _tool_response(event)
     interrupted = isinstance(tool_response, dict) and tool_response.get("interrupted")
     payload: dict[str, Any] = {
         "tool": {"name": event.get("tool_name", "")},
@@ -556,11 +560,7 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
 
 
 def _replacement_output(tool_name: str, text: str) -> Any:
-    """An updatedToolOutput Claude Code applies, or None for a tool whose output shape is undocumented.
-
-    Built-in tools ignore a replacement that does not match their output schema; Bash's shape is documented,
-    and MCP tool output passes through unvalidated (hooks reference, PostToolUse decision control).
-    """
+    """Bash's documented output shape holding text, or text for an MCP tool, whose output Claude Code does not validate."""
     if tool_name == "Bash":
         return {"stdout": text, "stderr": "", "interrupted": False, "isImage": False}
     if isinstance(tool_name, str) and tool_name.startswith("mcp__"):
@@ -568,10 +568,28 @@ def _replacement_output(tool_name: str, text: str) -> Any:
     return None
 
 
-def _withhold(tool_name: str, reason: str) -> dict[str, Any]:
-    """Keep a tool's output from Claude: replace it where the tool's shape allows, and otherwise record that Claude still sees it."""
+# Fields of a built-in tool's output that name a kind rather than carry content.
+_SHAPE_FIELDS = frozenset({"type", "mode"})
+
+
+def _shaped_like(value: Any, text: str) -> Any:
+    """value's structure with content strings replaced by text and lists emptied; a built-in tool ignores a replacement that breaks its output schema."""
+    if isinstance(value, str):
+        return text
+    if isinstance(value, list):
+        return []
+    if isinstance(value, dict):
+        return {k: v if k in _SHAPE_FIELDS and isinstance(v, str) else _shaped_like(v, text) for k, v in value.items()}
+    return value
+
+
+def _withhold(tool_name: str, reason: str, tool_response: Any = None) -> dict[str, Any]:
+    """Keep a tool's output from Claude: replace it in the tool's own output shape, and record it when no shape is known."""
     out = _block_response(reason, "PostToolUse")
-    replacement = _replacement_output(tool_name, f"[output withheld by the ACS Guardian: {reason}]")
+    text = f"[output withheld by the ACS Guardian: {reason}]"
+    replacement = _replacement_output(tool_name, text)
+    if replacement is None and isinstance(tool_response, (dict, str)):
+        replacement = _shaped_like(tool_response, text)
     if replacement is None:
         # A block only adds the reason next to the result; Claude still sees the original output.
         audit_event("unenforceable_decision", hook="PostToolUse", tool=tool_name, reason=reason)
@@ -580,28 +598,29 @@ def _withhold(tool_name: str, reason: str) -> dict[str, Any]:
     return out
 
 
-def _translate_posttool(decision: Decision, original_input: dict, tool_name: str = "") -> dict[str, Any]:
+def _translate_posttool(decision: Decision, original_input: dict, tool_name: str = "",
+                        tool_response: Any = None) -> dict[str, Any]:
     if decision.disposition == "deny":
-        return _withhold(tool_name, decision.reasoning or "blocked by Guardian")
+        return _withhold(tool_name, decision.reasoning or "blocked by Guardian", tool_response)
     if decision.disposition == "modify":
         violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", hook="PostToolUse",
                         detail=violation)
-            return _withhold(tool_name, f"MODIFY refused ({violation}); failing closed per §6.3")
+            return _withhold(tool_name, f"MODIFY refused ({violation}); failing closed per §6.3", tool_response)
         updated = decision.modifications.get("modified_content")
-        replacement = _replacement_output(tool_name, str(updated)) if updated is not None else None
+        replacement = _replacement_output(tool_name, updated) if isinstance(updated, str) else None
         if replacement is not None:
             hso = {"hookEventName": "PostToolUse", "updatedToolOutput": replacement}
             if decision.reasoning:
                 hso["additionalContext"] = decision.reasoning
             return {"hookSpecificOutput": hso}
         audit_modify_unsupported("structured edits on a tool result" if updated is None
-                                 else "a replacement in this tool's output shape", hook="PostToolUse", tool=tool_name)
-        return _withhold(tool_name, f"MODIFY substituted to DENY: {decision.reasoning}")
+                                 else "replacement content for this tool's output shape", hook="PostToolUse", tool=tool_name)
+        return _withhold(tool_name, f"MODIFY substituted to DENY: {decision.reasoning}", tool_response)
     if decision.disposition in ("ask", "defer"):
         # The tool already ran and nothing can pause its output for a person.
-        return _withhold(tool_name, f"{decision.disposition} on a delivered result: {decision.reasoning}")
+        return _withhold(tool_name, f"{decision.disposition} on a delivered result: {decision.reasoning}", tool_response)
     return {}
 
 
@@ -646,7 +665,6 @@ def _translate_session_stop(decision: Decision, original_input: dict, tool_name:
 
 _TRANSLATORS: dict[str, Callable[[Decision, dict, str], dict[str, Any]]] = {
     "PreToolUse":       _translate_pretool,
-    "PostToolUse":      _translate_posttool,
     "PostToolUseFailure": _translate_posttool_failure,
     "UserPromptSubmit": _translate_user_prompt,
     "Stop":             _translate_session_stop,
@@ -655,10 +673,8 @@ _TRANSLATORS: dict[str, Callable[[Decision, dict, str], dict[str, Any]]] = {
 
 
 def translate_response(acs_response: dict[str, Any], hook_event: str,
-                       original_input: dict | None = None, tool_name: str = "") -> dict[str, Any]:
-    # normalize_decision never raises: this runs outside main()'s
-    # try/except and an uncaught error is exit 1, which Claude Code
-    # proceeds on.
+                       original_input: dict | None = None, tool_name: str = "",
+                       tool_response: Any = None) -> dict[str, Any]:
     decision = normalize_decision(acs_response.get("result"))
 
     # An arrived decision outside the five dispositions fails closed;
@@ -672,13 +688,15 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
         if hook_event == "PreToolUse":
             return _pretool_response("deny", reason)
         if hook_event == "PostToolUse":
-            return _withhold(tool_name, reason)
+            return _withhold(tool_name, reason, tool_response)
         if hook_event == "PostToolUseFailure":
             return _context_only(tool_name, "deny", reason)
         if hook_event in ENFORCEABLE_BLOCK_HOOKS:
             return _block_response(reason)
         return {}
 
+    if hook_event == "PostToolUse":
+        return _translate_posttool(decision, original_input or {}, tool_name, tool_response)
     translator = _TRANSLATORS.get(hook_event)
     if translator:
         return translator(decision, original_input or {}, tool_name)
@@ -747,7 +765,8 @@ def _hook(event: dict[str, Any], hook_name: str, config: Config) -> int:
     session = _open_session(event, config)
     gated = config.gate(session, HOOK_MAP.get(hook_name))
     if gated is not None:
-        return _settle(gated, hook_name, session_id, tool_name=event.get("tool_name") or "")
+        return _settle(gated, hook_name, session_id, tool_name=event.get("tool_name") or "",
+                       tool_response=_tool_response(event))
     if hook_name == "SessionStart":
         # The reasoning the Guardian allowed sessionStart with reaches Claude on every SessionStart, resume and compact included.
         if session.start_context:
@@ -762,7 +781,8 @@ def _hook(event: dict[str, Any], hook_name: str, config: Config) -> int:
         # Settled with the session's effective posture; an exit 1 would let the host proceed.
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       hook_name, session_id, tool_name=event.get("tool_name") or "")
+                       hook_name, session_id, tool_name=event.get("tool_name") or "",
+                       tool_response=_tool_response(event))
 
 
 def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
@@ -800,14 +820,16 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       hook_name, session_id, tool_name=event.get("tool_name") or "")
+                       hook_name, session_id, tool_name=event.get("tool_name") or "",
+                       tool_response=_tool_response(event))
     if not request:
         if hook_name in AUDIT_ONLY_HOOKS:
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {hook_name}\n")
         return _settle(posture.resolve(Undecided("adapter_build_failed")), hook_name, session_id,
-                       tool_name=event.get("tool_name") or "")
+                       tool_name=event.get("tool_name") or "",
+                       tool_response=_tool_response(event))
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
@@ -828,17 +850,19 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
                         gate=hook_name in _ENFORCED_HOOKS)
     if isinstance(result, Resolution):
-        return _settle(result, hook_name, session_id, tool_name=event.get("tool_name") or "")
+        return _settle(result, hook_name, session_id, tool_name=event.get("tool_name") or "",
+                       tool_response=_tool_response(event))
     response = result.response
 
     # A translation bug would exit 1, which the host reads as proceed, so it fails closed here.
     try:
         _emit(translate_response(response, hook_name, original_input=event.get("tool_input") or {},
-                                 tool_name=event.get("tool_name") or ""))
+                                 tool_name=event.get("tool_name") or "", tool_response=_tool_response(event)))
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
-                       hook_name, session_id, tool_name=event.get("tool_name") or "")
+                       hook_name, session_id, tool_name=event.get("tool_name") or "",
+                       tool_response=_tool_response(event))
 
     if hook_name in AUDIT_ONLY_HOOKS:
         close_turn(session_id)
@@ -894,20 +918,13 @@ def _record(result: Decided | Resolution, hook: str, method: str, session_id: st
                     method=method, reason=decision.reasoning or "(none)", session_id=session_id)
 
 
-def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, tool_name: str = "") -> int:
-    """Carry out a resolution: block in the hook's native shape unless it proceeds, and record why per §6.4.
-
-    The audit type says which rule decided (fail_open_bypass,
-    decision_failure_fail_closed, guardian_refusal_fail_closed, or a session
-    gate: unguarded_session_bypass, session_not_started_fail_closed,
-    session_refused_fail_closed); `cause` says
-    what went wrong, so an unreachable Guardian (an ops issue) reads apart from
-    a malformed envelope (a client bug).
-    """
+def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, tool_name: str = "",
+            tool_response: Any = None) -> int:
+    """Carry out a resolution: block in the hook's shape unless it proceeds, and audit which rule decided (§6.4)."""
     if resolution.message:
         sys.stderr.write(f"acs-adapter: {resolution.message}\n")
     if not resolution.proceed:
-        _emit_deny(hook_name, f"ACS adapter: {resolution.label} ({resolution.cause})", tool_name)
+        _emit_deny(hook_name, f"ACS adapter: {resolution.label} ({resolution.cause})", tool_name, tool_response)
     audit_event(resolution.audit_type, cause=resolution.cause, hook=hook_name,
                 session_id=session_id, **resolution.fields)
     if resolution.decision_failure:
@@ -915,17 +932,14 @@ def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, t
     return 0
 
 
-def _emit_deny(hook_name: str, msg: str, tool_name: str = "") -> None:
-    """Emit a deny in the hook's native response shape — except on the
-    audit-only hooks, where no enforceable shape exists and a block
-    would instruct Claude Code to keep going."""
+def _emit_deny(hook_name: str, msg: str, tool_name: str = "", tool_response: Any = None) -> None:
     if hook_name in AUDIT_ONLY_HOOKS:
         audit_event("unenforceable_decision", hook=hook_name, reason=msg)
         return
     if hook_name == "PreToolUse":
         _emit(_pretool_response("deny", msg))
     elif hook_name == "PostToolUse":
-        _emit(_withhold(tool_name, msg))
+        _emit(_withhold(tool_name, msg, tool_response))
     elif hook_name == "PostToolUseFailure":
         _emit(_context_only(tool_name, "deny", msg))
     elif hook_name in ENFORCEABLE_BLOCK_HOOKS:

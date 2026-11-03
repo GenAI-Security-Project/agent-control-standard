@@ -51,10 +51,11 @@ Cursor's documented response keys are event-specific. The adapter translates ACS
 | ACS disposition | Cursor output |
 |---|---|
 | `allow` | `{}` (no output; proceed) |
-| `deny` | `{"additional_context": "ACS Guardian denied this result: …"}` + `unenforceable_decision` audit (the tool already ran; feedback is the only channel) |
-| `modify` with `modified_content` on an MCP tool | `{"updated_mcp_tool_output": <parsed content>}` — "For MCP tools only: replaces the tool output seen by the model" |
-| `modify` on another tool, on an HTTP MCP server's tool (its `tool_output` is `{"redacted": true}`), or with structured edits | as `deny`, recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5) |
-| any other decision with reasoning | `{"additional_context": reasoning}` |
+| `deny`, `ask`, `defer`, or an unusable verdict, on an MCP tool | `{"updated_mcp_tool_output": {"content": [{"type": "text", "text": "[output withheld by the ACS Guardian: …]"}]}}`: "For MCP tools only: replaces the tool output seen by the model" |
+| the same on another tool, or on an HTTP MCP server's tool (its `tool_output` is `{"redacted": true}`) | `{"additional_context": "ACS Guardian denied this result: …"}` + `unenforceable_decision` audit (the tool already ran and its output stays with the model) |
+| `modify` whose `modified_content` is a JSON object, on an MCP tool | `{"updated_mcp_tool_output": <that object>}`; the field is an object |
+| `modify` with other content, on another tool, or with structured edits | as `deny`, recorded as `modify_unsupported` with `reason_codes: ["modify_unsupported"]` (§6.5) |
+| `allow` with reasoning | `{"additional_context": reasoning}` |
 
 ### Other post-tool events (`postToolUseFailure`, `afterShellExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`)
 

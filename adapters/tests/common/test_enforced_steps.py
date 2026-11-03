@@ -58,6 +58,18 @@ class AnUnsignableResultIsWithheld(unittest.TestCase):
                       [(a["acs_audit_event"], a.get("cause")) for a in audits])
 
 
+    def test_cursor_withholds_an_mcp_result_it_cannot_sign_under_fail_open(self) -> None:
+        from acs.integrations.cursor import adapter
+        event = {"conversation_id": str(uuid.uuid4()), "workspace_roots": ["/tmp"], "tool_name": "MCP:fetch",
+                 "tool_input": {"url": "https://example.com"}, "tool_output": json.dumps({"text": "secret"})}
+        with mock.patch.object(_exchange, "sign_envelope", _unsignable):
+            out, audits = run_in_process(adapter, ["acs-cursor-hook", "postToolUse"], event)
+        self.assertNotIn("secret", json.dumps(out))
+        self.assertIn("withheld", json.dumps(out["updated_mcp_tool_output"]))
+        self.assertIn(("decision_failure_fail_closed", "envelope_not_signable"),
+                      [(a["acs_audit_event"], a.get("cause")) for a in audits])
+
+
 class AStepErrorKeepsTheNegotiatedDeny(unittest.TestCase):
     HELLO = {**NEGOTIATED_HELLO, "on_decision_failure": "deny"}
 

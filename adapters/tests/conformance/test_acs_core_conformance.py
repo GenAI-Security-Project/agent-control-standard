@@ -1067,6 +1067,7 @@ class Core04d_ModifyUnsupported(unittest.TestCase):
 
     REDACT = {"redactions": [{"path": "/command", "replacement": "[REDACTED]"}]}
     CONTENT = {"modified_content": "echo safe"}
+    OBJECT_CONTENT = {"modified_content": json.dumps({"content": [{"type": "text", "text": "echo safe"}]})}
     OVERRIDE = {"parameter_overrides": {"command": "echo safe"}}
     CLAUDE = {"session_id": "mu-1", "cwd": "/tmp", "tool_name": "Bash", "tool_input": {"command": "unsafe"},
               "tool_use_id": "mu1"}
@@ -1091,6 +1092,7 @@ class Core04d_ModifyUnsupported(unittest.TestCase):
         def cursor_denied(o): return o.get("permission") == "deny"
         def cursor_result_denied(o): return "updated_mcp_tool_output" not in o and \
             o.get("additional_context", "").startswith("ACS Guardian denied this result")
+        def cursor_result_withheld(o): return "withheld" in json.dumps(o.get("updated_mcp_tool_output"))
         def cursor_blocked(o): return o.get("continue") is False
         claude_result = {**self.CLAUDE, "hook_event_name": "PostToolUse", "tool_response": {"stdout": "x"}}
         cases = {
@@ -1118,7 +1120,12 @@ class Core04d_ModifyUnsupported(unittest.TestCase):
                                                   "steps/toolCallResult", self.CONTENT, cursor_result_denied),
             "Cursor result with structured edits": ("cursor", "postToolUse",
                                                     {**self.CURSOR, "tool_name": "MCP:run", "tool_output": "{\"x\": 1}"},
-                                                    "steps/toolCallResult", self.OVERRIDE, cursor_result_denied),
+                                                    "steps/toolCallResult", self.OVERRIDE, cursor_result_withheld),
+            "Cursor result of a local MCP tool with text content": ("cursor", "postToolUse",
+                                                                   {**self.CURSOR, "tool_name": "MCP:run",
+                                                                    "tool_output": "{\"x\": 1}"},
+                                                                   "steps/toolCallResult", self.CONTENT,
+                                                                   cursor_result_withheld),
             "Cursor shell execution result": ("cursor", "afterShellExecution",
                                               {**self.CURSOR, "command": "unsafe", "output": "x", "cwd": "/tmp"},
                                               "steps/toolCallResult", self.CONTENT, lambda o: o == {}),
@@ -1138,8 +1145,8 @@ class Core04d_ModifyUnsupported(unittest.TestCase):
                                                 lambda o: o["hookSpecificOutput"]["updatedInput"]["command"]),
             "Cursor result of a local MCP tool": ("cursor", "postToolUse",
                                                   {**self.CURSOR, "tool_name": "MCP:run", "tool_output": "{\"x\": 1}"},
-                                                  "steps/toolCallResult", self.CONTENT,
-                                                  lambda o: o["updated_mcp_tool_output"]),
+                                                  "steps/toolCallResult", self.OBJECT_CONTENT,
+                                                  lambda o: o["updated_mcp_tool_output"]["content"][0]["text"]),
         }
         for name, (host, hook, event, method, mods, applied) in cases.items():
             with self.subTest(name):

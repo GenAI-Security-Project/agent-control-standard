@@ -725,10 +725,13 @@ def _mcp_output_replaceable(tool_name: Any, tool_output: Any) -> bool:
     return _is_mcp_tool(tool_name) and not (isinstance(parsed, dict) and parsed.get("redacted") is True)
 
 
-def _post_tool_deny(event_name: str, reason: str) -> dict[str, Any]:
-    # postToolUse fires after execution — no block exists; the denial
-    # reaches the conversation as additional_context and is audited.
-    audit_event("unenforceable_decision", decision="deny", event=event_name, reason=reason or "(none)")
+def _post_tool_withhold(event_name: str, reason: str, tool_name: Any = "", tool_output: Any = None,
+                        decision: str = "deny") -> dict[str, Any]:
+    """Replace an MCP tool's output with a withheld notice; any other result is already with the model, so it is recorded."""
+    notice = f"[output withheld by the ACS Guardian: {reason or '(no reasoning)'}]"
+    if _mcp_output_replaceable(tool_name, tool_output):
+        return _post_tool_response(updated_mcp_tool_output={"content": [{"type": "text", "text": notice}]})
+    audit_event("unenforceable_decision", decision=decision, event=event_name, reason=reason or "(none)")
     return _post_tool_response(additional_context=f"ACS Guardian denied this result: {reason or '(no reasoning)'}")
 
 
@@ -747,27 +750,30 @@ def _translate_post_tool(decision: Decision, event_name: str, tool_name: str = "
                                                               f"{decision.reasoning or '(no reasoning)'}")
         return {}
     if decision.disposition == "deny":
-        return _post_tool_deny(event_name, decision.reasoning)
+        return _post_tool_withhold(event_name, decision.reasoning, tool_name, tool_output)
     if decision.disposition == "modify":
         violation = modify_composition_violation(decision.modifications)
         if violation:
             audit_event("modify_composition_invalid", event=event_name,
                         detail=violation)
-            return _post_tool_response(
-                additional_context=f"MODIFY refused ({violation})")
+            return _post_tool_withhold(event_name, f"MODIFY refused ({violation})", tool_name, tool_output)
         updated = decision.modifications.get("modified_content")
-        if updated is not None and _mcp_output_replaceable(tool_name, tool_output):
-            # Docs show an OBJECT value; ACS modified_content is a string.
-            # Parse JSON content when it is JSON, else pass the string.
-            return _post_tool_response(
-                updated_mcp_tool_output=_parse_json_field(updated))
-        audit_modify_unsupported("structured edits on a tool result" if updated is None
-                                 else "updated_mcp_tool_output on this tool", event=event_name, tool=tool_name)
-        return _post_tool_deny(event_name, f"MODIFY substituted to DENY: {decision.reasoning}")
+        # updated_mcp_tool_output is an object (hooks docs), so the string content must parse to one.
+        replacement = _parse_json_field(updated) if isinstance(updated, str) else None
+        if isinstance(replacement, dict) and _mcp_output_replaceable(tool_name, tool_output):
+            return _post_tool_response(updated_mcp_tool_output=replacement)
+        if updated is None:
+            unsupported = "structured edits on a tool result"
+        elif not isinstance(replacement, dict):
+            unsupported = "modified_content that is not a JSON object"
+        else:
+            unsupported = "updated_mcp_tool_output on this tool"
+        audit_modify_unsupported(unsupported, event=event_name, tool=tool_name)
+        return _post_tool_withhold(event_name, f"MODIFY substituted to DENY: {decision.reasoning}", tool_name, tool_output)
     if decision.disposition in ("ask", "defer"):
-        # The tool already ran and its result is delivered: nothing can hold it for a person.
-        audit_event("unenforceable_decision", decision=decision.disposition, event=event_name,
-                    reason=decision.reasoning or "(none)")
+        # The tool already ran, and nothing can hold its result for a person.
+        return _post_tool_withhold(event_name, f"{decision.disposition} on a delivered result: {decision.reasoning}",
+                                   tool_name, tool_output, decision.disposition)
     if decision.reasoning:
         return _post_tool_response(additional_context=decision.reasoning)
     return {}
@@ -804,8 +810,9 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
             return _permission_response("deny", reason)
         if event_name == "beforeSubmitPrompt":
             return {"__exit_code": 2, "_reasoning": reason}
-        # Post-tool / observational events have no enforceable shape;
-        # the audit event above is the record.
+        if event_name == "postToolUse":
+            return _post_tool_withhold(event_name, reason, tool_name, tool_output)
+        # Other post-tool and observational events have no enforceable shape; the audit event above is the record.
         return {}
 
     if event_name in PERMISSION_EVENTS:
@@ -879,7 +886,7 @@ def _hook(event_name: str, event: dict[str, Any], config: Config) -> int:
     session = _open_session(event, config)
     gated = config.gate(session, HOOK_MAP.get(event_name))
     if gated is not None:
-        return _settle(gated, event_name, session_id, workspace=_workspace(event))
+        return _settle(gated, event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
     if event_name == "sessionStart":
         # The session's sessionStart went out when the session opened, from this hook or an earlier one.
         return 0
@@ -892,7 +899,7 @@ def _hook(event_name: str, event: dict[str, Any], config: Config) -> int:
         # Settled with the session's effective posture; an exit 1 would let the host proceed.
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       event_name, session_id, workspace=_workspace(event))
+                       event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
 
 
 def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
@@ -933,14 +940,15 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       event_name, session_id, workspace=_workspace(event))
+                       event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
     if not request:
         if event_name == "stop":
             # turnEnd with no open turn: nothing to close honestly.
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {event_name}\n")
-        return _settle(posture.resolve(Undecided("adapter_build_failed")), event_name, session_id, workspace=_workspace(event))
+        return _settle(posture.resolve(Undecided("adapter_build_failed")), event_name, session_id,
+                       workspace=_workspace(event), **_tool_fields(event))
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
@@ -967,7 +975,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
                         gate=event_name in _ENFORCED_EVENTS)
     if isinstance(result, Resolution):
-        return _settle(result, event_name, session_id, workspace=_workspace(event))
+        return _settle(result, event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
     response = result.response
 
     # A bug escaping translate_response would exit 1 = Cursor proceeds;
@@ -978,7 +986,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
-                       event_name, session_id, workspace=_workspace(event))
+                       event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
 
     # Close the turn after the turnEnd has been emitted/recorded.
     if event_name == "stop":
@@ -1044,12 +1052,13 @@ def _explicit_allow(event_name: str) -> int:
     return 0
 
 
-def _settle(resolution: Resolution, event_name: str, session_id: str | None, *, workspace: str | None = None) -> int:
-    """Carry out a resolution in the event's native shape, allow or deny, and record why per §6.4.
+def _tool_fields(event: dict[str, Any]) -> dict[str, Any]:
+    return {"tool_name": event.get("tool_name") or "", "tool_output": event.get("tool_output")}
 
-    A proceed carries Cursor's explicit allow: failClosed covers hook crashes
-    and timeouts, and the posture already decided this step.
-    """
+
+def _settle(resolution: Resolution, event_name: str, session_id: str | None, *, workspace: str | None = None,
+            tool_name: Any = "", tool_output: Any = None) -> int:
+    """Carry out a resolution in the event's shape and audit which rule decided (§6.4); a proceed is an explicit allow, since failClosed covers crashes and timeouts."""
     if resolution.message:
         sys.stderr.write(f"acs-adapter: {resolution.message}\n")
     if resolution.decision_failure:
@@ -1058,6 +1067,12 @@ def _settle(resolution: Resolution, event_name: str, session_id: str | None, *, 
         audit_event(resolution.audit_type, cause=resolution.cause, event=event_name,
                     session_id=session_id, **resolution.fields)
         return _explicit_allow(event_name)
+    if event_name == "postToolUse":
+        audit_event(resolution.audit_type, cause=resolution.cause, event=event_name, session_id=session_id,
+                    **resolution.fields)
+        _emit(_post_tool_withhold(event_name, f"ACS adapter: {resolution.label} ({resolution.cause})",
+                                  tool_name, tool_output))
+        return 0
     return _deny_with_audit(resolution.audit_type, event_name, session_id,
                             resolution.cause, dict(resolution.fields), label=resolution.label)
 

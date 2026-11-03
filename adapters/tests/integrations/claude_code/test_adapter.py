@@ -322,21 +322,42 @@ class _GuardianRun(unittest.TestCase):
         return results
 
 
-BASH_SHAPE = {"stdout", "stderr", "interrupted", "isImage"}
+# The Bash replacement shape the hooks reference documents (PostToolUse decision control, 2026-11-01).
+DOCUMENTED_BASH_REPLACEMENT = {"stdout": "[redacted]", "stderr": "", "interrupted": False, "isImage": False}
+BASH_SHAPE = set(DOCUMENTED_BASH_REPLACEMENT)
+
+# Built-in tools' outputs as Claude Code reports them in tool_response; the live run confirms Claude Code applies a
+# replacement in each shape.
+BUILT_IN_RESPONSES = {
+    "Read": {"type": "text", "file": {"filePath": "/repo/.env", "content": "SECRET-OUTPUT", "numLines": 1,
+                                      "startLine": 1, "totalLines": 1}},
+    "Grep": {"mode": "content", "numFiles": 1, "filenames": ["/repo/.env"], "content": "SECRET-OUTPUT", "numLines": 1},
+    "WebFetch": {"bytes": 13, "code": 200, "codeText": "OK", "result": "SECRET-OUTPUT", "durationMs": 5,
+                 "url": "https://example.com/SECRET-OUTPUT"},
+}
+
+
+def _same_shape(a, b) -> bool:
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same_shape(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return True
+    return type(a) is type(b)
 
 
 class PostToolUseWithholdsOutput(_GuardianRun):
     """A decision that keeps a delivered result from Claude replaces the output where Claude Code applies a
     replacement (hooks reference, PostToolUse decision control) and is recorded where it cannot."""
 
-    def _post(self, tool_name: str, **decision) -> tuple[dict, str]:
+    def _post(self, tool_name: str, tool_response=None, **decision) -> tuple[dict, str]:
         g = ProgrammableGuardian()
         g.handlers["steps/toolCallResult"] = _answer(**decision)
+        if tool_response is None:
+            tool_response = {"stdout": "SECRET-OUTPUT", "stderr": "", "interrupted": False, "isImage": False}
         with g:
             [(out, err)] = self._run(g, _claude_code_event(
                 "PostToolUse", tool_name=tool_name, tool_input={"command": "cat key"},
-                tool_response={"stdout": "SECRET-OUTPUT", "stderr": "", "interrupted": False, "isImage": False},
-                tool_use_id="t1"))
+                tool_response=tool_response, tool_use_id="t1"))
             self.assertIn("steps/toolCallResult", g.methods_seen())
         self.assertNotIn("SECRET-OUTPUT", out)
         return json.loads(out), err
@@ -352,7 +373,7 @@ class PostToolUseWithholdsOutput(_GuardianRun):
                 out, err = self._post("Bash", **decision)
                 self.assertEqual(out["decision"], "block")
                 replacement = out["hookSpecificOutput"]["updatedToolOutput"]
-                self.assertEqual(set(replacement), BASH_SHAPE)
+                self.assertTrue(_same_shape(replacement, DOCUMENTED_BASH_REPLACEMENT), replacement)
                 self.assertIn("withheld", replacement["stdout"])
                 self.assertNotIn("unenforceable_decision", err)
 
@@ -363,18 +384,38 @@ class PostToolUseWithholdsOutput(_GuardianRun):
         self.assertIn("withheld", out["hookSpecificOutput"]["updatedToolOutput"])
         self.assertNotIn("unenforceable_decision", err)
 
-    def test_a_denied_result_of_another_tool_is_blocked_and_recorded_as_unenforceable(self) -> None:
-        for decision in ({"decision": "deny", "reasoning": "leaks a key"},
-                         {"decision": "modify", "reasoning": "rewrite", "modifications": {"modified_content": "x"}}):
-            with self.subTest(decision["decision"]):
-                out, err = self._post("Read", **decision)
-                self.assertEqual(out["decision"], "block")
-                self.assertNotIn("updatedToolOutput", out["hookSpecificOutput"])
-                self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
-                self.assertIn('"tool": "Read"', err)
+    def test_a_denied_result_of_another_built_in_tool_is_replaced_in_its_own_shape(self) -> None:
+        for tool, response in BUILT_IN_RESPONSES.items():
+            for decision in ({"decision": "deny", "reasoning": "leaks a key"},
+                             {"decision": "modify", "reasoning": "rewrite", "modifications": {"modified_content": "x"}}):
+                with self.subTest(tool, decision=decision["decision"]):
+                    out, err = self._post(tool, response, **decision)
+                    self.assertEqual(out["decision"], "block")
+                    replacement = out["hookSpecificOutput"]["updatedToolOutput"]
+                    self.assertTrue(_same_shape(replacement, response), replacement)
+                    self.assertIn("withheld", json.dumps(replacement))
+                    self.assertEqual(replacement.get("type", replacement.get("mode")), response.get("type", response.get("mode")))
+                    self.assertNotIn("unenforceable_decision", err)
+                    if decision["decision"] == "modify":
+                        self.assertIn('"acs_audit_event": "modify_unsupported"', err)
+
+    def test_a_denied_result_with_no_tool_response_is_blocked_and_recorded_as_unenforceable(self) -> None:
+        g = ProgrammableGuardian()
+        g.handlers["steps/toolCallResult"] = _answer(decision="deny", reasoning="leaks a key")
+        with g:
+            [(out, err)] = self._run(g, _claude_code_event("PostToolUse", tool_name="Read",
+                                                           tool_input={"file_path": "/x"}, tool_use_id="t1"))
+        self.assertNotIn("updatedToolOutput", json.loads(out)["hookSpecificOutput"])
+        self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
+
+    def test_a_modify_with_content_that_is_not_a_string_is_withheld(self) -> None:
+        out, err = self._post("Bash", decision="modify", reasoning="rewrite", modifications={"modified_content": ["x"]})
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("withheld", out["hookSpecificOutput"]["updatedToolOutput"]["stdout"])
+        self.assertIn('"acs_audit_event": "modify_composition_invalid"', err)
 
     def test_a_fail_closed_result_is_withheld_too(self) -> None:
-        for tool_name, replaced in (("Bash", True), ("mcp__files__read", True), ("Read", False), (7, False)):
+        for tool_name, replaced in (("Bash", True), ("mcp__files__read", True), ("Read", True), (7, True)):
             with self.subTest(tool=tool_name), tempfile.TemporaryDirectory() as root:
                 env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
                 env.update(ACS_GUARDIAN_URL="http://127.0.0.1:1/acs", ACS_DEFAULT_DENY="1", ACS_HMAC_KEY_ID="test-key",
