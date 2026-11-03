@@ -46,7 +46,7 @@ class DefaultWiringMatchesDocumentedSet(unittest.TestCase):
             f"{entry.get('command')!r}")
 
     def test_default_covers_current_core_and_proposed_gate(self) -> None:
-        from acs.integrations.cursor import wire  # noqa: E402
+        from acs.integrations.cursor import wire
         self.assertEqual(
             wire.DEFAULT_HOOKS,
             wire.CURRENT_CORE_HOOKS + wire.PR21_PROPOSED_HOOKS)
@@ -63,7 +63,7 @@ class ExampleConfigMatchesDefaultWiring(unittest.TestCase):
         import json
         example = json.loads((HERE.parents[2] / "docs" / "cursor" / "hooks.json.example").read_text())
         wired = set(example.get("hooks", {}))
-        from acs.integrations.cursor import wire  # noqa: E402
+        from acs.integrations.cursor import wire
         missing = set(wire.DEFAULT_HOOKS) - wired
         self.assertEqual(missing, set(),
             f"hooks.json.example (the copy-paste config) is missing "
@@ -73,7 +73,7 @@ class ExampleConfigMatchesDefaultWiring(unittest.TestCase):
         """failClosed catches only a failed hook, and the adapter exits 0 when it fails open, so a gate needs ACS_DEFAULT_DENY=1 too."""
         import json
         example = json.loads((HERE.parents[2] / "docs" / "cursor" / "hooks.json.example").read_text())
-        from acs.integrations.cursor import wire  # noqa: E402
+        from acs.integrations.cursor import wire
         # Every hook marked failClosed is a gate and also sets ACS_DEFAULT_DENY=1.
         checked = 0
         for hook, entries in example["hooks"].items():

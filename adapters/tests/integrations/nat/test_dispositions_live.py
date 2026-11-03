@@ -22,12 +22,12 @@ except ImportError:
     _NAT_OK = False
 
 
-from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied  # noqa: E402
+from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied
 if _NAT_OK:
-    from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
+    from acs.integrations.nat.adapter import ACSMiddlewareConfig
 
-from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.testing.harness import ProgrammableGuardian  # noqa: E402
+from acs.client import _handshake as client_handshake
+from acs.testing.harness import ProgrammableGuardian
 
 
 HMAC = "dispositions-live-shared-secret-padded-to-32-bytes"

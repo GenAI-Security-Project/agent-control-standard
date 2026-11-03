@@ -18,12 +18,12 @@ except ImportError:
     _NAT_OK = False
 
 
-from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
+from acs.client import _handshake as client_handshake
+from acs.integrations.nat.adapter import ACSMiddleware
 if _NAT_OK:
-    from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
-    from tests.integrations.nat._nat_runs import with_middleware  # noqa: E402
-from acs.testing.capture_guardian import CaptureGuardian  # noqa: E402
+    from acs.integrations.nat.adapter import ACSMiddlewareConfig
+    from tests.integrations.nat._nat_runs import with_middleware
+from acs.testing.capture_guardian import CaptureGuardian
 
 HMAC = "nat-emission-shared-secret-padded-to-32-bytes"
 

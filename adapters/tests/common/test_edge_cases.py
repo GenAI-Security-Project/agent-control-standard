@@ -17,13 +17,13 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from acs import client  # noqa: E402
-from acs import core  # noqa: E402
+from acs import client
+from acs import core
 from acs.client import _exchange
-from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.client import _store as client_store  # noqa: E402
+from acs.client import _handshake as client_handshake
+from acs.client import _store as client_store
 
-from acs.testing.harness import launch_guardian, sign_for_test, signing_env  # noqa: E402
+from acs.testing.harness import launch_guardian, sign_for_test, signing_env
 
 HERE = Path(__file__).resolve().parent
 GUARDIAN = HERE.parent.parent / "src" / "acs" / "guardian" / "example_guardian.py"

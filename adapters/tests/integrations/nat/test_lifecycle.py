@@ -15,12 +15,12 @@ try:
 except ImportError:
     _NAT_OK = False
 
-from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.testing.harness import ProgrammableGuardian  # noqa: E402
+from acs.client import _handshake as client_handshake
+from acs.testing.harness import ProgrammableGuardian
 
 if _NAT_OK:
-    from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
-    from tests.integrations.nat._nat_runs import with_middleware  # noqa: E402
+    from acs.integrations.nat.adapter import ACSMiddlewareConfig
+    from tests.integrations.nat._nat_runs import with_middleware
 
 SECRET = "nat-lifecycle-test-secret-padded-to-32-bytes"
 

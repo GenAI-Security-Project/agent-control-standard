@@ -39,7 +39,7 @@ except ImportError:
 def _build_middleware(guardian_url: str, *, default_deny: bool = True):
     os.environ["ACS_HMAC_SECRET"] = HMAC_SECRET
     os.environ["ACS_HMAC_KEY_ID"] = "test-key"
-    from acs.integrations.nat.adapter import ACSMiddleware, ACSMiddlewareConfig  # noqa: E402
+    from acs.integrations.nat.adapter import ACSMiddleware, ACSMiddlewareConfig
     return ACSMiddleware(ACSMiddlewareConfig(
         guardian_url=guardian_url,
         default_deny=default_deny,
@@ -130,7 +130,7 @@ def scenario_destructive(report: Report, guardian: ProgrammableGuardian) -> None
         shutil.rmtree(victim, ignore_errors=True)
         return "BUG: should not see this"
 
-    from acs.integrations.nat.adapter import ACSGuardianDenied  # noqa: E402
+    from acs.integrations.nat.adapter import ACSGuardianDenied
     raised = None
     try:
         asyncio.run(mw.function_middleware_invoke(
