@@ -522,6 +522,46 @@ class SessionGateThroughHooks(unittest.TestCase):
                 expected_host = session if host == "claude-code" else coerce_uuid(session, namespace_prefix="cursor")
                 self.assertEqual(second_start["params"]["payload"]["platform_context"]["host_session_id"], expected_host)
 
+    def test_a_session_end_the_host_cancels_mid_exchange_still_rolls_the_session_over(self) -> None:
+        claude = [str(BIN / "acs-claude-code-hook")]
+        cursor = str(BIN / "acs-cursor-hook")
+        for host in ("claude-code", "cursor"):
+            with self.subTest(host):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+                def slow_end(req, allow=guardian._default_allow):
+                    time.sleep(3)
+                    return allow(req)
+                guardian.handlers["steps/sessionEnd"] = slow_end
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                session = str(uuid.uuid4())
+                if host == "claude-code":
+                    base = {"session_id": session, "cwd": "/tmp"}
+                    start = (claude, {**base, "hook_event_name": "SessionStart", "source": "startup"})
+                    end = (claude, {**base, "hook_event_name": "SessionEnd", "reason": "prompt_input_exit"})
+                    resume = (claude, {**base, "hook_event_name": "UserPromptSubmit", "prompt": "hi"})
+                else:
+                    base = {"conversation_id": session, "workspace_roots": ["/tmp"]}
+                    start = ([cursor, "sessionStart"], {**base, "session_id": session})
+                    end = ([cursor, "sessionEnd"], {**base, "session_id": session, "reason": "completed"})
+                    resume = ([cursor, "beforeSubmitPrompt"], {**base, "prompt": "hi"})
+                self._hooks(guardian.url(), [start])
+                ending = subprocess.Popen(end[0], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL, text=True, env=self._env(guardian.url()))
+                ending.stdin.write(json.dumps(end[1]))
+                ending.stdin.close()
+                deadline = time.monotonic() + 10
+                while "steps/sessionEnd" not in guardian.methods_seen() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                ending.kill()
+                ending.wait(timeout=10)
+                self._hooks(guardian.url(), [resume])
+                sessions = {r["params"]["metadata"]["session_id"] for r in guardian.received}
+                self.assertEqual(len(sessions), 2, guardian.methods_seen())
+                self.assertEqual(guardian.methods_seen().count("handshake/hello"), 2,
+                                 "the resumed host session opens a new ACS session")
+
     def test_the_session_start_context_reaches_claude_when_another_hook_opened_the_session(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         guardian.handlers["steps/sessionStart"] = lambda req: {

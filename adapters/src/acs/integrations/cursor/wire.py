@@ -148,8 +148,19 @@ def build_command(*, hook_command: str, event_name: str,
     return f"{env_prefix} {shlex.quote(hook_command)} {event_name} {WIRE_MARKER}"
 
 
-def build_hook_entry(command: str, *, fail_closed: bool) -> dict:
-    entry = {"command": command}
+# sessionEnd runs under the per-script timeout, whose default Cursor leaves to the platform (hooks docs, Per-Script
+# Configuration Options); 15 s covers a handshake, a sessionStart and the sessionEnd at the default 5 s each.
+SESSION_END_TIMEOUT_S = 15
+
+
+def hook_timeout(hook: str) -> int | None:
+    return SESSION_END_TIMEOUT_S if hook == "sessionEnd" else None
+
+
+def build_hook_entry(command: str, *, fail_closed: bool, timeout: int | None = None) -> dict:
+    entry: dict = {"command": command}
+    if timeout is not None:
+        entry["timeout"] = timeout
     if fail_closed:
         entry["failClosed"] = True
     return entry
@@ -379,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
                 host_allowlist=args.host_allowlist,
                 audit_file=args.audit_file,
             )
-            entries_by_hook[hook] = build_hook_entry(cmd, fail_closed=hook_deny)
+            entries_by_hook[hook] = build_hook_entry(cmd, fail_closed=hook_deny, timeout=hook_timeout(hook))
         new = merge_wire(existing, hook_names, entries_by_hook)
 
     warnings = validate_inputs(args)

@@ -153,18 +153,29 @@ def build_command(*, hook_command: str, guardian_url: str,
 _ON_FAILURE_BLOCKS = frozenset({"PreToolUse", "UserPromptSubmit"})
 
 
-def build_inner_hook(command: str, *, block_on_failure: bool = False) -> dict:
+# SessionEnd hooks share a 1.5 s budget that a per-hook timeout raises, up to 60 s (hooks reference, SessionEnd);
+# 15 s covers a handshake, a sessionStart and the sessionEnd at the default 5 s each.
+SESSION_END_TIMEOUT_S = 15
+
+
+def hook_timeout(hook: str) -> int | None:
+    return SESSION_END_TIMEOUT_S if hook == "SessionEnd" else None
+
+
+def build_inner_hook(command: str, *, block_on_failure: bool = False, timeout: int | None = None) -> dict:
     """One wired command hook; block_on_failure makes Claude Code block the action when the hook fails or times out (v2.1.295+)."""
-    inner = {"type": "command", "command": command}
+    inner: dict = {"type": "command", "command": command}
+    if timeout is not None:
+        inner["timeout"] = timeout
     if block_on_failure:
         inner["onFailure"] = "block"
     return inner
 
 
-def build_hook_entry(command: str, *, block_on_failure: bool = False) -> dict:
+def build_hook_entry(command: str, *, block_on_failure: bool = False, timeout: int | None = None) -> dict:
     return {
         "matcher": "*",
-        "hooks": [build_inner_hook(command, block_on_failure=block_on_failure)],
+        "hooks": [build_inner_hook(command, block_on_failure=block_on_failure, timeout=timeout)],
     }
 
 
@@ -192,12 +203,12 @@ def merge_wire(existing: dict, hook_names: list[str],
                 matcher_star_seen = True
                 inner = [h for h in entry.get("hooks", [])
                           if WIRE_MARKER not in h.get("command", "")]
-                inner.append(build_inner_hook(command, block_on_failure=name in blocking))
+                inner.append(build_inner_hook(command, block_on_failure=name in blocking, timeout=hook_timeout(name)))
                 kept_entries.append({**entry, "hooks": inner})
             else:
                 kept_entries.append(entry)
         if not matcher_star_seen:
-            kept_entries.append(build_hook_entry(command, block_on_failure=name in blocking))
+            kept_entries.append(build_hook_entry(command, block_on_failure=name in blocking, timeout=hook_timeout(name)))
         hooks[name] = kept_entries
     return out
 

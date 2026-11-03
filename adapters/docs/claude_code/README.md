@@ -90,7 +90,7 @@ What it wires by default:
 | `PostToolUseFailure` | fail-open; sends the failed tool's error text |
 | `Stop` | fail-open; sends the reply (`agentResponse`) and closes the turn |
 | `StopFailure` | fail-open; closes the turn with outcome `error` |
-| `SessionEnd` | fail-open |
+| `SessionEnd` | fail-open; `timeout: 15`, since SessionEnd hooks otherwise share a 1.5 s budget |
 
 Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere). A fail-closed `PreToolUse` or `UserPromptSubmit` hook also carries `"onFailure": "block"`, so Claude Code v2.1.295 or later blocks the tool call or prompt when the hook itself crashes, times out or cannot start. On the other hooks a blocking failure stops nothing, since the action has already happened, so the wire tool leaves the field out there.
 

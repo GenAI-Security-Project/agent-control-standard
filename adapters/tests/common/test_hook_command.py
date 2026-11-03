@@ -148,6 +148,23 @@ class WiredPathsKeepADollarSign(unittest.TestCase):
                 self.assertEqual(str(module._expand("~/hmac.key")), "/home/u/hmac.key")
 
 
+class SessionEndGetsTheNetworkBudget(unittest.TestCase):
+    def test_each_wire_tool_gives_session_end_a_timeout_that_covers_its_round_trips(self) -> None:
+        for module, name, script, event in ((claude_wire, "settings.json", "acs-claude-code-hook", "SessionEnd"),
+                                            (cursor_wire, "hooks.json", "acs-cursor-hook", "sessionEnd")):
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+                    mock.patch.dict(os.environ, {"HOME": d}), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                settings = Path(d) / name
+                module.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                             f"--hook-command={_executable(Path(d) / script)}", "--write", *SECRET_ARGS])
+                hooks = json.loads(settings.read_text())["hooks"]
+                entry = hooks[event][0]["hooks"][0] if module is claude_wire else hooks[event][0]
+                self.assertEqual(entry["timeout"], 15)
+                others = [e for hook, entries in hooks.items() if hook != event for e in entries]
+                self.assertFalse(any("timeout" in (e["hooks"][0] if module is claude_wire else e) for e in others))
+
+
 class WrittenCommandsAndFiles(unittest.TestCase):
     """A path with a space stays one argument, and the settings file keeps its link and mode."""
 

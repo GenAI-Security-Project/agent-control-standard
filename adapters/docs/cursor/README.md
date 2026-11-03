@@ -105,7 +105,7 @@ What it wires by default: the six unconditional hooks of the ACS-Core minimum se
 | `postToolUseFailure` | toolCallResult | fail-open |
 | `afterAgentResponse` | agentResponse | fail-open |
 | `stop` | turnEnd | fail-open |
-| `sessionEnd` | sessionEnd | fail-open |
+| `sessionEnd` | sessionEnd | fail-open; `timeout: 15` |
 | `subagentStart` | subagentStart | **fail-CLOSED** (gate. The confused-deputy spawn gate, required by ACS-Core for subagent-capable clients.) |
 
 Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true` (Cursor's native flag), and each covers a different failure. `failClosed: true` blocks when the hook process itself fails: it crashes, times out, or returns invalid JSON. `ACS_DEFAULT_DENY` and the negotiated posture decide the failures the adapter handles, such as an unreachable Guardian. Once the adapter decides a step proceeds, it answers in Cursor's explicit allow shape, so `failClosed` never turns a decided proceed into a block.

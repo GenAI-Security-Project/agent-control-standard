@@ -10,7 +10,7 @@ _EXPORTS = {
     "current_session_id": "_handshake",
     "discard_session": "_handshake",
     "discard_session_state": "_store",
-    "end_session": "_handshake",
+    "mark_session_ended": "_handshake",
     "count_decision_failure": "_store",
     "Config": "_config",
     "Decided": "_outcome",

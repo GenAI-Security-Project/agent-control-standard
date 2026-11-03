@@ -17,8 +17,9 @@ from acs.client import (
     count_decision_failure,
     current_session_id,
     decision_failure_counts,
+    discard_session,
     discard_session_state,
-    end_session,
+    mark_session_ended,
     Decided,
     FailPosture,
     Handshake,
@@ -722,10 +723,12 @@ def main() -> int:
             event = {**event, "session_id": session_id, "host_session_id": host_session_id}
     if event_name != "sessionEnd" or not host_session_id:
         return _hook(event_name, event, config)
+    # Marked before the exchange, so a hook the host cancels mid-exchange still leaves the next hook a new session.
+    mark_session_ended(_session_id(event), config.guardian_url)
     try:
         return _hook(event_name, event, config)
     finally:
-        end_session(_session_id(event), config.guardian_url)
+        discard_session(_session_id(event), config.guardian_url)
         discard_session_state(_session_id(event), workspace=_workspace(event))
 
 

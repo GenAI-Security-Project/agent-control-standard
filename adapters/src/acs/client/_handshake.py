@@ -67,8 +67,8 @@ def current_session_id(host_session_id: str, guardian_url: str) -> str:
     return session_id
 
 
-def end_session(session_id: str, guardian_url: str) -> None:
-    """Mark a session ended after its sessionEnd, so a later hook of the same host session opens a new one, and remove its records."""
+def mark_session_ended(session_id: str, guardian_url: str) -> None:
+    """Mark a session ended, so a later hook of the same host session opens a new one."""
     marker = _ended(session_id, guardian_url)
     try:
         marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -76,7 +76,6 @@ def end_session(session_id: str, guardian_url: str) -> None:
     except OSError as e:
         audit_event("session_record_unwritable", session_id=session_id, guardian_url=guardian_url,
                     record=str(marker), error=str(e))
-    discard_session(session_id, guardian_url)
 
 
 def _ended(session_id: str, guardian_url: str) -> Path:
