@@ -62,16 +62,32 @@ function preToolCallSnapshot(): InterventionSnapshot {
   if (!isToolCallRequest(REQUEST)) throw new Error("probe request is not a steps/toolCallRequest");
   const target = resolvePolicyTargetArgument(loadMapping(MAPPING_PATH), "pre_tool_call", "Bash");
   const snapshot = assemblePreToolCallSnapshot(REQUEST, SOURCE_LABELS, target);
-  // AGT's pre_tool_call policy_target reads this leaf. Without it the probes
-  // would fail later with a bare TypeError, so name the missing field here.
-  const args = (snapshot as { tool_call: { args: Record<string, unknown> } }).tool_call.args;
-  if (typeof args[POLICY_TARGET_LEAF] !== "string") {
+  if (target === undefined) throw new Error("mapping.yaml declares no policy_target_argument for pre_tool_call");
+  const argument = (REQUEST.params.payload.arguments as Record<string, { value?: unknown }>)[target]?.value;
+  assertPolicyTarget(snapshot, target, argument);
+  return snapshot;
+}
+
+/**
+ * AGT's pre_tool_call policy_target reads `tool_call.args.<POLICY_TARGET_LEAF>`.
+ * Throws unless that leaf holds the request's own `target` argument: missing,
+ * the probes would fail later with a bare TypeError; any other string, they
+ * would pass while evaluating something the request never sent.
+ */
+export function assertPolicyTarget(snapshot: InterventionSnapshot, target: string, argument: unknown): void {
+  const leaf = (snapshot as { tool_call: { args: Record<string, unknown> } }).tool_call.args[POLICY_TARGET_LEAF];
+  if (typeof leaf !== "string") {
     throw new Error(
       `assemblePreToolCallSnapshot did not write tool_call.args.${POLICY_TARGET_LEAF} ` +
         `(expected the "${target}" argument as a string), so AGT has no policy target to evaluate`,
     );
   }
-  return snapshot;
+  if (leaf !== argument) {
+    throw new Error(
+      `assemblePreToolCallSnapshot wrote ${JSON.stringify(leaf)} to tool_call.args.${POLICY_TARGET_LEAF}, ` +
+        `not the request's "${target}" argument ${JSON.stringify(argument)}`,
+    );
+  }
 }
 
 function postToolCallSnapshot(): InterventionSnapshot {
