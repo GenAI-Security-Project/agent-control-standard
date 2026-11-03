@@ -57,9 +57,9 @@ def _deny(event_name: str, reason: str) -> int:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
-        }}))
+        }, "systemMessage": f"ACS blocked this tool call: {reason}"}))
     elif event_name == "UserPromptSubmit":
-        print(json.dumps({"decision": "block", "reason": reason}))
+        print(json.dumps({"decision": "block", "reason": reason, "systemMessage": f"ACS blocked this: {reason}"}))
     return 0
 
 

@@ -108,8 +108,26 @@ PRETOOL_PERMISSION_MAP: dict[str, str] = {
 def _emit(payload: dict[str, Any]) -> None:
     if not payload:
         return
+    message = _user_message(payload)
+    if message:
+        payload = {**payload, "systemMessage": message}
     json.dump(payload, sys.stdout)
     sys.stdout.write("\n")
+
+
+def _user_message(payload: dict[str, Any]) -> str:
+    """What Claude Code shows the user when ACS blocks or withholds; permissionDecisionReason and reason reach only Claude."""
+    hso = payload.get("hookSpecificOutput") or {}
+    reason = hso.get("permissionDecisionReason") or payload.get("reason") or "(no reason given)"
+    if hso.get("permissionDecision") == "deny":
+        return f"ACS blocked this tool call: {reason}"
+    if payload.get("decision") != "block":
+        return ""
+    if "updatedToolOutput" in hso:
+        return f"ACS withheld this tool's output from Claude: {reason}"
+    if hso.get("hookEventName") == "PostToolUse":
+        return f"ACS denied this tool's output, which Claude Code cannot withhold: {reason}"
+    return f"ACS blocked this: {reason}"
 
 
 def _pretool_response(decision: str, reason: str = "",
@@ -548,7 +566,9 @@ def _context_only(tool_name: str, disposition: str, reason: str) -> dict[str, An
                                  tool=tool_name)
     audit_event("unenforceable_decision", decision=disposition, hook="PostToolUseFailure", tool=tool_name,
                 reason=reason or "(none)")
-    return {"hookSpecificOutput": {"hookEventName": "PostToolUseFailure",
+    return {"systemMessage": f"ACS {disposition} on this failed tool result, which Claude Code cannot withhold: "
+                             f"{reason or '(no reasoning)'}",
+            "hookSpecificOutput": {"hookEventName": "PostToolUseFailure",
                                    "additionalContext": f"ACS Guardian decision on this failed tool result ({disposition}): "
                                                         f"{reason or '(no reasoning)'}"}}
 

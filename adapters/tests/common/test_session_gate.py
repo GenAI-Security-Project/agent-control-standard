@@ -328,6 +328,41 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertIn("steps/toolCallRequest", guardian.methods_seen())
                 self.assertNotIn("unmapped_hook_event", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
 
+    def test_claude_code_tells_the_user_when_it_blocks_or_withholds(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        allow = guardian._default_allow
+        session = str(uuid.uuid4())
+        base = {"session_id": session, "cwd": "/tmp"}
+        cases = {
+            "PreToolUse deny": ("steps/toolCallRequest", {**base, "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                                         "tool_input": {"command": "rm -rf ~/x"}, "tool_use_id": "c1"}),
+            "UserPromptSubmit deny": ("steps/userMessage", {**base, "hook_event_name": "UserPromptSubmit",
+                                                            "prompt": "do it"}),
+            "PostToolUse withheld": ("steps/toolCallResult", {**base, "hook_event_name": "PostToolUse",
+                                                              "tool_name": "Bash", "tool_use_id": "c2",
+                                                              "tool_input": {"command": "cat creds"},
+                                                              "tool_response": {"stdout": "secret", "stderr": "",
+                                                                                "interrupted": False,
+                                                                                "isImage": False}}),
+        }
+        for name, (method, event) in cases.items():
+            with self.subTest(name):
+                guardian.reset()
+                guardian.handlers[method] = lambda req: {**allow(req), "decision": "deny", "reasoning": "policy"}
+                p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(event), capture_output=True,
+                                   text=True, env=self._env(guardian.url()), timeout=30)
+                message = json.loads(p.stdout or "{}").get("systemMessage", "")
+                self.assertIn("ACS", message, p.stdout)
+                self.assertIn("policy", message)
+        guardian.reset()
+        for method, _ in cases.values():
+            guardian.handlers.pop(method, None)
+        p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(cases["PreToolUse deny"][1]),
+                           capture_output=True, text=True, env=self._env(guardian.url()), timeout=30)
+        self.assertEqual(p.stdout.strip(), "", "an allow tells the user nothing")
+
     def test_mcp_use_records_the_degraded_claim_once_per_session(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         guardian.start()
