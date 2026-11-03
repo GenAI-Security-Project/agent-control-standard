@@ -9,7 +9,7 @@ The **Guardian** is the policy enforcement point: a long-running HTTP service th
 Two roles in any deployment:
 
 - **Production Guardian** — your real policy engine. Typically OPA/Rego, Cedar, or a vendor SDK plugged in behind an HTTP server that speaks the ACS wire protocol. The adapter doesn't care what's inside; only the wire contract matters.
-- **`acs.guardian.example_guardian`** (the `acs-example-guardian` command) in this repo — a teaching artifact and test substrate. Implements the full wire protocol (handshake, envelope schema validation, HMAC signing, rolling chain, replay protection, skew rejection, dispositions, `system/ping`) but with a deliberately tiny deterministic policy: denies a short list of destructive Bash patterns + writes to system paths, allows everything else. Useful for local testing; **not for production**.
+- **`acs.guardian.example_guardian`** (the `acs-example-guardian` command) in this repo — a teaching artifact and test substrate. Implements the full wire protocol (handshake, envelope schema validation, HMAC signing, rolling chain, replay protection, skew rejection, dispositions, `system/ping`) but with a deliberately tiny deterministic policy: denies a short list of destructive shell commands, writes to system paths, subagent spawns (unless `ACS_ALLOW_SUBAGENT=1`) and unknown methods, and allows the rest. Useful for local testing; **not for production**.
 
 Production deployments swap the policy code in the example Guardian's `evaluate_step(method, params, request_id, chain_hash)` function with their real engine and keep the wire-protocol scaffolding.
 
@@ -180,7 +180,7 @@ Same as above, but with `command: "rm -rf /home/u"`:
 
 - **Step 4:** Guardian returns `{"decision": "deny", "reasoning": "destructive Bash pattern in: rm -rf /home/u"}`
 - **Step 5:** Adapter emits `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "destructive Bash pattern..."}}`
-- **Step 6:** Claude Code reads `permissionDecision: "deny"`, does not execute the Bash tool, and surfaces the reason: *"The command was blocked — a policy denied the Bash tool call, so it never ran."*
+- **Step 6:** Claude Code reads `permissionDecision: "deny"`, does not execute the Bash tool, and surfaces the reason: *"The command was blocked: a policy denied the Bash tool call, so it never ran."*
 
 ### What changes across the three adapters
 
@@ -190,9 +190,9 @@ The general pattern is identical. The framework-specific translation differs:
 |---|---|---|---|
 | **Where the adapter lives** | Separate shell process spawned per hook | Separate shell process spawned per hook | In-process Python class, same memory space as the agent |
 | **How the framework sends the event** | JSON on stdin; event type is a field inside the JSON (`hook_event_name`) | JSON on stdin; event type passed as a CLI argument (one command per event in `hooks.json`) | Python method call: `pre_invoke(context)` with `context.function_context.name` |
-| **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, `context.modified_kwargs` |
-| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{"permission": "allow"|"deny"}` on stdout, or `exit 2` to block | Set `context.action = InvocationAction.SKIP` to block, or raise `ACSGuardianDenied` |
-| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `updated_input` | Mutate `context.modified_kwargs` (input) or `context.output` (output) |
+| **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, the input in `context.modified_args[0]` or `context.modified_kwargs` |
+| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{"permission": "allow"|"deny"}` on stdout, `{"continue": false}` for a prompt, exit code 0 | Raise `ACSGuardianDenied`, or set `context.action = InvocationAction.SKIP` where NAT has it |
+| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `updated_input` | Rewrite the input in `context.modified_args[0]` when it is passed positionally, else in `context.modified_kwargs`; replace `context.output` for output |
 | **Process model** | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | Zero IPC; everything in the same Python interpreter |
 
 The Guardian-side wire format is **the same** for all three. The adapter is bilingual: it knows the framework's protocol on one side and ACS on the other.
@@ -248,7 +248,7 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 2. (Optional but encouraged) Write the adapter in `src/acs/integrations/<framework>/`, with tests in `tests/integrations/<framework>/`. The Claude Code adapter is the template.
 3. For a hook command, add a standard-library-only `hook.py` that calls `acs.integrations._bootstrap.run_hook` (see `claude_code/hook.py`), and install that as the command, so an adapter whose dependencies fail to import still writes an audit record and applies `ACS_DEFAULT_DENY`.
 4. Register it in `pyproject.toml`: an entry in the `acs.integrations` entry-point group, and its commands under `[project.scripts]`. An integration in another distribution registers in the same group.
-5. Add a row to the status table above.
+5. Add its suite to `PLATFORM_SUITES` in `run_conformance.py`, so `run_conformance.py <framework>` runs it.
 6. Open a PR against `GenAI-Security-Project/agent-control-standard`.
 
 Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_REQUIRE_PROFILES`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, build envelopes with `acs.core.request_envelope` and send them unsigned to `acs.client.round_trip`, which signs as the last step and returns either the decision or the `FailPosture.resolve` resolution to write in the host's shape, and keep the open turn with `acs.client.open_turn` / `current_turn` / `close_turn`.
