@@ -508,6 +508,7 @@ class _Session:
     ended: bool = False
     saw_end: bool = False
     failures: collections.Counter = field(default_factory=collections.Counter)
+    input_refusal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -798,10 +799,30 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return
         request = request_envelope(method, request_id=str(uuid.uuid4()), metadata=self._metadata(step.session_id),
                                    payload=payload)
-        result = self._exchange(session, request, step)
+        result = self._exchange(session, request, step, gate=method == "steps/userMessage")
         if isinstance(result, Resolution):
             audit_event("lifecycle_hook_failed", **{**result.fields, "cause": result.cause,
                                                     "method": method, "session_id": step.session_id})
+            if method == "steps/userMessage" and not result.proceed:
+                session.input_refusal = f"{result.label} on the workflow input ({result.cause})"
+            return
+        self._apply_lifecycle_verdict(session, method, normalize_decision((result.response or {}).get("result")))
+
+    def _apply_lifecycle_verdict(self, session: _Session, method: str, decision) -> None:
+        if decision.disposition == "allow":
+            return
+        disposition = decision.disposition or "(unusable)"
+        reason = decision.reasoning or "(none)"
+        if decision.disposition == "modify":
+            audit_modify_unsupported("NAT gives the middleware no way to rewrite a workflow's input or output",
+                                     session_id=session.id, method=method)
+        if method == "steps/userMessage":
+            session.input_refusal = f"workflow input refused ({disposition}): {reason}"
+            audit_event("workflow_input_refused", decision=disposition, reason=reason, session_id=session.id,
+                        method=method)
+        else:
+            audit_event("unenforceable_decision", decision=disposition, reason=reason, session_id=session.id,
+                        method=method)
 
     def _send_session_end(self, session: _Session, payload: dict) -> None:
         with session.idle:
@@ -873,6 +894,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         if gated is not None:
             # §4.1: a refused or unanswered session sends the Guardian nothing.
             return self._settle_pre(context, gated, step, f"{gated.label} ({gated.cause})")
+        if session.input_refusal:
+            return self._block(context, session.input_refusal)
         if not method_evaluated(step.server_hello, "steps/toolCallRequest"):
             # ALLOW-by-default (handshake.json): the call proceeds unsent.
             audit_event("method_not_evaluated", method="steps/toolCallRequest",

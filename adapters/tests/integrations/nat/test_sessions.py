@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import tempfile
 import threading
@@ -403,6 +404,69 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertEqual(own, ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest",
                                "steps/toolCallResult", "steps/sessionEnd:completed"])
         self.assertEqual(inside[-1], "steps/sessionEnd:completed")
+
+    def _audits(self) -> list[dict]:
+        path = Path(os.environ["ACS_AUDIT_FILE"])
+        return [json.loads(line.removeprefix("ACS_AUDIT ")) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def _verdict_on(self, method: str, decision: dict, *, default_deny: bool = False) -> None:
+        os.environ["ACS_AUDIT_FILE"] = str(self.records / "audit.log")
+        allow = self.guardian._default_allow
+        self.guardian.handlers[method] = lambda req: {**allow(req), **decision}
+
+        async def body(middleware, run):
+            async def entry(message):
+                await self._call(middleware, "call")
+                return "the answer"
+            await run("flow", entry, "the question")
+        self._middleware_runs(body, default_deny=default_deny)
+
+    def test_a_denied_workflow_input_blocks_the_runs_calls(self) -> None:
+        self._verdict_on("steps/userMessage", {"decision": "deny", "reasoning": "injected"})
+        self.assertEqual(self.executed, ["denied call"])
+        [session] = self._sessions()
+        self.assertNotIn("steps/toolCallRequest", session)
+        self.assertEqual(session[-1], "steps/sessionEnd:completed")
+        [refused] = [a for a in self._audits() if a["acs_audit_event"] == "workflow_input_refused"]
+        self.assertEqual((refused["decision"], refused["method"]), ("deny", "steps/userMessage"))
+
+    def test_a_modify_on_the_workflow_input_is_a_deny_recorded_as_modify_unsupported(self) -> None:
+        self._verdict_on("steps/userMessage", {"decision": "modify", "modifications": {"modified_content": "other"}})
+        self.assertEqual(self.executed, ["denied call"])
+        [unsupported] = [a for a in self._audits() if a["acs_audit_event"] == "modify_unsupported"]
+        self.assertEqual((unsupported["reason_codes"], unsupported["method"]), (["modify_unsupported"], "steps/userMessage"))
+
+    def test_an_undecided_workflow_input_follows_the_posture(self) -> None:
+        hello, allow = self.guardian._default_handshake, self.guardian._default_allow
+        self.guardian.handlers["handshake/hello"] = lambda req: {**hello(req), "timeout_config": {"default_ms": 200}}
+        self.guardian.handlers["steps/userMessage"] = lambda req: (time.sleep(0.5), allow(req))[1]
+        for default_deny, executed in ((False, ["call"]), (True, ["denied call"])):
+            with self.subTest(default_deny=default_deny):
+                self.executed = []
+
+                async def body(middleware, run):
+                    await run("flow", lambda m: self._call(middleware, "call"), "the question")
+                self._middleware_runs(body, default_deny=default_deny)
+                self.assertEqual(self.executed, executed)
+
+    def test_an_unsignable_workflow_input_blocks_the_runs_calls(self) -> None:
+        async def body(middleware, run):
+            await run("flow", lambda m: self._call(middleware, "call"), "lone surrogate \ud800")
+        self._middleware_runs(body)
+        self.assertEqual(self.executed, ["denied call"])
+        self.assertNotIn("steps/userMessage", self.guardian.methods_seen())
+
+    def test_a_verdict_on_the_workflow_output_is_recorded_as_unenforceable(self) -> None:
+        self._verdict_on("steps/agentResponse", {"decision": "deny", "reasoning": "leaks a secret"})
+        self.assertEqual(self.executed, ["call"])
+        [unenforceable] = [a for a in self._audits() if a["acs_audit_event"] == "unenforceable_decision"]
+        self.assertEqual((unenforceable["decision"], unenforceable["method"]), ("deny", "steps/agentResponse"))
+
+    def test_a_modify_on_the_workflow_output_is_recorded_as_modify_unsupported(self) -> None:
+        self._verdict_on("steps/agentResponse", {"decision": "modify", "modifications": {"modified_content": "x"}})
+        events = [a["acs_audit_event"] for a in self._audits()]
+        self.assertIn("modify_unsupported", events)
+        self.assertIn("unenforceable_decision", events)
 
     def test_a_finished_session_leaves_no_records(self) -> None:
         self.assertEqual(self._serve(("one", None)), ["ran one"])
