@@ -1,6 +1,7 @@
 """The acs-claude-code-hook command: run the adapter, or record why it could not load and apply the posture."""
 from __future__ import annotations
 
+import io
 import json
 import sys
 
@@ -62,7 +63,25 @@ def _deny(event_name: str, reason: str) -> int:
     return 0
 
 
+def _cursor_event(raw: str) -> str:
+    try:
+        event = json.loads(raw or "{}")
+    except Exception:  # noqa: BLE001
+        return ""
+    name = event.get("hook_event_name") if isinstance(event, dict) and "cursor_version" in event else None
+    return name if isinstance(name, str) else ""
+
+
 def main() -> int:
+    if sys.argv[1:2] != ["--version"]:
+        raw = sys.stdin.read()
+        sys.stdin = io.StringIO(raw)
+        cursor_event = _cursor_event(raw)
+        if cursor_event:
+            # Cursor runs the Claude Code hooks it imports from .claude/settings.json with its own events and answers.
+            from acs.integrations.cursor import hook as cursor_hook
+            sys.argv = [sys.argv[0], cursor_event]
+            return cursor_hook.main()
     return run_hook("acs.integrations.claude_code.adapter", event_key="hook",
                     event_name=_event_name, deny=_deny)
 

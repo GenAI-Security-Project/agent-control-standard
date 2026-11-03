@@ -308,6 +308,26 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertEqual(end["payload"], {"turn_id": start["payload"]["turn_id"], "outcome": "denied_at_start"})
                 self.assertEqual(end["metadata"]["turn_id"], start["payload"]["turn_id"])
 
+    def test_cursor_running_the_claude_code_hook_gets_the_cursor_adapters_answers(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        event = {"conversation_id": str(uuid.uuid4()), "workspace_roots": ["/tmp"], "cursor_version": "3.17.8",
+                 "hook_event_name": "preToolUse", "tool_name": "Shell", "tool_input": {"command": "rm -rf ~/x"},
+                 "tool_use_id": "call-1"}
+        allow = guardian._default_allow
+        for decision, expected in (("allow", {}), ("deny", "deny")):
+            with self.subTest(decision):
+                guardian.reset()
+                guardian.handlers["steps/toolCallRequest"] = lambda req, d=decision: {
+                    **allow(req), "decision": d, "reasoning": "policy"}
+                p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(event), capture_output=True,
+                                   text=True, env=self._env(guardian.url()), timeout=30)
+                out = json.loads(p.stdout or "null")
+                self.assertEqual(out if decision == "allow" else out.get("permission"), expected, p.stderr[-300:])
+                self.assertIn("steps/toolCallRequest", guardian.methods_seen())
+                self.assertNotIn("unmapped_hook_event", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
+
     def test_mcp_use_records_the_degraded_claim_once_per_session(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         guardian.start()

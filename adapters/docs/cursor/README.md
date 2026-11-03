@@ -68,6 +68,8 @@ Cursor runs the hooks from every source below and merges their answers, with any
 - the enterprise `hooks.json` (`/Library/Application Support/Cursor/` on macOS, `/etc/cursor/` on Linux, `C:\ProgramData\Cursor\` on Windows), team hooks and plugin hooks
 - with **Include Third-Party Plugins, Skills, and Other Configs** on, the default: the Claude Code hooks in `~/.claude/settings.json` and the project's `.claude/settings.json` and `.claude/settings.local.json`
 
+Cursor runs an imported Claude Code hook with its own events, so `acs-claude-code-hook` hands an event that carries `cursor_version` to the Cursor adapter, and a workspace wired only for Claude Code is governed in Cursor with Cursor's answers. The wire tools refuse to wire a second ACS hook that Cursor would also run.
+
 ```bash
 # Preview wiring into ~/.cursor/hooks.json (default — user-level)
 acs-cursor-wire \
