@@ -639,6 +639,50 @@ class SessionGateThroughHooks(unittest.TestCase):
                 [end] = guardian.envelopes_for("steps/sessionEnd")
                 self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"observed_agent_error": 1})
 
+    def test_a_claude_cd_keeps_the_sessions_agent_turn_and_failure_counts(self) -> None:
+        for project_dir in (None, "/proj"):
+            with self.subTest(CLAUDE_PROJECT_DIR=project_dir):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+                def hello(req, base=guardian._default_handshake):
+                    return {**base(req), "timeout_config": {"default_ms": 300}}
+
+                def late(req, allow=guardian._default_allow):
+                    time.sleep(0.6)
+                    return allow(req)
+                guardian.handlers.update({"handshake/hello": hello, "steps/toolCallResult": late})
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                session = str(uuid.uuid4())
+                extra = {"CLAUDE_PROJECT_DIR": project_dir} if project_dir else {}
+                env = {k: v for k, v in self._env(guardian.url(), **extra).items()
+                       if project_dir or k != "CLAUDE_PROJECT_DIR"}
+                for cwd, event in (("/proj", {"hook_event_name": "UserPromptSubmit", "prompt": "hi"}),
+                                   ("/proj", {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                              "tool_input": {"command": "cd sub"}}),
+                                   ("/proj/sub", {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                                  "tool_input": {"command": "ls"}}),
+                                   ("/proj/sub", {"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                                                  "tool_input": {"command": "ls"}, "tool_response": {"stdout": "x"}}),
+                                   ("/proj/sub", {"hook_event_name": "Stop", "last_assistant_message": "done"}),
+                                   ("/proj/sub", {"hook_event_name": "SessionEnd", "reason": "clear"})):
+                    p = subprocess.run([str(BIN / "acs-claude-code-hook")],
+                                       input=json.dumps({"session_id": session, "cwd": cwd, **event}),
+                                       capture_output=True, text=True, env=env, timeout=30)
+                    self.assertEqual(p.returncode, 0, p.stderr[-300:])
+                steps = [r for r in guardian.received if r["method"].startswith("steps/")]
+                self.assertEqual(len({r["params"]["metadata"]["agent_id"] for r in steps}), 1,
+                                 "one agent across the cd")
+                [turn_start] = guardian.envelopes_for("steps/turnStart")
+                turn_id = turn_start["params"]["payload"]["turn_id"]
+                for method in ("steps/toolCallRequest", "steps/toolCallResult", "steps/agentResponse"):
+                    for step in guardian.envelopes_for(method):
+                        self.assertEqual(step["params"]["metadata"].get("turn_id"), turn_id, method)
+                [turn_end] = guardian.envelopes_for("steps/turnEnd")
+                self.assertEqual(turn_end["params"]["payload"]["turn_id"], turn_id)
+                [end] = guardian.envelopes_for("steps/sessionEnd")
+                self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
+
     def test_a_fail_closed_session_end_still_reports_a_start_without_a_decision(self) -> None:
         # sessionEnd is audit-only, so a fail-closed hook sends it with the start's timeout (§6.4).
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):

@@ -31,7 +31,8 @@ Environment variables:
                       ACS_HMAC_KEY_ID. Without both, the session is refused
                       and every step denied: ACS-Core signs every request.
   ACS_AGENT_ID        Explicit agent_id for metadata. If unset, derived
-                      from cwd as `claude-code:<sha8(cwd)>`.
+                      as `claude-code:<sha8(dir)>` from CLAUDE_PROJECT_DIR,
+                      or from the cwd of the session's first hook.
   ACS_STARTUP_POSTURE "proceed" or "refuse": what this hook does in a
                       session with no negotiated Guardian, because its
                       handshake got no answer (§4.1). "proceed" lets the
@@ -84,6 +85,7 @@ from acs.client import (
     open_turn,
     record_mcp_use,
     round_trip,
+    update_session_state,
 )
 from acs.core import (
     Decision,
@@ -194,16 +196,32 @@ def _block_response(reason: str, hook_event: str | None = None) -> dict[str, Any
     return out
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
+_AGENT_IDS: dict[str, str] = {}
+
 
 def _agent_id(event: dict[str, Any]) -> str:
     explicit = os.environ.get("ACS_AGENT_ID")
     if explicit:
         return explicit
+    session_id = event.get("session_id") or ""
+    if session_id not in _AGENT_IDS:
+        project = _project_dir(event)
+        _AGENT_IDS[session_id] = (f"claude-code:{hashlib.sha256(project.encode('utf-8', 'surrogatepass')).hexdigest()[:8]}"
+                                  if project else "claude-code:unknown")
+    return _AGENT_IDS[session_id]
+
+
+# Claude Code's cwd follows Claude's cd, so the session's identity comes from where it started.
+def _project_dir(event: dict[str, Any]) -> str:
+    project = os.environ.get("CLAUDE_PROJECT_DIR")
+    if project:
+        return project
     cwd = event.get("cwd") or os.environ.get("PWD") or ""
-    if cwd:
-        return f"claude-code:{hashlib.sha256(cwd.encode('utf-8', 'surrogatepass')).hexdigest()[:8]}"
-    return "claude-code:unknown"
+    session_id = event.get("session_id")
+    if not (session_id and cwd):
+        return cwd
+    opened = update_session_state(session_id, lambda state: state.setdefault("opening_dir", cwd))
+    return opened if isinstance(opened, str) and opened else cwd
 
 
 def _wrap_arguments(raw: dict[str, Any]) -> dict[str, Any]:
@@ -259,7 +277,7 @@ def _payload_user_prompt(event: dict[str, Any]) -> dict[str, Any]:
 def build_agent_response_request(event: dict[str, Any]) -> dict[str, Any]:
     """steps/agentResponse for the reply a Stop carries in last_assistant_message, under the open turn."""
     metadata = _metadata(event)
-    turn_id = current_turn(event.get("session_id"), workspace=_turn_ws(event))
+    turn_id = current_turn(event.get("session_id"))
     if turn_id:
         metadata["turn_id"] = turn_id
     return request_envelope("steps/agentResponse", request_id=str(uuid.uuid4()), metadata=metadata,
@@ -279,7 +297,7 @@ def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
     name = event.get("hook_event_name", "")
     raw_reason = event.get("reason") or ("completed" if name == "Stop" else "other")
     # §6.4: the session's decision failures per failure class; an empty count says none were recorded.
-    counts = decision_failure_counts(event.get("session_id"), workspace=_turn_ws(event))
+    counts = decision_failure_counts(event.get("session_id"))
     return {"reason": SESSION_END_REASON_MAP.get(raw_reason, "completed"), "summary": {"decision_failures": counts}}
 
 
@@ -289,17 +307,8 @@ def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
 # per-session state the Cursor adapter uses, so every in-turn step stamps
 # metadata.turn_id and the turnEnd carries the matching id.
 
-def _turn_ws(event: dict[str, Any]) -> str | None:
-    return event.get("cwd") or None
-
-
 def _payload_turn_end(event: dict[str, Any]) -> dict[str, Any]:
-    """steps/turnEnd — closes the turn opened at the last UserPromptSubmit.
-    turn_id comes from session state (empty if no turn is open, in which
-    case build_request skips the emission). Claude's Stop fires on normal
-    turn completion and carries no error discriminator, so outcome is
-    'completed'."""
-    turn_id = current_turn(event.get("session_id"), workspace=_turn_ws(event))
+    turn_id = current_turn(event.get("session_id"))
     return {"turn_id": turn_id or "", "outcome": "completed"}
 
 
@@ -396,13 +405,12 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
 
     # Stamp the open turn's id on in-turn steps (request-envelope.json:69).
     if method in _IN_TURN_METHODS:
-        tid = current_turn(session_id, workspace=_turn_ws(event))
+        tid = current_turn(session_id)
         if tid:
             metadata["turn_id"] = tid
 
-    # steps/turnEnd needs a turn_id (>=1); if no turn is open there is
-    # nothing to close honestly, so skip the emission (main audits it).
-    if method == "steps/turnEnd" and not current_turn(session_id, workspace=_turn_ws(event)):
+    # turnEnd needs an open turn; with none the emission is skipped, and main audits it.
+    if method == "steps/turnEnd" and not current_turn(session_id):
         return {}
 
     # For PreToolUse (including the Task→subagentStart remap), pin
@@ -456,8 +464,7 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
         methods_implemented=(list(HOOK_MAP.values())
                              + ["steps/subagentStart", "steps/turnStart", "steps/agentResponse"]),
         start=lambda session: _send_session_start(event, session, config),
-        count_start_failure=lambda failure: count_decision_failure(event.get("session_id"), failure,
-                                                                   workspace=_turn_ws(event)),
+        count_start_failure=lambda failure: count_decision_failure(event.get("session_id"), failure),
     )
 
 
@@ -473,7 +480,7 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
                         guardian_url=config.guardian_url, posture=config.posture.negotiated(session.server_hello),
                         session_id=session_id)
     if isinstance(result, Resolution):
-        count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=_turn_ws(event))
+        count_decision_failure(session_id, result.fields.get("failure_class", "other"))
     return result
 
 
@@ -681,7 +688,7 @@ def main() -> int:
     session = _open_session(event, config)
     gated = config.gate(session, HOOK_MAP.get(hook_name))
     if gated is not None:
-        return _settle(gated, hook_name, session_id, workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
+        return _settle(gated, hook_name, session_id, tool_name=event.get("tool_name") or "")
     if hook_name == "SessionStart":
         # The reasoning the Guardian allowed sessionStart with reaches Claude on every SessionStart, resume and compact included.
         if session.start_context:
@@ -696,25 +703,22 @@ def main() -> int:
         # Settled with the session's effective posture; an exit 1 would let the host proceed.
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       hook_name, session_id, workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
+                       hook_name, session_id, tool_name=event.get("tool_name") or "")
 
 
 def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             server_hello: dict[str, Any], posture: FailPosture, config: Config) -> int:
     tool_name = event.get("tool_name")
     if isinstance(tool_name, str) and tool_name.startswith("mcp__"):
-        record_mcp_use(session_id, tool=tool_name, workspace=_turn_ws(event))
-    # Turn tracking: a UserPromptSubmit OPENS a turn with an explicit,
-    # decision-eligible steps/turnStart BEFORE the userMessage. A Guardian
-    # MAY deny to block the whole turn (turn-start.json); the deny lands in
-    # the prompt's own block shape so the prompt is blocked.
+        record_mcp_use(session_id, tool=tool_name)
+    # A prompt opens its turn with a decision-eligible turnStart before the userMessage, and a deny blocks the prompt (turn-start.json).
     if hook_name == "UserPromptSubmit":
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
             result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url, gate=True,
                                 posture=posture, session_id=session_id)
             if isinstance(result, Resolution):
-                return _settle(result, "UserPromptSubmit", session_id, workspace=_turn_ws(event))
+                return _settle(result, "UserPromptSubmit", session_id)
             turn_start = normalize_decision(result.response.get("result"))
             if turn_start.disposition != "allow":
                 # Only allow applies to a turn start, so any other disposition blocks the prompt.
@@ -726,7 +730,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         else:
             audit_event("method_not_evaluated", method="steps/turnStart",
                         hook=hook_name, session_id=session_id)
-        open_turn(session_id, turn_id, workspace=_turn_ws(event))
+        open_turn(session_id, turn_id)
 
     if hook_name == "Stop" and isinstance(event.get("last_assistant_message"), str) and event["last_assistant_message"]:
         _send_agent_response(event, config, posture, server_hello, session_id)
@@ -736,7 +740,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: adapter error: {e}\n")
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
-                       hook_name, session_id, workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
+                       hook_name, session_id, tool_name=event.get("tool_name") or "")
     if not request:
         if hook_name == "Stop":
             # turnEnd with no open turn: audit it rather than fabricate
@@ -745,7 +749,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {hook_name}\n")
         return _settle(posture.resolve(Undecided("adapter_build_failed")), hook_name, session_id,
-                       workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
+                       tool_name=event.get("tool_name") or "")
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
@@ -754,7 +758,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         audit_event("method_not_evaluated", method=method, hook=hook_name,
                     session_id=session_id)
         if hook_name == "Stop":
-            close_turn(session_id, workspace=_turn_ws(event))
+            close_turn(session_id)
         return 0
     if method == "steps/toolCallResult":
         origin = ("steps/subagentStart" if _is_subagent_tool(event.get("tool_name"))
@@ -766,7 +770,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
                         gate=hook_name in _ENFORCED_HOOKS)
     if isinstance(result, Resolution):
-        return _settle(result, hook_name, session_id, workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
+        return _settle(result, hook_name, session_id, tool_name=event.get("tool_name") or "")
     response = result.response
 
     # A translation bug would exit 1, which the host reads as proceed, so it fails closed here.
@@ -776,11 +780,11 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"acs-adapter: translate error: {e}\n")
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
-                       hook_name, session_id, workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
+                       hook_name, session_id, tool_name=event.get("tool_name") or "")
 
     # Close the turn after the turnEnd has been emitted/recorded.
     if hook_name == "Stop":
-        close_turn(session_id, workspace=_turn_ws(event))
+        close_turn(session_id)
     return 0
 
 
@@ -800,7 +804,7 @@ def _send_agent_response(event: dict[str, Any], config: Config, posture: FailPos
         audit_event(result.audit_type, **{**result.fields, "cause": result.cause, "hook": "Stop",
                                           "method": "steps/agentResponse", "session_id": session_id})
         if result.decision_failure:
-            count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=_turn_ws(event))
+            count_decision_failure(session_id, result.fields.get("failure_class", "other"))
         return
     decision = normalize_decision(result.response.get("result"))
     if decision.disposition != "allow":
@@ -808,8 +812,7 @@ def _send_agent_response(event: dict[str, Any], config: Config, posture: FailPos
                     method="steps/agentResponse", reason=decision.reasoning or "(none)", session_id=session_id)
 
 
-def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, workspace: str | None = None,
-            tool_name: str = "") -> int:
+def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, tool_name: str = "") -> int:
     """Carry out a resolution: block in the hook's native shape unless it proceeds, and record why per §6.4.
 
     The audit type says which rule decided (fail_open_bypass,
@@ -826,7 +829,7 @@ def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, w
     audit_event(resolution.audit_type, cause=resolution.cause, hook=hook_name,
                 session_id=session_id, **resolution.fields)
     if resolution.decision_failure:
-        count_decision_failure(session_id, resolution.fields.get("failure_class", "other"), workspace=workspace)
+        count_decision_failure(session_id, resolution.fields.get("failure_class", "other"))
     return 0
 
 

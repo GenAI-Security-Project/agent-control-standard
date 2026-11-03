@@ -269,7 +269,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_STARTUP_POSTURE` | follows `ACS_DEFAULT_DENY` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
-| `ACS_AGENT_ID` | derived from cwd | Stable agent identifier sent in `metadata.agent_id`. |
+| `ACS_AGENT_ID` | derived from `CLAUDE_PROJECT_DIR`, or the session's first `cwd` | Stable agent identifier sent in `metadata.agent_id`. |
 | `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Each session's handshake decision, kept for the session's lifetime. |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Deadline for the whole handshake/hello exchange, including a response that arrives slowly. A value that is not a positive number is replaced by `5` and recorded as `invalid_setting`. |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr — the durable audit half of §6.4's fail-open trade. |
