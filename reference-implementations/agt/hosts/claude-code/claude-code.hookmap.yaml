@@ -82,24 +82,14 @@ hooks:
     # decision today, so this entry is a guard against a Guardian that emits
     # one rather than a path this deployment exercises.
     #
-    # WHY THE REASONING ALSO GOES IN `additionalContext` (issue #109). Measured
-    # against Claude Code 2.1.285 and 2.1.311, `claude -p`, two PreToolUse
-    # hooks on one Bash call:
-    #   - When several hooks deny, the model reads the `permissionDecisionReason`
-    #     (or exit-2 stderr) of whichever hook FINISHED LAST, and nothing from
-    #     the others. The exit code does not change this; finish order does. A
-    #     project hook that answers after this shim drops the Guardian's
-    #     reasoning entirely, though the call stays blocked.
-    #   - The `permissionDecisionReason` of an allow reaches only the debug log,
-    #     never the model.
-    #   - `additionalContext` is kept from every hook that returns it, and the
-    #     model reads it as "PreToolUse:Bash hook additional context: ...".
-    # So `additionalContext` is the one field that carries the Guardian's
-    # reasoning to the model whatever else answers: a deny's explanation, a
-    # rewrite's, and the "no decision arrived..." a fail-open proceed gets
-    # from `applyFailurePosture`. When this shim is the only responder, a deny's
-    # reasoning reaches the model twice, as the denial and as context. `ask` is
-    # left without it: its reason is shown to the person who answers.
+    # WHY THE REASONING ALSO GOES IN `additionalContext` (issue #109). When
+    # several hooks deny one call, Claude Code gives the model the denial
+    # reason of only the hook that finishes last, and an allow's
+    # `permissionDecisionReason` reaches only the debug log. Claude Code keeps
+    # `additionalContext` from every hook, so it is the field that carries the
+    # Guardian's reasoning to the model whatever else answers. `ask` is left
+    # without it: its reason is shown to the person who answers. The README's
+    # "When another hook answers the same call" has the measurements.
     decisions:
       allow:
         output:
@@ -127,11 +117,9 @@ hooks:
       # modifications object -- a shape its `updatedInput` does not accept, so
       # the rewrite would be reported and never take effect.
       #
-      # A reason path was the one thing this entry was missing. A policy-ordered
-      # rewrite is the only decision that changes what runs without the transcript
-      # saying anything: the command silently differs from the one that was asked
-      # for, and every sibling entry above carries an explanation while this one
-      # did not.
+      # A policy-ordered rewrite changes what runs, so the model has to be told
+      # why. That reaches it through `additionalContext`: like any allow's, the
+      # `permissionDecisionReason` here reaches only Claude Code's debug log.
       modify:
         output:
           hookSpecificOutput.permissionDecision:       { value: allow }

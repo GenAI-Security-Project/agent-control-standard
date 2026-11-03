@@ -313,6 +313,18 @@ describe("renderDecision against the shipped hookmap, per hook", () => {
     expect(renderDecision("PreToolUse", result as never, real)).toEqual({ hookSpecificOutput: expected });
   });
 
+  // Both reason fields carry `type: string`, so a Guardian that puts a
+  // non-string in `reasoning` gets the decision rendered with no reason at all,
+  // rather than an output Claude Code cannot read.
+  it.each([
+    ["allow", { decision: "allow" }, { permissionDecision: "allow" }],
+    ["deny", { decision: "deny" }, { permissionDecision: "deny" }],
+    ["defer", { decision: "defer" }, { permissionDecision: "deny" }],
+    ["modify", { decision: "modify", applied_input: { command: "echo [REDACTED]" } }, { permissionDecision: "allow", updatedInput: { command: "echo [REDACTED]" } }],
+  ])("renders PreToolUse %s with a non-string reasoning and no reason field", (_name, result, expected) => {
+    expect(renderDecision("PreToolUse", { ...result, reasoning: { text: "not a string" } } as never, real)).toEqual({ hookSpecificOutput: expected });
+  });
+
   // The reason field is the second half: a rewrite is the only decision that
   // changes what runs while the transcript says nothing, and the same rule
   // applies to PreToolUse's `modify`. It is worse at this gate, because what
