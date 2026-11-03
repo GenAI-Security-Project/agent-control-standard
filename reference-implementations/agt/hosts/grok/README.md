@@ -8,21 +8,31 @@ This is a third host against an unchanged adapter. The Claude Code shim is the s
 
 1. Start the Guardian from `reference-implementations/agt`. The [tree README](../../README.md#start-the-guardian) shows the command.
 
-2. Register the hook. Grok's `workspaceRoot` is the git workspace, not this `agt/` tree, so `$GROK_PROJECT_DIR/hosts/grok/acs-hook.ts` does not resolve. Copy the shipped file into Grok's global hooks directory (always trusted) when the Grok workspace is this repository:
+2. Register the hook. The Guardian governs `run_terminal_command` only. This install does not add a catch-all matcher. A catch-all would deny an unregistered tool as `tool_unknown`. `PostToolUse` reads one `outputs.from` path, so the matcher stays on `run_terminal_command`.
+
+From `reference-implementations/agt`, run the installer.
 
 ```bash
-cp hosts/grok/hooks.json ~/.grok/hooks/acs-agt.json
+bash scripts/install-grok-hook.sh
 ```
 
-The shipped `hooks.json` names the hook as `bun run "$GROK_PROJECT_DIR/reference-implementations/agt/hosts/grok/acs-hook.ts"`. That resolves when Grok's workspace is the ACS git root. From any other workspace, replace that path with this file's absolute path.
+The script resolves `hosts/grok/acs-hook.ts` to an absolute path and writes `~/.grok/hooks/acs-agt.json`. `PreToolUse` and `PostToolUse` both run `bun run` on that path. The matcher is `run_terminal_command`. The timeout is 30 seconds.
 
-It registers two events. `PreToolUse` and `PostToolUse` both fire for `run_terminal_command`. The shipped Claude matcher `^(Bash|WebFetch)$` does not block Grok's PreToolUse; do not use it here.
+Set `GROK_HOOKS_DIR` to choose a different directory.
 
-3. Start Grok from a shell where the Guardian is reachable, with folder trust if you used a project hook:
+`hosts/grok/hooks.json` names `bun run "$GROK_PROJECT_DIR/reference-implementations/agt/hosts/grok/acs-hook.ts"`. That file is a local demo. Use it with `grok --trust`, and only when Grok's workspace is this repository's git root.
+
+The Claude Code matcher `^(Bash|WebFetch)$` matches no Grok tool. Nothing is governed, and nothing reports the miss.
+
+Linux CI does not prove Bun's Windows exit quirk. The exit guard in `acs-hook.ts` is the portable mitigation. A process that ends without a decision on stdout exits 2.
+
+3. Start Grok from a shell where the Guardian is reachable.
 
 ```bash
-grok --trust
+grok
 ```
+
+The file from step 2 is a global hook, which Grok trusts. Use `grok --trust` only with the local demo in step 2.
 
 Ask it to run `echo rm -rf /`. The hook sends the call to the Guardian. AGT's stock pattern rule denies it. `ls -la` in the same session runs.
 
@@ -59,7 +69,9 @@ Grok treats PreToolUse exit 2 as an explicit deny. A crash, timeout, or malforme
 | Exit | When |
 |---|---|
 | `0`, with a decision on stdout | Every real outcome, including `deny`. The deny travels in the JSON body, not the exit code. A Guardian that is down, a timeout, or a decision the host cannot render are all resolved by the negotiated `on_decision_failure` posture and audited |
-| `2`, with stderr only | The shim cannot trust its own input or configuration: stdin is not JSON, the payload has no string session id (`session_id` or `sessionId`) or hook event name, the session id is unsafe as a path segment, the hookmap fails to load, or the hookmap declares an output Grok does not accept |
+| `2`, empty stdout | The shim cannot trust its own input or configuration. Stdin is not JSON, the payload has no string session id (`session_id` or `sessionId`) or hook event name, the session id is unsafe as a path segment, the hookmap fails to load, or the hookmap declares an output Grok does not accept. Those failures write the reason on stderr. The exit guard uses this same code when the process would end at 0, or with no code, and no decision was written |
+
+Linux CI does not prove Bun's Windows exit quirk. The exit guard is the portable mitigation.
 
 Exit `1` never appears.
 
@@ -85,7 +97,7 @@ Fetch, skills, compact, subagent lifecycle, and a handshake from the host. This 
 |---|---|
 | `acs-hook.ts` | The shim |
 | `grok.hookmap.yaml` | The hookmap |
-| `hooks.json` | The hook registration to copy into `~/.grok/hooks/` |
+| `hooks.json` | Local-demo registration that uses `$GROK_PROJECT_DIR`. `scripts/install-grok-hook.sh` writes the absolute-path file |
 
 ## Tests
 

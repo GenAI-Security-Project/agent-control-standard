@@ -199,16 +199,12 @@ describe("acs-hook — the negotiated posture, end to end", () => {
     const out = await runShim(payload("rm -rf /"), env);
     const hook = expectQuietDecision(out);
     expect(hook.permissionDecision).toBe("allow");
-    // Byte-for-byte what the v3 runbook of the standalone repository
-    // (github.com/afogel/ACS_reference_implementation, docs/demos/v3-runbook.md) captures
-    // for this step. The
-    // session note for an unpersistable config must not leak into the
-    // healthy path, where hook 2 reads the config hook 1 stored and never
-    // re-handshakes at all.
-    expect(hook.permissionDecisionReason).toBe(
-      "no decision arrived from the guardian for steps/toolCallRequest (transport: Unable to connect. Is the " +
-        "computer able to access the url?); the session's negotiated posture applies -- " +
-        "on_decision_failure=proceed, so this step was proceeded.",
+    // Shim framing, not Bun's fetch sentence. Windows prefixes that sentence
+    // with `ECONNREFUSED:`. The session note for an unpersistable config
+    // must not leak into this path. Hook 2 reads the config hook 1 stored
+    // and never re-handshakes.
+    expect(hook.permissionDecisionReason).toMatch(
+      /^no decision arrived from the guardian for steps\/toolCallRequest \(transport: .+?\); the session's negotiated posture applies -- on_decision_failure=proceed, so this step was proceeded\.$/,
     );
 
     const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));

@@ -184,25 +184,25 @@ The plugin hooks `tool.execute.before` for the `bash` and `webfetch` tools and `
 
 ### Connect Grok Build TUI
 
-The same Guardian governs Grok at the same time. Do not restart anything.
+The Guardian governs `run_terminal_command` only. This install does not add a catch-all matcher. Do not restart the Guardian.
 
-1. Copy the shipped hook file into Grok's global hooks directory. Grok's workspace root is the git repo, not this `agt/` tree, so a project-relative `hosts/grok/` path does not resolve.
+1. Register the hook from this tree. The script writes `~/.grok/hooks/acs-agt.json` and points `PreToolUse` and `PostToolUse` at `hosts/grok/acs-hook.ts` by absolute path.
 
 ```bash
-cp hosts/grok/hooks.json ~/.grok/hooks/acs-agt.json
+bash scripts/install-grok-hook.sh
 ```
 
-The shipped file names `bun run "$GROK_PROJECT_DIR/reference-implementations/agt/hosts/grok/acs-hook.ts"`. That resolves when Grok's workspace is the ACS git root. From any other workspace, replace that path with this file's absolute path. Both events match `run_terminal_command` only. The [Grok host README](hosts/grok/README.md) has the details.
+`hosts/grok/hooks.json` uses `$GROK_PROJECT_DIR/...`. That file is a local demo. Use it with `grok --trust` when Grok's workspace is the ACS git root. The [Grok host README](hosts/grok/README.md) has the details.
 
-2. Start Grok.
+2. Start Grok from a shell where the Guardian is reachable.
 
 ```bash
-grok --trust
+grok
 ```
 
 3. Ask Grok to run `echo rm -rf /`. The hook sends the call to the Guardian. AGT's stock pattern rule denies it. Ask for `ls -la` in the same session and it runs.
 
-The shipped Claude Code matcher `^(Bash|WebFetch)$` does not block Grok's PreToolUse. Do not copy `hosts/claude-code/settings.json` into a Grok session and expect it to govern.
+The Claude Code matcher `^(Bash|WebFetch)$` matches no Grok tool. Nothing is governed, and nothing reports the miss. Do not copy `hosts/claude-code/settings.json` into a Grok session.
 
 ### Drive one hook by hand
 
