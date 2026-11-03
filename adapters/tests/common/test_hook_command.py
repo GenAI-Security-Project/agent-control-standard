@@ -196,6 +196,24 @@ class WrittenCommandsAndFiles(unittest.TestCase):
                 self.assertIn("acs-adapter-wired", real.read_text())
                 self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o600, "the secret-bearing file lost its mode")
 
+    def test_a_readable_settings_file_that_gets_an_inline_secret_ends_private_and_its_backup_holds_none(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                settings = tmp / name
+                settings.write_text("{}")
+                settings.chmod(0o644)
+                hook = _executable(tmp / script)
+                self._wire(module, tmp, settings, f"--hook-command={hook}", *SECRET_ARGS)
+                self.assertEqual(stat.S_IMODE(settings.stat().st_mode), 0o600)
+                self._wire(module, tmp, settings, f"--hook-command={hook}", "--secret-env-inline=" + "1" * 64,
+                           "--key-id=test-key")
+                backups = sorted(tmp.glob(f"{name}.bak.*"))
+                self.assertTrue(backups)
+                for backup in backups:
+                    self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600, backup.name)
+                    self.assertNotIn("0" * 64, backup.read_text(), "a backup keeps the replaced inline secret")
+
     def test_a_new_settings_file_is_private(self) -> None:
         for module, name, script in self.CASES:
             with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
