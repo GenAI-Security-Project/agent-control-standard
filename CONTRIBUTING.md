@@ -113,15 +113,12 @@ Put new guards in `tests/`. Collection is scoped there by `testpaths` in `pyproj
 For changes under `adapters/` (the reference adapters, example Guardian, and their test suites), run the adapter conformance gate before opening a PR — it lives in its own workflow (`.github/workflows/adapter_tests.yml`) with its own environment, per the rule above:
 
 ```bash
-pip install -r adapters/requirements-test.txt
-cd adapters
-python3 run_conformance.py claude cursor     # shared Guardian checks + those adapter suites
-# NAT needs the NVIDIA runtime; run its suite with an interpreter that has
-# nvidia-nat-core installed (see adapters/nat/requirements.txt):
-python3 run_conformance.py claude cursor nat
+cd adapters                                         # its own uv project and lockfile
+uv sync --locked --extra nat --group test
+uv run python run_conformance.py claude cursor nat  # shared checks + those adapter suites
 ```
 
-The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. See `adapters/README.md` for what the suite proves and its scope.
+Without the NAT runtime, sync without `--extra nat` and leave `nat` off the command. The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. The same workflow also builds the package and checks the installed wheel outside the repository (`adapters/scripts/check_wheel.py`). See `adapters/README.md` for what the suite proves and its scope.
 
 For prose contributions, follow the [editorial style guide](./STYLE.md). For schema contributions, validate `specification/v0.1.0/acs_schema.json` against the JSON Schema spec before submitting.
 

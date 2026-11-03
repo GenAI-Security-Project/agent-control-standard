@@ -1,0 +1,77 @@
+{
+  "_comment": "Drop into <project>/.cursor/hooks.json (or merge with your existing config). Replace ACS_GUARDIAN_URL with your deployment's endpoint and /path/to/acs-cursor-hook with the installed command (acs-cursor-wire writes it for you). ACS_HMAC_SECRET_FILE is REQUIRED for ACS-Core baseline integrity (§10): a secret of at least 32 bytes, named by ACS_HMAC_KEY_ID, the label the Guardian holds too; without both every hook refuses its session and denies every step. Generate it with mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key and give the SAME file to the Guardian. ACS_AUDIT_FILE is the durable audit sink for §6.4 events.",
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook sessionStart"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook beforeSubmitPrompt",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook preToolUse",
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook postToolUse"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook beforeShellExecution",
+        "failClosed": true
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterShellExecution"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook beforeMCPExecution",
+        "failClosed": true
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterMCPExecution"
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /path/to/acs-cursor-hook subagentStart",
+        "failClosed": true
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterAgentResponse"
+      }
+    ],
+    "stop": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook stop"
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook postToolUseFailure"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook sessionEnd",
+        "timeout": 15
+      }
+    ]
+  }
+}

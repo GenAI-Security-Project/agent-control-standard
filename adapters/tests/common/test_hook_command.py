@@ -1,0 +1,306 @@
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import shlex
+import stat
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from acs.integrations._hook_command import resolve_hook_command
+from acs.integrations.claude_code import wire as claude_wire
+from acs.integrations.cursor import wire as cursor_wire
+
+# The wire tools refuse to wire without a secret and its label (§10).
+SECRET_ARGS = ["--secret-env-inline=" + "0" * 64, "--key-id=test-key"]
+
+
+def _executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+class ResolveHookCommand(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_absolute_executable_override_is_kept(self) -> None:
+        hook = _executable(self.tmp / "acs-claude-code-hook")
+        self.assertEqual(resolve_hook_command("acs-claude-code-hook", str(hook)), str(hook))
+
+    def test_relative_override_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute path"):
+            resolve_hook_command("acs-claude-code-hook", "bin/acs-claude-code-hook")
+
+    def test_missing_override_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not an executable file"):
+            resolve_hook_command("acs-claude-code-hook", str(self.tmp / "absent"))
+
+    def test_non_executable_override_is_refused(self) -> None:
+        plain = self.tmp / "acs-claude-code-hook"
+        plain.write_text("not executable")
+        with self.assertRaisesRegex(ValueError, "not an executable file"):
+            resolve_hook_command("acs-claude-code-hook", str(plain))
+
+    def test_relative_path_entry_resolves_to_an_absolute_path(self) -> None:
+        _executable(self.tmp / "bin" / "acs-claude-code-hook")
+        cwd = os.getcwd()
+        try:
+            os.chdir(self.tmp)
+            with mock.patch.dict(os.environ, {"PATH": "bin"}):
+                resolved = resolve_hook_command("acs-claude-code-hook")
+        finally:
+            os.chdir(cwd)
+        self.assertTrue(os.path.isabs(resolved), resolved)
+        self.assertEqual(Path(resolved).resolve(), (self.tmp / "bin" / "acs-claude-code-hook").resolve())
+
+    def test_command_missing_from_path_is_refused(self) -> None:
+        with mock.patch.dict(os.environ, {"PATH": str(self.tmp)}):
+            with self.assertRaisesRegex(ValueError, "not on PATH"):
+                resolve_hook_command("acs-claude-code-hook")
+
+
+class WireRefusesUnusableCommands(unittest.TestCase):
+    CASES = (
+        (claude_wire, "settings.json", "acs-claude-code-hook"),
+        (cursor_wire, "hooks.json", "acs-cursor-hook"),
+    )
+
+    def _main(self, module, argv: list[str]) -> int:
+        # A home and working directory of its own, so no hook file on this machine counts as a second copy.
+        with tempfile.TemporaryDirectory() as home, contextlib.chdir(home), \
+                mock.patch.dict(os.environ, {"HOME": home}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                return module.main(argv)
+            except SystemExit as e:
+                return int(e.code or 0)
+
+    def test_nonexistent_override_exits_without_writing(self) -> None:
+        for module, name, _ in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as tmp:
+                settings = Path(tmp) / name
+                rc = self._main(module, ["--guardian-url=http://127.0.0.1:8787/acs",
+                                         f"--settings={settings}", f"--hook-command={tmp}/absent", "--write",
+                                         *SECRET_ARGS])
+                self.assertEqual(rc, 2)
+                self.assertFalse(settings.exists())
+
+    def test_written_command_runs_the_resolved_path_even_with_spaces(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as tmp:
+                hook = _executable(Path(tmp) / "dir with space" / script)
+                settings = Path(tmp) / name
+                rc = self._main(module, ["--guardian-url=http://127.0.0.1:8787/acs",
+                                         f"--settings={settings}", f"--hook-command={hook}", "--write",
+                                         *SECRET_ARGS])
+                self.assertEqual(rc, 0)
+                commands = [h["command"] for h in _commands(json.loads(settings.read_text()))]
+                self.assertTrue(commands)
+                for command in commands:
+                    self.assertIn(str(hook), shlex.split(command))
+
+
+def _commands(config: dict) -> list[dict]:
+    found: list[dict] = []
+    for entries in config.get("hooks", {}).values():
+        for entry in entries:
+            found.extend(entry.get("hooks", [entry]))
+    return [h for h in found if "command" in h]
+
+
+
+class ClaudeCodeGateHooksBlockOnFailure(unittest.TestCase):
+    """A fail-closed hook that crashes, times out or cannot start blocks its action too (onFailure, Claude Code v2.1.295+)."""
+
+    def _wire(self, *mode: str) -> dict[str, set[str]]:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), mock.patch.dict(os.environ, {"HOME": tmp}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            hook = _executable(Path(tmp) / "acs-claude-code-hook")
+            settings = Path(tmp) / "settings.json"
+            claude_wire.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                              f"--hook-command={hook}", "--write", *SECRET_ARGS, *mode])
+            hooks = json.loads(settings.read_text())["hooks"]
+        return {"block": {name for name, entries in hooks.items() if entries[0]["hooks"][0].get("onFailure") == "block"},
+                "all": set(hooks)}
+
+    def test_each_wiring_mode_blocks_exactly_its_fail_closed_hooks(self) -> None:
+        default = self._wire()
+        self.assertEqual(default["block"], {"PreToolUse", "UserPromptSubmit"})
+        strict = self._wire("--default-deny")
+        self.assertEqual(strict["block"], {"PreToolUse", "UserPromptSubmit"},
+                         "only on these does a blocking failure stop the action (exit code 2 behavior per event)")
+        self.assertEqual(self._wire("--all-fail-open")["block"], set())
+
+
+class WiredPathsKeepADollarSign(unittest.TestCase):
+    def test_a_literal_dollar_in_a_path_is_written_as_given(self) -> None:
+        for module in (claude_wire, cursor_wire):
+            with self.subTest(wire=module.__name__), mock.patch.dict(os.environ, {"HOME": "/home/u"}):
+                self.assertEqual(str(module._expand("/keys/x $HOME/hmac.key")), "/keys/x $HOME/hmac.key")
+                self.assertEqual(str(module._expand("~/hmac.key")), "/home/u/hmac.key")
+
+
+class SessionEndGetsTheNetworkBudget(unittest.TestCase):
+    def test_each_wire_tool_gives_session_end_a_timeout_that_covers_its_round_trips(self) -> None:
+        for module, name, script, event in ((claude_wire, "settings.json", "acs-claude-code-hook", "SessionEnd"),
+                                            (cursor_wire, "hooks.json", "acs-cursor-hook", "sessionEnd")):
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+                    mock.patch.dict(os.environ, {"HOME": d}), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                settings = Path(d) / name
+                module.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                             f"--hook-command={_executable(Path(d) / script)}", "--write", *SECRET_ARGS])
+                hooks = json.loads(settings.read_text())["hooks"]
+                entry = hooks[event][0]["hooks"][0] if module is claude_wire else hooks[event][0]
+                self.assertEqual(entry["timeout"], 15)
+                others = [e for hook, entries in hooks.items() if hook != event for e in entries]
+                self.assertFalse(any("timeout" in (e["hooks"][0] if module is claude_wire else e) for e in others))
+
+
+class WrittenCommandsAndFiles(unittest.TestCase):
+    """A path with a space stays one argument, and the settings file keeps its link and mode."""
+
+    CASES = ((claude_wire, "settings.json", "acs-claude-code-hook"), (cursor_wire, "hooks.json", "acs-cursor-hook"))
+
+    def _wire(self, module, tmp: Path, settings: Path, *extra: str) -> None:
+        with contextlib.chdir(tmp), mock.patch.dict(os.environ, {"HOME": str(tmp)}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            module.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}", "--write", *extra])
+
+    def test_a_secret_and_audit_path_with_spaces_reach_the_hook_whole(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                seen = tmp / "seen.json"
+                hook = tmp / "bin dir" / script
+                hook.parent.mkdir()
+                hook.write_text(f"#!/bin/sh\nprintf '%s\\n%s\\n' \"$ACS_HMAC_SECRET_FILE\" \"$ACS_AUDIT_FILE\" > '{seen}'\n")
+                hook.chmod(0o755)
+                key = tmp / "My Keys" / "hmac.key"
+                key.parent.mkdir()
+                key.write_text("0" * 64)
+                key.chmod(0o600)
+                audit = tmp / "My Logs" / "audit.log"
+                settings = tmp / name
+                self._wire(module, tmp, settings, f"--hook-command={hook}", f"--secret-file={key}",
+                           "--key-id=test-key", f"--audit-file={audit}")
+                for command in (h["command"] for h in _commands(json.loads(settings.read_text()))):
+                    p = subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=10)
+                    self.assertEqual(p.returncode, 0, (command, p.stderr))
+                    self.assertEqual(seen.read_text().splitlines(), [str(key), str(audit)])
+
+    def test_relative_secret_and_audit_paths_are_wired_absolute(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                seen = tmp / "seen.json"
+                hook = tmp / script
+                hook.write_text(f"#!/bin/sh\nprintf '%s\\n%s\\n' \"$ACS_HMAC_SECRET_FILE\" \"$ACS_AUDIT_FILE\" > '{seen}'\n")
+                hook.chmod(0o755)
+                (tmp / "hmac.key").write_text("0" * 64)
+                (tmp / "hmac.key").chmod(0o600)
+                elsewhere = tmp / "elsewhere"
+                elsewhere.mkdir()
+                settings = tmp / name
+                self._wire(module, tmp, settings, f"--hook-command={hook}", "--secret-file=hmac.key",
+                           "--key-id=test-key", "--audit-file=audit.jsonl")
+                for command in (h["command"] for h in _commands(json.loads(settings.read_text()))):
+                    p = subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=10,
+                                       cwd=elsewhere)
+                    self.assertEqual(p.returncode, 0, (command, p.stderr))
+                    self.assertEqual([Path(p).resolve() for p in seen.read_text().splitlines()],
+                                     [(tmp / "hmac.key").resolve(), (tmp / "audit.jsonl").resolve()])
+
+    def test_a_symlinked_settings_file_keeps_its_link_and_mode(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                hook = _executable(tmp / script)
+                real = tmp / "dotfiles" / name
+                real.parent.mkdir()
+                real.write_text("{}")
+                real.chmod(0o600)
+                link = tmp / name
+                link.symlink_to(real)
+                self._wire(module, tmp, link, f"--hook-command={hook}", *SECRET_ARGS)
+                self.assertTrue(link.is_symlink(), "the wire tool replaced the symlink with a plain file")
+                self.assertIn("acs-adapter-wired", real.read_text())
+                self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o600, "the secret-bearing file lost its mode")
+
+    def test_a_readable_settings_file_that_gets_an_inline_secret_ends_private_and_its_backup_holds_none(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                settings = tmp / name
+                settings.write_text("{}")
+                settings.chmod(0o644)
+                hook = _executable(tmp / script)
+                self._wire(module, tmp, settings, f"--hook-command={hook}", *SECRET_ARGS)
+                self.assertEqual(stat.S_IMODE(settings.stat().st_mode), 0o600)
+                self._wire(module, tmp, settings, f"--hook-command={hook}", "--secret-env-inline=" + "1" * 64,
+                           "--key-id=test-key")
+                backups = sorted(tmp.glob(f"{name}.bak.*"))
+                self.assertTrue(backups)
+                for backup in backups:
+                    self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600, backup.name)
+                    self.assertNotIn("0" * 64, backup.read_text(), "a backup keeps the replaced inline secret")
+
+    def test_a_backup_holds_no_part_of_a_quoted_inline_secret(self) -> None:
+        secrets = ["'LEADFRAGMENT middle'TAILFRAGMENT" + "0" * 32, "WORDONE WORDTWO" + "1" * 32,
+                   "QUOTE\"INSIDE\\BACKSLASH" + "2" * 32]
+        for module, name, script in self.CASES:
+            for secret in secrets:
+                with self.subTest(wire=module.__name__, secret=secret[:16]), tempfile.TemporaryDirectory() as d:
+                    tmp = Path(d)
+                    settings = tmp / name
+                    hook = _executable(tmp / script)
+                    self._wire(module, tmp, settings, f"--hook-command={hook}", f"--secret-env-inline={secret}",
+                               "--key-id=test-key")
+                    self._wire(module, tmp, settings, f"--hook-command={hook}", "--secret-env-inline=" + "9" * 64,
+                               "--key-id=test-key")
+                    [backup] = tmp.glob(f"{name}.bak.*")
+                    text = backup.read_text()
+                    for fragment in ("LEADFRAGMENT", "middle", "TAILFRAGMENT", "WORDONE", "WORDTWO", "QUOTE",
+                                     "INSIDE", "BACKSLASH", "0" * 32, "1" * 32, "2" * 32):
+                        self.assertNotIn(fragment, text)
+                    self.assertIn("ACS_HMAC_SECRET=<redacted>", text)
+
+    def test_a_new_settings_file_is_private(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                settings = tmp / name
+                self._wire(module, tmp, settings, f"--hook-command={_executable(tmp / script)}", *SECRET_ARGS)
+                self.assertEqual(stat.S_IMODE(settings.stat().st_mode), 0o600)
+
+class ClaudeCodeRetiredNotificationHook(unittest.TestCase):
+    def _settings_after(self, *mode: str) -> dict:
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), mock.patch.dict(os.environ, {"HOME": d}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            hook = _executable(Path(d) / "acs-claude-code-hook")
+            settings = Path(d) / "settings.json"
+            settings.write_text(json.dumps({"hooks": {"Notification": [{"matcher": "*", "hooks": [
+                {"type": "command", "command": f"{hook} {claude_wire.WIRE_MARKER}"},
+                {"type": "command", "command": "notify-send claude"}]}]}}))
+            claude_wire.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                              f"--hook-command={hook}", "--write", *SECRET_ARGS, *mode])
+            return json.loads(settings.read_text())
+
+    def test_wiring_and_unwiring_remove_only_the_acs_notification_hook(self) -> None:
+        for mode in ((), ("--unwire",)):
+            with self.subTest(mode=mode):
+                hooks = self._settings_after(*mode)["hooks"]
+                self.assertEqual(hooks["Notification"], [{"matcher": "*", "hooks": [
+                    {"type": "command", "command": "notify-send claude"}]}])
+
+
+if __name__ == "__main__":
+    unittest.main()

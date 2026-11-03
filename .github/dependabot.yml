@@ -80,3 +80,18 @@ updates:
       # with agt_ref as one deliberate change, so a Dependabot bump of the SDK
       # alone would always go red in CI.
       - dependency-name: "agent-control-specification*"
+
+  # The adapters are their own uv project, with their own lockfile, so the docs
+  # build never resolves NAT's dependency tree.
+  - package-ecosystem: "uv"
+    directory: "/adapters"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
