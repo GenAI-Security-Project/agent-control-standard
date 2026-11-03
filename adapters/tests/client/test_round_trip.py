@@ -73,10 +73,25 @@ class RoundTrip(unittest.TestCase):
                 self.assertEqual((result.proceed, result.audit_type, result.cause), (proceed, audit, "transport_failure"))
                 self.assertIn("Guardian unreachable", result.message)
 
-    def test_a_request_that_cannot_be_signed_is_denied_at_a_gate_whatever_the_posture(self) -> None:
+    def test_values_rfc_8785_cannot_encode_are_replaced_and_signed(self) -> None:
+        stderr = io.StringIO()
+        with mock.patch("sys.stderr", stderr):
+            result, sent = self._send(_request(note="a\ud800b", outputs=[{"value": {"id": 2**53, "n": float("nan")}}]),
+                                      self._signed_allow)
+        self.assertIsInstance(result, Decided)
+        [(wire, _)] = sent
+        self.assertEqual(wire["params"]["payload"]["note"], "a\ufffdb")
+        self.assertEqual(wire["params"]["payload"]["outputs"], [{"value": {"id": "9007199254740992", "n": "nan"}}])
+        self.assertTrue(verify_signature(wire, session_id=SESSION))
+        [record] = [json.loads(line[len("ACS_AUDIT "):]) for line in stderr.getvalue().splitlines()
+                    if line.startswith("ACS_AUDIT ")]
+        self.assertEqual((record["acs_audit_event"], record["lone_surrogates"], record["unsafe_integers"],
+                          record["non_finite_numbers"]), ("envelope_normalized", 1, 1, 1))
+
+    def test_a_request_that_still_cannot_be_signed_fails_closed_at_an_enforced_step(self) -> None:
         for gate, proceed in ((False, True), (True, False)):
             with self.subTest(gate=gate):
-                result, sent = self._send(_request(note="\ud800"), self._signed_allow, PROCEED, gate=gate)
+                result, sent = self._send(_request(note=b"bytes"), self._signed_allow, PROCEED, gate=gate)
                 self.assertEqual(sent, [], "nothing unsigned goes on the wire")
                 self.assertEqual((result.proceed, result.cause, result.fields["failure_class"]),
                                  (proceed, "envelope_not_signable", "observed_agent_error"))

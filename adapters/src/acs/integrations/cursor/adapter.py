@@ -102,6 +102,8 @@ from acs.core import (
 from acs.integrations.cursor.hook import PERMISSION_EVENTS
 
 _GATE_EVENTS = PERMISSION_EVENTS | {"beforeSubmitPrompt"}
+# Events whose step fails closed when its envelope cannot be signed: the gates, and the result the adapter can withhold.
+_ENFORCED_EVENTS = _GATE_EVENTS | {"postToolUse"}
 
 ADAPTER_VERSION = __version__
 
@@ -213,7 +215,7 @@ def _agent_id(event: dict[str, Any]) -> str:
     cwd = (event.get("cwd") or _first_workspace_root(event)
            or os.environ.get("PWD") or "")
     if cwd:
-        return f"cursor:{hashlib.sha256(cwd.encode()).hexdigest()[:8]}"
+        return f"cursor:{hashlib.sha256(cwd.encode('utf-8', 'surrogatepass')).hexdigest()[:8]}"
     return "cursor:unknown"
 
 
@@ -940,7 +942,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         pass
 
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
-                        gate=event_name in _GATE_EVENTS)
+                        gate=event_name in _ENFORCED_EVENTS)
     if isinstance(result, Resolution):
         return _settle(result, event_name, session_id, workspace=_workspace(event))
     response = result.response

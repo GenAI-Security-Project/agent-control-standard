@@ -53,8 +53,7 @@ _PENDING = "pending"
 
 
 def _handshake_cache_path(session_id: str, guardian_url: str, directory: Path | None = None) -> Path:
-    # Full SHA-256 (no truncation) avoids birthday collisions across the deployment's lifetime.
-    key = hashlib.sha256((session_id + "|" + guardian_url).encode()).hexdigest()
+    key = hashlib.sha256((session_id + "|" + guardian_url).encode("utf-8", "surrogatepass")).hexdigest()
     return (directory or _HANDSHAKE_CACHE_DIR) / f"{key}.json"
 
 

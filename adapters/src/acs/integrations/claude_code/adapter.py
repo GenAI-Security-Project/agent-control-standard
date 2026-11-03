@@ -131,6 +131,8 @@ KNOWN_UNMAPPED: dict[str, str] = {
 
 # Hooks that decide whether an action runs: the tool call and the prompt.
 _GATE_HOOKS = frozenset({"PreToolUse", "UserPromptSubmit"})
+# Hooks whose step fails closed when its envelope cannot be signed: the gates, and the result the adapter can withhold.
+_ENFORCED_HOOKS = _GATE_HOOKS | {"PostToolUse"}
 
 # Hooks whose deny shape is {"decision": "block", "reason": "..."}; on PostToolUse it only adds the reason, so _withhold also replaces the output.
 ENFORCEABLE_BLOCK_HOOKS = frozenset({
@@ -200,7 +202,7 @@ def _agent_id(event: dict[str, Any]) -> str:
         return explicit
     cwd = event.get("cwd") or os.environ.get("PWD") or ""
     if cwd:
-        return f"claude-code:{hashlib.sha256(cwd.encode()).hexdigest()[:8]}"
+        return f"claude-code:{hashlib.sha256(cwd.encode('utf-8', 'surrogatepass')).hexdigest()[:8]}"
     return "claude-code:unknown"
 
 
@@ -760,7 +762,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
             request["params"]["payload"].pop("request_id_ref", None)
 
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
-                        gate=hook_name in _GATE_HOOKS)
+                        gate=hook_name in _ENFORCED_HOOKS)
     if isinstance(result, Resolution):
         return _settle(result, hook_name, session_id, workspace=_turn_ws(event), tool_name=event.get("tool_name") or "")
     response = result.response

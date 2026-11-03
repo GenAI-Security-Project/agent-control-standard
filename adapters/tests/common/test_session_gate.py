@@ -179,8 +179,7 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertEqual([(r["acs_audit_event"], r["hook"]) for r in audits],
                                  [("decision_failure_fail_closed", "PreToolUse")])
 
-    def test_an_adapter_error_keeps_the_negotiated_deny(self) -> None:
-        """A step that raises inside the adapter settles with the session's posture, not the local default."""
+    def test_a_step_failure_keeps_the_negotiated_deny(self) -> None:
         from acs.client import Negotiated
         from acs.client._handshake import store_session_decision
         url = "http://127.0.0.1:1/acs"
@@ -196,7 +195,7 @@ class SessionGateThroughHooks(unittest.TestCase):
                        lambda p: p.returncode == 0 and json.loads(p.stdout)["continue"] is False),
         }
         for name, (run, server_hello, blocked) in cases.items():
-            for case, text in (("lone surrogate fails inside the step", "\\ud800"), ("control", "/tmp")):
+            for case, text in (("lone surrogate", "\\ud800"), ("control", "/tmp")):
                 with self.subTest(name, case=case):
                     session = str(uuid.uuid4())
                     store_session_decision(self.root / "handshake", self._hook_session(name, session), url,
@@ -206,11 +205,11 @@ class SessionGateThroughHooks(unittest.TestCase):
                     audits = [(r["acs_audit_event"], r.get("cause")) for r in _audit_records(p.stderr)
                               if r["acs_audit_event"] != "method_not_evaluated"
                               and r.get("method") != "steps/sessionStart"]
-                    # Claude Code fails signing its turnStart; Cursor fails opening the turn under that workspace root.
-                    lone = "envelope_not_signable" if name == "claude-code" else "adapter_exception"
-                    cause = lone if case.startswith("lone") else "transport_failure"
-                    self.assertEqual(audits, [("decision_failure_fail_closed", cause)],
-                        "the surrogate must fail signing inside the step, and the control must reach the transport")
+                    expected = [("decision_failure_fail_closed", "transport_failure")]
+                    if case.startswith("lone") and name == "claude-code":
+                        # Claude Code signs transcript_path; Cursor keys only its session state on the workspace root.
+                        expected.insert(0, ("envelope_normalized", None))
+                    self.assertEqual(audits, expected, "the surrogate is replaced and the step reaches the transport")
 
     @staticmethod
     def _hook_session(name: str, session: str) -> str:
@@ -628,37 +627,35 @@ class SessionGateThroughHooks(unittest.TestCase):
         [end] = guardian.envelopes_for("steps/sessionEnd")
         self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
 
-    def test_a_gate_step_the_signer_refuses_is_denied_whatever_the_posture(self) -> None:
+    def test_values_the_signer_cannot_encode_reach_the_guardian_replaced(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         guardian.start()
         self.addCleanup(guardian.stop)
         big = 2 ** 53 + 1
         claude = [str(BIN / "acs-claude-code-hook")]
+        cursor = str(BIN / "acs-cursor-hook")
         cases = {
-            # (argv, event, blocked in that hook's shape, the tool already ran)
+            # (argv, event, the method that carries the value, where the replaced value lands, what it becomes)
             "Claude Code tool call with an integer past 2**53": (claude, {
                 "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo", "id": big}},
-                lambda o: o.get("hookSpecificOutput", {}).get("permissionDecision") == "deny", False),
+                "steps/toolCallRequest", lambda p: p["arguments"]["id"]["value"], str(big)),
             "Claude Code Bash command with a lone surrogate": (claude, {
                 "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo \ud800"}},
-                lambda o: o.get("hookSpecificOutput", {}).get("permissionDecision") == "deny", False),
+                "steps/toolCallRequest", lambda p: p["arguments"]["command"]["value"], "echo \ufffd"),
             "Claude Code prompt with a lone surrogate": (claude, {
                 "hook_event_name": "UserPromptSubmit", "prompt": "hi \ud800"},
-                lambda o: o.get("decision") == "block", False),
-            "Claude Code prompt whose turnStart carries a lone surrogate": (claude, {
-                "hook_event_name": "UserPromptSubmit", "prompt": "hi", "transcript_path": "/tmp/\ud800"},
-                lambda o: o.get("decision") == "block", False),
+                "steps/userMessage", lambda p: p["content"][0]["value"], "hi \ufffd"),
             "Claude Code tool output with an integer past 2**53": (claude, {
                 "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "echo"},
                 "tool_response": {"stdout": "", "id": big}},
-                lambda o: bool(o), True),
-            "Cursor tool call with an integer past 2**53": ([str(BIN / "acs-cursor-hook"), "preToolUse"], {
+                "steps/toolCallResult", lambda p: p["outputs"][0]["value"]["id"], str(big)),
+            "Cursor tool call with an integer past 2**53": ([cursor, "preToolUse"], {
                 "tool_name": "Bash", "tool_input": {"command": "echo", "id": big}},
-                lambda o: o.get("permission") == "deny", False),
-            "Cursor prompt with a lone surrogate": ([str(BIN / "acs-cursor-hook"), "beforeSubmitPrompt"], {
-                "prompt": "hi \ud800"}, lambda o: o.get("continue") is False, False),
+                "steps/toolCallRequest", lambda p: p["arguments"]["id"]["value"], str(big)),
+            "Cursor prompt with a lone surrogate": ([cursor, "beforeSubmitPrompt"], {"prompt": "hi \ud800"},
+                "steps/userMessage", lambda p: p["content"][0]["value"], "hi \ufffd"),
         }
-        for name, (argv, event, blocked, ran) in cases.items():
+        for name, (argv, event, method, value, expected) in cases.items():
             with self.subTest(name):
                 guardian.reset()
                 session = str(uuid.uuid4())
@@ -667,16 +664,15 @@ class SessionGateThroughHooks(unittest.TestCase):
                 raw = json.dumps({**key, **event}).replace("\\\\ud800", "\\ud800")
                 p = subprocess.run(argv, input=raw, capture_output=True, text=True,
                                    env=self._env(guardian.url(), ACS_DEFAULT_DENY="0"), timeout=30)
-                out = json.loads(p.stdout) if p.stdout.strip() else {}
-                audits = [(r["acs_audit_event"], r.get("cause")) for r in _audit_records(p.stderr)]
                 self.assertEqual(p.returncode, 0, p.stderr[-300:])
-                if ran:
-                    self.assertFalse(blocked(out), "the tool already ran, so its output follows the posture")
-                    self.assertIn(("fail_open_bypass", "envelope_not_signable"), audits)
-                else:
-                    self.assertTrue(blocked(out), (p.stdout, audits))
-                    self.assertIn(("decision_failure_fail_closed", "envelope_not_signable"), audits)
-                    self.assertNotIn("steps/toolCallRequest", guardian.methods_seen())
+                self.assertIn("envelope_normalized", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
+                [step] = guardian.envelopes_for(method)
+                self.assertEqual(value(step["params"]["payload"]), expected)
+                out = json.loads(p.stdout) if p.stdout.strip() else {}
+                self.assertNotIn(out.get("hookSpecificOutput", {}).get("permissionDecision"), ("deny",), out)
+                self.assertNotIn(out.get("decision"), ("block",), out)
+                self.assertNotEqual(out.get("permission"), "deny", out)
+                self.assertNotEqual(out.get("continue"), False, out)
 
     def test_parallel_startup_hooks_follow_one_refusal(self) -> None:
         guardian = self._slow_hello(0.5, lambda req: {"code": -32000, "message": "agent not permitted"})

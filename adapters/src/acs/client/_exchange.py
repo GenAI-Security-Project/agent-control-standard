@@ -1,8 +1,9 @@
-"""One Guardian round trip: POST a signed request and classify what came back, with no side effects."""
 from __future__ import annotations
 
 import http.client
 import json
+import math
+import re
 import socket
 import threading
 import urllib.error
@@ -10,6 +11,7 @@ import urllib.request
 from dataclasses import replace
 from typing import Any
 
+from acs.client._audit import audit_event
 from acs.client._config import FailPosture, Resolution
 from acs.client._outcome import Decided, Outcome, Refused, Undecided
 from acs.client._signing import sign_envelope, verify_signature
@@ -181,14 +183,48 @@ def _read(resp: Any, cancelled: threading.Event) -> bytes:
     return b"".join(chunks)
 
 
+_MAX_SAFE_INTEGER = 2**53 - 1
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _signable(value: Any, replaced: dict[str, int]) -> Any:
+    if isinstance(value, str):
+        value, n = _SURROGATE.subn("\ufffd", value)
+        if n:
+            replaced["lone_surrogates"] = replaced.get("lone_surrogates", 0) + n
+        return value
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int) and abs(value) > _MAX_SAFE_INTEGER:
+        replaced["unsafe_integers"] = replaced.get("unsafe_integers", 0) + 1
+        return str(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        replaced["non_finite_numbers"] = replaced.get("non_finite_numbers", 0) + 1
+        return str(value)
+    if isinstance(value, dict):
+        return {_signable(k, replaced): _signable(v, replaced) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_signable(v, replaced) for v in value]
+    return value
+
+
+def _normalize(request: dict[str, Any]) -> None:
+    """Replace what RFC 8785 cannot encode (lone surrogates, integers past 2**53 - 1, NaN and infinities) so the Guardian still sees the step."""
+    replaced: dict[str, int] = {}
+    try:
+        params = _signable(request.get("params"), replaced)
+    except RecursionError:
+        return
+    if replaced:
+        request["params"] = params
+        audit_event("envelope_normalized", method=request.get("method"),
+                    request_id=(params or {}).get("request_id"), **replaced)
+
+
 def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPosture,
                session_id: str | None, gate: bool = False) -> Decided | Resolution:
-    """Sign the request as the last step before sending, exchange it within its method's timeout, and resolve anything but a usable decision with the posture.
-
-    gate marks a step that decides whether an action runs: a request the signer refuses
-    (an integer past 2**53, a lone surrogate) is denied there whatever the posture, since
-    the agent chooses the step's content and could otherwise keep it from the Guardian.
-    """
+    """Sign, exchange within the method's timeout, and resolve anything but a usable decision with the posture; on a gate an unsignable request fails closed."""
+    _normalize(request)
     try:
         sign_envelope(request, session_id=session_id)
     except Exception as e:  # noqa: BLE001

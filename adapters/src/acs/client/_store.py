@@ -48,10 +48,10 @@ def _session_state_path(session_id: str, *, workspace: str | None = None) -> Pat
         return _SESSION_STATE_DIR / f"{digest}.json"
     if workspace:
         digest = hashlib.sha256(
-            (workspace + "\x00" + session_id).encode()
+            (workspace + "\x00" + session_id).encode("utf-8", "surrogatepass")
         ).hexdigest()
     else:
-        digest = hashlib.sha256(session_id.encode()).hexdigest()
+        digest = hashlib.sha256(session_id.encode("utf-8", "surrogatepass")).hexdigest()
     return _SESSION_STATE_DIR / f"{digest}.json"
 
 
