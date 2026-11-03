@@ -748,12 +748,10 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         if hook_name in AUDIT_ONLY_HOOKS:
             close_turn(session_id)
         return 0
-    if method == "steps/toolCallResult":
-        origin = ("steps/subagentStart" if _is_subagent_tool(event.get("tool_name"))
-                  else "steps/toolCallRequest")
-        if not method_evaluated(server_hello, origin):
-            # The originating request was never sent, so citing it would dangle.
-            request["params"]["payload"].pop("request_id_ref", None)
+    if method == "steps/toolCallResult" and (_is_subagent_tool(event.get("tool_name"))
+                                             or not method_evaluated(server_hello, "steps/toolCallRequest")):
+        # hooks.md toolCallResult: request_id_ref names a toolCallRequest, and an Agent call is sent as subagentStart.
+        request["params"]["payload"].pop("request_id_ref", None)
 
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id,
                         gate=hook_name in _ENFORCED_HOOKS)

@@ -198,19 +198,16 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                     self.assertEqual(p.returncode, 0, p.stderr)
                     self.assertEqual("request_id_ref" in self._sent_result(guardian, h), cites)
 
-    def test_agent_result_checks_the_spawn_method(self) -> None:
-        """A Claude Code Agent call originates as steps/subagentStart, so its
-        result's ref follows whether subagentStart is evaluated."""
+    def test_an_agent_result_cites_no_tool_call_request_whatever_is_evaluated(self) -> None:
         agent_result = {"tool_name": "Agent", "tool_input": {"prompt": "look around"},
                         "tool_use_id": "toolu_agent01",
                         "tool_response": {"content": "done"}, "permission_mode": "default"}
-        for evaluated, cites in ((["steps/subagentStart", "steps/toolCallResult"], True),
-                                 (TOOL_HOOKS, False)):
+        for evaluated in (["steps/subagentStart", "steps/toolCallResult"], TOOL_HOOKS):
             with self.subTest(evaluated=evaluated):
                 guardian, h = self._session(evaluated)
                 p = h.run("claude-code", "PostToolUse", agent_result)
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual("request_id_ref" in self._sent_result(guardian, h), cites)
+                self.assertNotIn("request_id_ref", self._sent_result(guardian, h))
 
     def test_a_server_hello_without_methods_evaluated_negotiates_nothing(self) -> None:
         """handshake.json requires methods_evaluated, so a ServerHello without it is no answer, and the fail-closed startup posture blocks the prompt."""

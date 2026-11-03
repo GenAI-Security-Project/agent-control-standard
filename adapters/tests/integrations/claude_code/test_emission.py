@@ -101,6 +101,19 @@ class ClaudeEmission(unittest.TestCase):
                                           permission_mode="default"),
                                    "steps/subagentStart")
 
+    def test_a_subagent_result_cites_no_tool_call_request(self):
+        for tool in ("Agent", "Task"):
+            with self.subTest(tool=tool):
+                g = self._emit(_event("PostToolUse", tool_name=tool, tool_input={"prompt": "look it up"},
+                                      tool_response={"status": "completed", "content": []},
+                                      tool_use_id=f"spawn-{tool}", permission_mode="default"))
+                payload = g.only("steps/toolCallResult").parsed["params"]["payload"]
+                self.assertNotIn("request_id_ref", payload)
+        g = self._emit(_event("PostToolUse", tool_name="Bash", tool_input={"command": "ls"},
+                              tool_response={"stdout": "", "stderr": "", "interrupted": False, "isImage": False},
+                              tool_use_id="call-bash", permission_mode="default"))
+        self.assertIn("request_id_ref", g.only("steps/toolCallResult").parsed["params"]["payload"])
+
     def test_subagent_stop_not_forwarded(self):
         g = self._emit(_event("SubagentStop",
                               transcript_path="/tmp/sub.jsonl",
