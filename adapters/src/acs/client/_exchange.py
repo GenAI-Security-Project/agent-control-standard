@@ -194,6 +194,10 @@ _MAX_SAFE_INTEGER = 2**53 - 1
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
+class _KeyCollision(ValueError):
+    pass
+
+
 def _signable(value: Any, replaced: dict[str, int]) -> Any:
     if isinstance(value, str):
         value, n = _SURROGATE.subn("\ufffd", value)
@@ -209,30 +213,43 @@ def _signable(value: Any, replaced: dict[str, int]) -> Any:
         replaced["non_finite_numbers"] = replaced.get("non_finite_numbers", 0) + 1
         return str(value)
     if isinstance(value, dict):
-        return {_signable(k, replaced): _signable(v, replaced) for k, v in value.items()}
+        normalized: dict[Any, Any] = {}
+        for key, item in value.items():
+            signed_key = _signable(key, replaced)
+            if signed_key in normalized:
+                # The signed view would drop one of the two values.
+                raise _KeyCollision(f"two keys normalize to {signed_key!r}")
+            normalized[signed_key] = _signable(item, replaced)
+        return normalized
     if isinstance(value, list):
         return [_signable(v, replaced) for v in value]
     return value
 
 
-def _normalize(request: dict[str, Any]) -> None:
-    """Replace what RFC 8785 cannot encode (lone surrogates, integers past 2**53 - 1, NaN and infinities) so the Guardian still sees the step."""
+def _normalize(request: dict[str, Any]) -> str | None:
+    """Replace what RFC 8785 cannot encode (lone surrogates, integers past 2**53 - 1, NaN and infinities) so the
+    Guardian still sees the step; return why the request cannot be signed when two keys would become one."""
     replaced: dict[str, int] = {}
     try:
         params = _signable(request.get("params"), replaced)
     except RecursionError:
-        return
+        return None
+    except _KeyCollision as e:
+        return str(e)
     if replaced:
         request["params"] = params
         audit_event("envelope_normalized", method=request.get("method"),
                     request_id=(params or {}).get("request_id"), **replaced)
+    return None
 
 
 def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPosture,
                session_id: str | None, gate: bool = False) -> Decided | Resolution:
     """Sign, exchange within the method's timeout, and resolve anything but a usable decision with the posture; on a gate an unsignable request fails closed."""
-    _normalize(request)
+    collision = _normalize(request)
     try:
+        if collision is not None:
+            raise ValueError(collision)
         sign_envelope(request, session_id=session_id)
     except Exception as e:  # noqa: BLE001
         outcome = Undecided("envelope_not_signable", {"error": str(e)}, f"envelope not signable: {e}")

@@ -865,6 +865,32 @@ class SessionGateThroughHooks(unittest.TestCase):
         [end] = guardian.envelopes_for("steps/sessionEnd")
         self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
 
+    def test_keys_that_collide_once_replaced_fail_closed_on_enforced_hooks(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        claude = [str(BIN / "acs-claude-code-hook")]
+        cases = {
+            "PreToolUse": ({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                            "tool_input": {"\ud800": "rm -rf /", "\ufffd": "ls"}},
+                           lambda o: o["hookSpecificOutput"]["permissionDecision"] == "deny"),
+            "PostToolUse": ({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "cat"},
+                             "tool_response": {"stdout": "SECRET", "stderr": "", "interrupted": False, "isImage": False,
+                                               "\ud800": "a", "\ufffd": "b"}},
+                            lambda o: "SECRET" not in json.dumps(o) and o["hookSpecificOutput"]["updatedToolOutput"]),
+        }
+        for name, (event, enforced) in cases.items():
+            with self.subTest(name):
+                guardian.reset()
+                raw = json.dumps({"session_id": str(uuid.uuid4()), "cwd": "/tmp", **event})
+                p = subprocess.run(claude, input=raw, capture_output=True, text=True,
+                                   env=self._env(guardian.url(), ACS_DEFAULT_DENY="0"), timeout=30)
+                self.assertEqual(p.returncode, 0, p.stderr[-300:])
+                self.assertTrue(enforced(json.loads(p.stdout)), p.stdout)
+                self.assertIn(("decision_failure_fail_closed", "envelope_not_signable"),
+                              [(r["acs_audit_event"], r.get("cause")) for r in _audit_records(p.stderr)])
+                self.assertFalse({"steps/toolCallRequest", "steps/toolCallResult"} & set(guardian.methods_seen()))
+
     def test_values_the_signer_cannot_encode_reach_the_guardian_replaced(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         guardian.start()

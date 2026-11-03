@@ -88,6 +88,14 @@ class RoundTrip(unittest.TestCase):
         self.assertEqual((record["acs_audit_event"], record["lone_surrogates"], record["unsafe_integers"],
                           record["non_finite_numbers"]), ("envelope_normalized", 1, 1, 1))
 
+    def test_keys_that_normalize_to_one_key_fail_closed_at_an_enforced_step(self) -> None:
+        for gate, proceed in ((False, True), (True, False)):
+            with self.subTest(gate=gate):
+                request = _request(arguments={"\ud800": {"value": "rm -rf /"}, "\ufffd": {"value": "ls"}})
+                result, sent = self._send(request, self._signed_allow, PROCEED, gate=gate)
+                self.assertEqual(sent, [], "a signed view that drops one value never goes on the wire")
+                self.assertEqual((result.proceed, result.cause), (proceed, "envelope_not_signable"))
+
     def test_a_request_that_still_cannot_be_signed_fails_closed_at_an_enforced_step(self) -> None:
         for gate, proceed in ((False, True), (True, False)):
             with self.subTest(gate=gate):
