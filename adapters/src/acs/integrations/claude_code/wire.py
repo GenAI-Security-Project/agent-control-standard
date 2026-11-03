@@ -250,7 +250,8 @@ def render_diff(before: dict, after: dict, label: str) -> str:
 
 
 def _expand(p: str) -> Path:
-    return Path(os.path.expanduser(p))
+    # Absolute at wiring time: the hook runs in whatever directory the host gives it.
+    return Path(os.path.abspath(os.path.expanduser(p)))
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:

@@ -197,6 +197,28 @@ class WrittenCommandsAndFiles(unittest.TestCase):
                     self.assertEqual(p.returncode, 0, (command, p.stderr))
                     self.assertEqual(seen.read_text().splitlines(), [str(key), str(audit)])
 
+    def test_relative_secret_and_audit_paths_are_wired_absolute(self) -> None:
+        for module, name, script in self.CASES:
+            with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                seen = tmp / "seen.json"
+                hook = tmp / script
+                hook.write_text(f"#!/bin/sh\nprintf '%s\\n%s\\n' \"$ACS_HMAC_SECRET_FILE\" \"$ACS_AUDIT_FILE\" > '{seen}'\n")
+                hook.chmod(0o755)
+                (tmp / "hmac.key").write_text("0" * 64)
+                (tmp / "hmac.key").chmod(0o600)
+                elsewhere = tmp / "elsewhere"
+                elsewhere.mkdir()
+                settings = tmp / name
+                self._wire(module, tmp, settings, f"--hook-command={hook}", "--secret-file=hmac.key",
+                           "--key-id=test-key", "--audit-file=audit.jsonl")
+                for command in (h["command"] for h in _commands(json.loads(settings.read_text()))):
+                    p = subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=10,
+                                       cwd=elsewhere)
+                    self.assertEqual(p.returncode, 0, (command, p.stderr))
+                    self.assertEqual([Path(p).resolve() for p in seen.read_text().splitlines()],
+                                     [(tmp / "hmac.key").resolve(), (tmp / "audit.jsonl").resolve()])
+
     def test_a_symlinked_settings_file_keeps_its_link_and_mode(self) -> None:
         for module, name, script in self.CASES:
             with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
