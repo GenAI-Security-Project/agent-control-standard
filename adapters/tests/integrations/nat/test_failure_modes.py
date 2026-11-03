@@ -275,6 +275,8 @@ class FailureMode3_LifecycleSubscriptionRace(unittest.TestCase):
             self.addCleanup(ContextState.get().event_stream.reset, token)
             run_token = ContextState.get().workflow_run_id.set("race-run")
             self.addCleanup(ContextState.get().workflow_run_id.reset, run_token)
+            input_token = ContextState.get().input_message.set("race-input")
+            self.addCleanup(ContextState.get().input_message.reset, input_token)
             runs = [contextvars.copy_context(), contextvars.copy_context()]
             sessions = []
 

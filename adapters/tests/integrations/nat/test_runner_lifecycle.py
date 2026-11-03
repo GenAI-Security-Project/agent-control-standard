@@ -504,6 +504,9 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                                   modified_args=("x",), modified_kwargs={})
 
         async def post() -> None:
+            # As inside the refused run's Runner, which NAT entered with its input.
+            ContextState.get().input_message.set(run_input := object())
+            session.inputs.append(run_input)
             middleware._current.set(session)
             await middleware.post_invoke(context)
         asyncio.run(post())
@@ -581,6 +584,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                 for name, run in runs.items():
                     run.run(ContextState.get().event_stream.set, streams[name])
                     run.run(ContextState.get().workflow_run_id.set, f"run-{name}")
+                    run.run(ContextState.get().input_message.set, f"input-{name}")
                 sessions = {name: set() for name in "AB"}
                 for name in order:
                     sessions[name].add(runs[name].run(middleware._session_of_call))

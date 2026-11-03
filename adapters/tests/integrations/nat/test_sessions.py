@@ -513,6 +513,41 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self._middleware_runs(body)
         self.assertEqual(self.executed, ["before-close", "denied while-closing"])
 
+    def test_a_run_after_one_whose_end_nat_lost_is_a_session_of_its_own(self) -> None:
+        async def body(middleware, run):
+            async def outer(message):
+                # Without the exporter, NAT completes the nested Runner's stream instead of this run's.
+                async with Runner("nested", Fn("nested", lambda m: asyncio.sleep(0, "n")), ContextState.get(),
+                                  ExporterManager.from_exporters({})) as nested:
+                    await nested.result()
+                return await self._call(middleware, "unexported")
+            async with Runner("unexported", Fn("unexported", outer), ContextState.get(),
+                              ExporterManager.from_exporters({})) as runner:
+                await runner.result()
+            await run("exported", lambda message: self._call(middleware, "exported"))
+        self._middleware_runs(body)
+        self.assertEqual(self.executed, ["unexported", "exported"])
+        starts = [r["params"]["payload"]["platform_context"].get("workflow_name")
+                  for r in self.guardian.envelopes_for("steps/sessionStart")]
+        self.assertIn("exported", starts, "the later run opened a session of its own")
+
+    def test_a_direct_call_after_a_run_in_the_same_task_uses_the_middlewares_own_session(self) -> None:
+        for with_builder in (True, False):
+            with self.subTest(with_builder=with_builder):
+                self.guardian.reset()
+                self.executed = []
+
+                async def body(middleware, run):
+                    await self._call(middleware, "outside-before")
+                    await run("flow", lambda message: self._call(middleware, "inside"))
+                    await self._call(middleware, "outside-after")
+                self._middleware_runs(body, with_builder=with_builder)
+                self.assertEqual(self.executed, ["outside-before", "inside", "outside-after"])
+                own, inside = self._sessions()
+                self.assertEqual(own.count("steps/toolCallRequest"), 2, "both outside calls are in the own session")
+                self.assertEqual(own[-1], "steps/sessionEnd:completed")
+                self.assertEqual(inside.count("steps/toolCallRequest"), 1)
+
     def _audits(self) -> list[dict]:
         path = Path(os.environ["ACS_AUDIT_FILE"])
         return [json.loads(line.removeprefix("ACS_AUDIT ")) for line in path.read_text().splitlines()] if path.exists() else []
