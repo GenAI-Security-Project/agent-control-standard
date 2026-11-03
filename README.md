@@ -162,11 +162,11 @@ curl -sL https://genai-security-project.github.io/agent-control-standard/schema/
 ```
 
 That fetches the schema behind the `toolCallRequest` payload above, published from
-`specification/v0.1.0/hooks/tool-call-request.json` in this repository. All 44 schemas
+`specification/v0.1.0/hooks/tool-call-request.json` in this repository. All 46 schemas
 resolve the same way, each under the `v0.1.0` namespace shown in that URL. A merge to
 `main` republishes the full set, and the build fails before it ships if any `$id`
 collides or any `$ref` fails to resolve. A separate check reruns every six hours and
-confirms all 44 URIs still answer.
+confirms all 46 URIs still answer.
 
 ## A policy that edits instead of blocking
 
