@@ -39,6 +39,10 @@ function stripComments(src: string): string {
   return noBlockComments.replace(/(?<!:)\/\/.*$/gm, "");
 }
 
+function toForwardSlashes(relativePath: string): string {
+  return relativePath.replaceAll("\\", "/");
+}
+
 /**
  * True when `relativePath` has a `test` path segment anywhere, including at
  * the very start. `Glob.scanSync` returns paths relative to the scanned
@@ -48,9 +52,13 @@ function stripComments(src: string): string {
  * for a plain `.includes("/test/")` check to find. Anchoring on `(^|/)`
  * catches that case as well as the nested one, without false-positiving on a
  * segment that merely starts with "test" (`testing/`, `latest/`).
+ *
+ * Windows scan paths use `\`. `toForwardSlashes` runs first, here and on
+ * every path `readSourceFiles` compares to a forward-slash literal such as
+ * `grok/acs-hook.ts`.
  */
 function isUnderTestDir(relativePath: string): boolean {
-  return /(^|\/)test\//.test(relativePath);
+  return /(^|\/)test\//.test(toForwardSlashes(relativePath));
 }
 
 /**
@@ -64,7 +72,7 @@ function isUnderTestDir(relativePath: string): boolean {
  * enforcement in the README while enforcing nothing.
  */
 function readSourceFiles(dir: string): { file: string; code: string }[] {
-  const files = [...new Glob("**/*.ts").scanSync(dir)].filter((f) => !isUnderTestDir(f));
+  const files = [...new Glob("**/*.ts").scanSync(dir)].map(toForwardSlashes).filter((f) => !isUnderTestDir(f));
   expect({ dir, sourceFiles: files.length > 0 }).toEqual({ dir, sourceFiles: true });
   return files.map((f) => ({ file: f, code: stripComments(readFileSync(`${dir}/${f}`, "utf8")) }));
 }
@@ -905,7 +913,13 @@ describe("the source-file filter itself", () => {
    * `.includes("/test/")` misses.
    */
   it("excludes a test/ segment at the start of the path, not only when nested", () => {
-    const paths = ["test/invariants.test.ts", "src/test/helper.ts", "packages/foo/test/bar.ts"].map((path) => ({
+    const paths = [
+      "test/invariants.test.ts",
+      "src/test/helper.ts",
+      "packages/foo/test/bar.ts",
+      "test\\invariants.test.ts",
+      "src\\test\\helper.ts",
+    ].map((path) => ({
       path,
       excluded: isUnderTestDir(path),
     }));
@@ -914,7 +928,7 @@ describe("the source-file filter itself", () => {
   });
 
   it("does not exclude a segment that merely starts with the letters 'test'", () => {
-    const paths = ["latest/foo.ts", "testing/bar.ts", "src/index.ts"].map((path) => ({
+    const paths = ["latest/foo.ts", "testing/bar.ts", "src/index.ts", "testing\\bar.ts"].map((path) => ({
       path,
       excluded: isUnderTestDir(path),
     }));

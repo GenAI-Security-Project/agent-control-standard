@@ -44,6 +44,13 @@
  *     those is a broken deployment, not a policy question, and a loud,
  *     blocking stop beats a silent, ungoverned proceed.
  *
+ *     The same exit covers a process that would otherwise end at 0, or
+ *     with no code, and no decision on stdout. `wroteStdout` becomes true
+ *     only after stdout accepts the decision. The `exit` listener assigns
+ *     2 while that flag is still false. Linux CI does not prove the Bun
+ *     Windows case this covers. The listener is the portable mitigation.
+ *     Grok fail-opens on empty success, so that bare 0 has to become a block.
+ *
  *     Exit 1 never appears anywhere in this file, including for anything
  *     unexpected that escapes `main`. Grok fail-opens on a hook crash or
  *     malformed output, and a governance hook that cannot read its own
@@ -495,6 +502,8 @@ function assertHostAcceptsEveryDecision(hookmap: Hookmap, path: string): void {
   }
 }
 
+let wroteStdout = false;
+
 async function main(): Promise<void> {
   // Step 1: read the hook payload. A hook fired, so something governs this
   // tool call or nothing does -- and a shim that cannot read its own input
@@ -582,10 +591,33 @@ async function main(): Promise<void> {
   // reimplementing it.
   const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit });
 
-  process.stdout.write(JSON.stringify(asGrokOutput(governed.output, hookEventName)));
+  const body = JSON.stringify(asGrokOutput(governed.output, hookEventName));
+  // The flag flips only after stdout accepts the bytes. A throw, a failed
+  // write, or a runtime that exits before this callback leaves it false.
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(body, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      wroteStdout = true;
+      resolve();
+    });
+  });
 }
 
-main().catch((error: unknown) => {
+// A decision on stdout is the only success. Grok fail-opens when a hook
+// exits 0 with nothing written. Bun on Windows can reach that exit before
+// a floating promise settles, and Linux CI does not prove it. Top-level
+// await keeps this process alive until `main` settles. The listener covers
+// a runtime that still ends at 0, or with no code, without a decision.
+process.on("exit", (code: number | undefined) => {
+  if ((code === 0 || code === undefined) && !wroteStdout) {
+    process.exitCode = 2;
+  }
+});
+
+await main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   // Exit 2 ("blocking error") for everything, with no second tier. Anything
   // that reaches here is either a BlockingConfigurationError (this shim
