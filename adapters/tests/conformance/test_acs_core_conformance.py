@@ -1,45 +1,4 @@
-"""
-ACS v0.1.0 Guardian checks (summary-level Core + emission support).
-
-SCOPE — read before trusting a green run. This suite exercises the
-Core requirements enumerated in `docs/spec/conformance.md`'s
-'ACS-Core (mandatory baseline)' section plus the normative sections
-those bullets cite, and
-reference-stack coverage of the SHOULD/conditional items (MODIFY,
-system/ping, Wrapped-MCP shape). It is deliberately NOT a
-requirement-by-requirement audit of every normative MUST/REQUIRED in
-the linked sections — those sections carry many more (handshake
-negotiation edge cases, full decision semantics, hook completeness,
-two-sided live payload validation) than are checked here. A green run
-therefore means "the reference stack passes the summary-level Core
-checks and the emission suite", NOT "ACS-Core conformant". Full
-requirement-by-requirement ACS-Core conformance — spanning the
-Guardian, the framework wiring, and production config, not the adapter
-alone — is a separate tracked milestone (requirement ledger + missing
-behavioral tests).
-
-Each test docstring quotes the spec text it falsifies; CitationGuard
-pins the named summary requirements within the ACS-Core section.
-Editorial changes elsewhere may move that section without breaking citations.
-
-Run from the adapters/ directory:
-
-    python -m unittest test_acs_core_conformance
-
-The Wrapped-MCP namespace is validated for wire-format shape only
-(envelope validates, Guardian returns a structured response, no crash);
-full MCP request wrapping is NOT implemented, and whether it belongs in
-Core at all is a pending spec-owner decision. See `Core10_WrappedMcp`.
-
-Result: any FAIL/ERROR names the specific requirement that broke, with
-the spec citation in the test docstring.
-
-Adopter workflow: copy our adapters, modify for your stack, run this
-file. A failure identifies the cited requirement. A deployment that
-legitimately omits a SHOULD/conditional item (no MODIFY support, no
-MCP) may need to prune the corresponding reference-stack tests — the
-MUST tests are not prunable.
-"""
+"""Summary-level ACS-Core checks, not a full conformance audit (issue #33); each test cites the requirement it falsifies, and CitationGuard pins the cited ACS-Core bullets."""
 from __future__ import annotations
 
 import datetime
@@ -577,11 +536,7 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
                     f"{label}: the shipped policy MUST deny this; got "
                     f"{resp['result'].get('decision')!r}. An "
                     f"allow-everything Guardian must not pass conformance.")
-                # Folded from Core04.test_deny_response_includes_reasoning:
-                # response-envelope.json:107 — a DENY MUST carry reasoning,
-                # AND the deny response itself MUST validate against the
-                # canonical response envelope (the _validate_response_envelope
-                # assertion the fold originally dropped).
+                # response-envelope.json:114: a DENY carries reasoning, in a valid response envelope.
                 self.assertTrue(resp["result"].get("reasoning"),
                     f"{label}: §6 + response-envelope.json — DENY MUST include "
                     f"non-empty reasoning")
@@ -616,22 +571,7 @@ class Core03_HookTaxonomyMinimum(CoreHarness):
                     f"actually constraining shape")
 
 
-# =============================================================================
-# CORE-04 — Dispositions (conformance.md, ACS-Core / Dispositions, §6)
-# =============================================================================
-#
-# ACS-Core: "Four MUST-support: ALLOW, DENY, ASK, DEFER, with required
-# fields per §6. MODIFY is SHOULD-support" (§6.5 covers MODIFY-incapable
-# clients). The MODIFY tests below are reference-stack coverage, since
-# this stack implements MODIFY.
-# See the suite docstring's coverage claim.
-# response-envelope.json:107-110 — conditional requirements:
-#   deny -> reasoning required
-#   modify -> reasoning + modifications required
-#   ask -> reasoning + ask_details required
-#   defer -> reasoning + defer_details required
-# =============================================================================
-
+# conformance.md ACS-Core: Dispositions, §6; response-envelope.json:114-117 conditional fields. MODIFY (SHOULD) is reference-stack coverage.
 class Core04_Dispositions(CoreHarness):
 
     def test_allow_response_validates(self) -> None:
@@ -680,11 +620,7 @@ class Core04_Dispositions(CoreHarness):
                     f"accepted by schema — validator is a no-op")
 
     def test_modify_without_modifications_rejected_by_schema(self) -> None:
-        """response-envelope.json:108 — 'if decision const modify, then
-        required: [reasoning, modifications]'. A response that claims
-        modify but lacks modifications MUST fail schema validation."""
-        # Synthesize a broken response (Guardian doesn't emit modify in
-        # our example, so we construct one manually and validate it).
+        """response-envelope.json:115: modify requires reasoning and modifications."""
         broken = {
             "jsonrpc": "2.0", "id": "x",
             "result": {
@@ -699,8 +635,7 @@ class Core04_Dispositions(CoreHarness):
             f"modify-without-modifications must fail validation; got {errors}")
 
     def test_ask_without_ask_details_rejected_by_schema(self) -> None:
-        """response-envelope.json:109 — 'if decision const ask, then
-        required: [reasoning, ask_details]'."""
+        """response-envelope.json:116: ask requires reasoning and ask_details."""
         broken = {
             "jsonrpc": "2.0", "id": "x",
             "result": {
@@ -714,8 +649,7 @@ class Core04_Dispositions(CoreHarness):
             f"ask-without-ask_details must fail validation; got {errors}")
 
     def test_defer_without_defer_details_rejected_by_schema(self) -> None:
-        """response-envelope.json:110 — 'if decision const defer, then
-        required: [reasoning, defer_details]'."""
+        """response-envelope.json:117: defer requires reasoning and defer_details."""
         broken = {
             "jsonrpc": "2.0", "id": "x",
             "result": {
@@ -1241,8 +1175,7 @@ class Core05_SessionContext(CoreHarness):
             f"response missing chain_hash; got {resp['result']}")
 
     def test_chain_hash_is_lowercase_hex_sha256(self) -> None:
-        """response-envelope.json:82-85 — chain_hash pattern
-        ^[0-9a-f]{64}$ (lowercase hex SHA-256)."""
+        """response-envelope.json:89-91: chain_hash is lowercase hex SHA-256."""
         resp = self._post(self._make_envelope("steps/sessionStart", {}))
         h = resp["result"]["chain_hash"]
         self.assertRegex(h, r"^[0-9a-f]{64}$",

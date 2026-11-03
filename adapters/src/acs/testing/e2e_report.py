@@ -120,8 +120,8 @@ class Report:
         if passed == total:
             print(f"  Summary: {passed}/{total} scenarios passed — "
                   f"\033[1;32m{success_banner}\033[0m")
-            print("  (smoke test, not a conformance certification — run "
-                  "adapters/test_acs_core_conformance.py for the spec floor)")
+            print("  (smoke test, not a conformance certification: run "
+                  "adapters/run_conformance.py for the summary-level Core checks)")
         else:
             print(f"  Summary: {passed}/{total} scenarios passed — "
                   f"\033[1;31mFAILURES BELOW\033[0m")
