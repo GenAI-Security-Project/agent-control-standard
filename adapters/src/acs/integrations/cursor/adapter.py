@@ -734,17 +734,17 @@ def _post_tool_deny(event_name: str, reason: str) -> dict[str, Any]:
 
 def _translate_post_tool(decision: Decision, event_name: str, tool_name: str = "",
                          tool_output: Any = None) -> dict[str, Any]:
-    """Only `postToolUse` documents output fields (`additional_context`,
-    and `updated_mcp_tool_output` for MCP tools); every other post-tool
-    event documents "No output fields currently supported" (docs
-    2026-08-22), so an arrived restrictive decision there is recorded and
-    nothing is emitted."""
+    """Only postToolUse can replace output, for MCP tools; on the other post-tool events a decision is recorded (hooks docs 2026-11-01)."""
     if event_name != "postToolUse":
         if decision.disposition == "modify":
             audit_modify_unsupported("no output field on this event", event=event_name, tool=tool_name)
         if decision.disposition in ("deny", "modify", "ask", "defer"):
             audit_event("unenforceable_decision", decision=decision.disposition,
                         event=event_name, reason=decision.reasoning or "(none)")
+            if event_name == "postToolUseFailure":
+                return _post_tool_response(additional_context=f"ACS Guardian decision on this failed tool result "
+                                                              f"({decision.disposition}): "
+                                                              f"{decision.reasoning or '(no reasoning)'}")
         return {}
     if decision.disposition == "deny":
         return _post_tool_deny(event_name, decision.reasoning)

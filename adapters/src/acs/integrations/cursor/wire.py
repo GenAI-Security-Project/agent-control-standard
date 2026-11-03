@@ -84,19 +84,13 @@ from acs.integrations._settings_file import write_atomically
 
 HOOK_SCRIPT = "acs-cursor-hook"
 
-# The six unconditional ACS-Core minimum hooks in Cursor's vocabulary, plus stop, which closes the turn:
-#   sessionStart       — ACS sessionStart
-#   beforeSubmitPrompt — ACS userMessage
-#   preToolUse         — ACS toolCallRequest
-#   postToolUse        — ACS toolCallResult
-#   afterAgentResponse — ACS agentResponse
-#   stop               — ACS turnEnd
-#   sessionEnd         — ACS sessionEnd
+# ACS-Core's six unconditional hooks in Cursor's names, plus postToolUseFailure and stop.
 CURRENT_CORE_HOOKS = [
     "sessionStart",
     "beforeSubmitPrompt",
     "preToolUse",
     "postToolUse",
+    "postToolUseFailure",
     "afterAgentResponse",
     "stop",
     "sessionEnd",

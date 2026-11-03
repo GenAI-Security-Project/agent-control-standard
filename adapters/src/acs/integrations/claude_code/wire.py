@@ -94,6 +94,7 @@ ACS_CORE_HOOKS = [
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
+    "PostToolUseFailure",
     "SessionEnd",
     "Stop",
     "StopFailure",

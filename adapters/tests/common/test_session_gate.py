@@ -781,6 +781,37 @@ class SessionGateThroughHooks(unittest.TestCase):
         self.assertEqual([(m, o) for m, _, o in self._turns(guardian)], [("steps/turnStart", ""), ("steps/turnEnd", "error")])
         self.assertNotIn("steps/agentResponse", guardian.methods_seen(), "StopFailure carries the API error, not a reply")
 
+    def test_a_failed_tool_result_reaches_the_guardian_and_a_deny_is_recorded(self) -> None:
+        claude = [str(BIN / "acs-claude-code-hook")]
+        cursor = [str(BIN / "acs-cursor-hook"), "postToolUseFailure"]
+        session = str(uuid.uuid4())
+        cases = {
+            "claude-code": (claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "PostToolUseFailure",
+                                     "tool_name": "Bash", "tool_input": {"command": "cat creds; false"},
+                                     "tool_use_id": "toolu_1", "error": "Exit code 1\naws_secret_access_key=abc",
+                                     "is_interrupt": False, "duration_ms": 12},
+                            lambda o: o["hookSpecificOutput"]["additionalContext"]),
+            "cursor": (cursor, {"conversation_id": session, "workspace_roots": ["/tmp"], "tool_name": "Shell",
+                                "tool_input": {"command": "cat creds; false"}, "tool_use_id": "abc123",
+                                "error_message": "Exit code 1\naws_secret_access_key=abc", "failure_type": "error",
+                                "duration": 12, "is_interrupt": False},
+                       lambda o: o["additional_context"]),
+        }
+        for host, (argv, event, context) in cases.items():
+            with self.subTest(host):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET)
+                guardian.handlers["steps/toolCallResult"] = lambda req: {"decision": "deny", "reasoning": "leaks a key"}
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                [p] = self._hooks(guardian.url(), [(argv, event)])
+                [result] = guardian.envelopes_for("steps/toolCallResult")
+                payload = result["params"]["payload"]
+                self.assertEqual((payload["exit_status"], payload["outputs"]),
+                                 ("failure", [{"value": "Exit code 1\naws_secret_access_key=abc"}]))
+                self.assertEqual(validate_hook_payload(payload, "tool-call-result.json"), [])
+                self.assertIn("leaks a key", context(json.loads(p.stdout)))
+                self.assertIn("unenforceable_decision", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
+
     def test_a_fail_closed_session_end_still_reports_a_start_without_a_decision(self) -> None:
         # sessionEnd is audit-only, so a fail-closed hook sends it with the start's timeout (§6.4).
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):

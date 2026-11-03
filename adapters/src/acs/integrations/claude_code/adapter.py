@@ -111,8 +111,8 @@ HOOK_MAP: dict[str, str] = {
     "UserPromptSubmit": "steps/userMessage",
     "PreToolUse":       "steps/toolCallRequest",
     "PostToolUse":      "steps/toolCallResult",
-    # Stop fires at the end of a TURN (every reply), not the session;
-    # the turn is opened by steps/turnStart on UserPromptSubmit.
+    "PostToolUseFailure": "steps/toolCallResult",
+    # Stop ends a turn, not the session.
     "Stop":             "steps/turnEnd",
     # An API error ends the turn with StopFailure instead of Stop.
     "StopFailure":      "steps/turnEnd",
@@ -275,6 +275,21 @@ def _payload_post_tool_use(event: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _payload_post_tool_use_failure(event: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "tool": {"name": event.get("tool_name", "")},
+        "exit_status": "failure",
+        "outputs": [{"value": event.get("error") or "(no error message)"}],
+    }
+    ref = _tool_use_request_id(event.get("tool_use_id"))
+    if ref:
+        payload["request_id_ref"] = ref
+    dur = event.get("duration_ms")
+    if isinstance(dur, (int, float)) and not isinstance(dur, bool):
+        payload["duration_ms"] = int(dur)
+    return payload
+
+
 def _payload_user_prompt(event: dict[str, Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "value": event.get("prompt", "")}]}
 
@@ -322,6 +337,7 @@ def _payload_turn_end(event: dict[str, Any]) -> dict[str, Any]:
 _PAYLOAD_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "PreToolUse":       _payload_pretool_use,
     "PostToolUse":      _payload_post_tool_use,
+    "PostToolUseFailure": _payload_post_tool_use_failure,
     "UserPromptSubmit": _payload_user_prompt,
     "SessionStart":     _payload_session_start,
     "SessionEnd":       _payload_session_end,
@@ -589,6 +605,24 @@ def _translate_posttool(decision: Decision, original_input: dict, tool_name: str
     return {}
 
 
+def _translate_posttool_failure(decision: Decision, original_input: dict, tool_name: str = "") -> dict[str, Any]:
+    if decision.disposition == "allow":
+        return {}
+    return _context_only(tool_name, decision.disposition, decision.reasoning)
+
+
+def _context_only(tool_name: str, disposition: str, reason: str) -> dict[str, Any]:
+    """PostToolUseFailure takes only additionalContext, so Claude has already seen the error: say so and record it."""
+    if disposition == "modify":
+        audit_modify_unsupported("PostToolUseFailure takes no replacement output", hook="PostToolUseFailure",
+                                 tool=tool_name)
+    audit_event("unenforceable_decision", decision=disposition, hook="PostToolUseFailure", tool=tool_name,
+                reason=reason or "(none)")
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUseFailure",
+                                   "additionalContext": f"ACS Guardian decision on this failed tool result ({disposition}): "
+                                                        f"{reason or '(no reasoning)'}"}}
+
+
 def _translate_user_prompt(decision: Decision, original_input: dict, tool_name: str = "") -> dict[str, Any]:
     if decision.disposition == "allow":
         return {}
@@ -613,6 +647,7 @@ def _translate_session_stop(decision: Decision, original_input: dict, tool_name:
 _TRANSLATORS: dict[str, Callable[[Decision, dict, str], dict[str, Any]]] = {
     "PreToolUse":       _translate_pretool,
     "PostToolUse":      _translate_posttool,
+    "PostToolUseFailure": _translate_posttool_failure,
     "UserPromptSubmit": _translate_user_prompt,
     "Stop":             _translate_session_stop,
     "StopFailure":      _translate_session_stop,
@@ -638,9 +673,8 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
             return _pretool_response("deny", reason)
         if hook_event == "PostToolUse":
             return _withhold(tool_name, reason)
-        # Stop is deliberately absent. Claude Code reads
-        # {"decision":"block"} there as "do not stop", so a block would
-        # increase activity instead of preventing it.
+        if hook_event == "PostToolUseFailure":
+            return _context_only(tool_name, "deny", reason)
         if hook_event in ENFORCEABLE_BLOCK_HOOKS:
             return _block_response(reason)
         return {}
@@ -892,6 +926,8 @@ def _emit_deny(hook_name: str, msg: str, tool_name: str = "") -> None:
         _emit(_pretool_response("deny", msg))
     elif hook_name == "PostToolUse":
         _emit(_withhold(tool_name, msg))
+    elif hook_name == "PostToolUseFailure":
+        _emit(_context_only(tool_name, "deny", msg))
     elif hook_name in ENFORCEABLE_BLOCK_HOOKS:
         _emit(_block_response(msg))
 
