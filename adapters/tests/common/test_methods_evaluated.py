@@ -10,7 +10,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from acs.testing.harness import ProgrammableGuardian  # noqa: E402
+from acs.testing.harness import ProgrammableGuardian
 
 ADAPTERS = Path(__file__).resolve().parents[2]
 TOOL_HOOKS = ["steps/toolCallRequest", "steps/toolCallResult"]

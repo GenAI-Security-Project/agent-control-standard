@@ -25,11 +25,11 @@ try:
 except ImportError:
     _NAT_OK = False
 
-from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.integrations.nat.adapter import ACSMiddleware  # noqa: E402
+from acs.client import _handshake as client_handshake
+from acs.integrations.nat.adapter import ACSMiddleware
 
 if _NAT_OK:
-    from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
+    from acs.integrations.nat.adapter import ACSMiddlewareConfig
 
 HERE = Path(__file__).resolve().parent
 GUARDIAN_SCRIPT = HERE.parents[2] / "src" / "acs" / "guardian" / "example_guardian.py"

@@ -45,7 +45,6 @@ _HANDSHAKE_CACHE_DIR = Path(
 )
 
 _DEFAULT_HANDSHAKE_TIMEOUT_S = 5.0
-_HANDSHAKE_TIMEOUT_S: float | None = None
 
 _RECORD_VERSION = 1
 _STARTUP_VERSION = 1
@@ -210,8 +209,6 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
 
 
 def _handshake_timeout_s() -> float:
-    if _HANDSHAKE_TIMEOUT_S is not None:
-        return _HANDSHAKE_TIMEOUT_S
     raw = os.environ.get("ACS_HANDSHAKE_TIMEOUT_SECONDS", "").strip()
     if not raw:
         return _DEFAULT_HANDSHAKE_TIMEOUT_S

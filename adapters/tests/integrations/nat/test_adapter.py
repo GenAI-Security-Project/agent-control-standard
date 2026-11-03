@@ -20,11 +20,11 @@ try:
 except ImportError:
     _NAT_OK = False
 
-from acs.client import _handshake as client_handshake  # noqa: E402
-from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied  # noqa: E402
+from acs.client import _handshake as client_handshake
+from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied
 
 if _NAT_OK:
-    from acs.integrations.nat.adapter import ACSMiddlewareConfig  # noqa: E402
+    from acs.integrations.nat.adapter import ACSMiddlewareConfig
 
 
 HERE = Path(__file__).resolve().parent

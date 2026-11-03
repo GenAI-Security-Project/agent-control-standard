@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.validators import RefResolver
 
 
-from acs.core import schemas_dir  # noqa: E402
+from acs.core import schemas_dir
 
 SPEC_DIR = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
