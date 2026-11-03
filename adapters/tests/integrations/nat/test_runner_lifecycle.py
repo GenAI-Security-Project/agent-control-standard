@@ -401,12 +401,12 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                         exporters = {name: c.instance for name, c in builder._telemetry_exporters.items()}
                         exchange = middleware._exchange
 
-                        def late(session, request, step, *rest, held=held):
+                        def late(session, request, step, *rest, held=held, **options):
                             try:
                                 if request.get("method") == held:
                                     entered.set()
                                     release.wait(5)
-                                return exchange(session, request, step, *rest)
+                                return exchange(session, request, step, *rest, **options)
                             finally:
                                 done.set()
                         middleware._exchange = late

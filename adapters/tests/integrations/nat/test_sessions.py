@@ -163,7 +163,8 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
     def test_nats_function_middleware_chain_applies_a_modify(self) -> None:
         allow = self.guardian._default_allow
         self.guardian.handlers["steps/toolCallRequest"] = lambda req: {
-            **allow(req), "decision": "modify", "modifications": {"parameter_overrides": {"command": "ls"}}}
+            **allow(req), "decision": "modify", "reasoning": "use the safe command",
+            "modifications": {"parameter_overrides": {"command": "ls"}}}
         self.assertEqual(self._serve(("rm -rf /", None)), ["ran ls"])
         self.assertEqual(EXECUTED, ["ls"])
         [request] = self.guardian.envelopes_for("steps/toolCallRequest")
@@ -440,7 +441,8 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertEqual((refused["decision"], refused["method"]), ("deny", "steps/userMessage"))
 
     def test_a_modify_on_the_workflow_input_is_a_deny_recorded_as_modify_unsupported(self) -> None:
-        self._verdict_on("steps/userMessage", {"decision": "modify", "modifications": {"modified_content": "other"}})
+        self._verdict_on("steps/userMessage", {"decision": "modify", "reasoning": "rewrite",
+                                               "modifications": {"modified_content": "other"}})
         self.assertEqual(self.executed, ["denied call"])
         [unsupported] = [a for a in self._audits() if a["acs_audit_event"] == "modify_unsupported"]
         self.assertEqual((unsupported["reason_codes"], unsupported["method"]), (["modify_unsupported"], "steps/userMessage"))
@@ -458,12 +460,18 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
                 self._middleware_runs(body, default_deny=default_deny)
                 self.assertEqual(self.executed, executed)
 
-    def test_an_unsignable_workflow_input_blocks_the_runs_calls(self) -> None:
+    def test_a_workflow_input_the_signer_cannot_encode_reaches_the_guardian_replaced(self) -> None:
+        os.environ["ACS_AUDIT_FILE"] = str(self.records / "audit.log")
+        allow = self.guardian._default_allow
+        self.guardian.handlers["steps/userMessage"] = lambda req: {**allow(req), "decision": "deny", "reasoning": "no"}
+
         async def body(middleware, run):
             await run("flow", lambda m: self._call(middleware, "call"), "lone surrogate \ud800")
         self._middleware_runs(body)
+        [message] = [r for r in self.guardian.received if r["method"] == "steps/userMessage"]
+        self.assertEqual(message["params"]["payload"]["content"], [{"type": "text", "value": "lone surrogate \ufffd"}])
+        self.assertIn("envelope_normalized", [a["acs_audit_event"] for a in self._audits()])
         self.assertEqual(self.executed, ["denied call"])
-        self.assertNotIn("steps/userMessage", self.guardian.methods_seen())
 
     def test_a_verdict_on_the_workflow_output_is_recorded_as_unenforceable(self) -> None:
         self._verdict_on("steps/agentResponse", {"decision": "deny", "reasoning": "leaks a secret"})
@@ -472,7 +480,8 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertEqual((unenforceable["decision"], unenforceable["method"]), ("deny", "steps/agentResponse"))
 
     def test_a_modify_on_the_workflow_output_is_recorded_as_modify_unsupported(self) -> None:
-        self._verdict_on("steps/agentResponse", {"decision": "modify", "modifications": {"modified_content": "x"}})
+        self._verdict_on("steps/agentResponse", {"decision": "modify", "reasoning": "rewrite",
+                                                 "modifications": {"modified_content": "x"}})
         events = [a["acs_audit_event"] for a in self._audits()]
         self.assertIn("modify_unsupported", events)
         self.assertIn("unenforceable_decision", events)
