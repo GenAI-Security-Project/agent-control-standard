@@ -132,7 +132,6 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
     def test_repeat_tool_call_does_not_get_replay_detected(self) -> None:
         cfg = ACSMiddlewareConfig(
             guardian_url=self.url, default_deny=False,
-            session_id="repeat-tool-session",
         )
         mw = ACSMiddleware(cfg)
         seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=self.url,
@@ -262,7 +261,7 @@ class FailureMode3_LifecycleSubscriptionRace(unittest.TestCase):
 
         cfg = ACSMiddlewareConfig(
             guardian_url="http://127.0.0.1:1/dead",
-            default_deny=False, session_id="race-session-3",
+            default_deny=False,
         )
         mw = ACSMiddleware(cfg)
 

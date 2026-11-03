@@ -264,7 +264,6 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
 | `default_deny` | `false` | Fail-open with audit (§6.4 default). Set `true` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
 | `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config` replaces it for the session, per method where `per_method_ms` names one. |
-| `session_id` | (auto, per middleware) | UUID of the session for calls outside any NAT run; generated when unset. Each run's session gets a fresh `session_id` of its own. A configured value is the same in every process and after a restart, so leave it unset unless one process uses it once. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
 ### Environment variables (read by the adapter at runtime)
@@ -275,7 +274,6 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
 | `ACS_AGENT_ID` | derived from `target_function_or_group` | Stable agent identifier sent in `metadata.agent_id`. |
-| `ACS_SESSION_ID` | (unset) | Sets `session_id` when the YAML leaves it unset. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: every call passes through with no Guardian traffic and an `acs_disabled_bypass` audit event. Read when NAT builds the middleware, so set it before the workflow starts. |

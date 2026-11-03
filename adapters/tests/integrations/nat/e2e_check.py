@@ -36,21 +36,13 @@ except ImportError:
     _NAT_OK = False
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Shared helpers
-# ──────────────────────────────────────────────────────────────────────
-
-def _build_middleware(guardian_url: str, *, default_deny: bool = True,
-                       session_id: str | None = None):
-    """Construct an ACSMiddleware with the same env the operator uses
-    in production (HMAC secret on; signs every envelope)."""
+def _build_middleware(guardian_url: str, *, default_deny: bool = True):
     os.environ["ACS_HMAC_SECRET"] = HMAC_SECRET
     os.environ["ACS_HMAC_KEY_ID"] = "test-key"
     from acs.integrations.nat.adapter import ACSMiddleware, ACSMiddlewareConfig  # noqa: E402
     return ACSMiddleware(ACSMiddlewareConfig(
         guardian_url=guardian_url,
         default_deny=default_deny,
-        session_id=session_id or str(uuid.uuid4()),
     ))
 
 
@@ -81,7 +73,7 @@ def scenario_allow(report: Report, guardian: ProgrammableGuardian) -> None:
                                "Guardian sees handshake + toolCallRequest + toolCallResult")
 
     guardian.reset()
-    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs", session_id="nat-e2e-allow")
+    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs")
     executed = {"count": 0, "got_command": None}
 
     async def target(command: str) -> str:
@@ -127,7 +119,7 @@ def scenario_destructive(report: Report, guardian: ProgrammableGuardian) -> None
                                "function NOT executed; canary still on disk")
 
     guardian.reset()
-    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs", session_id="nat-e2e-destructive")
+    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs")
     executed = {"count": 0}
 
     async def target(command: str) -> str:
@@ -198,7 +190,7 @@ def scenario_read_tool(report: Report, guardian: ProgrammableGuardian) -> None:
                                "envelope.arguments.file_path.value matches probe path")
 
     guardian.reset()
-    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs", session_id="nat-e2e-read")
+    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs")
     executed = {"count": 0}
 
     async def target(file_path: str) -> str:
@@ -249,7 +241,7 @@ def scenario_handshake_once(report: Report, guardian: ProgrammableGuardian) -> N
                   "Guardian sees exactly 1 handshake/hello across all 3")
 
     guardian.reset()
-    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs", session_id="nat-e2e-handshake")
+    mw = _build_middleware(f"http://127.0.0.1:{guardian.port}/acs")
     executed = {"count": 0}
 
     async def target(command: str) -> str:

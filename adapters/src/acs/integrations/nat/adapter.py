@@ -135,27 +135,12 @@ if _NAT_AVAILABLE:
             default=False,
             description="If True, block the call when the Guardian is unreachable, returns malformed responses, or returns an unknown disposition. Default False matches the ACS spec default (§6.4 fail-open with audit event); set True for deployments that prefer fail-closed availability tradeoff.",
         )
-        session_id: Optional[str] = Field(
-            default=None,
-            description="Session id of calls outside any NAT run, generated if absent and coerced to UUID format; each run's session gets a fresh id.",
-        )
         timeout_s: float = Field(
             default=5.0,
             description="Per-request timeout for the Guardian round-trip.",
         )
         target_function_or_group: Optional[str] = None
         target_location: str = "input"
-
-
-def _coerce_uuid(raw: str | None) -> str:
-    """request-envelope.json:66 wants session_id as UUID. Accept a UUID
-    directly; otherwise derive a stable UUID5 from whatever NAT gave us."""
-    if not raw:
-        return str(uuid.uuid4())
-    try:
-        return str(uuid.UUID(raw))
-    except (ValueError, AttributeError, TypeError):
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"nat:{raw}"))
 
 
 def _wrap_arguments(raw: dict[str, Any]) -> dict[str, Any]:
@@ -477,9 +462,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             guardian_url=config.guardian_url,
             posture=FailPosture(deny_on_failure=bool(config.default_deny), timeout_s=config.timeout_s),
         )
-        self._session_id = _coerce_uuid(
-            getattr(config, "session_id", None) or os.environ.get("ACS_SESSION_ID")
-        )
+        self._session_id = str(uuid.uuid4())
         target = getattr(config, "target_function_or_group", None) or "nat"
         self._agent_id = os.environ.get("ACS_AGENT_ID") or f"nat:{hashlib.sha256(target.encode()).hexdigest()[:8]}"
         self._current: contextvars.ContextVar = contextvars.ContextVar(f"acs_nat_session_{id(self)}", default=None)

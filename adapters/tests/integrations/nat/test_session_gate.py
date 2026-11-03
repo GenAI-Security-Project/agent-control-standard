@@ -1,4 +1,4 @@
-"""§4.1 through the NAT middleware: the first handshake decides the session, and a later middleware for the same session follows it."""
+"""§4.1 through the NAT middleware: the first handshake decides the session, and a later middleware that finds the session's stored decision follows it."""
 from __future__ import annotations
 
 import asyncio
@@ -40,8 +40,9 @@ class SessionGateThroughNat(unittest.TestCase):
 
     def _run(self, url: str, session: str, *, default_deny: bool = False) -> tuple[int, bool]:
         """Invoke a protected function through a new middleware for the session; return how often it ran and whether NAT blocked it."""
-        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url=url, default_deny=default_deny,
-                                               session_id=session))
+        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url=url, default_deny=default_deny))
+        # Each middleware's own session id is fresh; reusing one is how a stored decision would be found again.
+        mw._session_id = session
         executed = {"count": 0}
 
         async def target(command: str) -> str:

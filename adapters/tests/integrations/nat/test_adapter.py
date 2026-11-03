@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 import unittest
-import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -86,7 +85,6 @@ class NATMiddlewareIntegration(unittest.TestCase):
         cfg = ACSMiddlewareConfig(
             guardian_url=self.guardian_url,
             default_deny=default_deny,
-            session_id="nat-test",
         )
         return ACSMiddleware(cfg)
 
@@ -127,8 +125,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
                     mock.patch.object(client_handshake, "_HANDSHAKE_CACHE_DIR",
                                       Path(d)), g:
                 mw = ACSMiddleware(ACSMiddlewareConfig(
-                    guardian_url=g.url(), default_deny=False,
-                    session_id=str(uuid.uuid4()), timeout_s=1.0,
+                    guardian_url=g.url(), default_deny=False, timeout_s=1.0,
                 ))
                 ctx = _make_context("Bash", {"command": "echo hi"})
                 result = asyncio.run(mw.pre_invoke(ctx))
@@ -169,7 +166,6 @@ class NATMiddlewareIntegration(unittest.TestCase):
                                       Path(d)), g:
                 mw = ACSMiddleware(ACSMiddlewareConfig(
                     guardian_url=g.url(), default_deny=True,
-                    session_id=str(uuid.uuid4()),
                 ))
                 ctx = _make_context("Bash", {"command": "echo hi"})
                 self.assertIsNone(asyncio.run(mw.pre_invoke(ctx)))

@@ -25,8 +25,7 @@ middleware:
     guardian_url: http://127.0.0.1:8787/acs
     default_deny: true
     timeout_s: 5.0
-    # Each NAT run's session gets a fresh session_id; session_id, if set, names only the
-    # session of calls outside any run, and is the same in every process, so leave it unset.
+    # Every session gets a fresh session_id, so there is none to configure.
     # target_function_or_group: my_tools
 
 function_groups:

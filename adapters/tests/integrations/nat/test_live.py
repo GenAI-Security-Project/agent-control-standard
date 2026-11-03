@@ -58,7 +58,6 @@ class LiveNATWorkflow(unittest.TestCase):
     def _make_middleware(self, default_deny: bool = True) -> ACSMiddleware:
         return ACSMiddleware(ACSMiddlewareConfig(
             guardian_url=self.guardian_url, default_deny=default_deny,
-            session_id="nat-live",
         ))
 
     def _ctx(self, tool_name: str) -> "FunctionMiddlewareContext":
@@ -138,7 +137,7 @@ class LiveNATWorkflow(unittest.TestCase):
 
         mw = ACSMiddleware(ACSMiddlewareConfig(
             guardian_url="http://127.0.0.1:1/dead",
-            default_deny=True, session_id="nat-live",
+            default_deny=True,
         ))
         with self.assertRaises(ACSGuardianDenied):
             asyncio.run(
@@ -160,7 +159,7 @@ class LiveNATWorkflow(unittest.TestCase):
 
         mw = ACSMiddleware(ACSMiddlewareConfig(
             guardian_url="http://127.0.0.1:1/dead",
-            default_deny=False, session_id="nat-live",
+            default_deny=False,
         ))
         result = asyncio.run(
             mw.function_middleware_invoke(

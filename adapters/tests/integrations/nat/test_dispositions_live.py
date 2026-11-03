@@ -77,8 +77,7 @@ class DispositionsLive(unittest.TestCase):
                 os.environ["ACS_HMAC_KEY_ID"] = "test-key"
         self.addCleanup(_restore)
         return ACSMiddleware(ACSMiddlewareConfig(
-            guardian_url=self.url, default_deny=default_deny,
-            session_id="dispositions-live"))
+            guardian_url=self.url, default_deny=default_deny))
 
     def setUp(self) -> None:
         self.guardian.reset()

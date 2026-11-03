@@ -347,7 +347,7 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
 
     def test_two_middlewares_with_one_config_never_share_a_session_id(self) -> None:
         async def main() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
             for _ in range(2):
                 async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                     exporters = {name: c.instance for name, c in builder._telemetry_exporters.items()}
@@ -362,6 +362,16 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         starts = [r["params"]["metadata"]["session_id"] for r in self.guardian.envelopes_for("steps/sessionStart")]
         self.assertEqual(len(starts), 2)
         self.assertEqual(len(set(starts)), 2)
+
+    def test_no_setting_makes_two_middlewares_share_the_session_of_calls_outside_a_run(self) -> None:
+        os.environ["ACS_SESSION_ID"] = "fixed"
+        for _ in range(2):
+            async def body(middleware, run):
+                await self._call(middleware, "outside")
+            asyncio.run(with_middleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id="fixed"),
+                                        body))
+        starts = {r["params"]["metadata"]["session_id"] for r in self.guardian.envelopes_for("steps/sessionStart")}
+        self.assertEqual(len(starts), 2, "a session_id is never used twice (§10 derives the session key from it)")
 
     def test_a_slow_lifecycle_hook_of_one_run_does_not_hold_another_runs_calls(self) -> None:
         allow = self.guardian._default_allow

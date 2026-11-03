@@ -60,8 +60,7 @@ class UntrustedAnswersNeverRunTheFunction(unittest.TestCase):
     def _run(self, answer: Callable[[dict], tuple[int, dict]], *, default_deny: bool = False) -> tuple[int, bool]:
         """Invoke a protected function through the middleware (fail-open unless default_deny); return how often it ran and whether NAT blocked it."""
         url = "http://127.0.0.1:9/acs"
-        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url=url, default_deny=default_deny,
-                                               session_id="nat-untrusted"))
+        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url=url, default_deny=default_deny))
         # The session already negotiated, so every request below is a step.
         seed_negotiated_session(self.records, session_id=mw._session_id, guardian_url=url,
                                 hmac_secret=SECRET)

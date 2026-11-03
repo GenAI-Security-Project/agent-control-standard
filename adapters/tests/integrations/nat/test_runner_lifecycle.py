@@ -153,8 +153,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         self.exporters: list[str] = []
 
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=default_deny,
-                                         session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=default_deny)
             async with WorkflowBuilder() as builder, \
                     build_acs_middleware(config, builder if with_builder else None) as middleware:
                 if prepare is not None:
@@ -233,7 +232,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         executed: list[str] = []
 
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=False, session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), default_deny=False)
             async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                 exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
 
@@ -262,7 +261,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         executed: list[str] = []
 
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
             async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                 exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
 
@@ -284,7 +283,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
     def test_a_run_cancelled_before_its_first_call_ends_as_cancelled(self) -> None:
         """The run's task is known from its WORKFLOW_START, so a run cancelled before any call is not reported as an error."""
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
             async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                 exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
 
@@ -318,7 +317,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                     return send(request, timeout=timeout)
 
                 async def run() -> int:
-                    config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+                    config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
                     async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                         exporters = {name: c.instance for name, c in builder._telemetry_exporters.items()}
 
@@ -351,7 +350,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         blocked: list[bool] = []
 
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
             async with build_acs_middleware(config, None) as middleware:
                 context = FunctionMiddlewareContext(name="Read", config=None, description=None, input_schema=None,
                                                     single_output_schema=str, stream_output_schema=str)
@@ -396,7 +395,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                 entered, release, done = threading.Event(), threading.Event(), threading.Event()
 
                 async def run() -> None:
-                    config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+                    config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
                     async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                         exporters = {name: c.instance for name, c in builder._telemetry_exporters.items()}
                         exchange = middleware._exchange
@@ -440,7 +439,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
 
     def test_a_session_that_ended_before_it_opened_never_opens(self) -> None:
         from acs.client import SessionRefused
-        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
+        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url()))
         self.addCleanup(middleware.close)
         session = middleware._new_session()
         middleware._end_session(session, "error")
@@ -497,7 +496,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
 
     def test_a_refused_run_withholds_a_result_and_sends_nothing(self) -> None:
         from acs.client import SessionRefused
-        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4())))
+        middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url()))
         self.addCleanup(middleware.close)
         session = middleware._new_session()
         session.decision = SessionRefused("session_start_denied", {"decision": "deny"})
@@ -520,7 +519,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
         tracked: list[int] = []
 
         async def run() -> None:
-            config = ACSMiddlewareConfig(guardian_url=self.guardian.url(), session_id=str(uuid.uuid4()))
+            config = ACSMiddlewareConfig(guardian_url=self.guardian.url())
             async with WorkflowBuilder() as builder, build_acs_middleware(config, builder) as middleware:
                 exporters = {name: configured.instance for name, configured in builder._telemetry_exporters.items()}
                 started, release = asyncio.Event(), asyncio.Event()
@@ -574,8 +573,7 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
     def test_without_the_builder_overlapping_runs_are_each_subscribed_once(self) -> None:
         for order in ("AA", "ABA", "ABAB"):
             with self.subTest(order):
-                middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url(),
-                                                               session_id=str(uuid.uuid4())))
+                middleware = ACSMiddleware(ACSMiddlewareConfig(guardian_url=self.guardian.url()))
                 sent: list[tuple[str, object]] = []
                 middleware._emit_lifecycle_hook = lambda method, payload, session: sent.append((method, session))
                 streams = {name: Subject() for name in "AB"}

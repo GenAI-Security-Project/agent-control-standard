@@ -8,7 +8,6 @@ import tempfile
 import threading
 import time
 import unittest
-import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -73,8 +72,7 @@ class GuardianCallsOffTheEventLoop(unittest.TestCase):
         self.executed = 0
 
     def _config(self, url: str | None = None) -> ACSMiddlewareConfig:
-        return ACSMiddlewareConfig(guardian_url=url or self.guardian.url(), default_deny=False,
-                                   session_id=str(uuid.uuid4()))
+        return ACSMiddlewareConfig(guardian_url=url or self.guardian.url(), default_deny=False)
 
     async def _invoke(self, mw: ACSMiddleware) -> bool:
         """One protected call through the middleware; True when NAT blocked it."""

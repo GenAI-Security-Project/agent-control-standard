@@ -64,8 +64,7 @@ class NatEmission(unittest.TestCase):
 
     def _mw(self) -> ACSMiddleware:
         return ACSMiddleware(ACSMiddlewareConfig(
-            guardian_url=self.guardian.url(), default_deny=False,
-            session_id="nat-emission"))
+            guardian_url=self.guardian.url(), default_deny=False))
 
     def test_pre_invoke_emits_tool_call_request(self) -> None:
         mw = self._mw()
