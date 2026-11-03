@@ -105,9 +105,9 @@ resolve, fragment included.
 
 `mkdocs.yml` is a landing build input, and its values are escaped as untrusted text.
 
-The site serves from **owaspacs.org**, at the domain root. **agentcontrolstandard.org**
-is a separate site, built and deployed from a separate repository, and nothing here
-publishes to it. The custom domain makes GitHub 301 the `github.io` URIs to owaspacs.org,
+The site serves from **owaspacs.org**, at the domain root, and it is the project's only
+site. Never name or link a legacy project domain in this repository, an issue, a pull
+request, or a discussion. The custom domain makes GitHub 301 the `github.io` URIs to owaspacs.org,
 which schema tooling follows. Do not rebase `$id` onto any domain.
 
 The build writes `CNAME` into `_site`, because a copy in `landing/` does not reach the

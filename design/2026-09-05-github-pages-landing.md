@@ -9,7 +9,7 @@ Status: approved design, not yet implemented
 
 Publish three things from this repository to GitHub Pages, rebuilt on every merge to `main`:
 
-1. A landing page that matches the visual design of agentcontrolstandard.org.
+1. A landing page that matches the visual design of the project's legacy website.
 2. The existing MkDocs specification site.
 3. The JSON schemas, served at the URIs their `$id` values already declare.
 
@@ -27,7 +27,7 @@ precondition for fixing it.
 | Landing page content | Mirror the live site, plus repo-native sections | Continuity for visitors after the redirect, and the page can show live spec data the marketing site cannot. |
 | Analytics | None | Material emits a Google tag with an empty ID when no key is set, leaking referrer and client IP for no benefit. Removed rather than configured. |
 | Contact address | `rock.lambros@owasp.org` on the page | Amends the no-email policy in `CLAUDE.md` with a named exception. |
-| Custom domain | Not yet | `agentcontrolstandard.org` redirects here in a later, separate change. |
+| Custom domain | Not yet | The project's legacy website redirects here in a later, separate change. |
 
 ## Architecture
 
@@ -220,7 +220,7 @@ this trade.
 
 ## Domain cutover
 
-Pointing `agentcontrolstandard.org` at this site later adds a `CNAME` file. GitHub then
+Pointing the project's legacy domain at this site later adds a `CNAME` file. GitHub then
 issues a 301 from `genai-security-project.github.io/agent-control-standard/*` to the custom
 domain.
 
@@ -234,7 +234,7 @@ Do not rebase `$id` onto the marketing domain during the cutover.
 ## Out of scope
 
 - Enabling the custom domain.
-- Changes to the separate repository that builds the current agentcontrolstandard.org.
+- Changes to the separate repository that builds the project's legacy website.
   Stale links there, including the `aos.owasp.org` specification link, live in that
   repository and resolve when the redirect lands.
 - Seven A2A hook pages under `docs/spec/instrument/a2a/hooks/` are absent from the MkDocs
