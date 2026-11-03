@@ -7,25 +7,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-# ----- Safe decision normalization -----
-
-# The five ACS dispositions (§6.3). Shared so every adapter classifies an
-# arrived verdict against the same set.
 KNOWN_DECISIONS = frozenset({"allow", "deny", "modify", "ask", "defer"})
 
 
 @dataclass(frozen=True)
 class Decision:
-    """A Guardian result's decision fields, each coerced to a safe type.
-
-    - disposition: stripped, lower-cased str; "" when the field is not a
-      usable string, which routes the caller to its unusable→DENY branch.
-    - reasoning: always a str (JSON repr if the Guardian sent a
-      non-string, so it can go into a `reason` field unchanged).
-    - modifications: always a dict ({} when the Guardian sent a
-      non-object, which makes a MODIFY with no usable mutation
-      substitute to DENY per §6.3).
-    """
+    """A Guardian result's decision fields coerced to safe types; disposition is "" when unusable."""
 
     disposition: str = ""
     reasoning: str = ""
@@ -33,7 +20,6 @@ class Decision:
 
     @property
     def known(self) -> bool:
-        """Whether the disposition is one of the five ACS dispositions (§6.3)."""
         return self.disposition in KNOWN_DECISIONS
 
 
