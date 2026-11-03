@@ -40,7 +40,7 @@ Cursor's documented response keys are event-specific. The adapter translates ACS
 
 | ACS disposition | Cursor output | Notes |
 |---|---|---|
-| `allow` | `{"permission": "allow"}` | |
+| `allow` | `{}` on `preToolUse`, `beforeShellExecution` and `beforeMCPExecution`; `{"permission": "allow"}` on `subagentStart` | `{}` leaves the call to Cursor's own sandbox and approval, as Claude Code's empty answer leaves it to Claude Code's permission rules. Checked live on 2026-11-03 with Cursor 3.17.8 in Allowlist (with Sandbox) mode: with `{}`, a `touch` outside the workspace still ran sandboxed first and then waited for approval, as with no hook; with `{"permission": "allow"}`, Cursor went straight to an unsandboxed run, so an explicit allow is not guaranteed to keep Cursor's own checks. |
 | `deny` | `{"permission": "deny", "user_message": reasoning, "agent_message": reasoning}` | Cursor displays user_message in UI; agent_message is fed back to the agent's context. |
 | `ask` | `{"permission": "ask", "user_message": reasoning, "agent_message": reasoning}`; on `preToolUse`, `{"permission": "deny", ...}` | Cursor documents `ask` as "accepted by the schema but not enforced for preToolUse today", so on `preToolUse` the tool would run: the adapter denies there and audits `unenforceable_decision`. `beforeShellExecution` and `beforeMCPExecution` prompt the user, and `subagentStart` treats `ask` as `deny`. |
 | `defer` | `{"permission": "ask", ...}`; on `preToolUse`, `{"permission": "deny", ...}` | Deployment substitution (not spec-mandated; §9.2 places substitution on the Guardian): Cursor has no defer, so it asks where Cursor enforces `ask` and denies on `preToolUse`, audited as `unenforceable_decision`. |
@@ -89,7 +89,7 @@ Cursor's `hooks.json` supports `matcher` regex per hook entry. The adapter does 
 
 ## failClosed
 
-Cursor's per-hook `failClosed: true` makes Cursor block when the hook crashes, times out, or returns invalid JSON. The adapter's `ACS_DEFAULT_DENY`, the negotiated posture and `ACS_STARTUP_POSTURE` decide the failures the adapter handles, and every step the adapter decides answers in Cursor's native shape: an explicit allow when it proceeds, a deny when it does not. Use both in production: `failClosed: true` in `hooks.json` for a failed hook process, `ACS_DEFAULT_DENY=1` for a Guardian that cannot decide.
+Cursor's per-hook `failClosed: true` makes Cursor block when the hook crashes, times out, or returns invalid JSON. The adapter's `ACS_DEFAULT_DENY`, the negotiated posture and `ACS_STARTUP_POSTURE` decide the failures the adapter handles, and every step the adapter decides answers in Cursor's native shape: when it proceeds, `{}` on the three tool gates, `{"permission": "allow"}` on `subagentStart` and `{"continue": true}` on `beforeSubmitPrompt`, each of which is output, so `failClosed` reads none of them as a failed hook; a deny when it does not. Use both in production: `failClosed: true` in `hooks.json` for a failed hook process, `ACS_DEFAULT_DENY=1` for a Guardian that cannot decide.
 
 ## Concurrency
 

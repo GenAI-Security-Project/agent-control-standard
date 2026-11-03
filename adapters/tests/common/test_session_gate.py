@@ -83,8 +83,8 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertIn("session_without_negotiated_guardian", audits)
                 self.assertIn("unguarded_session_bypass", audits)
                 if name == "cursor":
-                    self.assertEqual(json.loads(p.stdout), {"permission": "allow"},
-                        "failClosed: true reads an empty reply as a failed hook, so proceed needs the allow shape")
+                    self.assertEqual(json.loads(p.stdout), {},
+                        "failClosed: true reads no output as a failed hook, so proceed answers {}")
 
         guardian = self._restore(port)
         self._age_records()
@@ -234,10 +234,11 @@ class SessionGateThroughHooks(unittest.TestCase):
         session = str(uuid.uuid4())
         p, _, _ = self._cursor(url, session, "beforeSubmitPrompt")
         self.assertEqual((p.returncode, json.loads(p.stdout)), (0, {"continue": True}))
-        for event_name in ("preToolUse", "beforeShellExecution", "subagentStart"):
+        for event_name, allow in (("preToolUse", {}), ("beforeShellExecution", {}), ("beforeMCPExecution", {}),
+                                  ("subagentStart", {"permission": "allow"})):
             with self.subTest(event_name):
                 p, _, audits = self._cursor(url, session, event_name)
-                self.assertEqual(json.loads(p.stdout), {"permission": "allow"})
+                self.assertEqual(json.loads(p.stdout), allow)
                 self.assertEqual(audits, ["unguarded_session_bypass"])
 
     def test_integral_timeouts_written_as_decimals_still_negotiate(self) -> None:

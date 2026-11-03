@@ -108,7 +108,7 @@ What it wires by default: the six unconditional hooks of the ACS-Core minimum se
 | `sessionEnd` | sessionEnd | fail-open; `timeout: 15` |
 | `subagentStart` | subagentStart | **fail-CLOSED** (gate. The confused-deputy spawn gate, required by ACS-Core for subagent-capable clients.) |
 
-Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true` (Cursor's native flag), and each covers a different failure. `failClosed: true` blocks when the hook process itself fails: it crashes, times out, or returns invalid JSON. `ACS_DEFAULT_DENY` and the negotiated posture decide the failures the adapter handles, such as an unreachable Guardian. Once the adapter decides a step proceeds, it answers in Cursor's explicit allow shape, so `failClosed` never turns a decided proceed into a block.
+Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true` (Cursor's native flag), and each covers a different failure. `failClosed: true` blocks when the hook process itself fails: it crashes, times out, or returns invalid JSON. `ACS_DEFAULT_DENY` and the negotiated posture decide the failures the adapter handles, such as an unreachable Guardian. Once the adapter decides a step proceeds, it answers `{}` on `preToolUse`, `beforeShellExecution` and `beforeMCPExecution`, which leaves the call to Cursor's own sandbox and approval, and its allow shape on `subagentStart` and `beforeSubmitPrompt`. Each is output, so `failClosed` never turns a decided proceed into a block. An explicit `{"permission": "allow"}` on a tool gate can take the call out of Cursor's sandbox: on 2026-11-03, Cursor 3.17.8 in Allowlist (with Sandbox) mode went straight to an unsandboxed run with it, and kept its sandbox and approval with `{}`.
 
 Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere).
 
@@ -223,7 +223,7 @@ acs-cursor-hook preToolUse 2>&1 <<'EOF'
 EOF
 ```
 
-Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (fail-open when the hook sets no `ACS_DEFAULT_DENY`); stdout carries `{"permission": "allow"}`:
+Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (fail-open when the hook sets no `ACS_DEFAULT_DENY`); stdout carries `{}`, which leaves the call to Cursor:
 
 ```
 ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_open", ...}
@@ -301,7 +301,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Each session's handshake decision, kept for the session's lifetime. |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Deadline for the whole handshake/hello exchange, including a response that arrives slowly. A value that is not a positive number is replaced by `5` and recorded as `invalid_setting`. |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
-| `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. Each gate answers with its explicit allow, since `failClosed` blocks a hook that prints nothing. |
+| `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. Each gate answers with its proceed shape (`{}` on the tool gates), since `failClosed` blocks a hook that prints nothing. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 
 The adapter is invoked as `acs-cursor-hook <event_name>`, where `<event_name>` is one of: `sessionStart`, `sessionEnd`, `stop`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`, `beforeSubmitPrompt`, `preCompact`, `afterAgentResponse`, `afterAgentThought`.

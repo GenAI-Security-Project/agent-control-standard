@@ -47,7 +47,7 @@ from acs.core import (
     request_envelope,
     turn_start_envelope,
 )
-from acs.integrations.cursor.hook import PERMISSION_EVENTS
+from acs.integrations.cursor.hook import CURSOR_DECIDES_EVENTS, PERMISSION_EVENTS
 
 _GATE_EVENTS = PERMISSION_EVENTS | {"beforeSubmitPrompt"}
 # Events whose step fails closed when its envelope cannot be signed: the gates, and the result the adapter can withhold.
@@ -537,6 +537,8 @@ def _translate_permission(decision: Decision, event_name: str, original_input: d
                     reason=decision.reasoning or "(none)", substituted="deny")
         return _permission_response("deny", f"ACS Guardian asked for approval Cursor cannot hold here: "
                                             f"{decision.reasoning or '(no reasoning)'}")
+    if decision.disposition == "allow" and event_name in CURSOR_DECIDES_EVENTS:
+        return {}
     if decision.disposition in PERMISSION_MAP:
         return _permission_response(PERMISSION_MAP[decision.disposition], decision.reasoning)
     if decision.disposition == "modify":
@@ -855,6 +857,8 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         }) + "\n")
         return 0
 
+    if not out and event_name in CURSOR_DECIDES_EVENTS:
+        return _explicit_allow(event_name)
     _emit(out)
     return 0
 
@@ -898,8 +902,10 @@ def _record_delivered(decision: Decision, event_name: str) -> None:
 
 
 def _explicit_allow(event_name: str) -> int:
-    """Cursor's allow shape: a failClosed gate reads an empty reply as a failed hook."""
-    if event_name in PERMISSION_EVENTS:
+    """Cursor's proceed shape: a failClosed gate reads no output as a failed hook, and {} leaves the action to Cursor."""
+    if event_name in CURSOR_DECIDES_EVENTS:
+        sys.stdout.write("{}\n")
+    elif event_name in PERMISSION_EVENTS:
         _emit(_permission_response("allow"))
     elif event_name == "beforeSubmitPrompt":
         sys.stdout.write(json.dumps({"continue": True}) + "\n")

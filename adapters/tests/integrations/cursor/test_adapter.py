@@ -74,8 +74,7 @@ class CursorAdapter(unittest.TestCase):
             "tool_input": {"file_path": "/tmp/x"},
         })
         self.assertEqual(rc, 0, err)
-        payload = json.loads(out)
-        self.assertEqual(payload["permission"], "allow")
+        self.assertEqual(json.loads(out), {}, "an allow leaves the call to Cursor's own sandbox and approval")
 
     def test_pre_tool_destructive_bash_denies(self) -> None:
         rc, out, _ = self._run("preToolUse", {
@@ -100,7 +99,7 @@ class CursorAdapter(unittest.TestCase):
             "session_id": "cur-5", "command": "ls",
         })
         self.assertEqual(rc, 0)
-        self.assertEqual(json.loads(out)["permission"], "allow")
+        self.assertEqual(json.loads(out), {})
 
     def test_before_shell_destructive_denies(self) -> None:
         rc, out, _ = self._run("beforeShellExecution", {
@@ -158,8 +157,8 @@ class CursorAdapter(unittest.TestCase):
                            **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-11", namespace_prefix="cursor"))},
         )
         self.assertEqual(rc, 0)
-        self.assertEqual(json.loads(out), {"permission": "allow"},
-            "a decided proceed answers in Cursor's allow shape; failClosed reads an empty reply as a failed hook")
+        self.assertEqual(json.loads(out), {},
+            "a decided proceed answers {}: failClosed reads no output as a failed hook, and {} leaves the call to Cursor")
         self.assertIn("ACS_AUDIT", err, "fail-open MUST emit an audit event per §6.4")
         self.assertIn("fail_open_bypass", err)
 
@@ -206,14 +205,44 @@ class UnenforceableDecisions(unittest.TestCase):
                 _, audits = self._audits(lambda a: a._translate_post_tool(decision, "postToolUse"))
                 self.assertEqual(audits, [("unenforceable_decision", recorded)])
 
+class AnAllowLeavesTheToolGatesToCursor(unittest.TestCase):
+    """{} leaves a tool call to Cursor's own sandbox and approval, while an explicit allow can bypass them
+    (Cursor 3.17.8, Allowlist with Sandbox, checked 2026-11-03)."""
+
+    def test_the_three_tool_gates_answer_empty_on_allow_and_deny_in_their_shape(self) -> None:
+        from acs.testing.harness import ProgrammableGuardian
+        events = {"preToolUse": {"tool_name": "Shell", "tool_input": {"command": "ls"}},
+                  "beforeShellExecution": {"command": "ls", "cwd": "/tmp"},
+                  "beforeMCPExecution": {"tool_name": "fetch", "tool_input": "{}", "url": "https://example.com"}}
+        for disposition in ("allow", "deny"):
+            for name, fields in events.items():
+                with self.subTest(name, decision=disposition), ProgrammableGuardian() as g, \
+                        tempfile.TemporaryDirectory() as root:
+                    g.handlers["steps/toolCallRequest"] = lambda req, d=disposition: {"decision": d, "reasoning": "policy"}
+                    env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+                    env.update(signing_env(), ACS_GUARDIAN_URL=g.url(), ACS_HANDSHAKE_CACHE=f"{root}/handshake",
+                               ACS_SESSION_STATE_DIR=f"{root}/state")
+                    proc = subprocess.run([sys.executable, str(ADAPTER), name],
+                                          input=json.dumps({"conversation_id": f"conv-{name}", "workspace_roots": ["/tmp"],
+                                                            **fields}),
+                                          capture_output=True, text=True, env=env, timeout=15)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertIn("steps/toolCallRequest", g.methods_seen())
+                    out = json.loads(proc.stdout)
+                    if disposition == "allow":
+                        self.assertEqual(out, {})
+                    else:
+                        self.assertEqual((out["permission"], out["user_message"]), ("deny", "policy"))
+
+
 class TheKillSwitchAllowsExplicitly(unittest.TestCase):
     """failClosed blocks on "no output" (hooks docs), so ACS_DISABLED answers every gate in its allow shape."""
 
     def test_each_event_gets_its_allow_shape(self) -> None:
         env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
         env["ACS_DISABLED"] = "1"
-        for event, expected in (("preToolUse", {"permission": "allow"}), ("beforeShellExecution", {"permission": "allow"}),
-                                ("beforeMCPExecution", {"permission": "allow"}), ("subagentStart", {"permission": "allow"}),
+        for event, expected in (("preToolUse", {}), ("beforeShellExecution", {}),
+                                ("beforeMCPExecution", {}), ("subagentStart", {"permission": "allow"}),
                                 ("beforeSubmitPrompt", {"continue": True}), ("postToolUse", None)):
             with self.subTest(event):
                 proc = subprocess.run([sys.executable, str(ADAPTER), event], input="{}", capture_output=True, text=True,

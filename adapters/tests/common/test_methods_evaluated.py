@@ -143,7 +143,7 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 if adapter == "claude-code":
                     self.assertEqual(p.stdout.strip(), "")
                 else:
-                    self.assertEqual(json.loads(p.stdout).get("permission"), "allow")
+                    self.assertEqual(json.loads(p.stdout), {})
                 self.assertNotIn("steps/toolCallRequest", guardian.methods_received())
                 self.assertFalse(FAILURE_EVENTS & set(h.audit_names()), h.audit_names())
 

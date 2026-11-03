@@ -8,6 +8,8 @@ from acs.integrations._bootstrap import run_hook
 
 # Gate events, which take a {"permission": ...} deny.
 PERMISSION_EVENTS = frozenset({"preToolUse", "subagentStart", "beforeShellExecution", "beforeMCPExecution"})
+# Gate events where {} leaves the action to Cursor's sandbox and approval, which an explicit allow can bypass (Cursor 3.17.8, Allowlist with Sandbox, checked 2026-11-03).
+CURSOR_DECIDES_EVENTS = frozenset({"preToolUse", "beforeShellExecution", "beforeMCPExecution"})
 
 
 def _event_name(raw: str) -> str:
@@ -27,7 +29,9 @@ def _deny(event_name: str, reason: str) -> int:
 
 
 def _allow(event_name: str) -> int:
-    if event_name in PERMISSION_EVENTS:
+    if event_name in CURSOR_DECIDES_EVENTS:
+        print("{}")
+    elif event_name in PERMISSION_EVENTS:
         print(json.dumps({"permission": "allow"}))
     elif event_name == "beforeSubmitPrompt":
         print(json.dumps({"continue": True}))

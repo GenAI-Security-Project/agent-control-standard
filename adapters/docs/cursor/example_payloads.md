@@ -124,7 +124,15 @@ Fields not in the public skill docs but present in real payloads: `cursor_versio
 
 Per-event output keys differ. See the [mapping table](../mapping.md#disposition-mapping) for the full matrix.
 
-### Allow (permission events)
+### Allow (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`)
+
+```json
+{}
+```
+
+Cursor's own sandbox and approval then decide the call.
+
+### Allow (`subagentStart`)
 
 ```json
 {"permission": "allow"}
