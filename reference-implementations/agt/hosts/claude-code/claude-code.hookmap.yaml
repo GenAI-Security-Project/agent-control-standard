@@ -81,21 +81,36 @@ hooks:
     # posture. Nothing upstream of this hookmap produces an ACS `defer`
     # decision today, so this entry is a guard against a Guardian that emits
     # one rather than a path this deployment exercises.
+    #
+    # WHY THE REASONING ALSO GOES IN `additionalContext` (issue #109). Measured
+    # against Claude Code 2.1.285 and 2.1.311, `claude -p`, two PreToolUse
+    # hooks on one Bash call:
+    #   - When several hooks deny, the model reads the `permissionDecisionReason`
+    #     (or exit-2 stderr) of whichever hook FINISHED LAST, and nothing from
+    #     the others. The exit code does not change this; finish order does. A
+    #     project hook that answers after this shim drops the Guardian's
+    #     reasoning entirely, though the call stays blocked.
+    #   - The `permissionDecisionReason` of an allow reaches only the debug log,
+    #     never the model.
+    #   - `additionalContext` is kept from every hook that returns it, and the
+    #     model reads it as "PreToolUse:Bash hook additional context: ...".
+    # So `additionalContext` is the one field that carries the Guardian's
+    # reasoning to the model whatever else answers: a deny's explanation, a
+    # rewrite's, and the "no decision arrived..." a fail-open proceed gets
+    # from `applyFailurePosture`. When this shim is the only responder, a deny's
+    # reasoning reaches the model twice, as the denial and as context. `ask` is
+    # left without it: its reason is shown to the person who answers.
     decisions:
-      # A genuine Guardian allow only rarely carries a `reasoning` string, but
-      # `applyFailurePosture` always sets one -- a fail-open proceed renders as
-      # a plain allow, and this reason field is the only way its explanation
-      # ("no decision arrived...") reaches the transcript a human reads. An
-      # audited bypass that says nothing to the operator is the thing this
-      # avoids.
       allow:
         output:
           hookSpecificOutput.permissionDecision:       { value: allow }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
       deny:
         output:
           hookSpecificOutput.permissionDecision:       { value: deny }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
       ask:
         output:
           hookSpecificOutput.permissionDecision:       { value: ask }
@@ -104,6 +119,7 @@ hooks:
         output:
           hookSpecificOutput.permissionDecision:       { value: deny }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
       # `renderDecision` receives a decision that has already been validated,
       # which applies the ACS specification's modification rules to the
       # original tool arguments and puts the result in `applied_input`. Naming
@@ -120,6 +136,7 @@ hooks:
         output:
           hookSpecificOutput.permissionDecision:       { value: allow }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
           hookSpecificOutput.updatedInput:             { from: applied_input }
   # The result gate. `outputs.from` is the leaf that becomes the ACS payload's
   # outputs[0].value; `outputs.within` is the object a `modify` decision is

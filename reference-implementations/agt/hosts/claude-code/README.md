@@ -54,6 +54,12 @@ Claude Code reads the exit code before it reads stdout, so the shim uses exactly
 
 Exit `1` never appears. Claude Code reads it as "the hook did not fire" and proceeds ungoverned.
 
+## When another hook answers the same call
+
+Claude Code runs every matching hook in parallel. A project that already has its own `PreToolUse` hook on `Bash` runs it beside this shim. A deny from either one blocks the call. But when several hooks deny, the model reads the denial reason of only the hook that finishes last, whether it denied by JSON or by exit 2 (issue #109, measured on Claude Code 2.1.285 and 2.1.311). An allow's `permissionDecisionReason` reaches only Claude Code's debug log.
+
+So the request gate also writes the Guardian's `reasoning` to `additionalContext` on `allow`, `deny`, `defer` and `modify`. Claude Code keeps that field from every hook, and the model reads it as `PreToolUse:Bash hook additional context: …`, so the Guardian's reasoning arrives even when another hook's denial is the one in the tool result. When the shim is the only hook, a deny's reasoning arrives twice. The result gate needs no such step: Claude Code passes every hook's `block` reason to the model.
+
 ## The result gate
 
 At `PostToolUse` the tool has already run, and Claude Code's `block` alone withholds nothing. So a `deny`, an `ask` or a `defer` at the result gate replaces the output, and a `modify` applies the redaction to the output the model will see. A modification the host cannot apply, or a `modified_content` replacement, is refused, and the refusal withholds. A `defer` renders as `deny` at both gates, because Claude Code has no deferral state.

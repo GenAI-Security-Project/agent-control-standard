@@ -226,6 +226,7 @@ describe("renderDecision", () => {
       hookSpecificOutput: {
         permissionDecision: "allow",
         permissionDecisionReason: "drift_score 0.9 reached threshold 0.5",
+        additionalContext: "drift_score 0.9 reached threshold 0.5",
       },
     });
   });
@@ -268,6 +269,7 @@ describe("renderDecision", () => {
     expect(hookSpecificOutput).toEqual({
       permissionDecision: "allow",
       permissionDecisionReason: "redaction_applied",
+      additionalContext: "redaction_applied",
       updatedInput: { command: "echo [REDACTED]" },
     });
   });
@@ -279,6 +281,7 @@ describe("renderDecision", () => {
       hookSpecificOutput: {
         permissionDecision: "deny",
         permissionDecisionReason: "blocked",
+        additionalContext: "blocked",
       },
     });
   });
@@ -299,12 +302,12 @@ describe("renderDecision against the shipped hookmap, per hook", () => {
 
   it.each([
     ["allow", { decision: "allow" }, { permissionDecision: "allow" }],
-    ["deny", { decision: "deny", reasoning: "nope" }, { permissionDecision: "deny", permissionDecisionReason: "nope" }],
+    ["deny", { decision: "deny", reasoning: "nope" }, { permissionDecision: "deny", permissionDecisionReason: "nope", additionalContext: "nope" }],
     ["ask", { decision: "ask", reasoning: "confirm?" }, { permissionDecision: "ask", permissionDecisionReason: "confirm?" }],
     [
       "modify",
       { decision: "modify", reasoning: "rewritten", applied_input: { command: "echo [REDACTED]" } },
-      { permissionDecision: "allow", permissionDecisionReason: "rewritten", updatedInput: { command: "echo [REDACTED]" } },
+      { permissionDecision: "allow", permissionDecisionReason: "rewritten", additionalContext: "rewritten", updatedInput: { command: "echo [REDACTED]" } },
     ],
   ])("renders PreToolUse %s exactly as before", (_name, result, expected) => {
     expect(renderDecision("PreToolUse", result as never, real)).toEqual({ hookSpecificOutput: expected });
