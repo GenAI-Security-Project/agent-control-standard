@@ -43,6 +43,7 @@ SECRET = "nat-sessions-test-secret-padded-to-32-bytes"
 RUN = ["handshake/hello", "steps/sessionStart", "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
        "steps/agentResponse", "steps/sessionEnd"]
 EXECUTED: list[str] = []
+FLOW_RAISES: list[bool] = []
 
 if _NAT_OK:
     class _ToolConfig(FunctionBaseConfig, name="acs_sessions_test_tool"):
@@ -68,7 +69,10 @@ if _NAT_OK:
         tool = await builder.get_function("tool")
 
         async def run(message: str) -> str:
-            return await tool.ainvoke(message, to_type=str)
+            result = await tool.ainvoke("none" if message is None else message, to_type=str)
+            if FLOW_RAISES:
+                raise RuntimeError("the workflow failed after its call")
+            return result
         yield FunctionInfo.from_fn(run, description="calls the tool once with its input")
 
 
@@ -169,6 +173,85 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertEqual(EXECUTED, ["ls"])
         [request] = self.guardian.envelopes_for("steps/toolCallRequest")
         self.assertEqual(request["params"]["payload"]["arguments"], {"command": {"value": "rm -rf /"}})
+
+    def _serve_with_direct_calls(self, headers: dict, message, *, before: bool) -> None:
+        async def main() -> None:
+            config = _config(self.guardian.url(), default_deny=True)
+            async with WorkflowBuilder.from_config(config=config) as builder:
+                manager = await SessionManager.create(config=config, shared_builder=builder)
+                try:
+                    tool = await builder.get_function("tool")
+
+                    async def direct(command: str) -> None:
+                        try:
+                            await tool.ainvoke(command, to_type=str)
+                        except ACSGuardianDenied:
+                            EXECUTED.append(f"denied {command}")
+                    async with manager.session(http_connection=_request(**headers)) as session:
+                        if before:
+                            await direct("outside-before")
+                        try:
+                            async with session.run(message) as runner:
+                                await runner.result(to_type=str)
+                        except (ACSGuardianDenied, RuntimeError):
+                            pass
+                        await direct("outside-after")
+                finally:
+                    await manager.shutdown()
+        asyncio.run(main())
+
+    def _workflow_sessions(self) -> list[list[str]]:
+        workflows = {r["params"]["metadata"]["session_id"] for r in self.guardian.envelopes_for("steps/sessionStart")
+                     if (r["params"]["payload"].get("platform_context") or {}).get("workflow_name")}
+        return [[r["method"] for r in self.guardian.received if r["params"]["metadata"]["session_id"] == sid]
+                for sid in workflows]
+
+    _HEADERS = ({}, {"workflow-run-id": "client-chosen"},
+                {"workflow-run-id": "client-chosen", "workflow-trace-id": "0" * 31 + "1"})
+
+    def test_a_direct_call_after_a_served_run_uses_the_middlewares_own_session(self) -> None:
+        for headers in self._HEADERS:
+            for message in ("input", None):
+                for before in (False, True):
+                    with self.subTest(headers=headers, message=message, before=before):
+                        self.guardian.reset()
+                        EXECUTED.clear()
+                        self._serve_with_direct_calls(headers, message, before=before)
+                        self.assertEqual(EXECUTED, (["outside-before"] if before else [])
+                                         + [message or "none", "outside-after"])
+                        [workflow] = self._workflow_sessions()
+                        self.assertEqual(workflow[1], "steps/sessionStart", "the run sends its own sessionStart")
+                        self.assertEqual(workflow.count("steps/toolCallRequest"), 1, "only the run's call is in it")
+
+    def test_a_direct_call_after_a_failed_served_run_uses_the_middlewares_own_session(self) -> None:
+        FLOW_RAISES.append(True)
+        self.addCleanup(FLOW_RAISES.clear)
+        for headers in self._HEADERS:
+            for message in ("input", None):
+                with self.subTest(headers=headers, message=message):
+                    self.guardian.reset()
+                    EXECUTED.clear()
+                    self._serve_with_direct_calls(headers, message, before=False)
+                    self.assertEqual(EXECUTED, [message or "none", "outside-after"])
+                    [workflow] = self._workflow_sessions()
+                    self.assertEqual(workflow[-1], "steps/sessionEnd")
+
+    def test_a_call_before_a_served_run_never_lets_the_run_skip_its_start(self) -> None:
+        allow = self.guardian._default_allow
+        self.guardian.handlers["steps/sessionStart"] = lambda req: {
+            **allow(req), "decision": "deny" if (req["params"]["payload"].get("platform_context") or {}).get(
+                "workflow_name") else "allow", "reasoning": "workflows are not permitted"}
+        for headers in self._HEADERS:
+            for before in (False, True):
+                with self.subTest(headers=headers, before=before):
+                    self.guardian.reset()
+                    EXECUTED.clear()
+                    self._serve_with_direct_calls(headers, None, before=before)
+                    self.assertNotIn("none", EXECUTED, "the refused run's call never runs")
+                    self.assertIn("outside-after", EXECUTED, "a call after the refused run is the own session's")
+                    [workflow] = self._workflow_sessions()
+                    self.assertEqual(workflow[:2], ["handshake/hello", "steps/sessionStart"])
+                    self.assertNotIn("steps/toolCallRequest", workflow)
 
     def test_requests_sharing_a_run_id_header_are_separate_sessions(self) -> None:
         same = {"workflow-run-id": "client-chosen"}
@@ -465,8 +548,9 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
                 self.assertEqual(outputs, [None], "a result reported after close() is withheld")
 
     def test_a_detached_task_of_an_ended_run_runs_nothing_whatever_the_sessions_decision(self) -> None:
-        for mode in ("tool methods not evaluated", "no answer, startup proceeds"):
-            with self.subTest(mode):
+        for mode, with_builder in [(m, b) for m in ("tool methods not evaluated", "no answer, startup proceeds")
+                                   for b in (True, False)]:
+            with self.subTest(mode=mode, with_builder=with_builder):
                 self.guardian.reset()
                 self.executed = []
                 self._bypassing(mode)
@@ -488,9 +572,47 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
                     await run("root", leaves_a_task)
                     release.set()
                     await detached[0]
-                self._middleware_runs(body)
+                self._middleware_runs(body, with_builder=with_builder)
                 self.assertEqual(self.executed, ["inside", "denied late"])
                 self.assertEqual(outputs, [None], "a result the ended run's task reports is withheld")
+
+    def test_a_child_task_that_makes_a_refused_runs_first_call_stays_refused_after_the_run(self) -> None:
+        allow = self.guardian._default_allow
+        for with_builder in (True, False):
+            with self.subTest(with_builder=with_builder):
+                self.executed = []
+                answers = iter(["deny"])
+                self.guardian.handlers["steps/sessionStart"] = lambda req: {
+                    **allow(req), "decision": next(answers, "allow"), "reasoning": "only the run is refused"}
+
+                async def body(middleware, run):
+                    release = asyncio.Event()
+                    children: list[asyncio.Task] = []
+
+                    async def entry(message):
+                        async def child():
+                            await self._call(middleware, "first")
+                            await release.wait()
+                            await self._call(middleware, "late")
+                        children.append(asyncio.create_task(child()))
+                        await asyncio.sleep(0.2)
+                    await run("root", entry)
+                    release.set()
+                    await children[0]
+                self._middleware_runs(body, with_builder=with_builder, default_deny=True)
+                self.assertEqual(self.executed, ["denied first", "denied late"])
+
+    def test_a_task_created_after_a_run_uses_the_middlewares_own_session(self) -> None:
+        for with_builder in (True, False):
+            with self.subTest(with_builder=with_builder):
+                self.guardian.reset()
+                self.executed = []
+
+                async def body(middleware, run):
+                    await run("flow", lambda message: self._call(middleware, "inside"))
+                    await asyncio.create_task(self._call(middleware, "outside-after"))
+                self._middleware_runs(body, with_builder=with_builder)
+                self.assertEqual(self.executed, ["inside", "outside-after"])
 
     def test_no_call_runs_while_close_is_ending_the_sessions(self) -> None:
         self._bypassing("tool methods not evaluated")
@@ -532,17 +654,29 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertIn("exported", starts, "the later run opened a session of its own")
 
     def test_a_direct_call_after_a_run_in_the_same_task_uses_the_middlewares_own_session(self) -> None:
-        for with_builder in (True, False):
-            with self.subTest(with_builder=with_builder):
+        cases = [(builder, run_input, header) for builder in (True, False) for run_input in ("input", None)
+                 for header in (None, "provided-run-id", "both-ids")]
+        for with_builder, run_input, header in cases:
+            with self.subTest(with_builder=with_builder, run_input=run_input, header=header):
                 self.guardian.reset()
                 self.executed = []
 
-                async def body(middleware, run):
+                async def body(middleware, run, run_input=run_input, header=header):
+                    if header:
+                        # As SessionManager sets them from a request's headers, which outlive the Runner.
+                        ContextState.get().workflow_run_id.set(header)
+                    if header == "both-ids":
+                        ContextState.get().workflow_trace_id.set(7)
                     await self._call(middleware, "outside-before")
-                    await run("flow", lambda message: self._call(middleware, "inside"))
+                    await run("flow", lambda message: self._call(middleware, "inside"), run_input)
                     await self._call(middleware, "outside-after")
                 self._middleware_runs(body, with_builder=with_builder)
                 self.assertEqual(self.executed, ["outside-before", "inside", "outside-after"])
+                if not with_builder and run_input is None:
+                    # Without the builder, only a Runner's input marks a run, so this run's call is the own session's.
+                    [own] = self._sessions()
+                    self.assertEqual(own.count("steps/toolCallRequest"), 3)
+                    continue
                 own, inside = self._sessions()
                 self.assertEqual(own.count("steps/toolCallRequest"), 2, "both outside calls are in the own session")
                 self.assertEqual(own[-1], "steps/sessionEnd:completed")

@@ -333,8 +333,28 @@ def _current_run_id() -> str | None:
         return None
 
 
+def _span_stack() -> list:
+    try:
+        return _NATContextState.get().active_span_id_stack.get() if _NATContextState is not None else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _in_run(session: "_Session") -> bool:
+    # NAT sets these when a Runner starts and resets them in its context when it exits, so a context made during the run
+    # keeps them and one the Runner returns to, or makes afterwards, gets the previous ones back.
+    return (session.run_id == _current_run_id() and session.trace_id == _current_trace_id()
+            and any(_current_input() is item for item in session.inputs))
+
+
+def _current_trace_id() -> Any:
+    try:
+        return _NATContextState.get().workflow_trace_id.get() if _NATContextState is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _current_input() -> Any:
-    # NAT sets input_message when a Runner is entered and resets it when the Runner exits, however it ends.
     try:
         return _NATContextState.get().input_message.get() if _NATContextState is not None else None
     except Exception:  # noqa: BLE001
@@ -431,7 +451,10 @@ class _Session:
     # The run's step stream, for a run seen only from its calls.
     stream: weakref.ref | None = None
     run_id: str | None = None
-    # The inputs of the session's Runners, which tell a call inside the run from one made after it.
+    trace_id: Any = None
+    # "workflow" from a WORKFLOW_START, "stream" from a run seen only from its calls, or "own".
+    kind: str = "own"
+    # The inputs of the session's Runners, nested ones included.
     inputs: list = field(default_factory=list)
     platform_context: dict = field(default_factory=dict)
     decision: Handshake | None = None
@@ -477,6 +500,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         target = getattr(config, "target_function_or_group", None) or "nat"
         self._agent_id = os.environ.get("ACS_AGENT_ID") or f"nat:{hashlib.sha256(target.encode()).hexdigest()[:8]}"
         self._current: contextvars.ContextVar = contextvars.ContextVar(f"acs_nat_session_{id(self)}", default=None)
+        # The run a context saw end, set in the Runner's own context when NAT reports the end.
+        self._left: contextvars.ContextVar = contextvars.ContextVar(f"acs_nat_left_{id(self)}", default=None)
+        self._with_builder = False
         self._sessions_lock = threading.Lock()
         self._open_sessions: set[_Session] = set()
         self._stream_sessions: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -507,7 +533,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             session.lane.close()
 
     def _new_session(self, *, session_id: str | None = None, root_step: str | None = None, stream: Any = None,
-                     platform_context: dict | None = None, run: bool = False) -> _Session | None:
+                     platform_context: dict | None = None, run: bool = False, kind: str = "own") -> _Session | None:
         try:
             task = asyncio.current_task()
         except RuntimeError:
@@ -516,7 +542,9 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                            task=task, root_step=root_step,
                            stream=weakref.ref(stream) if stream is not None else None,
                            platform_context=dict(platform_context or {}),
-                           run_id=_current_run_id() if run else None, inputs=[_current_input()] if run else [])
+                           run_id=_current_run_id() if run else None,
+                           trace_id=_current_trace_id() if run else None, inputs=[_current_input()] if run else [],
+                           kind=kind)
         with self._sessions_lock:
             if self._closed:
                 session.lane.seal()
@@ -526,7 +554,8 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
     def _workflow_started(self, payload) -> _Session | None:
         current = self._current.get()
-        if current is not None and not current.ended and current.run_id == _current_run_id():
+        if (current is not None and current.kind == "workflow" and not current.ended
+                and current.run_id == _current_run_id() and self._left.get() is not current):
             current.inputs.append(_current_input())
             return None
         context = {"workflow_name": payload.name or ""}
@@ -534,10 +563,11 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         for key in ("workflow_run_id", "conversation_id"):
             if provided.get(key):
                 context[key] = provided[key]
-        session = self._new_session(root_step=payload.UUID, platform_context=context, run=True)
+        session = self._new_session(root_step=payload.UUID, platform_context=context, run=True, kind="workflow")
         if session is None:
             return None
         self._current.set(session)
+        self._watch_end(session)
         self._queue(session, "steps/sessionStart", {"platform_context": context})
         text = _stringify_step_data(payload.data)
         if text:
@@ -579,22 +609,42 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
 
     def _session_of_call(self) -> _Session | None:
         current = self._current.get()
-        stream = _current_stream()
-        message = _current_input()
-        if (current is not None and any(message is item for item in current.inputs)
-                and (current.stream is None or current.stream() is stream)):
+        if current is not None and self._belongs(current):
             return current
-        if stream is not None and message is not None:
-            return self._stream_session(stream)
+        stream = _current_stream() if not self._with_builder else None
+        if stream is not None:
+            with self._sessions_lock:
+                existing = self._stream_sessions.get(stream)
+            if existing is not None and self._belongs(existing):
+                self._current.set(existing)
+                return existing
+            # Only a Runner sets the input; a run whose input is None is reported under the middleware's own session.
+            if existing is None and _current_input() is not None and not getattr(stream, "_closed", False):
+                return self._stream_session(stream)
         return self._own_session()
+
+    def _belongs(self, session: _Session) -> bool:
+        return self._left.get() is not session and _in_run(session)
+
+    def _left_run(self, session: _Session) -> None:
+        self._left.set(session)
+
+    def _watch_end(self, session: _Session) -> None:
+        # NAT stops a run's exporters before a raised run completes its stream, so the end is watched on the stream itself.
+        try:
+            _NATContext.get().intermediate_step_manager.subscribe(on_next=lambda step: None,
+                                                                  on_complete=lambda: self._left_run(session))
+        except Exception as e:  # noqa: BLE001
+            audit_event("lifecycle_subscribe_failed", session_id=session.id, error=str(e))
 
     def _stream_session(self, stream: Any) -> _Session | None:
         with self._sessions_lock:
             session = self._stream_sessions.get(stream)
         if session is None:
-            stack = _NATContextState.get().active_span_id_stack.get()
+            stack = _span_stack()
             session = self._new_session(root_step=stack[1] if len(stack) > 1 else None, stream=stream,
-                                        platform_context={"workflow_run_id": _current_run_id()}, run=True)
+                                        platform_context={"workflow_run_id": _current_run_id()}, run=True,
+                                        kind="stream")
             if session is None:
                 return None
             with self._sessions_lock:
@@ -612,7 +662,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             _NATContext.get().intermediate_step_manager.subscribe(
                 on_next=lambda step: self._stream_step(session, step),
                 on_error=lambda e: audit_event("lifecycle_subscription_error", session_id=session.id, error=str(e)),
-                on_complete=lambda: self._runner_stopped(session),
+                on_complete=lambda: (self._left_run(session), self._runner_stopped(session)),
             )
         except Exception as e:  # noqa: BLE001
             audit_event("lifecycle_subscribe_failed", session_id=session.id, error=str(e))
@@ -622,6 +672,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         if (getattr(payload, "event_type", None) == IntermediateStepType.WORKFLOW_END
                 and payload.UUID == session.root_step):
             self._workflow_ended(session, payload)
+            self._left_run(session)
 
     def _own_session(self) -> _Session | None:
         with self._sessions_lock:
@@ -1073,6 +1124,7 @@ if _NAT_AVAILABLE and _HAS_REGISTRATION:
                 key = str(uuid.uuid4())
                 _LIFECYCLE_MIDDLEWARES[key] = middleware
                 await add_exporter(f"acs_lifecycle_{key}", ACSLifecycleExporterConfig(middleware_key=key))
+                middleware._with_builder = True
         try:
             yield middleware
         finally:
@@ -1108,6 +1160,7 @@ if _NAT_AVAILABLE and _HAS_REGISTRATION and _HAS_EXPORTER and _HAS_LIFECYCLE:
                 elif (payload.event_type == IntermediateStepType.WORKFLOW_END and self._session is not None
                       and payload.UUID == self._root_step):
                     self._middleware._workflow_ended(self._session, payload)
+                    self._middleware._left_run(self._session)
             except Exception as e:  # noqa: BLE001
                 audit_event("lifecycle_export_failed", error=str(e))
 

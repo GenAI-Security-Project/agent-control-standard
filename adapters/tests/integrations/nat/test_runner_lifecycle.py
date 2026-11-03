@@ -504,8 +504,12 @@ class EveryRunReportsItsLifecycle(unittest.TestCase):
                                   modified_args=("x",), modified_kwargs={})
 
         async def post() -> None:
-            # As inside the refused run's Runner, which NAT entered with its input.
-            ContextState.get().input_message.set(run_input := object())
+            # As inside the refused run's Runner, which NAT entered with its input, run id and trace id.
+            state = ContextState.get()
+            state.input_message.set(run_input := object())
+            state.workflow_run_id.set("run-1")
+            state.workflow_trace_id.set(1)
+            session.run_id, session.trace_id = "run-1", 1
             session.inputs.append(run_input)
             middleware._current.set(session)
             await middleware.post_invoke(context)
