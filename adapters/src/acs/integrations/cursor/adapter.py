@@ -1,62 +1,5 @@
 #!/usr/bin/env python3
-"""
-ACS adapter for Cursor hooks.
-
-Translates a Cursor hook event into a signed ACS JSON-RPC request,
-sends it to a Guardian, and translates the ACS response back to
-Cursor's expected output format.
-
-Wire-format ground truth: GenAI-Security-Project/agent-control-standard specification/v0.1.0/
-
-Note on payload completeness: Cursor does not expose every field ACS
-v0.1.0 hook schemas require.
-
-  - `subagentStart` — three of four required fields (subagent_session_id,
-    parent_session_id, parent_step_id) are populated from real session
-    data via deterministic UUID5 and the adapter's session-state tracking
-    of the last step_id. When NO prior step is recorded, parent_step_id
-    is the spawn event's own request_id (the spawn is the first observed
-    parent step) with a `subagent_start_parent_step_unknown` audit event
-    — never the session id masquerading as a step id. The fourth field,
-    `intent_derivation`, is hardcoded to `derived_from_parent` (the
-    defensible default for IDE-spawned subagents).
-  - `preCompact` — both required fields are real: `entries_to_compact` is
-    the list of step_ids the adapter has observed in this session;
-    `triggered_by` comes from Cursor's `trigger` field.
-  - `subagentStop` — NOT forwarded. Its event carries no identifier of
-    the subagentStart it ends, so it cannot name the subagent_session_id
-    steps/subagentStop requires (mapping.md).
-
-See the README per-hook honesty table for the full mapping.
-
-Usage in hooks.json:
-  { "command": "/path/to/acs-cursor-hook preToolUse" }
-
-Environment variables (same defaults / semantics as the Claude Code adapter):
-  ACS_GUARDIAN_URL    Guardian endpoint (default: http://127.0.0.1:8787/acs)
-  ACS_DEFAULT_DENY    "1" = fail-closed. Default "0" (spec default per §6.4).
-                      Cursor also honors per-hook `failClosed: true` in hooks.json.
-                      The ServerHello's `on_decision_failure` also applies
-                      (most-restrictive-wins). Guardian REFUSALS
-                      (SIGNATURE_INVALID, REPLAY_DETECTED, malformed /
-                      oversized envelope) always fail closed regardless of
-                      posture — every refusal is attacker-reachable.
-  ACS_HMAC_SECRET     Shared secret for HMAC-SHA256 signing per §10 (or
-                      ACS_HMAC_SECRET_FILE, preferred). Unset = no signing
-                      (local dev, loud audit event).
-  ACS_AGENT_ID        Explicit agent_id; defaults to cursor:<sha8(workspace)>.
-  ACS_STARTUP_POSTURE "proceed" or "refuse": what this hook does in a
-                      session with no negotiated Guardian (§4.1); the
-                      session keeps none for its lifetime. Unset follows
-                      ACS_DEFAULT_DENY.
-  ACS_HANDSHAKE       "0" skips the handshake; ACS_STARTUP_POSTURE then
-                      settles every step. Default "1".
-  ACS_AUDIT_FILE      Append every ACS_AUDIT event to this file (0600) in
-                      addition to stderr.
-  ACS_DISABLED        "1" = incident kill switch: no Guardian traffic; every
-                      gate gets its explicit allow, since failClosed blocks
-                      on no output.
-"""
+"""Cursor hook adapter: a hook event on stdin becomes an ACS step, and the Guardian's answer becomes the hook's output."""
 from __future__ import annotations
 
 import hashlib
@@ -799,9 +742,7 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
     decision = normalize_decision(acs_response.get("result"))
     original_input = original_input or {}
 
-    # An arrived-but-uninterpretable decision fails closed; the exact
-    # spec basis is unsettled (§6.4 vs. arrived-and-unusable),
-    # tracked in issue #32.
+    # A decision outside the five dispositions denies under either posture (issue #32).
     if not decision.known:
         audit_event("unusable_disposition",
                     disposition=decision.disposition or "(missing)", event=event_name)

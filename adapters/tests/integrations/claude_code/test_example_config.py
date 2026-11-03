@@ -54,10 +54,7 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
                 f"string, the only channel Claude Code passes through")
 
     def test_every_hook_carries_required_settings_inline(self) -> None:
-        """Every wired hook must carry the deployment settings inline.
-        Unset ACS_HMAC_SECRET_FILE means unsigned envelopes, which §10
-        makes non-conformant; unset ACS_AUDIT_FILE means audit events
-        that land nowhere, which §6.4 requires to land somewhere."""
+        """Without ACS_HMAC_SECRET_FILE every session is refused (§10), and without ACS_AUDIT_FILE the §6.4 audit stays on stderr."""
         for hook, entries in self.hooks.items():
             entry = entries[0]["hooks"][0]
             self.assertNotIn("env", entry,
@@ -67,9 +64,8 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
             for required in ("ACS_GUARDIAN_URL=", "ACS_HMAC_SECRET_FILE=",
                              "ACS_AUDIT_FILE="):
                 self.assertIn(required, cmd,
-                    f"{hook} must carry {required} inline. Unset means unsigned "
-                    f"envelopes, which §10 makes non-conformant, and audit "
-                    f"events that land nowhere, which §6.4 requires")
+                    f"{hook} must carry {required} inline: without a secret every session is refused (§10), "
+                    f"and without an audit file the §6.4 audit events land nowhere")
 
     def test_example_equals_wire_py_output(self) -> None:
         """The checked-in example must BE wire.py's output for the same

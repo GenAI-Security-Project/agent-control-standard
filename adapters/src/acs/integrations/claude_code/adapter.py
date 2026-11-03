@@ -1,59 +1,5 @@
 #!/usr/bin/env python3
-"""
-ACS adapter for Claude Code hooks.
-
-Translates a Claude Code hook event (read from stdin as JSON) into an
-ACS JSON-RPC request, signs it (HMAC-SHA256 baseline per Specification
-§10 when ACS_HMAC_SECRET is set), sends it to a Guardian, and
-translates the ACS response back to Claude Code's expected output.
-
-Wire-format ground truth: GenAI-Security-Project/agent-control-standard specification/v0.1.0/
-
-Environment variables:
-  ACS_GUARDIAN_URL    Guardian endpoint (default: http://127.0.0.1:8787/acs)
-  ACS_DEFAULT_DENY    "1" = fail-closed on adapter error or unknown
-                      Guardian disposition. Default: "0" (spec default
-                      per §6.4 is fail-open with audit event). Switch
-                      to "1" for production deployments that prefer
-                      fail-closed availability tradeoff. The negotiated
-                      ServerHello's `on_decision_failure` also applies:
-                      the adapter fails closed when EITHER this env var
-                      or the Guardian's declared posture says deny
-                      (most-restrictive-wins).
-                      Guardian REFUSALS (SIGNATURE_INVALID, REPLAY_DETECTED,
-                      oversized/malformed envelope, …) always fail closed
-                      regardless of posture — a refusal is an alive
-                      Guardian rejecting the envelope, and every refusal
-                      is attacker-reachable (see GUARDIAN_REFUSAL_CODES).
-  ACS_HMAC_SECRET     Shared secret for baseline HMAC-SHA256 envelope
-                      signing per §10 (or ACS_HMAC_SECRET_FILE, preferred
-                      for production), at least 32 bytes, named by
-                      ACS_HMAC_KEY_ID. Without both, the session is refused
-                      and every step denied: ACS-Core signs every request.
-  ACS_AGENT_ID        Explicit agent_id for metadata. If unset, derived
-                      as `claude-code:<sha8(dir)>` from CLAUDE_PROJECT_DIR,
-                      or from the cwd of the session's first hook.
-  ACS_STARTUP_POSTURE "proceed" or "refuse": what this hook does in a
-                      session with no negotiated Guardian, because its
-                      handshake got no answer (§4.1). "proceed" lets the
-                      step run with nothing sent to the Guardian, "refuse"
-                      denies it; the session keeps no negotiated Guardian
-                      for its lifetime. Unset follows ACS_DEFAULT_DENY.
-  ACS_HANDSHAKE       "0" skips the handshake, so the session gets no
-                      answer and ACS_STARTUP_POSTURE settles every step.
-                      Default "1". Each session's decision is stored in
-                      ~/.cache/acs-adapter-handshake/ for its lifetime.
-  ACS_AUDIT_FILE      Append every ACS_AUDIT event to this file (0600)
-                      in addition to stderr, so the §6.4 audit half of
-                      the fail-open trade lands somewhere durable.
-  ACS_DISABLED        "1" = incident kill switch: the adapter exits
-                      immediately with no Guardian traffic and no output
-                      (one stderr line). Use when a degraded Guardian is
-                      stalling every hook and you need the agent usable
-                      NOW; re-enable by unsetting. Documented incident
-                      procedure — faster and more reversible than
-                      hand-editing settings.json per machine.
-"""
+"""Claude Code hook adapter: a hook event on stdin becomes an ACS step, and the Guardian's answer becomes the hook's output."""
 from __future__ import annotations
 
 import hashlib
@@ -158,9 +104,7 @@ SESSION_END_REASON_MAP: dict[str, str] = {
     "other":             "completed",
 }
 
-# permissionDecision accepts allow | deny | ask (no native "defer"), so
-# DEFER substitutes to deny, audited. Deployment behavior, not spec-
-# mandated: §9.2 puts disposition substitution on the Guardian.
+# Claude Code's "defer" works only in -p runs, so DEFER substitutes to deny, audited; §9.2 puts substitution on the Guardian.
 PRETOOL_PERMISSION_MAP: dict[str, str] = {
     "deny": "deny", "ask": "ask",
 }
@@ -527,12 +471,8 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
     if decision.disposition in PRETOOL_PERMISSION_MAP:
         return _pretool_response(PRETOOL_PERMISSION_MAP[decision.disposition], decision.reasoning)
     if decision.disposition == "defer":
-        # No native defer in permissionDecision; spec default
-        # timeout_decision is deny (§6). Audited so substitution rate
-        # is machine-visible.
         audit_event("defer_substituted_deny", hook="PreToolUse")
-        return _pretool_response(
-            "deny", f"DEFER substituted to DENY (no native defer): {decision.reasoning}")
+        return _pretool_response("deny", f"DEFER substituted to DENY: {decision.reasoning}")
     if decision.disposition == "modify":
         # §6.3: a modifications object that breaks the composition rules is a DENY, never half-applied.
         violation = modify_composition_violation(decision.modifications)
@@ -548,8 +488,7 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
                 "deny", "MODIFY refused: Claude Code cannot apply the "
                 "requested redactions without dropping part of the decision")
         overrides = decision.modifications.get("parameter_overrides")
-        # A non-dict override cannot be applied as updatedInput; §6.3
-        # fails an unrealizable modification closed to DENY.
+        # A non-dict override cannot be applied as updatedInput, so §6.5 makes the MODIFY a DENY.
         if isinstance(overrides, dict):
             # updatedInput REPLACES the whole input, so merge the per-
             # argument overrides (modifications.json) onto the original.
@@ -683,9 +622,7 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
                        tool_response: Any = None) -> dict[str, Any]:
     decision = normalize_decision(acs_response.get("result"))
 
-    # An arrived decision outside the five dispositions fails closed;
-    # whether §6.4 (posture) or §6.3 (fail closed) governs is
-    # unsettled and tracked in issue #32 — deny is the safe reading.
+    # A decision outside the five dispositions denies under either posture (issue #32).
     if not decision.known:
         audit_event("unusable_disposition",
                     disposition=decision.disposition or "(missing)", hook=hook_event)

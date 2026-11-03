@@ -1,5 +1,5 @@
 {
-  "_comment": "Drop into <project>/.cursor/hooks.json (or merge with your existing config). Replace ACS_GUARDIAN_URL with your deployment's endpoint and /path/to/acs-cursor-hook with the installed command (acs-cursor-wire writes it for you). Generate the shared HMAC secret (REQUIRED for ACS-Core baseline integrity §10; without it any local process that binds the Guardian port becomes the Guardian): mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key — give the SAME file to the Guardian. ACS_AUDIT_FILE is the durable audit sink for §6.4 events.",
+  "_comment": "Drop into <project>/.cursor/hooks.json (or merge with your existing config). Replace ACS_GUARDIAN_URL with your deployment's endpoint and /path/to/acs-cursor-hook with the installed command (acs-cursor-wire writes it for you). ACS_HMAC_SECRET_FILE is REQUIRED for ACS-Core baseline integrity (§10): a secret of at least 32 bytes, named by ACS_HMAC_KEY_ID, the label the Guardian holds too; without both every hook refuses its session and denies every step. Generate it with mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key and give the SAME file to the Guardian. ACS_AUDIT_FILE is the durable audit sink for §6.4 events.",
   "version": 1,
   "hooks": {
     "sessionStart": [
