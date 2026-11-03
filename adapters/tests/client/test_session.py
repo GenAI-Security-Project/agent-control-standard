@@ -110,12 +110,13 @@ class _SessionTest(unittest.TestCase):
         self.audit = mock.patch.object(_handshake, "audit_event").start()
         self.addCleanup(mock.patch.stopall)
 
-    def _open(self, urlopen=None, *, session_id: str = "session-1", start=None, **env: str):
+    def _open(self, urlopen=None, *, session_id: str = "session-1", start=None, counted=None, **env: str):
         config = Config.from_env({"ACS_GUARDIAN_URL": URL, **env})
         with mock.patch.object(_exchange, "_open",
                                side_effect=urlopen or _answer(lambda h: _result(h, HELLO))) as network:
             decision = open_session(config=config, session_id=session_id, agent_id="test",
-                                    platform="test", methods_implemented=["steps/toolCallRequest"], start=start)
+                                    platform="test", methods_implemented=["steps/toolCallRequest"], start=start,
+                                    count_start_failure=None if counted is None else counted.append)
         return decision, network.call_count
 
     def _record(self, session_id: str = "session-1") -> Path:
@@ -506,14 +507,20 @@ class Startup(_SessionTest):
                 decision, calls = self._open(session_id=session, start=starts.append)
                 self.assertEqual((decision.cause, starts, calls), ("session_record_invalid", [], 0))
 
-    def test_a_start_whose_outcome_is_not_recorded_refuses_the_session_and_is_not_repeated(self) -> None:
+    def test_a_start_whose_outcome_is_not_recorded_is_settled_once_as_a_start_without_a_decision(self) -> None:
         starts: list = []
+        counted: list = []
         with mock.patch.object(_handshake.os, "replace", side_effect=OSError(28, "No space left on device")):
             first, _ = self._open(session_id="start-unrecorded", start=starts.append)
-        again, calls = self._open(session_id="start-unrecorded", start=starts.append)
-        self.assertEqual((first.cause, again.cause), ("session_record_unwritable", "session_start_incomplete"))
-        self.assertEqual((len(starts), calls), (1, 0))
-        self.assertIn("session_record_unwritable", [c.args[0] for c in self.audit.call_args_list])
+        again, calls = self._open(session_id="start-unrecorded", start=starts.append, counted=counted)
+        later, _ = self._open(session_id="start-unrecorded", start=starts.append, counted=counted)
+        self.assertEqual(first.cause, "session_record_unwritable")
+        self.assertIsInstance(again, Negotiated)
+        self.assertEqual(again.start_failure["cause"], "session_start_incomplete")
+        self.assertEqual((later, len(starts), calls, counted), (again, 1, 0, ["observed_agent_error"]),
+                         "the start is not repeated, and its failure is settled and counted once")
+        self.assertIn(("fail_open_bypass", "session_start_incomplete"),
+                      [(c.args[0], c.kwargs.get("cause")) for c in self.audit.call_args_list])
 
     def test_a_start_that_cannot_be_claimed_sends_nothing(self) -> None:
         link = os.link

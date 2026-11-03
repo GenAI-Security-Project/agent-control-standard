@@ -650,6 +650,8 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
         # HOOK_MAP value; advertise it so advertised == emitted.
         methods_implemented=list(HOOK_MAP.values()) + ["steps/turnStart"],
         start=lambda session: _send_session_start(event, session, config),
+        count_start_failure=lambda failure: count_decision_failure(_session_id(event), failure,
+                                                                   workspace=_workspace(event)),
     )
 
 

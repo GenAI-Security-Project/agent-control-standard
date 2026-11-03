@@ -68,24 +68,9 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
                  methods_implemented: list[str], wrapped_protocols: list[str] | None = None,
                  timeout: float | None = None, profiles_supported: list[str] | None = None,
                  transports_supported: list[str] | None = None,
-                 start: Callable[[Negotiated], Decided | Resolution | None] | None = None) -> Handshake:
-    """Return the session's decision: the stored one, or the result of one handshake, stored for the session's lifetime; never raises.
-
-    The record sits where the observed agent can write, so it carries an
-    HMAC under the session key over the decision, the session and the
-    Guardian URL: a record that is modified, corrupted, copied from another
-    endpoint, or cannot be stored refuses the session.
-
-    With start, the hook process that opens a negotiated session also sends
-    the session's sessionStart through it, once, unless this hook's
-    ACS_REQUIRE_PROFILES refuses it, and records the outcome in a
-    signed startup record next to the session record. Hooks of one session can
-    run at the same time, so every hook process of the session waits for that
-    handshake and that sessionStart under the session's startup lock, then
-    follows the recorded outcome: a deny or a refusal refuses the session, and
-    a sessionStart without a decision is settled by each hook's fail posture.
-    A startup that cannot be locked or recorded refuses the session.
-    """
+                 start: Callable[[Negotiated], Decided | Resolution | None] | None = None,
+                 count_start_failure: Callable[[str], None] | None = None) -> Handshake:
+    """The session's decision, stored once under an HMAC; with start, the opening process also sends sessionStart under the startup lock. Never raises."""
     if not session_id:
         return NoAnswer("missing_session_id")
     # §10: every request is signed, so a session with no usable secret and label is refused before any stored one is read.
@@ -123,8 +108,14 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
             return own
         recorded = _read_startup(started, ikm, session_id, config.guardian_url)
         if recorded == _PENDING:
-            # The process that claimed the sessionStart released the lock without recording its outcome.
-            return SessionRefused("session_start_incomplete", {"record": str(started)})
+            failure = config.posture.negotiated(decision.server_hello).resolve(Undecided(
+                "session_start_incomplete", {"record": str(started)},
+                "the hook that sent sessionStart ended before its decision arrived"))
+            if count_start_failure is not None:
+                count_start_failure(failure.fields["failure_class"])
+            outcome = session_start_outcome(decision, failure, session_id=session_id, guardian_url=config.guardian_url)
+            unrecorded = _write_startup(started, outcome, ikm, session_id, config.guardian_url)
+            return _required_profiles(unrecorded or outcome, config)
         if recorded is not None:
             return _required_profiles(recorded, config)
         claim = _write_startup(started, None, ikm, session_id, config.guardian_url)

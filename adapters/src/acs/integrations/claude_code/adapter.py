@@ -456,6 +456,8 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
         methods_implemented=(list(HOOK_MAP.values())
                              + ["steps/subagentStart", "steps/turnStart", "steps/agentResponse"]),
         start=lambda session: _send_session_start(event, session, config),
+        count_start_failure=lambda failure: count_decision_failure(event.get("session_id"), failure,
+                                                                   workspace=_turn_ws(event)),
     )
 
 

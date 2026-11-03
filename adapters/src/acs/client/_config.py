@@ -15,7 +15,8 @@ FAILURE_CLASSES = ("timeout", "unreachable", "malformed_response", "guardian_err
                    "signature_invalid", "handshake_failure", "other")
 
 _OBSERVED_AGENT_CAUSES = {"adapter_exception", "adapter_build_failed", "adapter_translate_exception", "envelope_not_signable",
-                          "invalid_stdin_json", "guardian_url_rejected", "request_exceeds_max_payload"}
+                          "invalid_stdin_json", "guardian_url_rejected", "request_exceeds_max_payload",
+                          "session_start_incomplete"}
 _SIGNATURE_CAUSES = {"response_signature_invalid", "error_signature_invalid", "response_unverifiable",
                      "server_hello_signature_invalid"}
 

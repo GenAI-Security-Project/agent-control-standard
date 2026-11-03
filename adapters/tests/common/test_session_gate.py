@@ -601,6 +601,44 @@ class SessionGateThroughHooks(unittest.TestCase):
                     self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"],
                                      {"malformed_response": 1})
 
+    def test_a_session_start_whose_hook_was_killed_is_a_counted_start_without_a_decision(self) -> None:
+        hooks = {"claude-code": ([str(BIN / "acs-claude-code-hook")], self._claude),
+                 "cursor": ([str(BIN / "acs-cursor-hook"), "preToolUse"], self._cursor)}
+        for host, (argv, run) in hooks.items():
+            with self.subTest(host):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
+
+                def slow_start(req, allow=guardian._default_allow):
+                    time.sleep(3)
+                    return allow(req)
+                guardian.handlers["steps/sessionStart"] = slow_start
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                session = str(uuid.uuid4())
+                event = ({"session_id": session, "cwd": "/tmp", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                          "tool_input": {"command": "echo hi"}} if host == "claude-code"
+                         else {"conversation_id": session, "workspace_roots": ["/tmp"], "tool_name": "Bash",
+                               "tool_input": {"command": "echo hi"}})
+                first = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         text=True, env=self._env(guardian.url()))
+                first.stdin.write(json.dumps(event))
+                first.stdin.close()
+                deadline = time.monotonic() + 10
+                while "steps/sessionStart" not in guardian.methods_seen() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                first.kill()
+                first.wait(timeout=10)
+                p, denied, audits = run(guardian.url(), session)
+                self.assertFalse(denied, p.stdout)
+                self.assertIn("fail_open_bypass", audits)
+                self.assertIn('"cause": "session_start_incomplete"', p.stderr)
+                p, denied, audits = run(guardian.url(), session, ACS_DEFAULT_DENY="1")
+                self.assertTrue(denied, p.stdout)
+                self.assertEqual(self._end(host, guardian.url(), session).returncode, 0)
+                self.assertEqual(guardian.methods_seen().count("steps/sessionStart"), 1)
+                [end] = guardian.envelopes_for("steps/sessionEnd")
+                self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"observed_agent_error": 1})
+
     def test_a_fail_closed_session_end_still_reports_a_start_without_a_decision(self) -> None:
         # sessionEnd is audit-only, so a fail-closed hook sends it with the start's timeout (§6.4).
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
