@@ -1228,4 +1228,43 @@ describe("acs-hook — the negotiated posture, end to end", () => {
       unlinkSync(hookmapPath);
     }
   });
+
+  // Under Bun 1.4.x on Windows, `await Bun.stdin.text()` inside `main()` does
+  // not keep the event loop alive while waiting on piped stdin: the subprocess
+  // exits 0 with empty stdout and empty stderr before `JSON.parse` or
+  // `main().catch` runs, which Claude Code reads as a silent proceed (#111).
+  // Spawning with `stdin: "pipe"` and writing through the pipe tests the real
+  // host invocation shape for both an unparseable payload (exit 2) and a
+  // governed payload (exit 0 with a decision on stdout).
+  it("reads piped stdin to completion before exiting -- blocking garbage with exit 2 and governing a valid payload (#111)", async () => {
+    const dir = scratch();
+    const runPiped = async (input: string) => {
+      const proc = Bun.spawn([process.execPath, "run", SHIM], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          ACS_GUARDIAN_URL: "http://127.0.0.1:1/acs",
+          ACS_SESSION_DIR: join(dir, "sessions"),
+          ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+        },
+      });
+      proc.stdin.write(input);
+      proc.stdin.end();
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { exitCode, stdout, stderr };
+    };
+
+    const bad = await runPiped("not json");
+    expect({ exitCode: bad.exitCode, stdout: bad.stdout }).toEqual({ exitCode: 2, stdout: "" });
+    expect(bad.stderr.length).toBeGreaterThan(0);
+
+    const good = await runPiped(payload("ls -la"));
+    expect(expectQuietDecision(good).permissionDecision).toBe("allow");
+  });
 });
