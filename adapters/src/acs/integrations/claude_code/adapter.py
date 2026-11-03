@@ -458,28 +458,49 @@ def _replacement_output(tool_name: str, text: str) -> Any:
     return None
 
 
-# Fields of a built-in tool's output that name a kind rather than carry content.
-_SHAPE_FIELDS = frozenset({"type", "mode"})
+def _withheld_read(response: dict, text: str) -> dict | None:
+    file = response.get("file")
+    if response.get("type") != "text" or not isinstance(file, dict):
+        return None
+    return {**response, "file": {**file, "content": text}}
 
 
-def _shaped_like(value: Any, text: str) -> Any:
-    """value's structure with content strings replaced by text and lists emptied; a built-in tool ignores a replacement that breaks its output schema."""
-    if isinstance(value, str):
-        return text
-    if isinstance(value, list):
-        return []
-    if isinstance(value, dict):
-        return {k: v if k in _SHAPE_FIELDS and isinstance(v, str) else _shaped_like(v, text) for k, v in value.items()}
-    return value
+def _withheld_agent(response: dict, text: str) -> dict | None:
+    if response.get("status") == "completed":
+        # The hand-back report, its bookkeeping and the subagent's task calls carry what the report says.
+        kept = {k: v for k, v in response.items() if k not in
+                ("handbackReport", "harnessNoteCount", "harnessTailCount", "harnessSectionHash", "taskCalls")}
+        return {**kept, "content": [{"type": "text", "text": text}]}
+    if response.get("status") == "async_launched":
+        return {**response, "description": text}
+    return None
+
+
+# Built-in tools' output schemas, from the Claude Code 2.1.317 program: each replacement keeps the fields and literals
+# its schema requires and puts the notice where the content was, since Claude Code ignores a replacement that does not
+# match and shows the original output (hooks reference, PostToolUse decision control).
+_WITHHELD: dict[str, Callable[[dict, str], dict | None]] = {
+    "Read": _withheld_read,
+    "Grep": lambda r, text: {**r, "numFiles": 0, "filenames": [], "content": text},
+    "Glob": lambda r, text: {**r, "numFiles": 0, "filenames": []},
+    "WebFetch": lambda r, text: {**r, "result": text},
+    "WebSearch": lambda r, text: {**r, "results": [text]},
+    "Write": lambda r, text: {k: v for k, v in r.items() if k != "gitDiff"} | {
+        "content": text, "structuredPatch": [], "originalFile": None},
+    "Edit": lambda r, text: {k: v for k, v in r.items() if k != "gitDiff"} | {
+        "oldString": text, "newString": text, "structuredPatch": [], "originalFile": None},
+    "Agent": _withheld_agent,
+    "Task": _withheld_agent,
+}
 
 
 def _withhold(tool_name: str, reason: str, tool_response: Any = None) -> dict[str, Any]:
-    """Keep a tool's output from Claude: replace it in the tool's own output shape, and record it when no shape is known."""
+    """Keep a tool's output from Claude: replace it in the tool's own output shape, and record it when no shape is known for the tool or its output."""
     out = _block_response(reason, "PostToolUse")
     text = f"[output withheld by the ACS Guardian: {reason}]"
     replacement = _replacement_output(tool_name, text)
-    if replacement is None and isinstance(tool_response, (dict, str)):
-        replacement = _shaped_like(tool_response, text)
+    if replacement is None and isinstance(tool_response, dict) and tool_name in _WITHHELD:
+        replacement = _WITHHELD[tool_name](tool_response, text)
     if replacement is None:
         # A block only adds the reason next to the result; Claude still sees the original output.
         audit_event("unenforceable_decision", hook="PostToolUse", tool=tool_name, reason=reason)

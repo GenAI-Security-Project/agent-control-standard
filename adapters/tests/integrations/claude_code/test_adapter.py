@@ -299,23 +299,38 @@ class _GuardianRun(unittest.TestCase):
 DOCUMENTED_BASH_REPLACEMENT = {"stdout": "[redacted]", "stderr": "", "interrupted": False, "isImage": False}
 BASH_SHAPE = set(DOCUMENTED_BASH_REPLACEMENT)
 
-# Built-in tools' outputs as Claude Code reports them in tool_response; the live run confirms Claude Code applies a
-# replacement in each shape.
+# Built-in tools' tool_response, and for each the fields and literals its output schema requires, transcribed from the
+# Claude Code 2.1.317 program; a replacement without them is ignored and Claude sees the original output.
 BUILT_IN_RESPONSES = {
-    "Read": {"type": "text", "file": {"filePath": "/repo/.env", "content": "SECRET-OUTPUT", "numLines": 1,
-                                      "startLine": 1, "totalLines": 1}},
-    "Grep": {"mode": "content", "numFiles": 1, "filenames": ["/repo/.env"], "content": "SECRET-OUTPUT", "numLines": 1},
-    "WebFetch": {"bytes": 13, "code": 200, "codeText": "OK", "result": "SECRET-OUTPUT", "durationMs": 5,
-                 "url": "https://example.com/SECRET-OUTPUT"},
+    "Read": ({"type": "text", "file": {"filePath": "/repo/.env", "content": "SECRET-OUTPUT", "numLines": 1,
+                                       "startLine": 1, "totalLines": 1}},
+             {"type": "text"}, ("file",), lambda r: r["file"]["content"]),
+    "Grep": ({"mode": "content", "numFiles": 1, "filenames": ["/repo/SECRET-OUTPUT"], "content": "SECRET-OUTPUT",
+              "numLines": 1}, {"mode": "content"}, ("numFiles", "filenames"), lambda r: r["content"]),
+    "Glob": ({"durationMs": 3, "numFiles": 1, "filenames": ["/repo/SECRET-OUTPUT"], "truncated": False},
+             {}, ("durationMs", "numFiles", "filenames", "truncated"), None),
+    "WebFetch": ({"bytes": 13, "code": 200, "codeText": "OK", "result": "SECRET-OUTPUT", "durationMs": 5,
+                  "url": "https://example.com/page"}, {}, ("bytes", "code", "codeText", "durationMs", "url"),
+                 lambda r: r["result"]),
+    "WebSearch": ({"query": "q", "results": [{"tool_use_id": "s1", "content": [{"title": "SECRET-OUTPUT",
+                                                                                "url": "https://example.com"}]}],
+                   "durationSeconds": 1.5}, {}, ("query", "durationSeconds"), lambda r: r["results"][0]),
+    "Write": ({"type": "update", "filePath": "/repo/a", "content": "SECRET-OUTPUT", "structuredPatch": [{"lines": ["SECRET-OUTPUT"]}],
+               "originalFile": "SECRET-OUTPUT"}, {"type": "update"}, ("filePath", "structuredPatch", "originalFile"),
+              lambda r: r["content"]),
+    "Edit": ({"filePath": "/repo/a", "oldString": "SECRET-OUTPUT", "newString": "SECRET-OUTPUT", "originalFile": "SECRET-OUTPUT",
+              "structuredPatch": [{"lines": ["SECRET-OUTPUT"]}], "userModified": False, "replaceAll": False},
+             {}, ("filePath", "originalFile", "structuredPatch", "userModified", "replaceAll"), lambda r: r["newString"]),
+    "Agent": ({"status": "completed", "agentId": "a1", "prompt": "explore", "canContinueAgent": True,
+               "content": [{"type": "text", "text": "SECRET-OUTPUT"}], "handbackReport": {"text": "SECRET-OUTPUT"},
+               "totalToolUseCount": 2, "totalDurationMs": 9, "totalTokens": 10,
+               "usage": {"input_tokens": 1, "output_tokens": 1, "cache_creation_input_tokens": None,
+                         "cache_read_input_tokens": None}},
+              {"status": "completed"}, ("agentId", "prompt", "totalToolUseCount", "totalDurationMs", "totalTokens", "usage"),
+              lambda r: r["content"][0]["text"]),
 }
-
-
-def _same_shape(a, b) -> bool:
-    if isinstance(a, dict) and isinstance(b, dict):
-        return a.keys() == b.keys() and all(_same_shape(a[k], b[k]) for k in a)
-    if isinstance(a, list) and isinstance(b, list):
-        return True
-    return type(a) is type(b)
+ASYNC_AGENT = {"status": "async_launched", "agentId": "a2", "description": "SECRET-OUTPUT", "prompt": "explore",
+               "outputFile": "/tmp/a2.out"}
 
 
 class PostToolUseWithholdsOutput(_GuardianRun):
@@ -346,7 +361,9 @@ class PostToolUseWithholdsOutput(_GuardianRun):
                 out, err = self._post("Bash", **decision)
                 self.assertEqual(out["decision"], "block")
                 replacement = out["hookSpecificOutput"]["updatedToolOutput"]
-                self.assertTrue(_same_shape(replacement, DOCUMENTED_BASH_REPLACEMENT), replacement)
+                self.assertEqual(set(replacement), BASH_SHAPE)
+                self.assertEqual((replacement["stderr"], replacement["interrupted"], replacement["isImage"]),
+                                 ("", False, False))
                 self.assertIn("withheld", replacement["stdout"])
                 self.assertNotIn("unenforceable_decision", err)
 
@@ -357,20 +374,45 @@ class PostToolUseWithholdsOutput(_GuardianRun):
         self.assertIn("withheld", out["hookSpecificOutput"]["updatedToolOutput"])
         self.assertNotIn("unenforceable_decision", err)
 
-    def test_a_denied_result_of_another_built_in_tool_is_replaced_in_its_own_shape(self) -> None:
-        for tool, response in BUILT_IN_RESPONSES.items():
+    def test_a_denied_result_of_each_supported_built_in_tool_keeps_its_schema(self) -> None:
+        for tool, (response, literals, required, notice) in BUILT_IN_RESPONSES.items():
             for decision in ({"decision": "deny", "reasoning": "leaks a key"},
                              {"decision": "modify", "reasoning": "rewrite", "modifications": {"modified_content": "x"}}):
                 with self.subTest(tool, decision=decision["decision"]):
                     out, err = self._post(tool, response, **decision)
                     self.assertEqual(out["decision"], "block")
                     replacement = out["hookSpecificOutput"]["updatedToolOutput"]
-                    self.assertTrue(_same_shape(replacement, response), replacement)
-                    self.assertIn("withheld", json.dumps(replacement))
-                    self.assertEqual(replacement.get("type", replacement.get("mode")), response.get("type", response.get("mode")))
+                    for key, value in literals.items():
+                        self.assertEqual(replacement[key], value, f"{tool} keeps the {key} literal")
+                    for key in required:
+                        self.assertIn(key, replacement)
+                    if notice is not None:
+                        self.assertIn("withheld", notice(replacement))
                     self.assertNotIn("unenforceable_decision", err)
                     if decision["decision"] == "modify":
                         self.assertIn('"acs_audit_event": "modify_unsupported"', err)
+
+    def test_an_async_agent_launch_keeps_its_status(self) -> None:
+        out, _ = self._post("Agent", ASYNC_AGENT, decision="deny", reasoning="leaks a key")
+        replacement = out["hookSpecificOutput"]["updatedToolOutput"]
+        self.assertEqual((replacement["status"], replacement["agentId"], replacement["outputFile"]),
+                         ("async_launched", "a2", "/tmp/a2.out"))
+        self.assertIn("withheld", replacement["description"])
+
+    def test_a_tool_or_output_variant_with_no_known_shape_is_blocked_and_recorded(self) -> None:
+        for tool, response in (("NotebookEdit", {"new_source": "SECRET-OUTPUT"}),
+                               ("Read", {"type": "image", "file": {"base64": "SECRET-OUTPUT", "type": "image/png",
+                                                                  "originalSize": 1}}),
+                               ("Agent", {"status": "remote_launched", "taskId": "t", "sessionUrl": "https://example.com",
+                                          "description": "SECRET-OUTPUT", "prompt": "p", "outputFile": "/tmp/x"})):
+            with self.subTest(tool, variant=response.get("type", response.get("status"))):
+                g = ProgrammableGuardian()
+                g.handlers["steps/toolCallResult"] = _answer(decision="deny", reasoning="leaks a key")
+                with g:
+                    [(out, err)] = self._run(g, _claude_code_event("PostToolUse", tool_name=tool, tool_input={},
+                                                                   tool_response=response, tool_use_id="t1"))
+                self.assertNotIn("updatedToolOutput", json.loads(out)["hookSpecificOutput"])
+                self.assertIn('"acs_audit_event": "unenforceable_decision"', err)
 
     def test_a_denied_result_with_no_tool_response_is_blocked_and_recorded_as_unenforceable(self) -> None:
         g = ProgrammableGuardian()
@@ -388,7 +430,7 @@ class PostToolUseWithholdsOutput(_GuardianRun):
         self.assertIn('"acs_audit_event": "modify_composition_invalid"', err)
 
     def test_a_fail_closed_result_is_withheld_too(self) -> None:
-        for tool_name, replaced in (("Bash", True), ("mcp__files__read", True), ("Read", True), (7, True)):
+        for tool_name, replaced in (("Bash", True), ("mcp__files__read", True), ("Read", False), (7, False)):
             with self.subTest(tool=tool_name), tempfile.TemporaryDirectory() as root:
                 env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
                 env.update(ACS_GUARDIAN_URL="http://127.0.0.1:1/acs", ACS_DEFAULT_DENY="1", ACS_HMAC_KEY_ID="test-key",
