@@ -625,10 +625,10 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         if session is None:
             return _Step(self._session_id, SessionRefused("middleware_closed", {}), None, self._acs.posture)
         with session.lock:
+            # A lifecycle hook queued before the session ended still goes out; a call after the end or close() does not.
+            if not lifecycle and (session.ended or self._closed):
+                return self._refused(session)
             if session.decision is None:
-                # A lifecycle hook queued before the session ended still goes out; a call after the end does not.
-                if session.ended and not lifecycle:
-                    return self._refused(session)
                 session.decision = open_session(
                     config=self._acs, session_id=session.id, agent_id=self._agent_id, platform="nat",
                     methods_implemented=self._methods(), start=lambda negotiated: self._send_session_start(session, negotiated))

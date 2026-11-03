@@ -23,7 +23,7 @@ try:
     from nat.data_models.function import FunctionBaseConfig
     from nat.data_models.intermediate_step import (IntermediateStep, IntermediateStepPayload, IntermediateStepType,
                                                    StreamEventData)
-    from nat.middleware.middleware import FunctionMiddlewareContext
+    from nat.middleware.middleware import FunctionMiddlewareContext, InvocationContext
     from nat.observability.exporter_manager import ExporterManager
     from nat.runtime.runner import Runner
     from nat.runtime.session import SessionManager
@@ -424,6 +424,94 @@ class EachRootRunnerIsOneSession(unittest.TestCase):
         self.assertEqual(own, ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest",
                                "steps/toolCallResult", "steps/sessionEnd:completed"])
         self.assertEqual(inside[-1], "steps/sessionEnd:completed")
+
+    def _bypassing(self, mode: str) -> None:
+        hello = self.guardian._default_handshake
+        if mode == "tool methods not evaluated":
+            self.guardian.handlers["handshake/hello"] = lambda req: {
+                **hello(req), "methods_evaluated": ["steps/sessionStart", "steps/userMessage", "steps/agentResponse",
+                                                    "steps/sessionEnd"]}
+        elif mode == "no answer, startup proceeds":
+            os.environ["ACS_STARTUP_POSTURE"] = "proceed"
+            self.guardian.handlers["handshake/hello"] = lambda req: {"code": -32603, "message": "unavailable"}
+
+    @staticmethod
+    def _late_result() -> "InvocationContext":
+        return InvocationContext(
+            function_context=FunctionMiddlewareContext(name="Read", config=None, description=None, input_schema=None,
+                                                       single_output_schema=str, stream_output_schema=str),
+            original_args=(), original_kwargs={"command": "late"}, modified_args=(),
+            modified_kwargs={"command": "late"}, output="SECRET")
+
+    def test_no_call_runs_after_close_whatever_the_sessions_decision(self) -> None:
+        for mode in ("tool methods not evaluated", "no answer, startup proceeds"):
+            with self.subTest(mode):
+                self.guardian.reset()
+                self.executed = []
+                self._bypassing(mode)
+                outputs: list = []
+
+                async def body(middleware, run):
+                    await self._call(middleware, "before-close")
+                    await asyncio.to_thread(middleware.close)
+                    sent = list(self.guardian.methods_seen())
+                    await self._call(middleware, "after-close")
+                    context = self._late_result()
+                    await middleware.post_invoke(context)
+                    outputs.append(context.output)
+                    self.assertEqual(self.guardian.methods_seen(), sent, "nothing goes out after close()")
+                self._middleware_runs(body)
+                self.assertEqual(self.executed, ["before-close", "denied after-close"])
+                self.assertEqual(outputs, [None], "a result reported after close() is withheld")
+
+    def test_a_detached_task_of_an_ended_run_runs_nothing_whatever_the_sessions_decision(self) -> None:
+        for mode in ("tool methods not evaluated", "no answer, startup proceeds"):
+            with self.subTest(mode):
+                self.guardian.reset()
+                self.executed = []
+                self._bypassing(mode)
+                outputs: list = []
+
+                async def body(middleware, run):
+                    release = asyncio.Event()
+                    detached: list[asyncio.Task] = []
+
+                    async def leaves_a_task(message):
+                        async def late():
+                            await release.wait()
+                            await self._call(middleware, "late")
+                            context = self._late_result()
+                            await middleware.post_invoke(context)
+                            outputs.append(context.output)
+                        detached.append(asyncio.create_task(late()))
+                        return await self._call(middleware, "inside")
+                    await run("root", leaves_a_task)
+                    release.set()
+                    await detached[0]
+                self._middleware_runs(body)
+                self.assertEqual(self.executed, ["inside", "denied late"])
+                self.assertEqual(outputs, [None], "a result the ended run's task reports is withheld")
+
+    def test_no_call_runs_while_close_is_ending_the_sessions(self) -> None:
+        self._bypassing("tool methods not evaluated")
+
+        async def body(middleware, run):
+            await self._call(middleware, "before-close")
+            closing, release = threading.Event(), threading.Event()
+            end = middleware._end_session
+
+            def held(session, reason):
+                closing.set()
+                release.wait(5)
+                end(session, reason)
+            middleware._end_session = held
+            closer = asyncio.create_task(asyncio.to_thread(middleware.close))
+            await asyncio.to_thread(closing.wait, 5)
+            await self._call(middleware, "while-closing")
+            release.set()
+            await closer
+        self._middleware_runs(body)
+        self.assertEqual(self.executed, ["before-close", "denied while-closing"])
 
     def _audits(self) -> list[dict]:
         path = Path(os.environ["ACS_AUDIT_FILE"])
