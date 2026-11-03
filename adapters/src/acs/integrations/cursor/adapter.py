@@ -53,8 +53,9 @@ Environment variables (same defaults / semantics as the Claude Code adapter):
                       settles every step. Default "1".
   ACS_AUDIT_FILE      Append every ACS_AUDIT event to this file (0600) in
                       addition to stderr.
-  ACS_DISABLED        "1" = incident kill switch: exit immediately, no
-                      Guardian traffic, no output (one stderr line).
+  ACS_DISABLED        "1" = incident kill switch: no Guardian traffic; every
+                      gate gets its explicit allow, since failClosed blocks
+                      on no output.
 """
 from __future__ import annotations
 
@@ -839,7 +840,7 @@ def main() -> int:
         audit_event("acs_disabled_bypass",
                     detail="ACS_DISABLED=1 — hook bypassed with no Guardian "
                            "traffic; every step proceeds ungoverned")
-        return 0
+        return _explicit_allow(sys.argv[1] if len(sys.argv) > 1 else "")
 
     if len(sys.argv) < 2:
         sys.stderr.write("acs-adapter: missing event name argument (usage: acs_adapter.py <event_name>)\n")

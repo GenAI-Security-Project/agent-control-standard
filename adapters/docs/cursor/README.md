@@ -299,7 +299,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Each session's handshake decision, kept for the session's lifetime. |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Deadline for the whole handshake/hello exchange, including a response that arrives slowly. A value that is not a positive number is replaced by `5` and recorded as `invalid_setting`. |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
-| `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. |
+| `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. Each gate answers with its explicit allow, since `failClosed` blocks a hook that prints nothing. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 
 The adapter is invoked as `acs-cursor-hook <event_name>`, where `<event_name>` is one of: `sessionStart`, `sessionEnd`, `stop`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `subagentStart`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `afterFileEdit`, `afterTabFileEdit`, `beforeSubmitPrompt`, `preCompact`, `afterAgentResponse`, `afterAgentThought`.

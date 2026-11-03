@@ -225,6 +225,23 @@ class UnenforceableDecisions(unittest.TestCase):
                 _, audits = self._audits(lambda a: a._translate_post_tool(decision, "postToolUse"))
                 self.assertEqual(audits, [("unenforceable_decision", recorded)])
 
+class TheKillSwitchAllowsExplicitly(unittest.TestCase):
+    """failClosed blocks on "no output" (hooks docs), so ACS_DISABLED answers every gate in its allow shape."""
+
+    def test_each_event_gets_its_allow_shape(self) -> None:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+        env["ACS_DISABLED"] = "1"
+        for event, expected in (("preToolUse", {"permission": "allow"}), ("beforeShellExecution", {"permission": "allow"}),
+                                ("beforeMCPExecution", {"permission": "allow"}), ("subagentStart", {"permission": "allow"}),
+                                ("beforeSubmitPrompt", {"continue": True}), ("postToolUse", None)):
+            with self.subTest(event):
+                proc = subprocess.run([sys.executable, str(ADAPTER), event], input="{}", capture_output=True, text=True,
+                                      env=env, timeout=15)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(json.loads(proc.stdout) if proc.stdout.strip() else None, expected)
+                self.assertIn('"acs_audit_event": "acs_disabled_bypass"', proc.stderr)
+
+
 class MCPResultsAreWithheld(unittest.TestCase):
     """A decision that keeps a delivered MCP result from the model replaces it through updated_mcp_tool_output
     (hooks docs: "replaces the tool output seen by the model"), an object."""

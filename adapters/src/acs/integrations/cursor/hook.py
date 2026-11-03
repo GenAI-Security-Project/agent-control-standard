@@ -26,9 +26,17 @@ def _deny(event_name: str, reason: str) -> int:
     return 0
 
 
+def _allow(event_name: str) -> int:
+    if event_name in PERMISSION_EVENTS:
+        print(json.dumps({"permission": "allow"}))
+    elif event_name == "beforeSubmitPrompt":
+        print(json.dumps({"continue": True}))
+    return 0
+
+
 def main() -> int:
     return run_hook("acs.integrations.cursor.adapter", event_key="event",
-                    event_name=_event_name, deny=_deny)
+                    event_name=_event_name, deny=_deny, allow=_allow)
 
 
 if __name__ == "__main__":

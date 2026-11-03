@@ -704,7 +704,8 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
                 p, records = self._run(argv + ["preToolUse"], event,
                                        ACS_DEFAULT_DENY="1", ACS_DISABLED="1")
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual(p.stdout.strip(), "")
+                self.assertEqual(json.loads(p.stdout), {"permission": "allow"},
+                                 "failClosed reads an empty reply as a failed hook, so the kill switch allows explicitly")
                 self.assertEqual([r["acs_audit_event"] for r in records], ["acs_disabled_bypass"])
                 self.assertEqual(records[0]["event"], "preToolUse")
 
