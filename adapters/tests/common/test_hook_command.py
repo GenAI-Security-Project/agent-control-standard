@@ -214,6 +214,26 @@ class WrittenCommandsAndFiles(unittest.TestCase):
                     self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600, backup.name)
                     self.assertNotIn("0" * 64, backup.read_text(), "a backup keeps the replaced inline secret")
 
+    def test_a_backup_holds_no_part_of_a_quoted_inline_secret(self) -> None:
+        secrets = ["'LEADFRAGMENT middle'TAILFRAGMENT" + "0" * 32, "WORDONE WORDTWO" + "1" * 32,
+                   "QUOTE\"INSIDE\\BACKSLASH" + "2" * 32]
+        for module, name, script in self.CASES:
+            for secret in secrets:
+                with self.subTest(wire=module.__name__, secret=secret[:16]), tempfile.TemporaryDirectory() as d:
+                    tmp = Path(d)
+                    settings = tmp / name
+                    hook = _executable(tmp / script)
+                    self._wire(module, tmp, settings, f"--hook-command={hook}", f"--secret-env-inline={secret}",
+                               "--key-id=test-key")
+                    self._wire(module, tmp, settings, f"--hook-command={hook}", "--secret-env-inline=" + "9" * 64,
+                               "--key-id=test-key")
+                    [backup] = tmp.glob(f"{name}.bak.*")
+                    text = backup.read_text()
+                    for fragment in ("LEADFRAGMENT", "middle", "TAILFRAGMENT", "WORDONE", "WORDTWO", "QUOTE",
+                                     "INSIDE", "BACKSLASH", "0" * 32, "1" * 32, "2" * 32):
+                        self.assertNotIn(fragment, text)
+                    self.assertIn("ACS_HMAC_SECRET=<redacted>", text)
+
     def test_a_new_settings_file_is_private(self) -> None:
         for module, name, script in self.CASES:
             with self.subTest(wire=module.__name__), tempfile.TemporaryDirectory() as d:
