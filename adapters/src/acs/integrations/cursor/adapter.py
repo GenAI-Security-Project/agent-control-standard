@@ -866,6 +866,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
                 audit_event("turn_start_blocked", turn_id=turn_id,
                             disposition=turn_start.disposition or "(unusable)",
                             event="beforeSubmitPrompt")
+                _send_turn_end(event, config, posture, server_hello, session_id, turn_id, "denied_at_start")
                 msg = (f"turn blocked at start ({turn_start.disposition or 'unusable'}): "
                        f"{turn_start.reasoning}")
                 sys.stderr.write(f"acs-adapter: {msg}\n")
@@ -960,18 +961,23 @@ def _close_interrupted_turn(event: dict[str, Any], config: Config, posture: Fail
     if not turn_id:
         return
     close_turn(session_id, workspace=workspace)
+    _send_turn_end(event, config, posture, server_hello, session_id, turn_id, "interrupted")
+
+
+def _send_turn_end(event: dict[str, Any], config: Config, posture: FailPosture, server_hello: dict,
+                   session_id: str | None, turn_id: str, outcome: str) -> None:
     if not method_evaluated(server_hello, "steps/turnEnd"):
         audit_event("method_not_evaluated", method="steps/turnEnd", event="beforeSubmitPrompt", session_id=session_id)
         return
     request = request_envelope("steps/turnEnd", request_id=str(uuid.uuid4()),
                                metadata={**_metadata("beforeSubmitPrompt", event), "turn_id": turn_id},
-                               payload={"turn_id": turn_id, "outcome": "interrupted"})
+                               payload={"turn_id": turn_id, "outcome": outcome})
     result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
     if isinstance(result, Resolution):
         audit_event(result.audit_type, **{**result.fields, "cause": result.cause, "event": "beforeSubmitPrompt",
                                           "method": "steps/turnEnd", "session_id": session_id})
         if result.decision_failure:
-            count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=workspace)
+            count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=_workspace(event))
         return
     _record_delivered(normalize_decision(result.response.get("result")), "steps/turnEnd")
 

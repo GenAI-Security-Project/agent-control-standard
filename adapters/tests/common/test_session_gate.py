@@ -299,8 +299,13 @@ class SessionGateThroughHooks(unittest.TestCase):
                            else p.returncode == 0 and out.get("continue") is False)
                 self.assertTrue(blocked, (p.returncode, p.stdout, p.stderr[-300:]))
                 self.assertIn("turn_start_blocked", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
-                self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart", "steps/turnStart"],
+                self.assertEqual(guardian.methods_seen(),
+                                 ["handshake/hello", "steps/sessionStart", "steps/turnStart", "steps/turnEnd"],
                                  "a blocked prompt's userMessage is never sent")
+                start, end = (r["params"] for r in guardian.received[-2:])
+                self.assertEqual(validate_hook_payload(end["payload"], "turn-end.json"), [])
+                self.assertEqual(end["payload"], {"turn_id": start["payload"]["turn_id"], "outcome": "denied_at_start"})
+                self.assertEqual(end["metadata"]["turn_id"], start["payload"]["turn_id"])
 
     def test_mcp_use_records_the_degraded_claim_once_per_session(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)

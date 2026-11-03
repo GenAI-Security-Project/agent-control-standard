@@ -747,6 +747,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
                 # Only allow applies to a turn start, so any other disposition blocks the prompt.
                 audit_event("turn_start_blocked", turn_id=turn_id,
                             disposition=turn_start.disposition or "(unusable)")
+                _send_turn_end(event, config, posture, server_hello, session_id, turn_id, "denied_at_start")
                 _emit(_block_response(
                     f"turn blocked at start ({turn_start.disposition or 'unusable'}): {turn_start.reasoning}"))
                 return 0
@@ -835,12 +836,17 @@ def _close_interrupted_turn(event: dict[str, Any], config: Config, posture: Fail
     if not turn_id:
         return
     close_turn(session_id)
+    _send_turn_end(event, config, posture, server_hello, session_id, turn_id, "interrupted")
+
+
+def _send_turn_end(event: dict[str, Any], config: Config, posture: FailPosture, server_hello: dict,
+                   session_id: str | None, turn_id: str, outcome: str) -> None:
     if not method_evaluated(server_hello, "steps/turnEnd"):
         audit_event("method_not_evaluated", method="steps/turnEnd", hook="UserPromptSubmit", session_id=session_id)
         return
     request = request_envelope("steps/turnEnd", request_id=str(uuid.uuid4()),
                                metadata={**_metadata(event), "turn_id": turn_id},
-                               payload={"turn_id": turn_id, "outcome": "interrupted"})
+                               payload={"turn_id": turn_id, "outcome": outcome})
     _record(round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id),
             "UserPromptSubmit", "steps/turnEnd", session_id)
 
