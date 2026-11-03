@@ -13,6 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from acs.core import coerce_uuid
 from acs.testing.harness import ProgrammableGuardian, validate_hook_payload
 
 BIN = Path(sys.executable).parent
@@ -473,6 +474,48 @@ class SessionGateThroughHooks(unittest.TestCase):
         self.assertEqual(outputs, [context, context, context])
         self.assertEqual(guardian.envelopes_for("steps/sessionStart")[0]["params"]["payload"]["platform_context"]["source"],
                          "startup")
+
+    def test_a_host_session_resumed_after_its_session_end_opens_a_new_acs_session(self) -> None:
+        claude = [str(BIN / "acs-claude-code-hook")]
+        cursor = str(BIN / "acs-cursor-hook")
+        for host in ("claude-code", "cursor"):
+            with self.subTest(host):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET)
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                session = str(uuid.uuid4())
+                if host == "claude-code":
+                    base = {"session_id": session, "cwd": "/tmp"}
+                    events = [(claude, {**base, "hook_event_name": "SessionStart", "source": "startup"}),
+                              (claude, {**base, "hook_event_name": "SessionEnd", "reason": "prompt_input_exit"}),
+                              (claude, {**base, "hook_event_name": "SessionStart", "source": "resume"}),
+                              (claude, {**base, "hook_event_name": "UserPromptSubmit", "prompt": "hi"}),
+                              (claude, {**base, "hook_event_name": "SessionEnd", "reason": "other"})]
+                else:
+                    base = {"conversation_id": session, "workspace_roots": ["/tmp"]}
+                    events = [([cursor, "sessionStart"], {**base, "session_id": session}),
+                              ([cursor, "sessionEnd"], {**base, "session_id": session, "reason": "completed"}),
+                              ([cursor, "beforeSubmitPrompt"], {**base, "prompt": "hi"}),
+                              ([cursor, "sessionEnd"], {**base, "session_id": session, "reason": "completed"})]
+                for argv, event in events:
+                    p = subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True,
+                                       env=self._env(guardian.url()), timeout=30)
+                    self.assertEqual(p.returncode, 0, p.stderr[-300:])
+                sessions: list[str] = []
+                for request in guardian.received:
+                    sid = request["params"]["metadata"]["session_id"]
+                    if not sessions or sessions[-1] != sid:
+                        sessions.append(sid)
+                self.assertEqual(len(sessions), 2, [(r["method"], r["params"]["metadata"]["session_id"])
+                                                    for r in guardian.received])
+                self.assertEqual(len(set(sessions)), 2, "no step goes into a session after its sessionEnd")
+                for sid in sessions:
+                    methods = [r["method"] for r in guardian.received if r["params"]["metadata"]["session_id"] == sid]
+                    self.assertEqual((methods[:2], methods[-1], methods.count("steps/sessionEnd")),
+                                     (["handshake/hello", "steps/sessionStart"], "steps/sessionEnd", 1), methods)
+                second_start = guardian.envelopes_for("steps/sessionStart")[1]
+                expected_host = session if host == "claude-code" else coerce_uuid(session, namespace_prefix="cursor")
+                self.assertEqual(second_start["params"]["payload"]["platform_context"]["host_session_id"], expected_host)
 
     def test_the_session_start_context_reaches_claude_when_another_hook_opened_the_session(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)

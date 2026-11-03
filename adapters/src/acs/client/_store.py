@@ -78,6 +78,15 @@ def save_session_state(session_id: str, state: dict, *, workspace: str | None = 
                          workspace=workspace)
 
 
+def discard_session_state(session_id: str, *, workspace: str | None = None) -> None:
+    if not session_id:
+        return
+    path = _session_state_path(session_id, workspace=workspace)
+    for record in (path, Path(f"{path}.lock")):
+        with contextlib.suppress(OSError):
+            record.unlink()
+
+
 def update_session_state(session_id: str, change: Callable[[dict], T], *,
                          workspace: str | None = None) -> T | None:
     """Apply change as one locked read-modify-write, since a session's hooks run concurrently; returns its result, or None when the state cannot be stored."""

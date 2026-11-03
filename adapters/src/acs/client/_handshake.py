@@ -57,6 +57,31 @@ def _handshake_cache_path(session_id: str, guardian_url: str, directory: Path | 
     return (directory or _HANDSHAKE_CACHE_DIR) / f"{key}.json"
 
 
+def current_session_id(host_session_id: str, guardian_url: str) -> str:
+    """The ACS session a host session's hooks belong to: the host's id until a sessionEnd ends it, then a new one each time."""
+    session_id, generation = host_session_id, 0
+    while _ended(session_id, guardian_url).exists():
+        generation += 1
+        session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"acs-session:{host_session_id}:{generation}"))
+    return session_id
+
+
+def end_session(session_id: str, guardian_url: str) -> None:
+    """Mark a session ended after its sessionEnd, so a later hook of the same host session opens a new one, and remove its records."""
+    marker = _ended(session_id, guardian_url)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        marker.touch(mode=0o600)
+    except OSError as e:
+        audit_event("session_record_unwritable", session_id=session_id, guardian_url=guardian_url,
+                    record=str(marker), error=str(e))
+    discard_session(session_id, guardian_url)
+
+
+def _ended(session_id: str, guardian_url: str) -> Path:
+    return Path(f"{_handshake_cache_path(session_id, guardian_url)}.ended")
+
+
 def discard_session(session_id: str, guardian_url: str) -> None:
     path = _handshake_cache_path(session_id, guardian_url)
     for record in (path, Path(f"{path}.started"), Path(f"{path}.lock")):

@@ -69,7 +69,10 @@ from acs import __version__
 from acs.client import (
     Config,
     count_decision_failure,
+    current_session_id,
     decision_failure_counts,
+    discard_session_state,
+    end_session,
     Decided,
     FailPosture,
     Handshake,
@@ -288,7 +291,8 @@ def _payload_session_start(event: dict[str, Any]) -> dict[str, Any]:
     ctx = {k: v for k, v in (
         ("source", event.get("source")),
         ("model", event.get("model")),
-        ("transcript_path", event.get("transcript_path"))
+        ("transcript_path", event.get("transcript_path")),
+        ("host_session_id", event.get("host_session_id")),
     ) if v}
     return {"platform_context": ctx} if ctx else {}
 
@@ -475,7 +479,8 @@ def _send_session_start(event: dict[str, Any], session: Negotiated, config: Conf
         audit_event("method_not_evaluated", method="steps/sessionStart",
                     hook=event.get("hook_event_name"), session_id=session_id)
         return None
-    opening = {k: event[k] for k in ("session_id", "cwd", "transcript_path", "model", "source") if k in event}
+    opening = {k: event[k] for k in ("session_id", "host_session_id", "cwd", "transcript_path", "model", "source")
+               if k in event}
     result = round_trip(build_request({**opening, "hook_event_name": "SessionStart"}),
                         guardian_url=config.guardian_url, posture=config.posture.negotiated(session.server_hello),
                         session_id=session_id)
@@ -682,6 +687,21 @@ def main() -> int:
                         session_id=event.get("session_id"))
         return 0
 
+    host_session_id = event.get("session_id")
+    if host_session_id:
+        session_id = current_session_id(host_session_id, config.guardian_url)
+        if session_id != host_session_id:
+            event = {**event, "session_id": session_id, "host_session_id": host_session_id}
+    if hook_name != "SessionEnd" or not host_session_id:
+        return _hook(event, hook_name, config)
+    try:
+        return _hook(event, hook_name, config)
+    finally:
+        end_session(event["session_id"], config.guardian_url)
+        discard_session_state(event["session_id"])
+
+
+def _hook(event: dict[str, Any], hook_name: str, config: Config) -> int:
     session_id = event.get("session_id")
 
     # §4.1: a refused or unanswered session sends the Guardian nothing; each step is settled here.

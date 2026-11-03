@@ -71,7 +71,10 @@ from acs import __version__
 from acs.client import (
     Config,
     count_decision_failure,
+    current_session_id,
     decision_failure_counts,
+    discard_session_state,
+    end_session,
     Decided,
     FailPosture,
     Handshake,
@@ -436,6 +439,8 @@ def _payload_session_start(event: dict[str, Any]) -> dict[str, Any]:
         ctx["is_background_agent"] = event["is_background_agent"]
     if event.get("cursor_version"):
         ctx["cursor_version"] = event["cursor_version"]
+    if event.get("host_session_id"):
+        ctx["host_session_id"] = event["host_session_id"]
     return {"platform_context": ctx} if ctx else {}
 
 
@@ -853,6 +858,21 @@ def main() -> int:
                         session_id=_session_id(event))
         return 0
 
+    host_session_id = _session_id(event)
+    if host_session_id:
+        session_id = current_session_id(host_session_id, config.guardian_url)
+        if session_id != host_session_id:
+            event = {**event, "session_id": session_id, "host_session_id": host_session_id}
+    if event_name != "sessionEnd" or not host_session_id:
+        return _hook(event_name, event, config)
+    try:
+        return _hook(event_name, event, config)
+    finally:
+        end_session(_session_id(event), config.guardian_url)
+        discard_session_state(_session_id(event), workspace=_workspace(event))
+
+
+def _hook(event_name: str, event: dict[str, Any], config: Config) -> int:
     session_id = _session_id(event)
 
     # §4.1: a refused or unanswered session sends the Guardian nothing; each step is settled here.
