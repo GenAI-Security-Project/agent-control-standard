@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agent-trigger.json",
+  "title": "steps/agentTrigger payload",
+  "description": "Payload for the agentTrigger hook. Fires when an agent is activated.",
+  "type": "object",
+  "required": ["trigger_type"],
+  "properties": {
+    "trigger_type": {
+      "type": "string",
+      "enum": ["user_message", "scheduled", "external_event", "a2a_inbound", "system"]
+    },
+    "trigger_source": {
+      "type": "object",
+      "description": "Source descriptor; shape depends on trigger_type"
+    },
+    "intent": {
+      "type": "object",
+      "description": "Optional Intent registered at session start (IBAC adopters populate)",
+      "properties": {
+        "raw": { "type": "string" },
+        "parsed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tool": { "type": "string" },
+              "operation": { "type": "string" },
+              "resource": { "type": "string" }
+            }
+          }
+        },
+        "parser_provenance": { "$ref": "../provenance.json" },
+        "scope_mode": {
+          "type": "string",
+          "enum": ["strict", "moderate", "permissive"]
+        }
+      },
+      "if": { "required": ["parsed"] },
+      "then": { "required": ["parser_provenance"] }
+    }
+  }
+}

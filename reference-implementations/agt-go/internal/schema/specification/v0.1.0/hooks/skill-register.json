@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/skill-register.json",
+  "title": "steps/skillRegister payload",
+  "description": "Fires when a skill enters the agent's available set, before it is eligible to load or run. This is the static vetting gate: the only point where a Guardian inspects the whole skill artifact and fixes its approved integrity digest before any of its actions execute. Per-action hooks like steps/toolCallRequest cannot catch a payload split across a skill's actions, because each action is benign in isolation. The malice exists only in the composition. The approval recorded here is what steps/skillLoad is later checked against, by the (skill_id, digest) pair. A Guardian MAY deny registration; a denied skill MUST NOT become eligible to load. The full definition body travels in this payload for inspection but is NOT persisted to the AgBOM. Only definition.ref and definition.digest persist (Spec Review Principle 3).",
+  "type": "object",
+  "required": ["skill_id", "definition", "declared_capabilities"],
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "description": "Stable id the skill will carry as a 'skill' component in the AgBOM. steps/skillLoad and steps/skillUnload reference this id."
+    },
+    "skill": {
+      "type": "object",
+      "description": "Descriptor of the skill being registered. SHOULD be populated when the deployment can identify the skill's source and publisher.",
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "provider": { "type": "string" }
+      }
+    },
+    "definition": {
+      "type": "object",
+      "description": "The skill's loadable artifact. 'ref' and 'digest' commit to the COMPLETE loadable artifact, including any bundled or fetched model files, adapters, or other binary assets, not only text. This scope matters: a skill can bundle a learned model whose backdoor lives in opaque weights rather than in any readable instruction, and source-code inspection has limited visibility into such a payload. For that class the control is the digest plus registration_provenance (integrity and origin of the whole artifact), not body reading. 'body' is the human-readable portion the Guardian can inspect inline. 'digest' is what steps/skillLoad is later bound against. The body is transient inspection material; it MUST NOT be required to persist in the AgBOM.",
+      "required": ["digest"],
+      "properties": {
+        "ref": { "type": "string", "format": "uri", "description": "URI of the complete loadable skill artifact per Section 3.11 (the package, including any bundled model files or adapters)." },
+        "digest": {
+          "type": "object",
+          "description": "Integrity digest over the COMPLETE loadable artifact, not only its text. Binds the exact bytes that load and run, so a model-bearing skill's weights are covered, and ties this registration to later steps/skillLoad events via the (skill_id, digest) pair.",
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": { "type": "string", "enum": ["sha-256", "sha-512"] },
+            "value": { "type": "string" }
+          }
+        },
+        "body": {
+          "type": "string",
+          "description": "Human-readable portion of the artifact (instructions, helper scripts, action manifest) for inline inspection. Does NOT include opaque binary assets such as model weights or adapters, which are covered by digest and registration_provenance rather than body inspection. Present for the Guardian to analyze; not persisted downstream."
+        }
+      }
+    },
+    "declared_capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Abstract capabilities the skill declares it needs, its least-privilege manifest. The Guardian SHOULD compare against the union of capabilities exposed by the composed tools and MAY deny over-broad declarations."
+    },
+    "composition": {
+      "type": "object",
+      "description": "What the skill composes, by AgBOM component id. composed_skills declares which other skills this skill is permitted to load, the containment set enforced at steps/skillLoad.",
+      "properties": {
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "mcp_servers": { "type": "array", "items": { "type": "string" } },
+        "a2a_peers": { "type": "array", "items": { "type": "string" } },
+        "models": { "type": "array", "items": { "type": "string" }, "description": "Component ids of model components the skill bundles. A model-bearing skill references its bundled model here so it is inventoried as a 'model' component with its own provenance, rather than left opaque inside the definition body. The whole-artifact digest binds the weights regardless; this surfaces the model to the Guardian's load-time and inventory policy." },
+        "composed_skills": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "registration_provenance": {
+      "$ref": "../provenance.json",
+      "description": "How the skill entered the available set. origin distinguishes a framework-bundled skill ('system') from a marketplace install ('user_input') or a runtime-fetched one ('tool_output'). source_id SHOULD carry the publisher or marketplace identity. A Guardian MAY require a signed provenance and deny unsigned or untrusted-origin skills."
+    }
+  }
+}
