@@ -27,6 +27,8 @@ def run_hook(module: str, *, event_key: str, event_name: Callable[[str], str],
             return 1
     raw = sys.stdin.read()
     sys.stdin = io.StringIO(raw)
+    # No ACS schema uses an IRI format, and jsonschema would spend 0.4 s of every hook loading the IRI grammar.
+    sys.modules.setdefault("rfc3987_syntax", None)
     try:
         main = import_module(module).main
     except ImportError as error:

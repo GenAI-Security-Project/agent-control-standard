@@ -96,6 +96,19 @@ class RoundTrip(unittest.TestCase):
                 self.assertEqual(sent, [], "a signed view that drops one value never goes on the wire")
                 self.assertEqual((result.proceed, result.cause), (proceed, "envelope_not_signable"))
 
+    def test_an_allow_with_an_invalid_optional_field_is_a_malformed_response(self) -> None:
+        def answer(body: dict):
+            response = sign_with_key({"jsonrpc": "2.0", "id": body["id"], "result": {
+                "type": "final", "acs_version": "0.1.0", "request_id": body["params"]["request_id"],
+                "decision": "allow", "chain_hash": {"x": 1}}}, derive_session_key(SECRET.encode(), SESSION),
+                key_id="test-key")
+            return io.BytesIO(json.dumps(response).encode())
+        for posture, proceed in ((PROCEED, True), (DENY, False)):
+            with self.subTest(deny=posture.deny_on_failure):
+                result, _ = self._send(_request(), answer, posture)
+                self.assertEqual((result.proceed, result.cause, result.fields["failure_class"]),
+                                 (proceed, "malformed_response", "malformed_response"))
+
     def test_a_request_that_still_cannot_be_signed_fails_closed_at_an_enforced_step(self) -> None:
         for gate, proceed in ((False, True), (True, False)):
             with self.subTest(gate=gate):
@@ -131,11 +144,18 @@ class ResultProblems(unittest.TestCase):
                      self._result(decision="ask", reasoning="r"),
                      self._result(decision="ask", reasoning="r", ask_details={"question": "q"}),
                      self._result(decision="defer", reasoning="r", defer_details=[]),
-                     self._result(decision="modify", reasoning="r", modifications="x"), "x"]
+                     self._result(decision="modify", reasoning="r", modifications="x"), "x",
+                     self._result(decision="allow", chain_hash={"x": 1}),
+                     self._result(decision="allow", reason_codes="pii"),
+                     self._result(decision="allow", metadata={"evaluator": "oracle"})]
         for result in conformant:
             with self.subTest(result=result):
                 self.assertIsNone(result_problem(result))
                 self.assertEqual(validate_response_envelope({"jsonrpc": "2.0", "id": "1", "result": result}), [])
+        composition = self._result(decision="modify", reasoning="r",
+                                   modifications={"modified_content": "x", "parameter_overrides": {"a": 1}})
+        self.assertNotEqual(validate_response_envelope({"jsonrpc": "2.0", "id": "1", "result": composition}), [])
+        self.assertIsNone(result_problem(composition), "§6.3 makes it a DENY, not a decision failure")
         for result in malformed:
             with self.subTest(result=result):
                 self.assertIsNotNone(result_problem(result))

@@ -17,12 +17,13 @@ from acs.client._outcome import Decided, Outcome, Refused, Undecided
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._urls import validate_guardian_url
 from acs.core import (
-    KNOWN_DECISIONS,
     MAX_REQUEST_BODY_BYTES,
     guardian_error_cause,
     is_guardian_refusal,
+    modify_composition_violation,
     normalize_decision,
     response_matches_request,
+    schemas_dir,
 )
 
 
@@ -274,43 +275,42 @@ def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPostu
     return posture.resolve(Refused("malformed_response", fields, message))
 
 
-_ACS_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
-_REQUIRED_WITH = {"deny": ("reasoning",), "modify": ("reasoning", "modifications"),
-                  "ask": ("reasoning", "ask_details"), "defer": ("reasoning", "defer_details")}
-_DETAILS_REQUIRED = {"ask_details": ("approver", "question", "timeout_seconds"),
-                     "defer_details": ("reason", "resolution_method", "resolution_timeout_ms")}
+_RESULT_VALIDATOR: Any = None
+
+
+def _result_validator() -> Any:
+    """A validator for response-envelope.json's AcsResult, resolving its references against the bundled schemas."""
+    global _RESULT_VALIDATOR
+    if _RESULT_VALIDATOR is None:
+        from jsonschema import Draft202012Validator
+        from referencing import Registry, Resource
+
+        resources = []
+        for path in schemas_dir().glob("*.json"):
+            schema = json.loads(path.read_text(encoding="utf-8"))
+            if "$id" in schema:
+                resources.append((schema["$id"], Resource.from_contents(schema)))
+        registry = Registry().with_resources(resources)
+        envelope = json.loads((schemas_dir() / "response-envelope.json").read_text(encoding="utf-8"))
+        _RESULT_VALIDATOR = Draft202012Validator({"$ref": f"{envelope['$id']}#/$defs/AcsResult"}, registry=registry,
+                                                 format_checker=Draft202012Validator.FORMAT_CHECKER)
+    return _RESULT_VALIDATOR
 
 
 def result_problem(result: Any) -> str | None:
-    """Why a decision result fails response-envelope.json's AcsResult, or None; modifications are left to §6.3."""
-    if not isinstance(result, dict):
-        return "result is not an object"
-    if result.get("type") != "final":
-        return 'type is not "final"'
-    version = result.get("acs_version")
-    if not isinstance(version, str) or not _ACS_VERSION.match(version):
-        return "acs_version is not a version string"
-    if not isinstance(result.get("request_id"), str):
-        return "request_id is not a string"
-    decision = result.get("decision")
-    if not isinstance(decision, str) or decision not in KNOWN_DECISIONS:
-        return "decision is not one of the five dispositions"
-    if "reasoning" in result and not isinstance(result["reasoning"], str):
-        return "reasoning is not a string"
-    for name in _REQUIRED_WITH.get(decision, ()):
-        if name not in result:
-            return f"{decision} without {name}"
-    for name, keys in _DETAILS_REQUIRED.items():
-        if name in result:
-            details = result[name]
-            if not isinstance(details, dict):
-                return f"{name} is not an object"
-            missing = [key for key in keys if key not in details]
-            if missing:
-                return f"{name} without {', '.join(missing)}"
-    if "modifications" in result and not isinstance(result["modifications"], dict):
-        return "modifications is not an object"
-    return None
+    """Why a decision result fails response-envelope.json's AcsResult, or None."""
+    from jsonschema.exceptions import best_match
+
+    errors = list(_result_validator().iter_errors(result))
+    if not errors:
+        return None
+    if (isinstance(result, dict) and all(e.absolute_path and e.absolute_path[0] == "modifications" for e in errors)
+            and modify_composition_violation(result.get("modifications"))):
+        # §6.3 makes this a DENY the adapter applies, which trace/otel-mapping.json does not count as a decision failure.
+        return None
+    error = best_match(errors)
+    where = "/".join(str(p) for p in error.absolute_path)
+    return f"{where}: {error.message}" if where else error.message
 
 
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
