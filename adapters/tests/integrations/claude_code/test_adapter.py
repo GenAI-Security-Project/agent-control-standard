@@ -343,8 +343,8 @@ class PostToolUseWithholdsOutput(_GuardianRun):
 
     def test_a_denied_bash_result_is_replaced_in_bash_s_output_shape(self) -> None:
         for decision in ({"decision": "deny", "reasoning": "leaks a key"},
-                         {"decision": "ask", "reasoning": "needs a person", "ask_details": {"approver_types": ["human"]}},
-                         {"decision": "defer", "reasoning": "later"},
+                         {"decision": "ask", "reasoning": "needs a person", "ask_details": {"approver": {"type": "human", "id": "owner"}, "question": "Run it?", "timeout_seconds": 60}},
+                         {"decision": "defer", "reasoning": "later", "defer_details": {"reason": "pending_dependency", "resolution_method": "timeout", "resolution_timeout_ms": 1000, "timeout_decision": "deny"}},
                          {"decision": "maybe", "reasoning": "not a disposition"},
                          {"decision": "modify", "reasoning": "both shapes",
                           "modifications": {"modified_content": "x", "parameter_overrides": {"command": "y"}}}):

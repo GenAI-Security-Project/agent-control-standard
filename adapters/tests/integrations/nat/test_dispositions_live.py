@@ -283,7 +283,8 @@ class DispositionsLive(unittest.TestCase):
             command: str
         for disposition in ("ask", "defer"):
             with self.subTest(disposition):
-                self._set_response("steps/toolCallResult", {"decision": disposition, "reasoning": "needs a person"})
+                details = ({"ask_details": {"approver": {"type": "human", "id": "owner"}, "question": "Run it?", "timeout_seconds": 60}} if disposition == "ask" else {"defer_details": {"reason": "pending_dependency", "resolution_method": "timeout", "resolution_timeout_ms": 1000, "timeout_decision": "deny"}})
+                self._set_response("steps/toolCallResult", {"decision": disposition, "reasoning": "needs a person", **details})
                 mw = self._mw(default_deny=False)
                 ctx = _make_ctx_with_pydantic_input("Bash", ShellInput, ShellInput(command="ls"))
                 ctx.output = "secret listing"
@@ -376,17 +377,16 @@ class DispositionsLive(unittest.TestCase):
         except ACSGuardianDenied:
             pass  # Expected on NAT 1.7.0
 
-    def test_a_call_the_signer_refuses_is_denied_under_a_fail_open_posture(self) -> None:
+    def test_an_integer_the_signer_cannot_encode_reaches_the_guardian_as_a_string(self) -> None:
         class IdInput(BaseModel):
             id: int
         ctx = _make_ctx_with_pydantic_input("lookup", IdInput, IdInput(id=2 ** 53 + 1))
         self._set_response("steps/toolCallRequest", {"decision": "allow", "reasoning": "fine"})
         mw = self._mw(default_deny=False)
         self.guardian.reset()
-        with self.assertRaises(ACSGuardianDenied):
-            asyncio.run(mw.pre_invoke(ctx))
-        self.assertNotIn("steps/toolCallRequest", self.guardian.methods_seen(),
-                         "an envelope the signer refuses never reaches the Guardian, so the call is denied")
+        asyncio.run(mw.pre_invoke(ctx))
+        [request] = self.guardian.envelopes_for("steps/toolCallRequest")
+        self.assertEqual(request["params"]["payload"]["arguments"]["id"]["value"], str(2 ** 53 + 1))
 
     def test_defer_substituted_to_deny(self) -> None:
         class ShellInput(BaseModel):

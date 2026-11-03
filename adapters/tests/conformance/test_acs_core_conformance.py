@@ -764,7 +764,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         """ASK → permissionDecision 'ask' (native surface, not a block)."""
         with self._scripted_guardian({
             "decision": "ask", "reasoning": "needs approval",
-            "ask_details": {"approver_types": ["human"]},
+            "ask_details": {"approver": {"type": "human", "id": "owner"}, "question": "Run it?", "timeout_seconds": 60},
         }) as g:
             r = self._run_claude(g)
         hso = r["out"].get("hookSpecificOutput", {})
@@ -776,9 +776,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         defer in permissionDecision; spec default timeout_decision deny)."""
         with self._scripted_guardian({
             "decision": "defer", "reasoning": "pending",
-            "defer_details": {"resolution_method": "retry",
-                              "resolution_timeout_ms": 1000,
-                              "timeout_decision": "deny"},
+            "defer_details": {"reason": "pending_dependency", "resolution_method": "timeout", "resolution_timeout_ms": 1000, "timeout_decision": "deny"},
         }) as g:
             r = self._run_claude(g)
         hso = r["out"].get("hookSpecificOutput", {})
@@ -792,41 +790,27 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
         for disposition in ("ask", "defer"):
             with self.subTest(disposition), self._scripted_guardian({
                 "decision": disposition, "reasoning": "pending",
-                **({"defer_details": {"resolution_method": "retry", "resolution_timeout_ms": 1000,
-                                      "timeout_decision": "deny"}} if disposition == "defer" else {}),
+                **({"defer_details": {"reason": "pending_dependency", "resolution_method": "timeout", "resolution_timeout_ms": 1000, "timeout_decision": "deny"}} if disposition == "defer" else {"ask_details": {"approver": {"type": "human", "id": "owner"}, "question": "Run it?", "timeout_seconds": 60}}),
             }) as g:
                 r = self._run_cursor(g)
             self.assertEqual(r["out"].get("permission"), "deny", r["out"])
             self.assertIn('"unenforceable_decision"', r["stderr"])
 
     def test_unusable_disposition_denies_regardless_of_posture(self) -> None:
-        """§6.4 requires an arrived decision to be honored regardless of
-        the posture. §6.3 makes one whose intent cannot be determined a
-        DENY plus an audit event. Posture stays at the shipped fail-open default on
-        purpose: it must have no effect on a decision that arrived."""
-        for bad, unreadable in (("deny ", False), (" deny", False),
-                                ("DENY\n", False), ("quarantine", True),
-                                ("", True)):
+        """A verdict outside the decision enum is a malformed_response that denies under the fail-open posture too (§6.4, issue #32)."""
+        for bad in ("deny ", " deny", "DENY\n", "quarantine", ""):
             with self.subTest(disposition=bad):
                 with self._scripted_guardian(
                         {"decision": bad, "reasoning": "policy hit"}) as g:
                     r = self._run_claude(g)
                 hso = r["out"].get("hookSpecificOutput", {})
                 self.assertEqual(hso.get("permissionDecision"), "deny",
-                    f"{bad!r} must deny: normalization handles a padded verdict, "
-                    f"§6.3 handles one that cannot be read. Got {r['out']!r}, "
-                    f"and empty output runs the tool.")
-                if unreadable:
-                    self.assertIn("unusable_disposition", r["stderr"],
-                        f"{bad!r} cannot be read at all, so §6.3's audit "
-                        f"event is required")
+                    f"{bad!r} must deny. Got {r['out']!r}, and empty output runs the tool.")
+                self.assertIn('"failure_class": "malformed_response"', r["stderr"],
+                    f"{bad!r} is outside the decision enum, so it is recorded as malformed_response")
 
     def test_non_string_and_non_object_verdicts_fail_closed(self) -> None:
-        """A hostile/buggy Guardian can send a NON-STRING decision or a
-        NON-OBJECT modifications; reading them with .strip()/.get()
-        raises, and an uncaught raise is exit 1 = the host PROCEEDS.
-        §6.3 requires fail-closed DENY when intent can't be
-        determined. Posture stays at the fail-open default."""
+        """A non-string decision or non-object modifications fails response-envelope.json and denies under the fail-open default (§6.4, issue #32)."""
         cases = [
             {"decision": 5},
             {"decision": {"v": "deny"}},
@@ -846,7 +830,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
                     f"Claude Code proceeds. stderr={r['stderr'][:300]}")
                 hso = r["out"].get("hookSpecificOutput", {})
                 self.assertEqual(hso.get("permissionDecision"), "deny",
-                    f"{result!r} must fail closed to deny (§6.3); "
+                    f"{result!r} must fail closed to deny; "
                     f"got {r['out']!r} — empty/allow output runs the tool")
                 with self._scripted_guardian(result) as g:
                     rc = self._run_cursor(g)

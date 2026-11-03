@@ -45,7 +45,7 @@ class RoundTrip(unittest.TestCase):
     @staticmethod
     def _signed_allow(body: dict):
         response = sign_with_key({"jsonrpc": "2.0", "id": body["id"], "result": {
-            "request_id": body["params"]["request_id"], "decision": "allow"}},
+            "type": "final", "acs_version": "0.1.0", "request_id": body["params"]["request_id"], "decision": "allow"}},
             derive_session_key(SECRET.encode(), SESSION), key_id="test-key")
         return io.BytesIO(json.dumps(response).encode())
 
@@ -95,6 +95,43 @@ class RoundTrip(unittest.TestCase):
                 self.assertEqual(sent, [], "nothing unsigned goes on the wire")
                 self.assertEqual((result.proceed, result.cause, result.fields["failure_class"]),
                                  (proceed, "envelope_not_signable", "observed_agent_error"))
+
+
+class ResultProblems(unittest.TestCase):
+    """result_problem flags only results response-envelope.json rejects, so it never turns a conformant answer into a failure."""
+    REQUEST_ID = "55555555-5555-4555-8555-555555555555"
+    ASK = {"approver": {"type": "human", "id": "owner"}, "question": "Run it?", "timeout_seconds": 60}
+    DEFER = {"reason": "pending_dependency", "resolution_method": "timeout", "resolution_timeout_ms": 1000}
+
+    def _result(self, **fields: Any) -> dict:
+        return {"type": "final", "acs_version": "0.1.0", "request_id": self.REQUEST_ID, **fields}
+
+    def test_conformant_results_pass_and_each_problem_is_also_a_schema_violation(self) -> None:
+        from acs.client._exchange import result_problem
+        from acs.testing.harness import validate_response_envelope
+        conformant = [self._result(decision="allow"), self._result(decision="deny", reasoning="no"),
+                      self._result(decision="modify", reasoning="r", modifications={"modified_content": "x"}),
+                      self._result(decision="ask", reasoning="r", ask_details=self.ASK),
+                      self._result(decision="defer", reasoning="r", defer_details=self.DEFER)]
+        malformed = [{"decision": "allow", "request_id": self.REQUEST_ID},
+                     self._result(decision="allow", type="progress"),
+                     self._result(decision="allow", acs_version="0.1"),
+                     {**self._result(decision="allow"), "request_id": 5},
+                     self._result(decision="maybe"), self._result(decision=["deny"]), self._result(decision="DENY"),
+                     self._result(decision="deny"), self._result(decision="deny", reasoning=5),
+                     self._result(decision="modify", reasoning="r"),
+                     self._result(decision="ask", reasoning="r"),
+                     self._result(decision="ask", reasoning="r", ask_details={"question": "q"}),
+                     self._result(decision="defer", reasoning="r", defer_details=[]),
+                     self._result(decision="modify", reasoning="r", modifications="x"), "x"]
+        for result in conformant:
+            with self.subTest(result=result):
+                self.assertIsNone(result_problem(result))
+                self.assertEqual(validate_response_envelope({"jsonrpc": "2.0", "id": "1", "result": result}), [])
+        for result in malformed:
+            with self.subTest(result=result):
+                self.assertIsNotNone(result_problem(result))
+                self.assertNotEqual(validate_response_envelope({"jsonrpc": "2.0", "id": "1", "result": result}), [])
 
 
 class Turns(unittest.TestCase):

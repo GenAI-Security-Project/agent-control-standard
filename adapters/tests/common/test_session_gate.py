@@ -579,6 +579,28 @@ class SessionGateThroughHooks(unittest.TestCase):
                     self.assertEqual(payload["summary"]["decision_failures"], {"timeout": 1})
                     self.assertEqual(validate_hook_payload(payload, "session-end.json"), [])
 
+    def test_a_result_without_the_fields_the_schema_requires_is_a_counted_malformed_response(self) -> None:
+        for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
+            for name, result, deny, denied in (
+                    ("unknown decision under fail-open", {"decision": "maybe", "reasoning": "x"}, "0", True),
+                    ("allow without type under fail-open", {"decision": "allow"}, "0", False),
+                    ("allow without type under fail-closed", {"decision": "allow"}, "1", True)):
+                with self.subTest(host, case=name):
+                    guardian = ProgrammableGuardian(hmac_secret=SECRET)
+                    guardian.complete_results = False
+                    guardian.handlers["steps/toolCallRequest"] = lambda req, r=result: {
+                        "acs_version": "0.1.0", "request_id": req["params"]["request_id"], **r}
+                    guardian.start()
+                    self.addCleanup(guardian.stop)
+                    session = str(uuid.uuid4())
+                    p, was_denied, audits = run(guardian.url(), session, ACS_DEFAULT_DENY=deny)
+                    self.assertEqual(was_denied, denied, p.stdout)
+                    self.assertIn('"failure_class": "malformed_response"', p.stderr)
+                    self.assertEqual(self._end(host, guardian.url(), session).returncode, 0)
+                    [end] = guardian.envelopes_for("steps/sessionEnd")
+                    self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"],
+                                     {"malformed_response": 1})
+
     def test_a_fail_closed_session_end_still_reports_a_start_without_a_decision(self) -> None:
         # sessionEnd is audit-only, so a fail-closed hook sends it with the start's timeout (§6.4).
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):

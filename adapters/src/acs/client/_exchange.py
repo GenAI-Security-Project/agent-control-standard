@@ -16,7 +16,14 @@ from acs.client._config import FailPosture, Resolution
 from acs.client._outcome import Decided, Outcome, Refused, Undecided
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._urls import validate_guardian_url
-from acs.core import MAX_REQUEST_BODY_BYTES, guardian_error_cause, is_guardian_refusal, response_matches_request
+from acs.core import (
+    KNOWN_DECISIONS,
+    MAX_REQUEST_BODY_BYTES,
+    guardian_error_cause,
+    is_guardian_refusal,
+    normalize_decision,
+    response_matches_request,
+)
 
 
 class RequestTooLargeError(Exception):
@@ -232,7 +239,61 @@ def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPostu
         return (posture.closed() if gate else posture).resolve(outcome)
     outcome = exchange(request, guardian_url=guardian_url,
                        timeout_s=posture.timeout_for(request.get("method", "")), session_id=session_id)
-    return outcome if isinstance(outcome, Decided) else posture.resolve(outcome)
+    if not isinstance(outcome, Decided):
+        return posture.resolve(outcome)
+    result = outcome.response.get("result")
+    try:
+        problem = result_problem(result)
+    except Exception as e:  # noqa: BLE001
+        problem = f"result could not be checked: {e}"
+    if problem is None:
+        return outcome
+    params = request.get("params") or {}
+    fields = {"method": request.get("method"), "request_id": params.get("request_id"), "problem": problem}
+    message = f"Guardian response fails response-envelope.json: {problem}"
+    if normalize_decision(result).disposition == "allow":
+        return posture.resolve(Undecided("malformed_response", fields, message))
+    # A restrictive or unreadable verdict is never carried out as an allow.
+    return posture.resolve(Refused("malformed_response", fields, message))
+
+
+_ACS_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+_REQUIRED_WITH = {"deny": ("reasoning",), "modify": ("reasoning", "modifications"),
+                  "ask": ("reasoning", "ask_details"), "defer": ("reasoning", "defer_details")}
+_DETAILS_REQUIRED = {"ask_details": ("approver", "question", "timeout_seconds"),
+                     "defer_details": ("reason", "resolution_method", "resolution_timeout_ms")}
+
+
+def result_problem(result: Any) -> str | None:
+    """Why a decision result fails response-envelope.json's AcsResult, or None; modifications are left to §6.3."""
+    if not isinstance(result, dict):
+        return "result is not an object"
+    if result.get("type") != "final":
+        return 'type is not "final"'
+    version = result.get("acs_version")
+    if not isinstance(version, str) or not _ACS_VERSION.match(version):
+        return "acs_version is not a version string"
+    if not isinstance(result.get("request_id"), str):
+        return "request_id is not a string"
+    decision = result.get("decision")
+    if not isinstance(decision, str) or decision not in KNOWN_DECISIONS:
+        return "decision is not one of the five dispositions"
+    if "reasoning" in result and not isinstance(result["reasoning"], str):
+        return "reasoning is not a string"
+    for name in _REQUIRED_WITH.get(decision, ()):
+        if name not in result:
+            return f"{decision} without {name}"
+    for name, keys in _DETAILS_REQUIRED.items():
+        if name in result:
+            details = result[name]
+            if not isinstance(details, dict):
+                return f"{name} is not an object"
+            missing = [key for key in keys if key not in details]
+            if missing:
+                return f"{name} without {', '.join(missing)}"
+    if "modifications" in result and not isinstance(result["modifications"], dict):
+        return "modifications is not an object"
+    return None
 
 
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,

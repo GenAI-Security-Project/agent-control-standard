@@ -328,6 +328,8 @@ class ProgrammableGuardian:
         # The label of hmac_secret (§10): requests under another label get an unsigned SIGNATURE_INVALID.
         self.key_id = key_id
         self.sign_responses = sign_responses
+        # A handler's decision gets the type, acs_version and request_id every AcsResult carries; False sends it as written.
+        self.complete_results = True
         self.received: list[dict] = []
         self.sent: list[dict] = []
         self.lock = threading.Lock()
@@ -453,6 +455,9 @@ class ProgrammableGuardian:
                 result_or_error = handler(req)
                 container = ("error" if "code" in result_or_error and "message" in result_or_error
                              else "result")
+                if container == "result" and guardian.complete_results and "decision" in result_or_error:
+                    result_or_error = {"type": "final", "acs_version": "0.1.0",
+                                       "request_id": req["params"]["request_id"], **result_or_error}
                 resp = {"jsonrpc": "2.0", "id": req.get("id"), container: result_or_error}
                 # Errors are signed too under ACS-Core (§10).
                 if guardian.sign_responses:
