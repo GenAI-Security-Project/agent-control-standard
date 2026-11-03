@@ -18,7 +18,8 @@ def _event_name(raw: str) -> str:
 
 def _deny(event_name: str, reason: str) -> int:
     if event_name in PERMISSION_EVENTS:
-        print(json.dumps({"permission": "deny", "user_message": reason, "agent_message": reason}))
+        message = f"ACS blocked this tool call: {reason}"
+        print(json.dumps({"permission": "deny", "user_message": message, "agent_message": message}))
         return 0
     if event_name == "beforeSubmitPrompt":
         # The documented native block, read with exit code 0 so Cursor shows the message.

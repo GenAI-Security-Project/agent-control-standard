@@ -232,7 +232,7 @@ class AnAllowLeavesTheToolGatesToCursor(unittest.TestCase):
                     if disposition == "allow":
                         self.assertEqual(out, {})
                     else:
-                        self.assertEqual((out["permission"], out["user_message"]), ("deny", "policy"))
+                        self.assertEqual((out["permission"], out["user_message"]), ("deny", "ACS blocked this tool call: policy"))
 
 
 class TheKillSwitchAllowsExplicitly(unittest.TestCase):

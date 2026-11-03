@@ -109,6 +109,8 @@ def _permission_response(decision: str, message: str = "",
                           updated_input: dict | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {"permission": decision}
     if message:
+        if decision == "deny" and not message.startswith("ACS"):
+            message = f"ACS blocked this tool call: {message}"
         out["user_message"] = message
         out["agent_message"] = message
     if updated_input is not None:
@@ -780,7 +782,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
                             disposition=turn_start.disposition or "(unusable)",
                             event="beforeSubmitPrompt")
                 _send_turn_end(event, config, posture, server_hello, session_id, turn_id, "denied_at_start")
-                msg = (f"turn blocked at start ({turn_start.disposition or 'unusable'}): "
+                msg = (f"ACS blocked this prompt at the turn's start ({turn_start.disposition or 'unusable'}): "
                        f"{turn_start.reasoning}")
                 sys.stderr.write(f"acs-adapter: {msg}\n")
                 sys.stdout.write(json.dumps({"continue": False,
@@ -853,7 +855,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         sys.stderr.write(f"acs-adapter: blocking prompt: {reasoning}\n")
         sys.stdout.write(json.dumps({
             "continue": False,
-            "user_message": reasoning or "blocked by ACS Guardian",
+            "user_message": f"ACS blocked this prompt: {reasoning}" if reasoning else "ACS blocked this prompt",
         }) + "\n")
         return 0
 
