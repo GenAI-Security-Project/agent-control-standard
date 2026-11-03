@@ -328,6 +328,24 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertIn("steps/toolCallRequest", guardian.methods_seen())
                 self.assertNotIn("unmapped_hook_event", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
 
+    def test_a_cursor_event_too_deep_to_parse_still_gets_the_cursor_adapters_answer(self) -> None:
+        deep = "[" * 100_000 + "]" * 100_000
+        cursor = ('{"conversation_id": "%s", "cursor_version": "3.28.7", "hook_event_name": "preToolUse", '
+                  '"tool_name": "Shell", "tool_input": {"command": "rm -rf ~/x", "deep": %s}}' % (uuid.uuid4(), deep))
+        decoy = ('{"session_id": "%s", "cwd": "/tmp", "hook_event_name": "PreToolUse", "tool_name": "Bash", '
+                 '"tool_input": {"command": "ls", "cursor_version": "3.28.7", "deep": %s}}' % (uuid.uuid4(), deep))
+        env = self._env("http://127.0.0.1:1/acs", ACS_DEFAULT_DENY="1")
+        answers = {}
+        for argv in ([str(BIN / "acs-claude-code-hook")], [str(BIN / "acs-cursor-hook"), "preToolUse"]):
+            p = subprocess.run(argv, input=cursor, capture_output=True, text=True, env=env, timeout=60)
+            answers[argv[0]] = json.loads(p.stdout or "null")
+        self.assertEqual(answers[str(BIN / "acs-claude-code-hook")], answers[str(BIN / "acs-cursor-hook")])
+        self.assertEqual(answers[str(BIN / "acs-cursor-hook")]["permission"], "deny")
+        p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=decoy, capture_output=True, text=True,
+                           env=env, timeout=60)
+        out = json.loads(p.stdout or "{}")
+        self.assertEqual(out.get("hookSpecificOutput", {}).get("permissionDecision"), "deny", p.stdout)
+
     def test_claude_code_tells_the_user_when_it_blocks_or_withholds(self) -> None:
         guardian = ProgrammableGuardian(hmac_secret=SECRET)
         guardian.start()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+from collections.abc import Callable
 
 from acs.integrations._bootstrap import run_hook
 
@@ -18,7 +19,7 @@ def _event_name(raw: str) -> str:
     return name if isinstance(name, str) else ""
 
 
-def _top_level_string(raw: str, key: str) -> str:
+def _top_level_string(raw: str, key: str, accept: Callable[[str], bool] = lambda s: s.isascii() and s.isalpha()) -> str:
     """The last string value of `key` in the top-level JSON object, skipping nested values iteratively; "" if none."""
     found, depth, last_key, awaiting, i = "", 0, None, False, 0
     while i < len(raw):
@@ -48,7 +49,7 @@ def _top_level_string(raw: str, key: str) -> str:
         elif depth == 1 and c == ",":
             last_key, awaiting = None, False
         i += 1
-    return found if found.isascii() and found.isalpha() else ""
+    return found if accept(found) else ""
 
 
 def _deny(event_name: str, reason: str) -> int:
@@ -67,7 +68,7 @@ def _cursor_event(raw: str) -> str:
     try:
         event = json.loads(raw or "{}")
     except Exception:  # noqa: BLE001
-        return ""
+        return _top_level_string(raw, "hook_event_name") if _top_level_string(raw, "cursor_version", bool) else ""
     name = event.get("hook_event_name") if isinstance(event, dict) and "cursor_version" in event else None
     return name if isinstance(name, str) else ""
 
