@@ -1,12 +1,4 @@
-"""
-Emission conformance — Cursor adapter.
-
-Same contract as the Claude Code emission suite: run the PRODUCTION
-adapter as the real subprocess Cursor spawns (`acs_adapter.py <event>`),
-capture the exact bytes against a validating CaptureGuardian whose
-oracle is the canonical schemas, and assert method-emitted-once +
-schema-valid + protocol invariants.
-"""
+"""Cursor emission: the production hook's exact bytes, validated against the canonical schemas."""
 from __future__ import annotations
 
 import json
@@ -22,15 +14,13 @@ ADAPTER = HERE.parents[2] / "src" / "acs" / "integrations" / "cursor" / "adapter
 
 from acs.testing.capture_guardian import CaptureGuardian  # noqa: E402
 
-# Realistic Cursor conversation id — NOT a UUID, so the captured
-# metadata.session_id proves coercion happens on the wire.
+# Not a UUID, so the captured session_id proves the coercion.
 SESSION = "conv-cursor-emission-01"
 
 
 class CursorEmission(unittest.TestCase):
     def _emit(self, event_name: str, event: dict) -> CaptureGuardian:
         g = CaptureGuardian()
-        # workspace_roots is Cursor's real common-input field (docs 2026-08-22).
         event = {"session_id": SESSION, "workspace_roots": ["/tmp/work"], **event}
         with g, tempfile.TemporaryDirectory() as cache:
             env = os.environ.copy()
@@ -39,9 +29,7 @@ class CursorEmission(unittest.TestCase):
                 "ACS_HMAC_SECRET": g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
                 "ACS_HANDSHAKE": "1",
                 "ACS_HANDSHAKE_CACHE": cache,
-                # subagentStart needs a recorded prior step OR falls back
-                # to the spawn's own request_id — either way it's honest;
-                # isolate session state so runs don't interfere.
+                # Per-run session state, so runs do not interfere.
                 "ACS_SESSION_STATE_DIR": cache,
             })
             env.pop("ACS_HMAC_SECRET_FILE", None)
@@ -61,10 +49,7 @@ class CursorEmission(unittest.TestCase):
         self.assertIn("handshake/hello", g.methods())
         g.assert_all_valid(self)
         if check is not None:
-            # CONTENT assertion — schema-valid-but-empty must not pass:
-            # every input is Cursor's documented shape (docs.cursor.com,
-            # 2026-08-22) and every check asserts the value landed in the
-            # ACS payload.
+            # Content assertion: a schema-valid but empty payload must not pass.
             check(self, g.payload_of(method))
         return g
 
@@ -95,8 +80,7 @@ class CursorEmission(unittest.TestCase):
                 t.assertEqual(p["arguments"]["command"]["value"], "echo hi")))
 
     def test_tool_call_result(self):
-        # Real postToolUse: tool_output is a JSON-STRINGIFIED result
-        # payload ("not raw terminal text"), duration in ms.
+        # tool_output is a JSON-stringified result, and duration is in ms.
         self._assert_emits(
             "postToolUse",
             {"tool_name": "Shell",
@@ -123,7 +107,6 @@ class CursorEmission(unittest.TestCase):
                 "nonzero exitCode in tool_output must map to failure"))
 
     def test_agent_response(self):
-        # `text` is the real content field (docs 2026-08-22).
         self._assert_emits(
             "afterAgentResponse", {"text": "done"}, "steps/agentResponse",
             check=lambda t, p: t.assertEqual(
@@ -138,8 +121,7 @@ class CursorEmission(unittest.TestCase):
             check=lambda t, p: t.assertEqual(p["reason"], "cancelled"))
 
     def test_subagent_start(self):
-        # tool_call_id (real per docs) links the spawn to the delegating
-        # Task toolCallRequest, whose request_id is uuid5 of the same id.
+        # tool_call_id links the spawn to the delegating toolCallRequest, whose request_id is its uuid5.
         import uuid as _uuid
         expected_parent = str(_uuid.uuid5(
             _uuid.NAMESPACE_URL, "cursor:tool_use:tc-789"))
@@ -155,8 +137,6 @@ class CursorEmission(unittest.TestCase):
                 t.assertEqual(p["subagent_descriptor"]["model_id"],
                               "claude-sonnet-4-5")))
 
-    # Remaining mapped native events — documented input shapes
-    # (docs.cursor.com, 2026-08-22) + content checks.
     EXTRA_NATIVE = [
         ("postToolUseFailure",
          {"tool_name": "Shell", "tool_input": {"command": "npm test"},
@@ -223,8 +203,7 @@ class CursorEmission(unittest.TestCase):
                 self._assert_emits(event_name, body, method, check=check)
 
     def test_bare_stop_with_no_open_turn_emits_nothing(self):
-        # steps/turnEnd needs an open turn; with none, the adapter emits
-        # nothing and audits it (full lifecycle: CursorSequentialSession).
+        # turnEnd needs an open turn; CursorSequentialSession covers the full lifecycle.
         g = self._emit("stop", {"status": "completed"})
         content = [m for m in g.methods() if m.startswith("steps/")]
         self.assertEqual(content, ["steps/sessionStart"],
@@ -237,10 +216,6 @@ class CursorEmission(unittest.TestCase):
             f"an unmapped event produced Core hook traffic: {content}")
 
     def test_non_uuid_session_coerced_on_the_wire(self):
-        """SESSION is a realistic non-UUID Cursor id; the captured
-        envelope's metadata.session_id MUST be a coerced UUID (not the
-        raw string) — proving coercion on the PRODUCTION path, not just
-        in the direct transform unit tests."""
         import uuid
         g = self._emit("preToolUse", {"tool_name": "Read",
                                       "tool_input": {"file_path": "/tmp/x"}})
@@ -253,15 +228,8 @@ class CursorEmission(unittest.TestCase):
 
 
 class CursorSequentialSession(unittest.TestCase):
-    """One Guardian + one handshake cache + one session-state dir across
-    an ordered sequence. Proves handshake-once, unique request_ids,
-    request_id_ref linkage, and advertised ⊆ emitted. The shared session
-    state also lets preCompact emit a valid entries_to_compact (it needs
-    a prior recorded step)."""
+    """One Guardian, handshake cache and state dir across an ordered sequence: one handshake, unique request_ids, request_id_ref links, advertised equals emitted."""
 
-    # (event_name, event_body) in order — documented Cursor shapes
-    # (docs 2026-08-22): tool_use_id on pre/postToolUse, JSON-stringified
-    # tool_output, `text` on afterAgentResponse.
     SEQUENCE = [
         ("sessionStart", {"is_background_agent": False}),
         ("beforeSubmitPrompt", {"prompt": "do a thing"}),
@@ -276,8 +244,6 @@ class CursorSequentialSession(unittest.TestCase):
         ("preCompact", {"trigger": "auto"}),
         ("subagentStart", {"subagent_id": "sub-1", "subagent_type": "explore",
                            "task": "explore", "tool_call_id": "c1"}),
-        # `stop` closes the turn opened by beforeSubmitPrompt;
-        # sessionEnd then closes the session.
         ("stop", {"status": "completed", "loop_count": 0}),
         ("sessionEnd", {"reason": "completed", "duration_ms": 45000}),
     ]
@@ -345,9 +311,6 @@ class CursorSequentialSession(unittest.TestCase):
             f"under-advertised={sorted(emitted - advertised)}")
 
     def test_turn_lifecycle_is_consistent(self):
-        """A turn opens with steps/turnStart (on beforeSubmitPrompt) and
-        closes with steps/turnEnd (on stop); every in-turn step carries
-        the same metadata.turn_id."""
         starts = self.g.records_for("steps/turnStart")
         ends = self.g.records_for("steps/turnEnd")
         self.assertEqual(len(starts), 1, f"one turnStart expected; {self.g.methods()}")

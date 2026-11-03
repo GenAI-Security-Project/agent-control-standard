@@ -1,4 +1,3 @@
-"""Structured ACS_AUDIT records, on stderr and in ACS_AUDIT_FILE."""
 from __future__ import annotations
 
 import json
@@ -9,16 +8,8 @@ from typing import Any
 from acs.core import iso8601_now
 
 
-# ----- Audit events (§6.4 fail-open recording) -----
-
 def audit_event(event_type: str, **fields: Any) -> None:
-    """Emit a structured audit-event line to stderr and, when
-    `ACS_AUDIT_FILE` is set, append it to that file (created 0600).
-
-    §6.4 requires every undecided proceed to be recorded; stderr alone
-    is not durable, so deployments SHOULD set ACS_AUDIT_FILE. Single-line
-    JSON for line-oriented ingestion.
-    """
+    """Write one JSON audit line to stderr and, when ACS_AUDIT_FILE is set, append it there (created 0600)."""
     payload = {
         "acs_audit_event": event_type,
         "timestamp": iso8601_now(),

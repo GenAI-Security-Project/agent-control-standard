@@ -18,13 +18,6 @@ except ImportError:  # Windows
 T = TypeVar("T")
 
 
-# ----- Per-session adapter state (cross-invocation) -----
-#
-# Shell-stdin adapters (claude-code, cursor) spawn one process per hook
-# event. To accumulate state across events in the same session (last
-# step_id, step_ids seen, subagent registry, etc.) the adapter persists
-# a small JSON file in the cache directory.
-
 _SESSION_STATE_DIR = Path(
     os.environ.get(
         "ACS_SESSION_STATE_DIR",
@@ -34,16 +27,8 @@ _SESSION_STATE_DIR = Path(
 
 
 def _session_state_path(session_id: str, *, workspace: str | None = None) -> Path:
-    """Path to the per-session state file.
-
-    Hash key is full 64-char SHA-256 (not [:16]) to eliminate birthday
-    collisions over the lifetime of a deployment. When `workspace` is
-    given, it is folded into the hash so two clients with the same
-    session_id but different workspaces (e.g., two Cursor windows
-    using `conv-default` as conversation_id) get distinct state files.
-    """
+    """workspace is part of the key, so two Cursor windows sharing a conversation_id keep separate state."""
     if not session_id:
-        # Empty session_id — return a path that won't collide with anything real
         digest = hashlib.sha256(b"empty").hexdigest()
         return _SESSION_STATE_DIR / f"{digest}.json"
     if workspace:
@@ -56,10 +41,6 @@ def _session_state_path(session_id: str, *, workspace: str | None = None) -> Pat
 
 
 def load_session_state(session_id: str, *, workspace: str | None = None) -> dict:
-    """Return the session-state dict for `session_id`, or an empty dict.
-
-    See `_session_state_path` for the workspace-namespacing rationale.
-    """
     if not session_id:
         return {}
     path = _session_state_path(session_id, workspace=workspace)
@@ -142,7 +123,6 @@ def _write(path: Path, state: dict[str, Any]) -> None:
 
 
 def record_step(session_id: str, step_id: str, *, workspace: str | None = None) -> None:
-    """Append step_id to the session's seen-list and update last_step_id."""
     if not session_id or not step_id:
         return
 

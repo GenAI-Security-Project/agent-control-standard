@@ -1,11 +1,4 @@
-"""
-Spec-validation tests for the NAT adapter.
-
-Validates the adapter's `_build_request()` output against the
-canonical v0.1.0 `request-envelope.json` and the corresponding
-per-hook schemas. Does NOT require nvidia-nat-core to be installed
-(the adapter's helpers are importable without NAT).
-"""
+"""_build_request output against request-envelope.json and the hook schemas; runs without NAT installed."""
 from __future__ import annotations
 
 import json

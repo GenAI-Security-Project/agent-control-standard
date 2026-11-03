@@ -1,25 +1,4 @@
-"""
-Shared test harness for ACS adapter tests.
-
-Test files across `adapters/` (and `adapters/<adapter>/tests/`) have
-historically duplicated ~50 lines of boilerplate each: free-port
-allocation, Guardian-spawn waiting, envelope construction, schema
-validation, ref-resolver setup. This module is the single home for
-those helpers — import what you need rather than redefining.
-
-Usage from any test file:
-
-    from acs.testing.harness import (
-        launch_guardian, wait_port,
-        make_envelope, validate_request_envelope, validate_response_envelope,
-        ProgrammableGuardian,
-    )
-
-The harness has no opinion on `unittest.TestCase` vs other runners —
-it's pure functions and a context manager. Plug it into whatever
-framework you're using.
-
-"""
+"""Shared test helpers: Guardian processes, envelopes, schema validation and ProgrammableGuardian."""
 from __future__ import annotations
 
 import datetime
@@ -47,15 +26,8 @@ _HERE = Path(__file__).resolve().parent
 TEST_KEY_ID = "test-key"
 
 
-# ────────────────────────────────────────────────────────────────────
-# Port + readiness
-# ────────────────────────────────────────────────────────────────────
-
 def wait_port(host: str, port: int, *, timeout: float = 5.0) -> None:
-    """Block until something is listening on host:port, or raise.
-
-    NOTE: this cannot tell OUR process from a port thief — Guardian
-    spawns must use launch_guardian(), whose child binds its own port."""
+    """Wait until something listens on host:port; it cannot tell our process from another, so Guardians use launch_guardian."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -68,13 +40,7 @@ def wait_port(host: str, port: int, *, timeout: float = 5.0) -> None:
 
 def launch_guardian(*, env: dict | None = None,
                     timeout: float = 5.0) -> tuple[subprocess.Popen, int]:
-    """Start example_guardian on an OS-assigned port it binds itself.
-
-    The child binds --port 0 and announces the assigned port on stdout, so
-    the returned port is owned by the spawned process by construction — a
-    pre-picked port could be bound by anything, including another Guardian.
-    Returns (process, port); caller terminates the process.
-    """
+    """Start example_guardian on a port it binds and announces itself, so the port is ours; returns (process, port)."""
     proc = subprocess.Popen(
         [sys.executable, str(GUARDIAN_SCRIPT), "--port", "0"],
         env=env if env is not None else os.environ.copy(),
@@ -106,10 +72,6 @@ def launch_guardian(*, env: dict | None = None,
         "example_guardian did not announce its port "
         f"(exit={proc.poll()!r}, line={line!r}) {stderr_tail}")
 
-
-# ────────────────────────────────────────────────────────────────────
-# Envelope construction
-# ────────────────────────────────────────────────────────────────────
 
 def make_envelope(
     method: str,
@@ -150,11 +112,6 @@ def make_envelope(
 
 def claude_code_event(hook_event_name: str, *, session_id: str | None = None,
                        **extra: Any) -> dict:
-    """Build a Claude Code hook event matching the framework's stdin schema.
-
-    Use this for `subprocess`-spawning adapter tests so every fixture
-    has the same shape.
-    """
     base = {
         "session_id": session_id or str(uuid.uuid4()),
         "transcript_path": "/tmp/test_transcript.jsonl",
@@ -167,20 +124,12 @@ def claude_code_event(hook_event_name: str, *, session_id: str | None = None,
     return base
 
 
-# ────────────────────────────────────────────────────────────────────
-# Schema validation
-# ────────────────────────────────────────────────────────────────────
-
 def _default_spec_dir() -> Path:
     return schemas_dir(os.environ.get("ACS_SPEC_DIR"))
 
 
 def build_local_resolver(schema_name: str, *, spec_dir: Path | None = None):
-    """Return (schema_dict, RefResolver) for `schema_name` under spec_dir.
-
-    Populates the resolver's `store` so `$ref` to sibling schemas
-    resolves locally (no network round-trip to acs.org).
-    """
+    """(schema, RefResolver) for schema_name, resolving sibling $refs locally."""
     from jsonschema.validators import RefResolver
     spec_dir = spec_dir or _default_spec_dir()
     store: dict[str, dict] = {}
@@ -229,35 +178,23 @@ def _validate(envelope: dict, schema_name: str,
 
 def validate_request_envelope(envelope: dict, *,
                                spec_dir: Path | None = None) -> list[str]:
-    """Validate against request-envelope.json. Returns list of error
-    messages; empty list means valid."""
+    """Errors against request-envelope.json; empty when valid."""
     return _validate(envelope, "request-envelope.json", spec_dir=spec_dir)
 
 
 def validate_response_envelope(envelope: dict, *,
                                 spec_dir: Path | None = None) -> list[str]:
-    """Validate against response-envelope.json. Returns list of error
-    messages; empty list means valid."""
+    """Errors against response-envelope.json; empty when valid."""
     return _validate(envelope, "response-envelope.json", spec_dir=spec_dir)
 
 
 def validate_hook_payload(payload: dict, hook_schema: str, *,
                            spec_dir: Path | None = None) -> list[str]:
-    """Validate a hook payload (e.g., `hooks/tool-call-request.json`).
-    Returns list of error messages; empty list means valid."""
+    """Errors against a hooks/ payload schema; empty when valid."""
     return _validate(payload, f"hooks/{hook_schema}", spec_dir=spec_dir)
 
 
-# ────────────────────────────────────────────────────────────────────
-# HTTP helpers
-# ────────────────────────────────────────────────────────────────────
-
 def post_envelope(url: str, envelope: dict, *, timeout: float = 5.0) -> dict:
-    """POST an envelope to a Guardian URL and return the parsed response.
-
-    Raises urllib errors if the Guardian is unreachable — callers can
-    catch to test fail-posture behavior.
-    """
     body = json.dumps(envelope).encode("utf-8")
     req = urllib.request.Request(
         url, data=body,
@@ -266,10 +203,6 @@ def post_envelope(url: str, envelope: dict, *, timeout: float = 5.0) -> dict:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-
-# ────────────────────────────────────────────────────────────────────
-# Guardian lifecycle
-# ────────────────────────────────────────────────────────────────────
 
 GUARDIAN_SCRIPT = _HERE.parent / "guardian" / "example_guardian.py"
 
@@ -309,14 +242,7 @@ def seed_negotiated_session(cache_dir: str | Path, *, session_id: str, guardian_
 
 
 class ProgrammableGuardian:
-    """Test Guardian whose response can be programmed per method.
-
-    Records every received request and every sent response so tests
-    can assert on the wire-level exchange. By default verifies HMAC
-    signatures (using TEST_HMAC_SECRET) and returns allow for every
-    method. Replace `handlers[method]` with a callable returning a
-    result dict (or an error dict with `code` + `message`) to customize.
-    """
+    """In-process test Guardian that records the exchange, verifies signatures and allows by default; handlers[method] programs a response."""
 
     DEFAULT_TEST_HMAC_SECRET = "shared-test-harness-secret-not-for-production"
 
@@ -338,11 +264,7 @@ class ProgrammableGuardian:
             "__default__":     self._default_allow,
         }
         self.delay_s: float = 0.0
-        # Optional callback(raw_bytes, parsed_dict) run on every received
-        # request before the response is built. CaptureGuardian uses it
-        # as the schema-validation oracle. None = no-op. Any exception it
-        # raises is recorded here (not swallowed) so a validator bug is
-        # loud, not silent.
+        # Called with each request's raw bytes and parsed body before the response; its exceptions are recorded, not swallowed.
         self.on_request = None
         self.on_request_errors: list[str] = []
         self._http = http.server
@@ -388,8 +310,6 @@ class ProgrammableGuardian:
         with self.lock:
             return [r for r in self.received if r.get("method") == method]
 
-    # ─── Default handlers ───
-
     def _default_handshake(self, req: dict) -> dict:
         # The HTTP handler wraps this ServerHello in result and signs the envelope.
         offered = req["params"]["payload"]
@@ -423,10 +343,7 @@ class ProgrammableGuardian:
                 req = json.loads(raw.decode())
                 with guardian.lock:
                     guardian.received.append(req)
-                # Raw-capture hook (CaptureGuardian) validates the
-                # unmodified bytes against the canonical schemas; a hook
-                # exception is recorded so assert_all_valid() fails while
-                # the wire stays alive.
+                # A hook exception is recorded, so assert_all_valid() fails while the wire stays alive.
                 if guardian.on_request is not None:
                     try:
                         guardian.on_request(raw, req)
@@ -437,9 +354,7 @@ class ProgrammableGuardian:
                     time.sleep(guardian.delay_s)
 
                 method = req.get("method", "")
-                # system/ping is the only signature-exempt method (§13);
-                # the handshake key derives from secret + session_id, both
-                # known pre-handshake.
+                # system/ping is the only unsigned method (§13).
                 if method != "system/ping":
                     sid = req.get("params", {}).get("metadata", {}).get("session_id", "")
                     key = core.derive_session_key(
@@ -478,10 +393,7 @@ class ProgrammableGuardian:
                 try:
                     self_h.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
-                    # A negotiated-timeout test intentionally closes the
-                    # client socket before the delayed Guardian response.
-                    # That is the behavior under test, not a server failure;
-                    # keep the harness from printing a misleading traceback.
+                    # A timeout test closes the client socket before this delayed response; the expected case prints no traceback.
                     pass
 
             def log_message(self_h, *a, **kw):

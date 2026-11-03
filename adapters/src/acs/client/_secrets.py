@@ -1,4 +1,3 @@
-"""Loading the HMAC input keying material from ACS_HMAC_SECRET_FILE or ACS_HMAC_SECRET."""
 from __future__ import annotations
 
 import os
@@ -28,10 +27,7 @@ MIN_SECRET_BYTES = 32
 
 
 def _check_secret_file_perms(path: str) -> None:
-    """Refuse to read the secret file if anything about its mode or
-    ownership would expose the key to another local user."""
-    # Reject symlinks — a symlink is an attack vector (replace target
-    # without changing the visible path).
+    # A symlink is refused: its target can change behind the visible path.
     if os.path.islink(path):
         raise SecretFilePermissionsError(
             f"ACS_HMAC_SECRET_FILE {path!r} is a symlink; refusing to follow")

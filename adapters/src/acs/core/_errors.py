@@ -1,16 +1,6 @@
-"""JSON-RPC error codes: audit cause labels, and the refusals that fail closed."""
 from __future__ import annotations
 
 
-
-
-# ----- JSON-RPC error code → audit cause label -----
-#
-# Adapters use this when the Guardian returns a JSON-RPC `error` response
-# (as opposed to a transport failure). Separating "Guardian rejected this
-# envelope" from "I couldn't reach the Guardian" is load-bearing for
-# operator triage — same fail-posture under §6.4, completely different
-# remediation. Codes are the §17.1 / JSON-RPC reserved set.
 GUARDIAN_ERROR_CAUSE: dict[int, str] = {
     -32000: "session_refused_response",
     -32001: "unsupported_version_response",
@@ -40,11 +30,11 @@ def guardian_error_cause(code: object) -> str:
 
 # Stricter than §6.4 as written (issue #32): each refusal is attacker-reachable, so it fails closed under either posture.
 GUARDIAN_REFUSAL_CODES = frozenset({
-    -32000,  # SESSION_REFUSED — policy refuses this session
+    -32000,  # SESSION_REFUSED
     -32004,  # SIGNATURE_INVALID
     -32005,  # REPLAY_DETECTED
     -32006,  # TIMESTAMP_OUT_OF_WINDOW
-    -32600,  # Invalid Request (malformed / oversized envelope)
+    -32600,  # Invalid Request
     -32700,  # Parse error
 })
 

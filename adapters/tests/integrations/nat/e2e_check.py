@@ -1,27 +1,5 @@
 #!/usr/bin/env python3
-"""
-End-to-end conformance check for an adopter's NAT ACS integration.
-
-Drives the real `ACSMiddleware` against a recording Guardian wired to
-the real `example_guardian.evaluate_step` policy — every scenario sees
-the same shipping policy, no synthetic per-scenario handlers.
-
-Alongside `tests/test_live.py` (which asserts on side-effect counters),
-this script asserts on the wire envelopes the Guardian receives: every
-envelope HMAC-signed and valid against the canonical ACS JSON Schema,
-arguments wrapped per tool-call-request.json:26-37, handshake once per
-session, the 4 lifecycle boundary hooks on WORKFLOW_START/END. It also
-runs the destructive scenario: `rm -rf` against a victim directory with
-a canary file that must survive the deny.
-
-Fully automated. NAT runs in-process, so unlike the Cursor e2e check
-there is no operator-in-the-loop: just run and watch.
-
-Prerequisites:
-  - nvidia-nat-core installed (>= 1.7.0)
-  - The canonical ACS schemas at $ACS_SPEC_DIR
-    (default: the in-repo specification/v0.1.0/)
-"""
+"""Automated live check of a NAT ACS install: the real middleware against a recording Guardian running the shipped policy."""
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +25,6 @@ from acs.testing.e2e_report import (  # noqa: E402
     Report, real_policy_handler,
     assert_envelopes_signed_and_valid as _assert_envelopes_signed_and_valid,
 )
-# Real example-Guardian policy, installed once for the whole run.
 from acs.guardian.example_guardian import evaluate_step  # noqa: E402
 
 HMAC_SECRET = "e2e-test-shared-secret-not-for-production"
@@ -86,15 +63,10 @@ def _ctx(tool_name: str):
     )
 
 
-# Bind the canonical-schema validator once so per-scenario callsites stay short.
 def _envelope_checks(guardian, sub_results: list) -> None:
     _assert_envelopes_signed_and_valid(
         guardian, validate_request_envelope, sub_results)
 
-
-# ──────────────────────────────────────────────────────────────────────
-# Scenarios
-# ──────────────────────────────────────────────────────────────────────
 
 TOTAL_SCENARIOS = 5
 
@@ -142,13 +114,7 @@ def scenario_allow(report: Report, guardian: ProgrammableGuardian) -> None:
 
 
 def scenario_destructive(report: Report, guardian: ProgrammableGuardian) -> None:
-    """The load-bearing scenario. The unit test asserts counter == 0; we
-    additionally write a canary file inside a victim dir, then ask the
-    middleware to rm -rf the victim. If the file vanishes despite the
-    Guardian's deny, the enforcement failed silently — the counter check
-    alone wouldn't catch it (counter == 0 if the function returns early
-    for any reason, including a bug). The canary makes it impossible to
-    false-pass."""
+    """A canary in the victim dir must survive the deny; a zero call count alone also passes when the function returns early for any reason."""
     victim = Path(tempfile.mkdtemp(prefix="acs-nat-e2e-victim-"))
     canary = victim / "DO_NOT_DELETE.txt"
     canary.write_text("if you see this after the scenario, the deny worked\n")
@@ -215,17 +181,12 @@ def scenario_destructive(report: Report, guardian: ProgrammableGuardian) -> None
     report.finish("destructive-policy-path",
                    all(ok for _, ok, _ in sub_results))
 
-    # cleanup if still around
     if victim.exists():
         import shutil
         shutil.rmtree(victim, ignore_errors=True)
 
 
 def scenario_read_tool(report: Report, guardian: ProgrammableGuardian) -> None:
-    """READ-TOOL — different tool name, same wire contract. Confirms the
-    adapter wraps every argument as {value: ...} per tool-call-request.json:26-37
-    regardless of the tool. Rock-style: validate against the canonical
-    schema, not against what we think the shape should be."""
     probe_dir = Path(tempfile.mkdtemp(prefix="acs-nat-e2e-read-"))
     probe = probe_dir / "probe.txt"
     probe.write_text("ACS NAT read-tool probe\n")
@@ -280,10 +241,7 @@ def scenario_read_tool(report: Report, guardian: ProgrammableGuardian) -> None:
 
 
 def scenario_handshake_once(report: Report, guardian: ProgrammableGuardian) -> None:
-    """HANDSHAKE — fires exactly ONCE per ACSMiddleware instance (§4).
-    Reuse the SAME middleware across 3 invocations; assert exactly one
-    handshake/hello envelope arrived. Subsequent calls must skip the
-    round-trip (cached in process memory)."""
+    """§4: calls outside a Runner share the middleware's own session, so three calls bring one handshake."""
     report.case(4, TOTAL_SCENARIOS,
                 "HANDSHAKE — fires exactly ONCE per middleware instance (§4)")
     report.field("Expected:",
@@ -397,10 +355,6 @@ def scenario_lifecycle_observability(report: Report, guardian: ProgrammableGuard
                    all(ok for _, ok, _ in sub_results))
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Output helpers
-# ──────────────────────────────────────────────────────────────────────
-
 def _dump_envelopes(report: Report, guardian: ProgrammableGuardian) -> None:
     if not guardian.received:
         return
@@ -410,10 +364,6 @@ def _dump_envelopes(report: Report, guardian: ProgrammableGuardian) -> None:
         rid = r.get("params", {}).get("request_id", "")[:8]
         print(f"        {method:35s}  req={rid}…")
 
-
-# ──────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
     if not _NAT_OK:

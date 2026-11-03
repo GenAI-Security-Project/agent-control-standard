@@ -120,16 +120,8 @@ except ImportError:
 
 
 class ACSGuardianDenied(Exception):
-    """Raised by the ACS middleware to block a function call.
+    """Raised from pre_invoke to block a call, NAT's documented blocking mechanism."""
 
-    NAT's documented blocking mechanism is to raise from pre_invoke (the
-    docstring: "Raises: Any exception to abort execution"). This custom
-    exception type lets observers and tests distinguish a policy-driven
-    block from unrelated errors.
-    """
-
-
-# ----- Config -----
 
 if _NAT_AVAILABLE:
 
@@ -155,9 +147,6 @@ if _NAT_AVAILABLE:
         target_location: str = "input"
 
 
-# ----- Helpers (module-scope so tests can exercise them without instantiating the middleware) -----
-
-
 def _coerce_uuid(raw: str | None) -> str:
     """request-envelope.json:66 wants session_id as UUID. Accept a UUID
     directly; otherwise derive a stable UUID5 from whatever NAT gave us."""
@@ -175,10 +164,7 @@ def _wrap_arguments(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stringify_step_data(data: Any) -> str:
-    """Best-effort extraction of human-readable content from a NAT
-    IntermediateStepPayload.data. The shape varies per event_type and per
-    framework; we pull out a string when possible and json-dump otherwise.
-    Returns empty string when there is genuinely nothing to forward."""
+    """Readable content from a NAT step's data, whose shape varies by event type; "" when there is none."""
     if data is None:
         return ""
     if isinstance(data, str):
@@ -221,12 +207,10 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
     """Flat {name: value} arguments from modified_args[0] and modified_kwargs; a scalar takes the input schema's field name at its position, else argN."""
     out: dict[str, Any] = {}
 
-    # 1. kwargs first — already named, no inference needed
     kwargs = getattr(context, "modified_kwargs", None) or {}
     for k, v in kwargs.items():
         out[str(k)] = v
 
-    # 2. args — extract named fields
     args = getattr(context, "modified_args", None) or []
     if not args:
         return out
@@ -234,14 +218,12 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
     schema_fields = _schema_fields(context)
 
     for idx, arg in enumerate(args):
-        # Pydantic model — best case: dump and merge
         if hasattr(arg, "model_dump"):
             try:
                 out.update(arg.model_dump(mode="json"))
                 continue
             except Exception:  # noqa: BLE001
                 pass
-        # Pydantic v1 fallback
         if hasattr(arg, "dict") and callable(getattr(arg, "dict", None)):
             try:
                 d = arg.dict()
@@ -250,19 +232,16 @@ def _collect_arguments(context: Any) -> dict[str, Any]:
                     continue
             except Exception:  # noqa: BLE001
                 pass
-        # Dataclass
         if is_dataclass(arg):
             try:
                 out.update(asdict(arg))
                 continue
             except Exception:  # noqa: BLE001
                 pass
-        # Plain dict — merge
         if isinstance(arg, dict):
             for k, v in arg.items():
                 out[str(k)] = v
             continue
-        # Scalar — use the schema field name at this position, else argN
         name = schema_fields[idx] if idx < len(schema_fields) else f"arg{idx}"
         out[name] = arg
 
@@ -509,8 +488,6 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         self._stream_sessions: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._own: _Session | None = None
         self._closed = False
-        # WeakKeyDictionary fallback for frozen contexts — id(context)
-        # would collide once GC recycles addresses.
         self._frozen_ctx_rids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._frozen_ctx_lock = threading.Lock()
 
@@ -822,7 +799,6 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             return rid
         except (AttributeError, TypeError):
             pass
-        # Frozen context — WeakKeyDictionary if it supports weak references.
         try:
             with self._frozen_ctx_lock:
                 cached = self._frozen_ctx_rids.get(context)
@@ -831,8 +807,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                 self._frozen_ctx_rids[context] = rid
                 return rid
         except TypeError:
-            # Not weak-referenceable: return a fresh uuid4 each call
-            # (pre→post correlation is lost) and audit the degradation.
+            # Not weak-referenceable: the pre-to-post correlation is lost, audited.
             audit_event("frozen_unweakrefable_context",
                         session_id=self._session_id)
             return rid
@@ -915,8 +890,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             # No pause primitive here, so ask and defer block; NAT's HITL middleware composes for approvals.
             return self._block(context, f"{decision.disposition}: {decision.reasoning}")
 
-        # An arrived-but-uninterpretable decision fails closed; the spec
-        # basis is tracked in issue #32.
+        # An unusable decision fails closed (issue #32).
         audit_event("unusable_disposition",
                     disposition=decision.disposition or "(missing)",
                     session_id=step.session_id,
@@ -942,9 +916,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
             audit_event("method_not_evaluated", method="steps/toolCallResult",
                         session_id=step.session_id)
             return None
-        # request_id_ref correlates the result with its originating
-        # toolCallRequest (tool-call-result.json:19-23); an unsent request
-        # is never cited.
+        # request_id_ref cites the toolCallRequest (tool-call-result.json:19-23), never an unsent one.
         correlation_id = self._correlation_request_id(context)
         request_sent = method_evaluated(step.server_hello, "steps/toolCallRequest")
         try:
@@ -1041,7 +1013,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
         return self._block(context, message or resolution.message or resolution.cause)
 
     def _settle_post(self, context, resolution: Resolution, step: _Step):
-        """Settle a post_invoke step without a usable decision: redact the output the Guardian never vetted unless the resolution lets it through, and record why."""
+        """Withhold the unvetted output unless the resolution proceeds, and record why."""
         if not resolution.proceed:
             _redact_output(context)
         audit_event(resolution.audit_type, **{**resolution.fields, "cause": resolution.cause,

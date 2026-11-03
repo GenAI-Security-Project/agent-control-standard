@@ -1,11 +1,3 @@
-"""
-wire.py installer tests for the Cursor adapter.
-
-Guards the DEFAULT install path against silently dropping a documented
-gate: subagentStart is the confused-deputy spawn gate, which ACS-Core
-requires of a subagent-capable client. These tests run the real CLI and
-assert the generated hooks.json.
-"""
 from __future__ import annotations
 
 import json
@@ -21,8 +13,6 @@ WIRE = HERE.parents[2] / "src" / "acs" / "integrations" / "cursor" / "wire.py"
 
 
 def _run_default_wire() -> dict:
-    """Run wire.py with the DEFAULT hook set (no --hooks) and --write to
-    a temp hooks.json; return the parsed result."""
     with tempfile.TemporaryDirectory() as d:
         settings = Path(d) / "hooks.json"
         secret = Path(d) / "hmac.key"
@@ -46,8 +36,6 @@ class DefaultWiringMatchesDocumentedSet(unittest.TestCase):
         self.hooks = _run_default_wire().get("hooks", {})
 
     def test_subagent_start_is_fail_closed_both_mechanisms(self) -> None:
-        """subagentStart is a gate: it must carry BOTH Cursor's native
-        failClosed:true AND our ACS_DEFAULT_DENY=1 (defense in depth)."""
         entries = self.hooks.get("subagentStart", [])
         self.assertTrue(entries, "subagentStart has no entries")
         entry = entries[0]
@@ -58,7 +46,6 @@ class DefaultWiringMatchesDocumentedSet(unittest.TestCase):
             f"{entry.get('command')!r}")
 
     def test_default_covers_current_core_and_proposed_gate(self) -> None:
-        """The default covers the unconditional Core hooks plus the spawn gate."""
         from acs.integrations.cursor import wire  # noqa: E402
         self.assertEqual(
             wire.DEFAULT_HOOKS,
@@ -70,9 +57,7 @@ class DefaultWiringMatchesDocumentedSet(unittest.TestCase):
 
 
 class ExampleConfigMatchesDefaultWiring(unittest.TestCase):
-    """The drop-in `hooks.json.example` — the file people actually copy —
-    must itself cover the documented default hook set; neither the
-    emission suite nor test_wire reads the checked-in example."""
+    """Neither the emission suite nor test_wire reads the checked-in hooks.json.example."""
 
     def test_example_wires_documented_default(self) -> None:
         import json
@@ -85,16 +70,11 @@ class ExampleConfigMatchesDefaultWiring(unittest.TestCase):
             f"default hooks {sorted(missing)}; wired: {sorted(wired)}")
 
     def test_example_gate_hooks_fail_closed_on_BOTH_mechanisms(self) -> None:
-        """A gate hook in the example must carry BOTH failClosed:true and
-        ACS_DEFAULT_DENY=1: failClosed only catches a non-zero exit, and
-        the adapter exits 0 on a build failure under the §6.4 fail-open
-        default."""
+        """failClosed catches only a failed hook, and the adapter exits 0 when it fails open, so a gate needs ACS_DEFAULT_DENY=1 too."""
         import json
         example = json.loads((HERE.parents[2] / "docs" / "cursor" / "hooks.json.example").read_text())
         from acs.integrations.cursor import wire  # noqa: E402
-        # Every hook the example marks failClosed is a gate; each MUST
-        # also set ACS_DEFAULT_DENY=1. This covers default, shell, and MCP
-        # gates without assigning a normative status to the default extras.
+        # Every hook marked failClosed is a gate and also sets ACS_DEFAULT_DENY=1.
         checked = 0
         for hook, entries in example["hooks"].items():
             entry = entries[0]
@@ -103,7 +83,6 @@ class ExampleConfigMatchesDefaultWiring(unittest.TestCase):
                 self.assertIn("ACS_DEFAULT_DENY=1", entry.get("command", ""),
                     f"gate hook {hook} sets failClosed:true but NOT "
                     f"ACS_DEFAULT_DENY=1 — fail-open on adapter build failure")
-        # Every default gate hook must actually be a fail-closed gate.
         for hook in wire.GATE_HOOKS & set(wire.DEFAULT_HOOKS):
             entry = example["hooks"].get(hook, [{}])[0]
             self.assertTrue(entry.get("failClosed") is True
@@ -113,13 +92,7 @@ class ExampleConfigMatchesDefaultWiring(unittest.TestCase):
         self.assertGreater(checked, 0, "no failClosed gate hooks found?")
 
     def test_unsupported_hooks_cannot_drift_into_shipped_wiring(self) -> None:
-        """Tie the adapter taxonomy to both installation surfaces.
-
-        A hook documented as unsupported must not appear in the generated
-        default set or the copy-paste example, and a hook cannot be both
-        mapped and unsupported.  This catches silent wiring drift without
-        pretending that an unsupported native event has an ACS mapping.
-        """
+        """A hook documented as unsupported appears in neither the default set nor the example, and no hook is both mapped and unsupported."""
         from acs.integrations.cursor import wire
         from acs.integrations.cursor import adapter as acs_adapter
 

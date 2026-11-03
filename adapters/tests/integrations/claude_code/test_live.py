@@ -39,9 +39,7 @@ class LiveClaudeCodeRoundTrip(unittest.TestCase):
         env.pop("ACS_HMAC_SECRET_FILE", None)
         cls.guardian_proc, cls.port = launch_guardian(env=env)
 
-        # Project-level settings.json wires the adapter into Claude Code's
-        # PreToolUse hook. Using the project root .claude/ so we don't
-        # touch the user's ~/.claude/settings.json.
+        # A project-level settings.json, so the user's ~/.claude/settings.json stays untouched.
         claude_dir = Path(cls.workdir) / ".claude"
         claude_dir.mkdir()
         settings = {
@@ -71,7 +69,6 @@ class LiveClaudeCodeRoundTrip(unittest.TestCase):
         shutil.rmtree(cls.workdir, ignore_errors=True)
 
     def _claude(self, prompt: str, timeout: float = 120.0) -> tuple[int, str]:
-        """Invoke `claude --print` from the test workdir, capture stdout."""
         proc = subprocess.run(
             ["claude", "--print", "--permission-mode", "acceptEdits", prompt],
             cwd=self.workdir,
@@ -81,34 +78,21 @@ class LiveClaudeCodeRoundTrip(unittest.TestCase):
         )
         return proc.returncode, proc.stdout
 
-    # ----- ALLOW path -----
-
     def test_benign_bash_runs(self) -> None:
-        """Guardian's policy allows benign Bash; Claude Code runs it and
-        the marker string appears in stdout."""
         marker = "ACS_LIVE_TEST_OK_MARKER"
         rc, stdout = self._claude(f"Run the shell command: echo {marker}")
         self.assertEqual(rc, 0, f"claude exited {rc}; stdout={stdout[:200]}")
         self.assertIn(marker, stdout,
                       f"benign command should have run; stdout={stdout[:300]}")
 
-    # ----- DENY path -----
-
     def test_destructive_bash_blocked(self) -> None:
-        """Guardian's destructive-Bash policy denies; Claude Code surfaces
-        the block in its output. We test against a string the example
-        Guardian's regex blocks (no actual destructive op is attempted
-        because PreToolUse fires before execution)."""
-        # The example_guardian DESTRUCTIVE_BASH pattern matches 'rm -rf /...'
-        # PreToolUse fires BEFORE the command runs, so the Guardian sees
-        # the proposed command and denies it; the command never executes.
+        # PreToolUse runs before the command, so the denied command never executes.
         prompt = (
             "Use the Bash tool with this exact command: "
             "rm -rf /tmp/acs-nonexistent-live-test-target"
         )
         rc, stdout = self._claude(prompt)
         self.assertEqual(rc, 0)
-        # Claude Code's response should reference the block / the Guardian
         lo = stdout.lower()
         self.assertTrue(
             "block" in lo or "denied" in lo or "policy" in lo

@@ -1,10 +1,3 @@
-"""
-End-to-end test: start the example Guardian, pipe Claude Code-shaped
-hook payloads through acs_adapter.py, assert the output Claude Code
-would receive.
-
-Schema source: https://code.claude.com/docs/en/hooks
-"""
 from __future__ import annotations
 
 import json
@@ -30,7 +23,6 @@ from acs.testing.harness import (  # noqa: E402
 
 
 def _claude_code_event(name: str, **extra) -> dict:
-    """Construct a hook event matching Claude Code's documented schema."""
     base = {
         "session_id": "00000000-0000-4000-8000-000000000001",
         "transcript_path": "/tmp/transcript.jsonl",
@@ -127,8 +119,6 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertEqual(payload["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("protected", payload["hookSpecificOutput"]["permissionDecisionReason"].lower())
 
-    # ----- Lifecycle hooks: empty stdout = proceed -----
-
     def test_session_start_no_output(self) -> None:
         rc, out, _ = self._run_adapter(_claude_code_event(
             "SessionStart", source="startup", model="claude-opus-4-7",
@@ -166,8 +156,6 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
 
-    # ----- Unknown hook proceeds silently -----
-
     def test_unmapped_hook_proceeds(self) -> None:
         rc, out, _ = self._run_adapter({
             "hook_event_name": "SomeFutureHook",
@@ -179,10 +167,7 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
 
-    # ----- Fail posture -----
-
     def test_guardian_unreachable_default_deny_pretoolue(self) -> None:
-        """PreToolUse with Guardian down + DEFAULT_DENY=1: emit deny in PreToolUse output shape."""
         rc, out, err = self._run_adapter(
             _claude_code_event(
                 "PreToolUse", tool_name="Read",
@@ -201,7 +186,6 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertIn("decision_failure_fail_closed", err)
 
     def test_guardian_unreachable_default_deny_posttool(self) -> None:
-        """PostToolUse with Guardian down + DEFAULT_DENY=1: top-level decision: block."""
         rc, out, err = self._run_adapter(
             _claude_code_event(
                 "PostToolUse", tool_name="Read",
@@ -218,7 +202,6 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertIn("ACS_AUDIT", err)
 
     def test_guardian_unreachable_fail_open_default_is_audit(self) -> None:
-        """Spec default per §6.4: fail-open, every bypass recorded as an audit event."""
         rc, out, err = self._run_adapter(
             _claude_code_event(
                 "PreToolUse", tool_name="Read",
@@ -244,23 +227,13 @@ class AdapterRoundTrip(unittest.TestCase):
                     "chain_hash": "0" * 64, "decision": "deny",
                     "reasoning": "policy hit",
                 }
-                # Stop maps to steps/turnEnd, which only reaches the
-                # Guardian when a turn is OPEN — so open one first with a
-                # real UserPromptSubmit, sharing one isolated state dir
-                # across both calls. (The original test sent a bare Stop;
-                # it passed locally only because an earlier run had left
-                # an open turn in the developer's default state dir — a
-                # clean CI runner had none, so the Stop was honestly
-                # skipped and the deny never happened: local green, CI
-                # red. State is now isolated per test.)
+                # turnEnd reaches the Guardian only for an open turn, so a UserPromptSubmit opens one first in an isolated state dir.
                 with g, tempfile.TemporaryDirectory() as state:
                     env = {"ACS_GUARDIAN_URL": g.url(),
                            "ACS_HMAC_SECRET": g.hmac_secret, "ACS_HMAC_KEY_ID": "test-key",
                            "ACS_SESSION_STATE_DIR": state}
                     if hook == "Stop":
-                        # Open the turn: allow turnStart + userMessage
-                        # explicitly (the __default__ handler denies, which
-                        # would block the prompt before a turn opened).
+                        # The default handler denies, which would block the prompt before the turn opened.
                         g.handlers["steps/turnStart"] = lambda req: {
                             "type": "final", "acs_version": "0.1.0",
                             "request_id": req["params"]["request_id"],

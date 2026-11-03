@@ -1,24 +1,4 @@
-"""
-Live NAT workflow test: invoke the ACS middleware exactly the way NAT's
-runtime invokes wrapped functions.
-
-Uses `FunctionMiddleware.function_middleware_invoke()` (the actual
-orchestration method NAT's runtime calls). The test creates a real
-target function, wraps it via the middleware's invoke method with a
-real `FunctionMiddlewareContext`, and asserts:
-  - Allow path: the function executes and its return value is propagated.
-  - Deny path: the function does NOT execute (no side effect observed)
-    and the block is signaled per NAT 1.7.0's contract.
-  - Modify path: the function receives modified kwargs.
-
-This exercises the same code path as a full NAT workflow run with the
-middleware attached -- the runtime constructs the same context, calls
-the same `function_middleware_invoke`, and respects the same block /
-modify outcomes. It does not load YAML or instantiate a Builder; those
-are NAT's responsibility, not the middleware's.
-
-Requires nvidia-nat-core. Skipped cleanly otherwise.
-"""
+"""The middleware through function_middleware_invoke, the method NAT's runtime calls for a wrapped function."""
 from __future__ import annotations
 
 import asyncio
@@ -89,10 +69,7 @@ class LiveNATWorkflow(unittest.TestCase):
             stream_output_schema=type(None),
         )
 
-    # ----- ALLOW path: function executes, return value propagated -----
-
     def test_allow_function_executes(self) -> None:
-        """Guardian allows -> function runs -> return value flows through middleware."""
         executed = {"count": 0, "args": None}
 
         async def target(command: str) -> str:
@@ -112,14 +89,7 @@ class LiveNATWorkflow(unittest.TestCase):
         self.assertEqual(executed["args"], "ls -la")
         self.assertEqual(result, "ran: ls -la")
 
-    # ----- DENY path: function does NOT execute, block surfaced -----
-
     def test_deny_function_does_not_execute(self) -> None:
-        """Guardian denies destructive Bash -> function MUST NOT run.
-
-        This is the load-bearing property of the middleware:
-        a function blocked by ACS must not produce its side effect.
-        """
         executed = {"count": 0}
 
         async def target(command: str) -> str:
@@ -159,8 +129,6 @@ class LiveNATWorkflow(unittest.TestCase):
             )
         self.assertEqual(executed["count"], 0)
 
-    # ----- Fail-closed posture: Guardian unreachable -> function blocked -----
-
     def test_guardian_unreachable_default_deny_blocks_function(self) -> None:
         executed = {"count": 0}
 
@@ -182,8 +150,6 @@ class LiveNATWorkflow(unittest.TestCase):
             )
         self.assertEqual(executed["count"], 0,
                          "fail-closed: function must not execute when Guardian unreachable")
-
-    # ----- Fail-open posture: function runs when Guardian unreachable -----
 
     def test_guardian_unreachable_fail_open_runs_function(self) -> None:
         executed = {"count": 0}

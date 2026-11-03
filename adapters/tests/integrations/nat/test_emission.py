@@ -116,7 +116,6 @@ class NatEmission(unittest.TestCase):
             f"handshake once per session: {self.guardian.methods()}")
         self.assertEqual(self.guardian.duplicate_request_ids(), [],
             "request_id MUST be unique per session")
-        # Correlation: result references its request (same context).
         req_id = self.guardian.request_id_for("steps/toolCallRequest")
         ref = self.guardian.payload_of("steps/toolCallResult").get("request_id_ref")
         self.assertIsNotNone(req_id)

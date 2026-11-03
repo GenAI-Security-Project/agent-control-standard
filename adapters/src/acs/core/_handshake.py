@@ -8,10 +8,7 @@ _SEMVER = re.compile(r"\d+\.\d+\.\d+")
 
 
 def method_evaluated(server_hello: dict | None, method: str) -> bool:
-    """Whether the negotiated Guardian evaluates `method`; handshake.json says
-    clients MUST treat methods missing from methods_evaluated as
-    ALLOW-by-default. With no negotiated list, every method counts as
-    evaluated."""
+    """handshake.json: a method missing from methods_evaluated is ALLOW-by-default; with no list, every method is evaluated."""
     if not isinstance(server_hello, dict):
         return True
     evaluated = server_hello.get("methods_evaluated")

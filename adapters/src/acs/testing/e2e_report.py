@@ -1,20 +1,9 @@
-"""Shared e2e-check infrastructure: pretty-printer + recording-Guardian
-helpers used by every adapter's `e2e_check.py`.
-
-Originally duplicated in three places (cursor / claude-code / nat
-e2e_check files). Lifted here so a change to scenario-output format,
-schema-validation sub-checks, or the real-policy handler hits every
-adapter at once and adapters can't drift.
-
-Adapter-specific scenarios stay in each adapter's own e2e_check.py
-(they encode framework-specific hook shapes, prompts, and assertions
-that don't generalize)."""
+"""Shared output and recording-Guardian helpers for each adapter's e2e_check.py."""
 from __future__ import annotations
 
 import json
 from typing import Any, Callable
 
-# ANSI escapes; identical across every adapter's e2e printer.
 CHECK = "✓"
 CROSS = "✗"
 PASS_TXT = "\033[1;32mPASS\033[0m"
@@ -24,17 +13,7 @@ RESET = "\033[0m"
 
 
 class Report:
-    """Render scenario PASS/FAIL output and a final summary.
-
-    Use:
-        report = Report()
-        report.print_header(...adapter-specific lines...)
-        report.case(1, total, "ALLOW — ...")
-        report.field("Marker:", marker)
-        report.sub("Function executed", ok, "count=1")
-        report.finish("allow-path", all_passed)
-        return 0 if report.summary("ACS-CORE SMOKE PASS") else 1
-    """
+    """Scenario PASS/FAIL output and a final summary."""
 
     def __init__(self) -> None:
         self.entries: list[tuple[str, bool]] = []
@@ -77,8 +56,6 @@ class Report:
         print(wrapped)
 
     def operator_action(self, instructions: list[str]) -> None:
-        """Wait for the operator to perform the listed steps and press Enter.
-        Cursor uses this (GUI in the loop); Claude/NAT do not."""
         import sys
         print(f"      {BOLD}── ACTION REQUIRED ──{RESET}")
         for i, line in enumerate(instructions, 1):
@@ -108,11 +85,6 @@ class Report:
         self.entries.append((title, ok))
 
     def summary(self, success_banner: str, *, width: int = 70) -> bool:
-        """Print the pass/fail summary.
-
-        The banner is scoped to what actually ran (N smoke scenarios);
-        conformance claims belong to test_acs_core_conformance.py.
-        """
         bar = "═" * width
         passed = sum(1 for _, ok in self.entries if ok)
         total = len(self.entries)
@@ -133,13 +105,7 @@ class Report:
 
 
 def real_policy_handler(evaluate_step: Callable) -> Callable[[dict], dict]:
-    """Wrap `example_guardian.evaluate_step` (or any compatible policy
-    function with the same 4-arg signature) as a ProgrammableGuardian
-    `handlers["__default__"]` callable.
-
-    Lets every e2e_check install the real shipping policy with one line:
-
-        guardian.handlers["__default__"] = real_policy_handler(evaluate_step)"""
+    """Wrap a policy function with evaluate_step's signature as a ProgrammableGuardian default handler."""
     def handler(req: dict) -> dict:
         method = req.get("method", "")
         params = req.get("params") or {}
@@ -152,13 +118,7 @@ def real_policy_handler(evaluate_step: Callable) -> Callable[[dict], dict]:
 def assert_envelopes_signed_and_valid(guardian: Any,
                                         validate_request_envelope: Callable,
                                         sub_results: list) -> None:
-    """Append the two wire-correctness sub-checks every scenario needs:
-    HMAC signing + validation against the on-disk canonical schemas
-    (adapter ↔ spec, not adapter ↔ fixture).
-
-    `sub_results` is mutated in place; the caller passes
-    `validate_request_envelope` so this helper stays free of
-    test_harness imports."""
+    """Append the signing and schema sub-checks every scenario needs to sub_results."""
     signed_envs = [r for r in guardian.received
                     if r.get("params", {}).get("signature", {}).get("algorithm") == "HMAC-SHA256"]
     all_signed = (len(signed_envs) == len(guardian.received))

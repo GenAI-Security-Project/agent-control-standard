@@ -1,8 +1,4 @@
-"""Handshake result-shape regressions; use real shared signing and schemas.
-
-These tests do not claim TypeScript Guardian interoperability. They exercise
-Python's shared helper, its signed fixture, and the shipped Python Guardian.
-"""
+"""Handshake result-shape regressions, run with the real signing and schemas."""
 from __future__ import annotations
 
 import copy
@@ -200,8 +196,7 @@ class ServerHelloContract(unittest.TestCase):
         self.assertEqual(session, SessionRefused("session_record_legacy", {"record": str(self._record())}))
 
     def test_unknown_fields_do_not_change_result_extraction(self):
-        # The spec ignores unknown fields. Even an extension named payload
-        # is not a reason to unwrap a valid direct ServerHello.
+        # Unknown fields are ignored, even one named payload.
         self.hello["payload"] = {"future_extension": True}
         self.hello["another_extension"] = "preserve"
         with mock.patch.object(_exchange, "_open", side_effect=self._respond):

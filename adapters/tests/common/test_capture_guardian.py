@@ -1,10 +1,4 @@
-"""
-Self-tests for the emission oracle (CaptureGuardian).
-
-A validator that never rejects makes the emission suite vacuous, so
-these tests feed deliberately-broken envelopes and assert each defect
-class is flagged — envelope schema, payload schema, every invariant.
-"""
+"""A validator that never rejects makes the emission suite vacuous, so each defect class must be flagged."""
 from __future__ import annotations
 
 import sys
@@ -47,9 +41,7 @@ def _signed_tool_call(secret: str, **overrides) -> dict:
 
 
 class IndependentVerifierKnownAnswer(unittest.TestCase):
-    """A frozen known-answer vector pins the oracle's independent
-    HKDF+HMAC+JCS implementation (it must not share acs.core's code,
-    where a shared bug would pass both sides)."""
+    """A known-answer vector pins the oracle's own HKDF, HMAC and JCS, which must not share acs.core's code."""
 
     SECRET = b"known-answer-test-secret"
     SID = "00000000-0000-4000-8000-00000000abcd"
@@ -96,10 +88,7 @@ class IndependentVerifierKnownAnswer(unittest.TestCase):
         self.assertFalse(independent_verify(env, b"wrong-secret", self.SID))
 
     def test_independent_of_acs_core(self):
-        """The verifier must not delegate to acs.core — that's the
-        whole point. Cross-check: it AGREES with acs.core on a valid
-        envelope (two implementations, same answer) but is a distinct
-        code path."""
+        """The verifier agrees with acs.core on a valid envelope without delegating to it."""
         from acs import client
         from acs import core
         from acs.testing.capture_guardian import independent_verify

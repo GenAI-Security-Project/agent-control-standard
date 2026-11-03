@@ -237,7 +237,6 @@ def _required_profiles(decision: Handshake, config: Config) -> Handshake:
 
 def store_session_decision(directory: Path, session_id: str, guardian_url: str,
                            decision: Handshake, ikm: bytes) -> Handshake:
-    """Store a decision for a session unless one is already stored; return the one that holds."""
     return _store_first(_handshake_cache_path(session_id, guardian_url, directory),
                         decision, ikm, session_id, guardian_url)[0]
 

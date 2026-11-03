@@ -60,7 +60,6 @@ EXPECTED_SKIPS = frozenset({
 
 
 def _is_expected_skip(suite: str, test_id: str, reason: str) -> bool:
-    """Exact-triple membership — no substring leniency."""
     return (suite, test_id, reason) in EXPECTED_SKIPS
 
 
@@ -86,7 +85,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _select_suites(platforms: list[str]) -> list[tuple[str, Path, tuple[str, str]]]:
-    """Return shared suites plus each selected platform once."""
     suites = list(SHARED_SUITES)
     selected: set[str] = set()
     for platform in platforms:
@@ -98,11 +96,7 @@ def _select_suites(platforms: list[str]) -> list[tuple[str, Path, tuple[str, str
 
 
 def _run_suite(cwd: Path, kind: tuple[str, str]) -> tuple[int, list[tuple[str, str]], int]:
-    """Return (passed, skipped[(id, reason)], failed) for one suite.
-
-    `failed` counts failures + errors INCLUDING setUpClass/module errors
-    (which land in result.errors even though they never ran a test), so
-    a broken suite can never masquerade as green."""
+    """(passed, skipped, failed) for one suite; failed includes setUpClass and module errors, so a broken suite cannot read as green."""
     loader = unittest.TestLoader()
     sys.path.insert(0, str(cwd))
     if kind[0] == "module":
@@ -113,9 +107,7 @@ def _run_suite(cwd: Path, kind: tuple[str, str]) -> tuple[int, list[tuple[str, s
                                      resultclass=_CountingResult)
     result = runner.run(suite)
     failed = len(result.failures) + len(result.errors)
-    # t.id() is the stable "module.Class.method" form the allowlist keys
-    # on — NOT str(t), which on 3.11+ is "method (module.Class.method)"
-    # and would never match the exact triple (caught by running it).
+    # t.id() is the module.Class.method form the allowlist keys on; str(t) differs on 3.11+.
     skipped = [(t.id(), reason) for t, reason in result.skipped]
     return result.successes, skipped, failed
 
@@ -125,9 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     suites = _select_suites(args.platforms)
     rows: list[tuple[str, int, int, int]] = []
     all_skips: list[tuple[str, str, str]] = []  # (suite, test id, reason)
-    # Run each suite in a fresh subprocess so sys.path / module-cache
-    # bleed between adapters can't mask or cause failures. Results come
-    # back as one JSON line so skip names + reasons survive.
+    # Each suite runs in its own subprocess, so module state cannot bleed between adapters.
     for label, cwd, kind in suites:
         cmd = [sys.executable, "-c",
                "import sys, json; sys.argv=['x'];"
@@ -159,7 +149,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{'TOTAL':22s} {tp:5d} {ts:5d} {tf:5d}")
     print("=" * 60)
 
-    # Report every skip by NAME + REASON, split expected vs unexpected.
     unexpected = []
     if all_skips:
         print("Skipped tests:")
@@ -182,8 +171,6 @@ def main(argv: list[str] | None = None) -> int:
               "EXPECTED_SKIPS only if it genuinely cannot be automated.")
         return 1
     if args.strict and ts:
-        # Under --strict, even allowlisted (expected) skips fail — for a
-        # fully-provisioned gate that demands EVERY test actually run.
         print(f"FAILED (--strict) — {ts} skipped; --strict requires zero "
               "skips of any kind (including the manual Cursor procedure).")
         return 1

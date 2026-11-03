@@ -34,7 +34,6 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 PER_CALL_TIMEOUT_S = 120.0
 
 
-# Shared pretty-printer + helpers; see src/acs/testing/e2e_report.py.
 from acs.testing.e2e_report import (  # noqa: E402
     Report,
     assert_envelopes_signed_and_valid as _assert_envelopes_signed_and_valid,
@@ -46,15 +45,7 @@ def _envelope_checks(guardian, sub_results: list) -> None:
         guardian, validate_request_envelope, sub_results)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Workdir + settings.json
-# ──────────────────────────────────────────────────────────────────────
-
 def write_settings(workdir: Path, port: int) -> None:
-    """Create .claude/settings.json that wires every Claude Code hook
-    type to the adapter. Adapter is invoked once per hook event; it
-    reads the framework-shaped event from stdin, builds an ACS envelope,
-    POSTs to the Guardian, and writes the verdict back to stdout."""
     claude_dir = workdir / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
     command = (
@@ -83,7 +74,6 @@ def write_settings(workdir: Path, port: int) -> None:
 
 def run_claude(prompt: str, *, workdir: Path,
                 timeout: float = PER_CALL_TIMEOUT_S) -> tuple[int, str, str]:
-    """Invoke `claude --print --model <CLAUDE_MODEL>` from workdir."""
     proc = subprocess.run(
         ["claude", "--print",
          "--model", CLAUDE_MODEL,
@@ -97,14 +87,8 @@ def run_claude(prompt: str, *, workdir: Path,
     return proc.returncode, proc.stdout, proc.stderr
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Programmable disposition handlers for the Guardian
-# ──────────────────────────────────────────────────────────────────────
-
 def allow_unless(*, deny_when_command_contains: str | None = None,
                   deny_reason: str = "policy denies this") -> callable:
-    """Build a Guardian handler that allows by default but denies when
-    a Bash command's `command` argument contains a given substring."""
     def handler(req: dict) -> dict:
         result_base = {
             "type": "final", "acs_version": "0.1.0",
@@ -128,10 +112,6 @@ def allow_unless(*, deny_when_command_contains: str | None = None,
     return handler
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Scenario runner
-# ──────────────────────────────────────────────────────────────────────
-
 def header_for_scenario(report: Report, num: int, total: int, title: str,
                          prompt: str, expectation: str) -> None:
     report.case(num, total, title)
@@ -141,9 +121,6 @@ def header_for_scenario(report: Report, num: int, total: int, title: str,
 
 def dump_session_envelopes(report: Report, guardian: ProgrammableGuardian,
                             session_id: str | None = None) -> None:
-    """For every envelope received in this session, print method name +
-    a one-line summary. For interesting ones (toolCallRequest), print the
-    full JSON."""
     if session_id is None:
         envelopes = list(guardian.received)
     else:
@@ -156,7 +133,6 @@ def dump_session_envelopes(report: Report, guardian: ProgrammableGuardian,
     for method, rid in methods:
         print(f"        {method:35s}  req={rid}…")
 
-    # Print the first toolCallRequest envelope verbatim — what Claude actually emits
     pretool = next((r for r in envelopes if r.get("method") == "steps/toolCallRequest"), None)
     if pretool:
         report.json_block("First steps/toolCallRequest envelope (verbatim)",
@@ -196,8 +172,7 @@ def scenario_allow(report: Report, workdir: Path,
     sub_results.append(("Guardian received steps/toolCallRequest",
                          "steps/toolCallRequest" in methods, ""))
     _envelope_checks(guardian, sub_results)
-    # Assert on the toolCallResult envelope, not Claude's prose summary
-    # — Claude may rephrase tool output.
+    # Assert on the toolCallResult envelope; Claude may rephrase the output.
     result_envs = [r for r in guardian.received
                     if r.get("method") == "steps/toolCallResult"]
     marker_in_tool_output = False
@@ -355,7 +330,6 @@ def scenario_handshake_once(report: Report, workdir: Path,
 
     guardian.reset()
     guardian.handlers["steps/toolCallRequest"] = allow_unless()
-    # Fresh handshake cache so this scenario's first envelope DOES handshake
     cache_dir = workdir / ".acs-handshake-cache"
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
@@ -435,7 +409,6 @@ def scenario_withheld_output(report: Report, workdir: Path,
 
 
 def main() -> int:
-    # Prereq: claude on PATH
     if shutil.which("claude") is None:
         print("FATAL: `claude` CLI not found on PATH.", file=sys.stderr)
         print("Install Claude Code first: https://docs.claude.com/claude-code",

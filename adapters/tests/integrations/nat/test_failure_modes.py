@@ -1,7 +1,3 @@
-"""
-Tests for three production failure modes: each exercises the exact
-production scenario and asserts the safe behavior.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -44,8 +40,7 @@ from acs.testing.harness import launch_guardian, seed_negotiated_session, sign_f
 
 
 class RecordingGuardian(BaseHTTPRequestHandler):
-    """Test Guardian that records every received method + tracks
-    duplicate request_ids per session (so we can assert no replay)."""
+    """Records every method and answers a duplicate request_id per session with REPLAY_DETECTED."""
     recorded: list = []
     seen_per_session: dict = {}
     lock = threading.Lock()
@@ -135,8 +130,6 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
         )
 
     def test_repeat_tool_call_does_not_get_replay_detected(self) -> None:
-        """Two calls to list_files() within the same session — the SECOND
-        call MUST NOT be rejected by Guardian replay protection."""
         cfg = ACSMiddlewareConfig(
             guardian_url=self.url, default_deny=False,
             session_id="repeat-tool-session",
@@ -150,14 +143,11 @@ class FailureMode1_DuplicateToolCallReplayDetected(unittest.TestCase):
         ctx2 = self._ctx("list_files", {})
         r2 = asyncio.run(mw.pre_invoke(ctx2))
 
-        # Both pre_invoke calls should hit the Guardian
         tool_call_records = [r for r in RecordingGuardian.recorded
                              if r["method"] == "steps/toolCallRequest"]
         self.assertEqual(len(tool_call_records), 2,
             f"expected 2 toolCallRequest sends, got {tool_call_records}")
 
-        # The two requests MUST have different request_ids; otherwise the
-        # Guardian's replay protection rejects the second call.
         rid1, rid2 = tool_call_records[0]["request_id"], tool_call_records[1]["request_id"]
         self.assertNotEqual(rid1, rid2,
             "BUG #1: NAT adapter sent the same request_id for two distinct "
@@ -227,7 +217,6 @@ class FailureMode2_GuardianRestartReplayWindow(unittest.TestCase):
             try: proc.wait(timeout=2.0)
             except subprocess.TimeoutExpired: proc.kill()
 
-        # Restart against the same state dir.
         proc = self._start_guardian()
         try:
             r2 = self._send_envelope(sid, rid)
@@ -252,8 +241,6 @@ class FailureMode3_LifecycleSubscriptionRace(unittest.TestCase):
     """
 
     def test_concurrent_subscribe_calls_subscribe_only_once(self) -> None:
-        """Force the race window with a slow fake subscribe(); count
-        actual calls. Bug = > 1."""
         from acs.integrations.nat import adapter as adapter_mod
 
         subscribe_calls = [0]

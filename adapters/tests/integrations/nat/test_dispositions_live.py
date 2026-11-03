@@ -1,24 +1,4 @@
-"""End-to-end verification that EVERY ACS disposition (ALLOW, DENY,
-MODIFY, ASK, DEFER, post_invoke DENY) is honored by the adapter when
-NAT's middleware chain captures the input as `modified_args[0]` — the
-shape every LangChain-based agent (react_agent, langgraph, etc.) uses
-in production. The previous test suite drove `modified_kwargs` only,
-masking a class of silent-bypass bugs (the `arguments: {}` envelope
-we hit in the live Vertex run).
-
-Each test:
-  1. Spawns a `ProgrammableGuardian` configured to return a specific
-     disposition for the toolCallRequest.
-  2. Builds a real `ACSMiddleware` against it.
-  3. Calls `pre_invoke` with input wrapped as a Pydantic model in
-     `modified_args` (the LangChain shape).
-  4. Asserts the disposition was honored — function input was rewritten
-     for MODIFY, exception was raised for DENY/ASK/DEFER, output was
-     redacted for post_invoke DENY.
-
-Without these tests, MODIFY / output-redaction can silently drop on
-the agent path and ship to production as theatre.
-"""
+"""Every disposition is honored when NAT passes the input as modified_args[0], the shape LangChain-based agents use."""
 from __future__ import annotations
 
 import asyncio
@@ -54,10 +34,7 @@ HMAC = "dispositions-live-shared-secret-padded-to-32-bytes"
 
 
 def _make_ctx_with_pydantic_input(tool_name: str, model_cls, model_instance):
-    """Build an InvocationContext that mirrors what NAT's middleware
-    chain produces when the LangChain wrapper calls
-    `Function.acall_invoke(**kwargs)` — input lives in modified_args[0]
-    as a Pydantic model, modified_kwargs is empty."""
+    """The InvocationContext NAT's chain builds for Function.acall_invoke(**kwargs): the input in modified_args[0] as a Pydantic model."""
     return InvocationContext(
         function_context=FunctionMiddlewareContext(
             name=tool_name,
@@ -76,8 +53,6 @@ def _make_ctx_with_pydantic_input(tool_name: str, model_cls, model_instance):
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core not installed")
 class DispositionsLive(unittest.TestCase):
-    """Run-once Guardian; per-test handler override."""
-
     @classmethod
     def setUpClass(cls) -> None:
         cls.guardian = ProgrammableGuardian(hmac_secret=HMAC)
@@ -126,18 +101,8 @@ class DispositionsLive(unittest.TestCase):
             }
         self.guardian.handlers[method] = handler
 
-    # ────────────────────────────────────────────────────────────────
-    # MODIFY — Guardian rewrites the command; the function must run
-    # with the OVERRIDE value, not the original
-    # ────────────────────────────────────────────────────────────────
-
     def test_modify_overrides_pydantic_model_input(self) -> None:
-        """REGRESSION: Adapter wrote overrides to context.modified_kwargs,
-        but NAT's actual call uses context.modified_args[0] (the Pydantic
-        model). MODIFY was silently dropped — Guardian saying 'rewrite
-        rm -rf to echo safe' had ZERO effect. Agent ran the original
-        dangerous command. The test below confirms the override
-        actually reaches the function input."""
+        """The override reaches the input NAT calls the function with, modified_args[0]."""
 
         class ShellInput(BaseModel):
             command: str
@@ -154,13 +119,10 @@ class DispositionsLive(unittest.TestCase):
         mw = self._mw()
         result = asyncio.run(mw.pre_invoke(ctx))
 
-        # The modification must reach the input that _ainvoke would actually
-        # call the function with. NAT calls call_next(*modified_args, **modified_kwargs).
-        # The adapter must EITHER mutate modified_args[0] in place or replace it.
+        # NAT calls call_next(*modified_args, **modified_kwargs), so the override must be in modified_args[0].
         post_args = list(ctx.modified_args or [])
         post_kwargs = dict(ctx.modified_kwargs or {})
 
-        # Flatten what _ainvoke would actually see
         if post_args and hasattr(post_args[0], "command"):
             effective = post_args[0].command
         elif "command" in post_kwargs:
@@ -461,11 +423,9 @@ class DispositionsLive(unittest.TestCase):
             "decision": "ask", "reasoning": "needs human approval",
         })
         mw = self._mw(default_deny=True)
-        # Either raises ACSGuardianDenied or sets context.action = SKIP.
-        # In both cases the function MUST NOT execute.
+        # Either ACSGuardianDenied or context.action = SKIP; the function must not run.
         try:
             result = asyncio.run(mw.pre_invoke(ctx))
-            # If no exception, must have signaled SKIP via action
             action = getattr(ctx, "action", None)
             self.assertIsNotNone(action,
                 "ASK was neither raised nor substituted to SKIP — function "
@@ -501,22 +461,12 @@ class DispositionsLive(unittest.TestCase):
         except ACSGuardianDenied:
             pass
 
-    # ────────────────────────────────────────────────────────────────
-    # post_invoke DENY — Guardian observes the tool result and demands
-    # redaction. The tool already ran; the OUTPUT must not flow.
-    # ────────────────────────────────────────────────────────────────
-
     def test_post_invoke_deny_redacts_output(self) -> None:
-        """Guardian sees the toolCallResult and decides the output is
-        sensitive (e.g. an exfil leak). Adapter MUST clear context.output
-        so the agent doesn't see the secret. If this fails, the agent
-        gets the raw secret string anyway — silent leak."""
         class ShellInput(BaseModel):
             command: str
         ctx = _make_ctx_with_pydantic_input(
             "Bash", ShellInput, ShellInput(command="cat /etc/secret"))
 
-        # Simulate the tool already ran and produced sensitive output
         ctx.output = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
         self._set_response("steps/toolCallResult", {
@@ -527,13 +477,7 @@ class DispositionsLive(unittest.TestCase):
         mw = self._mw()
         asyncio.run(mw.post_invoke(ctx))
 
-        # The output must be cleared. If the secret still flows through
-        # context.output, downstream readers (the LLM, callers, logs)
-        # will see it. `output=None` is the canonical redaction signal;
-        # downstream code that needs to distinguish "no output" from
-        # "redacted" reads the ACS_AUDIT stderr log for the
-        # post_invoke_redacted event (extra attributes on
-        # InvocationContext are blocked by Pydantic validate_assignment).
+        # output=None is the redaction signal; the post_invoke_redacted audit tells "redacted" from "no output".
         self.assertIsNone(ctx.output,
             "REGRESSION: post_invoke DENY did not clear context.output — "
             "the secret/sensitive value flows through despite Guardian "

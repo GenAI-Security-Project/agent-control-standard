@@ -9,10 +9,7 @@ from typing import Any
 ACS_VERSION = "0.1.0"
 DEFAULT_SKEW_WINDOW_MS = 300_000
 
-# Maximum bytes the Guardian will read from a single HTTP POST body.
-# Matches the handshake's max_payload_size_bytes default. Defends against
-# memory exhaustion via a huge Content-Length.
-MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MiB
+MAX_REQUEST_BODY_BYTES = 1_048_576
 
 
 def request_envelope(method: str, *, request_id: str, metadata: Mapping[str, Any],
@@ -39,18 +36,7 @@ def turn_start_envelope(metadata: Mapping[str, Any], turn_id: str) -> dict[str, 
 
 
 def response_matches_request(request: dict, response: dict) -> bool:
-    """Bind a Guardian response to the request that elicited it.
-
-    The per-session HMAC proves a response came from the Guardian, not
-    that it answers *this* request — a captured signed ALLOW replays
-    fine against a different call. Binding is two spec-carried checks:
-
-      1. JSON-RPC `id` on the response equals the request's `id`.
-      2. `result.request_id` equals the request's `params.request_id`
-         (required on every result per response-envelope.json).
-
-    Error responses carry no result; for those only check 1 applies.
-    Adapters MUST fail closed when this returns False."""
+    """Same JSON-RPC id and, for a result, the same request_id, so a signed response cannot be replayed onto another call."""
     if response.get("id") != request.get("id"):
         return False
     result = response.get("result")
@@ -60,8 +46,6 @@ def response_matches_request(request: dict, response: dict) -> bool:
             return False
     return True
 
-
-# ----- Time + IDs -----
 
 def iso8601_now() -> str:
     return (

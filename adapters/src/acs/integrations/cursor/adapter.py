@@ -55,15 +55,10 @@ _ENFORCED_EVENTS = _GATE_EVENTS | {"postToolUse"}
 ADAPTER_VERSION = __version__
 
 
-# ─── Hook taxonomy ──────────────────────────────────────────────────────────
-
-# Cursor hook event -> ACS step method.
 HOOK_MAP: dict[str, str] = {
     "sessionStart":         "steps/sessionStart",
     "sessionEnd":           "steps/sessionEnd",
-    # `stop` ends a TURN (each reply), not the session: steps/turnEnd
-    # closes the turn opened by steps/turnStart on beforeSubmitPrompt,
-    # while steps/sessionEnd seals the chain once per session.
+    # stop ends a turn, not the session.
     "stop":                 "steps/turnEnd",
     "preToolUse":           "steps/toolCallRequest",
     "postToolUse":          "steps/toolCallResult",
@@ -81,15 +76,11 @@ HOOK_MAP: dict[str, str] = {
     "afterTabFileEdit":     "steps/toolCallResult",
 }
 
-# Cursor events deliberately NOT mapped, with the reason; an event outside
-# HOOK_MAP and this set gets an `unmapped_hook_event` audit line so a
-# renamed upstream hook surfaces as ungoverned rather than quiet.
+# Anything outside HOOK_MAP and KNOWN_UNMAPPED is audited as unmapped_hook_event.
 KNOWN_UNMAPPED: dict[str, str] = {
     "subagentStop": "its event carries no identifier of the subagentStart it ends",
     "beforeReadFile": "read gate not wired in this adapter (candidate steps/knowledgeRetrieval)",
     "beforeTabFileRead": "Tab read gate not wired in this adapter (candidate steps/knowledgeRetrieval)",
-    # Fires outside any agent session (no conversation_id), so there is
-    # no ACS session to attach it to.
     "workspaceOpen": "app-lifecycle event outside any agent session",
 }
 
@@ -100,18 +91,13 @@ POST_TOOL_EVENTS = frozenset({
 
 # Cursor has no defer, so defer asks; preToolUse does not enforce ask, so _translate_permission denies ask and defer there.
 PERMISSION_MAP: dict[str, str] = {
-    "allow": "allow", "deny": "deny", "ask": "ask", "defer": "ask",  # no native defer
+    "allow": "allow", "deny": "deny", "ask": "ask", "defer": "ask",
 }
 
 SESSION_END_REASONS = frozenset({"completed", "cancelled", "error", "timeout", "abandoned"})
 
 
-# ─── Response writers — one definition each, used everywhere ──────────────
-
 def _emit(payload: dict[str, Any]) -> None:
-    """Single point where the adapter writes to stdout. Idempotent on
-    empty dict. beforeSubmitPrompt uses internal __exit_code/_reasoning
-    keys (handled in main) and never reaches this writer with them."""
     if not payload:
         return
     json.dump(payload, sys.stdout)
@@ -120,8 +106,6 @@ def _emit(payload: dict[str, Any]) -> None:
 
 def _permission_response(decision: str, message: str = "",
                           updated_input: dict | None = None) -> dict[str, Any]:
-    """Cursor's permission-event response shape: top-level `permission`
-    plus optional user/agent messages and updated_input (preToolUse only)."""
     out: dict[str, Any] = {"permission": decision}
     if message:
         out["user_message"] = message
@@ -133,9 +117,7 @@ def _permission_response(decision: str, message: str = "",
 
 def _post_tool_response(additional_context: str | None = None,
                          updated_mcp_tool_output: Any | None = None) -> dict[str, Any]:
-    """postToolUse response — the ONLY post-tool event with documented
-    output fields: `additional_context` and (for MCP tools)
-    `updated_mcp_tool_output` (docs show an object value)."""
+    """postToolUse is the only post-tool event with output fields: additional_context and, for MCP tools, updated_mcp_tool_output."""
     out: dict[str, Any] = {}
     if additional_context:
         out["additional_context"] = additional_context
@@ -144,11 +126,7 @@ def _post_tool_response(additional_context: str | None = None,
     return out
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
-
 def _first_workspace_root(event: dict[str, Any]) -> str | None:
-    """`workspace_roots` is Cursor's real common-input field — an array
-    (multiroot workspaces carry several); take the first."""
     roots = event.get("workspace_roots")
     if isinstance(roots, list) and roots and isinstance(roots[0], str):
         return roots[0]
@@ -177,10 +155,7 @@ def _workspace(event: dict[str, Any]) -> str | None:
 
 
 def _parse_json_field(raw: Any) -> Any:
-    """Cursor's MCP hooks carry `tool_input`/`result_json`/`tool_output`
-    as JSON-STRINGIFIED payloads (hooks docs): parse strings, pass objects
-    through, return the raw string on invalid JSON — never raise, since an
-    uncaught throw here exits 1 and Cursor proceeds."""
+    """Cursor sends some fields JSON-stringified: parse a string, pass an object through, keep invalid JSON as the string; never raises."""
     if isinstance(raw, str):
         try:
             return json.loads(raw)
@@ -191,8 +166,7 @@ def _parse_json_field(raw: Any) -> Any:
 
 
 def _int_ms(raw: Any) -> int | None:
-    """duration_ms must be an integer per tool-call-result.json; Cursor
-    sends `duration` as a number. Coerce or omit — never emit a float."""
+    """tool-call-result.json requires an integer; Cursor sends duration as a number."""
     if isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
@@ -200,10 +174,6 @@ def _int_ms(raw: Any) -> int | None:
     return None
 
 
-# ─── Turn tracking ────────────────────────────────────────────────────────
-# A turn opens on beforeSubmitPrompt (an explicit steps/turnStart) and
-# closes on `stop` (steps/turnEnd). turn_id is held in per-session state so
-# every in-turn step stamps metadata.turn_id and the turnEnd matches.
 _IN_TURN_METHODS = frozenset({
     "steps/userMessage", "steps/toolCallRequest", "steps/toolCallResult",
     "steps/agentResponse", "steps/subagentStart", "steps/preCompact", "steps/turnEnd",
@@ -225,14 +195,11 @@ def _outputs_list(raw: Any) -> list[dict[str, Any]]:
 
 
 def _tool_use_request_id(tool_call_id: str | None) -> str | None:
-    """Deterministic UUID5 so postToolUse can carry request_id_ref linking
-    back to the originating preToolUse (per tool-call-result.json:19-23)."""
+    """A uuid5 of the tool call id, so postToolUse's request_id_ref names its preToolUse (tool-call-result.json:19-23)."""
     if not tool_call_id:
         return None
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cursor:tool_use:{tool_call_id}"))
 
-
-# ─── Payload builders — dispatch table, one function per Cursor event ─────
 
 def _payload_pretool(event: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -249,13 +216,10 @@ def _payload_before_shell(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _payload_before_mcp(event: dict[str, Any]) -> dict[str, Any]:
-    """beforeMCPExecution real input (docs 2026-08-22): `tool_name`,
-    `tool_input` (JSON-STRINGIFIED params), plus `url` (remote server) or
-    `command` (stdio server) as the provider."""
+    """tool_input arrives JSON-stringified, and url or command names the server."""
     args = _parse_json_field(event.get("tool_input"))
     if not isinstance(args, dict):
-        # Unparseable/non-object params: carry them as one opaque argument
-        # rather than dropping them (the Guardian still sees the content).
+        # Unparseable params go as one opaque argument, so the Guardian still sees them.
         args = {"raw_params": args} if args is not None else {}
     tool: dict[str, Any] = {"name": event.get("tool_name", "")}
     provider = event.get("url") or event.get("command")
@@ -264,8 +228,6 @@ def _payload_before_mcp(event: dict[str, Any]) -> dict[str, Any]:
     return {"tool": tool, "arguments": _wrap_arguments(args)}
 
 
-# postToolUseFailure.failure_type → ACS exit_status enum
-# (tool-call-result.json: success | failure | timeout | blocked).
 _FAILURE_TYPE_TO_EXIT_STATUS = {
     "error": "failure",
     "timeout": "timeout",
@@ -274,10 +236,7 @@ _FAILURE_TYPE_TO_EXIT_STATUS = {
 
 
 def _payload_posttool(event: dict[str, Any]) -> dict[str, Any]:
-    """postToolUse real input (docs 2026-08-22): `tool_output` is a
-    JSON-STRINGIFIED result (for Shell it carries exitCode/stdout) plus
-    `duration` (ms); postToolUseFailure instead carries `error_message` +
-    `failure_type` ("error"|"timeout"|"permission_denied") + `duration`."""
+    """tool_output arrives JSON-stringified (Shell's carries exitCode); postToolUseFailure carries error_message and failure_type instead."""
     is_failure = (event.get("hook_event_name") == "postToolUseFailure"
                   or event.get("_event_name") == "postToolUseFailure")
     if is_failure:
@@ -286,8 +245,7 @@ def _payload_posttool(event: dict[str, Any]) -> dict[str, Any]:
         outputs = _outputs_list(event.get("error_message") or "(no error message)")
     else:
         parsed = _parse_json_field(event.get("tool_output"))
-        # Honest failure detection where the payload carries it: Shell
-        # tool_output is a JSON object with exitCode.
+        # Shell's tool_output carries exitCode.
         exit_status = "success"
         if isinstance(parsed, dict):
             code = parsed.get("exitCode")
@@ -309,11 +267,7 @@ def _payload_posttool(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _payload_after_shell(event: dict[str, Any]) -> dict[str, Any]:
-    """afterShellExecution real input (docs 2026-08-22): `command`,
-    `output`, `duration`, `sandbox` — no exit code and no correlation id
-    on this hook, so exit_status is 'success' (the schema requires a value;
-    postToolUse carries the discriminating exitCode) and request_id_ref is
-    omitted (mapping.md)."""
+    """afterShellExecution carries no exit code and no correlation id, so exit_status is success and request_id_ref is omitted."""
     payload = {
         "tool": {"name": "Shell"},
         "exit_status": "success",
@@ -326,10 +280,7 @@ def _payload_after_shell(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _payload_after_mcp(event: dict[str, Any]) -> dict[str, Any]:
-    """afterMCPExecution real input (docs 2026-08-22): `tool_name`,
-    `tool_input` (string), `result_json` (JSON-STRINGIFIED response),
-    `duration`; no correlation id exists on this hook, so request_id_ref
-    is omitted (pre/postToolUse carry the tool_use_id correlation)."""
+    """afterMCPExecution carries no correlation id, so request_id_ref is omitted."""
     payload = {
         "tool": {"name": event.get("tool_name", "")},
         "exit_status": "success",
@@ -342,9 +293,6 @@ def _payload_after_mcp(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _payload_file_edit(event: dict[str, Any]) -> dict[str, Any]:
-    """afterFileEdit / afterTabFileEdit real input: `file_path` +
-    `edits` [{old_string, new_string}]. Carry both so the Guardian sees
-    WHAT changed, not just which file."""
     output: dict[str, Any] = {"file_path": event.get("file_path", "")}
     edits = event.get("edits")
     if isinstance(edits, list) and edits:
@@ -362,15 +310,10 @@ def _payload_before_submit_prompt(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _payload_after_agent(event: dict[str, Any]) -> dict[str, Any]:
-    """afterAgentResponse / afterAgentThought real content field is
-    `text` (docs 2026-08-22)."""
     return {"content": [{"type": "text", "value": event.get("text", "")}]}
 
 
 def _payload_session_start(event: dict[str, Any]) -> dict[str, Any]:
-    """sessionStart real input: `session_id`, `is_background_agent`,
-    `composer_mode`, plus the common `workspace_roots`. platform_context
-    is schema-open (session-start.json), so carry the real facts."""
     ctx: dict[str, Any] = {}
     root = _first_workspace_root(event)
     if root:
@@ -388,9 +331,6 @@ def _payload_session_start(event: dict[str, Any]) -> dict[str, Any]:
     return {"platform_context": ctx} if ctx else {}
 
 
-# Cursor's real sessionEnd reason set is completed | aborted | error |
-# window_close | user_close (docs 2026-08-22), mapped onto the ACS enum
-# (completed | cancelled | error | timeout | abandoned).
 _CURSOR_SESSION_END_REASON_MAP = {
     "completed": "completed",
     "aborted": "cancelled",
@@ -404,15 +344,11 @@ def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
     raw = (event.get("reason") or "").lower()
     mapped = _CURSOR_SESSION_END_REASON_MAP.get(raw)
     if mapped is None:
-        # Legacy/unknown value: accept it if it happens to be an ACS enum
-        # member already, else default to completed.
         mapped = raw if raw in SESSION_END_REASONS else "completed"
     counts = decision_failure_counts(_session_id(event), workspace=_workspace(event))
     return {"reason": mapped, "summary": {"decision_failures": counts}}
 
 
-# Cursor stop.status → ACS turn-end outcome enum
-# (completed | deferred | error | interrupted | denied_at_start).
 _CURSOR_STOP_STATUS_TO_OUTCOME = {
     "completed": "completed",
     "aborted": "interrupted",
@@ -421,21 +357,13 @@ _CURSOR_STOP_STATUS_TO_OUTCOME = {
 
 
 def _payload_turn_end(event: dict[str, Any]) -> dict[str, Any]:
-    """Closes the turn opened at the last beforeSubmitPrompt; turn_id
-    comes from session state (empty → build_request skips the emission).
-    Cursor's `stop` carries `status` ∈ completed|aborted|error (docs
-    2026-08-22)."""
     outcome = _CURSOR_STOP_STATUS_TO_OUTCOME.get(
         (event.get("status") or "").lower(), "completed")
     return {"turn_id": current_turn(_session_id(event), workspace=_workspace(event)) or "", "outcome": outcome}
 
 
 def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
-    """All four schema-required fields from real session data. Lineage,
-    best first (docs 2026-08-22): uuid5 of the event's `tool_call_id`
-    (the same id the delegating preToolUse pinned as its request_id),
-    then the last recorded step, then (audited) the spawn envelope's own
-    request_id."""
+    """parent_step_id is the tool_call_id's uuid5, else the last recorded step, else (audited) the spawn's own request_id."""
     sub_raw = event.get("subagent_id", "")
     sid = _session_id(event)
     parent_step_id = _tool_use_request_id(event.get("tool_call_id"))
@@ -443,9 +371,7 @@ def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
         st = load_session_state(sid, workspace=_workspace(event))
         parent_step_id = st.get("last_step_id")
     if not parent_step_id:
-        # No tool_call_id and no prior step: build_request patches in
-        # this envelope's own request_id (sentinel None here) and the
-        # degraded lineage is audited.
+        # build_request patches in the envelope's own request_id, and the degraded lineage is audited.
         audit_event("subagent_start_parent_step_unknown",
                     session_id=sid,
                     detail="no tool_call_id and no prior step recorded; "
@@ -473,12 +399,7 @@ def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _payload_precompact(event: dict[str, Any]) -> dict[str, Any]:
-    """entries_to_compact: the step_ids observed this session — an honest
-    superset of whatever Cursor compacts. `triggered_by` maps Cursor's
-    {auto, manual} onto the closed pre-compact.json enum (a raw 'auto'
-    would be schema-invalid); with no observed steps the schema's >=1
-    cannot be met honestly, so entries stay empty and build_request skips
-    the emission."""
+    """entries_to_compact is every step_id seen this session, a superset of what Cursor compacts; with none, build_request skips the emission."""
     sid = _session_id(event)
     st = load_session_state(sid, workspace=_workspace(event))
     seen = list(st.get("seen_step_ids") or [])
@@ -514,13 +435,10 @@ def build_payload(event_name: str, event: dict[str, Any]) -> dict[str, Any]:
     builder = _PAYLOAD_BUILDERS.get(event_name)
     if not builder:
         return {}
-    # _payload_posttool branches on event_name; thread it through
     if event_name in ("postToolUse", "postToolUseFailure"):
         event = {**event, "_event_name": event_name}
     return builder(event)
 
-
-# ─── Envelope construction ──────────────────────────────────────────────────
 
 def build_request(event_name: str, event: dict[str, Any]) -> dict[str, Any]:
     method = HOOK_MAP.get(event_name)
@@ -543,10 +461,7 @@ def build_request(event_name: str, event: dict[str, Any]) -> dict[str, Any]:
     if method == "steps/turnEnd" and not current_turn(_session_id(event), workspace=_workspace(event)):
         return {}
 
-    # Pin *Request request_ids deterministically (uuid5 of `tool_use_id`
-    # / `tool_call_id`) so a matching *Result can cite request_id_ref;
-    # the shell/MCP-specific hooks carry no id, so their request_ids stay
-    # random and their results uncorrelated (mapping.md).
+    # Tool requests get a uuid5 request_id so their result can cite it; the shell and MCP hooks carry no id, so theirs stay uncorrelated.
     if method == "steps/toolCallRequest":
         ref = _tool_use_request_id(event.get("tool_use_id") or event.get("tool_call_id"))
         request_id = ref or str(uuid.uuid4())
@@ -554,13 +469,10 @@ def build_request(event_name: str, event: dict[str, Any]) -> dict[str, Any]:
         request_id = str(uuid.uuid4())
 
     payload = build_payload(event_name, event)
-    # subagentStart with no prior step: the spawn envelope's own
-    # request_id is the parent_step_id (see _payload_subagent_start).
     if method == "steps/subagentStart" and payload.get("parent_step_id") is None:
         payload["parent_step_id"] = request_id
 
-    # preCompact requires >=1 entry; none observed this session → skip
-    # the emission (audited) rather than fabricate one.
+    # preCompact needs at least one entry, so with none the emission is skipped.
     if method == "steps/preCompact" and not payload.get("entries_to_compact"):
         audit_event("precompact_skipped_no_observed_entries",
                     session_id=session_id,
@@ -595,8 +507,7 @@ def _open_session(event: dict[str, Any], config: Config) -> Handshake:
         session_id=_session_id(event),
         agent_id=_agent_id(event),
         platform="cursor",
-        # steps/turnStart is emitted on beforeSubmitPrompt but is not a
-        # HOOK_MAP value; advertise it so advertised == emitted.
+        # turnStart is emitted but is not a HOOK_MAP value.
         methods_implemented=list(HOOK_MAP.values()) + ["steps/turnStart"],
         start=lambda session: _send_session_start(event, session, config),
         count_start_failure=lambda failure: count_decision_failure(_session_id(event), failure,
@@ -769,8 +680,6 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
     return {}
 
 
-# ─── Main flow ──────────────────────────────────────────────────────────────
-
 def main() -> int:
     config = Config.from_env(os.environ)
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
@@ -801,8 +710,7 @@ def main() -> int:
 
     if event_name not in HOOK_MAP:
         if event_name not in KNOWN_UNMAPPED:
-            # Upstream rename or unknown wired event — audit it so the
-            # ungoverned step is recorded, never silent.
+            # An unknown event is audited, so an ungoverned step is never silent.
             audit_event("unmapped_hook_event", event=event_name,
                         session_id=_session_id(event))
         return 0
@@ -886,7 +794,6 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
                        event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
     if not request:
         if event_name == "stop":
-            # turnEnd with no open turn: nothing to close honestly.
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {event_name}\n")
@@ -895,8 +802,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
-        # ALLOW-by-default (handshake.json): audited and skipped, never sent,
-        # tracked as a step, or counted as a decision failure.
+        # ALLOW-by-default (handshake.json): audited and skipped, not a decision failure.
         audit_event("method_not_evaluated", method=method, event=event_name,
                     session_id=session_id)
         if event_name == "stop":
@@ -906,8 +812,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         # The originating request was never sent, so citing it would dangle.
         request["params"]["payload"].pop("request_id_ref", None)
 
-    # Track this step in session state so subsequent subagentStart /
-    # preCompact events can cite a real parent_step_id / entries_to_compact.
+    # Recorded so later subagentStart and preCompact events can cite real step ids.
     try:
         rid_for_state = request.get("params", {}).get("request_id")
         if session_id and rid_for_state:
@@ -921,8 +826,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         return _settle(result, event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
     response = result.response
 
-    # A bug escaping translate_response would exit 1 = Cursor proceeds;
-    # this guard makes any translation bug fail closed instead.
+    # A translation bug would exit 1, which Cursor proceeds on, so it fails closed here.
     try:
         out = translate_response(response, event_name, original_input=event.get("tool_input") or {},
                                  tool_name=event.get("tool_name") or "", tool_output=event.get("tool_output"))
@@ -931,7 +835,6 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
                        event_name, session_id, workspace=_workspace(event), **_tool_fields(event))
 
-    # Close the turn after the turnEnd has been emitted/recorded.
     if event_name == "stop":
         close_turn(session_id, workspace=_workspace(event))
 

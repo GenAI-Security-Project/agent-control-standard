@@ -1,12 +1,3 @@
-"""
-End-to-end tests for the Cursor adapter, using the Claude Code example
-Guardian. Cursor's hook schema is taken from the create-hook skill that
-ships with Cursor.
-
-Live verification status: unit-tested only. Cursor has no documented
-headless mode, so a live fire-through is a manual procedure
-(tests/live_verification.md).
-"""
 from __future__ import annotations
 
 import json
@@ -77,7 +68,6 @@ class CursorAdapter(unittest.TestCase):
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
-    # ----- preToolUse: allow path -----
     def test_pre_tool_safe_read_allows(self) -> None:
         rc, out, err = self._run("preToolUse", {
             "session_id": "cur-1", "tool_name": "Read",
@@ -105,7 +95,6 @@ class CursorAdapter(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out)["permission"], "deny")
 
-    # ----- beforeShellExecution -----
     def test_before_shell_safe(self) -> None:
         rc, out, _ = self._run("beforeShellExecution", {
             "session_id": "cur-5", "command": "ls",
@@ -120,11 +109,7 @@ class CursorAdapter(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out)["permission"], "deny")
 
-    # ----- subagentStart -----
     def test_subagent_start_gated_by_default(self) -> None:
-        """The example Guardian denies subagent spawns by default
-        (ACS_ALLOW_SUBAGENT unset), so routing spawns through the proper
-        hook never gets a weaker gate than a generic tool call."""
         rc, out, _ = self._run("subagentStart", {
             "session_id": "cur-7", "subagent_type": "explore",
         })
@@ -133,26 +118,22 @@ class CursorAdapter(unittest.TestCase):
         self.assertEqual(payload.get("permission"), "deny",
             "spawns must be gated by default; got: " + out)
 
-    # ----- Lifecycle events: empty output -----
     def test_session_start_silent(self) -> None:
         rc, out, _ = self._run("sessionStart", {"session_id": "cur-8"})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
 
     def test_after_agent_response_silent(self) -> None:
-        # `text` is the real Cursor field (docs 2026-08-22).
         rc, out, _ = self._run("afterAgentResponse", {
             "session_id": "cur-9", "text": "ok"})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
 
-    # ----- Unknown event -----
     def test_unmapped_event_silent(self) -> None:
         rc, out, _ = self._run("someFutureCursorEvent", {"session_id": "x"})
         self.assertEqual(rc, 0)
         self.assertEqual(out, "")
 
-    # ----- Fail posture -----
     def test_guardian_unreachable_default_deny_on_permission_event(self) -> None:
         rc, out, err = self._run("preToolUse",
             {"session_id": "cur-10", "tool_name": "Read",

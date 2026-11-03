@@ -42,7 +42,6 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     if key is None:
         ikm = load_hmac_secret()
         if not ikm:
-            # Signature present but no key configured: cannot verify
             return False
         meta = container.get("metadata") or {}
         session_id = session_id or meta.get("session_id") or container.get("request_id") or ""

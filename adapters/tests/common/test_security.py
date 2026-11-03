@@ -1,13 +1,4 @@
-"""
-Security tests for the shared `acs.core` and `acs.client` helpers and the Guardian
-HTTP path. Each test names a specific attack and asserts the
-mitigation that defeats it.
-
-Spec context: ACS is a security project (the whole point is to police
-agent behavior). Adapter and Guardian code that itself has security
-holes undermines the standard. These tests are the falsifiers for the
-mitigations documented in `adapters/SECURITY.md`.
-"""
+"""Each test names an attack and asserts the mitigation SECURITY.md documents."""
 from __future__ import annotations
 
 import binascii
@@ -40,12 +31,8 @@ HERE = Path(__file__).resolve().parent
 GUARDIAN = HERE.parent.parent / "src" / "acs" / "guardian" / "example_guardian.py"
 
 
-# ----- 1. SSRF via Guardian URL -----
-
 class GuardianUrlSchemeAllowlist(unittest.TestCase):
-    """ACS_GUARDIAN_URL must be http/https; file://, ftp://, data://,
-    etc. must be refused before the adapter calls urlopen — otherwise
-    an attacker who controls the env var can read arbitrary files."""
+    """file://, ftp:// and data:// are refused before urlopen, which would read local files."""
 
     def test_file_scheme_rejected(self) -> None:
         with self.assertRaises(ValueError) as cm:
@@ -71,13 +58,7 @@ class GuardianUrlSchemeAllowlist(unittest.TestCase):
         client.validate_guardian_url("https://guardian.internal/acs")
 
 
-# ----- 2. World-readable secret file -----
-
 class HmacSecretFilePermissions(unittest.TestCase):
-    """A secret file readable by group or world is a configuration mistake
-    that must be refused — silently using a world-readable secret leaks
-    the HMAC key to any local process."""
-
     def setUp(self) -> None:
         self.tmpdir = tempfile.mkdtemp()
         self.secret_path = Path(self.tmpdir) / "hmac.key"
@@ -101,7 +82,6 @@ class HmacSecretFilePermissions(unittest.TestCase):
 
     def test_mode_0600_accepted(self) -> None:
         os.chmod(self.secret_path, 0o600)
-        # Returns secret bytes; no raise
         self.assertTrue(client.load_hmac_secret().startswith(b"super-secret"))
 
     def test_world_readable_rejected(self) -> None:
@@ -124,12 +104,8 @@ class HmacSecretFilePermissions(unittest.TestCase):
             client.load_hmac_secret()
 
 
-# ----- 3. Guardian HTTP DoS via oversized body -----
-
 class GuardianBodySizeCap(unittest.TestCase):
-    """A POST with Content-Length > limit must be refused without reading
-    the whole body. The Guardian's documented max_payload_size_bytes in
-    the handshake is 1 MiB; the read path must enforce it."""
+    """A Content-Length past the 1 MiB cap is refused before the body is read."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -161,12 +137,8 @@ class GuardianBodySizeCap(unittest.TestCase):
         except urllib.error.HTTPError as e:
             code = e.code
         except urllib.error.URLError:
-            # The Guardian sent its 413 response and closed the socket
-            # before the client finished writing 2 MiB — manifests as a
-            # connection reset / write error on the client side. That's
-            # still a successful rejection: the body was never accepted.
+            # The 413 and close can reach the client as a reset mid-write; the body was still refused.
             connection_reset = True
-        # Any outcome that is NOT 200 OK proves the body was refused.
         self.assertFalse(code == 200,
             f"oversized request was accepted (status {code}) — DoS risk")
         if not connection_reset:
@@ -174,12 +146,8 @@ class GuardianBodySizeCap(unittest.TestCase):
                 f"expected 413 Payload Too Large or 400 or connection reset; got {code}")
 
 
-# ----- 4. Cache directory permissions -----
-
 class CacheDirPermissions(unittest.TestCase):
-    """save_session_state and the handshake cache must create files with
-    mode 0600 and parent dirs with mode 0700 — otherwise a local
-    attacker can read or poison adapter state."""
+    """Files 0600 and directories 0700, or a local attacker reads or poisons adapter state."""
 
     def setUp(self) -> None:
         import shutil
@@ -205,25 +173,15 @@ class CacheDirPermissions(unittest.TestCase):
             f"session-state dir mode is {oct(mode)}, want 0o700")
 
 
-# ----- 5. Regex DoS / oversized command input -----
-
 class RegexInputSizeCap(unittest.TestCase):
-    """Destructive-bash regex must not run on arbitrarily-large inputs.
-    A multi-MB command crafted to trigger backtracking would freeze the
-    Guardian; cap input length and audit the skip."""
-
     def test_oversized_command_is_short_circuited(self) -> None:
-        # Construct a 64 KiB command that is benign but oversized
         large_cmd = "echo " + ("a" * (64 * 1024))
-        # The destructive matcher should refuse to scan and return a
-        # sentinel that the caller treats as "do not allow without
-        # external review", not a False that allows the command.
+        # Oversized input returns a sentinel the caller must not treat as allowed.
         result = destructive_bash.scan_destructive_bash_safely(large_cmd, max_len=8192)
         self.assertEqual(result, "input_too_large",
             "oversized command MUST be flagged, not scanned, not silently allowed")
 
     def test_small_destructive_command_still_caught(self) -> None:
-        # Use the Guardian's actual pattern set
         for pat in destructive_bash.DESTRUCTIVE_BASH_PATTERNS:
             if pat.search("rm -rf /home/x"):
                 return
@@ -235,14 +193,7 @@ class RegexInputSizeCap(unittest.TestCase):
 
 
 class Item13_DestructiveRmFlagVariants(unittest.TestCase):
-    """Regression: every `rm` variant that combines recursive + force,
-    no matter what other harmless flags are present (verbose, interactive,
-    etc.), MUST be caught.
-
-    Original Guardian regex used `\\b` after a fixed `-rf` match, so
-    `rm -rfv /tmp/...` slipped through — the trailing `v` defeated the
-    word boundary. A trivial single-letter extension defeating the
-    policy is the worst class of regex bug for a security control."""
+    """Every rm that combines recursive and force is caught, whatever other flags it carries."""
 
     def _assert_caught(self, cmd: str) -> None:
         match = destructive_bash.matches_destructive_bash(cmd)
@@ -257,14 +208,12 @@ class Item13_DestructiveRmFlagVariants(unittest.TestCase):
             f"FALSE POSITIVE: benign command flagged as destructive: {cmd!r}")
 
     def test_rf_variants_caught(self) -> None:
-        # Canonical
         self._assert_caught("rm -rf /home/x")
         self._assert_caught("rm -fr /home/x")
         self._assert_caught("rm --recursive --force /home/x")
         self._assert_caught("rm --force --recursive /home/x")
 
     def test_rf_with_trailing_letters_caught(self) -> None:
-        # The bug Bar found: extra flag letters after r/f defeated the regex
         self._assert_caught("rm -rfv /home/x")
         self._assert_caught("rm -rfvi /home/x")
         self._assert_caught("rm -rfvI /home/x")
@@ -276,12 +225,10 @@ class Item13_DestructiveRmFlagVariants(unittest.TestCase):
         self._assert_caught("rm -ivrf /home/x")
 
     def test_rf_with_trailing_slash_and_command_chain_caught(self) -> None:
-        # Exact shape that Claude generated when Bar asked for an -rf test
         self._assert_caught("rm -rfv /tmp/this-is-a-fake-test-path-12345/")
         self._assert_caught("rm -rfv /tmp/foo/ ; echo done")
 
     def test_split_recursive_and_force_flags_caught(self) -> None:
-        # Separate -r and -f tokens are the same command as -rf.
         self._assert_caught("rm -r -f /")
         self._assert_caught("rm -f -r /")
         self._assert_caught("rm -R -f ~")
@@ -301,32 +248,15 @@ class Item13_DestructiveRmFlagVariants(unittest.TestCase):
         self._assert_allowed("find / -name '*.log'")
 
     def test_benign_rm_not_flagged(self) -> None:
-        # rm WITHOUT both r and f is allowed
         self._assert_allowed("rm -v /home/x")
         self._assert_allowed("rm -i /home/x")
         self._assert_allowed("rm /home/x")
         self._assert_allowed("rmdir /home/x")
-        # NOTE: `echo rm -rf /home/x` IS flagged by the regex (conservative
-        # by design — wrapping a destructive command in `echo` and piping
-        # to `sh` is a known evasion). Operators who want to allow it
-        # disable the pattern in their policy bundle.
+        # echo rm -rf /home/x is flagged too: wrapping in echo and piping to sh is a known evasion.
 
 
 class Item14_ToolNameCaseInsensitive(unittest.TestCase):
-    """Regression: the example Guardian's destructive-Bash policy was
-    gated on `tool_name in ("Bash", "Shell")` — a case-sensitive string
-    match. A NAT YAML key `shell` (lowercase) became the instance name,
-    sailed past the check, and a real LLM-driven `rm -rf` against a
-    sandbox directory ran to completion with the canary file deleted.
-    The destructive regex was correct; the OUTER guard was too strict.
-
-    Every reasonable shell tool name spelling MUST hit the same policy
-    branch:
-      - "Bash" (Claude Code adapter's PreToolUse tool name)
-      - "Shell" (Cursor's beforeShellExecution synthesizes this name)
-      - "shell" (NAT YAML key used as instance_name)
-      - "bash" / "BASH" (paranoia — any caller-chosen casing)
-    """
+    """Every shell tool spelling (Claude Code's Bash, Cursor's Shell, NAT's shell, any casing) meets the destructive-Bash policy."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -357,16 +287,12 @@ class Item14_ToolNameCaseInsensitive(unittest.TestCase):
                                 result.get("reason_codes", []))
 
     def test_unrelated_tool_unaffected(self) -> None:
-        """Case-folding must not over-broaden — `read` is not a shell tool."""
         result = self._call("Read", "rm -rf /tmp/x/")
-        # Read tool with a 'command' arg that LOOKS dangerous — not a
-        # shell call, the destructive regex isn't applied here.
         self.assertEqual(result.get("decision"), "allow",
             "case-fold must not pull non-shell tools into shell policy")
 
     def test_task_subagent_gate_also_case_insensitive(self) -> None:
-        """The Task tool deny was also case-sensitive; same case-fold."""
-        # ALLOW_SUBAGENT defaults False so Task should be denied
+        # ACS_ALLOW_SUBAGENT is off by default.
         for name in ("Task", "task", "TASK"):
             with self.subTest(tool_name=name):
                 result = self._call(name, "")
@@ -376,17 +302,7 @@ class Item14_ToolNameCaseInsensitive(unittest.TestCase):
 
 
 class Item15_VerifySignatureRobustToMalformedBase64(unittest.TestCase):
-    """Regression: verify_signature() called base64.b64decode() directly
-    without exception handling. A malformed signature value (truncation,
-    garbage characters, wrong padding) raised binascii.Error / ValueError
-    up to the request path instead of producing the spec's SIGNATURE_INVALID
-    (-32004) response. The Guardian only caught GuardianError around
-    signature checks, so the uncaught binascii.Error tore down the request
-    on the wire as a 500 / disconnected handler — security control
-    converted to a denial-of-service vector.
-
-    Every form of unparseable base64 MUST return False (signature invalid),
-    never crash."""
+    """Malformed base64 verifies as False, never as an exception that drops the request."""
 
     BAD_VALUES = [
         "not-base64",                # raw garbage
@@ -475,10 +391,7 @@ class Item16_ResponseRequestBinding(unittest.TestCase):
 
 
 class Item17_GuardianRefusalClassification(unittest.TestCase):
-    """Refusal codes = the Guardian is ALIVE and REFUSED this envelope.
-    Every one is attacker-reachable (oversize the body, replay the
-    deterministic request_id, strip the signature), so adapters fail
-    closed on them regardless of posture (spec issue #32)."""
+    """Refusals are attacker-reachable, so they fail closed under either posture (issue #32)."""
 
     def test_refusal_codes(self) -> None:
         for code in (-32000, -32004, -32005, -32006, -32600, -32700):
@@ -860,8 +773,6 @@ class Item22_StoredSessionDecisionIsAuthenticated(unittest.TestCase):
             "a forged 'unguarded' record must not let the session run without the Guardian")
         self.assertIn("session_record_invalid", err)
 
-
-# ----- 23. ClientHello advertises only earned integrity capabilities -----
 
 class Item23_ClientHelloCapabilityHonesty(unittest.TestCase):
     """The captured ClientHello claims the signed ACS-Core floor and is signed; a hook with no secret sends none."""

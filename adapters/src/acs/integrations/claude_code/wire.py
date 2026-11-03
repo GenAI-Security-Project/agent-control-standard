@@ -106,8 +106,7 @@ RETIRED_HOOKS = ["Notification"]
 # Hooks that gate an action fail closed by default; the others report what already happened, where §6.4's default is fail-open.
 GATE_HOOKS = {"PreToolUse", "UserPromptSubmit"}
 
-# A marker we embed in the command string so we can later detect "is
-# this hook entry one we wired?" without parsing argument shapes.
+# Embedded in the command, so a wired entry is recognized without parsing it.
 WIRE_MARKER = "# acs-adapter-wired"
 
 
@@ -169,10 +168,6 @@ def build_hook_entry(command: str, *, block_on_failure: bool = False) -> dict:
     }
 
 
-# ──────────────────────────────────────────────────────────────────────
-# settings.json merge
-# ──────────────────────────────────────────────────────────────────────
-
 def load_settings(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -190,8 +185,6 @@ def merge_wire(existing: dict, hook_names: list[str],
     for name in hook_names:
         command = commands_by_hook[name]
         entries = hooks.get(name, [])
-        # Strip our inner hooks from any matching-* entries and append
-        # ours. Non-matching entries left as-is.
         kept_entries: list[dict] = []
         matcher_star_seen = False
         for entry in entries:
@@ -210,14 +203,7 @@ def merge_wire(existing: dict, hook_names: list[str],
 
 
 def merge_unwire(existing: dict, hook_names: list[str]) -> dict:
-    """Strip ACS-wired INNER HOOKS from the given hook types.
-
-    Operates at the inner-hooks level so a user's own hook commands
-    sharing the same entry / matcher are preserved. If an entry's
-    inner-hooks list becomes empty after stripping ours, the entry
-    is removed; if a hook type's entries list becomes empty, the hook
-    type is removed.
-    """
+    """A copy of the settings without ACS's inner hooks; an entry or hook type left empty is removed."""
     out = json.loads(json.dumps(existing))
     hooks = out.get("hooks", {})
     for name in list(hooks.keys()):
@@ -230,7 +216,6 @@ def merge_unwire(existing: dict, hook_names: list[str]) -> dict:
                           if WIRE_MARKER not in h.get("command", "")]
             if kept_inner:
                 new_entries.append({**entry, "hooks": kept_inner})
-            # else: entry had only our inner hook(s) — drop it
         if new_entries:
             hooks[name] = new_entries
         else:
@@ -239,10 +224,6 @@ def merge_unwire(existing: dict, hook_names: list[str]) -> dict:
         out.pop("hooks", None)
     return out
 
-
-# ──────────────────────────────────────────────────────────────────────
-# Diff + atomic write
-# ──────────────────────────────────────────────────────────────────────
 
 def render(settings: dict) -> str:
     return json.dumps(settings, indent=2, sort_keys=False) + "\n"
@@ -262,8 +243,7 @@ def _expand(p: str) -> Path:
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
-    """Return a list of human-readable warnings for the operator. None
-    of these block the operation — they're informational nudges."""
+    """Warnings for the operator; none of them stops the run."""
     warnings: list[str] = []
 
     if not args.unwire:
@@ -312,10 +292,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
     return warnings
 
-
-# ──────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
@@ -373,7 +349,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
 
-    # Argument validation
     if not args.unwire and not args.guardian_url:
         p.error("--guardian-url is required (unless --unwire)")
     if args.secret_file and args.secret_env_inline:
@@ -398,18 +373,13 @@ def main(argv: list[str] | None = None) -> int:
     hook_names = [h.strip() for h in args.hooks.split(",") if h.strip()]
     args.hooks = hook_names  # for the warning function
 
-    # Build new settings
     existing = load_settings(settings_path)
     if args.unwire:
         new = merge_unwire(existing,
                             (hook_names if args.hooks else ACS_CORE_HOOKS + ["SubagentStop", "PreCompact"])
                             + [h for h in RETIRED_HOOKS if h not in hook_names])
     else:
-        # Build one command per hook. Each hook gets the deny posture
-        # that matches its safety category:
-        #   - --default-deny:   ALL hooks fail-closed.
-        #   - --all-fail-open:  ALL hooks fail-open.
-        #   - (default):        gate hooks fail-closed, others fail-open.
+        # Gate hooks fail closed by default; --default-deny closes every hook and --all-fail-open opens every hook.
         commands_by_hook: dict[str, str] = {}
         blocking: set[str] = set()
         for hook in hook_names:
@@ -435,14 +405,12 @@ def main(argv: list[str] | None = None) -> int:
         retired = [h for h in RETIRED_HOOKS if h not in hook_names]
         new = merge_wire(merge_unwire(existing, retired), hook_names, commands_by_hook, frozenset(blocking))
 
-    # Render
     warnings = validate_inputs(args)
     for w in warnings:
         print(f"  ⚠ {w}", file=sys.stderr)
     if warnings:
         print(file=sys.stderr)
 
-    # Show per-hook fail posture so operator sees the chosen safety mix
     if not args.unwire:
         print("Per-hook fail posture:")
         for hook in hook_names:

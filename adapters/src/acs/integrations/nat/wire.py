@@ -71,14 +71,8 @@ MIDDLEWARE_NAME = "acs_guardian"
 MIDDLEWARE_TYPE = "acs_guardian"
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Gap model — shared by lint + wire
-# ──────────────────────────────────────────────────────────────────────
-
 @dataclass
 class Gap:
-    """One missing-wire finding. Reused by --check (print) and
-    default/--write (mutate)."""
     severity: str   # "error" | "warn"
     kind: str       # "workflow" | "function_group" | "function" | "middleware_block" | "config"
     path: str       # dotted location e.g. "function_groups.my_tools"
@@ -94,15 +88,10 @@ def _yaml() -> YAML:
     return y
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Walker — single source of truth for "what attachment points exist
-# and which are wired". Used by both lint and wire to guarantee they
-# never diverge.
-# ──────────────────────────────────────────────────────────────────────
+# One walker serves --check and --write, so the two never diverge.
 
 def _line_of(node: Any) -> int | None:
-    """ruamel exposes .lc.line on CommentedMap / CommentedSeq nodes
-    (1-based after we +1). Returns None if absent."""
+    """ruamel's 0-based .lc.line, plus one; None when absent."""
     lc = getattr(node, "lc", None)
     if lc is None:
         return None
@@ -110,22 +99,18 @@ def _line_of(node: Any) -> int | None:
 
 
 def _list_includes_middleware(seq: Any) -> bool:
-    """Treat both ['acs_guardian'] and ['acs_guardian', ...] as wired."""
     if not isinstance(seq, (list, CommentedSeq)):
         return False
     return any(str(item) == MIDDLEWARE_NAME for item in seq)
 
 
 def find_attachment_points(doc: Any) -> list[Gap]:
-    """Walk the loaded workflow document and return every gap.
-    Empty list means fully wired."""
     gaps: list[Gap] = []
     if not isinstance(doc, (dict, CommentedMap)):
         gaps.append(Gap("error", "config", "<root>", None,
                          "workflow file root is not a mapping"))
         return gaps
 
-    # 1) The middleware block must define acs_guardian with _type acs_guardian
     mw_block = doc.get("middleware")
     if not isinstance(mw_block, (dict, CommentedMap)) or MIDDLEWARE_NAME not in mw_block:
         gaps.append(Gap("error", "middleware_block", "middleware",
@@ -141,7 +126,6 @@ def find_attachment_points(doc: Any) -> list[Gap]:
                 f"`middleware.{MIDDLEWARE_NAME}._type` must be "
                 f"`{MIDDLEWARE_TYPE}` (got {mw_def.get('_type') if isinstance(mw_def, dict) else 'non-mapping'!r})"))
 
-    # 2) The workflow attachment point
     wf = doc.get("workflow")
     if isinstance(wf, (dict, CommentedMap)):
         if not _list_includes_middleware(wf.get("middleware")):
@@ -149,7 +133,6 @@ def find_attachment_points(doc: Any) -> list[Gap]:
                              _line_of(wf),
                              f"`workflow.middleware` does not include `{MIDDLEWARE_NAME}` — the agent's top-level execution will not be gated"))
 
-    # 3) Every function_group attachment point
     fgs = doc.get("function_groups")
     if isinstance(fgs, (dict, CommentedMap)):
         for name, fg in fgs.items():
@@ -177,10 +160,7 @@ def find_attachment_points(doc: Any) -> list[Gap]:
     return gaps
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Mutators — every line we add carries the WIRE_MARKER comment so
-# --unwire knows exactly what we (and only what we) added.
-# ──────────────────────────────────────────────────────────────────────
+# Every line we add carries WIRE_MARKER, so --unwire removes only what we added.
 
 def _make_middleware_def(guardian_url: str, default_deny: bool,
                           timeout_s: float) -> CommentedMap:
@@ -194,12 +174,10 @@ def _make_middleware_def(guardian_url: str, default_deny: bool,
 
 def _ensure_middleware_block(doc: CommentedMap, guardian_url: str,
                               default_deny: bool, timeout_s: float) -> bool:
-    """Insert middleware.acs_guardian if missing. Returns True iff mutated."""
     mw = doc.get("middleware")
     mutated = False
     if not isinstance(mw, (dict, CommentedMap)):
         mw = CommentedMap()
-        # Insert at top of file (before workflow if possible)
         doc.insert(0, "middleware", mw,
                     comment=WIRE_MARKER + " (block created)")
         mutated = True
@@ -211,7 +189,6 @@ def _ensure_middleware_block(doc: CommentedMap, guardian_url: str,
 
 
 def _ensure_middleware_listed(parent: CommentedMap, path_for_log: str) -> bool:
-    """Ensure parent.middleware includes acs_guardian. Returns True iff mutated."""
     mw = parent.get("middleware")
     if mw is None:
         new = CommentedSeq([MIDDLEWARE_NAME])
@@ -221,14 +198,13 @@ def _ensure_middleware_listed(parent: CommentedMap, path_for_log: str) -> bool:
     if isinstance(mw, (list, CommentedSeq)):
         if MIDDLEWARE_NAME in [str(x) for x in mw]:
             return False
-        # Insert FIRST so policy gate runs before content filters
+        # First, so the policy gate runs before content filters.
         mw.insert(0, MIDDLEWARE_NAME)
         try:
             mw.yaml_add_eol_comment(WIRE_MARKER, key=0)
         except (AttributeError, TypeError):
             pass
         return True
-    # middleware is scalar (single middleware) — replace with list
     parent["middleware"] = CommentedSeq([MIDDLEWARE_NAME, mw])
     parent.yaml_add_eol_comment(WIRE_MARKER, key="middleware")
     return True
@@ -236,8 +212,6 @@ def _ensure_middleware_listed(parent: CommentedMap, path_for_log: str) -> bool:
 
 def install(doc: CommentedMap, *, guardian_url: str, default_deny: bool,
              timeout_s: float) -> list[str]:
-    """Apply wiring to doc in place. Returns a list of human-readable
-    change descriptions for the operator to review."""
     changes: list[str] = []
     if _ensure_middleware_block(doc, guardian_url, default_deny, timeout_s):
         changes.append(f"middleware.{MIDDLEWARE_NAME}: defined ({guardian_url})")
@@ -264,16 +238,10 @@ def install(doc: CommentedMap, *, guardian_url: str, default_deny: bool,
     return changes
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Unwire — structured removal on the parsed YAML: only nodes carrying
-# WIRE_MARKER are removed (text-stripping would orphan child lines).
-# ──────────────────────────────────────────────────────────────────────
+# Unwire removes only nodes carrying WIRE_MARKER, on the parsed YAML; stripping text would orphan child lines.
 
 def _eol_comment_text(parent: CommentedMap | CommentedSeq, key: Any) -> str:
-    """Return the EOL comment text attached to `parent[key]` (or empty
-    string if none). ruamel stores these in parent.ca.items[key] as a
-    quirky 4-tuple — only entry [2] (eol comment token) carries the
-    text we need."""
+    """The EOL comment text on parent[key], or ""; ruamel keeps it at index 2 of parent.ca.items[key]."""
     ca = getattr(parent, "ca", None)
     if ca is None:
         return ""
@@ -281,11 +249,9 @@ def _eol_comment_text(parent: CommentedMap | CommentedSeq, key: Any) -> str:
     entry = items.get(key)
     if not entry:
         return ""
-    # entry is [pre_key_comment, key_comments, eol_comment_token, ...]
     for tok in entry:
         if tok is None:
             continue
-        # Handle list of tokens or single token
         toks = tok if isinstance(tok, list) else [tok]
         for t in toks:
             val = getattr(t, "value", None)
@@ -295,42 +261,34 @@ def _eol_comment_text(parent: CommentedMap | CommentedSeq, key: Any) -> str:
 
 
 def unwire(text: str) -> tuple[str, list[str]]:
-    """Remove every node we previously annotated with WIRE_MARKER.
-    Operates on the parsed document; safer than text stripping."""
     removed: list[str] = []
     doc = _yaml().load(text)
     if not isinstance(doc, (dict, CommentedMap)):
         return text, removed
 
-    # 1) middleware block (and its acs_guardian subkey)
     mw = doc.get("middleware")
     if isinstance(mw, (dict, CommentedMap)):
-        # Subkey we added: middleware.acs_guardian (marker on that key)
         sub_comment = _eol_comment_text(mw, MIDDLEWARE_NAME)
         if MIDDLEWARE_NAME in mw and WIRE_MARKER in sub_comment:
             del mw[MIDDLEWARE_NAME]
             removed.append(f"middleware.{MIDDLEWARE_NAME}: removed")
 
-        # Top-level block we created (marker on doc.middleware key with
-        # "(block created)" suffix means we own the whole thing)
+        # A "(block created)" marker on doc.middleware means we own the whole block.
         top_comment = _eol_comment_text(doc, "middleware")
         if "(block created)" in top_comment or len(mw) == 0:
             del doc["middleware"]
             removed.append("middleware: removed block")
 
-    # 2) workflow.middleware
     wf = doc.get("workflow")
     if isinstance(wf, (dict, CommentedMap)):
         _strip_listed_middleware(wf, "workflow", removed)
 
-    # 3) function_groups.*.middleware
     fgs = doc.get("function_groups")
     if isinstance(fgs, (dict, CommentedMap)):
         for name, fg in fgs.items():
             if isinstance(fg, (dict, CommentedMap)):
                 _strip_listed_middleware(fg, f"function_groups.{name}", removed)
 
-    # 4) functions.*.middleware
     funcs = doc.get("functions")
     if isinstance(funcs, (dict, CommentedMap)):
         for name, fn in funcs.items():
@@ -344,9 +302,7 @@ def unwire(text: str) -> tuple[str, list[str]]:
 
 def _strip_listed_middleware(parent: CommentedMap, path: str,
                               removed: list[str]) -> None:
-    """Remove ONLY what we previously added (marked with WIRE_MARKER).
-    Hand-wired entries that lack the marker stay untouched — the marker
-    is the only signal that a node was ours."""
+    """Remove only entries carrying WIRE_MARKER; hand-wired entries stay."""
     mw = parent.get("middleware")
     if mw is None:
         return
@@ -360,7 +316,6 @@ def _strip_listed_middleware(parent: CommentedMap, path: str,
             return
         # Or scalar-to-list conversion: list is [acs_guardian, <original>]
         if len(contents) >= 2 and contents[0] == MIDDLEWARE_NAME:
-            # Restore the second entry as the scalar (or keep as list)
             del mw[0]
             removed.append(f"{path}.middleware: removed inserted `{MIDDLEWARE_NAME}`")
             return
@@ -381,10 +336,6 @@ def _strip_listed_middleware(parent: CommentedMap, path: str,
             del parent["middleware"]
             removed.append(f"{path}.middleware: removed empty list")
 
-
-# ──────────────────────────────────────────────────────────────────────
-# Rendering
-# ──────────────────────────────────────────────────────────────────────
 
 def render(doc: Any) -> str:
     buf = io.StringIO()
@@ -417,10 +368,6 @@ def format_gaps(gaps: list[Gap], yaml_path: Path) -> str:
     lines.append(f"Summary: {len(gaps)} finding(s) — {err} error, {wrn} warning")
     return "\n".join(lines)
 
-
-# ──────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
@@ -478,7 +425,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n(dry-run; re-run with --write to apply. {len(removed)} line(s) would be removed.)")
         return 0
 
-    # Default: install / re-install
     doc = _yaml().load(before_text)
     changes = install(doc, guardian_url=args.guardian_url,
                        default_deny=args.default_deny,

@@ -1,19 +1,4 @@
-"""
-Emission conformance — Claude Code adapter.
-
-Proves the PRODUCTION adapter (acs_adapter.py, run as the real
-subprocess Claude Code spawns) emits ACS-Core traffic that passes the
-CANONICAL schemas. Unlike test_envelope_schema.py — which calls
-build_request() directly — this captures the exact bytes the subprocess
-sends over HTTP to a validating CaptureGuardian whose oracle is the
-schema files.
-
-Every case asserts BOTH:
-  - the expected ACS method was emitted exactly once, and
-  - every captured envelope + payload passes its canonical schema and
-    the protocol invariants (signature, UUIDs, RFC3339, metadata,
-    argument wrapping).
-"""
+"""Claude Code emission: the production hook's exact bytes, validated against the canonical schemas."""
 from __future__ import annotations
 
 import json
@@ -41,8 +26,6 @@ def _event(name: str, **extra) -> dict:
 
 class ClaudeEmission(unittest.TestCase):
     def _emit(self, event: dict) -> CaptureGuardian:
-        """Run the real adapter subprocess against a CaptureGuardian and
-        return the guardian holding the captured, validated traffic."""
         g = CaptureGuardian()
         with g, tempfile.TemporaryDirectory() as cache:
             env = os.environ.copy()
@@ -65,15 +48,13 @@ class ClaudeEmission(unittest.TestCase):
 
     def _assert_emits(self, event: dict, method: str) -> CaptureGuardian:
         g = self._emit(event)
-        # handshake is always first, then the event method — exactly once.
         self.assertEqual(g.records_for(method) and len(g.records_for(method)), 1,
             f"expected exactly one {method}; captured {g.methods()}")
         self.assertIn("handshake/hello", g.methods(),
             "adapter must handshake before the first content event")
-        g.assert_all_valid(self)  # schema + invariants oracle
+        g.assert_all_valid(self)
         return g
 
-    # ----- Core matrix -----
     def test_session_start(self):
         self._assert_emits(_event("SessionStart", source="startup",
                                   model="claude-opus-4-7"), "steps/sessionStart")
@@ -104,16 +85,13 @@ class ClaudeEmission(unittest.TestCase):
                            "steps/sessionEnd")
 
     def test_bare_stop_with_no_open_turn_emits_nothing(self):
-        # steps/turnEnd needs an open turn; with none, the adapter audits
-        # and emits nothing (full lifecycle: ClaudeSequentialSession).
+        # turnEnd needs an open turn; ClaudeSequentialSession covers the full lifecycle.
         g = self._emit(_event("Stop", permission_mode="default"))
         content = [m for m in g.methods() if m.startswith("steps/")]
         self.assertEqual(content, ["steps/sessionStart"],
             f"a Stop that opens the session sends sessionStart and, with no open turn, no turnEnd; got {content}")
 
     def test_subagent_start_via_agent_tool(self):
-        # The spawn tool is `Agent` (docs 2026-08-22), legacy `Task`;
-        # both must emit steps/subagentStart.
         for tool in ("Agent", "Task"):
             with self.subTest(tool=tool):
                 self._assert_emits(_event("PreToolUse", tool_name=tool,
@@ -131,23 +109,15 @@ class ClaudeEmission(unittest.TestCase):
         self.assertEqual(content, [],
             f"SubagentStop is unmapped and must emit no step; got {content}")
 
-    # (Handshake advertised-vs-emitted containment is proved in
-    #  ClaudeSequentialSession.)
-
-    # ----- unmapped events must not masquerade as Core hooks -----
     def test_unknown_event_emits_nothing(self):
         g = self._emit(_event("SomeRenamedUpstreamHook"))
-        # Only the (optional) handshake may appear; NO steps/* content hook.
         content = [m for m in g.methods() if m.startswith("steps/")]
         self.assertEqual(content, [],
             f"an unmapped event produced Core hook traffic: {content}")
 
 
 class ClaudeSequentialSession(unittest.TestCase):
-    """Session-level invariants over ONE Guardian + ONE handshake cache:
-    handshake fires exactly once, request_ids are unique,
-    toolCallResult.request_id_ref links to its toolCallRequest, and the
-    handshake advertises only methods demonstrably emitted in this run."""
+    """One Guardian and one handshake cache: one handshake, unique request_ids, request_id_ref links, advertised equals emitted."""
 
     SEQUENCE = [
         _event("SessionStart", source="startup"),
@@ -161,8 +131,6 @@ class ClaudeSequentialSession(unittest.TestCase):
         _event("PreToolUse", tool_name="Agent",
                tool_input={"subagent_type": "researcher", "prompt": "x"},
                tool_use_id="spawn-1", permission_mode="default"),
-        # SubagentStop stays in the sequence as a realistic event but is
-        # KNOWN_UNMAPPED (emits nothing) — see test_subagent_stop_not_forwarded.
         _event("SubagentStop", transcript_path="/tmp/sub.jsonl"),
         _event("Stop", permission_mode="default", last_assistant_message="did the thing"),
         _event("SessionEnd", reason="clear"),
@@ -212,10 +180,6 @@ class ClaudeSequentialSession(unittest.TestCase):
             f"toolCallRequest's request_id ({ref!r} != {req_id!r})")
 
     def test_handshake_advertises_only_demonstrably_emitted_methods(self):
-        """Advertised methods_implemented must EQUAL the set actually
-        emitted in this session — equality catches both over-advertising
-        (a declared method never demonstrated) and under-advertising
-        (an emitted method never declared)."""
         advertised = set(self.g.handshake_methods_implemented())
         emitted = {m for m in self.g.methods() if m != "handshake/hello"}
         self.assertEqual(advertised, emitted,
@@ -223,9 +187,7 @@ class ClaudeSequentialSession(unittest.TestCase):
             f"under-advertised={sorted(emitted - advertised)}")
 
     def test_turn_lifecycle_is_consistent(self):
-        """A turn opens with steps/turnStart (on the prompt) and closes with
-        steps/turnEnd (on Stop), and every in-turn step carries the same
-        metadata.turn_id (turn-start/turn-end.json, request-envelope.json:69)."""
+        """Every in-turn step carries the turn's metadata.turn_id (request-envelope.json:69)."""
         starts = self.g.records_for("steps/turnStart")
         ends = self.g.records_for("steps/turnEnd")
         self.assertEqual(len(starts), 1, f"one turnStart expected; {self.g.methods()}")
@@ -238,7 +200,6 @@ class ClaudeSequentialSession(unittest.TestCase):
             meta = (self.g.records_for(method)[0].parsed.get("params") or {}).get("metadata") or {}
             self.assertEqual(meta.get("turn_id"), tid,
                 f"{method} must carry metadata.turn_id={tid!r}; got {meta.get('turn_id')!r}")
-        # sessionStart / sessionEnd are session-level — NOT under the turn.
         for method in ("steps/sessionStart", "steps/sessionEnd"):
             meta = (self.g.records_for(method)[0].parsed.get("params") or {}).get("metadata") or {}
             self.assertIsNone(meta.get("turn_id"),

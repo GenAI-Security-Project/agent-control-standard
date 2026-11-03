@@ -96,26 +96,19 @@ CURRENT_CORE_HOOKS = [
     "sessionEnd",
 ]
 
-# ACS-Core requires subagentStart of a subagent-capable client. Cursor
-# exposes that boundary, so the default wires the confused-deputy gate.
-# The constant keeps its earlier name because the tests import it.
+# ACS-Core requires subagentStart of a subagent-capable client; the constant keeps its earlier name because tests import it.
 PR21_PROPOSED_HOOKS = [
     "subagentStart",
 ]
 DEFAULT_HOOKS = CURRENT_CORE_HOOKS + PR21_PROPOSED_HOOKS
 
-# Hooks whose ACS verdict actually gates the action get BOTH Cursor's
-# native `failClosed: true` (adapter crash) and ACS_DEFAULT_DENY=1
-# (Guardian unreachable / unknown verdict) — two independent mechanisms
-# that must both fail open for a gate to leak; observational hooks get
-# fail-open per the §6.4 default.
+# Gate hooks get Cursor's failClosed for a crashed hook and ACS_DEFAULT_DENY for a missing decision; the others fail open, the §6.4 default.
 GATE_HOOKS = frozenset({
     "preToolUse", "beforeSubmitPrompt",
     "beforeShellExecution", "beforeMCPExecution", "subagentStart",
 })
 
-# Marker embedded in our hook commands so we can identify "is this a
-# hook entry we wired?" on unwire, without parsing argument shapes.
+# Embedded in the command, so a wired entry is recognized without parsing it.
 WIRE_MARKER = "# acs-adapter-wired"
 
 
@@ -156,21 +149,11 @@ def build_command(*, hook_command: str, event_name: str,
 
 
 def build_hook_entry(command: str, *, fail_closed: bool) -> dict:
-    """The Cursor hook-entry shape under each hook type.
-
-    Includes `failClosed: true` for gate hooks (Cursor's native fail-
-    posture mechanism — separate from our ACS_DEFAULT_DENY env var).
-    Together they cover both failure modes (adapter crashes vs.
-    Guardian unreachable / unknown verdict)."""
     entry = {"command": command}
     if fail_closed:
         entry["failClosed"] = True
     return entry
 
-
-# ──────────────────────────────────────────────────────────────────────
-# hooks.json merge
-# ──────────────────────────────────────────────────────────────────────
 
 def load_settings(path: Path) -> dict:
     if not path.exists():
@@ -183,23 +166,13 @@ def load_settings(path: Path) -> dict:
 
 def merge_wire(existing: dict, hook_names: list[str],
                 entries_by_hook: dict[str, dict]) -> dict:
-    """Return a new hooks.json dict with ACS wiring merged in.
-
-    entries_by_hook is {event_name: hook_entry_dict} so each hook can
-    have its own deny posture / failClosed setting.
-
-    Re-entrancy: operates at the inner-hooks list level so re-wiring
-    REPLACES our entry without touching the user's own entries under
-    the same event.
-    """
+    """A copy of hooks.json with ACS wired in; only our entries are replaced, so the user's entries for the same event stay."""
     out = json.loads(json.dumps(existing))  # deep copy
     out.setdefault("version", 1)
     hooks = out.setdefault("hooks", {})
     for name in hook_names:
         entry = entries_by_hook[name]
         existing_list = hooks.get(name, [])
-        # Strip our previous entry (carries WIRE_MARKER) and append the new one.
-        # Non-ACS entries left untouched.
         kept = [e for e in existing_list
                 if WIRE_MARKER not in (e.get("command") or "")]
         kept.append(entry)
@@ -208,11 +181,7 @@ def merge_wire(existing: dict, hook_names: list[str],
 
 
 def merge_unwire(existing: dict, hook_names: list[str]) -> dict:
-    """Strip ACS-wired entries from the given hook types.
-
-    Preserves the user's own non-ACS entries under the same events.
-    Empty event lists are removed; empty hooks dict is removed.
-    """
+    """A copy of hooks.json without ACS's entries; an event or hooks dict left empty is removed."""
     out = json.loads(json.dumps(existing))
     hooks = out.get("hooks", {})
     for name in list(hooks.keys()):
@@ -230,10 +199,6 @@ def merge_unwire(existing: dict, hook_names: list[str]) -> dict:
     return out
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Diff + atomic write
-# ──────────────────────────────────────────────────────────────────────
-
 def render(settings: dict) -> str:
     return json.dumps(settings, indent=2, sort_keys=False) + "\n"
 
@@ -247,17 +212,12 @@ def render_diff(before: dict, after: dict, label: str) -> str:
                                           n=3))
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Validation helpers
-# ──────────────────────────────────────────────────────────────────────
-
 def _expand(p: str) -> Path:
     return Path(os.path.expanduser(p))
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
-    """Return a list of human-readable warnings for the operator. None
-    of these block the operation — they're informational nudges."""
+    """Warnings for the operator; none of them stops the run."""
     warnings: list[str] = []
 
     if not args.unwire:
@@ -308,10 +268,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
     return warnings
 
-
-# ──────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
@@ -403,11 +359,7 @@ def main(argv: list[str] | None = None) -> int:
                 "postToolUseFailure", "afterAgentThought",
             ])
     else:
-        # Build one entry per hook. Each gets the deny posture for its
-        # safety category:
-        #   - --default-deny:    ALL hooks fail-closed
-        #   - --all-fail-open:   ALL hooks fail-open
-        #   - (default):         gate hooks fail-closed, others fail-open
+        # Gate hooks fail closed by default; --default-deny closes every hook and --all-fail-open opens every hook.
         entries_by_hook: dict[str, dict] = {}
         for hook in hook_names:
             if args.default_deny:

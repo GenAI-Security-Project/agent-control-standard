@@ -1,4 +1,3 @@
-"""The HMAC-SHA256 baseline signature of §10: key derivation, signing and verification with a given key."""
 from __future__ import annotations
 
 import base64
@@ -9,15 +8,8 @@ import hmac
 from acs.core._canonical import jcs_canonicalize
 
 
-# ----- Signing (HMAC-SHA256 baseline per §10) -----
-
 def derive_session_key(input_key_material: bytes, session_id: str) -> bytes:
-    """HKDF-SHA256 with session_id as `info`, no salt.
-
-    Spec §10: 'per-session HMAC key is HKDF-derived from deployment-provided
-    input keying material (a pre-shared secret, or a transport channel
-    binding such as a TLS exporter) together with the session_id.'
-    """
+    """HKDF-SHA256 with session_id as info and no salt (§10)."""
     # HKDF-Extract with empty salt
     prk = hmac.new(b"\x00" * 32, input_key_material, hashlib.sha256).digest()
     # HKDF-Expand to 32 bytes with info = session_id
@@ -27,10 +19,6 @@ def derive_session_key(input_key_material: bytes, session_id: str) -> bytes:
 
 
 def container_key(envelope: dict) -> str:
-    """Where the signature lives: params for requests, result for
-    decision responses, error for error responses (every response is
-    signed under ACS-Core — including errors, since a spoofable
-    unsigned error under a fail-open posture is an allow)."""
     if "method" in envelope:
         return "params"
     if "error" in envelope:
@@ -42,7 +30,6 @@ def sign_with_key(envelope: dict, key: bytes, *, key_id: str) -> dict:
     """Sign in place with HMAC-SHA256 over JCS(envelope without its signature), labelled key_id (§10)."""
     ckey = container_key(envelope)
     container = envelope.get(ckey, {})
-    # Strip any existing signature before signing
     unsigned_container = {k: v for k, v in container.items() if k != "signature"}
     unsigned_envelope = {**envelope, ckey: unsigned_container}
 
@@ -57,7 +44,6 @@ def sign_with_key(envelope: dict, key: bytes, *, key_id: str) -> dict:
 
 
 def verify_with_key(envelope: dict, key: bytes) -> bool:
-    """True when the envelope carries an HMAC-SHA256 signature that `key` reproduces."""
     ckey = container_key(envelope)
     container = envelope.get(ckey) or {}
     if not isinstance(container, dict):

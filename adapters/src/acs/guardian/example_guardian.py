@@ -30,9 +30,7 @@ from acs.core import (  # noqa: E402
 
 import datetime
 
-# Optional: with jsonschema + local canonical schemas (ACS_SPEC_DIR),
-# every incoming envelope is validated against request-envelope.json
-# before policy evaluation.
+# With jsonschema available, every incoming envelope is validated against request-envelope.json before policy runs.
 _SPEC_VALIDATION_AVAILABLE = False
 _REQUEST_ENVELOPE_VALIDATOR = None
 try:
@@ -67,9 +65,7 @@ except ImportError:
     )
 
 if not _SPEC_VALIDATION_AVAILABLE:
-    # Without envelope validation, malformed envelopes reach policy code
-    # unchecked and replay/skew checks degrade on envelopes missing
-    # request_id/timestamp.
+    # Without validation, malformed envelopes reach policy unchecked.
     print(
         "[guardian] WARNING: envelope schema validation DISABLED — "
         + _spec_validation_unavailable_reason
@@ -96,11 +92,7 @@ INFORMATIONAL_METHODS = {
 }
 
 
-# ----- Per-session state (replay + chain), persisted across restarts -----
-#
-# Persists to a JSON file per session_id under ACS_GUARDIAN_STATE_DIR so
-# the seen-request-id set and chain head survive restarts — §10.3's
-# replay-rejection MUST doesn't pause for a deploy.
+# Replay and chain state persist per session under ACS_GUARDIAN_STATE_DIR, so §10.3 replay rejection survives a restart.
 
 _STATE_DIR_ENV = os.environ.get(
     "ACS_GUARDIAN_STATE_DIR",
@@ -118,13 +110,7 @@ def _state_path(session_id: str) -> Path | None:
 
 
 class SessionState:
-    """Rolling chain head + replay protection per session_id.
-
-    Persisted (0600 JSON in STATE_DIR) after every mutation; loading is
-    best-effort — a corrupt file behaves like a fresh session.
-    seen_request_ids maps request_id → timestamp so
-    `evict_old_request_ids` can bound its growth.
-    """
+    """A session's chain head and seen request_ids, persisted as 0600 JSON; a corrupt file loads as a fresh session."""
 
     def __init__(self, session_id: str = "") -> None:
         self.session_id = session_id
@@ -154,17 +140,14 @@ class SessionState:
                         pass
             self.previous_hash = data.get("previous_hash")
             sr = data.get("seen_request_ids", {})
-            self.seen_request_ids = sr if isinstance(sr, dict) else {x: time.time() for x in sr}  # legacy list form: stamp now so the eviction cutoff keeps them a full window
+            self.seen_request_ids = sr if isinstance(sr, dict) else {x: time.time() for x in sr}  # legacy list: stamped now, so the entries live a full window
             sn = data.get("seen_nonces", {})
-            self.seen_nonces = sn if isinstance(sn, dict) else {x: time.time() for x in sn}  # legacy list form: stamp now so the eviction cutoff keeps them a full window
+            self.seen_nonces = sn if isinstance(sn, dict) else {x: time.time() for x in sn}  # legacy list: stamped now, so the entries live a full window
         except (OSError, json.JSONDecodeError):
             pass
 
     def persist(self) -> None:
-        """Atomic write with file-locked merge-on-write (HA deploys
-        sharing a STATE_DIR): exclusive flock on a sidecar `.lock`,
-        re-read disk state, merge, write atomically. Must be called
-        with self.lock held."""
+        """Write atomically, merging with the on-disk state under an exclusive lock for Guardians sharing STATE_DIR; call with self.lock held."""
         path = _state_path(self.session_id)
         if path is None:
             return
@@ -183,7 +166,6 @@ class SessionState:
                     if e.errno != errno.ENOLCK:
                         raise
 
-                # Re-read on-disk state for merge
                 merged_seen = dict(self.seen_request_ids)
                 merged_nonces = dict(self.seen_nonces)
                 merged_prev = self.previous_hash
@@ -192,29 +174,25 @@ class SessionState:
                         with open(path) as rf:
                             disk = json.load(rf)
                         disk_seen = disk.get("seen_request_ids") or {}
-                        # Backwards-compat: tolerate list form from earlier versions
                         if isinstance(disk_seen, list):
-                            disk_seen = {x: time.time() for x in disk_seen}  # legacy list form: stamp now so the eviction cutoff keeps them a full window
+                            disk_seen = {x: time.time() for x in disk_seen}  # legacy list: stamped now, so the entries live a full window
                         for k, v in disk_seen.items():
-                            # Keep the EARLIEST timestamp (so eviction works correctly)
+                            # The earliest timestamp wins, so eviction keeps the full window.
                             if k not in merged_seen or merged_seen[k] > v:
                                 merged_seen[k] = v
                         disk_nonces = disk.get("seen_nonces") or {}
                         if isinstance(disk_nonces, list):
-                            disk_nonces = {x: time.time() for x in disk_nonces}  # legacy list form: stamp now so the eviction cutoff keeps them a full window
+                            disk_nonces = {x: time.time() for x in disk_nonces}  # legacy list: stamped now, so the entries live a full window
                         for k, v in disk_nonces.items():
                             if k not in merged_nonces or merged_nonces[k] > v:
                                 merged_nonces[k] = v
-                        # Chain head: keep whichever exists (in single-Guardian
-                        # mode both are identical; in HA mode, this is best-effort).
+                        # Either head will do: one Guardian keeps them identical, and HA mode is best-effort.
                         if not merged_prev and disk.get("previous_hash"):
                             merged_prev = disk["previous_hash"]
                     except (OSError, json.JSONDecodeError):
                         pass
 
-                # Evict from the MERGED result, or dropped entries are
-                # re-added from disk forever; safe because the skew check
-                # (-32006) already rejects anything past the 2× window.
+                # Evict from the merged result, or dropped entries return from disk; the skew check already rejects anything older.
                 cutoff = time.time() - 2 * (SKEW_WINDOW_MS / 1000.0)
                 merged_seen = {k: v for k, v in merged_seen.items()
                                if v >= cutoff}
@@ -245,9 +223,7 @@ class SessionState:
 
 
 def evict_old_request_ids(st: "SessionState") -> int:
-    """Drop request_id entries older than 2 × skew_window (replay past
-    the window is already rejected with -32006; 2× covers clock drift).
-    Caller must hold st.lock. Returns the number evicted."""
+    """Drop request_ids older than twice the skew window, which -32006 already rejects; call with st.lock held."""
     cutoff = time.time() - 2 * (SKEW_WINDOW_MS / 1000.0)
     old = [k for k, ts in st.seen_request_ids.items() if ts < cutoff]
     for k in old:
@@ -256,8 +232,6 @@ def evict_old_request_ids(st: "SessionState") -> int:
 
 
 class GuardianState:
-    """Process-global state. Sessions keyed by metadata.session_id."""
-
     def __init__(self) -> None:
         self.sessions: dict[str, SessionState] = {}
         self.lock = threading.Lock()
@@ -274,8 +248,6 @@ class GuardianState:
 STATE = GuardianState()
 
 
-# ----- Helpers -----
-
 def _unwrap_arguments(wrapped: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in (wrapped or {}).items():
@@ -283,14 +255,8 @@ def _unwrap_arguments(wrapped: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-# ----- Chain computation (§8.2 normative) -----
-
 def compute_entry_hash(entry: dict, previous_hash: str | None) -> str:
-    """entry_hash = lowercase-hex(SHA-256(content_bytes || prev_hash_bytes))
-
-    content_bytes = UTF-8(JCS(entry with entry_hash and previous_hash REMOVED))
-    prev_hash_bytes = raw 32-byte decoding of previous_hash, or empty bytes for the first entry.
-    """
+    """§8.2: lowercase hex SHA-256 of JCS(entry without its hashes) followed by the previous hash's 32 raw bytes."""
     entry_for_hash = {k: v for k, v in entry.items() if k not in ("entry_hash", "previous_hash")}
     content_bytes = jcs_canonicalize(entry_for_hash)
     prev_bytes = bytes.fromhex(previous_hash) if previous_hash else b""
@@ -299,11 +265,7 @@ def compute_entry_hash(entry: dict, previous_hash: str | None) -> str:
 
 def append_to_chain(session_id: str, method: str, request_id: str,
                     payload_canonical: str, client_timestamp: str) -> str:
-    """Append a ContextEntry to the session's chain, return the new chain head.
-
-    Uses the client's (skew-validated) request timestamp so an external
-    observer can recompute the entry and verify the hash.
-    """
+    """Append a ContextEntry and return the chain head; the request's timestamp is used, so an observer can recompute the hash."""
     st = STATE.get(session_id)
     with st.lock:
         entry = {
@@ -317,11 +279,9 @@ def append_to_chain(session_id: str, method: str, request_id: str,
             entry["previous_hash"] = st.previous_hash
         new_head = compute_entry_hash(entry, st.previous_hash)
         st.previous_hash = new_head
-        st.persist()  # so a restart picks up the chain head
+        st.persist()
         return new_head
 
-
-# ----- Replay + skew checks (§10.3 normative) -----
 
 class GuardianError(Exception):
     def __init__(self, code: int, message: str, *, signed: bool = True) -> None:
@@ -337,16 +297,14 @@ def check_replay(session_id: str, request_id: str) -> None:
         return
     st = STATE.get(session_id)
     with st.lock:
-        # HA-mode: re-read on-disk state so we see what other Guardian
-        # instances have already accepted for this session.
+        # Re-read, so this sees what other Guardian instances accepted.
         st._load()
         if request_id in st.seen_request_ids:
             raise GuardianError(-32005, f"REPLAY_DETECTED: request_id {request_id} already seen in session")
-        # Evict opportunistically — every 100 new request_ids
         if len(st.seen_request_ids) % 100 == 0:
             evict_old_request_ids(st)
         st.seen_request_ids[request_id] = time.time()
-        st.persist()  # flock + merge — visible to other instances
+        st.persist()
 
 
 def check_skew(timestamp: str) -> None:
@@ -368,17 +326,14 @@ def check_signature(envelope: dict, session_id: str) -> None:
 
 
 def _major(version: str) -> str | None:
-    """Major component of an X.Y.Z version string, or None if unparseable."""
     parts = str(version).split(".")
     return parts[0] if parts and parts[0].isdigit() else None
 
 
 def evaluate_handshake(params: dict, request_id: str) -> dict:
-    """§4: ClientHello in payload; return ServerHello directly in result."""
     client_hello = params.get("payload") or {}
 
-    # Required ClientHello fields (handshake.json $defs/ClientHello) MUST
-    # be present; unknown extra fields are ignored (forward compatibility).
+    # handshake.json requires these ClientHello fields; unknown fields are ignored.
     missing = [f for f in ("acs_versions_supported", "methods_implemented",
                            "transports_supported", "provenance_producer")
                if f not in client_hello]
@@ -415,7 +370,6 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
 
 
 def evaluate_ping(params: dict, request_id: str) -> dict:
-    """§13: always allow; result.payload carries {status, echo, server_timestamp}."""
     echo = (params.get("payload") or {}).get("echo", "")
     return {
         "type": "final",
@@ -442,8 +396,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
     if method == "steps/toolCallRequest":
         tool = payload.get("tool") or {}
-        # Case-fold so "Bash" (Claude Code), "Shell" (Cursor), and
-        # "shell" (NAT YAML key) hit the same policy branch.
+        # Case-folded, so Claude Code's Bash, Cursor's Shell and NAT's shell meet one policy.
         tool_name_raw = tool.get("name", "")
         tool_name = tool_name_raw.lower()
         args = _unwrap_arguments(payload.get("arguments") or {})
@@ -476,11 +429,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         return {**base, "decision": "allow"}
 
     if method == "steps/subagentStart":
-        # Confused-deputy gate: spawns are gated by default with the same
-        # posture as the Task-tool branch — the proper hook must never be
-        # a weaker gate than a generic tool call. A "fresh"
-        # intent_derivation claims authority not derived from the parent
-        # and gets its own reason code.
+        # Spawns are gated as strictly as the Task tool, and a fresh intent_derivation gets its own reason code.
         derivation = (payload.get("intent_derivation") or "").lower()
         if not ALLOW_SUBAGENT:
             code = ("subagent_fresh_intent_gated" if derivation == "fresh"
@@ -556,7 +505,6 @@ def handle_request(request: dict) -> dict:
         sign_envelope(envelope, session_id=session_id)
         return envelope
 
-    # Standard hook traffic — full pipeline
     try:
         check_signature(request, session_id)
         check_skew(timestamp)
@@ -564,7 +512,6 @@ def handle_request(request: dict) -> dict:
     except GuardianError as e:
         return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
 
-    # Compute chain entry BEFORE evaluating, then include head in result.
     payload_canonical = jcs_canonicalize(params).decode("utf-8")
     chain_hash = append_to_chain(session_id, method, acs_request_id, payload_canonical, timestamp)
 
@@ -578,13 +525,9 @@ def handle_request(request: dict) -> dict:
     return envelope
 
 
-# ----- HTTP transport -----
-
 class GuardianHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
-        # Reject oversized requests before reading the body;
-        # MAX_REQUEST_BODY_BYTES matches the handshake's advertised
-        # max_payload_size_bytes.
+        # Oversized requests are rejected before the body is read.
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except (TypeError, ValueError):
@@ -604,9 +547,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                                 "error": {"code": -32700, "message": "Parse error"}})
             return
 
-        # A non-object top level is not a valid single JSON-RPC request,
-        # and a top-level array is a batch (unsupported in v0.1) — both
-        # MUST return -32600.
+        # A non-object, or a batch array, is not a v0.1 request: -32600.
         if not isinstance(request, dict):
             kind = "batch" if isinstance(request, list) else type(request).__name__
             self._respond(400, {"jsonrpc": "2.0", "id": None,
@@ -625,7 +566,6 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         sys.stderr.flush()
 
         response = handle_request(request)
-        # Log the verdict so operators see allow/deny, not just receipt.
         result = (response or {}).get("result") or {}
         decision = result.get("decision")
         if decision:

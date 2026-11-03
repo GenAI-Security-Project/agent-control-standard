@@ -1,4 +1,3 @@
-"""Every default schema lookup resolves to the repository's schemas when ACS_SPEC_DIR is unset."""
 from __future__ import annotations
 
 import os

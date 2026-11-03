@@ -1,4 +1,3 @@
-"""Reading a Guardian's decision safely, and the §6.3 MODIFY composition rules."""
 from __future__ import annotations
 
 import json
@@ -40,7 +39,7 @@ def normalize_decision(result: Any) -> Decision:
 def modify_composition_violation(modifications: dict) -> str | None:
     """Why a MODIFY breaks the §6.3 composition rules (both shapes, or overlapping targets), or None."""
     if not isinstance(modifications, dict):
-        return None  # caller treats empty/absent as no-usable-mutation
+        return None
     has_content = "modified_content" in modifications
     has_redactions = "redactions" in modifications
     has_overrides = "parameter_overrides" in modifications
@@ -59,11 +58,9 @@ def modify_composition_violation(modifications: dict) -> str | None:
                 "unusable (§6.3)")
 
     def _pointer_token(value: str) -> str:
-        """Encode one object-member name as an RFC 6901 token."""
         return value.replace("~", "~0").replace("/", "~1")
 
     def _paths_overlap(left: str, right: str) -> bool:
-        """True when equal paths or one JSON Pointer contains the other."""
         return (left == right or left == "" or right == ""
                 or left.startswith(right + "/")
                 or right.startswith(left + "/"))
@@ -82,9 +79,7 @@ def modify_composition_violation(modifications: dict) -> str | None:
             if not isinstance(path, str) or (path and not path.startswith("/")):
                 return (f"redaction path {path!r} is not an RFC 6901 JSON "
                         "Pointer — Guardian intent is unusable (§6.3)")
-            # JSON Pointer permits only ~0 and ~1 escape sequences.  Reject a
-            # malformed pointer rather than compare a different path from the
-            # one the Guardian intended.
+            # RFC 6901 allows only the ~0 and ~1 escapes.
             if re.search(r"~(?:[^01]|$)", path):
                 return (f"redaction path '{path}' has an invalid JSON Pointer "
                         "escape — Guardian intent is unusable (§6.3)")

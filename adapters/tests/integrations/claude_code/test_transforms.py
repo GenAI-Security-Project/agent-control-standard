@@ -1,21 +1,3 @@
-"""
-Special-transform unit tests for the Claude Code adapter.
-
-Per-event envelope + payload SCHEMA validation lives in the emission
-suite (tests/test_emission.py), which validates the exact bytes the
-production subprocess sends against the canonical schemas — a strictly
-stronger check than validating build_request() output directly. This
-file keeps ONLY the assertions emission does not make: adapter-specific
-transforms whose correctness is not captured by "the envelope is
-schema-valid".
-
-Here: the PreToolUse(Agent) → steps/subagentStart remap and its subagent
-lineage derivation. The spawn tool is `Agent` on current Claude Code
-(legacy `Task` still matched); both names are exercised so the gate
-cannot go dead on a rename. UUID coercion / argument extraction /
-timestamp / metadata / argument-wrapping are asserted as emission
-invariants on every captured envelope.
-"""
 from __future__ import annotations
 
 import sys
@@ -37,10 +19,7 @@ def _event(name: str, **extra) -> dict:
 
 
 class SubagentSpawnMethodBinding(unittest.TestCase):
-    """Envelope validation does not bind method to payload schema, so a
-    method/payload mismatch on the spawn remap would pass schema checks.
-    These pin the binding + lineage explicitly, for BOTH the current
-    `Agent` tool name and the legacy `Task` name."""
+    """Envelope validation does not bind method to payload schema, so the spawn remap's binding and lineage are pinned here."""
 
     def test_agent_and_task_remap_to_subagent_start_method(self) -> None:
         # Agent = current Claude Code (docs 2026-08-22); Task = legacy.
@@ -53,9 +32,7 @@ class SubagentSpawnMethodBinding(unittest.TestCase):
                 self.assertEqual(env["method"], "steps/subagentStart",
                     f"PreToolUse({tool}) must emit the subagentStart method, "
                     f"not a generic toolCallRequest")
-                # With tool_use_id: parent_step_id IS the envelope's
-                # request_id (delegation step and spawn event are the same
-                # wire step).
+                # With tool_use_id, parent_step_id is the envelope's request_id.
                 self.assertEqual(env["params"]["payload"]["parent_step_id"],
                                  env["params"]["request_id"])
 
@@ -67,9 +44,7 @@ class SubagentSpawnMethodBinding(unittest.TestCase):
         self.assertEqual(env["method"], "steps/toolCallRequest")
 
     def test_agent_without_tool_use_id_derives_from_request_id(self) -> None:
-        """No tool_use_id: both ids derive from the envelope's own
-        request_id — never a random uuid4 nor a uuid5 of the empty
-        string (which would collide every id-less spawn on one id)."""
+        """Without tool_use_id, both ids derive from the envelope's request_id, so id-less spawns do not collide."""
         ev = _event("PreToolUse", tool_name="Agent",
                     tool_input={"prompt": "x"}, permission_mode="default")
         ev.pop("tool_use_id", None)
@@ -81,7 +56,6 @@ class SubagentSpawnMethodBinding(unittest.TestCase):
             payload["subagent_session_id"],
             str(_uuid.uuid5(_uuid.NAMESPACE_URL,
                             f"claude-code:subagent:{rid}")))
-        # Two id-less spawns must NOT collide on subagent_session_id.
         env2 = acs_adapter.build_request(ev)
         self.assertNotEqual(payload["subagent_session_id"],
                             env2["params"]["payload"]["subagent_session_id"])

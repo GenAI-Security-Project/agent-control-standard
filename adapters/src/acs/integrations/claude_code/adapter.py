@@ -49,8 +49,6 @@ from acs.integrations.claude_code.hook import _event_name
 ADAPTER_VERSION = __version__
 
 
-# ─── Hook taxonomy ──────────────────────────────────────────────────────────
-
 HOOK_MAP: dict[str, str] = {
     "SessionStart":     "steps/sessionStart",
     "SessionEnd":       "steps/sessionEnd",
@@ -70,17 +68,13 @@ _IN_TURN_METHODS = frozenset({
     "steps/agentResponse", "steps/subagentStart", "steps/turnEnd",
 })
 
-# Events deliberately not mapped, with the reason; anything outside
-# HOOK_MAP and this set gets an `unmapped_hook_event` audit line.
+# Anything outside HOOK_MAP and KNOWN_UNMAPPED is audited as unmapped_hook_event.
 KNOWN_UNMAPPED: dict[str, str] = {
-    # steps/preCompact requires entries_to_compact (minItems 1) and the
-    # PreCompact event carries no entry list, so no honest payload exists.
     "PreCompact": "platform exposes no entry list for steps/preCompact",
     "SubagentStop": "its event carries the subagent's agent_id, not the tool_use_id its subagentStart's subagent_session_id comes from",
     "Notification": "fires on permission and idle prompts, not on the model's reply",
 }
 
-# Hooks that decide whether an action runs: the tool call and the prompt.
 _GATE_HOOKS = frozenset({"PreToolUse", "UserPromptSubmit"})
 # Hooks whose step fails closed when its envelope cannot be signed: the gates, and the result the adapter can withhold.
 _ENFORCED_HOOKS = _GATE_HOOKS | {"PostToolUse"}
@@ -110,11 +104,7 @@ PRETOOL_PERMISSION_MAP: dict[str, str] = {
 }
 
 
-# ─── Response writers — one definition each, used everywhere ──────────────
-
 def _emit(payload: dict[str, Any]) -> None:
-    """Single point where the adapter writes to stdout. Idempotent if
-    called with empty dict."""
     if not payload:
         return
     json.dump(payload, sys.stdout)
@@ -123,7 +113,6 @@ def _emit(payload: dict[str, Any]) -> None:
 
 def _pretool_response(decision: str, reason: str = "",
                        updated_input: dict | None = None) -> dict[str, Any]:
-    """Build Claude Code's PreToolUse response shape."""
     hso: dict[str, Any] = {
         "hookEventName": "PreToolUse",
         "permissionDecision": decision,
@@ -176,20 +165,11 @@ def _wrap_arguments(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tool_use_request_id(tool_use_id: str | None) -> str | None:
-    """Deterministic UUID5 from Claude Code's tool_use_id so PostToolUse
-    can populate `request_id_ref` (per tool-call-result.json:19-23)
-    linking back to its originating PreToolUse request."""
+    """A uuid5 of tool_use_id, so PostToolUse's request_id_ref names its PreToolUse (tool-call-result.json:19-23)."""
     if not tool_use_id:
         return None
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"claude-code:tool_use:{tool_use_id}"))
 
-
-# ─── Payload builders — dispatch table, one function per hook ──────────────
-#
-# Each function takes the Claude Code event dict and returns the
-# hook-payload portion of the ACS envelope (the part that goes under
-# `params.payload`). The dispatch table at the bottom maps hook names
-# to these functions; build_payload is then a one-line dispatch.
 
 def _payload_pretool_use(event: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -214,8 +194,7 @@ def _payload_post_tool_use(event: dict[str, Any]) -> dict[str, Any]:
     if ref:
         payload["request_id_ref"] = ref
     dur = event.get("duration_ms")
-    # tool-call-result.json requires an INTEGER; Claude Code documents
-    # duration_ms as a number, so coerce.
+    # tool-call-result.json requires an integer; Claude Code sends duration_ms as a number.
     if isinstance(dur, (int, float)) and not isinstance(dur, bool):
         payload["duration_ms"] = int(dur)
     return payload
@@ -263,16 +242,9 @@ def _payload_session_start(event: dict[str, Any]) -> dict[str, Any]:
 def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
     name = event.get("hook_event_name", "")
     raw_reason = event.get("reason") or ("completed" if name == "Stop" else "other")
-    # §6.4: the session's decision failures per failure class; an empty count says none were recorded.
     counts = decision_failure_counts(event.get("session_id"))
     return {"reason": SESSION_END_REASON_MAP.get(raw_reason, "completed"), "summary": {"decision_failures": counts}}
 
-
-# ─── Turn tracking ────────────────────────────────────────────────────────
-# A turn opens on UserPromptSubmit (an explicit steps/turnStart) and closes
-# on Stop (steps/turnEnd). The turn_id lives in the same disk-backed
-# per-session state the Cursor adapter uses, so every in-turn step stamps
-# metadata.turn_id and the turnEnd carries the matching id.
 
 def _payload_turn_end(event: dict[str, Any]) -> dict[str, Any]:
     turn_id = current_turn(event.get("session_id"))
@@ -297,14 +269,8 @@ def build_payload(event: dict[str, Any]) -> dict[str, Any]:
     return builder(event) if builder else {}
 
 
-# ─── Envelope construction ──────────────────────────────────────────────────
-
 def _is_subagent_spawn(event: dict[str, Any]) -> bool:
-    """True when this PreToolUse IS a subagent spawn.
-
-    Claude Code spawns subagents via the `Agent` tool (hooks reference,
-    fetched 2026-08-22); older builds named it `Task`, so match both.
-    The separate `TaskCreate` / task-list feature is not a spawn."""
+    """Claude Code spawns subagents with the Agent tool, Task in older builds; TaskCreate is not a spawn."""
     return (event.get("hook_event_name") == "PreToolUse"
             and _is_subagent_tool(event.get("tool_name")))
 
@@ -314,18 +280,7 @@ def _is_subagent_tool(tool_name: str | None) -> bool:
 
 
 def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
-    """steps/subagentStart from PreToolUse on the Agent tool (or legacy Task).
-
-    subagentStart is the confused-deputy spawn gate, which ACS-Core
-    requires of a subagent-capable client. Field sources:
-      - parent_step_id: this PreToolUse's own deterministic request_id
-        (uuid5 of tool_use_id) — the spawn event is the delegation step.
-      - subagent_session_id: uuid5 of the tool_use_id under a distinct
-        namespace (the child's real session id exists only after spawn).
-      - parent_session_id: the actual session_id.
-      - intent_derivation: "derived_from_parent" — the prompt is parent-
-        authored; "fresh" would claim underived authority.
-    """
+    """subagentStart for an Agent call: its ids are uuid5s of tool_use_id, and its intent is derived_from_parent because the parent wrote the prompt."""
     tool_use_id = event.get("tool_use_id") or ""
     tool_input = event.get("tool_input") or {}
     if tool_use_id:
@@ -333,8 +288,7 @@ def _payload_subagent_start(event: dict[str, Any]) -> dict[str, Any]:
             uuid.NAMESPACE_URL, f"claude-code:subagent:{tool_use_id}"))
         parent_step_id = _tool_use_request_id(tool_use_id)
     else:
-        # No tool_use_id: both ids are patched in build_request from the
-        # envelope's own request_id and the degraded identity is audited.
+        # Without tool_use_id, build_request patches both ids from the envelope's request_id.
         audit_event("subagent_spawn_id_unavailable",
                     session_id=event.get("session_id"),
                     detail="PreToolUse(Agent/Task) carried no tool_use_id; "
@@ -365,8 +319,6 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
     if not session_id:
         return {}
 
-    # The Agent tool (legacy: Task) is Claude Code's subagent spawn — route it to the
-    # dedicated confused-deputy gate instead of the generic tool hook.
     subagent_spawn = _is_subagent_spawn(event)
     if subagent_spawn:
         method = "steps/subagentStart"
@@ -383,9 +335,6 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
     if method == "steps/turnEnd" and not current_turn(session_id):
         return {}
 
-    # For PreToolUse (including the Task→subagentStart remap), pin
-    # request_id to a deterministic UUID derived from tool_use_id so the
-    # matching PostToolUse can reference it.
     request_id = (_tool_use_request_id(event.get("tool_use_id"))
                   if event.get("hook_event_name") == "PreToolUse"
                   else None) or str(uuid.uuid4())
@@ -393,10 +342,6 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
     payload = (_payload_subagent_start(event) if subagent_spawn
                else build_payload(event))
     if subagent_spawn:
-        # No tool_use_id case: the spawn event's own request_id is the
-        # honest identity source — it IS the delegation step, and the
-        # derived subagent id is unique per spawn instead of a stable
-        # uuid5 of the empty string (see _payload_subagent_start).
         if payload.get("parent_step_id") is None:
             payload["parent_step_id"] = request_id
         if payload.get("subagent_session_id") is None:
@@ -490,8 +435,7 @@ def _translate_pretool(decision: Decision, original_input: dict, tool_name: str 
         overrides = decision.modifications.get("parameter_overrides")
         # A non-dict override cannot be applied as updatedInput, so §6.5 makes the MODIFY a DENY.
         if isinstance(overrides, dict):
-            # updatedInput REPLACES the whole input, so merge the per-
-            # argument overrides (modifications.json) onto the original.
+            # updatedInput replaces the whole input.
             merged = {**original_input, **overrides}
             # "ask" shows the rewritten call to the user; "allow" would also skip their permission prompt.
             return _pretool_response("allow" if tool_name in _NO_PROMPT_TOOLS else "ask", decision.reasoning,
@@ -652,8 +596,6 @@ def translate_response(acs_response: dict[str, Any], hook_event: str,
     return {}
 
 
-# ─── Main flow ──────────────────────────────────────────────────────────────
-
 def main() -> int:
     config = Config.from_env(os.environ)
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
@@ -681,8 +623,7 @@ def main() -> int:
     hook_name = event.get("hook_event_name", "")
     if hook_name not in HOOK_MAP:
         if hook_name not in KNOWN_UNMAPPED:
-            # Unrecognized hook (upstream rename or newly wired event):
-            # audit it so an ungoverned session is not a quiet one.
+            # An unrecognized hook is audited, so an ungoverned session is not a quiet one.
             audit_event("unmapped_hook_event", hook=hook_name,
                         session_id=event.get("session_id"))
         return 0
@@ -777,8 +718,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
 
     method = request.get("method", "")
     if not method_evaluated(server_hello, method):
-        # ALLOW-by-default (handshake.json): recorded and skipped, never sent
-        # or counted as a decision failure.
+        # ALLOW-by-default (handshake.json): recorded and skipped, not a decision failure.
         audit_event("method_not_evaluated", method=method, hook=hook_name,
                     session_id=session_id)
         if hook_name in AUDIT_ONLY_HOOKS:

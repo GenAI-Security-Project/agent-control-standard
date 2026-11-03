@@ -1,14 +1,3 @@
-"""
-Integration tests for the ACS NAT middleware against the installed
-nvidia-nat-core package (NAT 1.7.0+).
-
-These tests construct a real NAT InvocationContext, run the adapter's
-pre_invoke / post_invoke through the actual NAT middleware machinery,
-and assert the round-trip behavior against a live example Guardian.
-
-Requires:
-  pip install nvidia-nat-core
-"""
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +12,6 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-# Skip cleanly if NAT isn't installed in the environment running tests
 try:
     from nat.middleware.middleware import (
         InvocationContext,
@@ -33,7 +21,6 @@ try:
 except ImportError:
     _NAT_OK = False
 
-# Import adapter (it tolerates NAT missing)
 from acs.client import _handshake as client_handshake  # noqa: E402
 from acs.integrations.nat.adapter import ACSMiddleware, ACSGuardianDenied  # noqa: E402
 
@@ -53,7 +40,6 @@ from acs.testing.harness import (  # noqa: E402
 
 
 def _make_context(tool_name: str, args: dict) -> "InvocationContext":
-    """Build a NAT InvocationContext that exercises the same path real NAT runtime would."""
     return InvocationContext(
         function_context=FunctionMiddlewareContext(
             name=tool_name,
@@ -104,8 +90,6 @@ class NATMiddlewareIntegration(unittest.TestCase):
         )
         return ACSMiddleware(cfg)
 
-    # ----- allow path -----
-
     def test_post_invoke_allow_passes_through(self) -> None:
         mw = self._make_middleware()
         ctx = _make_context("Read", {"file_path": "/tmp/x"})
@@ -114,13 +98,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
         self.assertIsNone(result)  # allow + no modification
 
     def test_negotiated_timeout_replaces_local_timeout(self) -> None:
-        """A decision arriving after the ServerHello deadline is a timeout.
-
-        The local config allows one second, while the signed ServerHello
-        negotiates 100 ms.  A Guardian DENY at 300 ms therefore must not be
-        applied; under the shipped fail-open posture the call proceeds with a
-        `decision_timeout` audit.  Exercises the real HTTP boundary.
-        """
+        """The signed ServerHello's 100 ms deadline wins over the local second, so a 300 ms DENY is late and the call proceeds with a decision_timeout audit."""
         g = ProgrammableGuardian()
 
         def hello(req: dict) -> dict:
@@ -171,10 +149,7 @@ class NATMiddlewareIntegration(unittest.TestCase):
                 os.environ["ACS_HMAC_KEY_ID"] = "test-key"
 
     def test_unevaluated_tool_call_proceeds_unsent(self) -> None:
-        """handshake.json: methods absent from methods_evaluated are
-        ALLOW-by-default. Under default_deny, an unevaluated toolCallRequest
-        proceeds without Guardian traffic, and the evaluated result never
-        cites the unsent request."""
+        """handshake.json ALLOW-by-default: an unevaluated toolCallRequest proceeds unsent under default_deny, and the result never cites it."""
         g = ProgrammableGuardian()
 
         def hello(req: dict) -> dict:
@@ -218,7 +193,6 @@ class NATMiddlewareIntegration(unittest.TestCase):
                 os.environ["ACS_HMAC_KEY_ID"] = "test-key"
 
     def test_acs_disabled_bypass_is_written_to_the_durable_sink(self) -> None:
-        """Both NAT bypass boundaries must leave structured durable records."""
         saved_disabled = os.environ.get("ACS_DISABLED")
         saved_audit = os.environ.get("ACS_AUDIT_FILE")
         try:
@@ -255,18 +229,12 @@ class NATMiddlewareIntegration(unittest.TestCase):
             else:
                 os.environ["ACS_AUDIT_FILE"] = saved_audit
 
-    # ----- fail posture -----
 
 class ExtractArgumentsFromInvocationContext(unittest.TestCase):
-    """NAT captures the function input as `modified_args[0]` (a Pydantic
-    model from `_convert_input`), not only `modified_kwargs`, so
-    `_extract_arguments` must flatten every shape NAT may use. The helper
-    is duck-typed on the context — no NAT install needed.
-    """
+    """NAT passes the function input as modified_args[0], a Pydantic model, so _extract_arguments flattens every shape; duck-typed, no NAT needed."""
 
     def _ctx(self, *, modified_args=(), modified_kwargs=None,
               input_schema=None):
-        """Build a duck-typed object matching what _extract_arguments reads."""
         from types import SimpleNamespace
         return SimpleNamespace(
             modified_args=tuple(modified_args),
@@ -275,8 +243,7 @@ class ExtractArgumentsFromInvocationContext(unittest.TestCase):
         )
 
     def test_pydantic_v2_model_in_modified_args_extracts_fields(self) -> None:
-        """LangChain react_agent path: a Pydantic model in
-        modified_args[0] must surface its field values."""
+        """LangChain react_agent path: a Pydantic model in modified_args[0]."""
         try:
             from pydantic import BaseModel
         except ImportError:
@@ -294,20 +261,16 @@ class ExtractArgumentsFromInvocationContext(unittest.TestCase):
             "must be extracted so policy can match destructive patterns")
 
     def test_plain_dict_in_modified_args_extracts_keys(self) -> None:
-        """NAT may also pass a raw dict if the function takes one."""
         from acs.integrations.nat.adapter import _extract_arguments
         ctx = self._ctx(modified_args=({"command": "echo hi"},))
         self.assertEqual(_extract_arguments(ctx), {"command": "echo hi"})
 
     def test_modified_kwargs_still_works(self) -> None:
-        """Existing path (named kwargs, e.g. from direct middleware tests)
-        must still work — this is the path the integration tests above use."""
         from acs.integrations.nat.adapter import _extract_arguments
         ctx = self._ctx(modified_kwargs={"file_path": "/tmp/x"})
         self.assertEqual(_extract_arguments(ctx), {"file_path": "/tmp/x"})
 
     def test_kwargs_and_args_both_present_kwargs_first(self) -> None:
-        """If both shapes are populated, both should appear in the result."""
         from acs.integrations.nat.adapter import _extract_arguments
         ctx = self._ctx(modified_args=({"command": "ls"},),
                           modified_kwargs={"timeout_s": 5})
@@ -316,8 +279,7 @@ class ExtractArgumentsFromInvocationContext(unittest.TestCase):
         self.assertEqual(out.get("timeout_s"), 5)
 
     def test_scalar_arg_with_schema_uses_field_name(self) -> None:
-        """If the arg is a scalar (e.g. single string), name it after
-        the input schema's first field — better than 'arg0' on the wire."""
+        """A scalar takes the input schema's first field name."""
         try:
             from pydantic import BaseModel
         except ImportError:
@@ -331,7 +293,6 @@ class ExtractArgumentsFromInvocationContext(unittest.TestCase):
         self.assertEqual(_extract_arguments(ctx).get("command"), "ls -la")
 
     def test_empty_context_returns_empty(self) -> None:
-        """No args, no kwargs, no schema → empty dict, not a crash."""
         from acs.integrations.nat.adapter import _extract_arguments
         self.assertEqual(_extract_arguments(self._ctx()), {})
 

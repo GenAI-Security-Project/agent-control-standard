@@ -1,50 +1,5 @@
 #!/usr/bin/env python3
-"""
-End-to-end conformance check for an adopter's Cursor ACS integration.
-
-Cursor is a desktop GUI app with no headless CLI (unlike `claude --print`),
-so this test cannot drive Cursor automatically. Instead it's
-**semi-automated**: the script does everything that can be done
-programmatically (Guardian setup, hooks wiring into a temp workspace,
-validation of what arrives, PASS/FAIL reporting) and asks the operator
-to perform a small set of well-defined actions in Cursor.
-
-For each scenario the script:
-
-  1. Configures a recording, signing Guardian for the scenario.
-  2. Prints precise instructions for what to do in Cursor.
-  3. Waits for the operator to press Enter when done.
-  4. Validates what envelopes arrived and prints PASS/FAIL.
-
-What's verified end-to-end (same properties the Claude Code e2e_check
-covers):
-
-  1. Cursor fires the hooks we expect, in the order we expect.
-  2. The adapter translates each into a wire-conformant ACS envelope.
-  3. Every envelope is HMAC-signed end-to-end and the Guardian verifies it.
-  4. The Guardian's verdicts are actually applied — allow lets the tool
-     run, deny visibly blocks it in Cursor's UI.
-  5. The handshake fires ONCE per Cursor session, even with many hooks.
-
-Prerequisites:
-  - Cursor installed (https://cursor.com)
-  - A test workspace (a throwaway directory you can open in Cursor)
-  - Python 3.10+ with `jsonschema` and `rfc8785`
-  - The canonical ACS schemas at $ACS_SPEC_DIR (default: the in-repo specification/v0.1.0/)
-
-Usage (from this directory):
-
-    python3 e2e_check.py
-
-The script will tell you what to do at each step. Total wall-clock
-varies because real human interaction is in the loop; budget 5-10
-minutes for the full sweep.
-
-Backup your real ~/.cursor/hooks.json BEFORE running this — the
-script wires a project-level .cursor/hooks.json inside a temp dir
-(doesn't touch your user-level config), but if you ALSO want to test
-user-level wiring, save your real file first.
-"""
+"""Semi-automated live check of a Cursor ACS install: the script wires a temp workspace and validates the traffic, and the operator acts in Cursor."""
 from __future__ import annotations
 
 import json
@@ -71,15 +26,12 @@ from acs.testing.harness import (  # noqa: E402
     validate_request_envelope,
     validate_response_envelope,
 )
-# Real example-Guardian policy, installed once so every scenario sees
-# the same shipping policy.
 from acs.guardian.example_guardian import evaluate_step  # noqa: E402
 
 HMAC_SECRET = "e2e-test-shared-secret-not-for-production"
 KEY_ID = "test-key"
 
 
-# Shared pretty-printer + helpers; see src/acs/testing/e2e_report.py.
 from acs.testing.e2e_report import (  # noqa: E402
     Report, real_policy_handler as _shared_real_policy_handler,
     assert_envelopes_signed_and_valid as _assert_envelopes_signed_and_valid,
@@ -95,18 +47,8 @@ def _envelope_checks(guardian, sub_results: list) -> None:
         guardian, validate_request_envelope, sub_results)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Workdir + project-level hooks.json
-# ──────────────────────────────────────────────────────────────────────
-
 def write_project_hooks(workdir: Path, port: int) -> Path:
-    """Create <workdir>/.cursor/hooks.json that wires every Cursor hook
-    event to the adapter. Project-level so it overrides the operator's
-    user-level config (~/.cursor/hooks.json) for THIS workspace only.
-
-    The handshake cache is pinned into the workdir so the HANDSHAKE-ONCE
-    scenario can clear it to force a re-handshake without polluting the
-    operator's `~/.cache/acs-adapter-handshake/`."""
+    """Project-level hooks.json for this workspace only, with the handshake cache pinned in the workdir."""
     cursor_dir = workdir / ".cursor"
     cursor_dir.mkdir(parents=True, exist_ok=True)
     hooks_path = cursor_dir / "hooks.json"
@@ -148,18 +90,11 @@ def write_project_hooks(workdir: Path, port: int) -> Path:
     return hooks_path
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Scenarios
-# ──────────────────────────────────────────────────────────────────────
-
 TOTAL_SCENARIOS = 5
 
 
 def scenario_setup_open_workspace(report: Report, workdir: Path,
                                     guardian: ProgrammableGuardian) -> None:
-    """Step 0: have the operator open the test workspace in Cursor.
-    This is the load-bearing setup — if Cursor doesn't pick up the
-    project-level hooks.json, nothing else works."""
     report.case(0, TOTAL_SCENARIOS, "SETUP — open the test workspace in Cursor")
     report.field("Workdir:", str(workdir))
     report.field("Hooks file:", str(workdir / ".cursor" / "hooks.json"))
@@ -196,14 +131,11 @@ def scenario_allow(report: Report, workdir: Path,
                          len(guardian.received) > 0,
                          f"received {len(guardian.received)}"))
     methods = set(r.get("method", "") for r in guardian.received)
-    # The handshake may already be cached from SETUP (correct §4
-    # behavior); the HANDSHAKE-ONCE scenario owns that assertion. The
-    # tool call may arrive via preToolUse or beforeShellExecution.
+    # The handshake may be cached from SETUP, and HANDSHAKE-ONCE owns that check; the call may arrive via preToolUse or beforeShellExecution.
     pretool_or_shell = ("steps/toolCallRequest" in methods)
     sub_results.append(("Guardian received a toolCallRequest",
                          pretool_or_shell, ""))
     _envelope_checks(guardian, sub_results)
-    # Marker should appear in some toolCallResult envelope's outputs
     result_envs = [r for r in guardian.received
                     if r.get("method") == "steps/toolCallResult"]
     marker_in_results = any(
@@ -223,9 +155,6 @@ def scenario_allow(report: Report, workdir: Path,
 
 def scenario_read_tool(report: Report, workdir: Path,
                          guardian: ProgrammableGuardian) -> None:
-    """READ-TOOL: different tool, same wire contract. Mirrors the Claude
-    Code e2e — confirms preToolUse arguments are wrapped per
-    tool-call-request.json:26-37 regardless of which tool fires."""
     probe = workdir / "read-tool-probe.txt"
     probe.write_text("ACS read-tool probe contents\n")
 
@@ -273,8 +202,6 @@ def scenario_read_tool(report: Report, workdir: Path,
 
 def scenario_destructive(report: Report, workdir: Path,
                            guardian: ProgrammableGuardian) -> None:
-    """Drives the real example-Guardian destructive-Bash regex end-to-end
-    through Cursor, not just at the regex unit-test level."""
     victim = workdir / "acs-e2e-victim"
     victim.mkdir(exist_ok=True)
     canary = victim / "DO_NOT_DELETE.txt"
@@ -343,9 +270,6 @@ def scenario_destructive(report: Report, workdir: Path,
 
 def scenario_handshake_once(report: Report, workdir: Path,
                               guardian: ProgrammableGuardian) -> None:
-    """Clear the file-based handshake cache to force a re-handshake, then
-    drive multiple tool calls and assert exactly one handshake/hello on
-    the wire (§4)."""
     report.case(5, TOTAL_SCENARIOS,
                 "HANDSHAKE — fires exactly ONCE per Cursor session (§4)")
     report.field("Expected:",
@@ -353,8 +277,6 @@ def scenario_handshake_once(report: Report, workdir: Path,
                   "Guardian sees exactly 1 handshake/hello across all of them")
 
     guardian.reset()
-    # Clear the pinned cache so the next invocation must re-handshake;
-    # later ones hit the warm cache.
     cache_dir = workdir / ".acs-handshake-cache"
     if cache_dir.exists():
         shutil.rmtree(cache_dir)
@@ -393,8 +315,6 @@ def scenario_handshake_once(report: Report, workdir: Path,
 
 def scenario_user_message(report: Report, workdir: Path,
                             guardian: ProgrammableGuardian) -> None:
-    """Verify beforeSubmitPrompt → steps/userMessage path: the prompt
-    text travels through the wire as a userMessage envelope."""
     marker = f"hello-from-cursor-e2e-{uuid.uuid4().hex[:6]}"
     report.case(4, TOTAL_SCENARIOS,
                 "USER MESSAGE — prompt text arrives as steps/userMessage")
@@ -435,13 +355,8 @@ def scenario_user_message(report: Report, workdir: Path,
     report.finish("user-message-path", all(ok for _, ok, _ in sub_results))
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Output helpers
-# ──────────────────────────────────────────────────────────────────────
-
 def _dump_session_envelopes(report: Report,
                              guardian: ProgrammableGuardian) -> None:
-    """Print method name + truncated request_id for every envelope in this scenario."""
     if not guardian.received:
         return
     print(f"      ── Hooks Cursor fired (in order)")
@@ -449,17 +364,12 @@ def _dump_session_envelopes(report: Report,
         method = r.get("method", "")
         rid = r.get("params", {}).get("request_id", "")[:8]
         print(f"        {method:35s}  req={rid}…")
-    # First tool envelope verbatim — what Cursor actually emits
     pretool = next((r for r in guardian.received
                      if r.get("method") == "steps/toolCallRequest"), None)
     if pretool:
         report.json_block("First steps/toolCallRequest envelope (verbatim)",
                            pretool, truncate=120)
 
-
-# ──────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
     if not SPEC_DIR_DEFAULT.exists():

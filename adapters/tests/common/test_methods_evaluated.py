@@ -1,12 +1,4 @@
-"""The ServerHello's methods_evaluated bounds what the CLI adapters send.
-
-handshake.json, ServerHello.methods_evaluated: "Methods listed by the client
-but absent here are NOT evaluated; the Guardian's enforcement does not cover
-them. Clients MAY still emit them for audit but MUST treat them as
-ALLOW-by-default." The Guardian below signs every reply, declares a legal
-subset, and answers unevaluated methods with the registered -32601, so a
-blocked step can only come from the adapter's own handling.
-"""
+"""handshake.json: methods absent from methods_evaluated are ALLOW-by-default, so a block can only come from the adapter's own handling."""
 from __future__ import annotations
 
 import json
@@ -126,8 +118,6 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
         return guardian, harness
 
     def test_prompt_proceeds_when_turn_and_message_are_unevaluated(self) -> None:
-        """Fail-closed must not block a prompt whose methods the Guardian
-        declared unevaluated, and those methods never reach the Guardian."""
         for adapter in ("claude-code", "cursor"):
             with self.subTest(adapter=adapter):
                 guardian, h = self._session(TOOL_HOOKS)
@@ -144,9 +134,7 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertFalse(FAILURE_EVENTS & set(h.audit_names()), h.audit_names())
 
     def test_unevaluated_gate_resolves_as_allow(self) -> None:
-        """An unevaluated toolCallRequest proceeds without Guardian traffic;
-        Cursor gets its explicit allow because failClosed gates read an
-        empty reply as a failed hook."""
+        """Cursor gets its explicit allow, since a failClosed gate reads an empty reply as a failed hook."""
         for adapter in ("claude-code", "cursor"):
             with self.subTest(adapter=adapter):
                 guardian, h = self._session(["steps/toolCallResult"])
@@ -160,7 +148,6 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertFalse(FAILURE_EVENTS & set(h.audit_names()), h.audit_names())
 
     def test_evaluated_method_decision_still_applies(self) -> None:
-        """A deny on a method the Guardian does evaluate still blocks."""
         for adapter in ("claude-code", "cursor"):
             with self.subTest(adapter=adapter):
                 guardian, h = self._session(TOOL_HOOKS, tool_decision="deny")
@@ -174,8 +161,6 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
                 self.assertIn("steps/toolCallRequest", guardian.methods_received())
 
     def test_turn_id_survives_an_unevaluated_turn_start(self) -> None:
-        """The turn opens locally when turnStart is unevaluated, so evaluated
-        in-turn steps still carry metadata.turn_id."""
         for adapter in ("claude-code", "cursor"):
             with self.subTest(adapter=adapter):
                 guardian, h = self._session(TOOL_HOOKS)
@@ -204,9 +189,7 @@ class MethodsEvaluatedBoundsTraffic(unittest.TestCase):
         return results[0]["params"]["payload"]
 
     def test_result_never_cites_an_unsent_request(self) -> None:
-        """With toolCallRequest unevaluated, a result's request_id_ref would
-        name a request the Guardian never received, so it is dropped (and the
-        envelope re-signed); with the request evaluated, the ref stays."""
+        """A result's request_id_ref would name a request the Guardian never received, so it is dropped and the envelope re-signed."""
         for adapter in ("claude-code", "cursor"):
             for evaluated, cites in ((["steps/toolCallResult"], False), (TOOL_HOOKS, True)):
                 with self.subTest(adapter=adapter, evaluated=evaluated):

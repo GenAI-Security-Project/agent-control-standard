@@ -1,4 +1,3 @@
-"""system/ping (§13)."""
 from __future__ import annotations
 
 import json
@@ -10,14 +9,8 @@ from acs.client._urls import validate_guardian_url
 from acs.core import ACS_VERSION, iso8601_now
 
 
-# ----- system/ping (§13) -----
-
 def ping(guardian_url: str, *, echo: str = "ping", timeout: float = 2.0) -> dict | None:
-    """Send a system/ping and return the result, or None on failure.
-
-    Per §13: Guardian MUST always return allow; ping does not participate
-    in the chain; no signature required.
-    """
+    """Send system/ping (§13: unsigned, outside the chain); the result, or None on failure."""
     request = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),

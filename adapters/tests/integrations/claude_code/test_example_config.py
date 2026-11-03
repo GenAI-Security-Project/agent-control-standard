@@ -1,15 +1,4 @@
-"""
-The drop-in settings.json.example — the file people copy — must itself
-cover the Core-minimum hook set, with gate hooks fail-closed.
-
-Emission proves the adapter CAN emit each hook when invoked; this puts
-the checked-in EXAMPLE config itself under test.
-
-Assertions read the COMMAND STRING, not a per-hook `env` object:
-Claude Code's command-hook fields carry no `env`, so anything placed
-there is silently dropped and the hook runs with Claude Code's own
-environment.
-"""
+"""settings.json.example covers the Core hook set with fail-closed gates; Claude Code's command hooks carry no env field, so settings live in the command string."""
 from __future__ import annotations
 
 import json
@@ -34,9 +23,6 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
             f"Core-minimum hooks {sorted(missing)}; wired: {sorted(self.hooks)}")
 
     def test_example_gate_hooks_are_fail_closed(self) -> None:
-        """Gate hooks in the example must carry ACS_DEFAULT_DENY=1 in the
-        command string — the only channel Claude Code passes through. A
-        silent fail-open on a gate is a policy hole."""
         for hook in wire.GATE_HOOKS & set(wire.ACS_CORE_HOOKS):
             entries = self.hooks.get(hook, [])
             self.assertTrue(entries, f"gate hook {hook} missing from example")
@@ -68,9 +54,6 @@ class ExampleConfigCoversCoreFloor(unittest.TestCase):
                     f"and without an audit file the §6.4 audit events land nowhere")
 
     def test_example_equals_wire_py_output(self) -> None:
-        """The checked-in example must BE wire.py's output for the same
-        placeholder arguments, so the generator and the artifact cannot
-        diverge."""
         expected = {}
         for hook in wire.ACS_CORE_HOOKS:
             cmd = wire.build_command(

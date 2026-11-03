@@ -1,10 +1,4 @@
-"""
-Tests for the authoritative runner's selection and skip classification.
-
-The allowlist must be exact on the (suite, test id, reason) triple —
-a substring match would tolerate an unrelated test carrying an
-allowlisted reason string.
-"""
+"""The allowlist matches the exact (suite, test id, reason) triple, never a substring."""
 from __future__ import annotations
 
 import os
@@ -102,8 +96,6 @@ class SkipClassifierIsExact(unittest.TestCase):
                 f"allowlisted triple not recognized: {entry}")
 
     def test_fake_test_borrowing_cursor_reason_is_unexpected(self):
-        """The exact hole: a NAT test that borrows the Cursor reason must
-        NOT be classified expected."""
         self.assertFalse(rc._is_expected_skip(
             "nat",
             "tests.test_emission.NatEmission.test_pre_invoke_emits_tool_call_request",
@@ -112,8 +104,6 @@ class SkipClassifierIsExact(unittest.TestCase):
             "unexpected — match is on the full triple, not the reason")
 
     def test_right_test_wrong_reason_is_unexpected(self):
-        """Same test id, byte-different reason → unexpected (a real skip
-        for a new reason must not be silently tolerated)."""
         self.assertFalse(rc._is_expected_skip(
             self.CURSOR[0], self.CURSOR[1],
             "Cursor live verification is a manual procedure"),  # missing tail
@@ -125,8 +115,6 @@ class SkipClassifierIsExact(unittest.TestCase):
             "suite label is part of the exact match")
 
     def test_substring_does_not_leak(self):
-        """A reason that CONTAINS an allowlisted reason as a substring is
-        still unexpected — proves we're not doing `in`."""
         self.assertFalse(rc._is_expected_skip(
             self.CURSOR[0], self.CURSOR[1],
             "PREFIX " + self.CURSOR[2] + " SUFFIX"))
