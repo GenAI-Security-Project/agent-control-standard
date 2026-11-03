@@ -961,7 +961,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                                      f"adapter error: {e}"))
             self._count_failure(session, result)
         else:
-            result = await asyncio.to_thread(self._exchange, session, request, step)
+            result = await asyncio.to_thread(self._exchange, session, request, step, True)
         if isinstance(result, Resolution):
             return self._settle_post(context, result, step)
         response = result.response

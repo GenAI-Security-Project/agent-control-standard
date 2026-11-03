@@ -369,6 +369,27 @@ class DispositionsLive(unittest.TestCase):
                 self.assertIn(("post_invoke_redacted", f"{disposition}_substituted_to_deny"),
                               [(c.args[0], c.kwargs.get("cause")) for c in audit.call_args_list])
 
+    def test_an_output_the_signer_still_refuses_is_withheld_under_fail_open(self) -> None:
+        from acs.client import _exchange
+
+        class ShellInput(BaseModel):
+            command: str
+        sign = _exchange.sign_envelope
+
+        def refuse_results(request, **kwargs):
+            if request.get("method") == "steps/toolCallResult":
+                raise ValueError("no RFC 8785 form")
+            return sign(request, **kwargs)
+        mw = self._mw(default_deny=False)
+        ctx = _make_ctx_with_pydantic_input("Bash", ShellInput, ShellInput(command="ls"))
+        ctx.output = "secret listing"
+        with mock.patch.object(_exchange, "sign_envelope", refuse_results), \
+                mock.patch("acs.integrations.nat.adapter.audit_event") as audit:
+            asyncio.run(mw.post_invoke(ctx))
+        self.assertIsNone(ctx.output)
+        self.assertIn("envelope_not_signable", [c.kwargs.get("cause") for c in audit.call_args_list])
+        self.assertNotIn("steps/toolCallResult", self.guardian.methods_seen())
+
     def test_modify_with_unapplied_redaction_blocks_instead_of_half_applying(self) -> None:
         """NAT must not apply overrides while dropping a sibling redaction."""
         class ShellInput(BaseModel):
