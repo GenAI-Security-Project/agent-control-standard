@@ -87,7 +87,7 @@ The bridge builds `snapshot` (`agtbridge/snapshot.go`) for two steps:
 | `tool_call.name` | `payload.tool.name`, after `policy.tool_aliases` | yes | yes |
 | `tool_call.version`, `tool_call.provider` | `payload.tool.version`, `payload.tool.provider` | yes | yes |
 | `tool_call.args.<name>` | `payload.arguments.<name>.value` | yes | no |
-| `tool_call.args.acs_policy_target` | the argument `mapping.yaml` names as the policy target | yes | no |
+| `tool_call.args.acs_policy_target` | the argument that `mapping.yaml` names as the policy target; absent when `mapping.yaml` names no argument for the tool | yes | no |
 | `tool_call.provenance.<name>` | `payload.arguments.<name>.provenance` | yes | no |
 | `tool_call.id` | `params.request_id` | yes | no |
 | `tool_call.raw_command` | `payload.raw_command`, or `""` | yes | no |

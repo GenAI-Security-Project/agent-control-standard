@@ -140,20 +140,18 @@ func (m *mapping) point(method string) (string, bool) {
 	return "", false
 }
 
-// policyTargetArgument is the tool argument a point's policy target is read
-// from and an override is written to; empty when the point declares none.
-func (m *mapping) policyTargetArgument(point, tool string) (string, error) {
+// policyTargetArgument is the tool argument that holds a point's policy
+// target. A MODIFY writes to the same argument. The result is empty when
+// mapping.yaml names no argument for the tool.
+func (m *mapping) policyTargetArgument(point, tool string) string {
 	table := m.InterventionPoints[point].PolicyTargetArgument
 	if table == nil {
-		return "", nil
+		return ""
 	}
 	if named, ok := table.ByTool[tool]; ok {
-		return named, nil
+		return named
 	}
-	if table.Default == "" {
-		return "", fmt.Errorf("mapping.yaml's intervention_points.%s.policy_target_argument names no argument for tool %q and declares no default", point, tool)
-	}
-	return table.Default, nil
+	return table.Default
 }
 
 // decision translates a verdict at a point, as mapVerdict does.

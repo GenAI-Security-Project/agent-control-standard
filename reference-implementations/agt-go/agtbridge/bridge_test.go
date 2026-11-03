@@ -446,6 +446,56 @@ verdict := {"decision": "allow", "reason": "owner"} if {
 	}
 }
 
+// TestPolicyTargetOutsideTheArguments: the manifest's policy_target is the
+// tool name, and mapping.yaml names no argument for the tool. AGT evaluates a
+// call with no arguments. A transform of the policy target has no argument to
+// change, so the Guardian denies it.
+func TestPolicyTargetOutsideTheArguments(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, dir, "policy/manifest.yaml", `agent_control_specification_version: "0.3.1-beta"
+policies:
+  names: {type: rego, bundle: lib, query: data.names.verdict}
+intervention_points:
+  pre_tool_call:
+    policy_target: "$.tool_call.name"
+    tool_name_from: "$.tool_call.name"
+    policy: {id: names}
+tools:
+  guide: {type: Tool}
+  rewrite: {type: Tool}
+`)
+	mustWrite(t, dir, "policy/lib/names.rego", `package names
+
+import rego.v1
+
+verdict := {"decision": "transform", "reason": "rewrite", "transform": {"path": "$policy_target", "value": "x"}} if {
+	input.policy_target.value == "rewrite"
+} else := {"decision": "allow", "reason": "guide"} if {
+	input.policy_target.value == "guide"
+	not input.snapshot.tool_call.args.acs_policy_target
+} else := {"decision": "deny", "reason": "unknown", "message": "no rule for this tool"}
+`)
+	mapping, err := os.ReadFile(agtTree + "/mapping.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, dir, "mapping.yaml", strings.Replace(string(mapping), "default: command", "default: null", 1))
+	e, err := agtEngine(dir, "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(tool string) map[string]any {
+		return map[string]any{"tool": map[string]any{"name": tool}, "arguments": map[string]any{}}
+	}
+	d, err := e.Decide(context.Background(), input(t, acs.StepToolCallRequest, call("guide")))
+	if err != nil || d.Disposition != acs.Allow {
+		t.Fatalf("guide: %+v, %v; want ALLOW", d.Decision, err)
+	}
+	if _, err := e.Decide(context.Background(), input(t, acs.StepToolCallRequest, call("rewrite"))); err == nil {
+		t.Fatal("a rewrite of a target outside the arguments was answered; it has no argument to land on")
+	}
+}
+
 // TestPolicyReadsTheToolResult: the result gate sees the payload's facts
 // beside the outputs, each output's provenance included.
 func TestPolicyReadsTheToolResult(t *testing.T) {

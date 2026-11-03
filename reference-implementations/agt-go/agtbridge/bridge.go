@@ -164,10 +164,7 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	if alias := e.opts.ToolAliases[policyToolName]; alias != "" {
 		policyToolName = alias
 	}
-	argument, err := e.mapping.policyTargetArgument(point, policyToolName)
-	if err != nil {
-		return guardian.PolicyDecision{}, err
-	}
+	argument := e.mapping.policyTargetArgument(point, policyToolName)
 	var snapshot map[string]any
 	switch point {
 	case PointPreToolCall:

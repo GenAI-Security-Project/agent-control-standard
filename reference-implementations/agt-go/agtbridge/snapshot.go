@@ -52,15 +52,13 @@ func ifcInput(labels []string) map[string]any {
 	return map[string]any{"ifc": map[string]any{"source_labels": source}}
 }
 
-// preToolCallSnapshot copies each argument's value into args, and the policy
-// target argument's value into the fixed leaf as well.
+// preToolCallSnapshot copies each argument's value into args. When
+// mapping.yaml names a policy target argument, it also copies that value into
+// the fixed leaf.
 func preToolCallSnapshot(req acs.Request, labels []string, argument, policyToolName string) (map[string]any, error) {
 	var payload acs.ToolCallRequestPayload
 	if err := jsonv2.Unmarshal(req.Params.Payload, &payload); err != nil {
 		return nil, err
-	}
-	if argument == "" {
-		return nil, fmt.Errorf("mapping.yaml declares no policy_target_argument for the request gate, so there is no argument to copy to the %q leaf the manifest targets", PolicyTargetLeaf)
 	}
 	args := map[string]any{}
 	for name, a := range payload.Arguments {
@@ -73,17 +71,11 @@ func preToolCallSnapshot(req acs.Request, labels []string, argument, policyToolN
 	if _, clash := args[PolicyTargetLeaf]; clash {
 		return nil, fmt.Errorf("tool %q sent an argument named %q, which is the leaf this Guardian writes its policy target to", payload.Tool.Name, PolicyTargetLeaf)
 	}
-	value, ok := args[argument]
-	if !ok {
-		sent := slices.Sorted(maps.Keys(args))
-		return nil, fmt.Errorf("mapping.yaml reads tool %q's policy target from argument %q, but this call sent no such argument (it sent: %v)", payload.Tool.Name, argument, sent)
+	if argument != "" {
+		if err := copyPolicyTarget(args, payload.Tool.Name, argument); err != nil {
+			return nil, err
+		}
 	}
-	// The stock rules guard their targets with is_string; a target of any
-	// other JSON type would pass every one of them.
-	if _, isString := value.(string); !isString {
-		return nil, fmt.Errorf("tool %q sent argument %q as a JSON %s, but its policy target must be a string", payload.Tool.Name, argument, jsonKind(value))
-	}
-	args[PolicyTargetLeaf] = value
 	raw := ""
 	if payload.RawCommand != nil {
 		raw = *payload.RawCommand
@@ -109,6 +101,23 @@ func preToolCallSnapshot(req acs.Request, labels []string, argument, policyToolN
 		"tool_call": call,
 		"input":     ifcInput(labels),
 	}, nil
+}
+
+// copyPolicyTarget copies the named argument's value into the fixed leaf. The
+// stock manifest's policy_target reads that leaf.
+func copyPolicyTarget(args map[string]any, tool, argument string) error {
+	value, ok := args[argument]
+	if !ok {
+		sent := slices.Sorted(maps.Keys(args))
+		return fmt.Errorf("mapping.yaml reads tool %q's policy target from argument %q, but this call sent no such argument (it sent: %v)", tool, argument, sent)
+	}
+	// The stock rules check their targets with is_string. A target of another
+	// JSON type would pass every one of them.
+	if _, isString := value.(string); !isString {
+		return fmt.Errorf("tool %q sent argument %q as a JSON %s, but its policy target must be a string", tool, argument, jsonKind(value))
+	}
+	args[PolicyTargetLeaf] = value
+	return nil
 }
 
 // addTool adds the tool's version and provider, which the payload names
