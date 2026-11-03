@@ -37,11 +37,11 @@ def test_trust_code_lines_come_after_tools_so_they_win():
         assert order.index("/tools/") < order.index(path)
 
 
-def test_codeowners_header_names_the_leads_and_the_lapsed_invitations():
+def test_codeowners_header_names_the_leads_and_excludes_owners_without_write():
     text = (REPO_ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
     assert "The project leads are @rocklambros,\n# @afogel, and @bar-capsule." in text
     assert "@artmaro holds write access." in text
-    assert "lapsed and are not being re-sent" in text
+    assert "an entry without write access does nothing" in text
 
 
 def test_project_owasp_yaml_names_the_leads_and_the_creators():

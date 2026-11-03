@@ -223,8 +223,8 @@ def test_desired_rulesets_are_protect_integration_and_protect_release():
         assert ruleset.require_last_push_approval is True
         assert ruleset.required_review_thread_resolution is True
         assert ruleset.check_integration_id == 15368
-    # Order step 3: closing-choice is required on integration only.
-    assert rulesets["protect-integration"].required_status_checks == ("test", "build", "closing-choice")
+    # Order step 3: closing-choice is required on integration only. So is dco for now.
+    assert rulesets["protect-integration"].required_status_checks == ("test", "build", "closing-choice", "dco")
     assert rulesets["protect-release"].required_status_checks == ("test", "build")
     # Rollout package E: a rebase merge lands every branch commit message, and any of them
     # can close an issue, so integration takes squash merges only.

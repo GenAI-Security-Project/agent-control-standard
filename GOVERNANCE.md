@@ -6,7 +6,7 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 
 | Role | Name |
 | --- | --- |
-| Project Lead | Rock Lambros ([@rocklambros](https://github.com/rocklambros)) |
+| Project Lead | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)) |
 | Project Lead | Ariel Fogel ([@afogel](https://github.com/afogel)) |
 | Project Lead | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)) |
 
@@ -15,9 +15,8 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 Each workstream owns a slice of the standard and runs its own review. Two leads per
 workstream keeps decisions moving when one is unavailable.
 
-Reference Implementation runs with one lead so far, and Documentation has none. The work in
-each continues, but it carries a single point of failure, or no owner at all, until somebody
-takes the open seats.
+Reference Implementation and Documentation run with one lead each so far. The work in each
+continues, but it carries a single point of failure until somebody takes the second seat.
 
 There is no Testing and Validation workstream for now. Whoever reviews a change checks it
 against the conformance requirements it touches.
@@ -25,12 +24,15 @@ against the conformance requirements it touches.
 | Workstream | Leads |
 | --- | --- |
 | Coding Agents | Almog Langleben ([@almogbhl](https://github.com/almogbhl)), Stefano Amorelli ([@stefanoamorelli](https://github.com/stefanoamorelli)) |
-| Development (SDK) | Rock Lambros ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
-| Documentation | Open |
+| Development (SDK) | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
+| Documentation | Lance Dye ([@Lrd0036](https://github.com/Lrd0036)) |
 | Identity | Eva Benn ([@evabenn](https://github.com/evabenn)), Richard Bird ([@RbBuiltWrong](https://github.com/RbBuiltWrong)) |
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
 | Reference Implementation | Evgeniy Kokuykin ([@artmaro](https://github.com/artmaro)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
+
+Eva Benn, Richard Bird, and Aruneesh Salhotra hold no write access, so a project lead
+assigns, labels, and owns review for Identity and Outreach.
 
 ## Triage authority
 
@@ -60,11 +62,11 @@ is how a taxonomy stops getting used in month two.
 the mandatory floor decision, the adapters, the installable Guardian, and the
 interoperability benchmark. It does not mean important.
 
-Triage runs on the weekly call. Promotion from `integration` to `main` is a standing item
-on the same call, and a project lead opens and merges it.
+Issues get triaged as they come in. A project lead opens and merges the promotion from
+`integration` to `main`.
 
-The pinned "Roadmap health" issue, rewritten nightly by the roadmap sweep, is the weekly
-call's triage agenda.
+The pinned "Roadmap health" issue, rewritten nightly by the roadmap sweep, lists what
+needs attention.
 
 Repository admins can bypass the rulesets on `main`, `integration`, and `release/*`. The
 health issue reports every bypassed merge and every direct push.
@@ -76,7 +78,7 @@ they step back.
 
 | Volunteer | Assigned by |
 | --- | --- |
-| Victor Hernandez ([@victorm-hernandez](https://github.com/victorm-hernandez)) | Rock Lambros |
+| Victor Hernandez ([@victorm-hernandez](https://github.com/victorm-hernandez)) | Kyriakos Lambros (Rock) |
 
 ## Origins
 

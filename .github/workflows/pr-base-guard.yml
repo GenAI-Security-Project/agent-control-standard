@@ -38,7 +38,11 @@ jobs:
           set -euo pipefail
           # Three-dot compares against the merge base, so commits that landed on the
           # base branch after this pull request opened do not count as its changes.
-          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > changed.txt
+          # Name and status, so the guard can tell a new page from an edited one.
+          # No rename detection, because a rename lists only its new path, so a file
+          # moved out of a protected tree would be invisible to the path rule. A
+          # rename arrives here as a delete plus an add, and both paths are judged.
+          git diff --name-status --no-renames "${BASE_SHA}...${HEAD_SHA}" > changed.txt
           cat changed.txt
 
       - name: Enforce the documentation lane

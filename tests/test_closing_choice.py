@@ -45,6 +45,26 @@ def test_every_reference_shape(reference):
     assert kinds(f"Closes {reference}") == [(5, "close")]
 
 
+@pytest.mark.parametrize("reference", ["GH-5", "gh-5", "Gh-5"])
+def test_gh_number_is_a_reference(reference):
+    assert kinds(f"Closes {reference}") == [(5, "close")]
+    assert kinds(f"Refs {reference}, #6") == [(5, "contribute"), (6, "contribute")]
+    assert kinds(f"See {reference}") == [(5, "none")]
+
+
+@pytest.mark.parametrize("text", ["Closes abc-GH-5", "Closes GH-5a", "Closes GHSA-5", "Closes GH-", "Closes GH5"])
+def test_gh_lookalikes_are_not_references(text):
+    assert kinds(text) == []
+
+
+@pytest.mark.parametrize(
+    "prefix", ["http://github.com/", "https://www.github.com/", "http://www.github.com/", "HTTPS://GITHUB.COM/"]
+)
+def test_url_spellings_github_does_not_link_are_not_references(prefix):
+    # Measured on PR #410: https://github.com/ and GH-N linked the issue, and these did not.
+    assert kinds(f"Closes {prefix}GenAI-Security-Project/agent-control-standard/issues/5") == []
+
+
 def test_other_repositories_are_ignored():
     assert kinds("Closes other-org/other-repo#5") == []
     assert kinds("Fixes https://github.com/other-org/other-repo/issues/5") == []

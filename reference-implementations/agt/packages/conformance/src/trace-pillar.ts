@@ -1,7 +1,7 @@
 /**
  * Whether a downstream consumer of the ACS v0.1.0 wire -- reading nothing
- * this Guardian keeps process-local -- could emit each required Trace-pillar
- * attribute `trace/otel-mapping.json` names. This is a check, not an
+ * this Guardian keeps process-local -- could emit each required or
+ * conditional Trace-pillar attribute `trace/otel-mapping.json` names. This is a check, not an
  * exporter: nothing here is named `exportTrace`, `traceExporter` or
  * `emitSpan`. Its render half, `renderTraceRows`, lives in `render.ts` --
  * that file's own module header is why: `render.ts`'s only imports are
@@ -11,7 +11,10 @@
  * `otel-mapping.json` is a JSON **Schema**, not a data file -- its data
  * lives inside `default` keys, three places:
  *   - `properties.step_to_span.default` -- an object keyed by ACS method,
- *     18 entries, each `{span_name, required_attributes, optional_attributes?}`.
+ *     21 entries, each `{span_name, required_attributes,
+ *     conditional_attributes?, optional_attributes?}`.
+ *   - `properties.step_span_attributes.properties.required_attributes.default`
+ *     -- one string array, the attributes every step span carries.
  *   - `properties.decision_event.properties.{required_attributes,
  *     conditional_attributes}.default` -- two string arrays.
  *   - `properties.provenance_attributes.properties.required.default` -- one
@@ -26,11 +29,12 @@
  * `steps/sessionStart`, `steps/sessionEnd`, `steps/userMessage`,
  * `steps/agentResponse`). This implementation can only claim or decline the
  * Trace pillar for the methods it evaluates. `otel-mapping.json` declares
- * eighteen; the other twelve (`steps/agentTrigger`,
+ * twenty-one; the other fifteen (`steps/agentTrigger`,
  * `steps/knowledgeRetrieval`, `steps/memoryStore`,
  * `steps/memoryContextRetrieval`, `steps/turnStart`, `steps/turnEnd`,
  * `steps/preCompact`, `steps/postCompact`, `steps/subagentStart`,
- * `steps/subagentStop`, `agbom/snapshot`, `agbom/changed`) are out of scope
+ * `steps/subagentStop`, `steps/skillRegister`, `steps/skillLoad`,
+ * `steps/skillUnload`, `agbom/snapshot`, `agbom/changed`) are out of scope
  * for the same reason `mapping.yaml` never reaches them. The six are frozen
  * here rather than re-read from `mapping.yaml`: this module's interface
  * consumes nothing else, so the scope is a stated design fact (which methods
@@ -49,19 +53,44 @@
  * `otel-mapping.json` names `acs.capability`, not
  * `hooks/tool-call-request.json`'s `capability` field.
  *
- * Decision facts (`acs.decision`, `acs.evaluator`, and the four conditional
- * attributes) are recorded as a span EVENT named `acs.decision` on the
- * parent step span -- not a span of their own -- so every row built from
+ * A step span's attributes come from two lists, read together:
+ * `required_attributes` (source field required on the wire) and
+ * `conditional_attributes` (#227: source field optional, so an exporter
+ * emits the attribute exactly when the payload carries it). Both are rows
+ * here, because both are attributes the mapping obliges an exporter to emit
+ * from the wire. A conditional row is expected to read "exists but is
+ * optional" -- that is the definition of the list -- so for it the red
+ * verdict is the mapping and the wire agreeing. A REQUIRED row that reads
+ * red is the finding: the mapping demands what the wire need not carry,
+ * which is how `acs.capability` read before #227 moved it. Each row
+ * carries the list it came from as `obligation`, so the renderer and the
+ * tests can tell the two cases apart rather than trusting this paragraph:
+ * every `required` row must read emittable, and the suite asserts it.
+ * `optional_attributes` names no obligation and is not read.
+ *
+ * Decision facts (`acs.decision` and the eleven conditional attributes) are
+ * recorded as a span EVENT named `acs.decision` on the parent step span --
+ * not a span of their own -- so every row built from
  * `decision_event` carries that literal string as its `span`, matching
  * `otel-mapping.json`'s own `event_name` const. Provenance attributes are
  * plainer still: `provenance_attributes`'s own description says they land
  * as ordinary attributes "on the resulting span" whichever step that is, so
  * that row's `span` is a parenthesised description rather than a literal
- * OTel name -- there is no single step span to point at. This is why
- * `TraceRow.span` (below) is typed as a bare `string`: a caller reading it
- * off a `TraceRow` this module returns cannot assume it is always a literal
- * OTel span or event name -- one of the seventeen rows' `span` value (the
- * provenance row) is not.
+ * OTel name -- there is no single step span to point at. `acs.request_id`
+ * and `acs.session.id` (`step_span_attributes`, #228) are the same shape:
+ * one row each, on every step span. This is why `TraceRow.span` (below) is
+ * typed as a bare `string`: a caller reading it off a `TraceRow` this module
+ * returns cannot assume it is always a literal OTel span or event name --
+ * three rows' `span` values (the provenance row and the two every-step-span
+ * rows) are not.
+ *
+ * NOT MEASURED: `decision_failure_event` (`acs.decision.failure`, #37 and
+ * #228). That event records a decision that never arrived, or arrived
+ * unusable, so its attributes describe what the recording party saw, not a
+ * field of either envelope. "Could a wire consumer emit this from the wire"
+ * has no answer for it, and a row here would read as a gap that is not one.
+ * The test suite pins both halves: the mapping defines the event, and no
+ * row names it, so including it later is a deliberate change.
  *
  * WHAT `resolveField` DOES NOT MODEL: JSON Schema's conditional-requirement
  * keywords (`allOf`/`if`/`then`), which `response-envelope.json`'s
@@ -84,7 +113,7 @@
  * event) is this field present and unconditionally required", walking the
  * FULL path including whatever optional container sits in between --
  * `acs.evaluator`'s path walks through `AcsResult.metadata`, itself optional
- * on `AcsResult`, and that optionality is exactly what makes the row red.
+ * on `AcsResult`, and that optionality is exactly what makes the row read not emittable.
  * Provenance has no such always-present parent in scope: nothing in the six
  * in-scope spans' `required_attributes` names a `provenance` field, and
  * whether a `Provenance` object is attached at all is a per-argument,
@@ -104,7 +133,7 @@ import { fileURLToPath } from "node:url";
 export type TraceRow = {
   attribute: string;
   /** The OTel span or span-event name this attribute is recorded on --
-   * EXCEPT for the provenance row, whose `span` is a parenthesised
+   * EXCEPT for the provenance and every-step-span rows, whose `span` is a parenthesised
    * description rather than a literal OTel name (module header): nothing in
    * `otel-mapping.json` names a span or event for provenance facts the way
    * `decision_event`'s `event_name` const names one for decision facts. A
@@ -113,8 +142,14 @@ export type TraceRow = {
   span: string;
   wireSource: string | null;
   emittableByWireConsumer: boolean;
+  /** Which mapping list named the attribute. A `required` row that is not
+   * emittable is a defect in the mapping. A `conditional` row that is not
+   * emittable is the list working as defined (module header). */
+  obligation: Obligation;
   reason?: string;
 };
+
+export type Obligation = "required" | "conditional";
 
 // The repository's own schemas, five directories up from this file; see
 // packages/guardian/src/validate-envelope.ts for the same relationship.
@@ -163,11 +198,21 @@ type SchemaNode = {
   $defs?: Record<string, SchemaNode>;
 };
 
-type StepSpanEntry = { span_name: string; required_attributes: string[]; optional_attributes?: string[] };
+type StepSpanEntry = {
+  span_name: string;
+  required_attributes: string[];
+  conditional_attributes?: string[];
+  optional_attributes?: string[];
+};
 
 type OtelMappingSchema = {
   properties: {
     step_to_span: { default: Record<string, StepSpanEntry> };
+    step_span_attributes: {
+      properties: {
+        required_attributes: { default: string[] };
+      };
+    };
     decision_event: {
       properties: {
         required_attributes: { default: string[] };
@@ -269,7 +314,7 @@ type FieldSite = {
   label: string;
 };
 
-function buildRow(attribute: string, span: string, site: FieldSite): TraceRow {
+function buildRow(attribute: string, span: string, obligation: Obligation, site: FieldSite): TraceRow {
   const { present, required } = resolveField(site.fileRoot, site.startNode, site.path);
 
   if (!present) {
@@ -278,6 +323,7 @@ function buildRow(attribute: string, span: string, site: FieldSite): TraceRow {
       span,
       wireSource: null,
       emittableByWireConsumer: false,
+      obligation,
       reason: `${site.file} has no "${site.label}" property -- no wire source for ${attribute}`,
     };
   }
@@ -289,13 +335,14 @@ function buildRow(attribute: string, span: string, site: FieldSite): TraceRow {
       span,
       wireSource,
       emittableByWireConsumer: false,
+      obligation,
       reason:
         `${site.file}'s "${site.label}" exists but is optional there, so a conformant envelope may omit it -- ` +
         `a wire consumer cannot rely on ${attribute} being emitted`,
     };
   }
 
-  return { attribute, span, wireSource, emittableByWireConsumer: true };
+  return { attribute, span, wireSource, emittableByWireConsumer: true, obligation };
 }
 
 export function checkTracePillar(): TraceRow[] {
@@ -321,7 +368,8 @@ export function checkTracePillar(): TraceRow[] {
   const acsResult = responseEnvelope.$defs?.AcsResult;
 
   /** Resolves the wire site for each of the ten (span, attribute) pairs the
-   * six in-scope spans' `required_attributes` name. Domain knowledge --
+   * six in-scope spans' `required_attributes` and `conditional_attributes`
+   * name. Domain knowledge --
    * which file and field an OTel attribute NAME resolves to -- not
    * something any schema states directly, so it is written here once, by
    * hand, and checked by `resolveField` above rather than trusted. */
@@ -333,6 +381,8 @@ export function checkTracePillar(): TraceRow[] {
         return { file: "hooks/tool-call-request.json", fileRoot: toolCallRequest, startNode: toolCallRequest, path: ["capability"], label: "capability" };
       case "gen_ai.tool.result::gen_ai.tool.name":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["tool", "name"], label: "tool.name" };
+      case "gen_ai.tool.result::acs.request_id_ref":
+        return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["request_id_ref"], label: "request_id_ref" };
       case "gen_ai.tool.result::acs.exit_status":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["exit_status"], label: "exit_status" };
       case "acs.session::acs.session.id":
@@ -379,8 +429,36 @@ export function checkTracePillar(): TraceRow[] {
       throw new Error(`checkTracePillar: trace/otel-mapping.json's step_to_span.default has no entry for "${method}"`);
     }
     for (const attribute of entry.required_attributes) {
-      rows.push(buildRow(attribute, entry.span_name, stepAttributeSite(entry.span_name, attribute)));
+      rows.push(buildRow(attribute, entry.span_name, "required", stepAttributeSite(entry.span_name, attribute)));
     }
+    for (const attribute of entry.conditional_attributes ?? []) {
+      rows.push(buildRow(attribute, entry.span_name, "conditional", stepAttributeSite(entry.span_name, attribute)));
+    }
+  }
+
+  // Attributes every step span carries, whichever step it is (module
+  // header) -- one row each, like the provenance row below.
+  const EVERY_STEP_SPAN = "(every step span)";
+  for (const attribute of otelMapping.properties.step_span_attributes.properties.required_attributes.default) {
+    // Both sources are required on every step request, and every step
+    // request has AcsParams, so neither row can be omitted by a hook payload.
+    const site: Record<string, { path: string[]; label: string }> = {
+      "acs.request_id": { path: ["request_id"], label: "AcsParams.request_id" },
+      "acs.session.id": { path: ["metadata", "session_id"], label: "AcsParams.metadata.session_id" },
+    };
+    const known = site[attribute];
+    if (known === undefined) {
+      throw new Error(`checkTracePillar: no known wire site for step_span_attributes attribute "${attribute}" -- add one here`);
+    }
+    rows.push(
+      buildRow(attribute, EVERY_STEP_SPAN, "required", {
+        file: "request-envelope.json",
+        fileRoot: requestEnvelope,
+        startNode: acsParams,
+        path: known.path,
+        label: known.label,
+      }),
+    );
   }
 
   // Decision facts ride the "acs.decision" span EVENT, not a step span of
@@ -389,16 +467,21 @@ export function checkTracePillar(): TraceRow[] {
 
   /** Where each `decision_event` attribute lives on `AcsResult`. Explicit,
    * not derived from the attribute name: a mechanical `"acs.".length` slice
-   * would be wrong for four of these six, because `acs.evaluator`,
+   * would be wrong for four of these twelve, because `acs.evaluator`,
    * `acs.confidence`, `acs.evaluator_version` and `acs.model_id` are not
    * siblings of `AcsResult.decision` -- they live one level deeper, at
    * `AcsResult.metadata.<name>` (verified by reading
    * `response-envelope.json`: `AcsResult.properties.metadata.properties`
    * lists all four; `AcsResult.required` and `metadata`'s own `required`
-   * are both silent on them, which is exactly what makes the row red under
+   * are both silent on them, which is exactly what makes the row read not emittable under
    * this module's rule -- metadata itself is optional on `AcsResult`, and
    * none of its own fields is required either). `acs.decision` and
-   * `acs.reasoning` remain direct `AcsResult` siblings. A `decision_event`
+   * `acs.reasoning` remain direct `AcsResult` siblings, as are the replay
+   * fields #228 added: `reason_codes`, `cited_provenance_ids`, `chain_hash`,
+   * and `policy_references`. The three `acs.policy.*` columns resolve to
+   * `policy_references` itself, not to one field of its entries: the
+   * padding rule emits all three whenever the array is non-empty, filling
+   * `""` for a missing field, so presence follows the array. A `decision_event`
    * attribute this table does not name throws, rather than silently
    * degrading to "no wire source" the way the mechanical derivation did. */
   function decisionAttributeSite(attribute: string): FieldSite {
@@ -439,6 +522,28 @@ export function checkTracePillar(): TraceRow[] {
           path: ["metadata", "model_id"],
           label: "AcsResult.metadata.model_id",
         };
+      case "acs.reason_codes":
+        return { file: "response-envelope.json", fileRoot: responseEnvelope, startNode: acsResult, path: ["reason_codes"], label: "AcsResult.reason_codes" };
+      case "acs.policy.ids":
+      case "acs.policy.versions":
+      case "acs.policy.rule_ids":
+        return {
+          file: "response-envelope.json",
+          fileRoot: responseEnvelope,
+          startNode: acsResult,
+          path: ["policy_references"],
+          label: "AcsResult.policy_references",
+        };
+      case "acs.cited_provenance_ids":
+        return {
+          file: "response-envelope.json",
+          fileRoot: responseEnvelope,
+          startNode: acsResult,
+          path: ["cited_provenance_ids"],
+          label: "AcsResult.cited_provenance_ids",
+        };
+      case "acs.chain_hash":
+        return { file: "response-envelope.json", fileRoot: responseEnvelope, startNode: acsResult, path: ["chain_hash"], label: "AcsResult.chain_hash" };
       default:
         throw new Error(
           `checkTracePillar: no known wire site for decision_event attribute "${attribute}" -- add one to decisionAttributeSite`,
@@ -447,9 +552,11 @@ export function checkTracePillar(): TraceRow[] {
   }
 
   const decisionEvent = otelMapping.properties.decision_event.properties;
-  const decisionAttributes = [...decisionEvent.required_attributes.default, ...decisionEvent.conditional_attributes.default];
-  for (const attribute of decisionAttributes) {
-    rows.push(buildRow(attribute, DECISION_SPAN, decisionAttributeSite(attribute)));
+  for (const attribute of decisionEvent.required_attributes.default) {
+    rows.push(buildRow(attribute, DECISION_SPAN, "required", decisionAttributeSite(attribute)));
+  }
+  for (const attribute of decisionEvent.conditional_attributes.default) {
+    rows.push(buildRow(attribute, DECISION_SPAN, "conditional", decisionAttributeSite(attribute)));
   }
 
   // Provenance attributes land as ordinary attributes on whichever step
@@ -462,7 +569,7 @@ export function checkTracePillar(): TraceRow[] {
   for (const attribute of otelMapping.properties.provenance_attributes.properties.required.default) {
     const field = attribute.slice("acs.provenance.".length);
     rows.push(
-      buildRow(attribute, PROVENANCE_SPAN, {
+      buildRow(attribute, PROVENANCE_SPAN, "required", {
         file: "provenance.json",
         fileRoot: provenance,
         startNode: provenance,

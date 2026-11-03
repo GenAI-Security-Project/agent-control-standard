@@ -451,7 +451,11 @@ export function mapVerdict(
   // Read before `reasoning` is composed, because the composed sentence names
   // the rule; assigned to `out` below, in the order the wire has always
   // carried these fields.
-  const ruleId = readVerdictField(verdict, fs.policy_references.rule_id);
+  // An empty reason names no rule. response-envelope.json requires a non-empty
+  // rule_id (#263), and Trace pads its policy arrays with "" to mean "absent",
+  // so "" is read as no rule at all rather than sent as one.
+  const rawRuleId = readVerdictField(verdict, fs.policy_references.rule_id);
+  const ruleId = rawRuleId === "" ? undefined : rawRuleId;
 
   // Composed, not copied. AGT's verdict.message is written for an operator
   // reading a log, and the bundle that writes it is vendored byte-identical

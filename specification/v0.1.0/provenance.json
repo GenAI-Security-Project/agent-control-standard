@@ -25,6 +25,7 @@
     },
     "source_id": {
       "type": "string",
+      "minLength": 1,
       "description": "Identifier within the origin (tool name, URL, file path, retrieval source). Combined with origin, this is what Guardians key trust classification on in v0.1."
     },
     "derived_from": {

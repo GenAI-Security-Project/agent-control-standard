@@ -9,7 +9,8 @@
 # Each job checks out main, because the published roadmap is built from main and the two
 # must classify milestones by the same rules. The sweep and dryrun clone in full, because
 # they ask git whether each closing commit is on main, and they read pull requests to
-# verify closes and report bypasses (decision 9). Neither write job runs on an event a fork
+# verify closes and report bypasses (decision 9). Both read the last scheduled monitor-pages
+# run, which is what actions: read is for. Neither write job runs on an event a fork
 # author can trigger, and no job installs packages, so no third-party code runs beside the
 # write token. tests/test_roadmap_sync_workflow.py pins every key of this file.
 name: Roadmap sync
@@ -64,6 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
       issues: write
       pull-requests: read
@@ -91,6 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
       issues: read
       pull-requests: read
