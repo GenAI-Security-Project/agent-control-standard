@@ -328,6 +328,22 @@ class SessionGateThroughHooks(unittest.TestCase):
                 self.assertIn("steps/toolCallRequest", guardian.methods_seen())
                 self.assertNotIn("unmapped_hook_event", [r["acs_audit_event"] for r in _audit_records(p.stderr)])
 
+    def test_a_signed_refusal_written_as_an_integral_number_still_refuses_under_proceed(self) -> None:
+        for method in ("handshake/hello", "steps/sessionStart", "steps/toolCallRequest"):
+            with self.subTest(method=method):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET)
+                guardian.handlers[method] = lambda req: {"code": -32000.0, "message": "refused"}
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                event = {"session_id": str(uuid.uuid4()), "cwd": "/tmp", "hook_event_name": "PreToolUse",
+                         "tool_name": "Bash", "tool_input": {"command": "rm -rf ~/x"}, "tool_use_id": "c1"}
+                p = subprocess.run([str(BIN / "acs-claude-code-hook")], input=json.dumps(event), capture_output=True,
+                                   text=True, env=self._env(guardian.url()), timeout=30)
+                out = json.loads(p.stdout or "{}")
+                self.assertEqual(out.get("hookSpecificOutput", {}).get("permissionDecision"), "deny", p.stderr[-300:])
+                if method != "steps/toolCallRequest":
+                    self.assertNotIn("steps/toolCallRequest", guardian.methods_seen())
+
     def test_a_cursor_event_too_deep_to_parse_still_gets_the_cursor_adapters_answer(self) -> None:
         deep = "[" * 100_000 + "]" * 100_000
         cursor = ('{"conversation_id": "%s", "cursor_version": "3.28.7", "hook_event_name": "preToolUse", '

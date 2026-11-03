@@ -17,12 +17,15 @@ class ErrorCauses(unittest.TestCase):
             "an audit record should name the §17 code, not the generic fallback")
         self.assertEqual(len(set(GUARDIAN_ERROR_CAUSE.values())), len(GUARDIAN_ERROR_CAUSE))
 
-    def test_only_integer_codes_classify(self) -> None:
-        for code in (None, "-32004", -32004.0, True, [-32004], {"code": -32004}):
+    def test_codes_classify_as_json_integers(self) -> None:
+        for code in (None, "-32004", -32004.5, float("inf"), float("nan"), True, [-32004], {"code": -32004}):
             with self.subTest(code=code):
                 self.assertEqual(guardian_error_cause(code), "guardian_error_response")
                 self.assertFalse(is_guardian_refusal(code))
-        self.assertTrue(is_guardian_refusal(-32004))
+        for code in (-32004, -32004.0):
+            with self.subTest(code=code):
+                self.assertTrue(is_guardian_refusal(code))
+                self.assertEqual(guardian_error_cause(code), "signature_invalid_response")
 
 
 if __name__ == "__main__":

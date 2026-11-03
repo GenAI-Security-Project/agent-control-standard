@@ -18,14 +18,20 @@ GUARDIAN_ERROR_CAUSE: dict[int, str] = {
 }
 
 
-def _is_code(code: object) -> bool:
-    return isinstance(code, int) and not isinstance(code, bool)
+def _code(code: object) -> int | None:
+    """code as a JSON integer, which -32000.0 also is (RFC 8785 writes both as -32000); never a bool."""
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        return code
+    if isinstance(code, float) and code.is_integer():
+        return int(code)
+    return None
 
 
 def guardian_error_cause(code: object) -> str:
-    if not _is_code(code):
-        return "guardian_error_response"
-    return GUARDIAN_ERROR_CAUSE.get(code, "guardian_error_response")
+    value = _code(code)
+    return "guardian_error_response" if value is None else GUARDIAN_ERROR_CAUSE.get(value, "guardian_error_response")
 
 
 # Stricter than §6.4 as written (issue #32): each refusal is attacker-reachable, so it fails closed under either posture.
@@ -48,8 +54,8 @@ SESSION_REFUSAL_CODES = frozenset({
 
 def is_session_refusal(code: object) -> bool:
     """True when a handshake error code refuses the session (§4.1)."""
-    return _is_code(code) and code in SESSION_REFUSAL_CODES
+    return _code(code) in SESSION_REFUSAL_CODES
 
 
 def is_guardian_refusal(code: object) -> bool:
-    return _is_code(code) and code in GUARDIAN_REFUSAL_CODES
+    return _code(code) in GUARDIAN_REFUSAL_CODES
