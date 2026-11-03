@@ -7,16 +7,15 @@ against, how, and what is explicitly out of scope.
 
 ACS is a security project — the whole point of the standard is to
 police agent behavior. Adapter code that itself has security holes
-undermines the standard. This document and the tests under
-`tests/common/test_security.py` are the falsifiers for every claim
-below.
+undermines the standard. Each threat below names the tests that fail
+when its mitigation stops holding, or says why it has none.
 
 ## In-scope components
 
 | Component | Trust posture |
 |---|---|
-| Adapter process (`claude-code/`, `cursor/`) | Shell-spawned by the framework per hook event. Runs as the framework's user. Reads framework JSON from stdin. |
-| Adapter middleware (`nat/`) | In-process inside the agent's Python runtime. Same address space as the agent. |
+| Adapter process (`integrations/claude_code/`, `integrations/cursor/`) | Shell-spawned by the framework per hook event. Runs as the framework's user. Reads framework JSON from stdin. |
+| Adapter middleware (`integrations/nat/`) | In-process inside the agent's Python runtime. Same address space as the agent. |
 | Guardian process (`src/acs/guardian/`) | HTTP server. Holds the HMAC secret. Computes the rolling audit chain. |
 | Wire transport | JSON-RPC over HTTP (deployments wrap with HTTPS / mTLS for production). |
 | HMAC shared secret | Loaded from `ACS_HMAC_SECRET_FILE` (preferred) or `ACS_HMAC_SECRET` (env-var fallback), and named by the label in `ACS_HMAC_KEY_ID` (§10). A response signed under any other label fails verification; no other secret is tried. |
@@ -43,8 +42,8 @@ under a different session_id.
 *Mitigation:* HMAC key is HKDF-SHA256-derived per-session from
 `(input_keying_material, session_id)`. A signature valid under
 session A's derived key fails verification under session B's key.
-*Test:* covered indirectly by `HmacSigning::test_signed_request_accepted`
-(uses session-specific key derivation).
+*Test:* `Core07_BaselineIntegrity::{test_per_session_key_derivation,
+test_signature_covers_session_id}`
 
 **T3 — Replay within a session.**
 Same envelope re-sent within the same session_id.
@@ -52,14 +51,15 @@ Same envelope re-sent within the same session_id.
 duplicates with `REPLAY_DETECTED` (-32005, §10.3). Per session, persisted
 under `ACS_GUARDIAN_STATE_DIR` so a Guardian restart keeps it; setting it
 to "" keeps it in memory only, for development.
-*Test:* `ReplayRejection::test_duplicate_request_id_rejected`
+*Test:* `Core06_ReplayProtection::test_duplicate_request_id_rejected_with_32005`,
+`FailureMode2_GuardianRestartReplayWindow::test_replay_protection_survives_guardian_restart`
 
 **T4 — Stale or future-dated envelope.**
 Captured envelope replayed outside the freshness window.
 *Mitigation:* Guardian rejects timestamps outside the negotiated skew
 window (default ±5 min) with `TIMESTAMP_OUT_OF_WINDOW` (-32006, §10.3).
-*Test:* `TimestampSkew::test_ancient_timestamp_rejected`,
-`test_future_timestamp_rejected`
+*Test:* `Core06_ReplayProtection::test_timestamp_outside_window_rejected_with_32006`
+(past and future)
 
 **T5 — SSRF via `ACS_GUARDIAN_URL`.**
 Attacker controls the env var; sets it to `file:///etc/passwd` to
@@ -70,8 +70,8 @@ step's round trip), `open_session` and `ping`. The step and handshake
 exchanges do not follow redirects, so a response cannot send the
 request to a host the check never saw; a redirect status is a
 decision failure under the posture.
-*Test:* `GuardianUrlSchemeAllowlist::test_file_scheme_rejected` and
-five other scheme rejections.
+*Test:* `GuardianUrlSchemeAllowlist`: `file`, `ftp`, `data` and
+`javascript` rejected, `http` and `https` accepted.
 
 **T6 — Guardian HTTP DoS via oversized body.**
 Attacker POSTs a request with Content-Length > available RAM,
@@ -94,7 +94,7 @@ test_group_readable_rejected, test_symlink_rejected}`
 **T8 — Cache / session-state poisoning.**
 Local attacker writes the handshake cache or session-state file
 between adapter invocations. For session-state, this would let them
-inject a fake `parent_step_id` into the next `subagentStart` payload.
+change the open turn or the decision-failure counts the next hook reads.
 *Mitigation:* Both cache directories created mode 0700; cache files
 created mode 0600 via `os.open(...O_CREAT, 0o600)`. A local attacker
 without same-uid privileges cannot read or write the state. These
@@ -154,9 +154,9 @@ field, hoping the adapter's response verification silently accepts.
 *Mitigation:* `verify_signature()` returns False for a response with no
 signature, and every request is signed. The adapter rejects the response
 and denies the step whatever the posture, with an audit event.
-*No dedicated test* — covered indirectly by the conformance suite's
-signed round-trip tests (Core07_BaselineIntegrity), which would fail
-if signature absence were silently accepted.
+*Test:* `ExchangeCauses::test_every_cause` ("unsigned result" and
+"unsigned error" are refused) and `Resolve::test_resolution_table` (a
+refusal denies under either posture).
 
 ### Out of scope (deployment / operational concerns)
 
@@ -194,7 +194,7 @@ non-repudiation against the Guardian itself.
 *Posture:* That's what the ACS-Crypto profile (asymmetric / PQC
 signatures) and the ACS-Audit profile (`request_hash` per
 ContextEntry) are for. v0.1 baseline acknowledges this tradeoff
-(`conformance.md, ACS-Core: Baseline integrity`); we don't implement those profiles.
+(`conformance.md`, "What 'ACS-Core conformant' guarantees"); we don't implement those profiles.
 
 **O5 — Compromised secret-file storage.**
 A reader of the storage volume (cloud snapshot, backup, etc.) gets
@@ -228,10 +228,10 @@ ACS's scope.
 
 | Threat | Mitigation | Test |
 |---|---|---|
-| T1 envelope tampering | HMAC-SHA256 over JCS canonical input | `HmacSigning::test_tampered_request_rejected` |
-| T2 cross-session lift | per-session HKDF key derivation | (covered by T1 verification path) |
-| T3 in-session replay | per-session `request_id` set + -32005 | `ReplayRejection::test_duplicate_request_id_rejected` |
-| T4 timestamp skew | skew-window check + -32006 | `TimestampSkew::test_ancient_timestamp_rejected` |
+| T1 envelope tampering | HMAC-SHA256 over JCS canonical input | `Core07_BaselineIntegrity::test_tampered_request_signature_invalid` |
+| T2 cross-session lift | per-session HKDF key derivation | `Core07_BaselineIntegrity::test_signature_covers_session_id` |
+| T3 in-session replay | per-session `request_id` set + -32005 | `Core06_ReplayProtection::test_duplicate_request_id_rejected_with_32005` |
+| T4 timestamp skew | skew-window check + -32006 | `Core06_ReplayProtection::test_timestamp_outside_window_rejected_with_32006` |
 | T5 SSRF | URL scheme allowlist (http/https) | `GuardianUrlSchemeAllowlist::*` (6 tests) |
 | T6 body-size DoS | Content-Length cap + 413 | `GuardianBodySizeCap::test_oversized_request_rejected` |
 | T7 leaky secret file | mode/owner/symlink check on `ACS_HMAC_SECRET_FILE` | `HmacSecretFilePermissions::*` (4 tests) |
@@ -239,7 +239,7 @@ ACS's scope.
 | T9 regex DoS | 8 KiB input cap + audit | `RegexInputSizeCap::*` (3 tests) |
 | T10 log injection | `json.dumps` escaping | enforced by stdlib |
 | T11 handshake downgrade | adapter signs based on own config, not handshake | code-level |
-| T12 response sig stripping | `verify_signature` False when sig absent + secret set | code-level |
+| T12 response sig stripping | `verify_signature` False when the signature is absent | `ExchangeCauses::test_every_cause` |
 
 ## How to report a finding
 
@@ -247,7 +247,3 @@ ACS's scope.
 GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new)
 to disclose privately — the process and response commitment are in
 [`CONTRIBUTING.md` § Reporting Security Issues](../CONTRIBUTING.md#reporting-security-issues).
-(An earlier version of this paragraph said to open a labeled public
-issue, which contradicted CONTRIBUTING.md and pointed at a CODEOWNERS
-file that doesn't exist — a researcher following the nearest
-instruction file would have posted a public zero-day. PR #22 review.)
