@@ -1578,10 +1578,7 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
             )
             self.assertIn("ACS_AUDIT", proc.stderr,
                 "refusal path must emit audit; stderr was:\n" + proc.stderr)
-            # The unsigned adapter cannot verify the Guardian's signed
-            # -32004 error, so the refusal surfaces one layer earlier —
-            # still fail-closed, with the claimed code carried as
-            # unverified triage metadata.
+            # The adapter holds another secret, so it refuses the -32004 it cannot verify and keeps the claimed code as unverified.
             self.assertIn("guardian_refusal_fail_closed", proc.stderr,
                 "a Guardian refusal must fail closed even under "
                 "DEFAULT_DENY=0 — fail-open here is a bypass primitive")

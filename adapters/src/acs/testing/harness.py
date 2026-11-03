@@ -123,13 +123,7 @@ def make_envelope(
     sign_with_secret: str | bytes | None = None,
     key_id: str = TEST_KEY_ID,
 ) -> dict:
-    """Build a canonical request envelope ready for the wire.
-
-    Pass `sign_with_secret` to attach an HMAC-SHA256 signature using
-    the same HKDF-per-session-key derivation the real adapters use.
-    Pass None to leave the envelope unsigned (used for handshake/hello,
-    system/ping, or to test the unsigned-rejection path).
-    """
+    """A request envelope, signed when sign_with_secret is given."""
     sid = session_id or str(uuid.uuid4())
     env = {
         "jsonrpc": "2.0",
