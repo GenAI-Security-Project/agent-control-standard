@@ -249,7 +249,8 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	// decision ran under, so it runs to a deadline of its own.
 	ctx, cancelAnswer := context.WithDeadline(lockCtx, recorded)
 	defer cancelAnswer()
-	if _, ok := g.decisionReply(in, pd.Decision, sess.Head); !ok {
+	// An Ask that §9.2 substitutes is never sent; the check below covers its replacement.
+	if _, ok := g.decisionReply(in, pd.Decision, sess.Head); !ok && !g.substitutesAsk(pd) {
 		err := errors.New("the policy engine returned a decision that fails response-envelope.json")
 		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "policy engine decision", err)
 		pd = PolicyDecision{Decision: denial(disposition.ReasonEvaluationFailed, "the policy engine returned a decision that cannot be sent")}
@@ -579,7 +580,7 @@ func (g *Guardian) decide(ctx context.Context, in *call, req acs.Request, sess S
 		return PolicyDecision{Decision: denial(disposition.ReasonEvaluationFailed, "the policy engine returned state that is not valid JSON")}
 	}
 	pd.Decision = disposition.WithDeferDefaults(pd.Decision)
-	if err := g.fit(req.Method, sess.Handshake.Server.ApproverTypesSupported, pd.Decision); err != nil {
+	if err := g.fit(req.Method, sess.Handshake.Server.ApproverTypesSupported, pd); err != nil {
 		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "policy engine decision", err)
 		return PolicyDecision{Decision: denial(disposition.ReasonEvaluationFailed, "the policy engine returned a decision that cannot be sent: "+err.Error())}
 	}
@@ -604,29 +605,48 @@ func (g *Guardian) substitute(ctx context.Context, in *call, req acs.Request, se
 			return g.auditUnavailable(ctx, in, req, err, substituted)
 		}
 		return substituted
-	case d.Disposition == acs.Ask:
-		substitution := g.cfg.AskSubstitution
-		if substitution == AskSubstitutionNone && pd.Client.CannotResolveAsk {
-			substitution = AskSubstitutionDeny
-			if pd.Client.AskSubstitute == acs.Defer {
-				substitution = AskSubstitutionDefer
-			}
+	case g.substitutesAsk(pd):
+		replacement, cause := disposition.AskAsDeny(d), "for a client that cannot route an approval"
+		switch g.askSubstitution(pd.Client) {
+		case AskSubstitutionDefer:
+			replacement = disposition.AskAsDefer(d)
+		case AskSubstitutionNone:
+			replacement, cause = disposition.AskWithoutApprover(d), "because this Guardian names no approver"
 		}
-		if substitution != AskSubstitutionNone {
-			replacement := disposition.AskAsDeny(d)
-			if substitution == AskSubstitutionDefer {
-				replacement = disposition.AskAsDefer(d)
-			}
-			if err := g.requiredEvent(ctx, EventAskSubstituted, req.Method, in.SessionID, in.RequestID, fmt.Sprintf("ask answered %s for a client that cannot route an approval", replacement.Disposition)); err != nil {
-				return g.auditUnavailable(ctx, in, req, err, replacement)
-			}
-			d = replacement
+		if err := g.requiredEvent(ctx, EventAskSubstituted, req.Method, in.SessionID, in.RequestID, fmt.Sprintf("ask answered %s %s", replacement.Disposition, cause)); err != nil {
+			return g.auditUnavailable(ctx, in, req, err, replacement)
 		}
+		d = replacement
 	}
 	if d.Disposition == acs.Defer && sess.Deferrals+1 > g.cfg.MaxDeferrals {
 		return keeping(d, denial(disposition.ReasonDeferralBoundExceeded, fmt.Sprintf("the session has deferred %d times, the most this Guardian allows (§6)", sess.Deferrals)))
 	}
 	return d
+}
+
+// askSubstitution is what replaces an Ask (§9.2): the endpoint's setting,
+// else the engine's signal that the client cannot resolve it, else none.
+func (g *Guardian) askSubstitution(client ClientCapability) AskSubstitution {
+	switch {
+	case g.cfg.AskSubstitution != AskSubstitutionNone || !client.CannotResolveAsk:
+		return g.cfg.AskSubstitution
+	case client.AskSubstitute == acs.Defer:
+		return AskSubstitutionDefer
+	default:
+		return AskSubstitutionDeny
+	}
+}
+
+// substitutesAsk reports whether the engine's decision is an Ask the Guardian
+// replaces before anything is sent: §9.2 substitutes it, or it names no
+// approver, which ask-details.json requires.
+func (g *Guardian) substitutesAsk(pd PolicyDecision) bool {
+	d := pd.Decision
+	if d.Disposition != acs.Ask {
+		return false
+	}
+	named := d.AskDetails != nil && d.AskDetails.Approver.Type != "" && d.AskDetails.Approver.ID != ""
+	return g.askSubstitution(pd.Client) != AskSubstitutionNone || !named
 }
 
 // auditUnavailable answers a step whose required audit event could not be
@@ -718,9 +738,10 @@ func (g *Guardian) callEngine(ctx context.Context, deadline time.Time, in Policy
 	}
 }
 
-// fit checks an engine's decision against the rules of §6 and §6.3 and
-// against what the ServerHello declared.
-func (g *Guardian) fit(methodName string, approverTypes []acs.ApproverType, d acs.Decision) error {
+// fit checks an engine's decision against the rules of §6 and §6.3 and, for
+// an Ask that is sent, against what the ServerHello declared.
+func (g *Guardian) fit(methodName string, approverTypes []acs.ApproverType, pd PolicyDecision) error {
+	d := pd.Decision
 	check := disposition.Check
 	if handler, _, ok := g.methods.WrappedHandler(methodName); ok {
 		check = func(d acs.Decision) error {
@@ -730,7 +751,7 @@ func (g *Guardian) fit(methodName string, approverTypes []acs.ApproverType, d ac
 	if err := check(d); err != nil {
 		return err
 	}
-	if d.Disposition == acs.Ask && !slices.Contains(approverTypes, d.AskDetails.Approver.Type) {
+	if d.Disposition == acs.Ask && !g.substitutesAsk(pd) && !slices.Contains(approverTypes, d.AskDetails.Approver.Type) {
 		return fmt.Errorf("approver type %q is not in approver_types_supported", d.AskDetails.Approver.Type)
 	}
 	return nil

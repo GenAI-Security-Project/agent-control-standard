@@ -40,7 +40,7 @@ running it does not exercise all five.
 | allow | yes | yes: `allow`, and `warn` with a policy reference |
 | deny | yes | yes: `deny`, and every `runtime_error:*` |
 | modify | yes | yes: `transform`, the shipped redaction rules |
-| ask | yes | only with an approver configured; the checked-in configuration never escalates, and without an approver an escalate is DENY `approver_unavailable` |
+| ask | yes | under `ask_substitution: none`, naming `policy.ask_approver`; `deny` and `defer` substitute it with or without an approver (`TestServesAnAsk`); the checked-in policy never escalates |
 | defer | yes | no: mapping.yaml maps no AGT verdict to defer |
 
 ## Expectations for reference implementations

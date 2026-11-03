@@ -49,6 +49,10 @@ type fileConfig struct {
 		OPATimeout      time.Duration     `koanf:"opa_timeout"`
 		AskSubstitution string            `koanf:"ask_substitution"`
 		ToolAliases     map[string]string `koanf:"tool_aliases"`
+		AskApprover     struct {
+			Type string `koanf:"type"`
+			ID   string `koanf:"id"`
+		} `koanf:"ask_approver"`
 	} `koanf:"policy"`
 	Security struct {
 		HMACKeyID        string `koanf:"hmac_key_id"`
@@ -110,6 +114,7 @@ type config struct {
 	opaPath           string
 	opaTimeout        time.Duration
 	askSubstitution   guardian.AskSubstitution
+	askApprover       *acs.Approver
 	toolAliases       map[string]string
 	maxSessions       int
 	maxEntries        int
@@ -246,6 +251,7 @@ func loadConfig(args, environ []string) (config, error) {
 		policyDir:    policyDir, manifest: manifest, mapping: mapping,
 		evaluator: raw.Policy.Evaluator, opaPath: opaPath, opaTimeout: raw.Policy.OPATimeout,
 		askSubstitution: guardian.AskSubstitution(raw.Policy.AskSubstitution),
+		askApprover:     approverOf(raw.Policy.AskApprover.Type, raw.Policy.AskApprover.ID),
 		toolAliases:     raw.Policy.ToolAliases,
 		maxSessions:     raw.Limits.MaxSessions, maxEntries: raw.Limits.MaxEntries, maxReservations: raw.Limits.MaxReservations,
 		maxSkillApprovals: raw.Limits.MaxSkillApprovals, maxEngineCalls: raw.Limits.MaxEngineCalls,
@@ -259,6 +265,15 @@ func loadConfig(args, environ []string) (config, error) {
 		return config{}, err
 	}
 	return c, nil
+}
+
+// approverOf is the approver of an ASK that policy.ask_approver names, or nil
+// when it names none.
+func approverOf(approverType, id string) *acs.Approver {
+	if approverType == "" && id == "" {
+		return nil
+	}
+	return &acs.Approver{Type: acs.ApproverType(approverType), ID: id}
 }
 
 func resolvePath(base, value string) (string, error) {
@@ -342,6 +357,13 @@ func (c config) validate() error {
 	if c.askSubstitution != guardian.AskSubstitutionNone && c.askSubstitution != guardian.AskSubstitutionDeny && c.askSubstitution != guardian.AskSubstitutionDefer {
 		errs = append(errs, errors.New("policy.ask_substitution must be none, deny or defer"))
 	}
+	if a := c.askApprover; a != nil {
+		if a.Type == "" || a.ID == "" {
+			errs = append(errs, errors.New("policy.ask_approver needs both type and id"))
+		} else if a.Type != acs.ApproverHuman && a.Type != acs.ApproverAgent && a.Type != acs.ApproverService {
+			errs = append(errs, errors.New("policy.ask_approver.type must be human, agent or service"))
+		}
+	}
 	if c.decisionTimeout <= 0 {
 		errs = append(errs, errors.New("protocol.decision_timeout must be positive"))
 	}
@@ -417,7 +439,7 @@ func run(args, environ []string) (err error) {
 	if err != nil {
 		return err
 	}
-	engine, err := agtbridge.New(os.DirFS(c.policyDir), c.mapping, evaluator, agtbridge.Options{ToolAliases: c.toolAliases})
+	engine, err := agtbridge.New(os.DirFS(c.policyDir), c.mapping, evaluator, agtbridge.Options{Approver: c.askApprover, ToolAliases: c.toolAliases})
 	if err != nil {
 		return err
 	}

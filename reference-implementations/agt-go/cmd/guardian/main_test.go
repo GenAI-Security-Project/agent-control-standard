@@ -14,10 +14,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	jsonv2 "github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
@@ -188,6 +191,86 @@ func TestServesDecisions(t *testing.T) {
 	}
 }
 
+// TestServesAnAsk runs the binary over a copy of the reference policy whose
+// approval rule is on, so every tool call escalates. policy.ask_substitution
+// applies first; an ASK that is sent names policy.ask_approver, and under none
+// without an approver the answer is DENY approver_unavailable.
+func TestServesAnAsk(t *testing.T) {
+	bin := build(t)
+	deployment := t.TempDir()
+	if err := os.CopyFS(filepath.Join(deployment, "policy"), os.DirFS("../../../agt/policy")); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := os.ReadFile("../../../agt/mapping.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployment, "mapping.yaml"), mapping, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataPath := filepath.Join(deployment, "policy", "lib", "data.json")
+	raw, err := os.ReadFile(dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := jsonv2.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	data["agt"].(map[string]any)["defaults"].(map[string]any)["config"].(map[string]any)["approval"] = map[string]any{"required": true, "approvers": []string{"owner"}}
+	if raw, err = jsonv2.Marshal(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	approvers := map[string][]string{
+		"approver":    {"ACS__POLICY__ASK_APPROVER__TYPE=human", "ACS__POLICY__ASK_APPROVER__ID=owner"},
+		"no_approver": {"ACS__POLICY__ASK_APPROVER__TYPE=", "ACS__POLICY__ASK_APPROVER__ID="},
+	}
+	for _, tt := range []struct {
+		substitution, approver string
+		want                   acs.Disposition
+	}{
+		{"none", "approver", acs.Ask},
+		{"none", "no_approver", acs.Deny},
+		{"deny", "approver", acs.Deny},
+		{"deny", "no_approver", acs.Deny},
+		{"defer", "approver", acs.Defer},
+		{"defer", "no_approver", acs.Defer},
+	} {
+		t.Run(tt.substitution+"/"+tt.approver, func(t *testing.T) {
+			env := append([]string{"ACS__POLICY__DEPLOYMENT_DIR=" + deployment, "ACS__POLICY__ASK_SUBSTITUTION=" + tt.substitution}, approvers[tt.approver]...)
+			c := start(t, bin, ".", env...).client(t)
+			ctx := context.Background()
+			if o, err := c.Handshake(ctx, observedagent.DefaultHello(handshake.CoreMethods()...)); err != nil || !o.Verified {
+				t.Fatalf("handshake: %v %s", err, o.Raw)
+			}
+			o, err := c.Send(ctx, observedagent.Request{Method: acs.StepToolCallRequest, Payload: shell("ls -la")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := o.Result
+			if d == nil || !o.Verified || d.Disposition != tt.want {
+				t.Fatalf("got %s", o.Raw)
+			}
+			switch d.Disposition {
+			case acs.Ask:
+				if d.AskDetails == nil || d.AskDetails.Approver.Type != acs.ApproverHuman || d.AskDetails.Approver.ID != "owner" {
+					t.Fatalf("got %s", o.Raw)
+				}
+			default:
+				if !slices.Contains(d.ReasonCodes, "approver_unavailable") {
+					t.Fatalf("got %s", o.Raw)
+				}
+				if tt.substitution == "none" && !strings.Contains(d.Reasoning, "names no approver") {
+					t.Fatalf("the reasoning does not name the missing approver: %s", o.Raw)
+				}
+			}
+		})
+	}
+}
+
 // TestServesThePreviousHMACKey: an agent on a key in
 // security.hmac_previous_keys and an agent on the current key are both
 // answered, each under its own key.
@@ -283,6 +366,8 @@ func TestRefusesToStart(t *testing.T) {
 		{"write_timeout_within_decision", base64.StdEncoding.EncodeToString([]byte(secret)), "server.write_timeout must exceed protocol.decision_timeout", []string{"--config", referenceConfig(t)}, []string{"ACS__SERVER__WRITE_TIMEOUT=5s"}},
 		{"non_positive_deferral_limit", base64.StdEncoding.EncodeToString([]byte(secret)), "limits.max_deferrals must be positive", []string{"--config", referenceConfig(t)}, []string{"ACS__LIMITS__MAX_DEFERRALS=0"}},
 		{"unknown_ask_substitution", base64.StdEncoding.EncodeToString([]byte(secret)), "policy.ask_substitution must be none, deny or defer", []string{"--config", referenceConfig(t)}, []string{"ACS__POLICY__ASK_SUBSTITUTION=ask"}},
+		{"approver_without_an_id", base64.StdEncoding.EncodeToString([]byte(secret)), "policy.ask_approver needs both type and id", []string{"--config", referenceConfig(t)}, []string{"ACS__POLICY__ASK_APPROVER__ID="}},
+		{"unknown_approver_type", base64.StdEncoding.EncodeToString([]byte(secret)), "policy.ask_approver.type must be human, agent or service", []string{"--config", referenceConfig(t)}, []string{"ACS__POLICY__ASK_APPROVER__TYPE=group", "ACS__POLICY__ASK_APPROVER__ID=owner"}},
 		{"unknown_override", base64.StdEncoding.EncodeToString([]byte(secret)), "invalid keys", []string{"--config", referenceConfig(t)}, []string{"ACS__NO__SUCH__SETTING=value"}},
 		{"unknown_storage_provider", base64.StdEncoding.EncodeToString([]byte(secret)), `storage.provider must be "memory"`, []string{"--config", referenceConfig(t)}, []string{"ACS__STORAGE__PROVIDER=redis"}},
 		{"negative_envelope_rotation", base64.StdEncoding.EncodeToString([]byte(secret)), "audit.max_envelope_file_bytes and audit.max_envelope_files: the file size and the file count cannot be negative", []string{"--config", referenceConfig(t)}, []string{"ACS__AUDIT__MAX_ENVELOPE_FILES=-1"}},

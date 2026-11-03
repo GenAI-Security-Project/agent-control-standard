@@ -173,6 +173,14 @@ func AskAsDeny(ask acs.Decision) acs.Decision {
 	return d
 }
 
+// AskWithoutApprover answers an Ask the Guardian cannot send because it names
+// no approver, which ask-details.json requires: DENY approver_unavailable.
+func AskWithoutApprover(ask acs.Decision) acs.Decision {
+	d := Deny(ReasonApproverUnavailable, "The step needs approval and this Guardian names no approver, so the step is denied. "+ask.Reasoning)
+	d.PolicyReferences = ask.PolicyReferences
+	return d
+}
+
 // WithDeferDefaults fills timeout_decision, which §6 requires on every
 // Defer and defaults to deny.
 func WithDeferDefaults(d acs.Decision) acs.Decision {

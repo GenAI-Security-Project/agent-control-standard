@@ -42,8 +42,8 @@ const DefaultAskTimeout = 5 * time.Minute
 // Options are what a deployment chooses beyond the manifest and the mapping.
 type Options struct {
 	// Approver is who resolves AGT's escalate verdict, sent as an ACS Ask.
-	// AGT's manifest names no approver for ACS, so without one an escalate
-	// is answered DENY with reason code approver_unavailable.
+	// AGT's manifest names no approver for ACS; without one the Guardian
+	// answers the Ask with its §9.2 substitute, or DENY approver_unavailable.
 	Approver *acs.Approver
 	// AskTimeout is an Ask's timeout; zero means DefaultAskTimeout.
 	AskTimeout time.Duration
@@ -245,19 +245,15 @@ func readState(raw []byte) (policyState, error) {
 	return s, nil
 }
 
-// ask completes an Ask with its details, or answers DENY when no approver is
-// configured: an Ask nobody can resolve is a denial with its reason stated.
+// ask completes an Ask with its details. Without an approver the details name
+// none, and the Guardian replaces the Ask before it is sent.
 func (e *Engine) ask(d acs.Decision) acs.Decision {
-	if e.opts.Approver == nil {
-		d.Disposition = acs.Deny
-		d.Reasoning = strings.TrimSpace(d.Reasoning + " No approver is configured for this Guardian, so the step is denied.")
-		d.ReasonCodes = append(slices.Clip(d.ReasonCodes), "approver_unavailable")
-		return d
-	}
 	d.AskDetails = &acs.AskDetails{
-		Approver:       *e.opts.Approver,
 		Question:       d.Reasoning,
 		TimeoutSeconds: int64(e.opts.AskTimeout / time.Second),
+	}
+	if e.opts.Approver != nil {
+		d.AskDetails.Approver = *e.opts.Approver
 	}
 	return d
 }

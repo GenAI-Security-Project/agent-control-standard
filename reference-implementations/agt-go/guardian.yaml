@@ -17,6 +17,7 @@ policy:
   opa_path: .acs/agt/bin
   opa_timeout: 4s
   ask_substitution: deny
+  ask_approver: {type: human, id: deployment-default}
   tool_aliases:
     shell: bash
 

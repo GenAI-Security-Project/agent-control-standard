@@ -1014,21 +1014,32 @@ func TestClientSubstitutions(t *testing.T) {
 		t.Fatalf("the postCompact record does not name the rewrite (§6.5): %+v", recorded)
 	}
 
-	ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Approver: acs.Approver{Type: acs.ApproverHuman, ID: "r"}, Question: "q", TimeoutSeconds: 30}}
-	for _, substitute := range []acs.Disposition{acs.Defer, acs.Deny} {
-		h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
-			return guardian.PolicyDecision{Decision: ask, Client: guardian.ClientCapability{CannotResolveAsk: true, AskSubstitute: substitute}}, nil
-		})
-		r = h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-		if r.Disposition != substitute || !slices.Contains(r.ReasonCodes, disposition.ReasonApproverUnavailable) {
-			t.Fatalf("§9.2 substitution %s got %+v", substitute, r)
-		}
-		if substitute == acs.Defer && (r.DeferDetails.TimeoutDecision != acs.Deny || r.DeferDetails.ResolutionTimeoutMS != 30000) {
-			t.Fatalf("defer details %+v", r.DeferDetails)
+	// An Ask that is substituted is never sent, so it needs no approver.
+	for _, approver := range []acs.Approver{{Type: acs.ApproverHuman, ID: "r"}, {}} {
+		ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Approver: approver, Question: "q", TimeoutSeconds: 30}}
+		for _, substitute := range []acs.Disposition{acs.Defer, acs.Deny} {
+			h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+				return guardian.PolicyDecision{Decision: ask, Client: guardian.ClientCapability{CannotResolveAsk: true, AskSubstitute: substitute}}, nil
+			})
+			r = h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+			if r.Disposition != substitute || !slices.Contains(r.ReasonCodes, disposition.ReasonApproverUnavailable) {
+				t.Fatalf("§9.2 substitution %s for approver %+v got %+v", substitute, approver, r)
+			}
+			if substitute == acs.Defer && (r.DeferDetails.TimeoutDecision != acs.Deny || r.DeferDetails.ResolutionTimeoutMS != 30000) {
+				t.Fatalf("defer details %+v", r.DeferDetails)
+			}
 		}
 	}
+	// An Ask that names no approver cannot be sent, and the reasoning says why.
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Question: "q", TimeoutSeconds: 30}}}, nil
+	})
+	r = h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonApproverUnavailable) || !strings.Contains(r.Reasoning, "names no approver") {
+		t.Fatalf("an Ask without an approver got %+v", r)
+	}
 	kinds := h.audit.eventKinds()
-	if count(kinds, guardian.EventModifyUnsupported) != 2 || count(kinds, guardian.EventAskSubstituted) != 2 {
+	if count(kinds, guardian.EventModifyUnsupported) != 2 || count(kinds, guardian.EventAskSubstituted) != 5 {
 		t.Fatalf("audit events %v", kinds)
 	}
 }

@@ -34,6 +34,7 @@ enabled only after the policy engine and Guardian are ready.
 | `policy.opa_path` | The OPA executable or its directory. | Required for `agt`: absolute or relative to the configuration file. Directory paths select `opa` on Unix and `opa.exe` on Windows. `make agt-native` copies the host executable to `.acs/agt/bin/`. |
 | `policy.opa_timeout` | The bound AGT puts on each `opa` run; past it, AGT denies the step. | Required for `agt`: a duration such as `4s`, positive, a whole number of milliseconds, and shorter than `protocol.decision_timeout` minus `protocol.answer_margin`. AGT's timer starts after `opa` starts, so leave room for process start and signing; `guardian.yaml` leaves one second. |
 | `policy.ask_substitution` | Endpoint behavior when ASK cannot be completed. | `none`, `deny` or `defer`. |
+| `policy.ask_approver` | Optional approver of every ASK: `type` and `id`. | Both set or both absent. `type` is `human`, `agent` or `service`. |
 | `policy.tool_aliases` | Optional map from an Observed Agent's tool name to the manifest's tool name. | Both names must be non-empty. |
 
 `ask_substitution: none` leaves an ASK from the engine unchanged. `deny` returns DENY
@@ -41,6 +42,9 @@ enabled only after the policy engine and Guardian are ready.
 setting belongs to this Guardian endpoint; it is not tied to a particular host
 product. The reference configuration uses `deny` because its host examples do
 not provide an ACS approval channel.
+
+A substituted ASK needs no approver. Under `none`, the ASK names `ask_approver`, which
+AGT's verdict cannot supply; without it the ASK is DENY `approver_unavailable`.
 
 A tool alias changes only the policy input. The signed ACS request, the
 SessionContext chain and audit records keep the original tool name.

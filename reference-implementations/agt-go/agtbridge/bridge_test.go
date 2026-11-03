@@ -341,7 +341,7 @@ tools:
 		approver *acs.Approver
 		want     acs.Disposition
 	}{
-		{"no_approver", nil, acs.Deny},
+		{"no_approver", nil, acs.Ask},
 		{"approver", &acs.Approver{Type: acs.ApproverService, ID: "security-service", Endpoint: &endpoint, Auth: &acs.ApproverAuth{Method: &authMethod}}, acs.Ask},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -362,8 +362,9 @@ tools:
 				t.Fatalf("got %+v", d.Decision)
 			}
 			if tt.approver == nil {
-				if !slices.Contains(d.ReasonCodes, "approver_unavailable") || len(e.Policy().ApproverTypes) != 0 {
-					t.Fatalf("got %+v", d.Decision)
+				// It names no approver, so the Guardian replaces it before it is sent.
+				if d.AskDetails == nil || d.AskDetails.Approver != (acs.Approver{}) || d.AskDetails.TimeoutSeconds != 300 || len(e.Policy().ApproverTypes) != 0 {
+					t.Fatalf("got %+v %+v", d.Decision, d.AskDetails)
 				}
 				return
 			}
