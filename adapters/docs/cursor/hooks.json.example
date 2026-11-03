@@ -1,5 +1,5 @@
 {
-  "_comment": "Drop into <project>/.cursor/hooks.json (or merge with your existing config). Replace ACS_GUARDIAN_URL with your deployment's endpoint and /path/to/acs-cursor-hook with the installed command (acs-cursor-wire writes it for you). Generate the shared HMAC secret (REQUIRED for ACS-Core baseline integrity \u00a710; without it any local process that binds the Guardian port becomes the Guardian): mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key — give the SAME file to the Guardian. ACS_AUDIT_FILE is the durable audit sink for \u00a76.4 events.",
+  "_comment": "Drop into <project>/.cursor/hooks.json (or merge with your existing config). Replace ACS_GUARDIAN_URL with your deployment's endpoint and /path/to/acs-cursor-hook with the installed command (acs-cursor-wire writes it for you). Generate the shared HMAC secret (REQUIRED for ACS-Core baseline integrity §10; without it any local process that binds the Guardian port becomes the Guardian): mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key — give the SAME file to the Guardian. ACS_AUDIT_FILE is the durable audit sink for §6.4 events.",
   "version": 1,
   "hooks": {
     "sessionStart": [
@@ -55,6 +55,11 @@
     "afterAgentResponse": [
       {
         "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook afterAgentResponse"
+      }
+    ],
+    "stop": [
+      {
+        "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-cursor-hook stop"
       }
     ],
     "sessionEnd": [

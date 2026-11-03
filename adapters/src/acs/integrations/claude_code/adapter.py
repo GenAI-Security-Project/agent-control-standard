@@ -114,6 +114,8 @@ HOOK_MAP: dict[str, str] = {
     # Stop fires at the end of a TURN (every reply), not the session;
     # the turn is opened by steps/turnStart on UserPromptSubmit.
     "Stop":             "steps/turnEnd",
+    # An API error ends the turn with StopFailure instead of Stop.
+    "StopFailure":      "steps/turnEnd",
 }
 
 # In-turn steps carry metadata.turn_id (request-envelope.json:69); session-
@@ -146,7 +148,7 @@ ENFORCEABLE_BLOCK_HOOKS = frozenset({
 
 # Claude Code reads a block on Stop as "keep going", so a DENY there is recorded and nothing is emitted.
 AUDIT_ONLY_HOOKS = frozenset({
-    "Stop",
+    "Stop", "StopFailure",
 })
 
 SESSION_END_REASON_MAP: dict[str, str] = {
@@ -313,7 +315,8 @@ def _payload_session_end(event: dict[str, Any]) -> dict[str, Any]:
 
 def _payload_turn_end(event: dict[str, Any]) -> dict[str, Any]:
     turn_id = current_turn(event.get("session_id"))
-    return {"turn_id": turn_id or "", "outcome": "completed"}
+    outcome = "error" if event.get("hook_event_name") == "StopFailure" else "completed"
+    return {"turn_id": turn_id or "", "outcome": outcome}
 
 
 _PAYLOAD_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -323,6 +326,7 @@ _PAYLOAD_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "SessionStart":     _payload_session_start,
     "SessionEnd":       _payload_session_end,
     "Stop":             _payload_turn_end,
+    "StopFailure":      _payload_turn_end,
 }
 
 
@@ -611,6 +615,7 @@ _TRANSLATORS: dict[str, Callable[[Decision, dict, str], dict[str, Any]]] = {
     "PostToolUse":      _translate_posttool,
     "UserPromptSubmit": _translate_user_prompt,
     "Stop":             _translate_session_stop,
+    "StopFailure":      _translate_session_stop,
 }
 
 
@@ -733,6 +738,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         record_mcp_use(session_id, tool=tool_name)
     # A prompt opens its turn with a decision-eligible turnStart before the userMessage, and a deny blocks the prompt (turn-start.json).
     if hook_name == "UserPromptSubmit":
+        _close_interrupted_turn(event, config, posture, server_hello, session_id)
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
             result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url, gate=True,
@@ -762,9 +768,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         return _settle(posture.resolve(Undecided("adapter_exception", {"error": str(e)})),
                        hook_name, session_id, tool_name=event.get("tool_name") or "")
     if not request:
-        if hook_name == "Stop":
-            # turnEnd with no open turn: audit it rather than fabricate
-            # a turn_id.
+        if hook_name in AUDIT_ONLY_HOOKS:
             audit_event("turn_end_no_open_turn", session_id=session_id)
             return 0
         sys.stderr.write(f"acs-adapter: could not build request for {hook_name}\n")
@@ -777,7 +781,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         # or counted as a decision failure.
         audit_event("method_not_evaluated", method=method, hook=hook_name,
                     session_id=session_id)
-        if hook_name == "Stop":
+        if hook_name in AUDIT_ONLY_HOOKS:
             close_turn(session_id)
         return 0
     if method == "steps/toolCallResult":
@@ -802,8 +806,7 @@ def _govern(event: dict[str, Any], hook_name: str, session_id: str | None,
         return _settle(posture.resolve(Refused("adapter_translate_exception", {"error": str(e)})),
                        hook_name, session_id, tool_name=event.get("tool_name") or "")
 
-    # Close the turn after the turnEnd has been emitted/recorded.
-    if hook_name == "Stop":
+    if hook_name in AUDIT_ONLY_HOOKS:
         close_turn(session_id)
     return 0
 
@@ -817,19 +820,44 @@ def _send_agent_response(event: dict[str, Any], config: Config, posture: FailPos
     try:
         request = build_agent_response_request(event)
     except Exception as e:  # noqa: BLE001
-        result: Decided | Resolution = posture.resolve(Undecided("adapter_build_failed", {"error": str(e)}))
-    else:
-        result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
+        _record(posture.resolve(Undecided("adapter_build_failed", {"error": str(e)})), "Stop",
+                "steps/agentResponse", session_id)
+        return
+    _record(round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id), "Stop",
+            "steps/agentResponse", session_id)
+
+
+def _close_interrupted_turn(event: dict[str, Any], config: Config, posture: FailPosture,
+                            server_hello: dict, session_id: str | None) -> None:
+    """Close a turn still open when the next prompt arrives as interrupted: Stop does not run after a user interrupt."""
+    turn_id = current_turn(session_id)
+    if not turn_id:
+        return
+    close_turn(session_id)
+    if not method_evaluated(server_hello, "steps/turnEnd"):
+        audit_event("method_not_evaluated", method="steps/turnEnd", hook="UserPromptSubmit", session_id=session_id)
+        return
+    request = request_envelope("steps/turnEnd", request_id=str(uuid.uuid4()),
+                               metadata={**_metadata(event), "turn_id": turn_id},
+                               payload={"turn_id": turn_id, "outcome": "interrupted"})
+    _record(round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id),
+            "UserPromptSubmit", "steps/turnEnd", session_id)
+
+
+def _record(result: Decided | Resolution, hook: str, method: str, session_id: str | None) -> None:
+    """Record the outcome of a step that already happened: a failure is audited and counted, a decision is not applied."""
     if isinstance(result, Resolution):
-        audit_event(result.audit_type, **{**result.fields, "cause": result.cause, "hook": "Stop",
-                                          "method": "steps/agentResponse", "session_id": session_id})
+        audit_event(result.audit_type, **{**result.fields, "cause": result.cause, "hook": hook,
+                                          "method": method, "session_id": session_id})
         if result.decision_failure:
             count_decision_failure(session_id, result.fields.get("failure_class", "other"))
         return
     decision = normalize_decision(result.response.get("result"))
-    if decision.disposition != "allow":
-        audit_event("unenforceable_decision", decision=decision.disposition or "(unusable)", hook="Stop",
-                    method="steps/agentResponse", reason=decision.reasoning or "(none)", session_id=session_id)
+    if decision.disposition == "modify":
+        audit_modify_unsupported("the step already happened", hook=hook, method=method, session_id=session_id)
+    elif decision.disposition != "allow":
+        audit_event("unenforceable_decision", decision=decision.disposition or "(unusable)", hook=hook,
+                    method=method, reason=decision.reasoning or "(none)", session_id=session_id)
 
 
 def _settle(resolution: Resolution, hook_name: str, session_id: str | None, *, tool_name: str = "") -> int:

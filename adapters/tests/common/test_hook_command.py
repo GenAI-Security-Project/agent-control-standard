@@ -135,7 +135,8 @@ class ClaudeCodeGateHooksBlockOnFailure(unittest.TestCase):
         default = self._wire()
         self.assertEqual(default["block"], {"PreToolUse", "UserPromptSubmit"})
         strict = self._wire("--default-deny")
-        self.assertEqual(strict["block"], strict["all"] - {"Stop"}, "Claude Code ignores onFailure on Stop")
+        self.assertEqual(strict["block"], strict["all"] - {"Stop", "StopFailure"},
+                         "Claude Code ignores onFailure on Stop and StopFailure")
         self.assertEqual(self._wire("--all-fail-open")["block"], set())
 
 

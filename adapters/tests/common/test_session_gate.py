@@ -726,6 +726,61 @@ class SessionGateThroughHooks(unittest.TestCase):
                 [end] = guardian.envelopes_for("steps/sessionEnd")
                 self.assertEqual(end["params"]["payload"]["summary"]["decision_failures"], {"timeout": 1})
 
+    def _hooks(self, url: str, events: list[tuple[list[str], dict]]) -> list[subprocess.CompletedProcess]:
+        runs = []
+        for argv, event in events:
+            p = subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True, env=self._env(url), timeout=30)
+            self.assertEqual(p.returncode, 0, p.stderr[-300:])
+            runs.append(p)
+        return runs
+
+    def _turns(self, guardian: ProgrammableGuardian) -> list[tuple[str, str, str]]:
+        return [(r["method"], r["params"]["payload"]["turn_id"], r["params"]["payload"].get("outcome", ""))
+                for r in guardian.received if r["method"] in ("steps/turnStart", "steps/turnEnd")]
+
+    def test_a_turn_no_stop_closed_ends_as_interrupted_when_the_next_prompt_opens(self) -> None:
+        claude = [str(BIN / "acs-claude-code-hook")]
+        cursor = str(BIN / "acs-cursor-hook")
+        session = str(uuid.uuid4())
+        cases = {
+            "claude-code": [(claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "prompt": "a"}),
+                            (claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "PreToolUse",
+                                      "tool_name": "Bash", "tool_input": {"command": "sleep 9"}}),
+                            (claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "prompt": "b"}),
+                            (claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "Stop",
+                                      "last_assistant_message": "done"})],
+            "cursor": [([cursor, "beforeSubmitPrompt"], {"conversation_id": session, "workspace_roots": ["/tmp"], "prompt": "a"}),
+                       ([cursor, "beforeSubmitPrompt"], {"conversation_id": session, "workspace_roots": ["/tmp"], "prompt": "b"}),
+                       ([cursor, "stop"], {"conversation_id": session, "workspace_roots": ["/tmp"], "status": "completed"})],
+        }
+        for host, events in cases.items():
+            with self.subTest(host):
+                guardian = ProgrammableGuardian(hmac_secret=SECRET)
+                guardian.start()
+                self.addCleanup(guardian.stop)
+                self._hooks(guardian.url(), events)
+                turns = self._turns(guardian)
+                self.assertEqual([(m, o) for m, _, o in turns], [("steps/turnStart", ""), ("steps/turnEnd", "interrupted"),
+                                                                ("steps/turnStart", ""), ("steps/turnEnd", "completed")])
+                self.assertEqual((turns[0][1], turns[2][1]), (turns[1][1], turns[3][1]), "each turnEnd closes its own turn")
+                interrupted = guardian.envelopes_for("steps/turnEnd")[0]
+                self.assertEqual(interrupted["params"]["metadata"]["turn_id"], turns[0][1])
+                self.assertEqual(validate_hook_payload(interrupted["params"]["payload"], "turn-end.json"), [])
+
+    def test_a_claude_turn_an_api_error_ends_closes_with_outcome_error(self) -> None:
+        guardian = ProgrammableGuardian(hmac_secret=SECRET)
+        guardian.start()
+        self.addCleanup(guardian.stop)
+        claude = [str(BIN / "acs-claude-code-hook")]
+        session = str(uuid.uuid4())
+        runs = self._hooks(guardian.url(), [
+            (claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "prompt": "a"}),
+            (claude, {"session_id": session, "cwd": "/tmp", "hook_event_name": "StopFailure", "error": "rate_limit",
+                      "last_assistant_message": "API Error: Rate limit reached"})])
+        self.assertEqual(runs[1].stdout.strip(), "")
+        self.assertEqual([(m, o) for m, _, o in self._turns(guardian)], [("steps/turnStart", ""), ("steps/turnEnd", "error")])
+        self.assertNotIn("steps/agentResponse", guardian.methods_seen(), "StopFailure carries the API error, not a reply")
+
     def test_a_fail_closed_session_end_still_reports_a_start_without_a_decision(self) -> None:
         # sessionEnd is audit-only, so a fail-closed hook sends it with the start's timeout (§6.4).
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):

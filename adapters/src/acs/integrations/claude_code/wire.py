@@ -96,6 +96,7 @@ ACS_CORE_HOOKS = [
     "PostToolUse",
     "SessionEnd",
     "Stop",
+    "StopFailure",
 ]
 
 # Wired by an earlier version; wiring and unwiring both remove them.
@@ -150,7 +151,7 @@ def build_command(*, hook_command: str, guardian_url: str,
 
 
 # Hooks on which Claude Code ignores onFailure: a failure there cannot block anything.
-_ON_FAILURE_IGNORED = frozenset({"Stop", "SubagentStop"})
+_ON_FAILURE_IGNORED = frozenset({"Stop", "StopFailure", "SubagentStop"})
 
 
 def build_inner_hook(command: str, *, block_on_failure: bool = False) -> dict:

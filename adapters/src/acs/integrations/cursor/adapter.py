@@ -815,8 +815,8 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
     if event_name == "beforeSubmitPrompt":
         return _translate_before_submit_prompt(decision, event_name)
 
-    # Remaining events are observational with no response shape — empty
-    # dict skips stdout emission.
+    # Remaining events are observational with no response shape, so a decision on them is recorded.
+    _record_delivered(decision, event_name)
     return {}
 
 
@@ -904,6 +904,7 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
         record_mcp_use(session_id, tool=str(tool_name or ""), workspace=_workspace(event))
     # A prompt opens its turn with a decision-eligible turnStart before the userMessage, and a deny blocks the prompt.
     if event_name == "beforeSubmitPrompt":
+        _close_interrupted_turn(event, config, posture, server_hello, session_id)
         turn_id = str(uuid.uuid4())
         if method_evaluated(server_hello, "steps/turnStart"):
             result = round_trip(build_turn_start_request(event, turn_id), guardian_url=config.guardian_url, gate=True,
@@ -999,6 +1000,39 @@ def _govern(event_name: str, event: dict[str, Any], session_id: str | None,
 
     _emit(out)
     return 0
+
+
+def _close_interrupted_turn(event: dict[str, Any], config: Config, posture: FailPosture,
+                            server_hello: dict, session_id: str | None) -> None:
+    """Close a turn still open when the next prompt arrives as interrupted, since no stop closed it."""
+    workspace = _workspace(event)
+    turn_id = current_turn(session_id, workspace=workspace)
+    if not turn_id:
+        return
+    close_turn(session_id, workspace=workspace)
+    if not method_evaluated(server_hello, "steps/turnEnd"):
+        audit_event("method_not_evaluated", method="steps/turnEnd", event="beforeSubmitPrompt", session_id=session_id)
+        return
+    request = request_envelope("steps/turnEnd", request_id=str(uuid.uuid4()),
+                               metadata={**_metadata("beforeSubmitPrompt", event), "turn_id": turn_id},
+                               payload={"turn_id": turn_id, "outcome": "interrupted"})
+    result = round_trip(request, guardian_url=config.guardian_url, posture=posture, session_id=session_id)
+    if isinstance(result, Resolution):
+        audit_event(result.audit_type, **{**result.fields, "cause": result.cause, "event": "beforeSubmitPrompt",
+                                          "method": "steps/turnEnd", "session_id": session_id})
+        if result.decision_failure:
+            count_decision_failure(session_id, result.fields.get("failure_class", "other"), workspace=workspace)
+        return
+    _record_delivered(normalize_decision(result.response.get("result")), "steps/turnEnd")
+
+
+def _record_delivered(decision: Decision, event_name: str) -> None:
+    """Record a decision on a step that already happened: a MODIFY as modify_unsupported, any other non-allow as unenforceable."""
+    if decision.disposition == "modify":
+        audit_modify_unsupported("the step already happened", event=event_name)
+    elif decision.disposition != "allow":
+        audit_event("unenforceable_decision", decision=decision.disposition, event=event_name,
+                    reason=decision.reasoning or "(none)")
 
 
 def _explicit_allow(event_name: str) -> int:
