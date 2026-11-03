@@ -178,6 +178,7 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	if err != nil {
 		return guardian.PolicyDecision{}, err
 	}
+	maps.Copy(snapshot, ambientMembers(in))
 	v, err := e.evaluator.Evaluate(ctx, point, snapshot)
 	if err != nil {
 		return guardian.PolicyDecision{}, err

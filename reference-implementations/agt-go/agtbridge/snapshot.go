@@ -8,6 +8,7 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 )
 
 // PolicyTargetLeaf is the argument the snapshot copies a tool's policy
@@ -16,11 +17,31 @@ import (
 // leaf.
 const PolicyTargetLeaf = "acs_policy_target"
 
-// The snapshots below have the shape packages/guardian/src/assemble-snapshot.ts
-// builds, member for member, so the policy sees the same input.
+// The snapshots below hold every member packages/guardian/src/assemble-snapshot.ts
+// builds, plus what it does not send: the rest of the tool payload and
+// ambientMembers.
 
 func budgets() map[string]any {
 	return map[string]any{"tool_call_count": 0.0, "token_count": 0.0, "elapsed_seconds": 0.0, "cost_usd": 0.0}
+}
+
+// envelope is AGT's envelope member (AGT-SNAPSHOT-1.0.md §1), filled from the
+// request's params and metadata.
+func envelope(req acs.Request, point string) map[string]any {
+	metadata := req.Params.Metadata
+	agent := map[string]any{"id": metadata.AgentID}
+	addPresent(agent, "name", metadata.AgentName)
+	e := map[string]any{
+		"agent":              agent,
+		"session":            map[string]any{"id": metadata.SessionID},
+		"intervention_point": point,
+		"timestamp":          req.Params.Timestamp,
+		"budgets":            budgets(),
+	}
+	if req.Params.TenantID != nil {
+		e["tenant"] = map[string]any{"id": *req.Params.TenantID}
+	}
+	return e
 }
 
 func ifcInput(labels []string) map[string]any {
@@ -67,11 +88,41 @@ func preToolCallSnapshot(req acs.Request, labels []string, argument, policyToolN
 	if payload.RawCommand != nil {
 		raw = *payload.RawCommand
 	}
+	call := map[string]any{"name": policyToolName, "args": args, "id": req.Params.RequestID, "raw_command": raw}
+	addTool(call, payload.Tool)
+	addPresent(call, "operation", payload.Operation)
+	addPresent(call, "capability", payload.Capability)
+	addPresent(call, "intent", payload.Intent)
+	// args holds each argument's value, which AGT's rules read directly, so
+	// each argument's provenance goes beside it, under the argument's name.
+	provenance := map[string]any{}
+	for name, a := range payload.Arguments {
+		if a.Provenance != nil {
+			provenance[name] = a.Provenance
+		}
+	}
+	if len(provenance) > 0 {
+		call["provenance"] = provenance
+	}
 	return map[string]any{
-		"envelope":  map[string]any{"budgets": budgets()},
-		"tool_call": map[string]any{"name": policyToolName, "args": args, "id": req.Params.RequestID, "raw_command": raw},
+		"envelope":  envelope(req, PointPreToolCall),
+		"tool_call": call,
 		"input":     ifcInput(labels),
 	}, nil
+}
+
+// addTool adds the tool's version and provider, which the payload names
+// beside its name, to a snapshot's tool_call.
+func addTool(call map[string]any, tool acs.Tool) {
+	addPresent(call, "version", tool.Version)
+	addPresent(call, "provider", tool.Provider)
+}
+
+// addPresent sets a snapshot member only when the payload carries it.
+func addPresent[T any](members map[string]any, name string, value *T) {
+	if value != nil {
+		members[name] = *value
+	}
 }
 
 func postToolCallSnapshot(req acs.Request, labels []string, policyToolName string) (map[string]any, error) {
@@ -85,14 +136,43 @@ func postToolCallSnapshot(req acs.Request, labels []string, policyToolName strin
 		if err := jsonv2.Unmarshal(o.Value, &v); err != nil {
 			return nil, err
 		}
-		outputs[i] = map[string]any{"value": v}
+		output := map[string]any{"value": v}
+		addPresent(output, "provenance", o.Provenance)
+		outputs[i] = output
 	}
+	call := map[string]any{"name": policyToolName}
+	addTool(call, payload.Tool)
+	result := map[string]any{"outputs": outputs, "exit_status": payload.ExitStatus}
+	addPresent(result, "operation", payload.Operation)
+	addPresent(result, "request_id_ref", payload.RequestIDRef)
+	addPresent(result, "duration_ms", payload.DurationMS)
 	return map[string]any{
-		"envelope":    map[string]any{"budgets": budgets()},
-		"tool_call":   map[string]any{"name": policyToolName},
-		"tool_result": map[string]any{"outputs": outputs},
+		"envelope":    envelope(req, PointPostToolCall),
+		"tool_call":   call,
+		"tool_result": result,
 		"input":       ifcInput(labels),
 	}, nil
+}
+
+// ambientMembers are the request metadata envelope has no place for, and the
+// session's Intent. actor and metadata are AGT's ambient member names
+// (snapshot-contract.md); every member and what is not sent: docs/architecture.md, "What the policy receives".
+func ambientMembers(in guardian.PolicyInput) map[string]any {
+	request := in.Request.Params.Metadata
+	members := map[string]any{}
+	addPresent(members, "actor", request.UserContext)
+	addPresent(members, "intent", in.Session.Intent)
+	metadata := map[string]any{}
+	addPresent(metadata, "turn_id", request.TurnID)
+	addPresent(metadata, "parent_turn_id", request.ParentTurnID)
+	addPresent(metadata, "session_state", request.SessionState)
+	addPresent(metadata, "environment", request.Environment)
+	addPresent(metadata, "platform", request.Platform)
+	addPresent(metadata, "platform_version", request.PlatformVersion)
+	if len(metadata) > 0 {
+		members["metadata"] = metadata
+	}
+	return members
 }
 
 // jsonKind names the JSON type of a value that jsonv2 decoded into any.

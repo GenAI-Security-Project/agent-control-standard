@@ -68,6 +68,49 @@ first, the Guardian answers DENY and keeps the call's place among
 call and is never freed. A program that imports `guardian` or `agtbridge` links
 no native library unless it imports `agtbridge/agteval`.
 
+### What the policy receives
+
+AGT gives the policy `{intervention_point, policy_target, snapshot, annotations, tool}`.
+The bridge builds `snapshot` (`agtbridge/snapshot.go`) for two steps:
+`steps/toolCallRequest` at `pre_tool_call` and `steps/toolCallResult` at
+`post_tool_call`. A member is present only when the request carries its source.
+
+| Snapshot member | Source in the ACS request | Request | Result |
+| --- | --- | --- | --- |
+| `envelope.agent.id` | `params.metadata.agent_id` | yes | yes |
+| `envelope.agent.name` | `params.metadata.agent_name` | yes | yes |
+| `envelope.session.id` | `params.metadata.session_id` | yes | yes |
+| `envelope.intervention_point` | the method | yes | yes |
+| `envelope.timestamp` | `params.timestamp` | yes | yes |
+| `envelope.tenant.id` | `params.tenant_id` | yes | yes |
+| `envelope.budgets` | zero counters, as in the TypeScript Guardian | yes | yes |
+| `tool_call.name` | `payload.tool.name`, after `policy.tool_aliases` | yes | yes |
+| `tool_call.version`, `tool_call.provider` | `payload.tool.version`, `payload.tool.provider` | yes | yes |
+| `tool_call.args.<name>` | `payload.arguments.<name>.value` | yes | no |
+| `tool_call.args.acs_policy_target` | the argument `mapping.yaml` names as the policy target | yes | no |
+| `tool_call.provenance.<name>` | `payload.arguments.<name>.provenance` | yes | no |
+| `tool_call.id` | `params.request_id` | yes | no |
+| `tool_call.raw_command` | `payload.raw_command`, or `""` | yes | no |
+| `tool_call.operation`, `tool_call.capability`, `tool_call.intent` | `payload.operation`, `payload.capability`, `payload.intent` | yes | no |
+| `tool_result.outputs[i].value`, `tool_result.outputs[i].provenance` | `payload.outputs[i].value`, `payload.outputs[i].provenance` | no | yes |
+| `tool_result.exit_status`, `tool_result.duration_ms`, `tool_result.operation`, `tool_result.request_id_ref` | the same members of `payload` | no | yes |
+| `input.ifc.source_labels` | the labels earlier verdicts returned, kept in the session's policy state | yes | yes |
+| `actor` | `params.metadata.user_context` | yes | yes |
+| `metadata` | `turn_id`, `parent_turn_id`, `session_state`, `environment`, `platform`, `platform_version` of `params.metadata` | yes | yes |
+| `intent` | the session's Intent | yes | yes |
+
+Not sent:
+
+| ACS member | Reason |
+| --- | --- |
+| the session's `entries` and `chain_hash` | They grow with every step, and AGT refuses a snapshot over 1 MiB (`max_snapshot_bytes`). AGT carries only `result_labels` between steps; an engine that needs more history keeps it in `PolicyDecision.State`. |
+| `jsonrpc`, `id`, `params.acs_version`, `params.nonce`, `params.signature` | The Guardian checks them before the policy runs. |
+
+The names follow AGT's snapshot specification (`AGT-SNAPSHOT-1.0.md` §1,
+`snapshot-contract.md`). Where AGT has no name, the member keeps its ACS name.
+Every other step is recorded and allowed without AGT: the bridge assembles no
+snapshot for it.
+
 ## How a request moves through the Guardian
 
 Every participant and call on these diagrams is a type or method in this module.

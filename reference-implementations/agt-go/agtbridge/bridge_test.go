@@ -381,6 +381,122 @@ tools:
 	}
 }
 
+// TestPolicyReadsTheRequestAndSession: §12.1 gives the engine the request
+// envelope, SessionContext, Intent and provenance, so a rule can decide on
+// who sent the step, the request metadata, the call's capability and
+// argument provenance, and the session's Intent; the session's entries stay out.
+func TestPolicyReadsTheRequestAndSession(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, dir, "policy/manifest.yaml", `agent_control_specification_version: "0.3.1-beta"
+policies:
+  facts: {type: rego, bundle: lib, query: data.facts.verdict}
+intervention_points:
+  pre_tool_call:
+    policy_target: "$.tool_call.args.acs_policy_target"
+    tool_name_from: "$.tool_call.name"
+    policy: {id: facts}
+tools:
+  Bash: {type: Tool}
+`)
+	mustWrite(t, dir, "policy/lib/facts.rego", `package facts
+
+import rego.v1
+
+verdict := {"decision": "allow", "reason": "owner"} if {
+	{name | input.snapshot[name]} == {"envelope", "tool_call", "input", "actor", "metadata", "intent"}
+	input.snapshot.actor.user_id == "owner"
+	input.snapshot.envelope.agent.id == "agent"
+	input.snapshot.envelope.session.id == "s1"
+	input.snapshot.envelope.tenant.id == "t1"
+	input.snapshot.envelope.intervention_point == "pre_tool_call"
+	input.snapshot.metadata == {"turn_id": "turn1"}
+	input.snapshot.intent.scope_mode == "strict"
+	input.snapshot.tool_call.capability == "shell"
+	input.snapshot.tool_call.provenance.command.origin == "user_input"
+} else := {"decision": "deny", "reason": "not_owner", "message": "only the owner may run this"}
+`)
+	mapping, err := os.ReadFile(agtTree + "/mapping.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, dir, "mapping.yaml", string(mapping))
+	e, err := agtEngine(dir, "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	strict := "strict"
+	for sender, want := range map[string]acs.Disposition{"owner": acs.Allow, "guest": acs.Deny} {
+		call := shell("ls")
+		call["capability"] = "shell"
+		call["arguments"] = map[string]any{"command": map[string]any{"value": "ls", "provenance": map[string]any{"provenance_id": "p1", "origin": "user_input"}}}
+		in := input(t, acs.StepToolCallRequest, call)
+		turn, tenant := "turn1", "t1"
+		in.Request.Params.Metadata = acs.Metadata{AgentID: "agent", SessionID: "s1", TurnID: &turn, UserContext: &acs.UserContext{UserID: &sender}}
+		in.Request.Params.TenantID = &tenant
+		in.Session.ChainHash = "head"
+		in.Session.Entries = []acs.ContextEntry{{EntryID: "e1", StepID: "s1-1", StepType: "steps/userMessage", EntryHash: "h1"}}
+		in.Session.Intent = &acs.Intent{ScopeMode: &strict}
+		d, err := e.Decide(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Disposition != want {
+			t.Errorf("%s: got %+v, want %s", sender, d.Decision, want)
+		}
+	}
+}
+
+// TestPolicyReadsTheToolResult: the result gate sees the payload's facts
+// beside the outputs, each output's provenance included.
+func TestPolicyReadsTheToolResult(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, dir, "policy/manifest.yaml", `agent_control_specification_version: "0.3.1-beta"
+policies:
+  result: {type: rego, bundle: lib, query: data.result.verdict}
+intervention_points:
+  post_tool_call:
+    policy_target: "$.tool_result.outputs[0].value"
+    tool_name_from: "$.tool_call.name"
+    policy: {id: result}
+tools:
+  Bash: {type: Tool}
+`)
+	mustWrite(t, dir, "policy/lib/result.rego", `package result
+
+import rego.v1
+
+verdict := {"decision": "allow", "reason": "trusted"} if {
+	input.snapshot.tool_result.exit_status == "success"
+	input.snapshot.tool_result.duration_ms == 12
+	{name | input.snapshot[name]} == {"envelope", "tool_call", "tool_result", "input"}
+	input.snapshot.envelope.intervention_point == "post_tool_call"
+	input.snapshot.tool_call.version == "1.0"
+	input.snapshot.tool_result.outputs[0].provenance.origin == "user_input"
+} else := {"decision": "deny", "reason": "untrusted", "message": "the output came from outside"}
+`)
+	mapping, err := os.ReadFile(agtTree + "/mapping.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, dir, "mapping.yaml", string(mapping))
+	e, err := agtEngine(dir, "policy/manifest.yaml", "mapping.yaml", agtbridge.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for origin, want := range map[string]acs.Disposition{"user_input": acs.Allow, "external": acs.Deny} {
+		d, err := e.Decide(context.Background(), input(t, acs.StepToolCallResult, map[string]any{
+			"tool": map[string]any{"name": "Bash", "version": "1.0"}, "exit_status": "success", "duration_ms": 12,
+			"outputs": []any{map[string]any{"value": "ok", "provenance": map[string]any{"provenance_id": "p1", "origin": origin}}},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Disposition != want {
+			t.Errorf("%s: got %+v, want %s", origin, d.Decision, want)
+		}
+	}
+}
+
 func TestAskTimeoutUsesWholeSeconds(t *testing.T) {
 	for timeout, accepted := range map[time.Duration]bool{500 * time.Millisecond: false, 1500 * time.Millisecond: false, 2 * time.Second: true} {
 		_, err := agtbridge.New(os.DirFS(agtTree), "mapping.yaml", pointsEvaluator{agtbridge.PointPreToolCall}, agtbridge.Options{AskTimeout: timeout})

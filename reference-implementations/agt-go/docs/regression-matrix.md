@@ -14,7 +14,7 @@ Checked against the open issues on 2026-10-09. All six remain open.
 | [#163](https://github.com/GenAI-Security-Project/agent-control-standard/issues/163) | Classify malformed JSON as `PARSE_ERROR` and a non-JSON-RPC request as `INVALID_REQUEST`. | `guardian.TestTransportErrors`, `guardian.TestInvalidJSONRPCPrecedesSignatureVerification` |
 | [#164](https://github.com/GenAI-Security-Project/agent-control-standard/issues/164) | Reject hook traffic before a successful handshake. | `guardian.TestMethodRouting` |
 | [#165](https://github.com/GenAI-Security-Project/agent-control-standard/issues/165) | Select a transport offered by both peers, or refuse the session. | `guardian.TestHandshakeRefusals`, `internal/handshake.TestEvaluatedMethods` |
-| [#166](https://github.com/GenAI-Security-Project/agent-control-standard/issues/166) | Bind a negotiated session to its signing key and `agent_id`. The standard leaves the meaning of `user_context` to deployment policy, so the Guardian passes it to the policy engine instead of treating it as an immutable identity. | `guardian.TestKeyBoundToSession`, `guardian.TestAgentIDBoundToSession` |
+| [#166](https://github.com/GenAI-Security-Project/agent-control-standard/issues/166) | Bind a negotiated session to its signing key and `agent_id`. The standard leaves the meaning of `user_context` to deployment policy, so the Guardian passes it to the policy, as `snapshot.actor`, instead of treating it as an immutable identity. | `guardian.TestKeyBoundToSession`, `guardian.TestAgentIDBoundToSession` |
 | [#167](https://github.com/GenAI-Security-Project/agent-control-standard/issues/167) | Dispatch `steps/sessionStart` through the policy engine. | `guardian.TestCoreFloor` |
 
 ## ACS-Core vectors
