@@ -425,7 +425,7 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
   // decide (packages/guardian/src/server.ts). Asserted per code rather than
   // as a set, so a failure names which route regressed. client.test.ts drives
   // three of them against a real Guardian; this is the unit half.
-  it.each([-32700, -32000, -32001, -32002, -32003, -32004, -32005, -32006, -32007, -32010, -32011, -32020])("classifies the guardian's %i as a refusal, not a delivery failure", (code) => {
+  it.each([-32700, -32600, -32000, -32001, -32002, -32003, -32004, -32005, -32006, -32007, -32010, -32011, -32020])("classifies the guardian's %i as a refusal, not a delivery failure", (code) => {
     const { kind, message } = classifyDeliveryFailure({ code, message: "no" });
     expect(kind).toBe("refused");
     // The code an incident reviewer needs, in the field that reaches the
@@ -465,7 +465,7 @@ describe("applyFailurePosture — a guardian that was alive and refused the enve
     ).toBe("deny");
   });
 
-  it.each([-32700, -32000, -32001, -32002, -32003, -32004, -32005, -32006, -32007, -32010, -32011, -32020])("denies on %i, which ACS reserves for an envelope the guardian will not decide", (code) => {
+  it.each([-32700, -32600, -32000, -32001, -32002, -32003, -32004, -32005, -32006, -32007, -32010, -32011, -32020])("denies on %i, which ACS reserves for an envelope the guardian will not decide", (code) => {
     const { sink } = recordingSink();
     expect(
       applyFailurePosture({ failure: { code, message: "no" }, session: SESSION("proceed"), audit: sink, ...CALL })
