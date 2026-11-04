@@ -1,4 +1,4 @@
-# Agent Control Standard
+# OWASP Agent Control Standard
 
 [![Code: Apache 2.0](https://img.shields.io/badge/Code-Apache%202.0-blue.svg)](./LICENSE)
 [![Docs: CC BY-SA 4.0](https://img.shields.io/badge/Docs-CC%20BY--SA%204.0-lightgrey.svg)](./LICENSE-DOCS)
@@ -69,11 +69,9 @@ today.
 
 ### Two ways this breaks on the first try
 
-`bun install` does not install `trash`, because `trash` is a system command the test and
-verification scripts call, not an npm package. Running `bun test` without it on `PATH`
-fails 26 tests, all in the conformance and upstream-watch scripts that clean up scratch
-directories. Install `trash-cli` first, or expect those 26
-failures and ignore them.
+`bun install` does not install `trash`, because `trash` is a system command, not an npm
+package. `bun test` passes without it. `bun run conformance`, `bun run watch:upstream`,
+and `bun run verify:pin` stop with an error until you install `trash-cli`.
 
 The Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
 is unreachable stops governing, silently, and the host proceeds as if nothing asked.
@@ -160,7 +158,7 @@ once, which is why a `$ref` inside one schema can resolve against the same base 
 other schema in the set uses.
 
 ```bash
-curl -s https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json
+curl -sL https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json
 ```
 
 That fetches the schema behind the `toolCallRequest` payload above, published from
@@ -289,12 +287,24 @@ harness measures the wire, not the language behind it.
 
 ### Harden it for production
 
-Two gaps are named and open, not vague. The Guardian writes its envelope and audit logs
-as synchronous file appends on the decision path, with no batching, so trace spans need
-a batched writer before a Trace-pillar claim would hold up under load. No OpenTelemetry
-collector or exporter exists yet. The conformance harness only measures which
-attributes a consumer *could* emit from the envelopes, not that anything ships them.
-Start in [`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
+Two gaps are named and open, not vague. The Guardian writes its envelope and
+session-context logs, and the host adapter writes its audit log, as synchronous file
+appends on the decision path, with no batching. Trace export is
+partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
+for the two live methods, `steps/toolCallRequest` and `steps/toolCallResult`, as the
+[Guardian README](reference-implementations/agt/packages/guardian/README.md#export-traces)
+describes. Failures only the host sees, such as an unreachable Guardian, stay in the host's
+audit log until a converter turns them into spans of the same format.
+[How the reference Guardian produces a trace](docs/spec/trace/extend_opentelemetry.md#how-the-reference-guardian-produces-a-trace)
+explains how the two streams join. A [sample trace](reference-implementations/agt/samples/trace/acs-trace-sample.jsonl)
+shows that output without running anything, and [Produce a trace](reference-implementations/agt/README.md#produce-a-trace)
+walks you from a fresh clone to a trace file of your own.
+
+That exporter does not make the reference ACS-Trace conformant, and this tree claims no
+Trace profile. It covers two methods, emits no OCSF, and leaves out a required attribute
+when the request omits it. The conformance harness still measures which attributes a
+consumer *could* emit from the wire, not what the exporter ships. Start in
+[`reference-implementations/agt/packages/`](reference-implementations/agt/packages/).
 
 ### Go deeper
 
@@ -362,7 +372,7 @@ What is in focus right now lives in one place, the Current Priority Scope in
 ## Where to go next
 
 - [AGT reference implementation](reference-implementations/agt/README.md): the deep tutorial behind the walkthrough above, the Guardian, both host shims, and the full limits list.
-- [Documentation site](https://genai-security-project.github.io/agent-control-standard/docs/): the specification, concepts, and topic guides.
+- [Documentation site](https://owaspacs.org/docs/): the specification, concepts, and topic guides.
 - [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification): the JSON Schemas and normative prose in this repository.
 - [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions): questions and design conversation.
 - Slack: [owasp.slack.com](https://owasp.slack.com), channel `#team-genai-asi-acs-general`.

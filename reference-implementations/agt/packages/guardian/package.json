@@ -9,6 +9,12 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/core": "2.12.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.223.0",
+    "@opentelemetry/otlp-transformer": "0.223.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-trace-base": "2.12.0",
     "agt-bridge": "workspace:*",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1"

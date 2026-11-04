@@ -233,7 +233,7 @@ export function renderOutcome(message: OutcomeMessage, options: RenderOptions = 
  */
 export function renderEnvelopeLogEntry(entry: EnvelopeLogEntry, options: RenderOptions = {}): string {
   const color = options.color ?? false;
-  const arrow = entry.direction === "request" ? "→ REQUEST " : "← RESPONSE";
+  const arrow = { request: "→ REQUEST ", response: "← RESPONSE", finding: "! FINDING " }[entry.direction];
   const method = entry.method ?? "(no method)";
   const id = entry.rpc_id === null ? "(unpaired)" : `id=${entry.rpc_id}`;
 
@@ -467,9 +467,13 @@ export function renderSessionChainRow(
   options: RenderOptions = {},
 ): string {
   const color = options.color ?? false;
+  const findings =
+    entry.findings === undefined || entry.findings.length === 0
+      ? ""
+      : `  ! ${entry.findings.join(", ")}${entry.request_id_ref === undefined ? "" : ` ref=${entry.request_id_ref}`}`;
   const row =
     `#${entry.seq}  ${entry.tool_name}  hash=${entry.hash.slice(0, SHORT_HASH_LENGTH)}  ` +
-    `session_id=${entry.session_id}`;
+    `session_id=${entry.session_id}${findings}`;
   return link.broken ? paint(`✖ CHAIN BREAK  ${row}`, RED, color) : row;
 }
 

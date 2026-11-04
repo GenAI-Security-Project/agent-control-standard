@@ -27,6 +27,21 @@ describe("mapVerdict", () => {
     expect(d.policy_references?.[0]?.rule_id).toBe("destructive_shell_command_blocked");
   });
 
+  // response-envelope.json requires a non-empty rule_id (#263), and Trace pads
+  // its policy arrays with "" to mean "absent". An empty AGT reason names no
+  // rule, so it produces no reference rather than one that fails the schema.
+  it("treats an empty AGT reason as no rule: a deny carries no policy_references", () => {
+    const d = mapVerdict({ decision: "deny", reason: "" }, m, "pre_tool_call", "command");
+    expect(d.decision).toBe("deny");
+    expect(d.policy_references).toBeUndefined();
+  });
+
+  it("treats an empty AGT reason as no rule: a warn, which needs one, fails", () => {
+    expect(() => mapVerdict({ decision: "warn", reason: "" }, m, "pre_tool_call", "command")).toThrow(
+      "verdict.reason was empty",
+    );
+  });
+
   // The whole warn round trip rests on this.
   it("maps warn to allow WITH non-empty policy_references", () => {
     const d = mapVerdict(
