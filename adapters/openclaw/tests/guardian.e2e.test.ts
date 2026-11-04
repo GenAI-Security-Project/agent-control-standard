@@ -159,7 +159,7 @@ for (const launcher of [typescript, go]) {
         let askingGuardian: RunningGuardian;
         let askingProxy: ReturnType<typeof recordEnvelopes>;
         beforeAll(async () => {
-          askingGuardian = await launcher.start({ manifestPath: writeManifest(join(policies, "asking"), [GUARDIAN_APPROVER]), onDecisionFailure: "proceed", key: KEY });
+          askingGuardian = await launcher.start({ manifestPath: writeManifest(join(policies, "asking"), [GUARDIAN_APPROVER]), onDecisionFailure: "proceed", key: KEY, askApprover: GUARDIAN_APPROVER });
           askingProxy = recordEnvelopes(askingGuardian.url);
         });
         afterAll(() => {

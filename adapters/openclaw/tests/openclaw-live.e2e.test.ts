@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,7 +121,7 @@ for (const launcher of unavailable === undefined ? [typescript, go] : []) {
     beforeAll(async () => {
       guardian = await launcher.start({ manifestPath: writeManifest(join(scratch, "stock")), onDecisionFailure: "deny", key: KEY });
       if (launcher.asks) {
-        askingGuardian = await launcher.start({ manifestPath: writeManifest(join(scratch, "asking"), [GUARDIAN_APPROVER]), onDecisionFailure: "deny", key: KEY });
+        askingGuardian = await launcher.start({ manifestPath: writeManifest(join(scratch, "asking"), [GUARDIAN_APPROVER]), onDecisionFailure: "deny", key: KEY, askApprover: GUARDIAN_APPROVER });
       }
       stockUrl = guardian.url;
       proxy = recordEnvelopes(stockUrl);
@@ -143,14 +143,11 @@ for (const launcher of unavailable === undefined ? [typescript, go] : []) {
       config.agents.defaults.workspace = join(scratch, "work");
       config.logging = { level: "debug", file: gatewayLog };
       writeFileSync(join(scratch, "openclaw.json"), JSON.stringify(config));
-      // The image runs as a separate user and needs write access to this state.
-      for (const path of [scratch, join(scratch, "state"), join(scratch, "home"), join(scratch, "work"), join(scratch, "openclaw.json")]) {
-        chmodSync(path, 0o777);
-      }
       const pulled = spawnSync("docker", ["pull", "--quiet", IMAGE], { encoding: "utf8" });
       expect(pulled.status).toBe(0);
       const started = spawnSync("docker", [
-        "run", "-d", "--name", container, "--network", "host",
+        // As this user, so the test can read what the gateway writes and delete it afterwards.
+        "run", "-d", "--name", container, "--network", "host", "--user", `${process.getuid!()}:${process.getgid!()}`,
         "-v", `${REPO}:${REPO}:ro`, "-v", `${scratch}:${scratch}`,
         "-e", `HOME=${join(scratch, "home")}`, "-e", `OPENCLAW_STATE_DIR=${join(scratch, "state")}`,
         "-e", `OPENCLAW_CONFIG_PATH=${join(scratch, "openclaw.json")}`, "-e", `ACS_HMAC_SECRET=${KEY.secret.toString("base64")}`,

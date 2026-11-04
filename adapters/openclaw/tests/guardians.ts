@@ -8,7 +8,8 @@ import type { HmacKey } from "../host-adapter.ts";
 
 const AGT_GO = join(AGT, "../agt-go");
 
-export type StartOptions = { manifestPath: string; onDecisionFailure: "proceed" | "deny"; key: HmacKey };
+/** `askApprover`: the human every ASK names; the TypeScript Guardian reads it from the manifest instead. */
+export type StartOptions = { manifestPath: string; onDecisionFailure: "proceed" | "deny"; key: HmacKey; askApprover?: string };
 export type Launcher = {
   name: string;
   unavailable(): string | undefined;
@@ -83,8 +84,7 @@ function goGuardian(): { binary: string; dir: string; opaPath: string } | undefi
 
 export const go: Launcher = {
   name: "Go",
-  // Its binary configures no approver, so it answers every ASK with a deny.
-  asks: false,
+  asks: true,
   evaluatesRunSteps: true,
   requiredInCi: false,
   unavailable: () =>
@@ -93,7 +93,7 @@ export const go: Launcher = {
       : existsSync(AGT_GO)
         ? "run `make build` in reference-implementations/agt-go"
         : "reference-implementations/agt-go/ is not in this tree, and ACS_GUARDIAN_BIN names no built Go Guardian",
-  start({ manifestPath, onDecisionFailure, key }) {
+  start({ manifestPath, onDecisionFailure, key, askApprover }) {
     const scratch = mkdtempSync(join(tmpdir(), "acs-openclaw-go-guardian-"));
     const secretFile = join(scratch, "hmac-secret");
     writeFileSync(secretFile, key.secret.toString("base64"), { mode: 0o600 });
@@ -115,6 +115,8 @@ export const go: Launcher = {
         ACS__PROTOCOL__ON_DECISION_FAILURE: onDecisionFailure,
         ACS__AUDIT__ENVELOPE_LOG: join(scratch, "envelopes.jsonl"),
         ACS__AUDIT__EVENT_LOG: join(scratch, "events.jsonl"),
+        // OpenClaw routes an ASK to a person, so this Guardian sends the ASK instead of its substitute.
+        ...(askApprover === undefined ? {} : { ACS__POLICY__ASK_SUBSTITUTION: "none", ACS__POLICY__ASK_APPROVER__TYPE: "human", ACS__POLICY__ASK_APPROVER__ID: askApprover }),
       },
     });
     return listen(child, scratch);
