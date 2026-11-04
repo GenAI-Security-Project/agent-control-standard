@@ -89,7 +89,7 @@ hooks:
     # Guardian's reasoning to the model whatever else answers. `allow` is left
     # without it: under `on_decision_failure: proceed` its reasoning says the
     # Guardian is unreachable, and the model must not learn that before the
-    # step runs. The audit log and the trace export record every allow. `ask`
+    # step runs. The host's audit log still records a fail-open proceed. `ask`
     # is left without it too: its reason is shown to the person who answers.
     # The README's "When another hook answers the same call" has the
     # measurements.
