@@ -41,6 +41,46 @@ class KeyDerivation(unittest.TestCase):
                                 "info is the session_id as sent, not normalized")
 
 
+class ASessionKeyNeedsTheSessionId(unittest.TestCase):
+    """§10 derives the key from the session_id, so a key derived from anything else matches no conformant Guardian."""
+
+    def setUp(self) -> None:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+        patcher = mock.patch.dict(os.environ, {**env, "ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key"},
+                                  clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _sessionless() -> dict:
+        envelope = make_envelope("steps/toolCallRequest")
+        del envelope["params"]["metadata"]["session_id"]
+        return envelope
+
+    def test_a_request_without_a_session_id_is_not_signed(self) -> None:
+        envelope = self._sessionless()
+        with self.assertRaises(ValueError):
+            client.sign_envelope(envelope)
+        self.assertNotIn("signature", envelope["params"])
+
+    def test_a_signature_under_the_request_id_does_not_verify(self) -> None:
+        request_id = str(uuid.uuid4())
+        response = sign_with_key({"jsonrpc": "2.0", "id": "rpc-1", "result": {"decision": "allow", "request_id": request_id}},
+                                 derive_session_key(SECRET.encode(), request_id), key_id="test-key")
+        self.assertFalse(client.verify_signature(response))
+
+    def test_a_gate_without_a_session_id_sends_nothing_and_denies(self) -> None:
+        sent: list = []
+        with mock.patch.object(_exchange, "_open", side_effect=lambda request, timeout: sent.append(request)):
+            result = client.round_trip(self._sessionless(), guardian_url="http://127.0.0.1:8787/acs",
+                                       posture=client.FailPosture(deny_on_failure=False, timeout_s=1.0),
+                                       session_id=None, gate=True)
+        self.assertEqual(sent, [])
+        self.assertIsInstance(result, client.Resolution)
+        self.assertFalse(result.proceed)
+        self.assertEqual(result.cause, "envelope_not_signable")
+
+
 class ConfiguredLabel(unittest.TestCase):
     def setUp(self) -> None:
         env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
