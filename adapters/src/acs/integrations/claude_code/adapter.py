@@ -138,6 +138,9 @@ def _pretool_response(decision: str, reason: str = "",
     }
     if reason:
         hso["permissionDecisionReason"] = reason
+        if decision == "deny":
+            # Claude reads only the last-finishing deny's reason, so another PreToolUse hook's deny would hide this one.
+            hso["additionalContext"] = f"ACS blocked this tool call: {reason}"
     if updated_input is not None:
         hso["updatedInput"] = updated_input
     return {"hookSpecificOutput": hso}

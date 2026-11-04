@@ -201,7 +201,7 @@ Expected: the Guardian answers the handshake with `-32004 SIGNATURE_INVALID`, si
 ```
 ACS_AUDIT {"acs_audit_event": "session_refused", "cause": "error_signature_invalid", "claimed_cause": "signature_invalid_response", "claimed_error_code": -32004, ...}
 ACS_AUDIT {"acs_audit_event": "session_refused_fail_closed", "cause": "error_signature_invalid", ..., "hook": "PreToolUse", ...}
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session refused (error_signature_invalid)"}}
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session refused (error_signature_invalid)", "additionalContext": "ACS blocked this tool call: ACS adapter: session refused (error_signature_invalid)"}, "systemMessage": "ACS blocked this tool call: ACS adapter: session refused (error_signature_invalid)"}
 ```
 
 Guardian unreachable, with the Guardian's secret and label:
@@ -220,7 +220,7 @@ Expected: the handshake gets no answer, so the session has no negotiated Guardia
 ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_closed", ...}
 ACS_AUDIT {"acs_audit_event": "session_not_started_fail_closed", "cause": "transport_failure", ..., "hook": "PreToolUse", ...}
 ```
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session not started (transport_failure)"}, "systemMessage": "ACS blocked this tool call: ACS adapter: session not started (transport_failure)"}
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session not started (transport_failure)", "additionalContext": "ACS blocked this tool call: ACS adapter: session not started (transport_failure)"}, "systemMessage": "ACS blocked this tool call: ACS adapter: session not started (transport_failure)"}
 
 Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`session_not_started_fail_closed`, or `unguarded_session_bypass` under `ACS_STARTUP_POSTURE=proceed`). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
 

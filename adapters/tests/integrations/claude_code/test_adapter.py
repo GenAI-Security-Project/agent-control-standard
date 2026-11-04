@@ -110,6 +110,24 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertEqual(hso["permissionDecision"], "deny")
         self.assertIn("destructive", hso["permissionDecisionReason"].lower())
 
+    def test_a_deny_carries_its_reason_to_claude_in_additional_context(self) -> None:
+        """Claude reads the permissionDecisionReason of the deny that finishes last, so another hook's deny would hide the ACS reason."""
+        cases = {
+            "guardian deny": ({}, "destructive"),
+            "decision failure": ({"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead", "ACS_DEFAULT_DENY": "1",
+                                  **self._negotiated("http://127.0.0.1:1/dead", "00000000-0000-4000-8000-000000000001")},
+                                 "decision-failure"),
+        }
+        for name, (env, expected) in cases.items():
+            with self.subTest(name):
+                rc, out, err = self._run_adapter(_claude_code_event(
+                    "PreToolUse", tool_name="Bash", tool_input={"command": "rm -rf /home/user"}), env_overrides=env)
+                self.assertEqual(rc, 0, err)
+                hso = json.loads(out)["hookSpecificOutput"]
+                self.assertEqual(hso["permissionDecision"], "deny")
+                self.assertIn(expected, hso["permissionDecisionReason"].lower())
+                self.assertEqual(hso["additionalContext"], f"ACS blocked this tool call: {hso['permissionDecisionReason']}")
+
     def test_write_to_protected_path_denied(self) -> None:
         rc, out, _ = self._run_adapter(_claude_code_event(
             "PreToolUse", tool_name="Write",

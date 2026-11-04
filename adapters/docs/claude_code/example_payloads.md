@@ -106,8 +106,10 @@ Nothing on stdout. Claude Code's own permission rules and prompt then decide; a 
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "destructive Bash pattern in: rm -rf /home/u"
-  }
+    "permissionDecisionReason": "destructive Bash pattern in: rm -rf /home/u",
+    "additionalContext": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"
+  },
+  "systemMessage": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"
 }
 ```
 
