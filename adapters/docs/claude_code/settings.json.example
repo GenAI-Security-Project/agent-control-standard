@@ -18,12 +18,13 @@
     "and give the SAME file to the Guardian.",
     "",
     "ACS_AUDIT_FILE: where \u00a76.4 audit events land durably. Hook-process",
-    "stderr is collected by nothing; this file is the audit half of the",
-    "fail-open trade.",
+    "stderr is collected by nothing; this file is the durable record of every",
+    "decision failure.",
     "",
     "ACS_DEFAULT_DENY=1 and onFailure block are set on the GATE hooks (PreToolUse,",
-    "UserPromptSubmit), the ones whose verdict blocks an action. Observational hooks",
-    "fail open per the \u00a76.4 default. Incident kill switch: set ACS_DISABLED=1 to",
+    "UserPromptSubmit), the ones whose verdict blocks an action. The other hooks",
+    "apply the Guardian's on_decision_failure, and a session whose handshake gets",
+    "no answer refuses its steps. Incident kill switch: set ACS_DISABLED=1 to",
     "bypass all hooks immediately."
   ],
   "hooks": {

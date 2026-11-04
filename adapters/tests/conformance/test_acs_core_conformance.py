@@ -698,7 +698,7 @@ class Core04b_DispositionsLiveThroughAdapters(unittest.TestCase):
                     f"{bad!r} is outside the decision enum, so it is recorded as malformed_response")
 
     def test_non_string_and_non_object_verdicts_fail_closed(self) -> None:
-        """A non-string decision or non-object modifications fails response-envelope.json and denies under the fail-open default (§6.4, issue #32)."""
+        """A non-string decision or non-object modifications fails response-envelope.json and denies under a Guardian that declares proceed (§6.4, issue #32)."""
         cases = [
             {"decision": 5},
             {"decision": {"v": "deny"}},
@@ -747,7 +747,7 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
                     "ACS_HANDSHAKE_CACHE": tempfile.mkdtemp(),
                     "ACS_SESSION_STATE_DIR": tempfile.mkdtemp()})
         env.pop("ACS_HMAC_SECRET_FILE", None)
-        env.pop("ACS_DEFAULT_DENY", None)   # shipped fail-open default on purpose
+        env.pop("ACS_DEFAULT_DENY", None)   # no local floor, so the Guardian's declared proceed applies
         return env
 
     def test_claude_modify_on_prompt_blocks(self) -> None:
@@ -1343,7 +1343,7 @@ class Core08_DecisionHonoringAdapter(unittest.TestCase):
             env_a["ACS_HMAC_SECRET"] = "a-secret-this-guardian-does-not-hold-0123456789"
             env_a["ACS_HMAC_KEY_ID"] = "test-key"
             env_a.pop("ACS_HMAC_SECRET_FILE", None)
-            env_a.pop("ACS_DEFAULT_DENY", None)  # default fail-open
+            env_a.pop("ACS_DEFAULT_DENY", None)  # no local floor, so the Guardian's declared proceed applies
             _negotiated(env_a, "00000000-0000-4000-8000-000000000001")
 
             proc = subprocess.run(

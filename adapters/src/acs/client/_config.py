@@ -131,9 +131,7 @@ class Config:
 
     @property
     def startup_proceeds(self) -> bool:
-        """Whether steps proceed with no negotiated Guardian (§4.1): unset follows the fail posture, "proceed" proceeds, anything else refuses."""
-        if self.startup_posture is None:
-            return not self.posture.deny_on_failure
+        """Whether steps proceed with no negotiated Guardian (§4.1): only "proceed" proceeds."""
         return self.startup_posture == "proceed"
 
     def gate(self, handshake: Handshake, method: str | None = None) -> Resolution | None:

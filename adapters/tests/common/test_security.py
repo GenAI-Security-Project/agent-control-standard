@@ -518,7 +518,7 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
     def _run(self, argv: list[str], stdin: str, **env_overrides: str):
         audit_file = self.tmp / f"audit-{uuid.uuid4().hex}.log"
         env = os.environ.copy()
-        for name in ("ACS_DISABLED", "ACS_DEFAULT_DENY"):
+        for name in ("ACS_DISABLED", "ACS_DEFAULT_DENY", "ACS_STARTUP_POSTURE"):
             env.pop(name, None)
         # Shadow first so the broken rfc8785 wins over the installed one.
         env["PYTHONPATH"] = str(self.shadow)
@@ -567,12 +567,18 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
                 self.assertEqual(json.loads(p.stdout)["decision"], "block")
                 self._unavailable_record(records, "hook", "UserPromptSubmit", "deny")
 
-            with self.subTest(form=form, ACS_DEFAULT_DENY="0", hook="PreToolUse"):
-                p, records = self._run(argv, event("PreToolUse"), ACS_DEFAULT_DENY="0")
+            with self.subTest(form=form, posture="unset", hook="PreToolUse"):
+                p, records = self._run(argv, event("PreToolUse"))
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"], "deny",
+                    "no Guardian can decide a step the adapter cannot send, so it follows the startup posture")
+                self._unavailable_record(records, "hook", "PreToolUse", "deny")
+
+            with self.subTest(form=form, ACS_STARTUP_POSTURE="proceed", hook="PreToolUse"):
+                p, records = self._run(argv, event("PreToolUse"), ACS_STARTUP_POSTURE="proceed")
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(p.stdout.strip(), "",
-                    "fail-open is the §6.4 default, so proceeding is correct "
-                    "here as long as it is audited")
+                    "a deployment that set the startup posture to proceed gets an audited proceed")
                 self._unavailable_record(records, "hook", "PreToolUse", "proceed")
 
             with self.subTest(form=form, ACS_DISABLED="1"):
@@ -607,8 +613,14 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
                 self.assertIs(json.loads(p.stdout)["continue"], False)
                 self._unavailable_record(records, "event", "beforeSubmitPrompt", "deny")
 
-            with self.subTest(form=form, ACS_DEFAULT_DENY="0", event="preToolUse"):
-                p, records = self._run(argv + ["preToolUse"], event, ACS_DEFAULT_DENY="0")
+            with self.subTest(form=form, posture="unset", event="preToolUse"):
+                p, records = self._run(argv + ["preToolUse"], event)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(json.loads(p.stdout)["permission"], "deny")
+                self._unavailable_record(records, "event", "preToolUse", "deny")
+
+            with self.subTest(form=form, ACS_STARTUP_POSTURE="proceed", event="preToolUse"):
+                p, records = self._run(argv + ["preToolUse"], event, ACS_STARTUP_POSTURE="proceed")
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(p.stdout.strip(), "")
                 self._unavailable_record(records, "event", "preToolUse", "proceed")

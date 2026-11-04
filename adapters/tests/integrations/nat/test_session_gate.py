@@ -59,6 +59,12 @@ class SessionGateThroughNat(unittest.TestCase):
         mw._emit_lifecycle_hook("steps/sessionEnd", {"reason": "completed"}, mw._own)
         return executed["count"], False
 
+    def test_an_unanswered_handshake_never_runs_the_function(self) -> None:
+        down = ProgrammableGuardian(hmac_secret=SECRET)
+        down._server.server_close()
+        self.assertEqual(self._run(down.url(), str(uuid.uuid4())), (0, True))
+
+    @mock.patch.dict(os.environ, {"ACS_STARTUP_POSTURE": "proceed"})
     def test_an_unguarded_session_never_contacts_a_restored_guardian(self) -> None:
         down = ProgrammableGuardian(hmac_secret=SECRET)
         down._server.server_close()
@@ -112,6 +118,7 @@ class SessionGateThroughNat(unittest.TestCase):
         self.assertEqual(self._run(guardian.url(), session), (0, True))
         self.assertEqual(guardian.methods_seen(), [], "a damaged record must not trigger another handshake")
 
+    @mock.patch.dict(os.environ, {"ACS_STARTUP_POSTURE": "proceed"})
     def test_a_record_copied_from_another_endpoint_never_runs_the_function(self) -> None:
         down = ProgrammableGuardian(hmac_secret=SECRET)
         down._server.server_close()

@@ -100,19 +100,19 @@ What it wires by default: the six unconditional hooks of the ACS-Core minimum se
 
 | Cursor event | ACS step method | Posture |
 |---|---|---|
-| `sessionStart` | sessionStart | fail-open (§6.4 default); a Guardian `deny` refuses the session |
+| `sessionStart` | sessionStart | the Guardian's posture; a Guardian `deny` refuses the session |
 | `beforeSubmitPrompt` | userMessage | **fail-CLOSED** (gate) |
 | `preToolUse` | toolCallRequest | **fail-CLOSED** (gate) |
-| `postToolUse` | toolCallResult | fail-open |
-| `postToolUseFailure` | toolCallResult | fail-open |
-| `afterAgentResponse` | agentResponse | fail-open |
-| `stop` | turnEnd | fail-open |
-| `sessionEnd` | sessionEnd | fail-open; `timeout: 15` |
+| `postToolUse` | toolCallResult | the Guardian's posture; under `deny` an MCP tool's output is withheld |
+| `postToolUseFailure` | toolCallResult | the Guardian's posture |
+| `afterAgentResponse` | agentResponse | the Guardian's posture |
+| `stop` | turnEnd | the Guardian's posture |
+| `sessionEnd` | sessionEnd | the Guardian's posture; `timeout: 15` |
 | `subagentStart` | subagentStart | **fail-CLOSED** (gate. The confused-deputy spawn gate, required by ACS-Core for subagent-capable clients.) |
 
 Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true` (Cursor's native flag), and each covers a different failure. `failClosed: true` blocks when the hook process itself fails: it crashes, times out, or returns invalid JSON. `ACS_DEFAULT_DENY` and the negotiated posture decide the failures the adapter handles, such as an unreachable Guardian. Once the adapter decides a step proceeds, it answers `{}` on `preToolUse`, `beforeShellExecution` and `beforeMCPExecution`, which leaves the call to Cursor's own sandbox and approval, and its allow shape on `subagentStart` and `beforeSubmitPrompt`. Each is output, so `failClosed` never turns a decided proceed into a block. An explicit `{"permission": "allow"}` on a tool gate can take the call out of Cursor's sandbox: on 2026-11-03, Cursor 3.17.8 in Allowlist (with Sandbox) mode went straight to an unsandboxed run with it, and kept its sandbox and approval with `{}`.
 
-Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere).
+The posture is what a step does when no usable decision arrives (§6.4). A gate hook's command carries `ACS_DEFAULT_DENY=1`, so it fails closed whatever the Guardian declares; the other hooks apply the ServerHello's `on_decision_failure`, and the example Guardian declares `deny`. In a session whose handshake gets no answer, every hook refuses its step unless it sets `ACS_STARTUP_POSTURE=proceed` (§4.1). Override with `--default-deny` (`ACS_DEFAULT_DENY=1` and `failClosed: true` on every hook) or `--all-fail-open` (`ACS_DEFAULT_DENY=0` and `ACS_STARTUP_POSTURE=proceed` on every hook, gates included, so a step with no usable decision proceeds, audited, unless the Guardian declares `deny`).
 
 To remove the wiring later: `acs-cursor-wire --unwire --write`.
 
@@ -225,14 +225,15 @@ acs-cursor-hook preToolUse 2>&1 <<'EOF'
 EOF
 ```
 
-Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (fail-open when the hook sets no `ACS_DEFAULT_DENY`); stdout carries `{}`, which leaves the call to Cursor:
+Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (`refuse` unless the hook sets `ACS_STARTUP_POSTURE=proceed`); stdout carries the deny:
 
 ```
-ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_open", ...}
-ACS_AUDIT {"acs_audit_event": "unguarded_session_bypass", "cause": "transport_failure", ..., "event": "preToolUse", ...}
+ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_closed", ...}
+ACS_AUDIT {"acs_audit_event": "session_not_started_fail_closed", "cause": "transport_failure", ..., "event": "preToolUse", ...}
 ```
+{"permission": "deny", "user_message": "ACS adapter: session not started (transport_failure)", "agent_message": "ACS adapter: session not started (transport_failure)"}
 
-Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`unguarded_session_bypass`, or `session_not_started_fail_closed` under a deny posture). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
+Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`session_not_started_fail_closed`, or `unguarded_session_bypass` under `ACS_STARTUP_POSTURE=proceed`). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
 
 ### Smoke #5 — pre-flight inventory (paranoid)
 
@@ -295,8 +296,8 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
-| `ACS_DEFAULT_DENY` | `0` | Fail-open with audit (§6.4 default). Set to `1` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
-| `ACS_STARTUP_POSTURE` | follows `ACS_DEFAULT_DENY` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
+| `ACS_DEFAULT_DENY` | (unset) | `1`: fail-closed whatever the Guardian declares. Unset or `0`: the ServerHello's `on_decision_failure` applies, and the example Guardian declares `deny` (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
+| `ACS_STARTUP_POSTURE` | `refuse` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
 | `ACS_AGENT_ID` | derived from cwd | Stable agent identifier sent in `metadata.agent_id`. |
@@ -329,7 +330,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | SessionContext + published `chain_hash` | ✓ session_id coerced to UUID; Guardian computes rolling SHA-256 chain |
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006) |
 | Baseline integrity (HMAC-SHA256) | ✓ every request and response signed under `ACS_HMAC_KEY_ID`; a hook with no secret of at least 32 bytes, or no label, refuses its session and sends nothing; SIGNATURE_INVALID -32004 on tamper |
-| Decision honoring (§6.4) | ✓ Cursor blocks on permission deny; adapter answers every decided step in Cursor's documented JSON; fail-open emits `ACS_AUDIT` event; audit `cause` field distinguishes failure modes (transport vs signature vs malformed envelope vs replay vs skew) |
+| Decision honoring (§6.4) | ✓ Cursor blocks on permission deny; adapter answers every decided step in Cursor's documented JSON; every decision failure emits an `ACS_AUDIT` event under either posture; audit `cause` field distinguishes failure modes (transport vs signature vs malformed envelope vs replay vs skew) |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1 |
 | Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: it maps `beforeMCPExecution` to `steps/toolCallRequest` and `afterMCPExecution` to `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. The first MCP tool a session uses records `profile_claim_degraded` once, whether it arrives through the MCP hooks or through `preToolUse` and `postToolUse` as `MCP:<tool>`. Known limitation. |
@@ -352,7 +353,7 @@ These hooks are emitted only when Cursor's `hooks.json` wires them to the adapte
 |---|---|
 | Cursor's agent runs commands as if no Guardian exists | Cursor reads `hooks.json` at startup. **Restart Cursor** after `acs-cursor-wire --write`. |
 | Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your hooks.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
-| Every tool call gets denied | Likely `ACS_DEFAULT_DENY=1` + Guardian down. Check the Guardian process is running. |
+| Every tool call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and the gate hooks carry `ACS_DEFAULT_DENY=1`. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time. |

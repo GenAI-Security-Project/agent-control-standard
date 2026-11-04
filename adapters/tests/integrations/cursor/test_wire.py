@@ -49,7 +49,7 @@ class DefaultWiringMatchesDocumentedSet(unittest.TestCase):
         from acs.integrations.cursor import wire
         self.assertEqual(
             wire.DEFAULT_HOOKS,
-            wire.CURRENT_CORE_HOOKS + wire.PR21_PROPOSED_HOOKS)
+            wire.CURRENT_CORE_HOOKS + wire.SUBAGENT_HOOKS)
         for hook in wire.DEFAULT_HOOKS:
             self.assertIn(hook, self.hooks,
                 f"default wiring missing documented hook {hook!r}; "

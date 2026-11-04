@@ -39,7 +39,7 @@ acs-claude-code-wire \\
   --secret-file=~/.acs/hmac.key \\
   --hooks=PreToolUse,PostToolUse
 
-# 5. Fail-closed posture (default is fail-open per §6.4)
+# 5. ACS_DEFAULT_DENY=1 on every hook, not only the gates
 acs-claude-code-wire \\
   --guardian-url=http://127.0.0.1:8787/acs \\
   --secret-file=~/.acs/hmac.key \\
@@ -103,7 +103,7 @@ ACS_CORE_HOOKS = [
 # Wired by an earlier version; wiring and unwiring both remove them.
 RETIRED_HOOKS = ["Notification"]
 
-# Hooks that gate an action fail closed by default; the others report what already happened, where §6.4's default is fail-open.
+# Hooks that gate an action fail closed whatever the Guardian declares; the others apply the Guardian's posture.
 GATE_HOOKS = {"PreToolUse", "UserPromptSubmit"}
 
 # Embedded in the command, so a wired entry is recognized without parsing it.
@@ -129,6 +129,7 @@ def build_command(*, hook_command: str, guardian_url: str,
                    key_id: str | None = None,
                    default_deny: bool,
                    host_allowlist: str | None,
+                   fail_open: bool = False,
                    audit_file: str | None = None) -> str:
     """The settings.json hook command, with absolute paths, since the hook's shell and working directory vary."""
     env_pairs: list[str] = [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
@@ -141,6 +142,8 @@ def build_command(*, hook_command: str, guardian_url: str,
         env_pairs.append(f"ACS_HMAC_KEY_ID={shlex.quote(key_id)}")
     if default_deny:
         env_pairs.append("ACS_DEFAULT_DENY=1")
+    elif fail_open:
+        env_pairs += ["ACS_DEFAULT_DENY=0", "ACS_STARTUP_POSTURE=proceed"]
     if host_allowlist:
         env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={shlex.quote(host_allowlist)}")
     if audit_file:
@@ -336,17 +339,14 @@ def main(argv: list[str] | None = None) -> int:
                          f"{','.join(ACS_CORE_HOOKS)}).")
     posture_group = p.add_mutually_exclusive_group()
     posture_group.add_argument("--default-deny", action="store_true",
-                    help="Force ACS_DEFAULT_DENY=1 (fail-CLOSED) on EVERY wired hook. "
-                         "Default behavior: fail-closed only on gate hooks "
-                         f"({', '.join(sorted(GATE_HOOKS))}) — these block actions "
-                         "until the Guardian decides, so a silent fail-open is a "
-                         "policy hole. Non-gate hooks default to fail-open (matches "
-                         "§6.4 spec default).")
+                    help="Write ACS_DEFAULT_DENY=1 (fail-CLOSED whatever the Guardian declares) on EVERY "
+                         f"wired hook. By default only the gate hooks ({', '.join(sorted(GATE_HOOKS))}) "
+                         "carry it; the others apply the Guardian's on_decision_failure, and every hook "
+                         "refuses its step in a session whose handshake got no answer.")
     posture_group.add_argument("--all-fail-open", action="store_true",
-                    help="Force ACS_DEFAULT_DENY=0 (fail-OPEN) on EVERY wired hook, "
-                         "including gates. NOT RECOMMENDED for production — an "
-                         "unreachable Guardian or malformed envelope on a gate hook "
-                         "lets the action run unguarded. Matches strict §6.4 default.")
+                    help="Write ACS_DEFAULT_DENY=0 and ACS_STARTUP_POSTURE=proceed on EVERY wired hook, "
+                         "gates included: a step with no usable decision proceeds, audited, unless the "
+                         "Guardian declares on_decision_failure: deny. NOT RECOMMENDED for production.")
     p.add_argument("--host-allowlist", default=None,
                     help="Comma-separated hostnames the adapter will accept as Guardian URLs "
                          "(defense in depth against env-var attacks).")
@@ -411,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
                 secret_env=args.secret_env_inline,
                 key_id=args.key_id,
                 default_deny=hook_deny,
+                fail_open=args.all_fail_open,
                 host_allowlist=args.host_allowlist,
                 audit_file=args.audit_file,
             )
@@ -433,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             elif hook in GATE_HOOKS:
                 posture = "fail-CLOSED (gate hook default)"
             else:
-                posture = "fail-OPEN (observational hook default)"
+                posture = "the Guardian's on_decision_failure"
             print(f"  {hook:18s} → {posture}")
         print()
 

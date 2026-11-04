@@ -96,13 +96,13 @@ CURRENT_CORE_HOOKS = [
     "sessionEnd",
 ]
 
-# ACS-Core requires subagentStart of a subagent-capable client; the constant keeps its earlier name because tests import it.
-PR21_PROPOSED_HOOKS = [
+# ACS-Core requires subagentStart of a subagent-capable client.
+SUBAGENT_HOOKS = [
     "subagentStart",
 ]
-DEFAULT_HOOKS = CURRENT_CORE_HOOKS + PR21_PROPOSED_HOOKS
+DEFAULT_HOOKS = CURRENT_CORE_HOOKS + SUBAGENT_HOOKS
 
-# Gate hooks get Cursor's failClosed for a crashed hook and ACS_DEFAULT_DENY for a missing decision; the others fail open, the §6.4 default.
+# Gate hooks get Cursor's failClosed for a crashed hook and ACS_DEFAULT_DENY for a missing decision; the others apply the Guardian's posture.
 GATE_HOOKS = frozenset({
     "preToolUse", "beforeSubmitPrompt",
     "beforeShellExecution", "beforeMCPExecution", "subagentStart",
@@ -129,6 +129,7 @@ def build_command(*, hook_command: str, event_name: str,
                    key_id: str | None = None,
                    default_deny: bool,
                    host_allowlist: str | None,
+                   fail_open: bool = False,
                    audit_file: str | None = None) -> str:
     env_pairs: list[str] = [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
     if secret_file:
@@ -139,6 +140,8 @@ def build_command(*, hook_command: str, event_name: str,
         env_pairs.append(f"ACS_HMAC_KEY_ID={shlex.quote(key_id)}")
     if default_deny:
         env_pairs.append("ACS_DEFAULT_DENY=1")
+    elif fail_open:
+        env_pairs += ["ACS_DEFAULT_DENY=0", "ACS_STARTUP_POSTURE=proceed"]
     if host_allowlist:
         env_pairs.append(f"ACS_GUARDIAN_HOST_ALLOWLIST={shlex.quote(host_allowlist)}")
     if audit_file:
@@ -305,19 +308,20 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"Command the hooks run (default: the absolute path of the installed "
                          f"{HOOK_SCRIPT} console script).")
     p.add_argument("--hooks", default=",".join(DEFAULT_HOOKS),
-                    help="Comma-separated hook names to wire (default: this "
-                         "branch's ACS-Core minimum plus PR #21's proposed "
-                         f"subagentStart gate: {','.join(DEFAULT_HOOKS)}).")
+                    help="Comma-separated hook names to wire (default: the ACS-Core minimum set, "
+                         "postToolUseFailure, stop, and the subagentStart gate ACS-Core requires of a "
+                         f"subagent-capable client: {','.join(DEFAULT_HOOKS)}).")
     posture_group = p.add_mutually_exclusive_group()
     posture_group.add_argument("--default-deny", action="store_true",
-                    help="Force fail-CLOSED on EVERY wired hook (sets BOTH Cursor's "
-                         "native failClosed AND our ACS_DEFAULT_DENY=1). Default behavior: "
-                         "fail-closed only on gate hooks "
-                         f"({', '.join(sorted(GATE_HOOKS & set(DEFAULT_HOOKS)))}).")
+                    help="Write Cursor's failClosed and ACS_DEFAULT_DENY=1 (fail-CLOSED whatever the "
+                         "Guardian declares) on EVERY wired hook. By default only the gate hooks "
+                         f"({', '.join(sorted(GATE_HOOKS & set(DEFAULT_HOOKS)))}) carry them; the others "
+                         "apply the Guardian's on_decision_failure, and every hook refuses its step in a "
+                         "session whose handshake got no answer.")
     posture_group.add_argument("--all-fail-open", action="store_true",
-                    help="Force fail-OPEN on EVERY wired hook, including gates. NOT "
-                         "RECOMMENDED — strict §6.4 default but a Guardian outage on a "
-                         "gate hook lets the action run unguarded.")
+                    help="Write ACS_DEFAULT_DENY=0 and ACS_STARTUP_POSTURE=proceed on EVERY wired hook, "
+                         "gates included: a step with no usable decision proceeds, audited, unless the "
+                         "Guardian declares on_decision_failure: deny. NOT RECOMMENDED for production.")
     p.add_argument("--audit-file",
                     help="Durable ACS_AUDIT sink appended by every hook process "
                          "(created 0600). RECOMMENDED: without it, §6.4 audit "
@@ -388,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
                 secret_env=args.secret_env_inline,
                 key_id=args.key_id,
                 default_deny=hook_deny,
+                fail_open=args.all_fail_open,
                 host_allowlist=args.host_allowlist,
                 audit_file=args.audit_file,
             )
@@ -410,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
             elif hook in GATE_HOOKS:
                 posture = "fail-CLOSED (gate hook default)"
             else:
-                posture = "fail-OPEN (observational hook default)"
+                posture = "the Guardian's on_decision_failure"
             print(f"  {hook:22s} → {posture}")
         print()
 

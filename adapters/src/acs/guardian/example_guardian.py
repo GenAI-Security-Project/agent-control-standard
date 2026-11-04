@@ -77,6 +77,7 @@ if not _SPEC_VALIDATION_AVAILABLE:
 
 SKEW_WINDOW_MS = int(os.environ.get("ACS_SKEW_WINDOW_MS", str(DEFAULT_SKEW_WINDOW_MS)))
 ALLOW_SUBAGENT = os.environ.get("ACS_ALLOW_SUBAGENT", "0") == "1"
+ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "").strip().lower() == "proceed" else "deny"
 
 
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/")
@@ -361,7 +362,7 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
         "signature_algorithms_supported": ["HMAC-SHA256"],
         "timeout_config": {"default_ms": 5000},
         "skew_window_ms": SKEW_WINDOW_MS,
-        "on_decision_failure": "proceed",  # spec default per §6.4
+        "on_decision_failure": ON_DECISION_FAILURE,
         "policy_requires_provenance": False,
         "profiles_accepted": [p for p in client_hello.get("profiles_supported") or [] if p == "acs-core"],
     }

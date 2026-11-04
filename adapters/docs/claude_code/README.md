@@ -83,16 +83,16 @@ What it wires by default:
 
 | Hook | Posture |
 |---|---|
-| `PreToolUse` | **fail-CLOSED** (gate — silent fail-open is a policy hole) |
-| `UserPromptSubmit` | **fail-CLOSED** (gate) |
-| `SessionStart` | fail-open (§6.4 default); a Guardian `deny` refuses the session |
-| `PostToolUse` | fail-open |
-| `PostToolUseFailure` | fail-open; sends the failed tool's error text |
-| `Stop` | fail-open; sends the reply (`agentResponse`) and closes the turn |
-| `StopFailure` | fail-open; closes the turn with outcome `error` |
-| `SessionEnd` | fail-open; `timeout: 15`, since SessionEnd hooks otherwise share a 1.5 s budget |
+| `PreToolUse` | **fail-CLOSED** (gate): the tool call is denied |
+| `UserPromptSubmit` | **fail-CLOSED** (gate): the prompt is blocked |
+| `SessionStart` | the Guardian's posture; a Guardian `deny` refuses the session |
+| `PostToolUse` | the Guardian's posture; under `deny` the output is withheld |
+| `PostToolUseFailure` | the Guardian's posture; sends the failed tool's error text |
+| `Stop` | the Guardian's posture, recorded only, since Claude Code reads a block on `Stop` as "keep going"; sends the reply (`agentResponse`) and closes the turn |
+| `StopFailure` | the Guardian's posture, recorded only; closes the turn with outcome `error` |
+| `SessionEnd` | the Guardian's posture, recorded only; `timeout: 15`, since SessionEnd hooks otherwise share a 1.5 s budget |
 
-Override with `--default-deny` (fail-closed on every hook) or `--all-fail-open` (strict §6.4 default everywhere). A fail-closed `PreToolUse` or `UserPromptSubmit` hook also carries `"onFailure": "block"`, so Claude Code v2.1.295 or later blocks the tool call or prompt when the hook itself crashes, times out or cannot start. On the other hooks a blocking failure stops nothing, since the action has already happened, so the wire tool leaves the field out there.
+The posture is what a step does when no usable decision arrives (§6.4). A gate hook's command carries `ACS_DEFAULT_DENY=1`, so it fails closed whatever the Guardian declares; the other hooks apply the ServerHello's `on_decision_failure`, and the example Guardian declares `deny`. In a session whose handshake gets no answer, every hook refuses its step unless it sets `ACS_STARTUP_POSTURE=proceed` (§4.1). Override with `--default-deny` (`ACS_DEFAULT_DENY=1` on every hook) or `--all-fail-open` (`ACS_DEFAULT_DENY=0` and `ACS_STARTUP_POSTURE=proceed` on every hook, gates included, so a step with no usable decision proceeds, audited, unless the Guardian declares `deny`). A fail-closed `PreToolUse` or `UserPromptSubmit` hook also carries `"onFailure": "block"`, so Claude Code v2.1.295 or later blocks the tool call or prompt when the hook itself crashes, times out or cannot start. On the other hooks a blocking failure stops nothing, since the action has already happened, so the wire tool leaves the field out there.
 
 To remove the wiring later: `acs-claude-code-wire --unwire --write`.
 
@@ -214,14 +214,15 @@ acs-claude-code-hook 2>&1 <<'EOF'
 EOF
 ```
 
-Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (fail-open when the hook sets no `ACS_DEFAULT_DENY`); stdout is empty, which Claude Code reads as proceed:
+Expected: the handshake gets no answer, so the session has no negotiated Guardian, and the hook's startup posture settles the step (`refuse` unless the hook sets `ACS_STARTUP_POSTURE=proceed`); stdout carries the deny:
 
 ```
-ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_open", ...}
-ACS_AUDIT {"acs_audit_event": "unguarded_session_bypass", "cause": "transport_failure", ..., "hook": "PreToolUse", ...}
+ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_closed", ...}
+ACS_AUDIT {"acs_audit_event": "session_not_started_fail_closed", "cause": "transport_failure", ..., "hook": "PreToolUse", ...}
 ```
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session not started (transport_failure)"}, "systemMessage": "ACS blocked this tool call: ACS adapter: session not started (transport_failure)"}
 
-Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`unguarded_session_bypass`, or `session_not_started_fail_closed` under a deny posture). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
+Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`session_not_started_fail_closed`, or `unguarded_session_bypass` under `ACS_STARTUP_POSTURE=proceed`). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
 
 ### Smoke #5 — pre-flight inventory (paranoid)
 
@@ -267,14 +268,14 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
-| `ACS_DEFAULT_DENY` | `0` | Fail-open with audit (§6.4 default). Set to `1` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
-| `ACS_STARTUP_POSTURE` | follows `ACS_DEFAULT_DENY` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
+| `ACS_DEFAULT_DENY` | (unset) | `1`: fail-closed whatever the Guardian declares. Unset or `0`: the ServerHello's `on_decision_failure` applies, and the example Guardian declares `deny` (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
+| `ACS_STARTUP_POSTURE` | `refuse` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
 | `ACS_AGENT_ID` | derived from `CLAUDE_PROJECT_DIR`, or the session's first `cwd` | Stable agent identifier sent in `metadata.agent_id`. |
 | `ACS_HANDSHAKE_CACHE` | `~/.cache/acs-adapter-handshake/` | Each session's handshake decision, kept for the session's lifetime. |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Deadline for the whole handshake/hello exchange, including a response that arrives slowly. A value that is not a positive number is replaced by `5` and recorded as `invalid_setting`. |
-| `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr — the durable audit half of §6.4's fail-open trade. |
+| `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr — the durable record of every decision failure (§6.4). |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: bypass all hooks immediately, no Guardian traffic. |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 
@@ -298,7 +299,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | SessionContext + published `chain_hash` | ✓ session_id propagated; Guardian computes rolling SHA-256 chain per §8.2 (`tests/conformance/test_acs_core_conformance.py::Core05_SessionContext`). |
 | Replay protection (`request_id` + `timestamp`) | ✓ adapter sends both; Guardian rejects duplicate `request_id` (REPLAY_DETECTED -32005) and timestamps outside skew window (TIMESTAMP_OUT_OF_WINDOW -32006) per §10.3. |
 | Baseline integrity (HMAC-SHA256 signature) | ✓ HKDF-derived per-session key signs every request and response under `ACS_HMAC_KEY_ID`; a hook with no secret of at least 32 bytes, or no label, refuses its session and sends nothing. The Guardian rejects an unsigned or tampered request with SIGNATURE_INVALID -32004. |
-| Decision honoring (§6.4) | ✓ adapter blocks on subprocess return; spec-default fail-open posture emits structured `ACS_AUDIT` event on every bypass; audit `cause` field distinguishes failure modes. |
+| Decision honoring (§6.4) | ✓ adapter blocks on subprocess return; every decision failure emits a structured `ACS_AUDIT` event under either posture; audit `cause` field distinguishes failure modes. |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | `nonce` (optional replay field) | ✗ adapter does not emit `nonce`; the envelope field is OPTIONAL in v0.1. |
 | Wrapped MCP `protocols/MCP/*` | ⚠ partial. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter covers only that case: Claude Code surfaces MCP tool calls as `mcp__*` tools, and the adapter sends them as `steps/toolCallRequest` and `steps/toolCallResult`. It wraps no other MCP surface (`initialize`, `prompts/get`, `resources/read`, notifications), so a session that uses MCP falls short of ACS-Core there. The first MCP tool a signed session uses records `profile_claim_degraded` once. Known limitation. |
@@ -308,7 +309,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | Symptom | Likely cause |
 |---|---|
 | Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your settings.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
-| Every hook gets denied | Likely `ACS_DEFAULT_DENY=1` + Guardian down. Check the Guardian process is running. |
+| Every hook gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and the gate hooks carry `ACS_DEFAULT_DENY=1`. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time (`sudo sntp -sS time.apple.com` on macOS). |

@@ -17,7 +17,7 @@ CRASHED_REASON = "ACS adapter error before the session posture was known; failin
 
 def run_hook(module: str, *, event_key: str, event_name: Callable[[str], str],
              deny: Callable[[str, str], int], allow: Callable[[str], int] = lambda name: 0) -> int:
-    """Run the adapter's main(): an adapter that cannot load follows ACS_DEFAULT_DENY, one that raises denies, and both are audited."""
+    """Run the adapter's main(): an adapter that cannot load follows the startup posture, one that raises denies, and both are audited."""
     if sys.argv[1:2] == ["--version"]:
         # Flags are answered without reading an event, so stdin may stay open.
         try:
@@ -57,7 +57,7 @@ def _settle(event_key: str, name: str, deny: Callable[[str, str], int], allow: C
                     detail="ACS_DISABLED=1 — hook bypassed with no Guardian "
                            "traffic; every step proceeds ungoverned")
         return allow(name)
-    deny_on_failure = fail_closed or config.posture.deny_on_failure
+    deny_on_failure = fail_closed or config.posture.deny_on_failure or not config.startup_proceeds
     audit_event(audit_type, **{event_key: name},
                 posture="deny" if deny_on_failure else "proceed",
                 error=f"{type(error).__name__}: {str(error).splitlines()[0] if str(error) else ''}",

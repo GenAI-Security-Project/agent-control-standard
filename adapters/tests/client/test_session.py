@@ -276,7 +276,7 @@ class Lifetime(_SessionTest):
 
     def test_the_start_is_audited_once(self) -> None:
         event = "session_without_negotiated_guardian"
-        cases = [({}, "fail_open"), ({"ACS_STARTUP_POSTURE": "refuse"}, "fail_closed")]
+        cases = [({"ACS_STARTUP_POSTURE": "proceed"}, "fail_open"), ({}, "fail_closed")]
         for i, (env, posture) in enumerate(cases):
             with self.subTest(posture):
                 self.audit.reset_mock()

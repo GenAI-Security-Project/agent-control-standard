@@ -9,10 +9,10 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
     """Add a signature under key_id, the configured ACS_HMAC_KEY_ID unless given; raises SigningMaterialMissing without a usable secret and label."""
     if key is None:
         ikm, _ = load_signing_material()
+        params = envelope.get("params") or envelope.get("result") or {}
+        session_id = session_id or (params.get("metadata") or {}).get("session_id")
         if not session_id:
-            params = envelope.get("params") or envelope.get("result") or {}
-            meta = params.get("metadata") or {}
-            session_id = meta.get("session_id") or params.get("request_id") or ""
+            raise ValueError("the envelope has no session_id, which the session key derives from (§10)")
         key = derive_session_key(ikm, session_id)
     label = key_id if key_id is not None else load_key_id()
     if not label:
@@ -43,7 +43,8 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
         ikm = load_hmac_secret()
         if not ikm:
             return False
-        meta = container.get("metadata") or {}
-        session_id = session_id or meta.get("session_id") or container.get("request_id") or ""
+        session_id = session_id or (container.get("metadata") or {}).get("session_id")
+        if not session_id:
+            return False
         key = derive_session_key(ikm, session_id)
     return verify_with_key(envelope, key)

@@ -378,9 +378,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="Path to the workflow.yml to operate on.")
     p.add_argument("--guardian-url", default="http://127.0.0.1:8787/acs",
                     help="ACS Guardian endpoint (default: http://127.0.0.1:8787/acs).")
-    p.add_argument("--default-deny", action="store_true",
-                    help="Set the middleware's default_deny: true (fail-closed when "
-                          "Guardian is unreachable). Default false matches §6.4 fail-open + audit.")
+    posture = p.add_mutually_exclusive_group()
+    posture.add_argument("--default-deny", action="store_true",
+                    help="Write default_deny: true, the default: a call with no usable decision is blocked "
+                         "whatever the Guardian declares.")
+    posture.add_argument("--all-fail-open", action="store_true",
+                    help="Write default_deny: false: the Guardian's on_decision_failure applies. A session "
+                         "whose handshake got no answer proceeds only with ACS_STARTUP_POSTURE=proceed.")
     p.add_argument("--timeout-s", type=float, default=5.0,
                     help="Per-request Guardian timeout (default 5.0s).")
     p.add_argument("--write", action="store_true",
@@ -427,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
 
     doc = _yaml().load(before_text)
     changes = install(doc, guardian_url=args.guardian_url,
-                       default_deny=args.default_deny,
+                       default_deny=not args.all_fail_open,
                        timeout_s=args.timeout_s)
     after_text = render(doc)
 

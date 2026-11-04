@@ -140,6 +140,32 @@ class ClaudeCodeGateHooksBlockOnFailure(unittest.TestCase):
         self.assertEqual(self._wire("--all-fail-open")["block"], set())
 
 
+class AllFailOpenOpensEveryHook(unittest.TestCase):
+    """--all-fail-open drops the local floor and lets a session with no negotiated Guardian proceed (§4.1, §6.4)."""
+
+    def _commands(self, module, settings_name: str, script: str, *mode: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), mock.patch.dict(os.environ, {"HOME": tmp}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            hook = _executable(Path(tmp) / script)
+            settings = Path(tmp) / settings_name
+            module.main(["--guardian-url=http://127.0.0.1:8787/acs", f"--settings={settings}",
+                         f"--hook-command={hook}", "--write", *SECRET_ARGS, *mode])
+            return [h["command"] for h in _commands(json.loads(settings.read_text()))]
+
+    def test_only_all_fail_open_writes_an_open_posture(self) -> None:
+        for module, settings_name, script in ((claude_wire, "settings.json", "acs-claude-code-hook"),
+                                              (cursor_wire, "hooks.json", "acs-cursor-hook")):
+            with self.subTest(module.__name__):
+                opened = self._commands(module, settings_name, script, "--all-fail-open")
+                self.assertTrue(opened)
+                for command in opened:
+                    self.assertIn("ACS_DEFAULT_DENY=0", command)
+                    self.assertIn("ACS_STARTUP_POSTURE=proceed", command)
+                for command in self._commands(module, settings_name, script):
+                    self.assertNotIn("ACS_STARTUP_POSTURE", command)
+                    self.assertNotIn("ACS_DEFAULT_DENY=0", command)
+
+
 class WiredPathsKeepADollarSign(unittest.TestCase):
     def test_a_literal_dollar_in_a_path_is_written_as_given(self) -> None:
         for module in (claude_wire, cursor_wire):
