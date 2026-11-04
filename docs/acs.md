@@ -472,7 +472,8 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
             "product": {
               "name": "ACS trace example",
               "vendor_name": "Example Corp"
-            }
+            },
+            "correlation_uid": "7673ad6b-b5b3-4eec-8f46-66c83eef0b52:1287ce09-fcda-4588-a5e9-3fa83bfe5291"
           },
           "actor": {
             "process": {
@@ -528,7 +529,7 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
         `unmapped.acs` copies the request's `method` and `request_id`, the envelope metadata's `agent_id` and `session_id`, and fields from the [tool-call result payload](./spec/instrument/hooks.md#toolcallresult). `request_id_ref` links the result to its earlier `toolCallRequest`. The request and session identifiers are UUIDs.
 
-        This example shows one step event with no attached provenance. Its Guardian decision is recorded as a separate trace event.
+        `metadata.correlation_uid` repeats the step's pair as `<session_id>:<request_id>`, because SIEM content reads native fields, not `unmapped`. The Guardian's decision is a separate trace event with the same `correlation_uid`, so a SIEM can join the two on that one field. This example shows the step event only, with no attached provenance.
 
     === "Real-time Streaming"
 

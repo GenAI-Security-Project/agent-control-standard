@@ -132,6 +132,35 @@ def test_walkthrough_copies_declared_acs_fields():
     validate_copied_acs_fields(walkthrough_event()["unmapped"]["acs"])
 
 
+def check_correlation_uid(event):
+    """Every OCSF step event sets metadata.correlation_uid to its own pair (step_to_class in the mapping)."""
+    acs = event["unmapped"]["acs"]
+    assert event["metadata"].get("correlation_uid") == f"{acs['session_id']}:{acs['request_id']}", (
+        "metadata.correlation_uid must be the step's <session_id>:<request_id>"
+    )
+
+
+def test_walkthrough_sets_the_step_correlation_uid():
+    check_correlation_uid(walkthrough_event())
+
+
+@pytest.mark.parametrize("make", [
+    None,
+    lambda acs: f"{acs['request_id']}:{acs['session_id']}",
+    lambda acs: f"{acs['session_id']}:{acs['request_id_ref']}",
+    lambda acs: f"{acs['session_id']}/{acs['request_id']}",
+], ids=["dropped", "reversed", "gated_request", "separator"])
+def test_correlation_uid_rejects_a_dropped_or_wrong_pair(make):
+    event = walkthrough_event()
+    check_correlation_uid(event)
+    if make is None:
+        del event["metadata"]["correlation_uid"]
+    else:
+        event["metadata"]["correlation_uid"] = make(event["unmapped"]["acs"])
+    with pytest.raises(AssertionError):
+        check_correlation_uid(event)
+
+
 @pytest.mark.parametrize("path,value", [
     (("tool", "id"), "run_command"),
     (("tool", "execution_id"), "exec_123"),
