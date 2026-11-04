@@ -19,17 +19,22 @@ import type { AcsFinalResult } from "../src/acs-result.ts";
 // The repository's own handshake schema, five directories up from this
 // file: this tree sits at reference-implementations/agt.
 const HANDSHAKE_SCHEMA_PATH = fileURLToPath(new URL("../../../../../specification/v0.1.0/handshake.json", import.meta.url));
+const REQUEST_ENVELOPE_SCHEMA_PATH = fileURLToPath(new URL("../../../../../specification/v0.1.0/request-envelope.json", import.meta.url));
 
 /** Compiles the ServerHello $def straight out of the pinned handshake.json --
  * not a hand-copied shape -- so this test fails the moment our ServerHello
  * drifts from the schema. */
 function validateServerHello(candidate: unknown): void {
   const handshakeSchema = JSON.parse(readFileSync(HANDSHAKE_SCHEMA_PATH, "utf8")) as {
+    $id: string;
     $defs: { ServerHello: Record<string, unknown> };
   };
+  const requestEnvelopeSchema = JSON.parse(readFileSync(REQUEST_ENVELOPE_SCHEMA_PATH, "utf8")) as Record<string, unknown>;
   const ajv = new Ajv2020({ strict: true, allErrors: true });
   addFormats(ajv);
-  const validate = ajv.compile(handshakeSchema.$defs.ServerHello);
+  ajv.addSchema(requestEnvelopeSchema);
+  ajv.addSchema(handshakeSchema);
+  const validate = ajv.getSchema(`${handshakeSchema.$id}#/$defs/ServerHello`)!;
   const valid = validate(candidate);
   if (!valid) {
     throw new Error(`ServerHello failed schema validation: ${JSON.stringify(validate.errors)}`);
