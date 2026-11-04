@@ -138,7 +138,7 @@ class Gate(unittest.TestCase):
 
     def test_gate_table(self) -> None:
         fields = {"error_code": -32000}
-        proceed, refuse = Config.from_env({}), Config.from_env({"ACS_STARTUP_POSTURE": "refuse"})
+        proceed, refuse = Config.from_env({"ACS_STARTUP_POSTURE": "proceed"}), Config.from_env({})
         table = [
             (proceed, Negotiated({"negotiated_version": "0.1.0"}), None),
             (proceed, SessionRefused("session_refused_response", fields),
@@ -169,13 +169,13 @@ class FromEnv(unittest.TestCase):
             handshake_enabled=True, disabled=False, startup_posture=None))
 
     def test_startup_posture(self) -> None:
-        """§4.1: unset follows the local fail posture; anything but proceed refuses."""
-        table = [({}, True), ({"ACS_DEFAULT_DENY": "1"}, False),
+        """§4.1: a session with no negotiated Guardian refuses its steps unless the hook sets proceed."""
+        table = [({}, False), ({"ACS_DEFAULT_DENY": "0"}, False), ({"ACS_DEFAULT_DENY": "1"}, False),
                  ({"ACS_STARTUP_POSTURE": "proceed", "ACS_DEFAULT_DENY": "1"}, True),
                  ({"ACS_STARTUP_POSTURE": " Proceed "}, True),
                  ({"ACS_STARTUP_POSTURE": "refuse"}, False),
                  ({"ACS_STARTUP_POSTURE": "procede"}, False),
-                 ({"ACS_STARTUP_POSTURE": ""}, True)]
+                 ({"ACS_STARTUP_POSTURE": ""}, False)]
         for env, proceeds in table:
             with self.subTest(env=env):
                 self.assertIs(Config.from_env(env).startup_proceeds, proceeds)

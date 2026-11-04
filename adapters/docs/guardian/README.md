@@ -21,7 +21,7 @@ Tool names compare case-insensitively, so `Bash` (Claude Code), `Shell` (Cursor)
 | Any other `steps/toolCallRequest` | `allow` |
 | `steps/subagentStart` | `deny`, `subagent_gated` (`subagent_fresh_intent_gated` when `intent_derivation` is `fresh`); `allow` with `ACS_ALLOW_SUBAGENT=1` |
 | `steps/sessionStart`, `steps/sessionEnd`, `steps/turnStart`, `steps/turnEnd`, `steps/userMessage`, `steps/agentResponse`, `steps/agentTrigger`, `steps/toolCallResult`, `steps/preCompact`, `steps/postCompact`, `steps/subagentStop`, `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval` | `allow` |
-| `handshake/hello` | a ServerHello (§4) |
+| `handshake/hello` | a ServerHello (§4) declaring `on_decision_failure: deny`, or `proceed` with `ACS_ON_DECISION_FAILURE=proceed` |
 | `system/ping` | `allow` with `{status, echo, server_timestamp}` (§13); unsigned and outside the chain |
 | Any other method | `deny`, `unknown_method` |
 

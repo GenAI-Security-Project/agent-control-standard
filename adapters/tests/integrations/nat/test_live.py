@@ -150,6 +150,19 @@ class LiveNATWorkflow(unittest.TestCase):
         self.assertEqual(executed["count"], 0,
                          "fail-closed: function must not execute when Guardian unreachable")
 
+    def test_guardian_unreachable_blocks_the_function(self) -> None:
+        executed = {"count": 0}
+
+        async def target(command: str) -> str:
+            executed["count"] += 1
+            return "ran"
+
+        mw = ACSMiddleware(ACSMiddlewareConfig(guardian_url="http://127.0.0.1:1/dead", default_deny=False))
+        with self.assertRaises(ACSGuardianDenied):
+            asyncio.run(mw.function_middleware_invoke(command="ls", call_next=target, context=self._ctx("Bash")))
+        self.assertEqual(executed["count"], 0)
+
+    @mock.patch.dict(os.environ, {"ACS_STARTUP_POSTURE": "proceed"})
     def test_guardian_unreachable_fail_open_runs_function(self) -> None:
         executed = {"count": 0}
 

@@ -78,7 +78,7 @@ class SessionGateThroughHooks(unittest.TestCase):
         sessions = {name: str(uuid.uuid4()) for name in hooks}
         for name, run in hooks.items():
             with self.subTest(name, phase="Guardian down"):
-                p, denied, audits = run(url, sessions[name])
+                p, denied, audits = run(url, sessions[name], ACS_STARTUP_POSTURE="proceed")
                 self.assertFalse(denied, p.stdout)
                 self.assertIn("session_without_negotiated_guardian", audits)
                 self.assertIn("unguarded_session_bypass", audits)
@@ -89,7 +89,8 @@ class SessionGateThroughHooks(unittest.TestCase):
         guardian = self._restore(port)
         self._age_records()
         # Settings an older adapter read as cache lifetimes; nothing reads them now.
-        expired = {"ACS_HANDSHAKE_CACHE_TTL_SECONDS": "0", "ACS_HANDSHAKE_FAILURE_CACHE_TTL_SECONDS": "0"}
+        expired = {"ACS_HANDSHAKE_CACHE_TTL_SECONDS": "0", "ACS_HANDSHAKE_FAILURE_CACHE_TTL_SECONDS": "0",
+                   "ACS_STARTUP_POSTURE": "proceed"}
         for name, run in hooks.items():
             with self.subTest(name, phase="Guardian restored, same session"):
                 p, denied, audits = run(url, sessions[name], **expired)
@@ -232,12 +233,12 @@ class SessionGateThroughHooks(unittest.TestCase):
     def test_cursor_startup_proceed_answers_in_each_events_allow_shape(self) -> None:
         port, url = self._down()
         session = str(uuid.uuid4())
-        p, _, _ = self._cursor(url, session, "beforeSubmitPrompt")
+        p, _, _ = self._cursor(url, session, "beforeSubmitPrompt", ACS_STARTUP_POSTURE="proceed")
         self.assertEqual((p.returncode, json.loads(p.stdout)), (0, {"continue": True}))
         for event_name, allow in (("preToolUse", {}), ("beforeShellExecution", {}), ("beforeMCPExecution", {}),
                                   ("subagentStart", {"permission": "allow"})):
             with self.subTest(event_name):
-                p, _, audits = self._cursor(url, session, event_name)
+                p, _, audits = self._cursor(url, session, event_name, ACS_STARTUP_POSTURE="proceed")
                 self.assertEqual(json.loads(p.stdout), allow)
                 self.assertEqual(audits, ["unguarded_session_bypass"])
 
@@ -1122,7 +1123,8 @@ class SessionGateThroughHooks(unittest.TestCase):
         for host in self.STARTUP:
             with self.subTest(host):
                 guardian.reset()
-                results = self._startup(host, guardian.url(), together=True, ACS_HANDSHAKE_TIMEOUT_SECONDS="1")
+                results = self._startup(host, guardian.url(), together=True, ACS_HANDSHAKE_TIMEOUT_SECONDS="1",
+                                        ACS_STARTUP_POSTURE="proceed")
                 self.assertEqual(guardian.methods_seen(), ["handshake/hello"])
                 audits = {name: [r["acs_audit_event"] for r in _audit_records(p.stderr)] for name, p in results}
                 self.assertEqual(sum(a.count("session_without_negotiated_guardian") for a in audits.values()), 1, audits)

@@ -1,7 +1,11 @@
 """acs-nat-wire wires and checks every point NAT gates: the workflow, each function group and each function."""
 from __future__ import annotations
 
+import contextlib
+import io
+import tempfile
 import unittest
+from pathlib import Path
 
 try:
     from acs.integrations.nat import wire
@@ -44,6 +48,29 @@ class WireCoversEveryFunction(unittest.TestCase):
         self.assertEqual([str(m) for m in functions["lookup"]["middleware"]], ["acs_guardian", "content_filter"])
         restored, _ = wire.unwire(wire.render(doc))
         self.assertEqual(restored, PLAIN)
+
+
+
+@unittest.skipUnless(_NAT_OK, "nvidia-nat-core is not installed")
+class WiredPosture(unittest.TestCase):
+    def _wired(self, *flags: str) -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow.yml"
+            path.write_text(PLAIN)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(wire.main(["--workflow", str(path), "--write", *flags]), 0)
+            return wire._yaml().load(path.read_text())["middleware"]["acs_guardian"]["default_deny"]
+
+    def test_the_middleware_is_wired_fail_closed(self) -> None:
+        self.assertIs(self._wired(), True)
+        self.assertIs(self._wired("--default-deny"), True)
+
+    def test_all_fail_open_wires_it_open(self) -> None:
+        self.assertIs(self._wired("--all-fail-open"), False)
+
+    def test_an_unset_default_deny_leaves_the_posture_to_the_guardian(self) -> None:
+        from acs.integrations.nat.adapter import ACSMiddlewareConfig
+        self.assertIs(ACSMiddlewareConfig(guardian_url="http://127.0.0.1:8787/acs").default_deny, False)
 
 
 if __name__ == "__main__":

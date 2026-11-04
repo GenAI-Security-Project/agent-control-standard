@@ -186,7 +186,7 @@ cd "$ACS_REPO/adapters"
 uv run python -m unittest tests.integrations.nat.test_live -v
 ```
 
-Five tests spin up the example Guardian (subprocess, not in-process), construct a real NAT middleware invocation, and assert side-effect counters: a benign function executes, a destructive function is denied, write-to-protected-path is denied, fail-closed blocks on Guardian unreachable, fail-open lets the call through with an audit event. `e2e_check.py` (Smoke #3) is the broader assertion surface; `test_live.py` is the minimal unit-style guarantee that the enforcement contract holds.
+Six tests spin up the example Guardian (subprocess, not in-process), construct a real NAT middleware invocation, and assert side-effect counters: a benign function executes, a destructive function is denied, write-to-protected-path is denied, `default_deny: true` blocks on Guardian unreachable, an unanswered handshake blocks by default, and `ACS_STARTUP_POSTURE=proceed` lets the call through with an audit event. `e2e_check.py` (Smoke #3) is the broader assertion surface; `test_live.py` is the minimal unit-style guarantee that the enforcement contract holds.
 
 ### Smoke #6 — audit-cause differentiation
 
@@ -262,7 +262,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 |---|---|---|
 | `_type` | `acs_guardian` (required) | Registers the middleware via NAT's `register_middleware` decorator. |
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
-| `default_deny` | `false` | Fail-open with audit (§6.4 default). Set `true` for fail-closed. The ServerHello's `on_decision_failure: deny` also flips it (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
+| `default_deny` | `false` | `true`: fail-closed whatever the Guardian declares; `acs-nat-wire` writes `true`, and `--all-fail-open` writes `false`. `false`: the ServerHello's `on_decision_failure` applies, and the example Guardian declares `deny` (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
 | `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config` replaces it for the session, per method where `per_method_ms` names one. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
@@ -277,7 +277,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | (unset) | Optional comma-separated hostname allowlist (defense in depth). |
 | `ACS_AUDIT_FILE` | (unset) | Append every `ACS_AUDIT` event to this file (created 0600) in addition to stderr. |
 | `ACS_DISABLED` | (unset) | `1` = incident kill switch: every call passes through with no Guardian traffic and an `acs_disabled_bypass` audit event. Read when NAT builds the middleware, so set it before the workflow starts. |
-| `ACS_STARTUP_POSTURE` | follows `default_deny` | `proceed` or `refuse`: what a call does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the call run, audited, with nothing sent to the Guardian, until the session ends; `refuse` blocks it. The session keeps no negotiated Guardian for its lifetime. Any other value refuses. Read when NAT builds the middleware. |
+| `ACS_STARTUP_POSTURE` | `refuse` | `proceed` or `refuse`: what a call does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the call run, audited, with nothing sent to the Guardian, until the session ends; `refuse` blocks it. The session keeps no negotiated Guardian for its lifetime. Any other value refuses. Read when NAT builds the middleware. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused; the stored record keeps what the Guardian answered, so each hook applies its own setting. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every call. Read when NAT builds the middleware. |
 
@@ -301,7 +301,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 | SessionContext + published `chain_hash` | ✓ every session's `session_id` is a UUID; Guardian computes rolling chain |
 | Replay protection | ✓ Guardian enforcement (REPLAY_DETECTED -32005, TIMESTAMP_OUT_OF_WINDOW -32006); audit cause distinguishes both |
 | Baseline integrity (HMAC-SHA256) | ✓ every request and response signed under `ACS_HMAC_KEY_ID`; a middleware with no secret of at least 32 bytes, or no label, refuses its session and denies every call; signed responses verified by adapter (pre_invoke + post_invoke reject SIGNATURE_INVALID) |
-| Decision honoring (§6.4) | ✓ NAT's middleware contract guarantees the function will not execute if `pre_invoke` raises or sets SKIP — verified in `test_live.py` (deny tests assert `executed["count"] == 0`); fail-open emits `ACS_AUDIT` events |
+| Decision honoring (§6.4) | ✓ NAT's middleware contract guarantees the function will not execute if `pre_invoke` raises or sets SKIP — verified in `test_live.py` (deny tests assert `executed["count"] == 0`); every decision failure emits an `ACS_AUDIT` event under either posture |
 | `cause` field on every audit event | ✓ `transport_failure`, `adapter_exception`, `response_signature_invalid`, plus a cause for every §17 JSON-RPC error code (for example `session_refused_response`, `signature_invalid_response`, `replay_detected_response`, `internal_error_response`) with `guardian_error_response` as the catch-all fallback for unknown codes |
 | Liveness `system/ping` | ⚠ Guardian-side only. ACS-Core says `system/ping` SHOULD be implemented: the Observed Agent declares it in `methods_implemented` and sends it, and the Guardian answers it (§13). The example Guardian answers ping as an always-allow method outside the chain, replay, and signature checks. The adapter does not declare or send `system/ping`, so a deployment that uses it must name an alternative liveness mechanism in its configuration, such as continuous observed hook traffic. Omitting both is non-conformant. |
 | Wrapped MCP `protocols/MCP/*` | ✗ not implemented. ACS-Core requires `protocols/MCP/*` for any session that involves MCP, and MCP `tools/call` MAY instead flow through the generic tool hooks. The adapter emits no `protocols/MCP/*` traffic. The function middleware sees an MCP tool only as an ordinary NAT function, so a wired MCP tool call can reach the Guardian only as `steps/toolCallRequest` and `steps/toolCallResult`. This suite does not exercise that path. No other MCP surface is wrapped, so a NAT session that uses MCP falls short of ACS-Core there. Known limitation. |
@@ -327,7 +327,7 @@ The adapter works across multiple NAT releases by feature-detecting the block me
 | `acs-nat-wire --check` keeps reporting gaps for the same function | That function is defined in Python code, not YAML, so acs-nat-wire can't reach it. Move the definition into YAML, or add `acs_guardian` to its `middleware` list in code; until then its calls reach the Guardian neither as a decision nor as an observation. |
 | `acs-nat-wire` errors out with "ruamel.yaml" missing | Install the `nat` extra: `pip install "$ACS_REPO/adapters[nat]"`. |
 | NAT runs functions as if no Guardian exists | NAT loaded the workflow before `acs-nat-wire --write` ran. **Restart your NAT process.** |
-| Every call gets denied | Likely `default_deny: true` in middleware config + Guardian down. Check the Guardian process is running. |
+| Every call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its calls unless `ACS_STARTUP_POSTURE=proceed`, and `acs-nat-wire` writes `default_deny: true`. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. Audit log shows `cause=signature_invalid_response`. |
 | Guardian returns `-32005 REPLAY_DETECTED` | Same `request_id` sent twice. Audit log shows `cause=replay_detected_response`. Usually a retry loop bug. |

@@ -135,7 +135,7 @@ if _NAT_AVAILABLE:
         )
         default_deny: bool = Field(
             default=False,
-            description="If True, block the call when the Guardian is unreachable, returns malformed responses, or returns an unknown disposition. Default False matches the ACS spec default (§6.4 fail-open with audit event); set True for deployments that prefer fail-closed availability tradeoff.",
+            description="If True, block the call when no usable decision arrives, whatever the Guardian declares. False applies the ServerHello's on_decision_failure (§6.4).",
         )
         timeout_s: float = Field(
             default=5.0,

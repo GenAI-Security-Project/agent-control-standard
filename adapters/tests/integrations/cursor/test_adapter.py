@@ -148,8 +148,19 @@ class CursorAdapter(unittest.TestCase):
         self.assertIn("ACS_AUDIT", err)
         self.assertIn("decision_failure_fail_closed", err)
 
-    def test_guardian_unreachable_fail_open_default_is_audit(self) -> None:
-        """§6.4 spec default: fail-open with audit event."""
+    def test_an_unanswered_handshake_refuses_the_step(self) -> None:
+        with mock.patch.dict(os.environ):
+            for name in ("ACS_DEFAULT_DENY", "ACS_STARTUP_POSTURE"):
+                os.environ.pop(name, None)
+            rc, out, err = self._run("preToolUse", {"session_id": "cur-13", "tool_name": "Read",
+                                                    "tool_input": {"file_path": "/tmp/x"}},
+                                     env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead"})
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["permission"], "deny")
+        self.assertIn("session_not_started_fail_closed", err)
+
+    def test_guardian_unreachable_under_a_declared_proceed_is_audited(self) -> None:
+        """A negotiated session whose Guardian declares proceed lets a step with no decision proceed, audited (§6.4)."""
         rc, out, err = self._run("preToolUse",
             {"session_id": "cur-11", "tool_name": "Read",
              "tool_input": {"file_path": "/tmp/x"}},

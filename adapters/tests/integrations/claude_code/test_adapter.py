@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
@@ -201,7 +202,18 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertIn("decision-failure", payload["reason"].lower())
         self.assertIn("ACS_AUDIT", err)
 
-    def test_guardian_unreachable_fail_open_default_is_audit(self) -> None:
+    def test_an_unanswered_handshake_refuses_the_step(self) -> None:
+        with mock.patch.dict(os.environ):
+            for name in ("ACS_DEFAULT_DENY", "ACS_STARTUP_POSTURE"):
+                os.environ.pop(name, None)
+            rc, out, err = self._run_adapter(
+                _claude_code_event("PreToolUse", tool_name="Read", tool_input={"file_path": "/tmp/x"}),
+                env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead"})
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("session_not_started_fail_closed", err)
+
+    def test_guardian_unreachable_under_a_declared_proceed_is_audited(self) -> None:
         rc, out, err = self._run_adapter(
             _claude_code_event(
                 "PreToolUse", tool_name="Read",
