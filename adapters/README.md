@@ -21,7 +21,7 @@ Running the Guardian — terminal window, `launchd`, `systemd`, container — is
 
 Known limitations kept in view: Cursor's real-framework wiring is a manual GUI procedure, and Wrapped MCP is validated for namespace shape only, not full wrapping. ACS-Core requires `protocols/MCP/*` for any session that involves MCP and lets only MCP `tools/call` collapse into the generic tool hooks. These adapters perform that collapse and wrap no other MCP surface, so a session that uses MCP falls short of ACS-Core there. Issue #33 tracks the reference-stack side. The adapters also emit no Trace events and do not claim ACS-Trace: `ACS_AUDIT` lines are local audit records, not OpenTelemetry or OCSF output.
 
-One authoritative command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. At least one platform is required; there is no implicit run-all default. Name one, two, or all three platforms in any order:
+One authoritative command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. At least one platform is required; there is no implicit run-all default. Name one or more platforms in any order:
 
 ```bash
 cd adapters
@@ -35,7 +35,7 @@ uv run python run_conformance.py claude cursor
 
 # All platforms. NAT needs the nat extra, or its skips count as
 # unexpected and fail.
-uv run python run_conformance.py claude cursor nat
+uv run python run_conformance.py claude codex cursor nat
 ```
 
 `claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client` and `package` checks run once for every command, regardless of the platform selection.
@@ -63,7 +63,7 @@ Breaking any adapter's method mapping, envelope/payload field, or signing turns 
 
 The adapters are **translators**. Each one speaks its framework's hook protocol on one side and ACS JSON-RPC on the other. The framework's agent code is untouched. The Guardian's policy code is untouched. The adapter is the bilingual layer between them.
 
-### The general pattern (same for all three adapters)
+### The general pattern (same for every adapter)
 
 For each event the framework fires:
 
@@ -182,20 +182,20 @@ Same as above, but with `command: "rm -rf /home/u"`:
 - **Step 5:** Adapter emits `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "destructive Bash pattern in: rm -rf /home/u", "additionalContext": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"}, "systemMessage": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"}`
 - **Step 6:** Claude Code reads `permissionDecision: "deny"`, does not execute the Bash tool, and surfaces the reason: *"The command was blocked: a policy denied the Bash tool call, so it never ran."*
 
-### What changes across the three adapters
+### What changes across the adapters
 
 The general pattern is identical. The framework-specific translation differs:
 
-| | Claude Code | Cursor | NAT |
-|---|---|---|---|
-| **Where the adapter lives** | Separate shell process spawned per hook | Separate shell process spawned per hook | In-process Python class, same memory space as the agent |
-| **How the framework sends the event** | JSON on stdin; event type is a field inside the JSON (`hook_event_name`) | JSON on stdin; event type passed as a CLI argument (one command per event in `hooks.json`) | Python method call: `pre_invoke(context)` with `context.function_context.name` |
-| **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, the input in `context.modified_args[0]` or `context.modified_kwargs` |
-| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{}` on allow for a tool call, `{"permission": "deny"}` on stdout to block, `{"continue": false}` for a prompt, exit code 0 | Raise `ACSGuardianDenied`, or set `context.action = InvocationAction.SKIP` where NAT has it |
-| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `updated_input` | Rewrite the input in `context.modified_args[0]` when it is passed positionally, else in `context.modified_kwargs`; replace `context.output` for output |
-| **Process model** | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | Zero IPC; everything in the same Python interpreter |
+| | Claude Code | Codex | Cursor | NAT |
+|---|---|---|---|---|
+| **Where the adapter lives** | Separate shell process spawned per hook | Separate shell process spawned per hook | Separate shell process spawned per hook | In-process Python class, same memory space as the agent |
+| **How the framework sends the event** | JSON on stdin; event type is a field inside the JSON (`hook_event_name`) | JSON on stdin; event type is a field inside the JSON (`hook_event_name`); only `PreToolUse` is mapped | JSON on stdin; event type passed as a CLI argument (one command per event in `hooks.json`) | Python method call: `pre_invoke(context)` with `context.function_context.name` |
+| **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_use_id`, `turn_id` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, the input in `context.modified_args[0]` or `context.modified_kwargs` |
+| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{}` on allow for a tool call, `{"permission": "deny"}` on stdout to block, `{"continue": false}` for a prompt, exit code 0 | Raise `ACSGuardianDenied`, or set `context.action = InvocationAction.SKIP` where NAT has it |
+| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `hookSpecificOutput.updatedInput` with `permissionDecision: "allow"`, since Codex has no `ask` | `updated_input` | Rewrite the input in `context.modified_args[0]` when it is passed positionally, else in `context.modified_kwargs`; replace `context.output` for output |
+| **Process model** | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | Zero IPC; everything in the same Python interpreter |
 
-The Guardian-side wire format is **the same** for all three. The adapter is bilingual: it knows the framework's protocol on one side and ACS on the other.
+The Guardian-side wire format is **the same** for every adapter. The adapter is bilingual: it knows the framework's protocol on one side and ACS on the other.
 
 ### Decision honoring is a framework property
 
@@ -209,7 +209,7 @@ ACS standardizes the wire format and the decision contract. Adapters live where 
 2. Knows ACS (always the same).
 3. Translates between them.
 
-The framework's agent code is untouched. The Guardian's policy code is untouched. The adapter is the bilingual translator that makes them speak. **One Guardian, one ACS contract, three adapters that translate three different protocols into that contract.** Add a new framework, write a new adapter, the Guardian doesn't change.
+The framework's agent code is untouched. The Guardian's policy code is untouched. The adapter is the bilingual translator that makes them speak. **One Guardian, one ACS contract, and one adapter per framework protocol, each translating into that contract.** Add a new framework, write a new adapter, the Guardian doesn't change.
 
 ---
 
@@ -225,9 +225,9 @@ adapters/
 │   ├── core/                       # no I/O: envelopes, signing, decisions, error codes, bundled schemas
 │   ├── client/                     # I/O: settings and fail posture, the secret, the handshake, the round trip, session state and turns, audit
 │   ├── integrations/<framework>/
-│   │   ├── hook.py                 # the installed hook command (Claude Code, Cursor)
+│   │   ├── hook.py                 # the installed hook command (Claude Code, Codex, Cursor)
 │   │   ├── adapter.py              # the hook, or the NAT middleware
-│   │   └── wire.py                 # writes the framework's own config
+│   │   └── wire.py                 # writes the framework's own config (not Codex yet)
 │   ├── guardian/example_guardian.py  # the example Guardian: wire handling, replay, skew and the session chain
 │   ├── examples/destructive_bash.py  # the example Guardian's toy policy
 │   └── testing/                    # CaptureGuardian and the shared test harness
@@ -238,7 +238,7 @@ adapters/
 
 Imports flow `integrations → client → core`, and none of the three imports `guardian`, `examples` or `testing`; `uv run lint-imports` checks both rules in CI.
 
-Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`); NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point.
+Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-codex-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`); NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point.
 
 ---
 
