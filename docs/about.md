@@ -1,6 +1,6 @@
 # About ACS
 
-Agent Control Standard (ACS) creates industry-wide transparency for AI agents.
+OWASP Agent Control Standard (ACS) creates industry-wide transparency for AI agents.
 
 ## Mission
 

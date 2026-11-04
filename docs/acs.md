@@ -1,6 +1,6 @@
-# Agent Control Standard
+# OWASP Agent Control Standard
 
-The Agent Control Standard (ACS) is a wire-format specification that lets a separate **Guardian Agent** permit, deny, or modify what an AI agent does in real time, over an authenticated channel and with an observable, reconstructable audit trail.
+The OWASP Agent Control Standard (ACS) is a wire-format specification that lets a separate **Guardian Agent** permit, deny, or modify what an AI agent does in real time, over an authenticated channel and with an observable, reconstructable audit trail.
 
 Agents that implement ACS-Core run every step through a Guardian over an authenticated channel and honor its decisions in real time. With the Trace, Inspect, and Crypto profiles they also emit OpenTelemetry spans and OCSF events, expose a dynamic Agent Bill of Materials (models, MCP servers, A2A peers, tools, knowledge sources, memory stores), and gain cryptographic non-repudiation of the audit chain. ACS-Core authenticates the channel and binds the agent to the Guardian's decisions; it does not by itself make a deployment secure or its policies strict, and tamper-evidence against a compromised Guardian is the Crypto and Audit profiles, not Core.
 
@@ -21,6 +21,8 @@ flowchart LR
 ```
 
 ## What v0.1.0 ships
+
+`v0.1.0` is the specification version, which names the schema namespace, and a release can update the schemas inside it. The release number changes with each release, as the [releases page](https://github.com/GenAI-Security-Project/agent-control-standard/releases) and the [CHANGELOG](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CHANGELOG.md) record.
 
 - **ACS-Core** (mandatory baseline) — capability-negotiation handshake, JSON-RPC envelope, minimum hook set (`sessionStart`, `userMessage` or `agentTrigger`, `toolCallRequest`/`Result`, `agentResponse`, `sessionEnd`, `subagentStart` for subagent-capable frameworks), four MUST-support dispositions (`allow`, `deny`, `ask`, `defer`) with `modify` SHOULD-support, SessionContext with rolling SHA-256 chain hash, optional Intent with immutability rule, replay protection, baseline HMAC-SHA256 signature, decision honoring, declared liveness mechanism (`system/ping` or a transport-level alternative), and Wrapped MCP when sessions involve MCP. Additional hooks (`turnStart`/`End`, `preCompact`/`postCompact`, `subagentStop`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `skillRegister`/`Load`/`Unload`) are normatively defined and SHOULD be implemented when the harness can observe the corresponding event.
 - **ACS-Trace** profile — OpenTelemetry semconv mapping + OCSF event-class mapping, with decisions emitted as span events on the parent step span.

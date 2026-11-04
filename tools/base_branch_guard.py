@@ -3,7 +3,8 @@
 `main` publishes the site and all 44 schema $id URIs on every merge. A change to
 normative content lands on `integration` first, so those URIs move only on a deliberate
 promotion. GitHub rulesets cannot express "the paths in the diff decide the base
-branch", so this does.
+branch", so this does. A page added under docs/ also needs `integration`, because its
+`nav` entry lives in mkdocs.yml, which is outside the lane.
 
 The allowlist is positive. Anything it does not name requires `integration`, which makes
 a directory nobody anticipated a failure rather than a silent pass.
@@ -77,44 +78,108 @@ def paths_requiring_integration(paths: Iterable[str]) -> list[str]:
     return sorted({path for path in paths if not in_docs_lane(path)})
 
 
+# A path added under this prefix is a new page. The deploy runs the test suite before it
+# builds, and a page with no `nav` entry fails it, so a new page merged straight to the
+# publishing branch stops every deploy until a `mkdocs.yml` change arrives by promotion.
+NEW_PAGE_PREFIX = "docs/"
+
+# Statuses from `git diff --name-status` that put a path into the tree. A rename or copy
+# carries a similarity score after its letter, as in R100. The workflow passes
+# --no-renames, so a rename reaches this script as a delete plus an add and the old
+# path stays visible to the path rule. R and C stay here so a listing produced without
+# that flag still counts the new path as an addition.
+ADDING_STATUSES = ("A", "R", "C")
+
+
+def added_pages_requiring_integration(added: Iterable[str]) -> list[str]:
+    """Return every added path under docs/, which needs a `nav` entry from `integration`."""
+    return sorted({path for path in added if path.startswith(NEW_PAGE_PREFIX)})
+
+
+def parse_name_status(lines: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Split `git diff --name-status` output into changed paths and added paths.
+
+    Each line is a status, a tab, and a path. A rename or copy names the old path and
+    then the new one, and only the new path is a change here, the same path
+    `--name-only` reports. A line with no tab is a bare path from an older listing and
+    counts as changed, not added.
+    """
+    changed: list[str] = []
+    added: list[str] = []
+    for line in lines:
+        line = line.rstrip("\r\n")
+        if not line.strip():
+            continue
+        if "\t" not in line:
+            changed.append(line.strip())
+            continue
+        fields = line.split("\t")
+        status, path = fields[0].strip(), fields[-1]
+        changed.append(path)
+        if status.startswith(ADDING_STATUSES):
+            added.append(path)
+    return changed, added
+
+
 def decide(
     paths: Iterable[str],
     base_ref: str,
     head_ref: str,
     head_repo: str,
     base_repo: str,
+    added: Iterable[str] = (),
 ) -> tuple[int, str]:
-    """Return an exit status and the message to print."""
+    """Return an exit status and the message to print.
+
+    `added` names the paths the pull request adds. It defaults to empty so a caller that
+    knows only the changed paths gets the path rule alone.
+    """
     if base_ref != PUBLISHING_BRANCH:
         return 0, f"Base branch is {base_ref!r}, not {PUBLISHING_BRANCH!r}. Nothing to check."
     if is_promotion(head_ref, head_repo, base_repo):
         return 0, f"Promotion from {head_ref!r}. Specification paths are expected here."
     offenders = paths_requiring_integration(paths)
-    if not offenders:
+    new_pages = [path for path in added_pages_requiring_integration(added)
+                 if path not in offenders]
+    if not offenders and not new_pages:
         return 0, "Every changed path is in the documentation lane."
-    listing = "\n".join(f"  {path}" for path in offenders)
-    return 1, (
-        f"These paths may not target `{PUBLISHING_BRANCH}`. Retarget this pull request "
-        f"at `integration`:\n{listing}\n\n"
-        f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on merge, "
-        "so specification and code changes land on `integration` and publish on a "
-        "promotion. See CONTRIBUTING.md."
-    )
+    parts = []
+    if offenders:
+        listing = "\n".join(f"  {path}" for path in offenders)
+        parts.append(
+            f"These paths may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
+            f"request at `integration`:\n{listing}\n\n"
+            f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on "
+            "merge, so specification and code changes land on `integration` and "
+            "publish on a promotion."
+        )
+    if new_pages:
+        listing = "\n".join(f"  {path}" for path in new_pages)
+        parts.append(
+            f"These new pages may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
+            f"request at `integration`:\n{listing}\n\n"
+            "A new page needs a titled `nav` entry in `mkdocs.yml`, and `mkdocs.yml` "
+            "reaches the publishing branch only through `integration`. The deploy runs "
+            "the guards before it builds, so a page without its `nav` entry stops every "
+            f"deploy of `{PUBLISHING_BRANCH}`."
+        )
+    return 1, "\n\n".join(parts) + " See CONTRIBUTING.md."
 
 
 def main(argv: list[str]) -> int:
     """Read the changed paths from a file and the refs from the environment."""
     if len(argv) != 2:
-        print("usage: base_branch_guard.py <file-listing-changed-paths>", file=sys.stderr)
+        print("usage: base_branch_guard.py <git-diff-name-status-listing>", file=sys.stderr)
         return 2
     with open(argv[1], encoding="utf-8") as handle:
-        paths = [line.strip() for line in handle if line.strip()]
+        paths, added = parse_name_status(handle)
     status, message = decide(
         paths,
         os.environ.get("BASE_REF", ""),
         os.environ.get("HEAD_REF", ""),
         os.environ.get("HEAD_REPO", ""),
         os.environ.get("BASE_REPO", ""),
+        added,
     )
     print(message, file=sys.stderr if status else sys.stdout)
     return status

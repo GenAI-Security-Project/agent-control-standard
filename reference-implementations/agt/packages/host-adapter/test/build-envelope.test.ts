@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateEnvelope } from "guardian";
@@ -7,6 +7,7 @@ import {
   buildEnvelope,
   loadHookmap,
   toSessionUuid,
+  toInvocationRequestId,
   modificationDocumentOf,
   type Hookmap,
   type HookmapHookEntry,
@@ -149,6 +150,15 @@ describe("buildEnvelope", () => {
     const envelope = buildEnvelope("PreToolUse", payload, hookmap);
 
     expect(envelope.params.metadata.session_id).toBe(realUuid);
+  });
+
+  // The audit log records the envelope's JSON-RPC id as `rpc_id`, and the
+  // trace converter (guardian/src/audit-to-otlp.ts) carries it as
+  // acs.request_id to join the host's failure spans to the Guardian's. That
+  // join holds only while the two ids are the same value.
+  it("uses the request_id as the JSON-RPC id", () => {
+    const envelope = buildEnvelope("PreToolUse", preToolUsePayload, hookmap);
+    expect(envelope.id).toBe(envelope.params.request_id);
   });
 
   it("toSessionUuid is deterministic and produces a valid uuid for a non-uuid input", () => {
@@ -1146,5 +1156,130 @@ describe("buildEnvelope", () => {
         ),
       ).toThrow(/PostToolUse.*raw_command/s);
     });
+  });
+});
+
+describe("call_id: pairing a result with its request", () => {
+  const withCallId: Hookmap = {
+    ...hookmap,
+    hooks: {
+      PreToolUse: { ...hookmap.hooks.PreToolUse!, call_id: "$.tool_use_id" } as HookmapHookEntry,
+      PostToolUse: { ...hookmap.hooks.PostToolUse!, call_id: "$.tool_use_id" } as HookmapHookEntry,
+    },
+  };
+  const before = { ...preToolUsePayload, tool_use_id: "toolu_01" };
+  const after = { ...before, hook_event_name: "PostToolUse", tool_response: { stdout: "done" } };
+
+  it("gives the result the request's request_id as request_id_ref, and both validate", () => {
+    const request = buildEnvelope("PreToolUse", before, withCallId);
+    const result = buildEnvelope("PostToolUse", after, withCallId);
+
+    expect(() => validateEnvelope(request)).not.toThrow();
+    expect(() => validateEnvelope(result)).not.toThrow();
+    expect(result.params.payload.request_id_ref).toBe(request.params.request_id);
+    // The JSON-RPC id stays random, so two asks about one call never share it.
+    expect(request.id).not.toBe(request.params.request_id);
+    expect(buildEnvelope("PreToolUse", before, withCallId).id).not.toBe(request.id);
+    expect(result.params.request_id).not.toBe(request.params.request_id);
+  });
+
+  it("derives the id from the session and the call id, so another session's call does not collide", () => {
+    const here = buildEnvelope("PreToolUse", before, withCallId);
+    const elsewhere = buildEnvelope("PreToolUse", { ...before, session_id: "another-session" }, withCallId);
+
+    expect(here.params.request_id).toBe(toInvocationRequestId(toSessionUuid("abc123"), "toolu_01"));
+    expect(here.params.request_id).toMatch(UUID_RE);
+    expect(elsewhere.params.request_id).not.toBe(here.params.request_id);
+  });
+
+  it("falls back to a random request_id and no reference when the host sends no call id", () => {
+    const request = buildEnvelope("PreToolUse", preToolUsePayload, withCallId);
+    const result = buildEnvelope("PostToolUse", { ...preToolUsePayload, tool_response: { stdout: "done" } }, withCallId);
+
+    expect(request.params.request_id).toMatch(UUID_RE);
+    expect(result.params.payload.request_id_ref).toBeUndefined();
+    expect(() => validateEnvelope(result)).not.toThrow();
+  });
+
+  it("sends no reference when the hookmap declares no call_id", () => {
+    const result = buildEnvelope("PostToolUse", after, hookmap);
+
+    expect(result.params.payload.request_id_ref).toBeUndefined();
+  });
+
+  it("refuses a call_id that is not a path string, as a hookmap fault", () => {
+    const broken: Hookmap = {
+      ...hookmap,
+      hooks: { ...hookmap.hooks, PreToolUse: { ...hookmap.hooks.PreToolUse!, call_id: 7 } as unknown as HookmapHookEntry },
+    };
+
+    expect(() => buildEnvelope("PreToolUse", before, broken)).toThrow(/"call_id"/);
+  });
+});
+
+
+describe("call_id: the real hookmaps, and the derivation pinned", () => {
+  const CLAUDE_CODE = new URL("../../../hosts/claude-code/claude-code.hookmap.yaml", import.meta.url);
+  const LINE = "    call_id: $.tool_use_id\n";
+
+  function loadEdited(edit: (yaml: string) => string): Hookmap {
+    const dir = mkdtempSync(join(tmpdir(), "acs-hookmap-"));
+    const path = join(dir, "hookmap.yaml");
+    writeFileSync(path, edit(readFileSync(CLAUDE_CODE, "utf8")));
+    try {
+      return loadHookmap(path);
+    } finally {
+      unlinkSync(path);
+      rmdirSync(dir);
+    }
+  }
+
+  it("pairs a Claude Code request and result through the shipped hookmap, for a session id that is not a uuid", () => {
+    const shipped = loadHookmap(CLAUDE_CODE.pathname);
+    const before = { ...preToolUsePayload, session_id: "sess-raw-not-a-uuid", tool_use_id: "toolu_01" };
+    const after = { ...before, hook_event_name: "PostToolUse", tool_response: { stdout: "done" } };
+
+    const request = buildEnvelope("PreToolUse", before, shipped);
+    const result = buildEnvelope("PostToolUse", after, shipped);
+
+    expect(result.params.payload.request_id_ref).toBe(request.params.request_id);
+  });
+
+  it("keeps the derivation stable, because a changed one unpairs every call that straddles an upgrade", () => {
+    expect(toSessionUuid("abc123")).toBe("4c0c070f-241c-57eb-b406-ca28fe9f1229");
+    expect(toInvocationRequestId("4c0c070f-241c-57eb-b406-ca28fe9f1229", "toolu_01")).toBe(
+      "044e7d73-4d3f-8dc7-abdc-6200ff5a7734",
+    );
+  });
+
+  it("refuses at load a call_id that is not a path string", () => {
+    expect(() => loadEdited((yaml) => yaml.replace(LINE, "    call_id: 7\n"))).toThrow(/"call_id" must be one JSONPath-lite string/);
+  });
+
+  it("refuses at load a call_id declared on the request gate but not the result gate", () => {
+    const lastAt = (yaml: string) => yaml.lastIndexOf(LINE);
+    expect(() =>
+      loadEdited((yaml) => yaml.slice(0, lastAt(yaml)) + yaml.slice(lastAt(yaml) + LINE.length)),
+    ).toThrow(/declares "call_id" on some tool gates but not on \["PostToolUse"\]/);
+  });
+
+  it("refuses at load a call_id naming a reserved segment, which resolvePath would refuse on every step", () => {
+    expect(() => loadEdited((yaml) => yaml.split(LINE).join("    call_id: $.constructor\n"))).toThrow(
+      /call_id" is not a usable path: .*reserved segment "constructor"/,
+    );
+  });
+
+  it("refuses at load a call_id on result gates when the hookmap maps no request gate", () => {
+    // Drop the PreToolUse entry whole: everything from its key to the next hook.
+    const withoutRequestGate = (yaml: string) => {
+      const start = yaml.indexOf("  PreToolUse:\n");
+      const end = yaml.indexOf("  PostToolUse:\n");
+      return yaml.slice(0, start) + yaml.slice(end);
+    };
+    expect(() => loadEdited(withoutRequestGate)).toThrow(/declares "call_id" only on result gates/);
+  });
+
+  it("loads a hookmap that declares call_id on neither gate", () => {
+    expect(() => loadEdited((yaml) => yaml.split(LINE).join(""))).not.toThrow();
   });
 });

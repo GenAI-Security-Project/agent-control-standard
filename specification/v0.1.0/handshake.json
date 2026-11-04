@@ -128,7 +128,7 @@
           "type": "string",
           "enum": ["proceed", "deny"],
           "default": "proceed",
-          "description": "Posture the Observed Agent applies on a decision failure: no usable decision within the negotiated timeout, whether the Guardian is silent, the transport fails, or an error response carries no decision (Specification 6.4). 'proceed' (default) is fail-open, so a slow, erroring, or unreachable Guardian does not halt production; 'deny' is fail-closed. Every fail-open proceed MUST be recorded as an audit event (Specification 6.4). A decision that arrives within the timeout MUST be honored regardless of this posture."
+          "description": "Posture the Observed Agent applies on a decision failure: no usable decision within the negotiated timeout, whether the Guardian is silent, the transport fails, or an error response carries no decision (Specification 6.4). 'proceed' (default) is fail-open, so a slow, erroring, or unreachable Guardian does not halt production; 'deny' is fail-closed. Every decision failure MUST be recorded as an audit event, fail-open or fail-closed (Specification 6.4). A decision that arrives within the timeout MUST be honored regardless of this posture."
         },
         "approver_types_supported": {
           "type": "array",

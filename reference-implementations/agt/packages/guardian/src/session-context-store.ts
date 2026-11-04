@@ -99,6 +99,8 @@ export {
 /** What the Guardian's request path is told and asks on every step. */
 export interface SessionContextStore {
   context(sessionId: string): SessionContext;
+  hasToolCallRequest(sessionId: string, requestId: string): boolean;
+  hasRequestId(sessionId: string, requestId: string): boolean;
   append(sessionId: string, step: SessionStep): SessionContextEntry;
   replaceIfcLabels(sessionId: string, labels: IfcLabels): void;
   sourceLabels(sessionId: string): IfcLabels;
@@ -226,6 +228,16 @@ export function createMemorySessionContextStore(
       return { session_id: sessionId, entries: [...read(sessionId).entries] };
     },
 
+    // Straight off the map rather than through `read`, which builds an empty
+    // state for a session it does not hold. Neither question needs one.
+    hasToolCallRequest(sessionId, requestId) {
+      return sessions.get(sessionId)?.toolCallRequestIds.has(requestId) ?? false;
+    },
+
+    hasRequestId(sessionId, requestId) {
+      return sessions.get(sessionId)?.requestIds.has(requestId) ?? false;
+    },
+
     append(sessionId, step) {
       const state = ensure(sessionId);
       const previous = state.entries.at(-1);
@@ -237,6 +249,9 @@ export function createMemorySessionContextStore(
         method: step.method,
         request_id: step.request_id,
         tool_name: step.tool_name,
+        ...(step.findings === undefined
+          ? {}
+          : { findings: step.findings, ...(step.request_id_ref === undefined ? {} : { request_id_ref: step.request_id_ref }) }),
       };
       const entry: SessionContextEntry = { ...withoutHash, hash: hashEntry(withoutHash) };
       // Pushed onto the array this session already owns, rather than rebuilt
@@ -244,6 +259,10 @@ export function createMemorySessionContextStore(
       // N per step, N^2 per session -- and the module doc above says what a
       // Guardian that slow does to the decision that never arrives.
       state.entries.push(entry);
+      state.requestIds.add(step.request_id);
+      if (step.method === "steps/toolCallRequest") {
+        state.toolCallRequestIds.add(step.request_id);
+      }
       appendLine?.(JSON.stringify(entry));
       return entry;
     },

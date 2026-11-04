@@ -1,4 +1,4 @@
-# Agent Control Standard - Instrument
+# OWASP Agent Control Standard - Instrument
 
 AI agents make critical decisions autonomously. They collaborate, execute code, and access sensitive data. But they operate as black boxes. Enterprises can't trust what they can't see.
 

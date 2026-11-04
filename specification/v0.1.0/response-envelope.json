@@ -56,13 +56,14 @@
           "items": {
             "type": "object",
             "properties": {
-              "policy_id": { "type": "string" },
+              "policy_id": { "type": "string", "minLength": 1 },
               "policy_version": {
                 "type": "string",
+                "minLength": 1,
                 "description": "Optional deployment-chosen version identifier for the referenced policy bundle or document. Lets audit replay reconstruct the exact historical policy state without prescribing a ledger or versioning scheme."
               },
-              "policy_name": { "type": "string" },
-              "rule_id": { "type": "string" }
+              "policy_name": { "type": "string", "minLength": 1 },
+              "rule_id": { "type": "string", "minLength": 1 }
             }
           },
           "description": "The policies/rules that fired. A single decision MAY cite multiple — when IBAC + FIDES + AARM all reject the same action, expect three entries here, one per paradigm. policy_version is optional and deployment-defined, but SHOULD be populated when the deployment supports replay or ledger-backed policy state. Audit replay walks this list to reconstruct which rules contributed."
@@ -88,7 +89,7 @@
         "chain_hash": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
-          "description": "Rolling SHA-256 audit-chain head (lowercase hex) after this step's ContextEntry was appended. The Guardian MUST include it on every response for a step where it wrote a ContextEntry, the content-bearing steps (Specification 8). Publishing the head on the wire lets an observer that records traffic detect a chain rewritten after the fact. It is covered by the response signature. Under the HMAC baseline this gives integrity and tamper-evidence to a key-holder and supports cross-Guardian comparison; non-repudiation against a compromised Guardian requires the asymmetric ACS-Crypto profile."
+          "description": "Rolling SHA-256 audit-chain head (lowercase hex) after this step's ContextEntry was appended. The Guardian MUST include it on every response for a step where it wrote a ContextEntry, the content-bearing steps (Specification 8). Publishing the head on the wire lets an observer that records traffic detect a chain rewritten after the fact. It is covered by the response signature. Under the HMAC baseline this gives integrity and tamper-evidence to a key-holder and supports cross-Guardian comparison. Both parties hold the key, so a signed head is attributable to neither, and non-repudiation requires the asymmetric ACS-Crypto profile (Specification 8.6)."
         },
         "signature": {
           "$ref": "request-envelope.json#/$defs/Signature",
