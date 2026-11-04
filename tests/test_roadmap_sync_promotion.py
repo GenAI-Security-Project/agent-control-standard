@@ -132,7 +132,7 @@ def test_open_promotion_runs_on_dispatch_only():
 
 from datetime import date  # noqa: E402
 
-from roadmap_sync import bypasses  # noqa: E402
+from roadmap_sync import SyncError, bypasses  # noqa: E402
 
 
 class FakeGitHub:
@@ -140,11 +140,22 @@ class FakeGitHub:
 
     def __init__(self, pulls: list[dict], commit_pulls: dict[str, list], authors: dict[str, str | None]):
         self.pulls, self.commit_pulls, self.authors = pulls, commit_pulls, authors
+        self.access = {"lead": "write", "owner": "admin", "outsider": "read"}
+        self.access_reads: list[str] = []
+
+    def closed(self, path: str) -> list[dict]:
+        base = re.search(r"base=(\w+)", path).group(1)
+        return [p for p in self.pulls if p["base"] == base]
 
     def get(self, path: str):
         if "/pulls?state=closed" in path:
-            base = re.search(r"base=(\w+)", path).group(1)
-            return [p for p in self.pulls if p["base"] == base]
+            return self.closed(path)[:100]  # one page, as the REST call returns
+        if path.endswith("/permission"):
+            login = path.split("/")[-2]
+            self.access_reads.append(login)
+            if login not in self.access:
+                raise SyncError(f"{path} failed")
+            return {"permission": self.access[login]}
         if path.endswith("/pulls"):
             return self.commit_pulls.get(path.split("/")[-2], [])
         oid = path.rsplit("/", 1)[1]
@@ -152,10 +163,14 @@ class FakeGitHub:
         return {"author": {"login": login} if login else None}
 
     def paginate(self, path: str):
+        if "/pulls?state=closed" in path:
+            return self.closed(path)
         number = int(re.search(r"/pulls/(\d+)/", path).group(1))
         pull = next(p for p in self.pulls if p["number"] == number)
         if "/reviews" in path:
-            return [{"state": state} for state in pull["reviews"]]
+            # A bare state is a review by the lead, and a pair names the reviewer.
+            pairs = [(entry, "lead") if isinstance(entry, str) else entry for entry in pull["reviews"]]
+            return [{"state": state, "user": {"login": login}} for state, login in pairs]
         return [{"filename": name} for name in pull["files"]]
 
 
@@ -178,6 +193,68 @@ def test_bypasses_count_unapproved_merges_and_flag_roster_changes(repo):
     )
     found = bypasses(gh, lambda args: (0, ""), date(2026, 10, 4))
     assert found == [["count", 3], ["pull", 4, "integration"], ["pull", 3, "main"]]
+
+
+def test_an_approval_without_write_access_does_not_hide_an_admin_merge(repo):
+    repo.publish()
+    gh = FakeGitHub(
+        pulls=[
+            pull(1, "integration", "2026-10-03T00:00:00Z", reviews=[("APPROVED", "outsider")], files=["GOVERNANCE.md"]),
+            pull(2, "integration", "2026-10-03T00:00:00Z", reviews=[("APPROVED", "owner")], files=["GOVERNANCE.md"]),
+        ],
+        commit_pulls={}, authors={},
+    )
+    assert bypasses(gh, lambda args: (0, ""), date(2026, 10, 4)) == [["count", 1], ["pull", 1, "integration"]]
+
+
+def test_only_a_reviewers_standing_review_counts(repo):
+    repo.publish()
+    gh = FakeGitHub(
+        pulls=[
+            pull(1, "integration", "2026-10-03T00:00:00Z", reviews=["APPROVED", "CHANGES_REQUESTED"]),
+            pull(2, "integration", "2026-10-03T00:00:00Z", reviews=["APPROVED", "COMMENTED"]),
+            pull(3, "integration", "2026-10-03T00:00:00Z", reviews=["APPROVED", "DISMISSED"]),
+        ],
+        commit_pulls={}, authors={},
+    )
+    assert bypasses(gh, lambda args: (0, ""), date(2026, 10, 4)) == [["count", 2]]
+
+
+def test_a_bot_or_ghost_approval_is_not_looked_up_and_does_not_count(repo):
+    repo.publish()
+    gh = FakeGitHub(
+        pulls=[pull(1, "integration", "2026-10-03T00:00:00Z", reviews=[("APPROVED", "app[bot]"), ("APPROVED", None)])],
+        commit_pulls={}, authors={},
+    )
+    assert bypasses(gh, lambda args: (0, ""), date(2026, 10, 4)) == [["count", 1]]
+    assert gh.access_reads == []
+
+
+def test_each_reviewers_access_is_read_once(repo):
+    repo.publish()
+    gh = FakeGitHub(
+        pulls=[pull(n, "integration", "2026-10-03T00:00:00Z", reviews=[("APPROVED", "outsider")]) for n in (1, 2)],
+        commit_pulls={}, authors={},
+    )
+    bypasses(gh, lambda args: (0, ""), date(2026, 10, 4))
+    assert gh.access_reads == ["outsider"]
+
+
+def test_an_unreadable_access_level_fails_the_section_rather_than_passing_the_merge(repo):
+    repo.publish()
+    gh = FakeGitHub(
+        pulls=[pull(1, "integration", "2026-10-03T00:00:00Z", reviews=[("APPROVED", "gone")])],
+        commit_pulls={}, authors={},
+    )
+    with pytest.raises(SyncError):
+        bypasses(gh, lambda args: (0, ""), date(2026, 10, 4))
+
+
+def test_bypasses_read_past_the_first_page(repo):
+    repo.publish()
+    newer = [pull(n, "integration", "2026-09-01T00:00:00Z") for n in range(1, 101)]
+    gh = FakeGitHub(pulls=[*newer, pull(101, "integration", "2026-10-03T00:00:00Z")], commit_pulls={}, authors={})
+    assert bypasses(gh, lambda args: (0, ""), date(2026, 10, 4)) == [["count", 1]]
 
 
 def test_direct_pushes_are_listed_with_a_checked_login(repo):

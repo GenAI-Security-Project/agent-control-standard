@@ -14,6 +14,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
 | `steps/skillLoad`, `steps/skillUnload` | Module Activity | 1005 (`activity_id` 1 load, 2 unload) |
 | `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval`, `steps/preCompact`, `steps/postCompact` | Datastore Activity | 6005 |
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
+| Decision (allow) | Application Lifecycle | 6002 |
 | `agbom/snapshot`, `agbom/changed` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
 | `steps/skillRegister` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
 

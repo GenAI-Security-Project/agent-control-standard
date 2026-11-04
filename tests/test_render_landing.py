@@ -1,8 +1,10 @@
 """Tests for build-time content injection.
 
-GOVERNANCE.md reaches an HTML attribute position, so the escaping cases are the point.
-A roster pull request is reviewed for names and handles, not for quoting.
+Build inputs reach the page, so the escaping cases are the point.
 """
+import base64
+import dataclasses
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -12,13 +14,22 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import render_landing
+import site_nav
 from publish_schemas import BASE
 from render_landing import (
-    RenderError, parse_priority_scope, parse_workstreams, render, render_priority_scope,
-    render_workstreams, schema_count, spec_version,
+    RenderError, page_url, parse_priority_scope, read_nav_config, render,
+    release_version, render_csp, render_nav, render_priority_scope, 
+    schema_count, spec_version,
 )
 
 REPO = Path(__file__).resolve().parents[1]
+NAV = read_nav_config(REPO / "mkdocs.yml")
+# An inline SVG with one style, the shape of the real diagram, so the policy has one
+# style body to hash.
+STARBURST = "<svg><style>a{}</style></svg>"
+REPAIR_HINT = "Edit `mkdocs.yml` on a branch from `integration`"
+# Unlike the spec tree's v0.1.0, so a test cannot pass on the wrong number.
+RELEASE_FILE = "9.8.7\n"
 
 CONTRIBUTING = """# Contributing to ACS
 
@@ -47,34 +58,9 @@ CONTRIBUTING_SCOPE = (
     "kick-off."
 )
 
-GOVERNANCE = """# Governance
 
-## Project lead
 
-| Role | Name |
-| --- | --- |
-| Project Lead | Rock Lambros ([@rocklambros](https://github.com/rocklambros)) |
-
-## Workstream leads
-
-Prose that must not be parsed as a row.
-
-| Workstream | Leads |
-| --- | --- |
-| Identity | Eva Benn ([@evabenn](https://github.com/evabenn)) |
-| Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)) |
-
-## Origins
-
-Not a workstream.
-"""
-
-FULL_TEMPLATE = (
-    "<!--ACS:SPEC_VERSION--><!--ACS:SCHEMA_COUNT--><!--ACS:SCHEMA_HREF-->"
-    "<tbody><!--ACS:WORKSTREAMS--></tbody>"
-    "<blockquote><!--ACS:PRIORITY_SCOPE--></blockquote>"
-    "<div><!--ACS:STARBURST--></div>"
-)
+FULL_TEMPLATE = "".join(render_landing.REQUIRED_PLACEHOLDERS) + "<script>var x=1;</script>"
 
 
 @pytest.fixture
@@ -147,8 +133,8 @@ def test_main_reports_a_copy_failure_without_a_traceback(tmp_path, monkeypatch, 
     """
     landing = tmp_path / "landing"
     (landing / "assets").mkdir(parents=True)
-    (landing / "index.html").write_text("".join(render_landing.REQUIRED_PLACEHOLDERS))
-    (landing / "assets" / "starburst.svg").write_text("<svg></svg>")
+    (landing / "index.html").write_text(FULL_TEMPLATE)
+    (landing / "assets" / "starburst.svg").write_text(STARBURST)
 
     def boom(*args, **kwargs):
         raise OSError("assets unreadable")
@@ -156,45 +142,6 @@ def test_main_reports_a_copy_failure_without_a_traceback(tmp_path, monkeypatch, 
     monkeypatch.setattr(render_landing.shutil, "copytree", boom)
     assert render_landing.main(["render_landing.py", str(landing), str(tmp_path / "out")]) == 1
     assert "assets unreadable" in capsys.readouterr().err
-
-
-# --- governance parsing ---------------------------------------------------
-
-def test_parse_workstreams_reads_only_the_workstream_table():
-    assert [name for name, _ in parse_workstreams(GOVERNANCE)] == ["Identity", "Spec"]
-
-
-def test_parse_workstreams_accepts_heading_case_and_spacing():
-    """A formatter or a title-case edit must not take the site down."""
-    for heading in ("## Workstream Leads", "## Workstream leads ", "##  Workstream leads"):
-        text = GOVERNANCE.replace("## Workstream leads", heading)
-        assert len(parse_workstreams(text)) == 2
-
-
-def test_parse_workstreams_stops_at_any_heading_level():
-    text = GOVERNANCE.replace("## Origins", "### Emeritus\n\n| Old | Thing |\n| --- | --- |\n| A | B |\n\n## Origins")
-    assert [name for name, _ in parse_workstreams(text)] == ["Identity", "Spec"]
-
-
-def test_parse_workstreams_keeps_an_escaped_pipe():
-    text = GOVERNANCE.replace("| Identity |", r"| Identity \| IAM |")
-    assert [name for name, _ in parse_workstreams(text)] == ["Identity | IAM", "Spec"]
-
-
-def test_parse_workstreams_raises_on_a_wrong_width_row():
-    """A silently dropped workstream is worse than a loud failure."""
-    text = GOVERNANCE.replace("| Spec |", "| Spec | extra |")
-    with pytest.raises(RenderError, match="cells"):
-        parse_workstreams(text)
-
-
-def test_parse_workstreams_fails_without_the_section():
-    with pytest.raises(RenderError, match="Workstream leads"):
-        parse_workstreams("# Governance\n\nNothing here.\n")
-
-
-def test_parse_workstreams_handles_the_real_file():
-    assert len(parse_workstreams((REPO / "GOVERNANCE.md").read_text(encoding="utf-8"))) == 7
 
 
 # --- priority scope parsing ------------------------------------------------
@@ -229,11 +176,6 @@ def test_parse_priority_scope_handles_the_real_file():
 
 # --- escaping -------------------------------------------------------------
 
-def test_render_workstreams_converts_markdown_links_to_html():
-    html = render_workstreams([("Identity", "Eva Benn ([@evabenn](https://example.com))")])
-    assert '<a href="https://example.com">@evabenn</a>' in html
-
-
 def parse_attributes(markup: str) -> list[tuple[str, list[tuple[str, str | None]]]]:
     """Return (tag, attributes) for every start tag.
 
@@ -256,29 +198,8 @@ def parse_attributes(markup: str) -> list[tuple[str, list[tuple[str, str | None]
     return collector.tags
 
 
-def test_render_workstreams_blocks_attribute_breakout():
-    html = render_workstreams([("X", '[@ok](https://x" autofocus onfocus="alert(1))')])
-    attributes = [name for _, attrs in parse_attributes(html) for name, _ in attrs]
-    assert not [name for name in attributes if name.startswith("on")]
-    assert "autofocus" not in attributes
-    # The quote survives as an entity inside the value rather than as a delimiter.
-    assert "&quot;" in html
-
-
-def test_render_workstreams_drops_a_javascript_scheme():
-    html = render_workstreams([("X", "[@x](javascript:alert(1))")])
-    assert "javascript:" not in html
-    assert "@x" in html  # the label survives, the link does not
-
-
-def test_render_workstreams_escapes_raw_html():
-    html = render_workstreams([("<script>alert(1)</script>", "safe")])
-    assert "<script>" not in html
-    assert "&lt;script&gt;" in html
-
-
 def test_render_priority_scope_escapes_raw_html():
-    """The blockquote is a build input like GOVERNANCE.md, reviewed for wording, not markup."""
+    """The blockquote is a build input, reviewed for wording, not markup."""
     scope = parse_priority_scope(CONTRIBUTING.replace(
         "A runnable Guardian Agent reference implementation,",
         "A runnable Guardian Agent <script>alert(1)</script> reference implementation,",
@@ -291,13 +212,51 @@ def test_render_priority_scope_escapes_raw_html():
 # --- placeholders ---------------------------------------------------------
 
 def test_render_fills_every_placeholder(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, "<svg id='sb'/>")
-    assert "v0.1.0" in out and "Identity" in out and "<svg id='sb'/>" in out
+    out = render(FULL_TEMPLATE, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+    assert "v0.1.0" in out and "Identity" in out and STARBURST in out
+    assert 'aria-label="Navigation"' in out and "Content-Security-Policy" in out
     assert CONTRIBUTING_SCOPE in out
 
 
+def test_render_fills_the_release_from_version_txt(spec_tree):
+    template = FULL_TEMPLATE + "<!--ACS:RELEASE_VERSION-->"
+    out = render(template, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+    assert out.count("9.8.7") == 2
+    assert "<!--ACS:" not in out
+
+
+def test_render_fails_when_the_template_drops_the_release(spec_tree):
+    without = FULL_TEMPLATE.replace("<!--ACS:RELEASE_VERSION-->", "")
+    with pytest.raises(RenderError, match="RELEASE_VERSION"):
+        render(without, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+
+
+@pytest.mark.parametrize("text", ["", "0.1", "v0.1.4", '0.1.4"><script>', "0.1.4\n0.1.5\n"])
+def test_release_version_refuses_anything_but_a_semantic_version(text):
+    with pytest.raises(RenderError, match="version.txt"):
+        release_version(text)
+
+
+@pytest.mark.parametrize("text, expected", [("0.1.4\n", "0.1.4"), (" 1.2.3-rc.1 ", "1.2.3-rc.1")])
+def test_release_version_trims_the_file(text, expected):
+    assert release_version(text) == expected
+
+
+def test_main_fails_when_version_txt_is_missing(tmp_path, monkeypatch, capsys):
+    real_read_text = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.name == "version.txt":
+            raise FileNotFoundError(str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 1
+    assert "version.txt" in capsys.readouterr().err
+
+
 def test_render_derives_the_schema_href_from_the_version(spec_tree):
-    out = render(FULL_TEMPLATE, spec_tree, GOVERNANCE, CONTRIBUTING, "<svg/>")
+    out = render(FULL_TEMPLATE, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
     assert "schema/v0.1.0/acs_schema.json" in out
 
 
@@ -305,12 +264,24 @@ def test_render_fails_when_the_template_drops_a_placeholder(spec_tree):
     """A template missing the hero would otherwise ship a blank div with no error."""
     without = FULL_TEMPLATE.replace("<!--ACS:STARBURST-->", "")
     with pytest.raises(RenderError, match="STARBURST"):
-        render(without, spec_tree, GOVERNANCE, CONTRIBUTING, "<svg/>")
+        render(without, spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
+
+
+def test_header_values_are_escaped_and_validated(spec_tree):
+    """site_name reaches attributes, so a quote must not end one, and a markup character
+    stops the build rather than reaching the page."""
+    quoted = dataclasses.replace(NAV, site_name='A"B')
+    template = FULL_TEMPLATE + '<a title="<!--ACS:SITE_NAME-->">'
+    assert '<a title="A&quot;B">' in render(template, spec_tree, CONTRIBUTING, STARBURST, quoted, RELEASE_FILE)
+    for field, value in (("site_name", "<b>"), ("repo_name", "a&b"), ("repo_url", "https://evil.example/")):
+        with pytest.raises(RenderError, match=field):
+            render(FULL_TEMPLATE, spec_tree, CONTRIBUTING, STARBURST,
+                   dataclasses.replace(NAV, **{field: value}), RELEASE_FILE)
 
 
 def test_render_fails_when_an_unknown_placeholder_survives(spec_tree):
     with pytest.raises(RenderError, match="unfilled placeholder"):
-        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, GOVERNANCE, CONTRIBUTING, "<svg/>")
+        render(FULL_TEMPLATE + "<!--ACS:UNKNOWN-->", spec_tree, CONTRIBUTING, STARBURST, NAV, RELEASE_FILE)
 
 
 def test_main_does_not_republish_the_inlined_diagram(tmp_path):
@@ -320,4 +291,353 @@ def test_main_does_not_republish_the_inlined_diagram(tmp_path):
     assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
     assert not (tmp_path / "assets" / "starburst.svg").exists()
     assert (tmp_path / "assets" / "acs.css").is_file()
+
+
+def test_main_ties_the_page_to_the_stylesheet_it_was_built_with(tmp_path):
+    """A stale stylesheet under a new page breaks the header for returning visitors."""
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
+    digest = hashlib.sha256((REPO / "landing" / "assets" / "acs.css").read_bytes()).hexdigest()[:12]
+    assert f'href="assets/acs.css?v={digest}"' in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("before, after", [
+    ("<p>ACS v0.1.0 organizes</p>", "<p>ACS v0.1.4 organizes</p>"),
+    ("<p>A v0.1.0-conformant deployment</p>", "<p>A v0.1.4-conformant deployment</p>"),
+    ("<h1>ACS v0.1.0 — Instrument</h1>", "<h1>ACS v0.1.4 — Instrument</h1>"),
+    # Wire values and paths are the specification version, and changing them breaks readers.
+    ("<code>acs_version: v0.1.0</code>", "<code>acs_version: v0.1.0</code>"),
+    ("<pre><code>v0.1.0\n<span>v0.1.0</span></code></pre>", "<pre><code>v0.1.0\n<span>v0.1.0</span></code></pre>"),
+    ('<a href="/schema/v0.1.0/x.json">root</a>', '<a href="/schema/v0.1.0/x.json">root</a>'),
+    ("<p>specification/v0.1.0/hooks</p>", "<p>specification/v0.1.0/hooks</p>"),
+    ("<p>the v0.1.0 schemas</p>", "<p>the v0.1.0 schemas</p>"),
+    ("<p>v0.1.01</p>", "<p>v0.1.01</p>"),
+    ("<p>not supported in v0.1.0.</p>", "<p>not supported in v0.1.4.</p>"),
+    ("<p>v0.1.0.1</p>", "<p>v0.1.0.1</p>"),
+])
+def test_show_release_changes_prose_and_leaves_literals(before, after):
+    assert render_landing.show_release(before, "0.1.0", "0.1.4") == after
+
+
+def test_docs_prose_and_search_show_the_release(tmp_path):
+    page = tmp_path / "docs" / "a" / "index.html"
+    page.parent.mkdir(parents=True)
+    page.write_text("<p>ACS v0.1.0 ships</p>", encoding="utf-8")
+    index = tmp_path / "docs" / "search" / "search_index.json"
+    index.parent.mkdir(parents=True)
+    index.write_text(json.dumps({"docs": [{"title": "ACS v0.1.0", "text": "<code>v0.1.0</code> in v0.1.0"}]}), encoding="utf-8")
+
+    render_landing.show_release_in_docs(tmp_path, "0.1.0", "0.1.4")
+
+    assert "ACS v0.1.4 ships" in page.read_text(encoding="utf-8")
+    entry = json.loads(index.read_text(encoding="utf-8"))["docs"][0]
+    assert entry == {"title": "ACS v0.1.4", "text": "<code>v0.1.0</code> in v0.1.4"}
+
+
+def test_main_shows_the_real_release_in_built_docs(tmp_path):
+    """Uses the real version inputs, whose prefixes a fixture would hide."""
+    page = tmp_path / "docs" / "a" / "index.html"
+    page.parent.mkdir(parents=True)
+    spec = render_landing.spec_version(REPO / "specification")
+    page.write_text(f"<p>ACS {spec} ships</p><code>{spec}</code>", encoding="utf-8")
+
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
+
+    release = render_landing.release_version((REPO / "version.txt").read_text(encoding="utf-8")).removeprefix("v")
+    assert page.read_text(encoding="utf-8") == f"<p>ACS v{release} ships</p><code>{spec}</code>"
+
+
+def test_docs_pages_are_tied_to_the_stylesheet_they_were_built_with(tmp_path):
+    sheet = tmp_path / "docs" / "stylesheets" / "extra.css"
+    sheet.parent.mkdir(parents=True)
+    sheet.write_text("a { color: red; }", encoding="utf-8")
+    deep = tmp_path / "docs" / "a" / "b" / "index.html"
+    deep.parent.mkdir(parents=True)
+    link = '<link rel="stylesheet" href="../../stylesheets/extra.css">'
+    deep.write_text(link, encoding="utf-8")
+    (tmp_path / "404.html").write_text('<link href="/docs/stylesheets/extra.css">', encoding="utf-8")
+
+    render_landing.pin_docs_stylesheet(tmp_path)
+
+    digest = hashlib.sha256(sheet.read_bytes()).hexdigest()[:12]
+    assert f"stylesheets/extra.css?v={digest}" in deep.read_text(encoding="utf-8")
+    assert f"stylesheets/extra.css?v={digest}" in (tmp_path / "404.html").read_text(encoding="utf-8")
+
+
+def test_main_publishes_the_demo_the_page_points_at(tmp_path):
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
+    page = (tmp_path / "index.html").read_text(encoding="utf-8")
+    for name in ("demo.mp4", "demo-poster.jpg"):
+        assert f'"assets/video/{name}"' in page
+        assert (tmp_path / "assets" / "video" / name).stat().st_size > 0
     assert (tmp_path / "assets" / "icon.svg").is_file()
+
+
+# --- navigation pane --------------------------------------------------------
+
+LANDING_ROOT = "https://example.org/agent-control-standard/"
+
+
+def with_nav(*entries) -> render_landing.NavConfig:
+    return dataclasses.replace(NAV, nav=tuple(entries))
+
+
+def raises_naming(entry: str, pattern: str | None = None):
+    """Every validation failure names the entry, the rule, and where to fix it."""
+
+    class Check:
+        def __enter__(self):
+            self.inner = pytest.raises(RenderError)
+            self.info = self.inner.__enter__()
+            return self.info
+
+        def __exit__(self, *exc):
+            handled = self.inner.__exit__(*exc)
+            message = str(self.info.value)
+            assert entry in message, message
+            assert REPAIR_HINT in message, message
+            if pattern is not None:
+                assert pattern in message, message
+            return handled
+
+    return Check()
+
+
+@pytest.mark.parametrize("path, url", [
+    ("README.md", "./"),
+    ("index.md", "./"),
+    ("concepts/README.md", "concepts/"),
+    ("concepts/index.md", "concepts/"),
+    ("topics/faq.md", "topics/faq/"),
+    ("spec/trace/OCSF/implementation_examples.md", "spec/trace/OCSF/implementation_examples/"),
+    ("topics/my page.md", "topics/my%20page/"),
+])
+def test_page_url_matches_mkdocs_rule(path, url):
+    assert page_url(path) == url
+
+
+def _expected_rows(nav, depth):
+    for entry in nav:
+        ((title, value),) = entry.items()
+        if isinstance(value, list):
+            yield depth, title, None
+            yield from _expected_rows(value, depth + 1)
+        else:
+            yield depth, title, LANDING_ROOT + "docs/" + ("" if page_url(value) == "./" else page_url(value))
+
+
+def test_render_nav_emits_the_pane_in_order():
+    rows = site_nav.walk_landing(render_nav(NAV), LANDING_ROOT)
+    expected = [(1, "Home", LANDING_ROOT)]
+    expected += [(2, s["title"], LANDING_ROOT + "#" + s["anchor"]) for s in NAV.landing_sections]
+    expected += list(_expected_rows(NAV.nav, 1))
+    expected += [(1, "External resources", None)]
+    expected += [(2, r["title"], r["url"]) for r in NAV.external_resources]
+    assert [(depth, label, url) for depth, label, url, _group, _section in rows] == expected
+    # The design's count, so a walker and a renderer that drop the same row still fail.
+    assert len(rows) == 52
+    by_label = {row[1]: row for row in rows}
+    assert by_label["Trustworthy Agents"][2] == LANDING_ROOT + "docs/"
+    assert by_label["FAQ"][2] == LANDING_ROOT + "docs/topics/faq/"
+    assert by_label["Home"][3] is True and by_label["External resources"][4] is True
+    assert site_nav.landing_open_labels(render_nav(NAV)) == {"Home"}
+    assert site_nav.aria_current_links(render_nav(NAV)) == [("a", "./")]
+
+
+def test_render_nav_emits_no_target_or_rel():
+    attrs = [name for _, pairs in parse_attributes(render_nav(NAV)) for name, _ in pairs]
+    assert "target" not in attrs and "rel" not in attrs
+    assert 'href="/"' not in render_nav(NAV)
+
+
+@pytest.mark.parametrize("title", ["Trace & Inspect", "<code>hooks</code>", "a > b", "Title\n"])
+def test_title_with_markup_raises_naming_the_entry(title):
+    """Review Focus 1: a split pane is worse than a failed build."""
+    nav = with_nav({"Specification": [{title: "spec/conformance.md"}]})
+    with raises_naming(repr(title), site_nav.TITLE.pattern):
+        render_nav(nav)
+
+
+def test_section_and_resource_titles_are_validated():
+    sections = ({"title": "<b>x</b>", "anchor": "problem"},)
+    with raises_naming("'<b>x</b>'", site_nav.TITLE.pattern):
+        render_nav(dataclasses.replace(NAV, landing_sections=sections))
+    resources = ({"title": "a & b", "url": site_nav.REPO_URL},)
+    with raises_naming("'a & b'", site_nav.TITLE.pattern):
+        render_nav(dataclasses.replace(NAV, external_resources=resources))
+
+
+@pytest.mark.parametrize("anchor", ["", "1st", "has space", 'x" onfocus="a', "problem\n", "#problem"])
+def test_bad_anchor_raises(anchor):
+    sections = ({"title": "The problem", "anchor": anchor},)
+    with raises_naming(repr(anchor), site_nav.ANCHOR.pattern):
+        render_nav(dataclasses.replace(NAV, landing_sections=sections))
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "java\nscript:alert(1)",
+    "java\tscript:alert(1)",
+    "https://github.com/x\n",
+    "https://github.com/\rx",
+    "data:text/html,x",
+])
+def test_url_with_javascript_scheme_or_newline_raises(url):
+    # A browser deletes tabs and line breaks before parsing, so they get their own rule.
+    reason = "tab or line break" if any(c in url for c in "\t\r\n") else None
+    with raises_naming(repr(url), reason):
+        render_nav(with_nav({"Bad": url}))
+    resources = ({"title": "Bad", "url": url},)
+    with raises_naming(repr(url), reason):
+        render_nav(dataclasses.replace(NAV, external_resources=resources))
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/\\evil.example",
+    "https://github.com/x\\y",
+    "https://github.com/@evil.example/",
+    "https://github.com/user@evil.example",
+    "https://github.com/a:b",
+])
+def test_url_with_backslash_or_userinfo_raises(url):
+    reason = "backslash, an @, or a colon after the scheme"
+    with raises_naming(repr(url), reason):
+        render_nav(with_nav({"Bad": url}))
+    resources = ({"title": "Bad", "url": url},)
+    with raises_naming(repr(url), reason):
+        render_nav(dataclasses.replace(NAV, external_resources=resources))
+
+
+@pytest.mark.parametrize("url", [
+    "https://evil.example/",
+    "http://github.com/",
+    "https://github.com.evil.example/",
+    "https://owasp.slack.com.evil.example",
+    "//github.com/x",
+    "/docs/",
+    "ftp://github.com/",
+])
+def test_external_url_outside_the_two_hosts_raises(url):
+    with raises_naming(repr(url), site_nav.EXTERNAL_URL.pattern):
+        render_nav(with_nav({"Bad": url}))
+    resources = ({"title": "Bad", "url": url},)
+    with raises_naming(repr(url), site_nav.EXTERNAL_URL.pattern):
+        render_nav(dataclasses.replace(NAV, external_resources=resources))
+
+
+@pytest.mark.parametrize("url", [
+    'https://github.com/x" onmouseover="alert(1)',
+    "https://github.com/x' onmouseover='alert(1)",
+    "https://github.com/x><script>alert(1)</script>",
+    "https://github.com/x onmouseover=alert(1)",
+])
+def test_attribute_breakout_in_an_external_url_is_rejected(url):
+    """The host prefix matches, so only the character rule stands between the value
+    and a new attribute. Escaping would make it inert. Rejecting keeps a review honest."""
+    reason = render_landing.URL_CHARS.pattern
+    with raises_naming(repr(url), reason):
+        render_nav(with_nav({"Bad": url}))
+    resources = ({"title": "Bad", "url": url},)
+    with raises_naming(repr(url), reason):
+        render_nav(dataclasses.replace(NAV, external_resources=resources))
+
+
+def test_a_doc_path_outside_the_pattern_raises():
+    for path in ("../secrets.md", "a/../../b.md", "page.html", 'x".md'):
+        with raises_naming(repr(path), site_nav.DOC_PATH.pattern):
+            render_nav(with_nav({"Bad": path}))
+
+
+def test_bare_string_entry_raises():
+    with raises_naming("'about.md'", "bare string"):
+        render_nav(with_nav({"ACS": "acs.md"}, "about.md"))
+    with raises_naming("untitled"):
+        render_nav(with_nav({"ACS": "acs.md"}, ["about.md"]))
+    with raises_naming("untitled"):
+        render_nav(with_nav({None: [{"ACS": "acs.md"}]}))
+
+
+def test_every_value_is_escaped():
+    """Quotes pass every pattern but must not close the attribute or the text node."""
+    nav = with_nav({'Say "hi" it\'s': "acs.md"})
+    out = render_nav(nav)
+    assert "Say &quot;hi&quot; it&#x27;s" in out
+
+
+# --- content security policy --------------------------------------------------
+
+def _hash(body: str) -> str:
+    return base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode("ascii")
+
+
+def test_csp_hashes_the_one_script_and_one_style():
+    page = (
+        "<!-- <script>not this</script> --><svg><style>\n a{fill:red} \n</style></svg>"
+        "<p>x</p><script>\n  var x = 1;\n</script>"
+    )
+    assert render_csp(page) == (
+        '<meta http-equiv="Content-Security-Policy" content="'
+        "default-src 'none'; "
+        f"script-src 'sha256-{_hash(chr(10) + '  var x = 1;' + chr(10))}'; "
+        f"style-src 'self' 'sha256-{_hash(chr(10) + ' a{fill:red} ' + chr(10))}'; "
+        "img-src 'self'; media-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'"
+        '">'
+    )
+
+
+def test_csp_raises_on_two_scripts():
+    with pytest.raises(RenderError, match="script"):
+        render_csp("<style>a{}</style><script>a</script><script>b</script>")
+    with pytest.raises(RenderError, match="style"):
+        render_csp("<style>a{}</style><style>b{}</style><script>a</script>")
+    with pytest.raises(RenderError, match="script"):
+        render_csp("<style>a{}</style>")
+
+
+@pytest.mark.parametrize("body", ["a{content:'&amp;'}", "a{content:'&#60;'}", "a{} <!-- x -->"])
+def test_csp_raises_on_an_entity_in_the_style_body(body):
+    """An SVG style is foreign content, decoded before the browser hashes it."""
+    with pytest.raises(RenderError, match="style"):
+        render_csp(f"<svg><style>{body}</style></svg><script>a</script>")
+
+
+def test_render_succeeds_with_no_built_docs_present(tmp_path, monkeypatch):
+    """The landing render runs before the docs build in no particular order, so it must
+    read nothing a docs build produces."""
+    read: list[Path] = []
+    original_read_text, original_open = Path.read_text, Path.open
+
+    def spy_read_text(self, *args, **kwargs):
+        read.append(self.resolve())
+        return original_read_text(self, *args, **kwargs)
+
+    def spy_open(self, *args, **kwargs):
+        read.append(self.resolve())
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", spy_read_text)
+    monkeypatch.setattr(Path, "open", spy_open)
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "out"
+    assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(out)]) == 0
+    assert (REPO / "mkdocs.yml").resolve() in read
+    built = [path for path in read if {"site", "_site"} & set(path.relative_to(path.anchor).parts)]
+    assert not built, built
+    page = (out / "index.html").read_text(encoding="utf-8")
+    assert 'aria-label="Navigation"' in page
+
+
+def test_inline_bodies_match_conftests_rule_on_the_real_page():
+    from conftest import _element_bodies
+
+    page = render(
+        (REPO / "landing" / "index.html").read_text(encoding="utf-8"),
+        REPO / "specification",
+        (REPO / "CONTRIBUTING.md").read_text(encoding="utf-8"),
+        (REPO / "landing" / "assets" / "starburst.svg").read_text(encoding="utf-8"),
+        NAV,
+        (REPO / "version.txt").read_text(encoding="utf-8"),
+    )
+    bodies = render_landing._inline_bodies(page)
+    assert bodies == _element_bodies(page)
+    assert sorted(tag for tag, _ in bodies) == ["script", "style"]

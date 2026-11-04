@@ -33,6 +33,43 @@ The Guardian reads `ACS_GUARDIAN_HOST`, `ACS_GUARDIAN_PORT`, `ACS_MANIFEST_PATH`
 
 The AGT SDK reads `ACS_OPA_TIMEOUT_MS`, defaulting to 5000 milliseconds. The handshake advertises this evaluator timeout plus 1000 milliseconds for request handling and decision delivery. The default host deadline is therefore 6000 milliseconds; setting `ACS_OPA_TIMEOUT_MS=30000` advertises 31000 milliseconds. A timeout too large to represent with the delivery margin stops startup.
 
+## Audit log limits and failures
+
+Both audit logs are required. A missing or unopenable sink stops startup. Each sink
+has a maximum segment size of 8 MiB and retains at most five files, including the
+active file: 40 MiB per sink and 80 MiB in total. `ACS_LOG_MAX_BYTES` and
+`ACS_LOG_MAX_FILES` configure those positive limits. The newline counts towards
+the size limit, and a single record larger than a segment is refused.
+
+A full active file moves to `.1`, with older segments moving to `.2` and so on.
+Rotation never deletes or overwrites an audit record. When the retained segments
+are full, decisions are denied until an operator archives the segments and
+restarts the Guardian. Rotation uses same-directory hard links to prevent
+overwriting an existing destination; a filesystem that cannot make these links
+causes a denial rather than losing history.
+
+Each append is serialized, written, flushed and synchronized to the filesystem.
+A write, flush, sync or rotation failure latches the sink unavailable. A valid
+step receives a final `deny`, including when logging the response to an otherwise
+allowed request fails. It does not receive an error that could trigger the host's
+fail-open posture. Subsequent steps remain denied; the Guardian does not silently
+disable its audit logs and continue evaluating requests. The unrecordable denial
+itself cannot repair an unavailable sink: restore storage and inspect any partial
+last record before restarting.
+
+An adjacent `.lock` file holds an exclusive advisory lock for the lifetime of
+each sink, including across rotations. Reusing the same configured path in
+another sink or Guardian fails startup. The data file remains readable by the
+Inspector. Symlink or hard-link aliases and writers that ignore the advisory
+lock are not supported: configure distinct physical files for the two sinks and
+for separate instances. An incomplete final record prevents restart instead of
+appending new records to a partial JSON line.
+
+The session state is still in memory. This does not add crash recovery for that
+state or claim full ACS-Core conformance. Parsing and oversized-body errors that
+cannot identify a step retain their JSON-RPC error behavior; they cannot be
+turned into a step decision.
+
 ## Test
 
 ```sh
@@ -42,7 +79,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ACS_OPA_PATH=/absolute/path/to/opa ACS_OPA_TIMEOUT_MS=30000 cargo test --workspace --all-features
 ```
 
-Six unit tests cover verdict mapping, session state, OPA version validation, and host deadline calculation. The HTTP integration test starts a real Guardian and uses the pinned AGT bundle for handshake, allow, deny, request and result redaction, egress denial, WebFetch allowance, malformed payload, unknown method, parse error, oversized body, and log cases. It also checks the advertised deadline. It requires OPA. The test command gives slow test machines a longer OPA subprocess deadline and correspondingly extends the host deadline. The existing TypeScript tests are a separate baseline and can be run from `../agt` with Bun 1.3.11.
+Unit tests cover verdict mapping, session state, OPA version validation, host deadline calculation, and bounded audit logging. The HTTP integration test starts a real Guardian and uses the pinned AGT bundle for handshake, allow, deny, request and result redaction, egress denial, WebFetch allowance, malformed payload, unknown method, parse error, oversized body, and log cases. It also checks the advertised deadline. It requires OPA. The test command gives slow test machines a longer OPA subprocess deadline and correspondingly extends the host deadline. The existing TypeScript tests are a separate baseline and can be run from `../agt` with Bun 1.3.11.
 
 For a direct wire comparison, start the Rust Guardian on port 8787 and the TypeScript Guardian on port 8788 with the same AGT policy bundle, then run `node tests/compare-guardians.mjs` from this directory. `RUST_GUARDIAN_URL` and `TS_GUARDIAN_URL` can override the endpoints. CI also runs these nine cases: eight complete response comparisons and one handshake comparison excluding the intentionally different `timeout_config.default_ms`.
 

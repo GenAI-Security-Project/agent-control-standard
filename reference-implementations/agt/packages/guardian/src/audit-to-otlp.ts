@@ -290,10 +290,11 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     if (sessionId !== undefined) {
       attributes["acs.session.id"] = sessionUuid(sessionId);
     }
-    // The host builds every envelope with its JSON-RPC id equal to
-    // params.request_id (build-envelope.ts), so the entry's rpc_id is the
-    // request id the Guardian's span for the same request carries.
-    const requestId = readString(entry.rpc_id);
+    // The entry's request_id is the id the Guardian's span for the same
+    // request carries. Entries written before that field existed have only
+    // rpc_id, which equalled params.request_id whenever the host did not
+    // derive the request id from its own call id.
+    const requestId = readString(entry.request_id) ?? readString(entry.rpc_id);
     if (requestId !== undefined) {
       attributes["acs.request_id"] = requestId;
     }

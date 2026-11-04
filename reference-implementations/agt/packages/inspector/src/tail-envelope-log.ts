@@ -59,7 +59,10 @@
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 
-export type EnvelopeLogDirection = "request" | "response";
+// "finding" is a fact the Guardian established about a request that the spec
+// requires it to record, such as an unresolved request_id_ref. Its envelope is
+// the Guardian's own record, not a JSON-RPC object.
+export type EnvelopeLogDirection = "request" | "response" | "finding";
 
 /** One line of the envelope log the Guardian writes. */
 export type EnvelopeLogEntry = {
@@ -106,7 +109,7 @@ function isEnvelopeLogEntryShape(value: unknown): value is EnvelopeLogEntry {
   return (
     typeof candidate.seq === "number" &&
     typeof candidate.recorded_at === "string" &&
-    (candidate.direction === "request" || candidate.direction === "response") &&
+    (candidate.direction === "request" || candidate.direction === "response" || candidate.direction === "finding") &&
     (typeof candidate.method === "string" || candidate.method === null) &&
     (typeof candidate.rpc_id === "string" || typeof candidate.rpc_id === "number" || candidate.rpc_id === null)
   );

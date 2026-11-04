@@ -50,4 +50,4 @@ jobs:
           fi
           gh issue create --title "$TITLE" \
             --label 'status:needs-triage' \
-            --body "The Current Priority Scope in CONTRIBUTING.md passed its review date of $DUE. Confirm what is still in focus, move what has shipped, and set the next review date. This is a standing item for the weekly call."
+            --body "The Current Priority Scope in CONTRIBUTING.md passed its review date of $DUE. Confirm what is still in focus, move what has shipped, and set the next review date."

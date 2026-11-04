@@ -1,5 +1,6 @@
 //! Rust Guardian for the AGT ACS reference implementation.
 
+mod audit;
 mod mapping;
 mod policy;
 mod schema;

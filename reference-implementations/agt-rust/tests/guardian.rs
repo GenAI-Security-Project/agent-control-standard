@@ -19,6 +19,139 @@ fn request(method: &str, payload: Value, request_id: &str) -> Value {
     })
 }
 
+#[test]
+fn refuses_to_start_when_an_audit_log_cannot_be_opened() {
+    let directory = tempfile::tempdir().expect("temporary log directory");
+    let mut config = GuardianConfig::from_repo();
+    config.envelope_log = Some(directory.path().to_owned());
+    let Err(error) = Guardian::new(config) else {
+        panic!("an unavailable audit log must stop startup");
+    };
+    assert_eq!(error, "audit log path is a directory");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn audit_write_failure_returns_an_honored_deny_over_http() {
+    for fail_session_log in [false, true] {
+        let directory = tempfile::tempdir().expect("temporary log directory");
+        let failing_log = directory.path().join("failing.jsonl");
+        std::os::unix::fs::symlink("/dev/full", &failing_log).unwrap();
+        let mut config = GuardianConfig::from_repo();
+        config.envelope_log = Some(if fail_session_log {
+            directory.path().join("envelopes.jsonl")
+        } else {
+            failing_log.clone()
+        });
+        config.session_log = Some(if fail_session_log {
+            failing_log
+        } else {
+            directory.path().join("sessions.jsonl")
+        });
+        let guardian = Guardian::new(config).expect("pinned AGT manifest should load");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, guardian.router()).await });
+        let client = reqwest::Client::new();
+        for _ in 0..2 {
+            let response: Value = client
+                .post(format!("http://{address}/acs"))
+                .json(&request(
+                    "steps/toolCallRequest",
+                    json!({
+                        "tool": {"name": "Bash"},
+                        "arguments": {"command": {"value": "ls -la"}},
+                        "raw_command": "ls -la"
+                    }),
+                    "ff1c17fa-48e1-49dd-88c6-50796a504c14",
+                ))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(response["result"]["decision"], "deny", "{response}");
+            assert!(
+                response.get("error").is_none(),
+                "logging failure must not trigger fail-open"
+            );
+        }
+        server.abort();
+        let _ = server.await;
+    }
+}
+
+#[tokio::test]
+async fn a_response_log_failure_replaces_an_allow_with_an_honored_deny() {
+    let directory = tempfile::tempdir().unwrap();
+    let raw = request(
+        "steps/toolCallRequest",
+        json!({
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "ls -la"}},
+            "raw_command": "ls -la"
+        }),
+        "ff1c17fa-48e1-49dd-88c6-50796a504c14",
+    );
+    let request_record = json!({
+        "seq": 1, "recorded_at": "2000-01-01T00:00:00.000Z",
+        "direction": "request", "method": "steps/toolCallRequest",
+        "rpc_id": raw["id"], "envelope": raw,
+    });
+    for audit_full in [false, true] {
+        let mut config = GuardianConfig::from_repo();
+        let envelopes = directory
+            .path()
+            .join(format!("envelopes-{audit_full}.jsonl"));
+        let sessions = directory
+            .path()
+            .join(format!("sessions-{audit_full}.jsonl"));
+        config.envelope_log = Some(envelopes.clone());
+        config.session_log = Some(sessions.clone());
+        if audit_full {
+            config.log_max_bytes = serde_json::to_vec(&request_record).unwrap().len() as u64 + 1;
+            config.log_max_files = 1;
+        }
+        let guardian = Guardian::new(config).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, guardian.router()).await });
+        let response: Value = reqwest::Client::new()
+            .post(format!("http://{address}/acs"))
+            .json(&raw)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            response["result"]["decision"],
+            if audit_full { "deny" } else { "allow" },
+            "{response}"
+        );
+        if audit_full {
+            assert_eq!(
+                response["result"]["reason_codes"],
+                json!(["audit_unavailable"])
+            );
+        }
+        assert!(response.get("error").is_none());
+        // Both requests reached policy evaluation; only the capped response cannot fit.
+        assert_eq!(
+            std::fs::read_to_string(envelopes).unwrap().lines().count(),
+            if audit_full { 1 } else { 2 }
+        );
+        assert_eq!(
+            std::fs::read_to_string(sessions).unwrap().lines().count(),
+            1
+        );
+        server.abort();
+        let _ = server.await;
+    }
+}
+
 #[tokio::test]
 async fn guardian_matches_the_two_tool_gates_and_refuses_invalid_steps() {
     let mut config = GuardianConfig::from_repo();
@@ -224,4 +357,5 @@ async fn guardian_matches_the_two_tool_gates_and_refuses_invalid_steps() {
     assert!(chain.contains("steps/toolCallResult"));
 
     server.abort();
+    let _ = server.await;
 }

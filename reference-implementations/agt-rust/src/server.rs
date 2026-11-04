@@ -1,4 +1,6 @@
-use crate::{mapping::Mapping, policy::Policy, schema::Schemas, session::SessionStore};
+use crate::{
+    audit::AuditLog, mapping::Mapping, policy::Policy, schema::Schemas, session::SessionStore,
+};
 use axum::{
     body::{to_bytes, Body},
     extract::State,
@@ -9,11 +11,10 @@ use axum::{
 use chrono::Utc;
 use serde_json::{json, Map, Value};
 use std::{
-    fs::{self, File, OpenOptions},
     io::{self, Write},
     net::SocketAddr,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 const MAX_REQUEST_BYTES: usize = 1_048_576;
@@ -25,6 +26,10 @@ pub struct GuardianConfig {
     pub schemas: PathBuf,
     pub envelope_log: Option<PathBuf>,
     pub session_log: Option<PathBuf>,
+    /// Maximum bytes in each audit log segment, including line separators.
+    pub log_max_bytes: u64,
+    /// Maximum retained files per sink, including its active segment.
+    pub log_max_files: usize,
     pub on_decision_failure: String,
 }
 
@@ -38,6 +43,8 @@ impl GuardianConfig {
             schemas: root.join("../../specification/v0.1.0"),
             envelope_log: Some(root.join("../agt/.acs/envelopes-rust.jsonl")),
             session_log: Some(root.join("../agt/.acs/session-context-rust.jsonl")),
+            log_max_bytes: 8 * 1024 * 1024,
+            log_max_files: 5,
             on_decision_failure: "proceed".into(),
         }
     }
@@ -49,14 +56,9 @@ pub struct Guardian {
     mapping: Mapping,
     schemas: Schemas,
     sessions: SessionStore,
-    envelope_log: Option<Mutex<EnvelopeLog>>,
-    session_log: Option<Mutex<Option<File>>>,
+    envelope_log: AuditLog,
+    session_log: AuditLog,
     posture: String,
-}
-
-struct EnvelopeLog {
-    file: Option<File>,
-    seq: u64,
 }
 
 impl Guardian {
@@ -68,15 +70,20 @@ impl Guardian {
         let policy = Policy::load(&config.manifest)?;
         let mapping = Mapping::load(&config.mapping)?;
         let schemas = Schemas::load(&config.schemas)?;
-        let envelope_log = config.envelope_log.map(|path| {
-            Mutex::new(EnvelopeLog {
-                file: open_log_best_effort(&path),
-                seq: 0,
-            })
-        });
-        let session_log = config
-            .session_log
-            .map(|path| Mutex::new(open_log_best_effort(&path)));
+        let envelope_log = AuditLog::open(
+            config
+                .envelope_log
+                .ok_or("the envelope audit log is required")?,
+            config.log_max_bytes,
+            config.log_max_files,
+        )?;
+        let session_log = AuditLog::open(
+            config
+                .session_log
+                .ok_or("the session audit log is required")?,
+            config.log_max_bytes,
+            config.log_max_files,
+        )?;
         Ok(Arc::new(Self {
             policy,
             mapping,
@@ -95,15 +102,29 @@ impl Guardian {
 
     fn respond(&self, raw: Value) -> Value {
         let method = raw.get("method").and_then(Value::as_str).map(str::to_owned);
-        self.write_envelope("request", &raw, method.as_deref());
-        let response = self.dispatch(&raw);
+        if !self.session_log.available()
+            || self
+                .write_envelope("request", &raw, method.as_deref())
+                .is_err()
+        {
+            return audit_failure(&raw);
+        }
+        let mut response = self.dispatch(&raw);
+        if !self.session_log.available() {
+            response = audit_failure(&raw);
+        }
         if let Err(error) = self.schemas.validate_response(&response) {
             let _ = writeln!(
                 io::stderr().lock(),
                 "guardian sent a response that fails response-envelope.json: {error}"
             );
         }
-        self.write_envelope("response", &response, method.as_deref());
+        if self
+            .write_envelope("response", &response, method.as_deref())
+            .is_err()
+        {
+            return audit_failure(&raw);
+        }
         response
     }
 
@@ -169,7 +190,7 @@ impl Guardian {
         let (entry, labels) = self
             .sessions
             .append(session_id, method, request_id, tool_name)?;
-        self.write_session(&entry);
+        self.write_session(&entry)?;
 
         let point = self.mapping.point(method)?;
         let target_argument = self.mapping.target_argument(point, tool_name);
@@ -230,41 +251,28 @@ impl Guardian {
         Ok(Value::Object(decision))
     }
 
-    fn write_envelope(&self, direction: &str, envelope: &Value, method: Option<&str>) {
-        let Some(log) = &self.envelope_log else {
-            return;
-        };
-        let Ok(mut log) = log.lock() else { return };
-        let entry = json!({
-            "seq": log.seq + 1,
-            "recorded_at": timestamp(),
-            "direction": direction,
-            "method": method,
-            "rpc_id": rpc_id(envelope),
-            "envelope": envelope,
-        });
-        let Some(file) = log.file.as_mut() else {
-            return;
-        };
-        if let Err(error) = write_line(file, &entry) {
-            let _ = writeln!(io::stderr().lock(), "envelope log write failed: {error}");
-            log.file = None;
-        } else {
-            log.seq += 1;
-        }
+    fn write_envelope(
+        &self,
+        direction: &str,
+        envelope: &Value,
+        method: Option<&str>,
+    ) -> Result<(), String> {
+        self.envelope_log.append(|seq| {
+            serde_json::to_vec(&json!({
+                "seq": seq,
+                "recorded_at": timestamp(),
+                "direction": direction,
+                "method": method,
+                "rpc_id": rpc_id(envelope),
+                "envelope": envelope,
+            }))
+            .map_err(|error| error.to_string())
+        })
     }
 
-    fn write_session(&self, entry: &crate::session::ChainEntry) {
-        let Some(log) = &self.session_log else { return };
-        let Ok(mut guard) = log.lock() else { return };
-        let Some(file) = guard.as_mut() else { return };
-        if let Err(error) = write_line(file, entry) {
-            let _ = writeln!(
-                io::stderr().lock(),
-                "session context log write failed: {error}"
-            );
-            *guard = None;
-        }
+    fn write_session(&self, entry: &crate::session::ChainEntry) -> Result<(), String> {
+        self.session_log
+            .append(|_| serde_json::to_vec(entry).map_err(|error| error.to_string()))
     }
 }
 
@@ -289,7 +297,7 @@ async fn handle(State(guardian): State<Arc<Guardian>>, request: Request<Body>) -
                 "request body exceeds the 1048576-byte limit",
                 None,
             );
-            guardian.write_envelope("response", &response, None);
+            let _ = guardian.write_envelope("response", &response, None);
             return Json(response);
         }
     };
@@ -297,7 +305,7 @@ async fn handle(State(guardian): State<Arc<Guardian>>, request: Request<Body>) -
         Ok(raw) => raw,
         Err(_) => {
             let response = failure(Value::Null, -32700, "Parse error", None);
-            guardian.write_envelope("response", &response, None);
+            let _ = guardian.write_envelope("response", &response, None);
             return Json(response);
         }
     };
@@ -313,7 +321,7 @@ async fn handle(State(guardian): State<Arc<Guardian>>, request: Request<Body>) -
                 &format!("guardian failed to handle the request: {error}"),
                 None,
             );
-            on_failure.write_envelope("response", &response, method.as_deref());
+            let _ = on_failure.write_envelope("response", &response, method.as_deref());
             Json(response)
         }
     }
@@ -361,44 +369,18 @@ fn deny_on_failure(raw: &Value, message: &str, reason: &str) -> Option<Value> {
     }))
 }
 
+fn audit_failure(raw: &Value) -> Value {
+    let message = "the required audit record could not be kept";
+    match deny_on_failure(raw, message, "audit_unavailable") {
+        Some(decision) => success(rpc_id(raw), decision),
+        None => failure(rpc_id(raw), -32020, message, None),
+    }
+}
+
 fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn sanitize(message: &str) -> String {
     message.replace(env!("CARGO_MANIFEST_DIR"), "")
-}
-
-fn open_log(path: &PathBuf) -> Result<File, String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
-    }
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options
-        .open(path)
-        .map_err(|error| format!("{}: {error}", path.display()))
-}
-
-fn open_log_best_effort(path: &PathBuf) -> Option<File> {
-    match open_log(path) {
-        Ok(file) => Some(file),
-        Err(error) => {
-            let _ = writeln!(
-                io::stderr().lock(),
-                "log sink disabled after open failure: {error}"
-            );
-            None
-        }
-    }
-}
-
-fn write_line(file: &mut File, value: &impl serde::Serialize) -> Result<(), String> {
-    serde_json::to_writer(&mut *file, value).map_err(|error| error.to_string())?;
-    file.write_all(b"\n").map_err(|error| error.to_string())
 }
