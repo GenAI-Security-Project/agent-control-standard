@@ -1,0 +1,65 @@
+# Runs the OpenClaw adapter's type check and tests, its end-to-end suite
+# against the TypeScript reference Guardian included, on the OpenClaw
+# release the adapter supports: its package.json peer dependency.
+#
+# No workflow expression appears inside a `run:` block: the release reaches
+# the shell through `env:`.
+name: OpenClaw adapter
+
+on:
+  pull_request:
+    paths:
+      - "adapters/openclaw/**"
+      # The adapter imports host-adapter, and its tests start the Guardian.
+      - "reference-implementations/agt/**"
+      # Every envelope the tests send is validated against these schemas.
+      - "specification/**"
+      - ".github/workflows/openclaw-adapter.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "adapters/openclaw/**"
+      - "reference-implementations/agt/**"
+      - "specification/**"
+      - ".github/workflows/openclaw-adapter.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: openclaw-adapter-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          # OpenClaw's undici requires this because Bun 1.3 lacks webidl.util.markAsUncloneable.
+          # The reference implementation uses Bun 1.3.11.
+          bun-version: "1.4.2"
+
+      - name: Install the TypeScript reference the adapter and its tests use
+        working-directory: reference-implementations/agt
+        run: bun install --frozen-lockfile
+
+      - name: Install the adapter's dependencies
+        working-directory: adapters/openclaw
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        working-directory: adapters/openclaw
+        run: bun run typecheck
+
+      - name: Run the tests
+        working-directory: adapters/openclaw
+        run: bun test
