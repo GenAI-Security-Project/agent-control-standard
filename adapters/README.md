@@ -246,7 +246,7 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 
 1. Add `docs/<framework>/` with a README and a `mapping.md` documenting how the framework's hook events map to ACS `steps/*` methods, and how the framework's response shape relates to ACS dispositions.
 2. (Optional but encouraged) Write the adapter in `src/acs/integrations/<framework>/`, with tests in `tests/integrations/<framework>/`. The Claude Code adapter is the template.
-3. For a hook command, add a standard-library-only `hook.py` that calls `acs.integrations._bootstrap.run_hook` (see `claude_code/hook.py`), and install that as the command, so an adapter whose dependencies fail to import still writes an audit record and applies `ACS_DEFAULT_DENY`.
+3. For a hook command, add a standard-library-only `hook.py` that calls `acs.integrations._bootstrap.run_hook` (see `claude_code/hook.py`), and install that as the command, so an adapter whose dependencies fail to import still writes an audit record and denies the step unless the hook sets `ACS_STARTUP_POSTURE=proceed`.
 4. Register it in `pyproject.toml`: an entry in the `acs.integrations` entry-point group, and its commands under `[project.scripts]`. An integration in another distribution registers in the same group.
 5. Add its suite to `PLATFORM_SUITES` in `run_conformance.py`, so `run_conformance.py <framework>` runs it.
 6. Open a PR against `GenAI-Security-Project/agent-control-standard`.
