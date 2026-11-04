@@ -5,7 +5,9 @@ drifted from the schemas under `specification/v0.1.0/hooks/` (#389). Rows left
 out required fields such as `toolCallResult`'s `tool`, listed three of four
 `preCompact` triggers, and named fields no schema defines, such as
 `knowledgeRetrieval`'s `keywords`. The schemas are the normative source, so
-these checks read them:
+these checks read them. They cover the 19 `steps/*` hooks, whose sections have
+bare names. Sections such as `agbom/snapshot` and `defer/subscribe` keep their
+namespace in the name and are not checked here.
 
 - every top-level payload field appears in the row, in backticks;
 - every value of a top-level enum appears in the row, in backticks;
@@ -33,9 +35,8 @@ ALSO_NAMED = {
 }
 
 
-def hook_sections():
+def hook_sections(text):
     """Map each `## <hook>` section to its schema path and its payload row, or None without one."""
-    text = PAGE.read_text(encoding="utf-8")
     found = {}
     for match in re.finditer(r"^## (\S+)\n(.*?)(?=^## |\Z)", text, re.M | re.S):
         schema = re.search(r"^Schema: \[`hooks/([a-z-]+\.json)`\]", match[2], re.M)
@@ -45,8 +46,14 @@ def hook_sections():
     return found
 
 
-SECTIONS = hook_sections()
-ROWS = {hook: entry for hook, entry in SECTIONS.items() if entry[1] is not None}
+def steps_hooks(sections):
+    """The `steps/*` hooks, whose sections have bare names, unlike `agbom/snapshot` or `defer/subscribe`."""
+    return {hook: entry for hook, entry in sections.items() if "/" not in hook}
+
+
+SECTIONS = hook_sections(PAGE.read_text(encoding="utf-8"))
+STEPS = steps_hooks(SECTIONS)
+ROWS = {hook: entry for hook, entry in STEPS.items() if entry[1] is not None}
 
 
 def load(path):
@@ -119,9 +126,21 @@ def undefined(hook, path, row):
 
 
 def test_every_steps_hook_has_a_payload_row():
-    without = {hook for hook, (_, row) in SECTIONS.items() if row is None and not hook.startswith(("agbom/", "system/"))}
+    without = {hook for hook, (_, row) in STEPS.items() if row is None}
     assert not without, f"Hook sections with no **Payload:** row: {sorted(without)}"
     assert len(ROWS) == 19, f"Expected a payload row for each of the 19 steps/* hooks, found {len(ROWS)}"
+
+
+def test_a_namespaced_section_with_a_payload_row_is_not_counted():
+    """#496 adds `## defer/subscribe` with a schema link and a payload row; the steps/* checks must skip it."""
+    page = PAGE.read_text(encoding="utf-8") + (
+        "\n## defer/subscribe\n\n"
+        "Schema: [`hooks/defer-subscribe.json`](https://example.com/defer-subscribe.json).\n\n"
+        "**Payload:** `deferred_request_id`, the `request_id` of the deferred step.\n"
+    )
+    sections = hook_sections(page)
+    assert "defer/subscribe" in sections
+    assert steps_hooks(sections).keys() == STEPS.keys()
 
 
 @pytest.mark.parametrize("hook", sorted(ROWS))
