@@ -167,7 +167,6 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         hookEventName: "PreToolUse",
         permissionDecision: "allow",
         permissionDecisionReason: "drift_score 0.9 reached threshold 0.5",
-        additionalContext: "drift_score 0.9 reached threshold 0.5",
       },
     });
   });

@@ -226,7 +226,6 @@ describe("renderDecision", () => {
       hookSpecificOutput: {
         permissionDecision: "allow",
         permissionDecisionReason: "drift_score 0.9 reached threshold 0.5",
-        additionalContext: "drift_score 0.9 reached threshold 0.5",
       },
     });
   });
