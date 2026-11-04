@@ -179,7 +179,7 @@ Notice the shape: `acs_version` / `request_id` / `timestamp` / `metadata` live i
 Same as above, but with `command: "rm -rf /home/u"`:
 
 - **Step 4:** Guardian returns `{"decision": "deny", "reasoning": "destructive Bash pattern in: rm -rf /home/u"}`
-- **Step 5:** Adapter emits `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "destructive Bash pattern..."}}`
+- **Step 5:** Adapter emits `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "destructive Bash pattern in: rm -rf /home/u", "additionalContext": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"}, "systemMessage": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"}`
 - **Step 6:** Claude Code reads `permissionDecision: "deny"`, does not execute the Bash tool, and surfaces the reason: *"The command was blocked: a policy denied the Bash tool call, so it never ran."*
 
 ### What changes across the three adapters
