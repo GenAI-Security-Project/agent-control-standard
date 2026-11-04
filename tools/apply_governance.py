@@ -301,7 +301,7 @@ def desired_labels() -> list[Label]:
         # Stock GitHub defaults. Not created by Step 2, but relied on by Step 12.
         Label(
             name="help wanted", color="008672",
-            description="Already accepted work. Safe to start without waiting on triage.",
+            description="Already accepted work. Ask a lead to assign it to you.",
         ),
         Label(name="good first issue", color="7057ff", description="Good for newcomers"),
     ]
@@ -526,12 +526,14 @@ def desired_rulesets() -> list[Ruleset]:
     protect-integration also requires `closing-choice`, from the Order's step 3, once a
     project lead has set CLOSING_CHOICE_SINCE. Before that date the check passes every pull
     request with a notice, so requiring it blocks nothing that was open.
+    protect-integration also requires `dco`, which checks every commit for a sign-off.
+    protect-main takes `dco` at the next promotion.
     """
     return [
         Ruleset(
             name="protect-integration",
             target_ref="refs/heads/integration",
-            required_status_checks=("test", "build", "closing-choice"),
+            required_status_checks=("test", "build", "closing-choice", "dco"),
             allowed_merge_methods=("squash",),
         ),
         Ruleset(name="protect-release", target_ref="refs/heads/release/*"),
