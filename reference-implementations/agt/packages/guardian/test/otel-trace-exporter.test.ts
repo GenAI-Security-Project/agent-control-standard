@@ -763,12 +763,12 @@ describe("createOtelTraceExporter -- the session and message steps", () => {
             { type: "text", value: "a", provenance: provenance("user_input", { source_id: "user-1" }) },
             // No provenance: contributes no element to any column.
             { type: "text", value: "b" },
-            { type: "file", value: "c", provenance: provenance("retrieval") },
+            { type: "file", value: "c", provenance: provenance("retrieved") },
           ],
         }),
       );
 
-      expect({ method, origin: span.attributes["acs.provenance.origin"] }).toEqual({ method, origin: ["user_input", "retrieval"] });
+      expect({ method, origin: span.attributes["acs.provenance.origin"] }).toEqual({ method, origin: ["user_input", "retrieved"] });
       expect({ method, sourceId: span.attributes["acs.provenance.source_id"] }).toEqual({ method, sourceId: ["user-1", ""] });
     }
   });
