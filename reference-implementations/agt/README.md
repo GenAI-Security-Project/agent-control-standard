@@ -367,7 +367,7 @@ The [conformance README](packages/conformance/README.md) explains each table and
 
 ## View the events
 
-The Guardian records every envelope to `.acs/envelopes.jsonl` before it validates the envelope. Nothing is stripped or redacted, so the file holds raw tool arguments. It is gitignored. Do not commit it.
+The Guardian records every envelope to `.acs/envelopes.jsonl` before it validates the envelope. Nothing is stripped or redacted, so the file holds raw tool arguments and tool outputs. The Guardian creates a new `.acs/` directory with mode `0700`, and sets the log to mode `0600` on every write. An `.acs/` directory that already exists keeps its mode. The file is gitignored. Do not commit it.
 
 One denied `Bash` call produces four envelopes: the handshake request and response, then the tool call request and its decision. The Inspector renders them like this.
 
