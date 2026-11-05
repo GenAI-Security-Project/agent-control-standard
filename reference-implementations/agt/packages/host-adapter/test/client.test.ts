@@ -21,6 +21,7 @@ import {
 } from "../src/handshake.ts";
 import { renderDecision } from "../src/render-decision.ts";
 import { createMemorySessionConfigStore } from "../src/session-config.ts";
+import { GuardianDecisionResponseError, GuardianResponseValidationError } from "../src/validate-response.ts";
 
 const hookmap: Hookmap = loadHookmap("hosts/claude-code/claude-code.hookmap.yaml");
 
@@ -32,6 +33,22 @@ function preToolUsePayload(command: string): Record<string, unknown> {
     hook_event_name: "PreToolUse",
     tool_name: "Bash",
     tool_input: { command },
+  };
+}
+
+function decisionResponse(
+  envelope: ReturnType<typeof buildEnvelope>,
+  decision: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    jsonrpc: "2.0",
+    id: envelope.id,
+    result: {
+      type: "final",
+      acs_version: "0.1.0",
+      request_id: envelope.params.request_id,
+      ...decision,
+    },
   };
 }
 
@@ -295,20 +312,12 @@ describe("GuardianClient.requestDecision", () => {
     expect(outcome.decisionArrived).toBe(false);
   });
 
-  it("honours a decision that arrives alongside a malformed `error`, never letting the failure outrank it", async () => {
-    // A response carrying both is malformed per JSON-RPC, but a decision is in
-    // it -- and a caller that checked `error` first would answer a real deny
-    // with a delivery-failure path instead of honouring it.
+  it("accepts a schema-valid deny and preserves its required reasoning", async () => {
     const mock = Bun.serve({
       port: 0,
       async fetch(req) {
-        const body = (await req.json()) as { id: string | number };
-        return Response.json({
-          jsonrpc: "2.0",
-          id: body.id,
-          result: { decision: "deny", reasoning: "blocked" },
-          error: { code: -32020, message: "something also went wrong" },
-        });
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json(decisionResponse(envelope, { decision: "deny", reasoning: "blocked by policy" }));
       },
     });
 
@@ -318,6 +327,280 @@ describe("GuardianClient.requestDecision", () => {
 
       expect(outcome.decisionArrived).toBe(true);
       expect(outcome.decisionArrived && outcome.decision.decision).toBe("deny");
+      expect(outcome.decisionArrived && outcome.decision.reasoning).toBe("blocked by policy");
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a deny without required reasoning before it becomes an AcsDecision", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json(decisionResponse(envelope, { decision: "deny" }));
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResponseValidationError);
+      expect(classifyDeliveryFailure(outcome.decisionArrived === false ? outcome.failure : undefined)).toMatchObject({
+        kind: "invalid_response",
+      });
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a deny whose reasoning has the wrong type", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json(decisionResponse(envelope, { decision: "deny", reasoning: 7 }));
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResponseValidationError);
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("fails a schema-invalid response closed even under a proceed posture", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json(decisionResponse(envelope, { decision: "deny" }));
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+
+      const events: AuditEvent[] = [];
+      const decision = applyFailurePosture({
+        failure: outcome.decisionArrived === false ? outcome.failure : undefined,
+        session: {
+          config: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+          },
+          failure: undefined,
+        },
+        sessionId: "sess-1",
+        method: envelope.method,
+        rpcId: envelope.id,
+        audit: { path: "test", write: (event) => (events.push(event), true) },
+      });
+
+      expect(decision.decision).toBe("deny");
+      expect(decision.reason_codes).toEqual(["guardian_response_invalid"]);
+      expect(events[0]).toMatchObject({
+        posture: "proceed",
+        outcome: "blocked",
+        failure: { kind: "invalid_response" },
+      });
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a response carrying both a result and an error", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json({
+          ...decisionResponse(envelope, { decision: "deny", reasoning: "blocked" }),
+          error: { code: -32020, message: "something also went wrong" },
+        });
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResponseValidationError);
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects an unknown decision before it reaches host rendering", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json(decisionResponse(envelope, { decision: "quarantine" }));
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResponseValidationError);
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects additional top-level response fields under the canonical envelope", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json({
+          ...decisionResponse(envelope, { decision: "allow" }),
+          unexpected: true,
+        });
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResponseValidationError);
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a schema-valid ServerHello result on a decision method", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json({
+          jsonrpc: "2.0",
+          id: envelope.id,
+          result: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+          },
+        });
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianDecisionResponseError);
+
+      const events: AuditEvent[] = [];
+      const decision = applyFailurePosture({
+        failure: outcome.decisionArrived === false ? outcome.failure : undefined,
+        session: {
+          config: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+          },
+          failure: undefined,
+        },
+        sessionId: "sess-1",
+        method: envelope.method,
+        rpcId: envelope.id,
+        audit: { path: "test", write: (event) => (events.push(event), true) },
+      });
+      expect(decision.decision).toBe("deny");
+      expect(decision.reason_codes).toEqual(["guardian_response_invalid"]);
+      expect(events[0]).toMatchObject({
+        posture: "proceed",
+        outcome: "blocked",
+        failure: { kind: "invalid_response" },
+      });
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a ServerHello carrying stray AcsResult discriminator fields", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json({
+          jsonrpc: "2.0",
+          id: envelope.id,
+          result: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+            type: "final",
+            decision: "allow",
+          },
+        });
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianDecisionResponseError);
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("rejects a result that satisfies both the ServerHello and AcsResult branches", async () => {
+    const mock = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json({
+          jsonrpc: "2.0",
+          id: envelope.id,
+          result: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+            type: "final",
+            acs_version: "0.1.0",
+            request_id: envelope.params.request_id,
+            decision: "allow",
+          },
+        });
+      },
+    });
+
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResponseValidationError);
     } finally {
       mock.stop(true);
     }
@@ -352,12 +635,8 @@ describe("GuardianClient.requestDecision", () => {
     const mock = Bun.serve({
       port: 0,
       async fetch(req) {
-        const body = (await req.json()) as { id: string | number };
-        return Response.json({
-          jsonrpc: "2.0",
-          id: body.id,
-          result: { decision: "allow", request_id: crypto.randomUUID() },
-        });
+        const envelope = (await req.json()) as ReturnType<typeof buildEnvelope>;
+        return Response.json(decisionResponse(envelope, { decision: "allow", request_id: crypto.randomUUID() }));
       },
     });
 
@@ -366,6 +645,32 @@ describe("GuardianClient.requestDecision", () => {
       const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
 
       expect(outcome.decisionArrived).toBe(false);
+      expect(outcome.decisionArrived === false && outcome.failure).toBeInstanceOf(GuardianResultCorrelationError);
+
+      const events: AuditEvent[] = [];
+      const decision = applyFailurePosture({
+        failure: outcome.decisionArrived === false ? outcome.failure : undefined,
+        session: {
+          config: {
+            negotiated_version: "0.1.0",
+            methods_evaluated: ["steps/toolCallRequest"],
+            selected_transport: "http",
+            timeout_config: { default_ms: 5000 },
+            on_decision_failure: "proceed",
+          },
+          failure: undefined,
+        },
+        sessionId: "sess-1",
+        method: envelope.method,
+        rpcId: envelope.id,
+        audit: { path: "test", write: (event) => (events.push(event), true) },
+      });
+      expect(decision.decision).toBe("allow");
+      expect(events[0]).toMatchObject({
+        posture: "proceed",
+        outcome: "proceeded",
+        failure: { kind: "unknown" },
+      });
     } finally {
       mock.stop(true);
     }

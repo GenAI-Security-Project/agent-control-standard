@@ -87,7 +87,11 @@ async function renderedBy(decision: Record<string, unknown>, command: string): P
   const stub = Bun.serve({
     port: 0,
     async fetch(req) {
-      const body = (await req.json()) as { id: string | number; method: string };
+      const body = (await req.json()) as {
+        id: string | number;
+        method: string;
+        params: { request_id: string };
+      };
       if (body.method === "handshake/hello") {
         return Response.json({
           jsonrpc: "2.0",
@@ -101,7 +105,16 @@ async function renderedBy(decision: Record<string, unknown>, command: string): P
           },
         });
       }
-      return Response.json({ jsonrpc: "2.0", id: body.id, result: decision });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          type: "final",
+          acs_version: "0.1.0",
+          request_id: body.params.request_id,
+          ...decision,
+        },
+      });
     },
   });
   try {
@@ -198,7 +211,11 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         {
           decision: "ask",
           reasoning: "this needs a human",
-          ask_details: { approver: "security-team", question: "run this?", timeout_seconds: 300 },
+          ask_details: {
+            approver: { type: "human", id: "security-team" },
+            question: "run this?",
+            timeout_seconds: 300,
+          },
         },
         "curl example.com",
       ),
@@ -225,8 +242,8 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
           decision: "defer",
           reasoning: "waiting on an out-of-band approval",
           defer_details: {
-            reason: "awaiting change ticket",
-            resolution_method: "external",
+            reason: "pending_dependency",
+            resolution_method: "human_approval",
             resolution_timeout_ms: 300_000,
           },
         },
