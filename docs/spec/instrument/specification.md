@@ -64,13 +64,13 @@ A worked example appears in [ACS in Action](../../topics/ACS_in_action_example.m
 |---|---|
 | Envelope | JSON-RPC 2.0, with `acs_version` in `params` (requests) and `result` (responses) |
 | Transports | HTTP(S) and stdio (Content-Length framing, UTF-8) |
-| Method namespaces | `steps/*`, `protocols/A2A/*`, `protocols/MCP/*`, `agbom/*`, `system/*`, `handshake/*`, `trace/*` (reserved) |
+| Method namespaces | `steps/*`, `protocols/A2A/*`, `protocols/MCP/*`, `agbom/*`, `system/*`, `handshake/*`, `defer/*`, `trace/*` (reserved) |
 | Wrapped methods | `protocols/MCP/*` is the canonical v0.1 namespace for MCP wrapping (e.g. `protocols/MCP/tools/call`). The `wrapped:` prefix is an alternative explicit-version form for deployments that pin a specific protocol version on the wire (e.g. `wrapped:mcp-2025-06-18/tools/call`). Both are valid; `protocols/*` is preferred. A2A wrapping deferred to v0.2. |
 | Error code range | `-32000` to `-32099` reserved for ACS |
 | Response shape | Discriminated union: `{ "type": "final", ... }` |
 | Forward compat | Accept `X.Y.Z` matching major version; ignore unknown fields |
 
-Streaming and notifications are not supported in v0.1.0. Batching is permitted as standard JSON-RPC 2.0 — Guardians SHOULD accept array-shaped requests and return an array of correlated responses, but ACS does not add atomicity, ordering, or cross-request dependency semantics in v0.1. Each request in a batch is evaluated independently, in declared order, with each carrying its own `request_id` and (if signed) its own signature. A Guardian that does not support batching MUST return `-32600 Invalid Request` for array-shaped inputs so the Observed Agent can fall back to sequential requests.
+Streaming and notifications are not supported in v0.1.0, with one exception: `defer/subscribe` delivers a DEFER resolution as a stream of at most one `defer/pending` notification, then exactly one response (§6.6). Batching is permitted as standard JSON-RPC 2.0 — Guardians SHOULD accept array-shaped requests and return an array of correlated responses, but ACS does not add atomicity, ordering, or cross-request dependency semantics in v0.1. Each request in a batch is evaluated independently, in declared order, with each carrying its own `request_id` and (if signed) its own signature. A Guardian that does not support batching MUST return `-32600 Invalid Request` for array-shaped inputs so the Observed Agent can fall back to sequential requests.
 
 The full envelope schemas are [`request-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/request-envelope.json) and [`response-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json).
 
@@ -129,7 +129,7 @@ Hook details, payloads, and per-hook examples are catalogued on the [Hooks](./ho
 
 Wrapped: `protocols/MCP/*` (specified in v0.1; see [Extending MCP](./extend_mcp.md)). The `protocols/A2A/*` namespace is reserved; wrapping specification deferred to v0.2.
 
-Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [Inspect](../inspect/README.md)). System methods (`system/*`): `system/ping` (§13). These are not Instrument hooks (they're the wire surface for Inspect and transport-control) but they share the request-envelope shape, and `agbom/*` participates in the SessionContext audit chain.
+Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [Inspect](../inspect/README.md)). System methods (`system/*`): `system/ping` (§13). DEFER resolution (`defer/*`): `defer/subscribe` (§6.6). These are not Instrument hooks (they're the wire surface for Inspect, transport-control and DEFER resolution) but they share the request-envelope shape, and `agbom/*` participates in the SessionContext audit chain.
 
 ## 6. Disposition Vocabulary
 
@@ -141,9 +141,9 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 | `ASK` | Pause and request approval (substituted with `DEFER` or `DENY` for approver-incapable clients; see [§9.2](#92-approver-incapable-clients-normative)) | `reasoning`, `ask_details` |
 | `DEFER` | Verdict not yet reachable | `reasoning`, `defer_details` |
 
-DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session.
+DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. `defer_details` MUST include `reason`, `resolution_method` and `resolution_timeout_ms`. `timeout_decision`, when present, is `deny`. Cascading deferrals MUST be bounded per session. The Observed Agent learns the resolution through `defer/subscribe` (§6.6).
 
-`timeout_decision` defaulting to `deny` is deliberately the opposite of `on_decision_failure` defaulting to `proceed` (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, not one that never answered: a degraded Guardian that can still emit DEFER fails closed where a silent one fails open.
+An expired DEFER resolves to `deny`, deliberately the opposite of the `proceed` default of `on_decision_failure` (§6.4). A Guardian that returns DEFER has found a concern it cannot yet resolve. The timeout blocks the step because the concern is still unresolved.
 
 The diagram below shows the five dispositions. ALLOW, DENY, and MODIFY resolve immediately. ASK and DEFER pause the step until it resolves.
 
@@ -174,6 +174,7 @@ The decision envelope ([`response-envelope.json`](https://genai-security-project
 | `policy_data` | no | Free-form structured payload for paradigm- or policy-specific facts. When multiple paradigms fire, conventionally keyed by paradigm name (`{ "ibac": {...}, "fides": {...}, "aarm": {...} }`). |
 | `cited_provenance_ids` | no | Array of `provenance_id`s whose facts drove this decision. Standard top-level surface for "which provenance objects mattered". |
 | `modifications` / `ask_details` / `defer_details` | conditional | Disposition-specific payloads. |
+| `defer_resolution` | conditional | How the deferral resolved. Every successful response to `defer/subscribe` carries it, and no other response does (§6.6). |
 | `metadata` | no | ACS-defined evaluator/observability metadata: `evaluator` (`deterministic`/`agent`/`composite`), `evaluator_version`, `evaluation_duration_ms`, `model_id` (required when `evaluator` is `agent` or `composite`), `confidence`. NOT for policy-emitted facts — those go in `policy_data`. |
 
 ### 6.2 Paradigm composition
@@ -195,7 +196,7 @@ The provenance of a value introduced by `parameter_overrides` (its `origin`, and
 
 ### 6.4 Honoring decisions (normative)
 
-A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3) — or, for a client that cannot apply it, falls back per [§6.5](#65-modify-incapable-clients-normative) — `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant; the one defined substitution is §6.5's MODIFY fallback, which blocks rather than proceeds unmodified at every hook except `postCompact`, where compaction has already happened, so the client keeps the original summary and records an audit event (§6.5).
+A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3) — or, for a client that cannot apply it, falls back per [§6.5](#65-modify-incapable-clients-normative) — `ASK` pauses for approval, `DEFER` suspends pending resolution (§6.6). A framework that emits hooks but proceeds without applying the verdict is not conformant; the one defined substitution is §6.5's MODIFY fallback, which blocks rather than proceeds unmodified at every hook except `postCompact`, where compaction has already happened, so the client keeps the original summary and records an audit event (§6.5).
 
 A step suffers a **decision failure** when no usable decision arrives within the negotiated timeout: the Guardian stays silent, the transport fails (connection refused, TLS failure, malformed response), or the Guardian returns an error instead of a decision. All three resolve the same way: the Observed Agent applies the deployment's failure posture, declared as `on_decision_failure` in the handshake (§4) and defaulting to `proceed` (fail-open) so that a slow, erroring, or unreachable Guardian does not halt production. A deployment MAY set `on_decision_failure: deny` (fail-closed). The negotiated timeout bounds every failure mode: an error from the §17.1 registry carries a recovery action the agent MAY attempt within the remaining budget, and an unambiguous failure (a refused connection) MAY resolve immediately rather than waiting out the clock.
 
@@ -212,6 +213,88 @@ If a client receives a `MODIFY` it cannot apply — from a Guardian that misjudg
 This rule preserves the security guarantee (actions that would have been rewritten by the Guardian are not silently allowed with the unmodified payload) while letting clients whose framework cannot mutate requests, or deployments that choose strict allow/deny for auditability, participate in ACS sessions as fully conformant ACS-Core deployments.
 
 **Exception — `postCompact`.** `postCompact` fires after compaction has occurred and `DENY` is not a legal disposition there ([Hooks › postCompact](hooks.md#postcompact)), so the substitution above has no legal answer at that hook. For a MODIFY-incapable client the Guardian MUST return `ALLOW` at `postCompact` and MUST record an audit event with `reason_codes: ["modify_unsupported"]` naming the rewrite it could not deliver, so the unmodified summary standing is visible rather than silent. A client that receives a `MODIFY` it cannot apply at `postCompact` keeps the original summary and MUST record the same audit event; substituting `DENY` there would record a denial that changed nothing.
+
+### 6.6 Resolving DEFER (normative)
+
+A DEFER suspends the step. The Observed Agent learns how the deferral resolves by subscribing with `defer/subscribe`. How an approver's answer or the inputs named in `required_context` reach the Guardian is outside this section. Schema: [`hooks/defer-subscribe.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/defer-subscribe.json).
+
+The sequence below shows one pending deferral from the original step through subscription to the signed resolution.
+
+```mermaid
+sequenceDiagram
+    participant OA as Observed Agent
+    participant GA as Guardian Agent
+    OA->>GA: Step (request_id A)
+    GA-->>OA: DEFER (defer_details)
+    Note over OA: Suspend the step
+    OA->>GA: Signed defer/subscribe (request_id B, deferred_request_id A)
+    GA-->>OA: defer/pending notification (unsigned)
+    Note over GA: Approval delivery is outside this section
+    Note over GA: Resolve the deferral, write the signed resolution record as an audit event, and write one ContextEntry
+    GA-->>OA: Signed response (request_id B, defer_resolution, chain_hash)
+    Note over OA: Verify the signature (§10)
+    Note over OA: Apply the decision to step A without resubmitting the step
+```
+
+**Identifier.** In the subscription, the Observed Agent MUST set `payload.deferred_request_id` to the `request_id` of the deferred step's request. That `request_id` identifies the step within the session (§10.3). The subscription carries its own `request_id`.
+
+**Subscription.** A Guardian that returns DEFER MUST implement `defer/subscribe`. The Observed Agent MUST subscribe to the resolution of each step it suspends on DEFER. The subscription is a standard signed request (§10). The Observed Agent MUST NOT send `defer/subscribe` in a batch. A Guardian that supports batching MUST answer each `defer/subscribe` batch entry with `-32600 Invalid Request`. `defer/subscribe` is outside the method negotiation of the handshake:
+
+- The Observed Agent need not list `defer/subscribe` in `methods_implemented`.
+- The Guardian need not list `defer/subscribe` in `methods_evaluated`.
+- The Guardian MUST NOT answer `defer/subscribe` with `CAPABILITY_NOT_NEGOTIATED`.
+
+The Guardian MUST answer with `DEFERRAL_NOT_FOUND` (`-32012`, §17.1) when `deferred_request_id` does not identify a deferred step of the session. While a subscription is open, the Guardian MUST keep accepting and answering the other requests of the session.
+
+**Messages.** When a subscription arrives for a pending deferral, the Guardian MUST send a `defer/pending` notification at once. The notification is a JSON-RPC Notification from the Guardian. The `params` of the notification carry only `acs_version` and `deferred_request_id`. The notification has no decision and no signature.
+
+When the deferral resolves, the Guardian MUST send the response to `defer/subscribe`. The response is a decision envelope, signed per §10, that carries a `defer_resolution` object. For a deferral that resolved before the subscription arrived, the Guardian MUST send only the response, at once.
+
+The response ends the subscription. The Observed Agent applies the decision to the deferred step per §6.4.
+
+**Decision at resolution.** The approver answers the Guardian, not the Observed Agent. The Guardian makes the final decision on the deferred step and puts it in the `decision` of the response. The Guardian keeps the request of the deferred step, so the Observed Agent does not send that request again.
+
+An approver's answer resolves the question that the DEFER raised. The answer does not override other policy.
+
+The Observed Agent MAY run other steps in the session while the deferred step waits. At resolution, the Guardian SHOULD evaluate the deferred step again. The inputs are the current SessionContext and any approval or additional context the Guardian received.
+
+An approver's `deny` MUST resolve to `deny`. After an approver's `allow`, the Guardian MAY set the final decision to `deny`, `modify` or `ask`. In that case, the response MUST name the cause in `reason_codes`.
+
+The final decision is `allow`, `deny`, `modify` or `ask`. The final decision MUST NOT be `defer`. A resolution with `resolution_method: timeout` or `session_end` MUST have the decision `deny`. When the Guardian cannot decide yet, the Guardian sends no response, and the deferral stays pending until its deadline. Where §9.2 forbids ASK, the Guardian MUST send the `DENY` substitute of §9.2 instead of a final `ask`.
+
+**`defer_resolution`.** `defer_resolution` carries `deferred_request_id`, `resolution_method`, `resolved_at` and `deferred_metadata`. `defer_resolution.resolution_method` names what actually resolved the deferral: `human_approval`, `additional_context`, `timeout` or `session_end`. This value can differ from the `resolution_method` that `defer_details` expected.
+
+`deferred_metadata` MUST be a copy of `params.metadata` of the deferred step's request. This `metadata` holds the identity that the deferred step carried.
+
+With `human_approval`, `defer_resolution` also carries `approval`. `approval` carries `approver`, `decision` and `decided_at`. `approver` has the shape of `ask_details.approver`.
+
+`approval.decision` is the approver's answer, `allow` or `deny`, not the final decision. `approval.decided_at` is when the approver answered. Schema: [`defer-resolution.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/defer-resolution.json).
+
+**Timeout.** The Guardian MUST resolve a deferral that is still pending to `deny` with `resolution_method: timeout` no later than `resolution_timeout_ms` after it sent the DEFER. The Guardian SHOULD resolve the deferral early enough that a response to an open subscription reaches the Observed Agent before that time. How much earlier is the Guardian's choice. Neither `timeout_config.default_ms` nor an entry of `timeout_config.per_method_ms` (§4) limits a subscription.
+
+**Session end.** In this section, a session ends when the Guardian receives `steps/sessionEnd` for the session or the stdio channel of the session closes. The Guardian then MUST resolve each pending deferral of the session to `deny` with `resolution_method: session_end`. When the Guardian receives `steps/sessionEnd`, the Guardian MUST append the resolution ContextEntries before the `sessionEnd` ContextEntry.
+
+ACS defines no message that reports an Observed Agent restart, so no resolution names a restart. A restarted Observed Agent starts a new session, and the new session cannot subscribe to a deferral of the old one. The deferrals of the old session resolve by the rules of this section.
+
+**Failed subscription.** A failed subscription is not a decision failure under §6.4, so the Observed Agent MUST NOT apply `on_decision_failure`. Failures include a transport failure, an error response other than `DEFERRAL_NOT_FOUND`, and a malformed message or a message whose signature fails.
+
+A failed or abandoned subscription does not change the deferral. The Observed Agent MAY subscribe again. `DEFERRAL_NOT_FOUND` is final. On that error, the Observed Agent MUST treat the step as `deny` and MUST record that denial in an audit event.
+
+**Local deadline.** The Observed Agent waits at most `resolution_timeout_ms` after it receives the DEFER. An Observed Agent that holds no verified resolution by that deadline MUST treat the step as `deny` and MUST record that denial in an audit event. The Observed Agent MUST NOT apply a resolution that arrives after that denial. The Observed Agent MUST record each such resolution in an audit event.
+
+**Retention.** The Guardian MUST keep each resolution until the session ends. When the Observed Agent subscribes again, each response for the same resolution MUST carry the same `result`, apart from `request_id` and `signature`.
+
+**Transport.** On HTTP the Observed Agent MUST send the request with `Accept: application/json, text/event-stream`. Except for the JSON error answer below, the Guardian MUST answer `200` with `Content-Type: text/event-stream`. The Guardian MUST send each JSON-RPC message as one event on a single `data:` line. The Guardian MUST close the stream after the result or error response.
+
+When the request is not valid JSON or its method is unknown, the Guardian answers with a JSON-RPC error in an `application/json` body. The Observed Agent MUST accept that answer. While the deferral is pending, the Guardian SHOULD send SSE comment lines as a keep-alive, so that intermediaries do not close an idle stream. An SSE comment line starts with `:`, and the client ignores it.
+
+On stdio the messages share the session channel. The Observed Agent uses `deferred_request_id` in `defer/pending` to match the notification to the deferral. The Observed Agent MAY stop listening to a subscription, by closing its HTTP stream or by ignoring the stdio messages for that deferral.
+
+**Audit.** When a deferral resolves, the Guardian MUST write one ContextEntry for the resolution. The entry has `step_type: "defer_resolution"` and `step_id` set to the `deferred_request_id`. The response that carries the resolution MUST include the resulting `chain_hash` (§8.6). `defer/subscribe` is not a step, so the Guardian writes no ContextEntry for the request.
+
+The resolution record is the `result` that a response to `defer/subscribe` carries, without `request_id`, `chain_hash` and `signature`. The Guardian builds the record when the deferral resolves, before it sends any response that carries the resolution. For the resolution ContextEntry, `request_hash` covers the resolution record instead of request params (§8.1).
+
+When a deferral resolves, the Guardian MUST also write the resolution record as an audit event, whether or not an agent subscribes. The audit event MUST carry a signature over the resolution record (§10). The Guardian signs the record with the algorithm and key that signed the DEFER.
 
 ## 7. Provenance
 
@@ -272,7 +355,7 @@ The SessionContext container is intentionally not schematized in v0.1. The wire-
 Schema: [`context-entry.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/context-entry.json). Append-only entry in the audit chain.
 
 - **Required:** `entry_id`, `step_id`, `step_type`, `entry_hash`.
-- **SHOULD:** `request_hash` (lowercase-hex SHA-256 of the JCS-canonicalized request envelope params; without this the chain commits only to step metadata, not to request content, so deployments claiming the **ACS-Audit** profile MUST populate `request_hash`), `timestamp`, `provenance_summary`, `previous_hash` (required for every entry except the first).
+- **SHOULD:** `request_hash` (lowercase-hex SHA-256 of the JCS-canonicalized request envelope params, or of the resolution record for a `defer_resolution` entry (§6.6); without this the chain commits only to step metadata, not to request content, so deployments claiming the **ACS-Audit** profile MUST populate `request_hash`), `timestamp`, `provenance_summary`, `previous_hash` (required for every entry except the first).
 
 Storage representation is implementation-defined; this spec constrains the canonical form used for hashing, not how Guardians store entries internally.
 
@@ -353,7 +436,7 @@ A signature over the §10 canonical input is REQUIRED in ACS-Core. The signature
 
 **`key_id` for HMAC.** For `HMAC-SHA256`, `key_id` is an opaque label, chosen by the deployment, that names one configured secret. This specification reserves no values, and an implementation takes the label from its configuration. It does not hardcode one. A verifier MUST reject an unknown `key_id` (`SIGNATURE_INVALID`, §17.1) and MUST NOT fall back to another secret. `key_id` MUST NOT be derived from the secret. A Guardian that signs its response with `HMAC-SHA256` uses the secret, and the `key_id`, that the request named. The `SIGNATURE_INVALID` error for an unknown `key_id` is unsigned, because no configured secret matches it. A deployment rotating its secret configures the new secret under a new label, such as `"2026-10"`, so a verifier can hold both secrets while the rotation is in progress. That is what the §17.1 recovery for `SIGNATURE_INVALID`, re-resolving `key_id`, relies on. For the asymmetric algorithms of ACS-Crypto, `key_id` identifies the public key or hybrid key descriptor (§10.2).
 
-**Signed input.** The signed input for every algorithm is the RFC 8785 (JCS) canonicalization of the request or response envelope with the `signature` field removed, encoded as UTF-8. This binds the signature to the whole envelope, including `method`, `metadata.session_id`, `request_id`, and `timestamp`, so a captured signature cannot be lifted into a different envelope (for example, re-wrapping a signed `toolCallResult` under a different `session_id`). A verifier MUST recompute this canonical form and MUST reject a signature that does not cover it (`SIGNATURE_INVALID`, §17.1). The input is fixed by this rule, not declared per message: a discoverable `signed_fields` would let a producer advertise partial coverage that omits `session_id`, reopening the gap this closes. Alternative canonicalization is not permitted in v0.1, matching the chain-hash rule in §8.
+**Signed input.** The signed input for every algorithm is the RFC 8785 (JCS) canonicalization of the request or response envelope with the `signature` field removed, encoded as UTF-8. This binds the signature to the whole envelope, including `method`, `metadata.session_id`, `request_id`, and `timestamp`, so a captured signature cannot be lifted into a different envelope (for example, re-wrapping a signed `toolCallResult` under a different `session_id`). A verifier MUST recompute this canonical form and MUST reject a signature that does not cover it (`SIGNATURE_INVALID`, §17.1). The input is fixed by this rule, not declared per message: a discoverable `signed_fields` would let a producer advertise partial coverage that omits `session_id`, reopening the gap this closes. Alternative canonicalization is not permitted in v0.1, matching the chain-hash rule in §8. A DEFER resolution record (§6.6) is the one signed object that is not an envelope: its signed input is the JCS form of the record, encoded as UTF-8.
 
 ### 10.1 Algorithm registry
 
@@ -444,7 +527,7 @@ OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 
 | Feature | Deferred to | Reason |
 |---|---|---|
-| Streaming + wrapped streaming methods | v0.2 | SSE, interruption, chunk-level policy is too much surface |
+| Streaming + wrapped streaming methods, except `defer/subscribe` (§6.6) | v0.2 | SSE, interruption, chunk-level policy is too much surface |
 | Batching atomicity, ordering, cross-request dependencies | v0.2 | Standard JSON-RPC 2.0 batching is permitted in v0.1; ACS-specific atomicity / ordering / dependency rules wait for the streaming spec |
 | Sensitivity / four-level timeout model | v0.2 | Categorization-from-facts is non-trivial; v0.1 uses a single handshake-negotiated default timeout |
 | Recursive ASK + quorum | v0.2 | Bounded delegation and tie-breaking need careful spec |
@@ -490,5 +573,6 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 | `-32005` | `REPLAY_DETECTED` | Duplicate `request_id` or `nonce` within the session (§10.3). | Regenerate `request_id` (and `nonce`) and retry. |
 | `-32006` | `TIMESTAMP_OUT_OF_WINDOW` | `timestamp` falls outside the negotiated skew window (§10.3); `data.skew_window_ms` carries the window. | Correct clock drift and retry within the window. |
 | `-32007` | `CHAIN_MISMATCH` | The client's `chain_hash` does not match the Guardian's computed head (§8.6). Also exposable as a deny `reason_code: "chain_mismatch"` when the Guardian can still return a decision. | Re-fetch session state; a persistent mismatch is an integrity event, not a transient error. |
+| `-32012` | `DEFERRAL_NOT_FOUND` | The `deferred_request_id` of a `defer/subscribe` does not identify a deferred step of this session (§6.6). | Treat the deferred step as `deny` (§6.6); do not subscribe again for that `deferred_request_id`. |
 
 `system/ping` MUST NOT return an ACS-specific error, so liveness probing survives signature-rotation and key-resolution failures (§13).

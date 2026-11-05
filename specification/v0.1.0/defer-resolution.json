@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/defer-resolution.json",
+  "title": "ACS DEFER Resolution",
+  "description": "This object describes how and when a DEFER resolved. The resolution record of Specification 6.6 holds this object next to decision, the Guardian's final decision on the deferred step.",
+  "type": "object",
+  "required": ["deferred_request_id", "resolution_method", "resolved_at", "deferred_metadata"],
+  "properties": {
+    "deferred_request_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The request_id of the deferred step."
+    },
+    "resolution_method": {
+      "type": "string",
+      "enum": ["human_approval", "additional_context", "timeout", "session_end"],
+      "description": "What resolved the deferral, which may differ from the resolution_method the DEFER expected in defer_details. 'timeout': the deferral was still pending at the Guardian's deadline of Specification 6.6, and the decision is 'deny'. 'session_end': the session ended while the deferral was pending, and the decision is 'deny'."
+    },
+    "resolved_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the Guardian resolved the deferral."
+    },
+    "deferred_metadata": {
+      "$ref": "request-envelope.json#/$defs/Metadata",
+      "description": "The metadata of the deferred step, as the Guardian received it. This metadata holds the identity that the deferred step carried."
+    },
+    "approval": {
+      "description": "The approver's answer. This object is required when resolution_method is 'human_approval'. An approver's deny resolves to deny. After an approver's allow, the Guardian may set the final decision to deny, modify or ask, and reason_codes then name the cause (Specification 6.6).",
+      "type": "object",
+      "required": ["approver", "decision", "decided_at"],
+      "properties": {
+        "approver": { "$ref": "ask-details.json#/properties/approver" },
+        "decision": { "type": "string", "enum": ["allow", "deny"] },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the approver answered."
+        }
+      }
+    }
+  },
+  "if": { "properties": { "resolution_method": { "const": "human_approval" } }, "required": ["resolution_method"] },
+  "then": { "required": ["approval"] }
+}

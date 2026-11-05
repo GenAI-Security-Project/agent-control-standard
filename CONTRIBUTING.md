@@ -142,7 +142,7 @@ targets `integration`, and the guard rejects a new page aimed at `main`. A page 
 `nav` and outside the declared prefixes fails the guards, which the deploy runs before it builds.
 
 `integration` is the default branch, so a pull request opened from the GitHub interface
-already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
+already targets it. `main` publishes the site and all 46 schema `$id` URIs on merge, so
 it takes only two kinds of change: a promotion from `integration`, and an editorial
 change to a path on the allowlist below. A guard enforces this and will tell you to
 retarget if you get it wrong.

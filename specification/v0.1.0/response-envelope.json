@@ -13,7 +13,7 @@
       "description": "Echoes the request id. Per JSON-RPC 2.0, MUST be null when the id cannot be determined (e.g. parse error or invalid request); otherwise matches the request id. A successful (result) response always carries the original non-null id."
     },
     "result": {
-      "description": "Method-dependent. Hook, wrapped-protocol, agbom/* and system/* methods return an AcsResult. handshake/hello returns a ServerHello (handshake.json), which carries no decision. The two shapes share no required field, so a conformant response matches exactly one branch: a ServerHello has no 'decision' and an AcsResult has no 'negotiated_version'.",
+      "description": "Method-dependent. Hook, wrapped-protocol, agbom/*, system/* and defer/subscribe methods return an AcsResult. handshake/hello returns a ServerHello (handshake.json), which carries no decision. The two shapes share no required field, so a conformant response matches exactly one branch: a ServerHello has no 'decision' and an AcsResult has no 'negotiated_version'.",
       "oneOf": [
         { "$ref": "#/$defs/AcsResult" },
         { "$ref": "handshake.json#/$defs/ServerHello" }
@@ -82,6 +82,10 @@
         "modifications": { "$ref": "modifications.json" },
         "ask_details": { "$ref": "ask-details.json" },
         "defer_details": { "$ref": "defer-details.json" },
+        "defer_resolution": {
+          "$ref": "defer-resolution.json",
+          "description": "How the deferral resolved. Every successful response to defer/subscribe carries this object, and no other response does (Specification 6.6)."
+        },
         "payload": {
           "type": "object",
           "description": "Method-specific response data. Used by system/* methods (e.g., system/ping returns { status, echo, server_timestamp }) and other methods that carry structured data alongside the decision. Not used by standard Instrument hooks — those communicate via modifications, ask_details, or defer_details."
@@ -114,7 +118,12 @@
         { "if": { "properties": { "decision": { "const": "deny" } }, "required": ["decision"] }, "then": { "required": ["reasoning"] } },
         { "if": { "properties": { "decision": { "const": "modify" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "modifications"] } },
         { "if": { "properties": { "decision": { "const": "ask" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "ask_details"] } },
-        { "if": { "properties": { "decision": { "const": "defer" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "defer_details"] } }
+        { "if": { "properties": { "decision": { "const": "defer" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "defer_details"] } },
+        { "if": { "required": ["defer_resolution"] }, "then": { "properties": { "decision": { "not": { "const": "defer" } } } } },
+        { "if": { "properties": { "defer_resolution": { "type": "object", "properties": { "approval": { "type": "object", "properties": { "decision": { "const": "deny" } }, "required": ["decision"] } }, "required": ["approval"] } }, "required": ["defer_resolution"] }, "then": { "properties": { "decision": { "const": "deny" } } } },
+        { "if": { "properties": { "defer_resolution": { "type": "object", "properties": { "resolution_method": { "const": "timeout" } }, "required": ["resolution_method"] } }, "required": ["defer_resolution"] }, "then": { "properties": { "decision": { "const": "deny" } } } },
+        { "if": { "properties": { "decision": { "not": { "const": "allow" } }, "defer_resolution": { "type": "object", "properties": { "approval": { "type": "object", "properties": { "decision": { "const": "allow" } }, "required": ["decision"] } }, "required": ["approval"] } }, "required": ["decision", "defer_resolution"] }, "then": { "required": ["reason_codes"], "properties": { "reason_codes": { "type": "array", "minItems": 1 } } } },
+        { "if": { "properties": { "defer_resolution": { "type": "object", "properties": { "resolution_method": { "const": "session_end" } }, "required": ["resolution_method"] } }, "required": ["defer_resolution"] }, "then": { "properties": { "decision": { "const": "deny" } } } }
       ]
     },
     "JsonRpcError": {

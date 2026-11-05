@@ -22,8 +22,9 @@
     "resolution_timeout_ms": { "type": "integer", "minimum": 0 },
     "timeout_decision": {
       "type": "string",
-      "enum": ["deny", "ask"],
-      "default": "deny"
+      "enum": ["deny"],
+      "default": "deny",
+      "description": "The decision at timeout. Always deny: an expired DEFER fails closed (Specification 6, 6.6)."
     },
     "required_context": {
       "type": "array",
