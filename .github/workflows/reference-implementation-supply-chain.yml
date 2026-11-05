@@ -1,7 +1,8 @@
 # Runs the AGT supply-chain checks that nothing else invokes.
 #
-# verify-pin.sh clones agt.lock's pinned commit and byte-diffs the vendored policy
-# bundle against it. A mismatch fails the job.
+# verify-pin.sh clones agt.lock's pinned commit and byte-diffs the vendored .rego
+# files against it. A mismatch fails the job. It skips the other files in policy/lib,
+# including data.json, which holds the egress allowlist.
 #
 # run-upstream-watch.sh diffs AGT's contract surfaces between the pinned commit and
 # upstream main, and prints a report. Drift exits 0 because moving the pin is a human
@@ -45,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  agt:
+  agt-supply-chain:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -58,6 +59,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # agt.lock comes from the pull request, and both scripts clone whatever agt_repo
+      # names. The expected value lives here because /.github/ needs a project lead's
+      # review. This checks the repository only. agt_ref still comes from the pull
+      # request, so a reviewer has to read every change to it.
+      - name: Check that agt.lock names the upstream repository
+        run: |
+          set -euo pipefail
+          expected="https://github.com/microsoft/agent-governance-toolkit"
+          actual="$(jq -r '.agt_repo' agt.lock)"
+          if [ "$actual" != "$expected" ]; then
+            echo "agt.lock names $actual, expected $expected" >&2
+            exit 1
+          fi
 
       # Same pin as reference-implementation.yml.
       - name: Install Bun

@@ -48,7 +48,7 @@ bun run watch:upstream
 
 This runs `scripts/run-upstream-watch.sh`, which clones AGT twice, once at the pinned commit and once at `main`, and hands the two paths to the runner as `PINNED_AGT_CLONE` and `UPSTREAM_AGT_CLONE`. The runner diffs AGT's eight declared contract surfaces field by field, validates the Guardian's policy input against both schema versions, and reports which tools the two hookmaps declare against the manifest's registry.
 
-The watch reports. It never fails a build. Nothing reaches this tree until a human moves the pin in `agt.lock`.
+The watch reports drift, and drift never fails a build. A run that could not finish does fail the job. Nothing reaches this tree until a human moves the pin in `agt.lock`.
 
 ## Use it in-process
 
