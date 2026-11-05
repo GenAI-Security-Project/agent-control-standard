@@ -100,19 +100,19 @@ What it wires by default: the six unconditional hooks of the ACS-Core minimum se
 
 | Cursor event | ACS step method | Posture |
 |---|---|---|
-| `sessionStart` | sessionStart | the Guardian's posture; a Guardian `deny` refuses the session |
+| `sessionStart` | sessionStart | the posture; a Guardian `deny` refuses the session |
 | `beforeSubmitPrompt` | userMessage | **fail-CLOSED** (gate) |
 | `preToolUse` | toolCallRequest | **fail-CLOSED** (gate) |
-| `postToolUse` | toolCallResult | the Guardian's posture; under `deny` an MCP tool's output is withheld |
-| `postToolUseFailure` | toolCallResult | the Guardian's posture |
-| `afterAgentResponse` | agentResponse | the Guardian's posture |
-| `stop` | turnEnd | the Guardian's posture |
-| `sessionEnd` | sessionEnd | the Guardian's posture; `timeout: 15` |
+| `postToolUse` | toolCallResult | the posture; under `deny` an MCP tool's output is withheld |
+| `postToolUseFailure` | toolCallResult | the posture |
+| `afterAgentResponse` | agentResponse | the posture |
+| `stop` | turnEnd | the posture |
+| `sessionEnd` | sessionEnd | the posture; `timeout: 15` |
 | `subagentStart` | subagentStart | **fail-CLOSED** (gate. The confused-deputy spawn gate, required by ACS-Core for subagent-capable clients.) |
 
 Gate hooks get **both** `ACS_DEFAULT_DENY=1` (our env var) AND `failClosed: true` (Cursor's native flag), and each covers a different failure. `failClosed: true` blocks when the hook process itself fails: it crashes, times out, or returns invalid JSON. `ACS_DEFAULT_DENY` and the negotiated posture decide the failures the adapter handles, such as an unreachable Guardian. Once the adapter decides a step proceeds, it answers `{}` on `preToolUse`, `beforeShellExecution` and `beforeMCPExecution`, which leaves the call to Cursor's own sandbox and approval, and its allow shape on `subagentStart` and `beforeSubmitPrompt`. Each is output, so `failClosed` never turns a decided proceed into a block. An explicit `{"permission": "allow"}` on a tool gate can take the call out of Cursor's sandbox: on 2026-11-03, Cursor 3.17.8 in Allowlist (with Sandbox) mode went straight to an unsandboxed run with it, and kept its sandbox and approval with `{}`.
 
-The posture is what a step does when no usable decision arrives (§6.4). A gate hook's command carries `ACS_DEFAULT_DENY=1`, so it fails closed whatever the Guardian declares; the other hooks apply the ServerHello's `on_decision_failure`, and the example Guardian declares `deny`. In a session whose handshake gets no answer, every hook refuses its step unless it sets `ACS_STARTUP_POSTURE=proceed` (§4.1). Override with `--default-deny` (`ACS_DEFAULT_DENY=1` and `failClosed: true` on every hook) or `--all-fail-open` (`ACS_DEFAULT_DENY=0` and `ACS_STARTUP_POSTURE=proceed` on every hook, gates included, so a step with no usable decision proceeds, audited, unless the Guardian declares `deny`).
+The posture is what a step does when no usable decision arrives (§6.4): deny, unless the hook's own environment sets `ACS_DEFAULT_DENY=0`. A ServerHello that declares `on_decision_failure: deny` overrides that opt-in, so the Guardian can only tighten the posture. A gate hook's command carries `ACS_DEFAULT_DENY=1`, so an `ACS_DEFAULT_DENY=0` inherited from Cursor's environment leaves it closed. In a session whose handshake gets no answer, every hook refuses its step unless it sets `ACS_STARTUP_POSTURE=proceed` (§4.1). Override with `--default-deny` (`ACS_DEFAULT_DENY=1` and `failClosed: true` on every hook) or `--all-fail-open` (`ACS_DEFAULT_DENY=0` and `ACS_STARTUP_POSTURE=proceed` on every hook, gates included, so a step with no usable decision proceeds, audited, unless the Guardian declares `deny`).
 
 To remove the wiring later: `acs-cursor-wire --unwire --write`.
 
@@ -296,7 +296,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
-| `ACS_DEFAULT_DENY` | (unset) | `1`: fail-closed whatever the Guardian declares. Unset or `0`: the ServerHello's `on_decision_failure` applies, and the example Guardian declares `deny` (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
+| `ACS_DEFAULT_DENY` | (unset) | Unset, or any value but `0`: a step with no usable decision is denied. `0`: it proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins); this is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
 | `ACS_STARTUP_POSTURE` | `refuse` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
@@ -353,7 +353,7 @@ These hooks are emitted only when Cursor's `hooks.json` wires them to the adapte
 |---|---|
 | Cursor's agent runs commands as if no Guardian exists | Cursor reads `hooks.json` at startup. **Restart Cursor** after `acs-cursor-wire --write`. |
 | Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your hooks.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
-| Every tool call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and the gate hooks carry `ACS_DEFAULT_DENY=1`. Check the Guardian process is running. |
+| Every tool call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and a step with no usable decision is denied unless the hook sets `ACS_DEFAULT_DENY=0`. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time. |

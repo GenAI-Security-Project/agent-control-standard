@@ -120,7 +120,7 @@ class Config:
     def from_env(cls, env: Mapping[str, str]) -> Config:
         return cls(
             guardian_url=env.get("ACS_GUARDIAN_URL", DEFAULT_GUARDIAN_URL),
-            posture=FailPosture(deny_on_failure=env.get("ACS_DEFAULT_DENY", "0") == "1",
+            posture=FailPosture(deny_on_failure=env.get("ACS_DEFAULT_DENY") != "0",
                                 timeout_s=DEFAULT_TIMEOUT_S),
             handshake_enabled=env.get("ACS_HANDSHAKE", "1") == "1",
             disabled=env.get("ACS_DISABLED") == "1",

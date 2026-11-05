@@ -478,7 +478,7 @@ class SessionGateThroughHooks(unittest.TestCase):
         guardian.start()
         self.addCleanup(guardian.stop)
         session = str(uuid.uuid4())
-        p, denied, audits = self._claude(guardian.url(), session)
+        p, denied, audits = self._claude(guardian.url(), session, ACS_DEFAULT_DENY="0")
         # Under the 5 s default the deny would arrive after 1 s and apply.
         self.assertFalse(denied, p.stdout)
         self.assertIn('"cause": "decision_timeout"', p.stderr)
@@ -507,12 +507,12 @@ class SessionGateThroughHooks(unittest.TestCase):
         self.addCleanup(guardian.stop)
         self.addCleanup(release.set)
         session = str(uuid.uuid4())
-        p, denied, audits = self._claude(guardian.url(), session)
+        p, denied, audits = self._claude(guardian.url(), session, ACS_DEFAULT_DENY="0")
         self.assertFalse(denied, p.stdout)
         self.assertIn("fail_open_bypass", audits)
         release.set()
         time.sleep(0.2)
-        p, denied, audits = self._claude(guardian.url(), session)
+        p, denied, audits = self._claude(guardian.url(), session, ACS_DEFAULT_DENY="0")
         self.assertTrue(denied, "the second step reached the Guardian and its deny applied")
         self.assertEqual(guardian.methods_seen(),
                          ["handshake/hello", "steps/sessionStart", "steps/toolCallRequest", "steps/toolCallRequest"])
@@ -711,13 +711,14 @@ class SessionGateThroughHooks(unittest.TestCase):
             "hookEventName": "SessionStart", "additionalContext": "context from the Guardian"}})
 
     def test_the_session_start_decision_governs_every_hook_of_the_session(self) -> None:
-        # sessionStart answer, the negotiated on_decision_failure, and whether the session's tool calls proceed.
-        cases = {"allow": ("allow", "deny", True), "deny": ("deny", "proceed", False),
-                 "signed refusal": ("refusal", "proceed", False),
-                 "timeout under deny": ("timeout", "deny", False),
-                 "timeout under proceed": ("timeout", "proceed", True)}
+        # sessionStart answer, the negotiated on_decision_failure, the hook's ACS_DEFAULT_DENY, and whether the session's tool calls proceed.
+        cases = {"allow": ("allow", "deny", "0", True), "deny": ("deny", "proceed", "0", False),
+                 "signed refusal": ("refusal", "proceed", "0", False),
+                 "timeout under deny": ("timeout", "deny", "0", False),
+                 "timeout under proceed": ("timeout", "proceed", "0", True),
+                 "timeout under a Guardian's proceed alone": ("timeout", "proceed", None, False)}
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
-            for name, (answer, on_failure, proceeds) in cases.items():
+            for name, (answer, on_failure, local, proceeds) in cases.items():
                 with self.subTest(host, case=name):
                     guardian = ProgrammableGuardian(hmac_secret=SECRET, threaded=True)
 
@@ -736,7 +737,8 @@ class SessionGateThroughHooks(unittest.TestCase):
                     self.addCleanup(guardian.stop)
                     session = str(uuid.uuid4())
                     for process in (1, 2):
-                        p, denied, audits = run(guardian.url(), session)
+                        p, denied, audits = run(guardian.url(), session,
+                                                **({} if local is None else {"ACS_DEFAULT_DENY": local}))
                         self.assertEqual(denied, not proceeds, (process, p.stdout, audits))
                     self.assertEqual(guardian.methods_seen(), ["handshake/hello", "steps/sessionStart"]
                                      + (["steps/toolCallRequest"] * 2 if proceeds else []))
@@ -843,7 +845,7 @@ class SessionGateThroughHooks(unittest.TestCase):
                     time.sleep(0.02)
                 first.kill()
                 first.wait(timeout=10)
-                p, denied, audits = run(guardian.url(), session)
+                p, denied, audits = run(guardian.url(), session, ACS_DEFAULT_DENY="0")
                 self.assertFalse(denied, p.stdout)
                 self.assertIn("fail_open_bypass", audits)
                 self.assertIn('"cause": "session_start_incomplete"', p.stderr)

@@ -50,6 +50,54 @@ class WireCoversEveryFunction(unittest.TestCase):
         self.assertEqual(restored, PLAIN)
 
 
+NAMED = """\
+middleware:
+  acs:
+    _type: acs_guardian
+    guardian_url: http://127.0.0.1:8787/acs
+
+functions:
+  tool:
+    _type: current_datetime
+    middleware:
+      - acs
+  lookup:
+    _type: current_datetime
+
+workflow:
+  _type: acs_nested_outer
+  inner: tool
+  middleware:
+    - acs
+"""
+
+
+@unittest.skipUnless(_NAT_OK, "nvidia-nat-core is not installed")
+class WireFindsTheMiddlewareByType(unittest.TestCase):
+    def test_check_accepts_the_guardian_middleware_under_any_name(self) -> None:
+        gaps = wire.find_attachment_points(wire._yaml().load(NAMED))
+        self.assertEqual([g.path for g in gaps], ["functions.lookup"])
+
+    def test_write_lists_the_existing_middleware_and_adds_no_second_guard(self) -> None:
+        doc = wire._yaml().load(NAMED)
+        wire.install(doc, guardian_url="http://127.0.0.1:8787/acs", default_deny=True, timeout_s=5.0)
+        self.assertEqual(list(doc["middleware"]), ["acs"])
+        self.assertEqual([str(m) for m in doc["functions"]["tool"]["middleware"]], ["acs"])
+        self.assertEqual([str(m) for m in doc["functions"]["lookup"]["middleware"]], ["acs"])
+        self.assertEqual([str(m) for m in doc["workflow"]["middleware"]], ["acs"])
+        self.assertEqual(wire.find_attachment_points(doc), [])
+        restored, _ = wire.unwire(wire.render(doc))
+        self.assertEqual(restored, NAMED)
+
+    def test_write_refuses_when_acs_guardian_names_another_middleware(self) -> None:
+        taken = NAMED.replace("  acs:\n    _type: acs_guardian", "  acs_guardian:\n    _type: content_filter")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow.yml"
+            path.write_text(taken)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(wire.main(["--workflow", str(path), "--write"]), 0)
+            self.assertEqual(path.read_text(), taken)
+
 
 @unittest.skipUnless(_NAT_OK, "nvidia-nat-core is not installed")
 class WiredPosture(unittest.TestCase):
@@ -68,9 +116,9 @@ class WiredPosture(unittest.TestCase):
     def test_all_fail_open_wires_it_open(self) -> None:
         self.assertIs(self._wired("--all-fail-open"), False)
 
-    def test_an_unset_default_deny_leaves_the_posture_to_the_guardian(self) -> None:
+    def test_an_unset_default_deny_denies(self) -> None:
         from acs.integrations.nat.adapter import ACSMiddlewareConfig
-        self.assertIs(ACSMiddlewareConfig(guardian_url="http://127.0.0.1:8787/acs").default_deny, False)
+        self.assertIs(ACSMiddlewareConfig(guardian_url="http://127.0.0.1:8787/acs").default_deny, True)
 
 
 if __name__ == "__main__":

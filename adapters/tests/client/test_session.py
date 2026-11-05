@@ -447,8 +447,8 @@ class Startup(_SessionTest):
         again, _ = self._open(session_id="start-timeout", start=lambda s: self.fail("started twice"))
         self.assertEqual(first, again)
         self.assertEqual(first.start_failure["cause"], "decision_timeout")
-        proceed = Config.from_env({"ACS_GUARDIAN_URL": URL})
-        deny = Config.from_env({"ACS_GUARDIAN_URL": URL, "ACS_DEFAULT_DENY": "1"})
+        proceed = Config.from_env({"ACS_GUARDIAN_URL": URL, "ACS_DEFAULT_DENY": "0"})
+        deny = Config.from_env({"ACS_GUARDIAN_URL": URL})
         self.assertIsNone(proceed.gate(again))
         self.assertEqual((deny.gate(again).proceed, deny.gate(again).cause), (False, "decision_timeout"))
         self.assertEqual([c.args[0] for c in self.audit.call_args_list if c.kwargs.get("method") == "steps/sessionStart"],
@@ -497,7 +497,7 @@ class Startup(_SessionTest):
         self.assertIsInstance(decision, Negotiated)
         self.assertEqual(starts, [])
         self.assertEqual([(c.args[0], c.kwargs["error"]) for c in self.audit.call_args_list
-                          if c.kwargs.get("method") == "steps/sessionStart"], [("fail_open_bypass", "boom")])
+                          if c.kwargs.get("method") == "steps/sessionStart"], [("decision_failure_fail_closed", "boom")])
 
     def test_a_hook_refused_by_its_own_profile_requirement_leaves_the_start_to_a_later_hook(self) -> None:
         for name, stored_first in (("opens the session", False), ("joins a stored session", True)):
@@ -536,7 +536,7 @@ class Startup(_SessionTest):
         self.assertEqual(again.start_failure["cause"], "session_start_incomplete")
         self.assertEqual((later, len(starts), calls, counted), (again, 1, 0, ["observed_agent_error"]),
                          "the start is not repeated, and its failure is settled and counted once")
-        self.assertIn(("fail_open_bypass", "session_start_incomplete"),
+        self.assertIn(("decision_failure_fail_closed", "session_start_incomplete"),
                       [(c.args[0], c.kwargs.get("cause")) for c in self.audit.call_args_list])
 
     def test_a_start_that_cannot_be_claimed_sends_nothing(self) -> None:

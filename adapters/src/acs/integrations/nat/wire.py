@@ -98,10 +98,19 @@ def _line_of(node: Any) -> int | None:
     return (lc.line or 0) + 1
 
 
-def _list_includes_middleware(seq: Any) -> bool:
+def _guardian_names(doc: Any) -> list[str]:
+    """The names under `middleware:` whose `_type` is acs_guardian; NAT lists a middleware by its name, so any name can be ours."""
+    mw = doc.get("middleware") if isinstance(doc, (dict, CommentedMap)) else None
+    if not isinstance(mw, (dict, CommentedMap)):
+        return []
+    return [str(name) for name, definition in mw.items()
+            if isinstance(definition, (dict, CommentedMap)) and definition.get("_type") == MIDDLEWARE_TYPE]
+
+
+def _list_includes_middleware(seq: Any, names: list[str]) -> bool:
     if not isinstance(seq, (list, CommentedSeq)):
         return False
-    return any(str(item) == MIDDLEWARE_NAME for item in seq)
+    return any(str(item) in names for item in seq)
 
 
 def find_attachment_points(doc: Any) -> list[Gap]:
@@ -112,37 +121,40 @@ def find_attachment_points(doc: Any) -> list[Gap]:
         return gaps
 
     mw_block = doc.get("middleware")
-    if not isinstance(mw_block, (dict, CommentedMap)) or MIDDLEWARE_NAME not in mw_block:
-        gaps.append(Gap("error", "middleware_block", "middleware",
-                         _line_of(mw_block) if mw_block is not None else None,
-                         f"top-level `middleware:` block is missing the "
-                         f"`{MIDDLEWARE_NAME}:` definition"))
-    else:
-        mw_def = mw_block[MIDDLEWARE_NAME]
-        if not isinstance(mw_def, (dict, CommentedMap)) or mw_def.get("_type") != MIDDLEWARE_TYPE:
+    names = _guardian_names(doc)
+    if not names:
+        mw_def = mw_block.get(MIDDLEWARE_NAME) if isinstance(mw_block, (dict, CommentedMap)) else None
+        if mw_def is None:
+            gaps.append(Gap("error", "middleware_block", "middleware",
+                             _line_of(mw_block) if mw_block is not None else None,
+                             f"top-level `middleware:` block has no middleware with "
+                             f"`_type: {MIDDLEWARE_TYPE}`"))
+        else:
             gaps.append(Gap(
                 "error", "config", f"middleware.{MIDDLEWARE_NAME}",
                 _line_of(mw_def),
                 f"`middleware.{MIDDLEWARE_NAME}._type` must be "
                 f"`{MIDDLEWARE_TYPE}` (got {mw_def.get('_type') if isinstance(mw_def, dict) else 'non-mapping'!r})"))
+        names = [MIDDLEWARE_NAME]
+    listed = names[0]
 
     wf = doc.get("workflow")
     if isinstance(wf, (dict, CommentedMap)):
-        if not _list_includes_middleware(wf.get("middleware")):
+        if not _list_includes_middleware(wf.get("middleware"), names):
             gaps.append(Gap("error", "workflow", "workflow",
                              _line_of(wf),
-                             f"`workflow.middleware` does not include `{MIDDLEWARE_NAME}` — the agent's top-level execution will not be gated"))
+                             f"`workflow.middleware` does not include `{listed}` — the agent's top-level execution will not be gated"))
 
     fgs = doc.get("function_groups")
     if isinstance(fgs, (dict, CommentedMap)):
         for name, fg in fgs.items():
             if not isinstance(fg, (dict, CommentedMap)):
                 continue
-            if not _list_includes_middleware(fg.get("middleware")):
+            if not _list_includes_middleware(fg.get("middleware"), names):
                 gaps.append(Gap(
                     "error", "function_group",
                     f"function_groups.{name}", _line_of(fg),
-                    f"function_group `{name}` does not list `{MIDDLEWARE_NAME}` — every function in this group will bypass the Guardian"))
+                    f"function_group `{name}` does not list `{listed}` — every function in this group will bypass the Guardian"))
 
     # 4) Every function: a call to a function, from the workflow or from another
     # function, runs only that function's own middleware.
@@ -151,11 +163,11 @@ def find_attachment_points(doc: Any) -> list[Gap]:
         for name, fn in funcs.items():
             if not isinstance(fn, (dict, CommentedMap)):
                 continue
-            if not _list_includes_middleware(fn.get("middleware")):
+            if not _list_includes_middleware(fn.get("middleware"), names):
                 gaps.append(Gap(
                     "error", "function",
                     f"functions.{name}", _line_of(fn),
-                    f"function `{name}` does not list `{MIDDLEWARE_NAME}` — every call to it bypasses the Guardian"))
+                    f"function `{name}` does not list `{listed}` — every call to it bypasses the Guardian"))
 
     return gaps
 
@@ -188,52 +200,61 @@ def _ensure_middleware_block(doc: CommentedMap, guardian_url: str,
     return mutated
 
 
-def _ensure_middleware_listed(parent: CommentedMap, path_for_log: str) -> bool:
+def _ensure_middleware_listed(parent: CommentedMap, listed: str, names: list[str]) -> bool:
     mw = parent.get("middleware")
     if mw is None:
-        new = CommentedSeq([MIDDLEWARE_NAME])
+        new = CommentedSeq([listed])
         parent["middleware"] = new
         parent.yaml_add_eol_comment(WIRE_MARKER, key="middleware")
         return True
     if isinstance(mw, (list, CommentedSeq)):
-        if MIDDLEWARE_NAME in [str(x) for x in mw]:
+        if _list_includes_middleware(mw, names):
             return False
         # First, so the policy gate runs before content filters.
-        mw.insert(0, MIDDLEWARE_NAME)
+        mw.insert(0, listed)
         try:
             mw.yaml_add_eol_comment(WIRE_MARKER, key=0)
         except (AttributeError, TypeError):
             pass
         return True
-    parent["middleware"] = CommentedSeq([MIDDLEWARE_NAME, mw])
+    parent["middleware"] = CommentedSeq([listed, mw])
     parent.yaml_add_eol_comment(WIRE_MARKER, key="middleware")
     return True
 
 
 def install(doc: CommentedMap, *, guardian_url: str, default_deny: bool,
              timeout_s: float) -> list[str]:
+    """Raises ValueError when `middleware.acs_guardian` names another middleware, since listing it would gate nothing."""
     changes: list[str] = []
-    if _ensure_middleware_block(doc, guardian_url, default_deny, timeout_s):
-        changes.append(f"middleware.{MIDDLEWARE_NAME}: defined ({guardian_url})")
+    names = _guardian_names(doc)
+    if not names:
+        mw = doc.get("middleware")
+        if isinstance(mw, (dict, CommentedMap)) and MIDDLEWARE_NAME in mw:
+            raise ValueError(f"`middleware.{MIDDLEWARE_NAME}` is not `_type: {MIDDLEWARE_TYPE}`; "
+                             f"rename it or set its `_type`, then wire again")
+        if _ensure_middleware_block(doc, guardian_url, default_deny, timeout_s):
+            changes.append(f"middleware.{MIDDLEWARE_NAME}: defined ({guardian_url})")
+        names = [MIDDLEWARE_NAME]
+    listed = names[0]
 
     wf = doc.get("workflow")
     if isinstance(wf, (dict, CommentedMap)):
-        if _ensure_middleware_listed(wf, "workflow"):
-            changes.append(f"workflow.middleware: added `{MIDDLEWARE_NAME}`")
+        if _ensure_middleware_listed(wf, listed, names):
+            changes.append(f"workflow.middleware: added `{listed}`")
 
     fgs = doc.get("function_groups")
     if isinstance(fgs, (dict, CommentedMap)):
         for name, fg in fgs.items():
             if isinstance(fg, (dict, CommentedMap)):
-                if _ensure_middleware_listed(fg, f"function_groups.{name}"):
-                    changes.append(f"function_groups.{name}.middleware: added `{MIDDLEWARE_NAME}`")
+                if _ensure_middleware_listed(fg, listed, names):
+                    changes.append(f"function_groups.{name}.middleware: added `{listed}`")
 
     funcs = doc.get("functions")
     if isinstance(funcs, (dict, CommentedMap)):
         for name, fn in funcs.items():
             if isinstance(fn, (dict, CommentedMap)):
-                if _ensure_middleware_listed(fn, f"functions.{name}"):
-                    changes.append(f"functions.{name}.middleware: added `{MIDDLEWARE_NAME}`")
+                if _ensure_middleware_listed(fn, listed, names):
+                    changes.append(f"functions.{name}.middleware: added `{listed}`")
 
     return changes
 
@@ -266,6 +287,7 @@ def unwire(text: str) -> tuple[str, list[str]]:
     if not isinstance(doc, (dict, CommentedMap)):
         return text, removed
 
+    names = _guardian_names(doc) or [MIDDLEWARE_NAME]
     mw = doc.get("middleware")
     if isinstance(mw, (dict, CommentedMap)):
         sub_comment = _eol_comment_text(mw, MIDDLEWARE_NAME)
@@ -281,19 +303,19 @@ def unwire(text: str) -> tuple[str, list[str]]:
 
     wf = doc.get("workflow")
     if isinstance(wf, (dict, CommentedMap)):
-        _strip_listed_middleware(wf, "workflow", removed)
+        _strip_listed_middleware(wf, "workflow", removed, names)
 
     fgs = doc.get("function_groups")
     if isinstance(fgs, (dict, CommentedMap)):
         for name, fg in fgs.items():
             if isinstance(fg, (dict, CommentedMap)):
-                _strip_listed_middleware(fg, f"function_groups.{name}", removed)
+                _strip_listed_middleware(fg, f"function_groups.{name}", removed, names)
 
     funcs = doc.get("functions")
     if isinstance(funcs, (dict, CommentedMap)):
         for name, fn in funcs.items():
             if isinstance(fn, (dict, CommentedMap)):
-                _strip_listed_middleware(fn, f"functions.{name}", removed)
+                _strip_listed_middleware(fn, f"functions.{name}", removed, names)
 
     buf = io.StringIO()
     _yaml().dump(doc, buf)
@@ -301,7 +323,7 @@ def unwire(text: str) -> tuple[str, list[str]]:
 
 
 def _strip_listed_middleware(parent: CommentedMap, path: str,
-                              removed: list[str]) -> None:
+                              removed: list[str], names: list[str]) -> None:
     """Remove only entries carrying WIRE_MARKER; hand-wired entries stay."""
     mw = parent.get("middleware")
     if mw is None:
@@ -310,28 +332,28 @@ def _strip_listed_middleware(parent: CommentedMap, path: str,
     # Case A: we created the whole `middleware:` key for this parent
     if WIRE_MARKER in parent_marker and isinstance(mw, (list, CommentedSeq)):
         contents = [str(x) for x in mw]
-        if contents == [MIDDLEWARE_NAME]:
+        if len(contents) == 1 and contents[0] in names:
             del parent["middleware"]
             removed.append(f"{path}.middleware: removed key")
             return
         # Or scalar-to-list conversion: list is [acs_guardian, <original>]
-        if len(contents) >= 2 and contents[0] == MIDDLEWARE_NAME:
+        if len(contents) >= 2 and contents[0] in names:
             del mw[0]
-            removed.append(f"{path}.middleware: removed inserted `{MIDDLEWARE_NAME}`")
+            removed.append(f"{path}.middleware: removed inserted `{contents[0]}`")
             return
     # Case B: we prepended into an existing list — remove only the
     # marker-carrying item(s).
     if isinstance(mw, (list, CommentedSeq)):
         to_remove: list[int] = []
         for i, item in enumerate(mw):
-            if str(item) != MIDDLEWARE_NAME:
+            if str(item) not in names:
                 continue
             item_comment = _eol_comment_text(mw, i)
             if WIRE_MARKER in item_comment:
                 to_remove.append(i)
         for i in reversed(to_remove):
+            removed.append(f"{path}.middleware[{i}]: removed inserted `{mw[i]}`")
             del mw[i]
-            removed.append(f"{path}.middleware[{i}]: removed inserted `{MIDDLEWARE_NAME}`")
         if len(mw) == 0 and WIRE_MARKER in parent_marker:
             del parent["middleware"]
             removed.append(f"{path}.middleware: removed empty list")
@@ -380,11 +402,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="ACS Guardian endpoint (default: http://127.0.0.1:8787/acs).")
     posture = p.add_mutually_exclusive_group()
     posture.add_argument("--default-deny", action="store_true",
-                    help="Write default_deny: true, the default: a call with no usable decision is blocked "
-                         "whatever the Guardian declares.")
+                    help="Write default_deny: true, the default, in the acs_guardian definition this tool adds: "
+                         "a call with no usable decision is blocked whatever the Guardian declares. An "
+                         "existing middleware with _type: acs_guardian keeps its own default_deny.")
     posture.add_argument("--all-fail-open", action="store_true",
-                    help="Write default_deny: false: the Guardian's on_decision_failure applies. A session "
-                         "whose handshake got no answer proceeds only with ACS_STARTUP_POSTURE=proceed.")
+                    help="Write default_deny: false in the acs_guardian definition this tool adds: a call with "
+                         "no usable decision proceeds, audited, unless the Guardian declares "
+                         "on_decision_failure: deny. An existing middleware with _type: acs_guardian keeps its "
+                         "own default_deny. A session whose handshake got no answer proceeds only with "
+                         "ACS_STARTUP_POSTURE=proceed.")
     p.add_argument("--timeout-s", type=float, default=5.0,
                     help="Per-request Guardian timeout (default 5.0s).")
     p.add_argument("--write", action="store_true",
@@ -430,9 +456,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     doc = _yaml().load(before_text)
-    changes = install(doc, guardian_url=args.guardian_url,
-                       default_deny=not args.all_fail_open,
-                       timeout_s=args.timeout_s)
+    try:
+        changes = install(doc, guardian_url=args.guardian_url,
+                           default_deny=not args.all_fail_open,
+                           timeout_s=args.timeout_s)
+    except ValueError as error:
+        sys.stderr.write(f"FATAL: {error}\n")
+        return 2
     after_text = render(doc)
 
     if not changes:

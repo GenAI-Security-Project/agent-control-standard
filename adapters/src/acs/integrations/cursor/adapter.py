@@ -105,16 +105,13 @@ def _emit(payload: dict[str, Any]) -> None:
     sys.stdout.write("\n")
 
 
-def _permission_response(decision: str, message: str = "",
-                          updated_input: dict | None = None) -> dict[str, Any]:
+def _permission_response(decision: str, message: str = "") -> dict[str, Any]:
     out: dict[str, Any] = {"permission": decision}
     if message:
         if decision == "deny" and not message.startswith("ACS"):
             message = f"ACS blocked this tool call: {message}"
         out["user_message"] = message
         out["agent_message"] = message
-    if updated_input is not None:
-        out["updated_input"] = updated_input
     return out
 
 
@@ -566,9 +563,9 @@ def _translate_permission(decision: Decision, event_name: str, original_input: d
         elif not isinstance(overrides, dict):
             unsupported = "no parameter_overrides object"
         else:
-            # updated_input replaces the whole input.
+            # updated_input replaces the whole input; with no permission key Cursor keeps its sandbox and approval, as with {}.
             merged = {**original_input, **overrides}
-            return _permission_response("allow", decision.reasoning, updated_input=merged)
+            return {"updated_input": merged}
         audit_modify_unsupported(unsupported, event=event_name, tool=tool_name)
         return _permission_response("deny",
                                      f"MODIFY substituted to DENY: {decision.reasoning}")

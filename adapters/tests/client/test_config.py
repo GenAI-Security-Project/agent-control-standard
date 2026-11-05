@@ -24,6 +24,15 @@ class Negotiation(unittest.TestCase):
             with self.subTest(hello=hello):
                 self.assertTrue(DENY.negotiated(hello).deny_on_failure)
 
+    def test_only_the_local_config_opts_into_proceed(self) -> None:
+        """A ServerHello can tighten the posture but never loosen it."""
+        table = [({}, "proceed", True), ({}, None, True), ({"ACS_DEFAULT_DENY": "0"}, "proceed", False),
+                 ({"ACS_DEFAULT_DENY": "0"}, None, False), ({"ACS_DEFAULT_DENY": "0"}, "deny", True)]
+        for env, declared, denies in table:
+            with self.subTest(env=env, on_decision_failure=declared):
+                hello = {} if declared is None else {"on_decision_failure": declared}
+                self.assertIs(Config.from_env(env).posture.negotiated(hello).deny_on_failure, denies)
+
     def test_proceed_stays_proceed_without_a_deny(self) -> None:
         for hello in ({"on_decision_failure": "proceed"}, {}, {"on_decision_failure": "DENY"}):
             with self.subTest(hello=hello):
@@ -165,7 +174,7 @@ class FromEnv(unittest.TestCase):
     def test_defaults(self) -> None:
         self.assertEqual(Config.from_env({}), Config(
             guardian_url=DEFAULT_GUARDIAN_URL,
-            posture=FailPosture(deny_on_failure=False, timeout_s=DEFAULT_TIMEOUT_S),
+            posture=FailPosture(deny_on_failure=True, timeout_s=DEFAULT_TIMEOUT_S),
             handshake_enabled=True, disabled=False, startup_posture=None))
 
     def test_startup_posture(self) -> None:
@@ -197,14 +206,18 @@ class FromEnv(unittest.TestCase):
     def test_switches_turn_on_only_with_1(self) -> None:
         for value in ("true", "yes", "0", ""):
             with self.subTest(value=value):
-                config = Config.from_env({"ACS_DEFAULT_DENY": value, "ACS_DISABLED": value})
-                self.assertFalse(config.posture.deny_on_failure)
-                self.assertFalse(config.disabled)
+                self.assertFalse(Config.from_env({"ACS_DISABLED": value}).disabled)
 
-    @mock.patch.dict(os.environ, {"ACS_DEFAULT_DENY": "1", "ACS_DISABLED": "1"})
+    def test_only_0_opts_out_of_deny(self) -> None:
+        for value in ("1", "", "false", "no", " 0", "00"):
+            with self.subTest(value=value):
+                self.assertTrue(Config.from_env({"ACS_DEFAULT_DENY": value}).posture.deny_on_failure)
+        self.assertFalse(Config.from_env({"ACS_DEFAULT_DENY": "0"}).posture.deny_on_failure)
+
+    @mock.patch.dict(os.environ, {"ACS_DEFAULT_DENY": "0", "ACS_DISABLED": "1"})
     def test_reads_only_the_mapping_it_is_given(self) -> None:
         config = Config.from_env({})
-        self.assertFalse(config.posture.deny_on_failure)
+        self.assertTrue(config.posture.deny_on_failure)
         self.assertFalse(config.disabled)
 
 

@@ -159,12 +159,12 @@ class CursorAdapter(unittest.TestCase):
         self.assertEqual(json.loads(out)["permission"], "deny")
         self.assertIn("session_not_started_fail_closed", err)
 
-    def test_guardian_unreachable_under_a_declared_proceed_is_audited(self) -> None:
-        """A negotiated session whose Guardian declares proceed lets a step with no decision proceed, audited (§6.4)."""
+    def test_guardian_unreachable_under_a_local_proceed_is_audited(self) -> None:
+        """A step with no decision proceeds, audited (§6.4), when the hook opts into proceed and the Guardian declares no deny."""
         rc, out, err = self._run("preToolUse",
             {"session_id": "cur-11", "tool_name": "Read",
              "tool_input": {"file_path": "/tmp/x"}},
-            env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
+            env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead", "ACS_DEFAULT_DENY": "0",
                            **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-11", namespace_prefix="cursor"))},
         )
         self.assertEqual(rc, 0)
@@ -172,6 +172,20 @@ class CursorAdapter(unittest.TestCase):
             "a decided proceed answers {}: failClosed reads no output as a failed hook, and {} leaves the call to Cursor")
         self.assertIn("ACS_AUDIT", err, "fail-open MUST emit an audit event per §6.4")
         self.assertIn("fail_open_bypass", err)
+
+    def test_a_guardian_s_declared_proceed_alone_denies(self) -> None:
+        """The seeded ServerHello declares proceed, and only the hook's own ACS_DEFAULT_DENY=0 can opt into it."""
+        env = {k: v for k, v in os.environ.items() if k != "ACS_DEFAULT_DENY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            rc, out, err = self._run("preToolUse",
+                {"session_id": "cur-11b", "tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}},
+                env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
+                               **self._negotiated("http://127.0.0.1:1/dead", coerce_uuid("cur-11b", namespace_prefix="cursor"))},
+            )
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["permission"], "deny")
+        self.assertIn("decision_failure_fail_closed", err)
+        self.assertNotIn("fail_open_bypass", err)
 
     def test_before_submit_prompt_block_with_readable_message(self) -> None:
         rc, out, err = self._run("beforeSubmitPrompt",
