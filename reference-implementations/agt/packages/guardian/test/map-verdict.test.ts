@@ -59,9 +59,17 @@ describe("mapVerdict", () => {
     expect(mapVerdict({ decision: "allow" }, m, "pre_tool_call", "command").policy_references ?? []).toHaveLength(0);
   });
 
-  it("maps escalate to ask and transform to modify", () => {
-    expect(mapVerdict({ decision: "escalate", reason: "approval_required" }, m, "pre_tool_call", "command").decision)
-      .toBe("ask");
+  it("maps escalate to ask with required ask_details (#141) and transform to modify", () => {
+    const askDecision = mapVerdict({ decision: "escalate", reason: "approval_required" }, m, "pre_tool_call", "command");
+    expect(askDecision.decision).toBe("ask");
+    expect(askDecision.ask_details).toEqual({
+      approver: { type: "human", id: "operator" },
+      question:
+        "This step needs human approval before it can run. " +
+        "Policy: approval_required, from AGT's stock bundle (agt_stock).",
+      timeout_seconds: 300,
+      timeout_disposition: "deny",
+    });
     expect(
       mapVerdict(
         { decision: "transform", reason: "redacted", transform: { path: "$policy_target", value: "x" } },

@@ -91,4 +91,23 @@ describe("checkResponse -- validateEnvelope's outbound counterpart", () => {
       }),
     ).toEqual({ status: "checked_valid" });
   });
+
+  it("accepts an ask decision synthesized by mapVerdict from an AGT escalate verdict (#141)", async () => {
+    const { finalResult } = await import("../src/acs-result.ts");
+    const { loadMapping, mapVerdict } = await import("../src/map-verdict.ts");
+    const mapping = loadMapping("mapping.yaml");
+    const decision = mapVerdict(
+      { decision: "escalate", reason: "approval_required", message: "destructive operation" },
+      mapping,
+      "pre_tool_call",
+      "command",
+    );
+    expect(
+      checkResponse({
+        jsonrpc: "2.0",
+        id: "rpc-ask-1",
+        result: finalResult({ acs_version: "0.1.0", request_id: PLACEHOLDER_REQUEST_ID }, decision),
+      }),
+    ).toEqual({ status: "checked_valid" });
+  });
 });
