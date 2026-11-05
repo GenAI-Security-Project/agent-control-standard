@@ -567,7 +567,7 @@ export function checkTracePillar(): TraceRow[] {
   // narrower rule".
   const PROVENANCE_SPAN = "(every step span, when Provenance is attached)";
   for (const attribute of otelMapping.properties.provenance_attributes.properties.required.default) {
-    const field = attribute.slice("acs.provenance.".length);
+    const field = attribute === "acs.provenance.ids" ? "provenance_id" : attribute.slice("acs.provenance.".length);
     rows.push(
       buildRow(attribute, PROVENANCE_SPAN, "required", {
         file: "provenance.json",

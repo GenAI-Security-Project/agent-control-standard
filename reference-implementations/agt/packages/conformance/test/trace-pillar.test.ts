@@ -180,10 +180,12 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     expect(rows.some((r) => r.span === "acs.decision.failure" || r.attribute.startsWith("acs.failure."))).toBe(false);
   });
 
-  it("acs.provenance.origin is emittable -- provenance.json's own `required` list includes `origin`", () => {
-    const row = only("acs.provenance.origin");
-    expect(row.emittableByWireConsumer).toBe(true);
-    expect(row.wireSource).toContain("provenance.json");
+  it("acs.provenance.ids and acs.provenance.origin are emittable -- provenance.json's own `required` list includes `provenance_id` and `origin`", () => {
+    for (const attr of ["acs.provenance.ids", "acs.provenance.origin"]) {
+      const row = only(attr);
+      expect(row.emittableByWireConsumer).toBe(true);
+      expect(row.wireSource).toContain("provenance.json");
+    }
   });
 
   it("emittableByWireConsumer is false wherever wireSource is null -- an invariant of buildRow, currently unexercised by real data", () => {
@@ -223,9 +225,9 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "acs.message.agent": 2, // steps/agentResponse: acs.session.id, acs.agent.id
       "acs.decision": 12, // decision_event: 1 required + 11 conditional
       "(every step span)": 2, // step_span_attributes: acs.request_id, acs.session.id
-      "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
+      "(every step span, when Provenance is attached)": 2, // provenance_attributes.required: acs.provenance.ids, acs.provenance.origin
     });
-    expect(rows).toHaveLength(26);
+    expect(rows).toHaveLength(27);
   });
 
   it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {

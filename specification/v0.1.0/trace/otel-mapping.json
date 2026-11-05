@@ -201,12 +201,12 @@
     },
     "provenance_attributes": {
       "type": "object",
-      "description": "When Provenance is attached to a hook payload, the resulting span MUST carry provenance facts as attributes. Lineage edges MAY be linked via OTel span links keyed by provenance_id. v0.1 emits the factual provenance fields (origin, source_id) on the wire and on the span. Both are string arrays, also for a single Provenance object. acs.provenance.source_id is emitted whenever at least one attached Provenance object has a source_id, and omitted otherwise. When emitted, it has the same length and order as acs.provenance.origin, with an empty string where an object has none. Trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see §7.1).",
+      "description": "When Provenance is attached to a hook payload, the resulting span MUST carry provenance facts as attributes. Lineage edges MAY be linked via OTel span links keyed by provenance_id. v0.1 emits the factual provenance fields (provenance_id, origin, source_id) on the wire and on the span as parallel string arrays, also for a single Provenance object. Argument keys are visited in code-point order, outputs by index, and a Provenance object reached more than once is emitted once at its first occurrence (deduplicated by provenance_id). acs.provenance.source_id is emitted whenever at least one attached Provenance object has a source_id, and omitted otherwise. When emitted, it has the same length and order as acs.provenance.ids and acs.provenance.origin, with an empty string where an object has none. Trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see §7.1).",
       "properties": {
         "required": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["acs.provenance.origin"]
+          "default": ["acs.provenance.ids", "acs.provenance.origin"]
         },
         "optional": {
           "type": "array",
