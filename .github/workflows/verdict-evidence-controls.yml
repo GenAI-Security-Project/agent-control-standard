@@ -1,0 +1,64 @@
+# Runs the executable controls for the draft verdict evidence predicate.
+#
+# The draft (docs/predicates/acs-verdict-evidence-v1.md, #297) says in prose that a
+# scope lift must come from a statement the peer signed, and that a quarantine record
+# must be bound and must have an outcome after review_by. The controls are signed
+# records with accepted and refused cases. They come from the verdict-evidence
+# dependency group, pinned in uv.lock, so this job is the only place they install.
+# The guard job in deploy-pages.yml collects the same test file and skips it there.
+#
+# The ACS-Core suite stays in tests/ as files, per #19. This job does not change that.
+name: Verdict evidence controls
+
+on:
+  pull_request:
+    paths:
+      - "docs/predicates/**"
+      - "tests/test_verdict_evidence_controls.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/verdict-evidence-controls.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "docs/predicates/**"
+      - "tests/test_verdict_evidence_controls.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/verdict-evidence-controls.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: verdict-evidence-controls-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  controls:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+
+      # --locked refuses a lockfile that drifted from pyproject.toml, so the controls
+      # that run are the ones the lockfile pins.
+      - name: Install the controls from the lockfile
+        run: uv sync --locked --group verdict-evidence
+
+      # With this set, a missing package fails the run instead of skipping it.
+      - name: Run the controls
+        env:
+          ACS_REQUIRE_VERDICT_EVIDENCE: "1"
+        run: uv run --locked --group verdict-evidence pytest -v tests/test_verdict_evidence_controls.py
