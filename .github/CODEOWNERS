@@ -59,6 +59,12 @@
 # record who wrote it.
 /reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro
 
+# The reference adapters are installable code that hooks into an agent and decides
+# whether its tool calls run. Bar Kaduri owns them. The other two project leads are
+# listed too, because GitHub does not let an author approve her own pull request, and
+# with Bar as the only owner every change she makes here would need an admin bypass.
+/adapters/  @bar-capsule @rocklambros @afogel
+
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead
 # approves them (decision 11).
