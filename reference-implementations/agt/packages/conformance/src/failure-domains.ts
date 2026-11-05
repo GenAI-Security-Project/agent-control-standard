@@ -9,8 +9,7 @@
  * TWO FAILURE DOMAINS, kept apart here exactly as `deny-on-invalid-envelope.ts`
  * keeps them apart at the point that answers them:
  *
- *   (1) AGT'S EVALUATION LAYER FAILS CLOSED (§6.4). An envelope that fails
- *       schema validation, or whose evaluation throws, arrives as an
+ *   (1) AGT'S EVALUATION LAYER FAILS CLOSED (§6.4). A JSON-RPC request whose envelope fails schema validation, or whose evaluation throws, arrives as an
  *       honoured ACS `deny` decision -- never a bare JSON-RPC error.
  *       `denyOnInvalidEnvelope` (`packages/guardian/src/deny-on-invalid-
  *       envelope.ts`) is what does it, reached from two different catches in

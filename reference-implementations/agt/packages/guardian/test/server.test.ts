@@ -334,6 +334,84 @@ describe("startGuardian POST /acs -- denyOnInvalidEnvelope's boundary: what stay
     expect(response.error?.code).toBeLessThanOrEqual(-32000);
   });
 
+  it("rejects array-shaped batch requests with -32600 Invalid Request (#130)", async () => {
+    const batch = [toolCallEnvelope("ls -la", { id: 1 }), toolCallEnvelope("pwd", { id: 2 })];
+    const response = await postAcs(url, batch);
+
+    expect(response.result).toBeUndefined();
+    expect(response.id).toBeNull();
+    expect(response.error).toEqual({ code: -32600, message: "Invalid Request" });
+  });
+
+  it("rejects valid JSON that is not a JSON-RPC 2.0 request with -32600 Invalid Request, never an ACS deny (#163)", async () => {
+    const missingJsonrpc = await postAcs(url, { hello: "world" });
+    expect(missingJsonrpc.result).toBeUndefined();
+    expect(missingJsonrpc.id).toBeNull();
+    expect(missingJsonrpc.error).toEqual({ code: -32600, message: "Invalid Request" });
+
+    const wrongVersionStep = await postAcs(url, {
+      jsonrpc: "1.0",
+      id: 1,
+      method: "steps/toolCallRequest",
+      params: {},
+    });
+    expect(wrongVersionStep.result).toBeUndefined();
+    expect(wrongVersionStep.id).toBe(1);
+    expect(wrongVersionStep.error).toEqual({ code: -32600, message: "Invalid Request" });
+  });
+
+  // JSON-RPC 2.0 section 4: id is a string, a number, or null, and params, when
+  // present, is an object or an array. A scalar params on a step came back as
+  // an ACS deny, which is what issue #163 item 4 rules out.
+  it.each([
+    ["an object id", { id: {} }, null],
+    ["an array id", { id: [] }, null],
+    ["a boolean id", { id: true }, null],
+    ["a number as params", { id: 1, params: 5 }, 1],
+    ["a string as params", { id: 1, params: "x" }, 1],
+    ["null as params", { id: 1, params: null }, 1],
+  ])("rejects a steps/* request with %s as -32600, never an ACS deny (#163)", async (_label, fields, expectedId) => {
+    const response = await postAcs(url, { jsonrpc: "2.0", method: "steps/toolCallRequest", params: {}, ...fields });
+
+    expect(response.result).toBeUndefined();
+    expect(response.id).toBe(expectedId);
+    expect(response.error).toEqual({ code: -32600, message: "Invalid Request" });
+  });
+
+  it.each([
+    ["a non-string method", { jsonrpc: "2.0", id: 1, method: 5, params: {} }],
+    ["a missing method", { jsonrpc: "2.0", id: 1, params: {} }],
+    ["a bare number", 5],
+    ["null", null],
+  ])("rejects %s as -32600 (#163)", async (_label, body) => {
+    const response = await postAcs(url, body);
+
+    expect(response.result).toBeUndefined();
+    expect(response.error).toEqual({ code: -32600, message: "Invalid Request" });
+  });
+
+  // Valid JSON-RPC that fails ACS stays on the ACS path (issue #163 item 3).
+  it.each([
+    ["object params", {}],
+    ["array params", []],
+  ])("keeps a steps/* request with empty %s an ACS deny (#163)", async (_label, params) => {
+    const response = await postAcs(url, { jsonrpc: "2.0", id: 1, method: "steps/toolCallRequest", params });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result?.decision).toBe("deny");
+    expect(response.result?.reason_codes).toEqual(["envelope_invalid"]);
+  });
+
+  it.each([
+    ["a null id", { id: null }],
+    ["no id", {}],
+  ])("keeps a steps/* request with %s on the ACS path (#163)", async (_label, fields) => {
+    const response = await postAcs(url, { jsonrpc: "2.0", method: "steps/toolCallRequest", params: {}, ...fields });
+
+    expect(response.result).toBeUndefined();
+    expect(response.error?.code).toBe(-32010);
+  });
+
   // Envelope-log tapping: the response for the schema-invalid deny path is a
   // JSON-RPC success rather than an error, so this confirms the tap still
   // pairs request and response for it, the same as any other response.
