@@ -50,14 +50,13 @@
  * invariant -- see e.g. failure-domains.ts's own header) never leaks the
  * listener.
  */
-import { loadMapping, startGuardian, POLICY_TARGET_LEAF } from "guardian";
+import { loadMapping, startGuardian } from "guardian";
 // The deployment subpath, not the barrel: the barrel is the governance verbs,
 // and this is how the deployment builds a bridge. This runner MEASURES the
 // shipped deployment, so it has to build the same bridge startGuardian builds
 // -- assembling a replica here is how a harness comes to measure something
 // that is no longer the thing it names.
 import { createDeploymentBridge } from "guardian/deployment";
-import type { InterventionSnapshot } from "agt-bridge";
 import type { CoverageMatrix } from "./cells.ts";
 import { checkInterventionPoints, coverageCellsFromInterventionPoints } from "./intervention-points.ts";
 import { checkVerdicts } from "./verdicts.ts";
@@ -68,37 +67,10 @@ import { mergeCells } from "./merge-cells.ts";
 import { renderCoverageMatrix, renderMappingTable, renderTraceRows } from "./render.ts";
 import { checkPolicyInputSchema } from "./policy-input-schema.ts";
 import { resolveExitCode } from "./exit-code.ts";
+import { POST_TOOL_CALL_SNAPSHOT, PRE_TOOL_CALL_SNAPSHOT } from "./probe-snapshots.ts";
 
 const MANIFEST_PATH = "policy/manifest.yaml";
 const MAPPING_PATH = "mapping.yaml";
-
-/** The same REDACTABLE / REDACTABLE_COMMAND shapes `test/identity.test.ts`
- * drives -- a real transform at both transform-capable gates, so this
- * runner's own enforced-identity cells report the measured `guardian_only`
- * finding, not the no-rewrite case a benign fixture would report instead. */
-const PRE_TOOL_CALL_SNAPSHOT: InterventionSnapshot = {
-  envelope: { budgets: { tool_call_count: 0, token_count: 0, elapsed_seconds: 0, cost_usd: 0 } },
-  tool_call: {
-    name: "Bash",
-    // POLICY_TARGET_LEAF is the leaf assemble-snapshot.ts copies a tool's own
-    // policy-target argument to; policy/manifest.yaml's pre_tool_call point
-    // targets that leaf, not `command` directly.
-    args: { command: "echo ghp_ONLYINCOMMAND999", [POLICY_TARGET_LEAF]: "echo ghp_ONLYINCOMMAND999" },
-    // The same point's `annotations.egress.from` names this member, and an
-    // annotation's `from` is a liveness precondition: unresolved, AGT denies
-    // the whole call on runtime_error:path_missing before the annotator is
-    // dispatched. assemble-snapshot.ts writes it on every real snapshot.
-    raw_command: "echo ghp_ONLYINCOMMAND999",
-    id: "t1",
-  },
-  input: { ifc: { source_labels: ["public"] } },
-};
-const POST_TOOL_CALL_SNAPSHOT: InterventionSnapshot = {
-  envelope: { budgets: { tool_call_count: 0, token_count: 0, elapsed_seconds: 0, cost_usd: 0 } },
-  tool_call: { name: "Bash" },
-  tool_result: { outputs: [{ value: "TOKEN=ghp_ONLYINOUTPUT999\n" }] },
-  input: { ifc: { source_labels: ["public"] } },
-};
 
 export type ConformanceRun = {
   /** Everything this runner publishes, as one string -- the three tables plus

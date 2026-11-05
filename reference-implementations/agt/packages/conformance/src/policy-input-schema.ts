@@ -58,7 +58,7 @@ import { join } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { EvidenceBridge, InterventionSnapshot } from "agt-bridge";
-import { POLICY_TARGET_LEAF } from "guardian";
+import { POST_TOOL_CALL_SNAPSHOT, PRE_TOOL_CALL_SNAPSHOT } from "./probe-snapshots.ts";
 
 /** Names the variable `scripts/run-conformance.sh` sets after cloning AGT at
  * `agt.lock`'s pinned ref -- read here, and printed in the skip reason below,
@@ -70,41 +70,11 @@ export const PINNED_AGT_CLONE_ENV = "PINNED_AGT_CLONE";
  * `PINNED_AGT_CLONE` names. */
 const SCHEMA_RELATIVE_PATH = "policy-engine/spec/schema/wire/policy-input.schema.json";
 
-/** Representative snapshots at the two points this leg covers -- the same
- * REDACTABLE / REDACTABLE_COMMAND shapes `test/identity.test.ts` drives
- * through the real bridge for the identical reason: real fixtures that
- * exercise AGT's transform path, not minimal stubs shaped by this check.
- * Order is this module's own reporting order. */
+/** The two points this leg covers, in this module's reporting order, each with
+ * the snapshot the Guardian's own assemblers build (see probe-snapshots.ts). */
 const PROBE_SNAPSHOTS: [point: "pre_tool_call" | "post_tool_call", snapshot: InterventionSnapshot][] = [
-  [
-    "pre_tool_call",
-    {
-      envelope: { budgets: { tool_call_count: 0, token_count: 0, elapsed_seconds: 0, cost_usd: 0 } },
-      tool_call: {
-        name: "Bash",
-        // POLICY_TARGET_LEAF is the leaf assemble-snapshot.ts copies a
-        // tool's own policy-target argument to; policy/manifest.yaml's
-        // pre_tool_call point targets that leaf, not `command` directly.
-        args: { command: "echo ghp_ONLYINCOMMAND999", [POLICY_TARGET_LEAF]: "echo ghp_ONLYINCOMMAND999" },
-        // The same point's `annotations.egress.from` names this member, and
-        // an annotation's `from` is a liveness precondition: unresolved, AGT
-        // denies the whole call on runtime_error:path_missing, and the
-        // document this leg is meant to validate is never produced.
-        raw_command: "echo ghp_ONLYINCOMMAND999",
-        id: "t1",
-      },
-      input: { ifc: { source_labels: ["public"] } },
-    },
-  ],
-  [
-    "post_tool_call",
-    {
-      envelope: { budgets: { tool_call_count: 0, token_count: 0, elapsed_seconds: 0, cost_usd: 0 } },
-      tool_call: { name: "Bash" },
-      tool_result: { outputs: [{ value: "TOKEN=ghp_ONLYINOUTPUT999\n" }] },
-      input: { ifc: { source_labels: ["public"] } },
-    },
-  ],
+  ["pre_tool_call", PRE_TOOL_CALL_SNAPSHOT],
+  ["post_tool_call", POST_TOOL_CALL_SNAPSHOT],
 ];
 
 export type SchemaLegResult =
