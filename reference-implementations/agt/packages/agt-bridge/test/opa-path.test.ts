@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,7 @@ import { publishOpaPath } from "../src/opa-path.ts";
  */
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const BRIDGE_INDEX = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+const OPA_PATH_SOURCE = fileURLToPath(new URL("../src/opa-path.ts", import.meta.url));
 const MANIFEST = join(REPO_ROOT, "policy", "manifest.yaml");
 
 const SNAPSHOT = {
@@ -106,6 +108,63 @@ describe("publishOpaPath -- the opa AGT's native core spawns, made reachable fro
     } finally {
       if (before === undefined) delete process.env.ACS_OPA_PATH;
       else process.env.ACS_OPA_PATH = before;
+    }
+  });
+
+  it("rejects an unverified substitute binary on ACS_OPA_PATH unless ACS_OPA_SHA256 matches (#72)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-opa-integrity-"));
+    const fakeBin = join(dir, process.platform === "win32" ? "opa.exe" : "opa");
+    writeFileSync(fakeBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const beforePath = process.env.ACS_OPA_PATH;
+    const beforeSha = process.env.ACS_OPA_SHA256;
+    try {
+      process.env.ACS_OPA_PATH = fakeBin;
+      delete process.env.ACS_OPA_SHA256;
+      expect(() => publishOpaPath()).toThrow(/does not match the bundled opa binary/);
+
+      process.env.ACS_OPA_SHA256 = "0".repeat(64);
+      expect(() => publishOpaPath()).toThrow(/failed SHA-256 integrity check/);
+
+      process.env.ACS_OPA_SHA256 = "not-a-hex-digest";
+      expect(() => publishOpaPath()).toThrow(/must be a 64-character hex SHA-256 digest/);
+    } finally {
+      if (beforePath === undefined) delete process.env.ACS_OPA_PATH;
+      else process.env.ACS_OPA_PATH = beforePath;
+      if (beforeSha === undefined) delete process.env.ACS_OPA_SHA256;
+      else process.env.ACS_OPA_SHA256 = beforeSha;
+      try {
+        unlinkSync(fakeBin);
+      } catch {
+        // ignore
+      }
+      rmdirSync(dir);
+    }
+  });
+
+  it("refuses an opa that has no bundled binary to compare with, unless ACS_OPA_SHA256 matches (#72)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-opa-no-bundle-"));
+    const fakeBin = join(dir, process.platform === "win32" ? "opa.exe" : "opa");
+    const script = join(dir, "publish.ts");
+    writeFileSync(fakeBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(script, `import { publishOpaPath } from ${JSON.stringify(OPA_PATH_SOURCE)};\nconsole.log(publishOpaPath());\n`);
+    const digest = createHash("sha256").update(readFileSync(fakeBin)).digest("hex");
+    const publish = (extra: Record<string, string>) =>
+      Bun.spawnSync([process.execPath, "run", script], {
+        cwd: REPO_ROOT,
+        env: { PATH: dir, HOME: process.env.HOME ?? dir, ACS_OPA_NO_BUNDLE: "1", ...extra },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    try {
+      const refused = publish({});
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.stderr.toString()).toContain("no bundled opa binary to compare it with");
+      expect(refused.stderr.toString()).toContain(`ACS_OPA_SHA256=${digest}`);
+
+      const accepted = publish({ ACS_OPA_SHA256: digest });
+      expect({ exitCode: accepted.exitCode, stdout: accepted.stdout.toString().trim() }).toEqual({ exitCode: 0, stdout: fakeBin });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
