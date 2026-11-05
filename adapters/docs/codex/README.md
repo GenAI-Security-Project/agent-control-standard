@@ -60,8 +60,8 @@ Review the exact hook with Codex `/hooks` and trust the project configuration. C
 | `ACS_GUARDIAN_URL` | The Guardian, over HTTP(S); defaults to `http://127.0.0.1:8787/acs` |
 | `ACS_HMAC_SECRET_FILE` | The shared signing secret, at least 32 bytes, mode `0600`. `ACS_HMAC_SECRET` also works, but prefer the file |
 | `ACS_HMAC_KEY_ID` | The label that names the secret (§10). Without it, or without a secret, every call is denied before anything is sent |
-| `ACS_DEFAULT_DENY` | `1` denies a call that gets no usable decision; anything else lets it proceed, audited |
-| `ACS_STARTUP_POSTURE` | What happens when no Guardian answers the handshake: unset follows `ACS_DEFAULT_DENY`, `proceed` proceeds, anything else denies |
+| `ACS_DEFAULT_DENY` | `0` lets a call that gets no usable decision proceed, audited. Unset, or any other value, denies it |
+| `ACS_STARTUP_POSTURE` | What happens when no Guardian answers the handshake: `proceed` lets the call run, audited, with nothing sent to the Guardian. Unset, or any other value, denies it |
 | `ACS_AUDIT_FILE` | A durable audit file, written as well as stderr |
 | `ACS_HANDSHAKE_CACHE` | Where session decisions are stored |
 | `ACS_AGENT_ID` | The deployment's own agent identity |

@@ -264,14 +264,20 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("http_400_refusal", audit)
 
     def test_an_unanswered_handshake_follows_the_startup_posture(self) -> None:
-        self.env["ACS_GUARDIAN_URL"] = "http://127.0.0.1:1/acs"
-        for posture in ("0", "1"):
-            with self.subTest(posture=posture):
-                self.env["ACS_DEFAULT_DENY"] = posture
+        """§4.1: a session with no negotiated Guardian denies its calls unless the hook sets ACS_STARTUP_POSTURE=proceed."""
+        base = {k: v for k, v in self.env.items() if k not in ("ACS_DEFAULT_DENY", "ACS_STARTUP_POSTURE")}
+        base["ACS_GUARDIAN_URL"] = "http://127.0.0.1:1/acs"
+        table = [({}, "deny", "session_not_started_fail_closed"),
+                 ({"ACS_DEFAULT_DENY": "0"}, "deny", "session_not_started_fail_closed"),
+                 ({"ACS_DEFAULT_DENY": "1"}, "deny", "session_not_started_fail_closed"),
+                 ({"ACS_STARTUP_POSTURE": "proceed"}, None, "unguarded_session_bypass")]
+        for overrides, decision, audit_event in table:
+            with self.subTest(env=overrides):
+                self.env = {**base, **overrides}
+                self.fresh_session_records()
                 out, audit = self.invoke()
-                self.assertEqual(out.get("permissionDecision"), "deny" if posture == "1" else None)
-                self.assertIn("unguarded_session_bypass" if posture == "0" else "session_not_started_fail_closed",
-                              audit)
+                self.assertEqual(out.get("permissionDecision"), decision)
+                self.assertIn(audit_event, audit)
 
     def test_a_server_hello_that_does_not_answer_the_client_hello_sends_no_step(self) -> None:
         self.env["ACS_DEFAULT_DENY"] = "1"
@@ -382,15 +388,20 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(self.guardian.methods(), [])
 
     def test_the_hook_command_follows_the_posture_when_the_adapter_cannot_load(self) -> None:
+        """No Guardian can decide a call the adapter cannot send, so it proceeds only when the hook opts into both postures."""
         shadow = Path(self.tmp.name) / "shadow"
         shadow.mkdir()
         (shadow / "rfc8785.py").write_text("raise ImportError('test missing dependency')\n")
-        self.env["PYTHONPATH"] = str(shadow)
-        for posture in ("0", "1"):
-            with self.subTest(posture=posture):
-                self.env["ACS_DEFAULT_DENY"] = posture
+        base = {k: v for k, v in self.env.items() if k not in ("ACS_DEFAULT_DENY", "ACS_STARTUP_POSTURE")}
+        base["PYTHONPATH"] = str(shadow)
+        table = [({}, "deny"), ({"ACS_DEFAULT_DENY": "0"}, "deny"), ({"ACS_DEFAULT_DENY": "1"}, "deny"),
+                 ({"ACS_STARTUP_POSTURE": "proceed"}, "deny"),
+                 ({"ACS_STARTUP_POSTURE": "proceed", "ACS_DEFAULT_DENY": "0"}, None)]
+        for overrides, decision in table:
+            with self.subTest(env=overrides):
+                self.env = {**base, **overrides}
                 out, audit = self.invoke(command=[str(HOOK)])
-                self.assertEqual(out.get("permissionDecision"), "deny" if posture == "1" else None)
+                self.assertEqual(out.get("permissionDecision"), decision)
                 self.assertIn("adapter_unavailable", audit)
         self.assertEqual(self.guardian.methods(), [])
 
