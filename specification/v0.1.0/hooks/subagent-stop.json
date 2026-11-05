@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-stop.json",
   "title": "steps/subagentStop payload",
-  "description": "Fires when an in-process subagent terminates. The envelope's metadata.session_id is the PARENT's session (the parent receives the subagent-stop notification on its own audit chain); the subagent's own session has by this point already emitted its sessionEnd with its own final_chain_hash. This hook lets the parent's audit chain reference the subagent's terminal state without merging the two chains. Not decision-eligible — the subagent has already terminated.",
+  "description": "Fires when an in-process subagent terminates. The envelope's metadata.session_id is the PARENT's session (the parent receives the subagent-stop notification on its own audit chain); the subagent's own session has by this point already emitted its sessionEnd with its own final_chain_hash. This hook lets the parent's audit chain reference the subagent's terminal state without merging the two chains. Audit-only — the subagent has already terminated, so the Guardian writes a ContextEntry and returns 'allow'. No other disposition is legal.",
   "type": "object",
   "required": ["subagent_session_id", "outcome"],
   "properties": {
