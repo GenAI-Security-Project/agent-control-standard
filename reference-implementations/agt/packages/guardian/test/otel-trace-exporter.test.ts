@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
-import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
+import { createMemorySessionContextStore, startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
@@ -874,8 +874,16 @@ describe("Guardian trace export wiring", () => {
   it("answers identically with a failing exporter and with export off, and reports once", async () => {
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     const exporter = createOtelTraceExporter({ spanExporter: throwingSpanExporter(), methodsEvaluated: METHODS_EVALUATED });
-    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
-    const silent = await startGuardian(baseOptions);
+    const fixedNow = () => new Date("2026-09-15T12:00:00.000Z");
+    const exporting = await startGuardian({
+      ...baseOptions,
+      traceExporter: exporter,
+      sessionContextStore: createMemorySessionContextStore({ now: fixedNow }),
+    });
+    const silent = await startGuardian({
+      ...baseOptions,
+      sessionContextStore: createMemorySessionContextStore({ now: fixedNow }),
+    });
     try {
       const requestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
@@ -1082,8 +1090,16 @@ describe("Guardian trace export wiring", () => {
       methodsEvaluated: METHODS_EVALUATED,
       onError: (error) => errors.push(error),
     });
-    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
-    const silent = await startGuardian(baseOptions);
+    const fixedNow = () => new Date("2026-09-15T12:00:00.000Z");
+    const exporting = await startGuardian({
+      ...baseOptions,
+      traceExporter: exporter,
+      sessionContextStore: createMemorySessionContextStore({ now: fixedNow }),
+    });
+    const silent = await startGuardian({
+      ...baseOptions,
+      sessionContextStore: createMemorySessionContextStore({ now: fixedNow }),
+    });
     let exportingClosed = false;
     try {
       // Decisions are the same as with export off, before the endpoint dies.
