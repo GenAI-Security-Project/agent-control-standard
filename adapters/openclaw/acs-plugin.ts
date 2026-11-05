@@ -184,7 +184,7 @@ function refusalsFor(api: PluginApi): RefusalStore {
   };
 }
 
-/** OpenClaw runs higher priorities first; this plugin runs last, so its answer is the one that stands. */
+/** OpenClaw runs higher priorities first, so this plugin normally runs last. The README names what breaks that. */
 const RUN_LAST = { priority: Number.MIN_SAFE_INTEGER };
 
 function missingCapability(api: PluginApi): string | undefined {

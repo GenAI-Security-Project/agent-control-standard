@@ -279,7 +279,7 @@ export function createToolCallGate({ exchange, audit, logger, runFacts }: Create
     switch (decision.decision) {
       case "allow":
         await markRan();
-        // This handler runs last, so OpenClaw uses the parameters the Guardian saw.
+        // OpenClaw keeps the last params returned. These replace any earlier plugin's change with what the Guardian saw.
         return confirm({ params: event.params });
       case "modify":
         await markRan();

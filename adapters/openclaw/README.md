@@ -60,6 +60,10 @@ The adapter is tested on OpenClaw 2026.10.9, the release its `package.json` name
 
 The adapter always sets `agent_id` to `openclaw`. To let the Guardian distinguish agents, give each agent its own secret and `key_id` ([#306](https://github.com/GenAI-Security-Project/agent-control-standard/issues/306)).
 
+Keep the HMAC secret and channel tokens out of the agent's reach. A process with the secret can sign requests as this adapter. An agent with a channel token can message its own gateway, and the Guardian sees that message as coming from the same sender.
+
+On the gateway host, `exec` inherits most of the gateway's environment and can read any file the gateway can. Deny `exec` in the tool policy, or run it in OpenClaw's sandbox (`agents.defaults.sandbox`) and do not mount the secret file there. The demo below does neither, so use it only on a test machine.
+
 ## How each decision lands
 
 [`mapping.md`](mapping.md) lists every OpenClaw hook and ACS step. It says what each hook sends and how the adapter enforces each decision. It explains why the adapter does not use other hooks or steps. The short form is:
@@ -73,7 +77,15 @@ The adapter always sets `agent_id` to `openclaw`. To let the Guardian distinguis
 
 A decision this host cannot carry out as sent is blocked and written to the audit log as `substituted`. This includes `modify` on a user message. It also includes `modify` on a reply with media at `message_sending`, or with a structured part at `reply_payload_sending`. The adapter also blocks `modify` on a result that is not text or images (`modify_unsupported`, §6.5). It blocks `ask` on any step except a tool call. It blocks every `defer`.
 
-The plugin registers every hook at the lowest priority. OpenClaw therefore keeps this plugin's tool-call `params` and returned reply text. A plugin cannot detect two cases that break this rule. First, OpenClaw keeps the first approval request any plugin returns, with that plugin's `params`. Second, OpenClaw runs each plugin's tool-result middleware in turn. Do not run another plugin that returns `params` or `requireApproval` from `before_tool_call`, or registers tool-result middleware.
+An `allow` or a `modify` holds only if this plugin runs last. A `deny` holds in any order. The plugin registers every hook at a very low priority, so OpenClaw normally keeps its tool-call `params` and returned reply text.
+
+The plugin does not detect three cases that change its decision:
+
+- Another plugin, or a second copy of this one, at the same or a lower priority runs after this one and replaces them. OpenClaw does not validate priorities.
+- OpenClaw keeps the first approval request any plugin returns, with that plugin's `params`.
+- OpenClaw runs each plugin's tool-result middleware in turn.
+
+Whoever installs plugins on the gateway is responsible for this. Do not run a second copy of this plugin, or another plugin that returns `params` or `requireApproval` from `before_tool_call`, returns `content` from `message_sending`, or registers tool-result middleware.
 
 ## What it reads
 
@@ -141,6 +153,8 @@ The steps from one hook share one `deadlineMs`. A step can therefore stop waitin
 A first handshake has a different rule. If the hook deadline ends or the handshake fails, the session has no ServerHello. Section 4.1 applies the startup posture, which `failurePosture` sets. `negotiated` uses the ACS default, `proceed`.
 
 OpenClaw sends the original message or reply if `reply_dispatch`, `reply_payload_sending`, or `message_sending` times out. The adapter must therefore answer before those hooks time out. Under `closed`, the adapter audits a blocked step with `posture_source: "host"`. The adapter audits a step that proceeds as §6.4 requires. If the adapter cannot write that audit line, it blocks the step ([Discussion #325](https://github.com/GenAI-Security-Project/agent-control-standard/discussions/325)). The adapter catches internal errors in these hooks. `reply_dispatch` claims and drops the message. `reply_payload_sending` cancels the reply. `message_sending` cancels the delivery. If a hook throws or times out before returning, OpenClaw lets the original through.
+
+This adapter does not support a Guardian that uses an agent on this gateway as its judge. Each question starts a new run, and that run asks the Guardian again. Every step that misses its deadline blocks, but only OpenClaw's A2A rate limit stops the recursion ([Discussion #514](https://github.com/GenAI-Security-Project/agent-control-standard/discussions/514)).
 
 ## Conformance
 
