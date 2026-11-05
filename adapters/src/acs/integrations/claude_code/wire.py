@@ -103,7 +103,7 @@ ACS_CORE_HOOKS = [
 # Wired by an earlier version; wiring and unwiring both remove them.
 RETIRED_HOOKS = ["Notification"]
 
-# Hooks that gate an action fail closed whatever the Guardian declares; the others apply the Guardian's posture.
+# Hooks that gate an action pin ACS_DEFAULT_DENY=1, so an ACS_DEFAULT_DENY=0 inherited from the environment leaves them closed.
 GATE_HOOKS = {"PreToolUse", "UserPromptSubmit"}
 
 # Embedded in the command, so a wired entry is recognized without parsing it.
@@ -341,8 +341,9 @@ def main(argv: list[str] | None = None) -> int:
     posture_group.add_argument("--default-deny", action="store_true",
                     help="Write ACS_DEFAULT_DENY=1 (fail-CLOSED whatever the Guardian declares) on EVERY "
                          f"wired hook. By default only the gate hooks ({', '.join(sorted(GATE_HOOKS))}) "
-                         "carry it; the others apply the Guardian's on_decision_failure, and every hook "
-                         "refuses its step in a session whose handshake got no answer.")
+                         "carry it; the others fail closed too unless their environment sets "
+                         "ACS_DEFAULT_DENY=0, and every hook refuses its step in a session whose handshake "
+                         "got no answer.")
     posture_group.add_argument("--all-fail-open", action="store_true",
                     help="Write ACS_DEFAULT_DENY=0 and ACS_STARTUP_POSTURE=proceed on EVERY wired hook, "
                          "gates included: a step with no usable decision proceeds, audited, unless the "
@@ -434,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
             elif hook in GATE_HOOKS:
                 posture = "fail-CLOSED (gate hook default)"
             else:
-                posture = "the Guardian's on_decision_failure"
+                posture = "fail-CLOSED unless the environment sets ACS_DEFAULT_DENY=0"
             print(f"  {hook:18s} → {posture}")
         print()
 

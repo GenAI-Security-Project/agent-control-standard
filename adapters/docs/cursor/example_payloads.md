@@ -152,9 +152,7 @@ Cursor's own sandbox and approval then decide the call.
 
 ```json
 {
-  "permission": "allow",
-  "updated_input": {"command": "ls -la # sanitized"},
-  "user_message": "command sanitized by Guardian"
+  "updated_input": {"command": "ls -la # sanitized"}
 }
 ```
 

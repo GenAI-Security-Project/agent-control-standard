@@ -864,11 +864,10 @@ class Core04c_PromptGateAndMergeFailClosed(unittest.TestCase):
                                   "workspace_roots": ["/tmp"], "tool_name": "Bash",
                                   "tool_input": tool_input}),
                 capture_output=True, text=True, env=self._env(g), timeout=15)
-        ui = (json.loads(proc.stdout).get("updated_input", {})
-              if proc.stdout.strip() else {})
-        self.assertEqual(ui, {"command": "echo safe", "timeout": 5},
-            f"cursor MODIFY must MERGE overrides onto the original input; "
-            f"got updated_input={ui!r}")
+        out = json.loads(proc.stdout) if proc.stdout.strip() else {}
+        self.assertEqual(out, {"updated_input": {"command": "echo safe", "timeout": 5}},
+            f"cursor MODIFY must MERGE overrides onto the original input and send no permission, "
+            f"since an explicit allow can take the call out of Cursor's sandbox; got {out!r}")
 
     def test_disjoint_structured_targets_are_not_reported_as_overlap(self) -> None:
         """Prefix matching must not confuse sibling JSON Pointer paths."""
@@ -1499,7 +1498,7 @@ class Core08b_NegotiatedDecisionTimeout(unittest.TestCase):
         })
         env.pop("ACS_HMAC_SECRET_FILE", None)
         env.pop("ACS_HANDSHAKE", None)
-        env.pop("ACS_DEFAULT_DENY", None)
+        env["ACS_DEFAULT_DENY"] = "0"
         if platform == "claude":
             command = [sys.executable, str(INTEGRATIONS_DIR / "claude_code" / "adapter.py")]
             event = {

@@ -75,14 +75,14 @@ acs-nat-wire \
   --write
 ```
 
-`acs-nat-wire` walks every attachment point in your YAML and inserts `acs_guardian`:
+`acs-nat-wire` finds the ACS middleware by its `_type: acs_guardian`, under whatever name you gave it, and lists that name at every attachment point. With no such middleware it adds one named `acs_guardian`:
 
 | YAML location | What `acs-nat-wire` does |
 |---|---|
-| top-level `middleware:` block | adds the `acs_guardian:` definition with your guardian_url, default_deny, timeout_s |
-| `workflow.middleware` | prepends `acs_guardian` (policy gate runs before content filters) |
-| every `function_groups.*.middleware` | prepends `acs_guardian` |
-| every `functions.*.middleware` | prepends `acs_guardian`, creating the list when the function has none |
+| top-level `middleware:` block | adds the `acs_guardian:` definition with your guardian_url, default_deny, timeout_s, unless a middleware with `_type: acs_guardian` is already there |
+| `workflow.middleware` | prepends that name (policy gate runs before content filters) |
+| every `function_groups.*.middleware` | prepends that name |
+| every `functions.*.middleware` | prepends that name, creating the list when the function has none |
 
 Every line we add carries a `# acs-adapter-wired` marker. Re-running is a no-op. `--unwire --write` removes exactly what we added and nothing else.
 
@@ -262,7 +262,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 |---|---|---|
 | `_type` | `acs_guardian` (required) | Registers the middleware via NAT's `register_middleware` decorator. |
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
-| `default_deny` | `false` | `true`: fail-closed whatever the Guardian declares; `acs-nat-wire` writes `true`, and `--all-fail-open` writes `false`. `false`: the ServerHello's `on_decision_failure` applies, and the example Guardian declares `deny` (most-restrictive-wins). Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
+| `default_deny` | `true` | `true`: a call with no usable decision is denied; `acs-nat-wire` writes `true`, and `--all-fail-open` writes `false`. `false`: the call proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins); this is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
 | `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config` replaces it for the session, per method where `per_method_ms` names one. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
@@ -327,7 +327,7 @@ The adapter works across multiple NAT releases by feature-detecting the block me
 | `acs-nat-wire --check` keeps reporting gaps for the same function | That function is defined in Python code, not YAML, so acs-nat-wire can't reach it. Move the definition into YAML, or add `acs_guardian` to its `middleware` list in code; until then its calls reach the Guardian neither as a decision nor as an observation. |
 | `acs-nat-wire` errors out with "ruamel.yaml" missing | Install the `nat` extra: `pip install "$ACS_REPO/adapters[nat]"`. |
 | NAT runs functions as if no Guardian exists | NAT loaded the workflow before `acs-nat-wire --write` ran. **Restart your NAT process.** |
-| Every call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its calls unless `ACS_STARTUP_POSTURE=proceed`, and `acs-nat-wire` writes `default_deny: true`. Check the Guardian process is running. |
+| Every call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its calls unless `ACS_STARTUP_POSTURE=proceed`, and a call with no usable decision is denied unless the YAML sets `default_deny: false`. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. Audit log shows `cause=signature_invalid_response`. |
 | Guardian returns `-32005 REPLAY_DETECTED` | Same `request_id` sent twice. Audit log shows `cause=replay_detected_response`. Usually a retry loop bug. |

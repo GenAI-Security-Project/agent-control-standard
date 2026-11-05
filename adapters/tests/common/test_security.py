@@ -576,9 +576,15 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
 
             with self.subTest(form=form, ACS_STARTUP_POSTURE="proceed", hook="PreToolUse"):
                 p, records = self._run(argv, event("PreToolUse"), ACS_STARTUP_POSTURE="proceed")
+                self.assertEqual(json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"], "deny",
+                    "the startup posture alone leaves a decision failure denied")
+                self._unavailable_record(records, "hook", "PreToolUse", "deny")
+
+            with self.subTest(form=form, ACS_STARTUP_POSTURE="proceed", ACS_DEFAULT_DENY="0", hook="PreToolUse"):
+                p, records = self._run(argv, event("PreToolUse"), ACS_STARTUP_POSTURE="proceed", ACS_DEFAULT_DENY="0")
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(p.stdout.strip(), "",
-                    "a deployment that set the startup posture to proceed gets an audited proceed")
+                    "a deployment that opted into proceed for both postures gets an audited proceed")
                 self._unavailable_record(records, "hook", "PreToolUse", "proceed")
 
             with self.subTest(form=form, ACS_DISABLED="1"):
@@ -621,6 +627,11 @@ class Item21_AdapterDegradedBootstrap(unittest.TestCase):
 
             with self.subTest(form=form, ACS_STARTUP_POSTURE="proceed", event="preToolUse"):
                 p, records = self._run(argv + ["preToolUse"], event, ACS_STARTUP_POSTURE="proceed")
+                self.assertEqual(json.loads(p.stdout)["permission"], "deny")
+                self._unavailable_record(records, "event", "preToolUse", "deny")
+
+            with self.subTest(form=form, ACS_STARTUP_POSTURE="proceed", ACS_DEFAULT_DENY="0", event="preToolUse"):
+                p, records = self._run(argv + ["preToolUse"], event, ACS_STARTUP_POSTURE="proceed", ACS_DEFAULT_DENY="0")
                 self.assertEqual(p.returncode, 0, p.stderr)
                 self.assertEqual(p.stdout.strip(), "")
                 self._unavailable_record(records, "event", "preToolUse", "proceed")

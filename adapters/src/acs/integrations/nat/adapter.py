@@ -134,8 +134,8 @@ if _NAT_AVAILABLE:
             description="ACS Guardian endpoint to POST requests to.",
         )
         default_deny: bool = Field(
-            default=False,
-            description="If True, block the call when no usable decision arrives, whatever the Guardian declares. False applies the ServerHello's on_decision_failure (§6.4).",
+            default=True,
+            description="If True, block the call when no usable decision arrives (§6.4). False opts into proceed, unless the ServerHello declares on_decision_failure: deny.",
         )
         timeout_s: float = Field(
             default=5.0,

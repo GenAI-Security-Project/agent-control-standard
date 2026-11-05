@@ -231,13 +231,13 @@ class AdapterRoundTrip(unittest.TestCase):
         self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("session_not_started_fail_closed", err)
 
-    def test_guardian_unreachable_under_a_declared_proceed_is_audited(self) -> None:
+    def test_guardian_unreachable_under_a_local_proceed_is_audited(self) -> None:
         rc, out, err = self._run_adapter(
             _claude_code_event(
                 "PreToolUse", tool_name="Read",
                 tool_input={"file_path": "/tmp/x"},
             ),
-            env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
+            env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead", "ACS_DEFAULT_DENY": "0",
                            **self._negotiated("http://127.0.0.1:1/dead", "00000000-0000-4000-8000-000000000001")},
         )
         self.assertEqual(rc, 0, err)
@@ -245,6 +245,20 @@ class AdapterRoundTrip(unittest.TestCase):
         # §6.4: 'Every step that proceeds without a decision MUST be recorded as an audit event'
         self.assertIn("ACS_AUDIT", err, "fail-open MUST emit an audit event per §6.4")
         self.assertIn("fail_open_bypass", err)
+
+    def test_a_guardian_s_declared_proceed_alone_denies(self) -> None:
+        """The seeded ServerHello declares proceed, and only the hook's own ACS_DEFAULT_DENY=0 can opt into it."""
+        env = {k: v for k, v in os.environ.items() if k != "ACS_DEFAULT_DENY"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            rc, out, err = self._run_adapter(
+                _claude_code_event("PreToolUse", tool_name="Read", tool_input={"file_path": "/tmp/x"}),
+                env_overrides={"ACS_GUARDIAN_URL": "http://127.0.0.1:1/dead",
+                               **self._negotiated("http://127.0.0.1:1/dead", "00000000-0000-4000-8000-000000000001")},
+            )
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("decision_failure_fail_closed", err)
+        self.assertNotIn("fail_open_bypass", err)
 
     def test_audit_only_hooks_never_emit_a_block(self) -> None:
         """Claude Code reads a block on Stop as "keep going", so neither a DENY nor a decision failure may produce one."""

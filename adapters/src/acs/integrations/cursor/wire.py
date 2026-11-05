@@ -102,7 +102,7 @@ SUBAGENT_HOOKS = [
 ]
 DEFAULT_HOOKS = CURRENT_CORE_HOOKS + SUBAGENT_HOOKS
 
-# Gate hooks get Cursor's failClosed for a crashed hook and ACS_DEFAULT_DENY for a missing decision; the others apply the Guardian's posture.
+# Gate hooks get Cursor's failClosed for a crashed hook and ACS_DEFAULT_DENY=1, so an ACS_DEFAULT_DENY=0 inherited from the environment leaves them closed.
 GATE_HOOKS = frozenset({
     "preToolUse", "beforeSubmitPrompt",
     "beforeShellExecution", "beforeMCPExecution", "subagentStart",
@@ -316,8 +316,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Write Cursor's failClosed and ACS_DEFAULT_DENY=1 (fail-CLOSED whatever the "
                          "Guardian declares) on EVERY wired hook. By default only the gate hooks "
                          f"({', '.join(sorted(GATE_HOOKS & set(DEFAULT_HOOKS)))}) carry them; the others "
-                         "apply the Guardian's on_decision_failure, and every hook refuses its step in a "
-                         "session whose handshake got no answer.")
+                         "fail closed too unless their environment sets ACS_DEFAULT_DENY=0, and every hook "
+                         "refuses its step in a session whose handshake got no answer.")
     posture_group.add_argument("--all-fail-open", action="store_true",
                     help="Write ACS_DEFAULT_DENY=0 and ACS_STARTUP_POSTURE=proceed on EVERY wired hook, "
                          "gates included: a step with no usable decision proceeds, audited, unless the "
@@ -415,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
             elif hook in GATE_HOOKS:
                 posture = "fail-CLOSED (gate hook default)"
             else:
-                posture = "the Guardian's on_decision_failure"
+                posture = "fail-CLOSED unless the environment sets ACS_DEFAULT_DENY=0"
             print(f"  {hook:22s} → {posture}")
         print()
 

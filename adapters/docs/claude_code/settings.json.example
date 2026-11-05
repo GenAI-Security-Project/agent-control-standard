@@ -23,9 +23,9 @@
     "",
     "ACS_DEFAULT_DENY=1 and onFailure block are set on the GATE hooks (PreToolUse,",
     "UserPromptSubmit), the ones whose verdict blocks an action. The other hooks",
-    "apply the Guardian's on_decision_failure, and a session whose handshake gets",
-    "no answer refuses its steps. Incident kill switch: set ACS_DISABLED=1 to",
-    "bypass all hooks immediately."
+    "fail closed too unless their environment sets ACS_DEFAULT_DENY=0, and a",
+    "session whose handshake gets no answer refuses its steps. Incident kill",
+    "switch: set ACS_DISABLED=1 to bypass all hooks immediately."
   ],
   "hooks": {
     "SessionStart": [
