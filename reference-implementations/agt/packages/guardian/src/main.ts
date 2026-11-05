@@ -13,8 +13,8 @@
  * hardcoding the other's value.
  *
  * `ACS_GUARDIAN_HOST` is left unset by default, which leaves startGuardian's
- * loopback bind in place -- see server.ts's header for why an unauthenticated
- * endpoint defaults to the narrowest bind. This is where a deployment that
+ * loopback bind in place -- see server.ts's header for why even an
+ * authenticated endpoint defaults to the narrowest bind. This is where a deployment that
  * needs a routable one says so, since env is this process's configuration
  * surface and server.ts reads none itself.
  */
@@ -66,6 +66,22 @@ if (otelTraceEndpoint !== undefined) {
 // healthy start immediately followed by one.
 const posture = buildServerHello().on_decision_failure;
 
+const hmacSecret = process.env.ACS_HMAC_SECRET;
+if (hmacSecret === undefined) {
+  throw new Error(
+    "ACS_HMAC_SECRET is required: set it to at least 32 bytes of base64-encoded key material before starting the ACS-Core Guardian",
+  );
+}
+const decodedHmacSecret = Buffer.from(hmacSecret, "base64");
+if (decodedHmacSecret.length < 32) {
+  throw new Error("ACS_HMAC_SECRET must decode to at least 32 bytes");
+}
+// §10: key_id is a label the deployment chooses for its secret, so there is
+// no default to fall back on.
+const hmacKeyId = process.env.ACS_HMAC_KEY_ID;
+if (!hmacKeyId) {
+  throw new Error("ACS_HMAC_KEY_ID is required: set it to the label that names ACS_HMAC_SECRET (Specification §10, key_id for HMAC)");
+}
 const guardian = await startGuardian({
   port,
   hostname,
@@ -74,14 +90,17 @@ const guardian = await startGuardian({
   sessionContextLog,
   otelTraceFile,
   otelTraceEndpoint,
+  hmacSecret,
+  hmacKeyId,
 });
 console.log(`Guardian listening at ${guardian.url}`);
 console.log(`Envelope log: ${envelopeLogPath}`);
 console.log(`Session context log: ${sessionContextLog}`);
 console.log(`Failure posture: ${posture}   (override with ACS_ON_DECISION_FAILURE=deny)`);
+console.log("Signature verification: HMAC-SHA256 (required)");
 
-// Only when export is on. The four lines above are what README.md captures
-// and test/readme-captures.test.ts holds them to the line, so a fifth line
+// Only when export is on. The five lines above are what README.md captures
+// and test/readme-captures.test.ts holds them to the line, so a sixth line
 // appears only for a Guardian the quickstart does not run.
 const traceOutputs = [otelTraceFile, otelTraceEndpoint].filter((target): target is string => target !== undefined);
 if (traceOutputs.length > 0) {

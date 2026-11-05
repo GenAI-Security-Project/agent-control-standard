@@ -106,7 +106,14 @@ export const FAILURE_ATTRIBUTES = {
   payloadBytes: "acs.failure.payload_bytes",
 } as const;
 
-export type FailureClass = "timeout" | "unreachable" | "malformed_response" | "guardian_error" | "observed_agent_error" | "other";
+export type FailureClass =
+  | "timeout"
+  | "unreachable"
+  | "malformed_response"
+  | "guardian_error"
+  | "observed_agent_error"
+  | "signature_invalid"
+  | "other";
 export type FailurePosture = "fail_open" | "fail_closed";
 export type FailureReporter = "guardian" | "observed_agent";
 
@@ -157,7 +164,10 @@ type StepSpanEntry = {
  * a new method cannot quietly go untraced: it is either mapped or named
  * with its reason.
  */
-export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {};
+export const METHODS_WITHOUT_SPAN: Readonly<Record<string, string>> = {
+  "protocols/MCP/tools/call":
+    "otel-mapping.json maps only steps/* and agbom/* methods; a span for a protocol method needs a step_to_span entry in the spec first",
+};
 
 /** otel-mapping.json is a JSON Schema whose data lives inside `default`
  * keys, the same three places `packages/conformance/src/trace-pillar.ts`

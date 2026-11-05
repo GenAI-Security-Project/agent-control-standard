@@ -30,6 +30,7 @@ function entryLine(seq: number, overrides: Partial<SessionContextLogEntry> = {})
     method: "steps/toolCallRequest",
     request_id: `req-${seq}`,
     tool_name: "run_shell",
+    request_hash: "a".repeat(64),
     ...overrides,
   };
   return `${JSON.stringify(entry)}\n`;
@@ -48,6 +49,7 @@ function sessionEntry(overrides: Partial<SessionContextLogEntry> = {}): SessionC
     method: "steps/toolCallRequest",
     request_id: "req-1",
     tool_name: "run_shell",
+    request_hash: "a".repeat(64),
     ...overrides,
   };
 }
@@ -188,6 +190,7 @@ describe("renderSessionChain", () => {
       method: "steps/toolCallRequest",
       request_id: "req-1",
       tool_name: "run_shell",
+      request_hash: "a".repeat(64),
     };
 
     const rendered = renderSessionChain([entry]);
@@ -209,6 +212,7 @@ describe("renderSessionChain", () => {
       method: "steps/toolCallRequest",
       request_id: "req-1",
       tool_name: "run_shell",
+      request_hash: "a".repeat(64),
     };
     const second: SessionContextLogEntry = {
       session_id: "sess-1",
@@ -220,6 +224,7 @@ describe("renderSessionChain", () => {
       method: "steps/toolCallRequest",
       request_id: "req-2",
       tool_name: "run_shell",
+      request_hash: "a".repeat(64),
     };
 
     const rendered = renderSessionChain([first, second]);

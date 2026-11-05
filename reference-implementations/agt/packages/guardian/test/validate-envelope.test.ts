@@ -133,7 +133,13 @@ describe("isToolCallRequest -- the method discrimination the narrow type depends
         metadata: { agent_id: "agent-1", session_id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed" },
         // No tool, no arguments -- a handshake carries neither, which is
         // exactly why typing it as a tool call was wrong rather than untidy.
-        payload: {},
+        payload: {
+          acs_versions_supported: ["0.1.0"],
+          methods_implemented: ["steps/toolCallRequest"],
+          transports_supported: ["http"],
+          provenance_producer: "none",
+          profiles_supported: ["acs-core"],
+        },
       },
     };
 

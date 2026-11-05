@@ -72,7 +72,9 @@ import { createFileSpanExporter } from "./otlp-file-exporter.ts";
  * `transport` is a request that never reached the Guardian, which is what
  * `unreachable` names. `error_without_decision` and `refused` both mean an
  * error came back instead of a decision (§6.4), so both are `guardian_error`;
- * the code goes in `acs.failure.error_code`. `host_configuration` is the host
+ * the code goes in `acs.failure.error_code`. `signature_invalid` is a reply
+ * that failed verification or answered another request, which #37 keeps apart
+ * so tampering does not blend into organic failures. `host_configuration` is the host
  * failing before any request existed. `decision_unrenderable` is a decision
  * that did arrive and that this host could not express, which none of the
  * other classes describe, so it falls to `other` with its own detail.
@@ -84,6 +86,7 @@ export const FAILURE_CLASS_BY_KIND: Readonly<Record<string, FailureClass>> = {
   transport: "unreachable",
   error_without_decision: "guardian_error",
   refused: "guardian_error",
+  signature_invalid: "signature_invalid",
   host_configuration: "observed_agent_error",
 };
 
@@ -104,6 +107,7 @@ export const FAILURE_DETAIL_BY_KIND: Readonly<Record<string, string>> = {
   transport: "The host could not reach the Guardian.",
   error_without_decision: GUARDIAN_ERROR_STATUS,
   refused: "The Guardian refused the request, and this host blocked the step.",
+  signature_invalid: "A reply arrived that failed verification, and this host blocked the step.",
   host_configuration: "The host could not build a request for this hook.",
   decision_unrenderable: "A decision arrived, and this host could not express it in its hook output.",
 };
