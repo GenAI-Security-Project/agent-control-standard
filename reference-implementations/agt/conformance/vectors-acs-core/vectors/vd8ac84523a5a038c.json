@@ -1,0 +1,46 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": "SIGNATURE_INVALID",
+    "codeValue": -32004,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-10",
+  "id": "vd8ac84523a5a038c",
+  "kind": "reject",
+  "payload": {
+    "context_entry": {
+      "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "step_id": "st-0003",
+      "step_type": "hooks/toolCallRequest"
+    },
+    "guardian_response": {
+      "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "decision": "allow",
+      "signature": {
+        "algorithm": "ML-DSA-65",
+        "key_id": "guardian-k1",
+        "value": "AAAA"
+      }
+    },
+    "key_id_resolves_to": {
+      "class": "asymmetric",
+      "key_id": "guardian-k1",
+      "signing_key_held_by": [
+        "guardian"
+      ]
+    },
+    "profile": "ACS-Crypto",
+    "signed_by": "observed_agent",
+    "signed_with": "agent-k2"
+  },
+  "requirements": [
+    "ACS-R-022",
+    "ACS-R-021"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "EXTERNAL"
+}

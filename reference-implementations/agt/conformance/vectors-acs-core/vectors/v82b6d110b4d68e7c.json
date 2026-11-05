@@ -1,0 +1,46 @@
+{
+  "coverage": "supported",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": "the specification carries no revocation mechanism at the pinned commit: revocation propagation is listed as pending in its own identity overview, so a deployment has no conformant way to learn that the mandate was withdrawn. The vector is kept rather than dropped because an absent verdict and a passing one look identical in a table that only carries allow and deny.",
+    "verdict": "unmeasurable"
+  },
+  "family": "acs-f-3",
+  "id": "v82b6d110b4d68e7c",
+  "kind": "indeterminate",
+  "payload": {
+    "mandate_state": "REVOKED",
+    "request": {
+      "acs": "0.1",
+      "metadata": {
+        "session_id": "s-0001",
+        "turn_id": "t-0001"
+      },
+      "method": "hooks/toolCallRequest",
+      "params": {
+        "tool": {
+          "arguments": {
+            "id": "c-1"
+          },
+          "name": "records.lookup"
+        }
+      },
+      "request_id": "11111111-1111-4111-8111-111111111111",
+      "signature": {
+        "algorithm": "HMAC-SHA256",
+        "key_id": "k1",
+        "value": "AAAA"
+      },
+      "timestamp": "2026-09-09T12:00:00Z"
+    },
+    "revoked_at": "2026-09-09T11:30:00Z"
+  },
+  "requirements": [
+    "ACS-R-003"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "EXTERNAL"
+}

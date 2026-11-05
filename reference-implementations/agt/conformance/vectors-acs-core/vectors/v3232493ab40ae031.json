@@ -1,0 +1,51 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-10",
+  "id": "v3232493ab40ae031",
+  "kind": "reject",
+  "payload": {
+    "context_entry": {
+      "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "step_id": "st-0003",
+      "step_type": "hooks/toolCallRequest"
+    },
+    "guardian_response": {
+      "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "decision": "allow",
+      "signature": {
+        "algorithm": "HMAC-SHA256",
+        "key_id": "session-k1",
+        "value": "AAAA"
+      }
+    },
+    "key_id_resolves_to": {
+      "class": "symmetric",
+      "key_id": "session-k1",
+      "signing_key_held_by": [
+        "guardian",
+        "observed_agent"
+      ]
+    },
+    "presented_as": {
+      "audience": "third_party",
+      "claim": "non_repudiation",
+      "witness_scope": "EXTERNAL"
+    },
+    "profile": "ACS-Core",
+    "signed_by": "guardian",
+    "signed_with": "session-k1"
+  },
+  "requirements": [
+    "ACS-R-021"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "EXTERNAL"
+}

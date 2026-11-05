@@ -1,0 +1,27 @@
+{
+  "coverage": "configured",
+  "evidenceBasis": "substrate",
+  "expected": {
+    "code": "PROVENANCE_REQUIRED",
+    "codeValue": -32002,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-8",
+  "id": "va2fea96983583972",
+  "kind": "reject",
+  "payload": {
+    "provenance_producer": "deterministic",
+    "record": {
+      "origin": "agent_generated",
+      "produced_by": "llm_completion",
+      "trust": "trusted"
+    }
+  },
+  "requirements": [
+    "ACS-R-010"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}

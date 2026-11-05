@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+title: >-
+  agent-evidence-vectors: conformance vectors for agent execution evidence
+message: >-
+  This is software. It implements and tests the adversarial-execution-evidence
+  predicate; the normative artifact is that predicate's own text, which is
+  settled upstream in the in-toto attestation project and vendored here under
+  spec/predicates/ with the commit it was taken from recorded in
+  spec/VENDOR-PIN.json. It carries no standing as a standard or a specification
+  of its own. Cite the specification for what the predicate requires and this
+  suite for what a corpus forces. If this
+  suite is used to demonstrate conformance, or a claim is made about what it
+  does or does not exercise, cite the released version rather than the branch. A
+  conformance claim against a moving target is not a conformance claim.
+type: software
+authors:
+  - family-names: Gilda
+    given-names: Sankalp
+    email: sankalp.gilda@gmail.com
+    orcid: 'https://orcid.org/0000-0002-3645-4501'
+repository-code: https://github.com/probityai/agent-evidence-vectors
+doi: 10.5281/zenodo.22758687
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22758687
+    description: >-
+      The concept DOI. It always resolves to the newest archived release,
+      so it names the suite rather than any one revision of it.
+  - type: doi
+    value: 10.5281/zenodo.22803129
+    description: >-
+      The version DOI for 0.11.1. It names that release and never moves,
+      which is what a conformance claim cites.
+abstract: >-
+  A recomputable execution attestation toolkit for the in-toto adversarial
+  execution evidence predicate. The predicate's model is execute-and-attest
+  rather than match-and-assert: a consumer recomputes the outcome from the
+  bytes the statement carries instead of trusting a verdict the producer
+  asserted about itself. The repository carries a second, independently usable
+  implementation of that contract, so that any producer can self-certify and
+  any consumer can reject a lying emitter. The corpus is versioned and
+  immutable per revision: a published revision is never mutated in place, and a
+  normative change regenerates every vector byte-identically from its
+  generators.
+keywords:
+  - conformance testing
+  - attestation
+  - supply chain security
+  - in-toto
+  - provenance
+  - canonicalization
+  - agentic systems
+  - evidence
+license: Apache-2.0
+version: 0.17.0
+date-released: "2026-10-04"
