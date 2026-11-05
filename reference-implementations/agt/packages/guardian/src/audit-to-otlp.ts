@@ -39,15 +39,16 @@
  * it does not append into the audit log, the Guardian's trace file, or its
  * own earlier run.
  *
- * It also checks the log and exits non-zero when it finds a seq gap, a
- * duplicate seq, a recorded_at timestamp going backwards, a line with no usable
- * seq, which includes a line that does not parse, or an entry with no usable
- * recorded_at, which is timed at now. The output file is still complete for
- * the lines that remain. A gap means a line is missing. Duplicates or
- * timestamps going backwards can come from hooks that ran at the same time.
- * Deleting the last lines cannot be detected, because nothing comes after them
- * to compare. seq carries no signature, so this is a check for lost writes, not
- * for tampering: anyone who can edit the log can renumber it and pass.
+ * It also checks the log and exits non-zero when it finds a seq gap, a line
+ * with no usable seq, which includes a line that does not parse, or an entry
+ * with no usable recorded_at, which is timed at now. Duplicate seq values and
+ * recorded_at timestamps going backwards print the order line on stderr and
+ * exit 0, because both can come from hooks that ran at the same time. The
+ * output file is still complete for the lines that remain. A gap means a line
+ * is missing. Deleting the last lines cannot be detected, because nothing
+ * comes after them to compare. seq carries no signature, so this is a check
+ * for lost writes, not for tampering: anyone who can edit the log can renumber
+ * it and pass.
  */
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -423,7 +424,9 @@ export function reportConversion(summary: ConversionSummary, otelPath: string): 
   if (summary.written !== summary.converted) {
     console.error(`only ${summary.written} of ${summary.converted} span(s) reached ${otelPath}`);
   }
-  return summary.sequence !== undefined || summary.written !== summary.converted ? 1 : 0;
+  const s = summary.sequence;
+  const orderFailure = s !== undefined && (s.gaps > 0 || s.unnumbered > 0 || s.untimed > 0);
+  return orderFailure || summary.written !== summary.converted ? 1 : 0;
 }
 
 if (import.meta.main) {

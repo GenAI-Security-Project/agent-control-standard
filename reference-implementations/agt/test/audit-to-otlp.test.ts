@@ -554,16 +554,16 @@ describe("audit-to-otlp: order checks, status sentences, and hardening (#284)", 
       "audit log order: 1 gap(s), 0 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
     );
 
-    // [1, 2, 2, 3] -> 1 duplicate
+    // [1, 2, 2, 3] -> 1 duplicate (prints stderr and exits 0)
     const dup = await runCli(seqLines([1, 2, 2, 3]));
-    expect(dup.exitCode).toBe(1);
+    expect(dup.exitCode).toBe(0);
     expect(dup.stderr).toBe(
       "audit log order: 0 gap(s), 1 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
     );
 
-    // [1, 1, 3, 1, 1, 4, 6, 6] -> 0 gaps and 4 duplicates
+    // [1, 1, 3, 1, 1, 4, 6, 6] -> 0 gaps and 4 duplicates (prints stderr and exits 0)
     const concurrent = await runCli(seqLines([1, 1, 3, 1, 1, 4, 6, 6]));
-    expect(concurrent.exitCode).toBe(1);
+    expect(concurrent.exitCode).toBe(0);
     expect(concurrent.stderr).toBe(
       "audit log order: 0 gap(s), 4 duplicate(s), 0 recorded_at going backwards, 0 line(s) with no usable seq",
     );
@@ -620,7 +620,7 @@ describe("audit-to-otlp: order checks, status sentences, and hardening (#284)", 
         makeLine({ seq: 2, recorded_at: "2026-10-15T00:00:01.000Z" }) +
         makeLine({ seq: 3, recorded_at: "2026-10-15T00:00:02.000Z" }),
     );
-    expect(backwards.exitCode).toBe(1);
+    expect(backwards.exitCode).toBe(0);
     expect(backwards.stderr).toBe(report(0, 0, 1, 0));
 
     const unnumbered = await runCli(makeLine({}, true));
