@@ -72,7 +72,7 @@
         "negotiated_version": {
           "type": "string",
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
-          "description": "Version selected by the Guardian from the client's acs_versions_supported. MUST match the client's major version."
+          "description": "Version selected by the Guardian from the client's acs_versions_supported. MUST satisfy the Forward compat rule in Specification §3."
         },
         "methods_evaluated": {
           "type": "array",

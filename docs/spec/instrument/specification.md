@@ -479,7 +479,7 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 | Code | Name | Raised when | Observed Agent recovery |
 |---|---|---|---|
 | `-32000` | `SESSION_REFUSED` | Guardian policy refuses the session and no more specific code applies (for example an `agent_id` the policy does not permit). | Do not retry without a policy or configuration change; read `data.reason`. |
-| `-32001` | `UNSUPPORTED_VERSION` | No common `acs_version` at handshake (§4). | Retry the handshake with a version from `data.supported_versions`. |
+| `-32001` | `UNSUPPORTED_VERSION` | No common `acs_version` at handshake (§4), or a step whose `params.acs_version` is not the session's `negotiated_version`. | Retry the handshake with a version from `data.supported_versions`, or send the session's `negotiated_version`. |
 | `-32002` | `PROVENANCE_REQUIRED` | Policy requires provenance but the client declared `provenance_producer: "none"` (§4, §7). | Re-handshake as a `deterministic` producer, or connect to a Guardian that does not require provenance. |
 | `-32003` | `CAPABILITY_NOT_NEGOTIATED` | A method or profile was exercised that the handshake did not negotiate for this session (§4). | Re-handshake to negotiate the method or profile named in `data.method`. |
 | `-32004` | `SIGNATURE_INVALID` | A required signature is missing, malformed, or fails verification (§10). | Re-sign the request; if it persists, re-resolve `key_id`. |
