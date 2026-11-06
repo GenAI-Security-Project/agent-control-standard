@@ -49,12 +49,13 @@ import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 export type SessionContextLogEntry = {
   session_id: string;
   seq: number;
-  prev_hash: string;
+  prev_hash: string | null;
   hash: string;
   recorded_at: string;
   method: string;
   request_id: string;
   tool_name: string;
+  request_hash: string;
   /** What the Guardian established about the step as it arrived, present
    * only when it established something. */
   findings?: string[];
@@ -97,12 +98,13 @@ function isSessionContextLogEntryShape(value: unknown): value is SessionContextL
   return (
     typeof candidate.session_id === "string" &&
     typeof candidate.seq === "number" &&
-    typeof candidate.prev_hash === "string" &&
+    (candidate.prev_hash === null || typeof candidate.prev_hash === "string") &&
     typeof candidate.hash === "string" &&
     typeof candidate.recorded_at === "string" &&
     typeof candidate.method === "string" &&
     typeof candidate.request_id === "string" &&
     typeof candidate.tool_name === "string" &&
+    typeof candidate.request_hash === "string" &&
     (candidate.findings === undefined ||
       (Array.isArray(candidate.findings) && candidate.findings.every((finding) => typeof finding === "string"))) &&
     (candidate.request_id_ref === undefined || typeof candidate.request_id_ref === "string")

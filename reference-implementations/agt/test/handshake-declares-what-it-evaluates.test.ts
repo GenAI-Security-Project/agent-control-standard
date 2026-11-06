@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { buildServerHello, loadMapping, startGuardian, type StartedGuardian } from "guardian";
+import { buildServerHello, startGuardian, type StartedGuardian } from "guardian";
 import {
   createGuardianClient,
   createMemorySessionConfigStore,
   loadHookmap,
   negotiateSessionConfig,
 } from "host-adapter";
+import { fetchWithHandshake } from "./helpers/handshake.ts";
 
 /**
  * The handshake has to describe the Guardian that sent it.
@@ -44,7 +45,6 @@ import {
  */
 
 const MANIFEST = fileURLToPath(new URL("../policy/manifest.yaml", import.meta.url));
-const MAPPING = fileURLToPath(new URL("../mapping.yaml", import.meta.url));
 const HOOKMAP = fileURLToPath(new URL("../hosts/claude-code/claude-code.hookmap.yaml", import.meta.url));
 
 /** server.ts's own code for "well-formed envelope, no handler here". */
@@ -62,11 +62,11 @@ afterAll(async () => {
 
 /**
  * A payload that satisfies whatever schema `validateEnvelope` applies to this
- * method, so the probe below measures dispatch rather than validation. Only the
- * two dispatched methods have a hook payload schema today; every other method
- * is checked against the generic request-envelope shape alone, which an empty
- * object satisfies. If that stops being true the probe says so by name rather
- * than quietly reclassifying the method (see `dispatches`).
+ * method, so the probe below measures dispatch rather than validation. The
+ * native tool gates and four lifecycle hooks have method-specific schemas;
+ * wrapped MCP is validated by its generic envelope plus the Guardian's
+ * normalization path. If that changes, the probe says so by name rather than
+ * quietly reclassifying the method (see `dispatches`).
  */
 function payloadFor(method: string): Record<string, unknown> {
   if (method === "steps/toolCallRequest") {
@@ -74,6 +74,18 @@ function payloadFor(method: string): Record<string, unknown> {
   }
   if (method === "steps/toolCallResult") {
     return { tool: { name: "Bash" }, exit_status: "success", outputs: [{ value: "nothing to redact" }] };
+  }
+  if (method === "protocols/MCP/tools/call") {
+    return { tool: { name: "mcp_probe" }, arguments: {} };
+  }
+  if (method === "steps/sessionEnd") {
+    return { reason: "completed" };
+  }
+  if (method === "steps/userMessage") {
+    return { content: [{ type: "text", value: "probe" }] };
+  }
+  if (method === "steps/agentResponse") {
+    return { content: [{ type: "text", value: "probe" }] };
   }
   return {};
 }
@@ -87,7 +99,7 @@ type RpcAnswer = {
  * answered for it at all. */
 async function dispatches(method: string): Promise<boolean> {
   const id = crypto.randomUUID();
-  const res = await fetch(guardian.url, {
+  const res = await fetchWithHandshake(guardian.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -125,48 +137,25 @@ async function dispatches(method: string): Promise<boolean> {
   throw new Error(`unclassifiable answer for ${method}: ${JSON.stringify(answer)}`);
 }
 
-describe("the ServerHello declares exactly the methods this Guardian dispatches", () => {
-  it("names every dispatched method and no undispatched one", async () => {
+describe("the ServerHello declares exactly the methods this Guardian evaluates", () => {
+  it("does not misrepresent allow-by-default lifecycle hooks as policy-evaluated", async () => {
     const declared = buildServerHello({}).methods_evaluated;
-
-    // The candidate set: every ACS method this deployment maps to an AGT
-    // intervention point, plus whatever the hello claims. The first half is
-    // sound as a universe because a dispatched method must resolve a point out
-    // of this same table -- `resolveInterventionPoint` throws otherwise and the
-    // step comes back as an honoured deny, never as enforcement. The second
-    // half is what catches a hello naming a method the mapping does not even
-    // have.
-    const mapping = loadMapping(MAPPING);
-    const candidates = new Set<string>(declared);
-    for (const point of Object.values(mapping.intervention_points)) {
-      if (typeof point.acs_method === "string") {
-        candidates.add(point.acs_method);
-      }
+    expect([...declared].sort()).toEqual([
+      "protocols/MCP/tools/call",
+      "steps/toolCallRequest",
+      "steps/toolCallResult",
+    ]);
+    for (const method of ["steps/sessionStart", "steps/sessionEnd", "steps/userMessage", "steps/agentResponse"]) {
+      expect(declared).not.toContain(method);
+      expect(await dispatches(method)).toBe(true);
     }
-    // The probe is only meaningful over a candidate set wider than the answer.
-    expect(candidates.size).toBeGreaterThan(declared.length);
-
-    const dispatched: string[] = [];
-    for (const method of [...candidates].sort()) {
-      if (await dispatches(method)) {
-        dispatched.push(method);
-      }
-    }
-
-    // Equality, in both directions, deliberately: `toEqual` on sorted arrays
-    // rather than a subset check, because over-declaring is the worse failure
-    // and a subset assertion would pass through it.
-    expect(dispatched).toEqual([...declared].sort());
   });
 
-  it("declares only methods the client said it implements, per handshake.json", async () => {
+  it("does not claim client methods the shipped integrations cannot emit", async () => {
     const implemented = await capturedClientHello();
-    // handshake.json: methods_evaluated is a "Subset of the client's
-    // methods_implemented". Under-declaring on the client side is therefore not
-    // a cosmetic omission -- it makes the Guardian's own answer unstateable.
-    for (const method of buildServerHello({}).methods_evaluated) {
-      expect(implemented).toContain(method);
-    }
+    const hookmap = loadHookmap(HOOKMAP);
+    const emitted = [...new Set(Object.values(hookmap.hooks).map((entry) => entry.acs_method))];
+    expect([...implemented].sort()).toEqual(emitted.sort());
   });
 
   it("implements every ACS method the shipped hookmap can fire", async () => {

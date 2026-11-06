@@ -1,0 +1,27 @@
+{
+  "name": "acs-openclaw-adapter",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "openclaw": {
+    "extensions": [
+      "./acs-plugin.ts"
+    ]
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.2",
+    "openclaw": "2026.10.9",
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.10.9"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
+}
