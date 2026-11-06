@@ -148,7 +148,7 @@ mkdir -p .claude
 cp hosts/claude-code/settings.json .claude/settings.json
 ```
 
-This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash` and `WebFetch` tools, before the tool runs. `PostToolUse` fires for the `Bash` tool, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The [Claude Code host README](hosts/claude-code/README.md) has the details.
+This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash` and `WebFetch` tools, before the tool runs. `PostToolUse` fires for the `Bash` tool, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The `PreToolUse` entry sets `onFailure` to `block`. Claude Code v2.1.295 or later then denies the tool call when that hook fails or times out. An older client does not implement the field, and the tool runs. The [Claude Code host README](hosts/claude-code/README.md) has the details.
 
 2. Start Claude Code.
 
@@ -452,6 +452,7 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 - A modification the host cannot apply, or a `modified_content` replacement, is refused and the refusal withholds. (same file)
 - Each ACS decision renders to the exact `permissionDecision` shape Claude Code accepts. A `defer` renders as `deny`, because Claude Code has no deferral state. (`hosts/claude-code/test/wire-shape.test.ts`)
 - The shim exits with the blocking code on a payload it cannot parse, a missing session id, a traversal-shaped session id, or a hookmap that declares an output the host does not accept. (`hosts/claude-code/test/posture.test.ts`)
+- A `PreToolUse` hook that cannot start, crashes, exits unexpectedly, prints JSON that does not parse, or times out denies the tool call. The shipped settings set `onFailure` to `block`. The same outcomes proceed when that field is absent. (`hosts/claude-code/test/hook-failure.test.ts`)
 
 **Host behaviour, OpenCode**
 
