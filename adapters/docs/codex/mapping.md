@@ -5,7 +5,7 @@
 | Input | ACS representation |
 |---|---|
 | `PreToolUse` | `steps/toolCallRequest`, a synchronous decision before the call runs |
-| `tool_name` | `payload.tool.name`, with Codex's own name kept (`Bash` for shell and `exec_command`) |
+| `tool_name` | `payload.tool.name`, with Codex's own name kept (`Bash` for shell and `exec_command`, `spawn_agent` for a subagent spawn) |
 | `tool_input` object | Each argument becomes `{ "value": original_value }`, with no invented provenance |
 | `session_id` | Kept when it is a UUID; otherwise a UUID5 in the `codex:session` namespace. The original goes in `metadata.codex_session_id` |
 | `turn_id` | Kept as `metadata.turn_id`. No `turnStart` or `turnEnd` is sent for it |
@@ -15,7 +15,7 @@
 
 The session ID, turn ID, tool-call ID, tool name and an object input are required. An event missing any of them is denied with no traffic, under either posture, rather than sent with invented identity. The adapter never reads the transcript, whose format is not a stable hook interface.
 
-The handshake runs on the first tool call of a session, and its result is stored under an HMAC for the session's later calls. It advertises exactly one step method, the Guardian URL's transport, no Wrapped MCP and no conformance profile. Signing alone is not ACS-Core conformance. No session or turn lifecycle, tool results, heartbeat or subagent gates are emitted.
+The handshake runs on the first tool call of a session, and its result is stored under an HMAC for the session's later calls. It advertises exactly one step method, the Guardian URL's transport, no Wrapped MCP and no conformance profile. Signing alone is not ACS-Core conformance. No session or turn lifecycle, tool results, heartbeat or `steps/subagentStart` are emitted. A subagent spawn reaches the Guardian as a `steps/toolCallRequest` for `spawn_agent`, since Codex runs a spawn as a tool call and ignores `continue: false` from `SubagentStart`.
 
 If a valid ServerHello leaves `steps/toolCallRequest` out of `methods_evaluated`, the Guardian is not evaluating tool calls. The adapter audits `method_not_evaluated`, sends no tool-call request and prints nothing, which leaves Codex's own approval policy in charge. That is not a decision failure, so neither the local nor the negotiated deny posture turns it into a denial. A ServerHello that fails its checks is still no answer, and the startup posture settles the call.
 

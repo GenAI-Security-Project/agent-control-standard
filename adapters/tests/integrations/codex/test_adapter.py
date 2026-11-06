@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -409,6 +411,44 @@ class AdapterTests(unittest.TestCase):
         out, _ = self.invoke(command=[str(HOOK)])
         self.assertEqual(out, {})
         self.assertEqual(self.guardian.methods(), ["handshake/hello", "steps/toolCallRequest"])
+
+    def test_a_subagent_spawn_is_gated_as_a_tool_call(self) -> None:
+        """Codex runs a spawn as the spawn_agent tool, and SubagentStart cannot stop one, so PreToolUse is the gate."""
+        spawn = event(tool_name="spawn_agent", tool_input={"message": "review the diff", "agent_type": "worker"})
+        self.verdict("deny", reasoning="no subagents")
+        out, _ = self.invoke(spawn)
+        self.assertEqual(out["permissionDecision"], "deny")
+        payload = self.guardian.payload_of("steps/toolCallRequest")
+        self.assertEqual(payload["tool"]["name"], "spawn_agent")
+        self.assertEqual(payload["arguments"]["message"], {"value": "review the diff"})
+        self.verdict("modify", modifications={"parameter_overrides": {"message": "summarize the diff"}})
+        out, _ = self.invoke(event(tool_name="spawn_agent", tool_use_id="call_4", tool_input=spawn["tool_input"]))
+        self.assertEqual(out["permissionDecision"], "allow")
+        self.assertEqual(out["updatedInput"], {"message": "summarize the diff", "agent_type": "worker"})
+
+    def test_the_example_hook_covers_shell_and_spawns_and_blocks_when_it_cannot_run(self) -> None:
+        example = Path(__file__).resolve().parents[3] / "docs" / "codex" / "hooks.json.example"
+        entry = json.loads(example.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]
+        for name, matched in (("Bash", True), ("spawn_agent", True), ("BashTool", False), ("apply_patch", False),
+                              ("multi_agent_v1wait_agent", False), ("mcp__local__spawn_agent", False)):
+            with self.subTest(tool=name):
+                self.assertEqual(re.search(entry["matcher"], name) is not None, matched)
+        words = shlex.split(entry["hooks"][0]["command"])
+        self.assertEqual(words[:2], ["sh", "-c"])
+        self.assertEqual(len(words), 3)
+        hook, fallback = words[2].split(" || ", 1)
+        self.assertTrue(hook.endswith("/acs-codex-hook"))
+        # Codex runs the call after any hook failure but exit 2, so a hook that cannot start must exit 2.
+        missing = Path(self.tmp.name) / "missing" / "acs-codex-hook"
+        proc = subprocess.run(["sh", "-c", f"{shlex.quote(str(missing))} || {fallback}"],
+                              input=json.dumps(event()), capture_output=True, text=True, timeout=20)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("blocked", proc.stderr)
+        # A hook that runs keeps its exit 0 and its decision.
+        self.verdict("deny", reasoning="policy")
+        out, _ = self.invoke(command=["sh", "-c", f"{shlex.quote(str(HOOK))} || {fallback}"])
+        self.assertEqual(out["permissionDecision"], "deny")
 
     def test_the_example_guardian_allows_denies_and_rejects_a_replay(self) -> None:
         self.env["ACS_GUARDIAN_STATE_DIR"] = str(Path(self.tmp.name) / "guardian-state")
