@@ -183,10 +183,16 @@ describe("acs-hook — the negotiated posture, end to end", () => {
     // session note for an unpersistable config must not leak into the
     // healthy path, where hook 2 reads the config hook 1 stored and never
     // re-handshakes at all.
-    expect(hook.permissionDecisionReason).toBe(
-      "no decision arrived from the guardian for steps/toolCallRequest (transport: Unable to connect. Is the " +
-        "computer able to access the url?); the session's negotiated posture applies -- " +
-        "on_decision_failure=proceed, so this step was proceeded.",
+    //
+    // The transport cause's spelling belongs to the runtime, not to the
+    // spec: Bun 1.4.4 prefixes the same failure with `ECONNREFUSED: ` while
+    // 1.4.3 does not, so an exact-string comparison fails on a toolchain
+    // upgrade that changes nothing about this behaviour. Pin the whole
+    // sentence in one anchored match, tolerating only the runtime's optional
+    // errno prefix: loosening the glue (`;` -> `,`) or dropping the cause's
+    // closing `)` still has to fail.
+    expect(hook.permissionDecisionReason).toMatch(
+      /^no decision arrived from the guardian for steps\/toolCallRequest \(transport: (?:[A-Z]+: )?Unable to connect\. Is the computer able to access the url\?\); the session's negotiated posture applies -- on_decision_failure=proceed, so this step was proceeded\.$/,
     );
 
     const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
