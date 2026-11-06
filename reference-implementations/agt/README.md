@@ -527,7 +527,7 @@ These findings are open on this tree. They are recorded here so a reader does no
 - A reference fails to resolve for three ordinary reasons as well as a suspicious one: the request was recorded before a Guardian restart, its session was evicted, or the request never reached this Guardian and the host proceeded under its posture. The finding doesn't say which. Run one Guardian per session, or route by session, or every result that lands on a different Guardian is a finding.
 - A reference to a request the Guardian denied counts as resolved, so a result for a denied tool call gets no finding.
 - Specification §10.3 says a Guardian MUST reject a duplicate `request_id` in a session. This Guardian records a `request_id_duplicate` finding instead, for a `steps/toolCallRequest` or `steps/toolCallResult` that reuses an id any earlier step in the session carried, and still decides the step. It sees only the two methods it dispatches.
-- The shim derives a request's `request_id` from the host's call id, so asking twice about one call repeats the id. If a Guardian answers that with `REPLAY_DETECTED`, the shim retries that request once with a random id. The result hook runs on its own and still names the derived id, so the result resolves against the first request the host sent for that call. The JSON-RPC `id` stays random either way, so the envelope log never pairs two requests under one id, and the host audit log records the `request_id` separately as `request_id`.
+- The shim derives a request's `request_id` from the host's call id, so asking twice about one call repeats the id. If a Guardian answers that with `REPLAY_DETECTED`, the shim retries that request once with a random id and records the retry's id, so the result for that call names the request the host acted on rather than the one the Guardian refused (issue #351). The Claude Code shim keeps that record under `ACS_SESSION_DIR/applied/`, since its result hook runs in a fresh process; the OpenCode plugin keeps it in memory. The JSON-RPC `id` stays random either way, so the envelope log never pairs two requests under one id, and the host audit log records the `request_id` separately as `request_id`.
 - Six required Trace-pillar attributes exist on the wire but are optional there. Requiring them is an ask for v0.2. The Guardian also leaves `AcsResult.metadata` empty, which it could fill today.
 
 ## Verify
@@ -556,7 +556,7 @@ Everything above runs with no configuration. These are the variables each proces
 | Variable | Default | What it does |
 |---|---|---|
 | `ACS_GUARDIAN_URL` | `http://localhost:8787/acs` | Where the shim sends envelopes |
-| `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
+| `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session, and under `applied/`, which request a result names for a call the shim retried |
 | `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 

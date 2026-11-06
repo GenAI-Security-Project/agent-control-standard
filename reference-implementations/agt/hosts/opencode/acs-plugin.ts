@@ -118,6 +118,7 @@ import {
   auditUngovernedStep,
   createAuditSink,
   createGuardianClient,
+  createMemoryAppliedRequestStore,
   createMemorySessionConfigStore,
   DEFAULT_TIMEOUT_MS,
   governStep,
@@ -140,6 +141,7 @@ import {
   type AuditSink,
   type GuardianClient,
   type Hookmap,
+  type AppliedRequestStore,
   type SessionConfigStore,
 } from "host-adapter";
 // applyOpenCodeOutput, and every private helper it alone needs, lives in
@@ -1182,6 +1184,10 @@ type Deployment = {
   readonly guardian: GuardianClient;
   readonly audit: AuditSink;
   readonly store: SessionConfigStore;
+  /** Which request a result names after the request gate retried a call
+   * under a fresh id (issue #351). In memory here, for the same reason
+   * `store` is. */
+  readonly appliedRequests: AppliedRequestStore;
 };
 
 /**
@@ -1338,6 +1344,7 @@ async function runExchange(
     // given.
     sessionId: input.sessionID,
     audit: deployment.audit,
+    appliedRequests: deployment.appliedRequests,
     // The tool this exchange already scoped on, told rather than left to
     // be asked a second time. It is the very value `governsTool` was asked
     // about a few lines up, and passing it is what makes the two checks
@@ -1403,6 +1410,7 @@ export const AcsPlugin: Plugin = async () => {
     // handshake round trip. One interface, two implementations, and the
     // adapter never learns which host is running.
     store: createMemorySessionConfigStore(),
+    appliedRequests: createMemoryAppliedRequestStore(),
   };
 
   // Named as a const rather than returned inline, so `Object.keys` below

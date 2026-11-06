@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateEnvelope } from "guardian";
+import { createMemoryAppliedRequestStore } from "../src/applied-request-store.ts";
 import {
   buildEnvelope,
   loadHookmap,
@@ -1205,6 +1206,24 @@ describe("call_id: pairing a result with its request", () => {
     const result = buildEnvelope("PostToolUse", after, hookmap);
 
     expect(result.params.payload.request_id_ref).toBeUndefined();
+  });
+
+  it("names the request the host acted on when the store holds one for the call, and the derived id otherwise", () => {
+    const store = createMemoryAppliedRequestStore();
+    const request = buildEnvelope("PreToolUse", before, withCallId);
+    const retry = "9d2a4c1e-3b7f-4e8a-a1c2-5f6e7d8c9b0a";
+
+    const before_retry = buildEnvelope("PostToolUse", after, withCallId, { appliedRequests: store });
+    expect(before_retry.params.payload.request_id_ref).toBe(request.params.request_id);
+
+    store.set(request.params.request_id, retry);
+    const result = buildEnvelope("PostToolUse", after, withCallId, { appliedRequests: store });
+    expect(result.params.payload.request_id_ref).toBe(retry);
+    expect(() => validateEnvelope(result)).not.toThrow();
+    // The request gate never reads the store: a third ask still sends the derived id.
+    expect(buildEnvelope("PreToolUse", before, withCallId, { appliedRequests: store }).params.request_id).toBe(
+      request.params.request_id,
+    );
   });
 
   it("refuses a call_id that is not a path string, as a hookmap fault", () => {
