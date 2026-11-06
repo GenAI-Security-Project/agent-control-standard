@@ -39,6 +39,8 @@ AGT's native core spawns `opa`. The SDK ships it as a per-platform optional depe
 
 `createBridge` refuses a manifest path that contains `/./`. AGT joins the path verbatim, and OPA's bundle loader then drops the bundle's data document, which disables every rule while still answering `allow`. The refusal is a backstop for that fail-open. A `./`-prefixed path is the usual way to hit it.
 
+A manifest's `bundle:` value can also disable policy. `createBridge` reads the manifest (`src/bundle-path.ts`) and refuses a `bundle` with a `.` or `..` segment or a path that is not normalized. Measured with `rm -rf /` as the step: `./lib`, `lib/.`, `./lib/`, `lib/./`, `lib/../lib`, `sub/../lib`, `../policy/lib`, `.//lib`, `lib//` and `sub//lib` returned `allow`. `.` and `lib/..` denied every step. `lib`, `lib/`, `sub/lib` and an absolute path denied the step, as expected.
+
 ## The pin
 
 `agt.lock` at the root of the tree records the AGT commit, the bundle path inside that commit, and the SDK version this bridge is built against. `policy/lib/` is that commit's stock bundle, byte for byte, plus one `data.json` this project wrote. `bun run verify:pin` re-clones the commit and diffs the two.
