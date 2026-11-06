@@ -1,0 +1,124 @@
+{
+  "scenario": "live",
+  "result": "pass",
+  "platform": "Darwin arm64",
+  "acs_commit": "7d2dd3c69f82ec7565eef49b1609906deba1ef6b",
+  "bun": "1.4.2",
+  "opencode": "1.18.30",
+  "agt_pin": {
+    "agt_repo": "https://github.com/microsoft/agent-governance-toolkit",
+    "agt_ref": "81955d48025c6b11deb3fc9dabf89f74f4145775",
+    "bundle_path": "policy-engine/policy/lib",
+    "sdk_package": "agent-control-specification",
+    "sdk_version": "0.3.1-beta.0"
+  },
+  "negotiated_posture": "proceed",
+  "guardian_stopped_after_first_tool": false,
+  "wire_responses": [
+    {
+      "seq": 2,
+      "recorded_at": "2026-09-13T11:49:22.685Z",
+      "direction": "response",
+      "method": "handshake/hello",
+      "rpc_id": "4d2afd98-d5b3-4328-a14a-869358b94c7a",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "4d2afd98-d5b3-4328-a14a-869358b94c7a",
+        "result": {
+          "negotiated_version": "0.1.0",
+          "methods_evaluated": [
+            "steps/toolCallRequest",
+            "steps/toolCallResult"
+          ],
+          "selected_transport": "http",
+          "timeout_config": {
+            "default_ms": 5000
+          },
+          "on_decision_failure": "proceed"
+        }
+      }
+    },
+    {
+      "seq": 4,
+      "recorded_at": "2026-09-13T11:49:22.728Z",
+      "direction": "response",
+      "method": "steps/toolCallRequest",
+      "rpc_id": "cf74d6d2-f468-4a41-84c8-4e47ad076396",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "cf74d6d2-f468-4a41-84c8-4e47ad076396",
+        "result": {
+          "type": "final",
+          "acs_version": "0.1.0",
+          "request_id": "cf74d6d2-f468-4a41-84c8-4e47ad076396",
+          "decision": "allow"
+        }
+      }
+    },
+    {
+      "seq": 6,
+      "recorded_at": "2026-09-13T11:49:22.793Z",
+      "direction": "response",
+      "method": "steps/toolCallResult",
+      "rpc_id": "944ed702-e3ee-4fbb-9d16-6568afd8aa49",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "944ed702-e3ee-4fbb-9d16-6568afd8aa49",
+        "result": {
+          "type": "final",
+          "acs_version": "0.1.0",
+          "request_id": "944ed702-e3ee-4fbb-9d16-6568afd8aa49",
+          "decision": "allow"
+        }
+      }
+    },
+    {
+      "seq": 8,
+      "recorded_at": "2026-09-13T11:49:22.876Z",
+      "direction": "response",
+      "method": "steps/toolCallRequest",
+      "rpc_id": "5c10c57b-41ea-4197-9bf0-81f06b090c99",
+      "envelope": {
+        "jsonrpc": "2.0",
+        "id": "5c10c57b-41ea-4197-9bf0-81f06b090c99",
+        "result": {
+          "type": "final",
+          "acs_version": "0.1.0",
+          "request_id": "5c10c57b-41ea-4197-9bf0-81f06b090c99",
+          "decision": "deny",
+          "reasoning": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 5.",
+          "reason_codes": [
+            "destructive_shell_command_blocked"
+          ],
+          "policy_references": [
+            {
+              "policy_id": "agt_stock",
+              "rule_id": "destructive_shell_command_blocked"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "tool_outcomes": [
+    {
+      "call_id": "call_fixture_0",
+      "command": "printf '%s\\n' 'ACS_ALLOWED' > allowed.txt",
+      "status": "completed",
+      "error": null
+    },
+    {
+      "call_id": "call_fixture_1",
+      "command": "echo rm -rf / > denied.txt",
+      "status": "error",
+      "error": "This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 5."
+    }
+  ],
+  "failure_audit": [],
+  "markers": {
+    "allowed.txt": "ACS_ALLOWED\n",
+    "denied.txt": null,
+    "outage.txt": null,
+    "control/denied.txt": "rm -rf /\n"
+  }
+}
