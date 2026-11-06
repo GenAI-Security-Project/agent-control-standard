@@ -20,6 +20,10 @@ Argument-level provenance lets a Guardian reason about the lineage of individual
 
 This is what makes compaction a controllable chokepoint rather than a laundering path. Without transitive lineage, untrusted content could enter, be summarized into new `agent_generated` text, and lose the mark of where it came from.
 
+> **Lineage spans the session boundary (normative).** A `provenance_id` is unique only within its own session, so a read in a later session cannot cite the node that was written in an earlier one. A memory write carries a `lineage_id`, the `origin_session_id` and the writer's provenance summary; every read of that entry echoes them and cites the `lineage_id` in `derived_from`. The wire rules are in [Specification §7.3](../spec/instrument/specification.md#73-memory-lineage-across-sessions-normative).
+
+*Example.* In session A the agent fetches a web page (`origin: tool_output`) and stores a note from it in a `user`-scoped memory. In session B the note comes back as `origin: retrieved`, but its lineage still names the `tool_output` it rests on, so a Guardian does not mistake it for recall the user wrote.
+
 *Example.* The model summarizes a retrieved web page (`origin: retrieved`). The summary text is `agent_generated`, but its `derived_from` includes the page's Provenance, so a Guardian still sees that the summary rests on retrieved content.
 
 ## Deterministic assignment

@@ -2,9 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/memory-store.acs-provenance.json",
   "title": "steps/memoryStore payload (ACS-Provenance profile)",
-  "description": "Strict variant of memory-store.json for deployments running provenance_producer: deterministic / claiming ACS-Provenance. The written content MUST carry provenance. ACS-Core deployments validate against the base schema instead.",
+  "description": "Strict variant of memory-store.json for deployments running provenance_producer: deterministic / claiming ACS-Provenance. The written content MUST carry provenance, and the write MUST carry lineage with the writing session's provenance_summary. ACS-Core deployments validate against the base schema instead.",
   "allOf": [{ "$ref": "./memory-store.json" }],
+  "required": ["lineage"],
   "properties": {
-    "content": { "required": ["value", "provenance"] }
+    "content": { "required": ["value", "provenance"] },
+    "lineage": { "required": ["lineage_id", "origin_session_id", "provenance_summary"] }
   }
 }
