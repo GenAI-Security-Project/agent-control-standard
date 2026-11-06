@@ -29,6 +29,8 @@ HOOK = Path(sys.executable).parent / "acs-codex-hook"
 EXAMPLE = Path(__file__).resolve().parents[3] / "docs" / "codex" / "hooks.json.example"
 SUBAGENT_TASK = "ACS-SUBAGENT-TASK: create the marker"
 REPLACEMENT_TASK = "ACS-SUBAGENT-TASK: create the replacement marker"
+# A model in Codex's own catalog, named only so Codex offers it apply_patch; the local fixture still answers.
+PATCH_MODEL = "gpt-5.5"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -55,7 +57,12 @@ def message(text: str) -> dict:
 
 
 def outputs(req: dict) -> list[dict]:
-    return [item for item in req.get("input", []) if item.get("type") == "function_call_output"]
+    return [item for item in req.get("input", [])
+            if item.get("type") in ("function_call_output", "custom_tool_call_output")]
+
+
+def patch_adding(name: str) -> str:
+    return f"*** Begin Patch\n*** Add File: {name}\n+{name.split('.')[0]}\n*** End Patch\n"
 
 
 def is_subagent(req: dict) -> bool:
@@ -125,7 +132,8 @@ class ScriptedModel:
 
 
 def run_codex(codex: str, directory: Path, hook: str, decide, *, multi_agent: bool,
-              name: str, evidence_dir: Path) -> tuple[subprocess.CompletedProcess, ScriptedModel]:
+              name: str, evidence_dir: Path, model_name: str = "acs-fixture",
+              ) -> tuple[subprocess.CompletedProcess, ScriptedModel]:
     matcher, fallback = example_hook()
     hook_command = shlex.join(["sh", "-c", hook + " || " + fallback])
     hook_config = ("hooks={PreToolUse=[{matcher=" + json.dumps(matcher) + ",hooks=[{type=\"command\",command="
@@ -137,7 +145,7 @@ def run_codex(codex: str, directory: Path, hook: str, decide, *, multi_agent: bo
                       'request_max_retries=0,stream_max_retries=0}')
         args = [codex, "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                 "--skip-git-repo-check", "--dangerously-bypass-hook-trust", "-C", str(directory),
-                "--json", "--sandbox", "workspace-write", "-m", "acs-fixture",
+                "--json", "--sandbox", "workspace-write", "-m", model_name,
                 "-c", 'model_provider="acs_fixture"', "-c", provider,
                 "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
                 "-c", hook_config, "--enable", "hooks", "--enable", "unified_exec",
@@ -156,11 +164,11 @@ def run_codex(codex: str, directory: Path, hook: str, decide, *, multi_agent: bo
 
 
 def hook_for(guardian: CaptureGuardian, directory: Path) -> str:
-    return shlex.join([
-        "env", "ACS_GUARDIAN_URL=" + guardian.url(), "ACS_HMAC_SECRET=" + guardian.hmac_secret,
-        "ACS_HMAC_KEY_ID=" + guardian.key_id, "ACS_HANDSHAKE_CACHE=" + str(directory / "cache"),
-        "ACS_SESSION_STATE_DIR=" + str(directory / "state"), "ACS_DEFAULT_DENY=1", str(HOOK),
-    ])
+    """The hook as the example writes it: sh assignments, then the command, with no env process."""
+    settings = {"ACS_GUARDIAN_URL": guardian.url(), "ACS_HMAC_SECRET": guardian.hmac_secret,
+                "ACS_HMAC_KEY_ID": guardian.key_id, "ACS_HANDSHAKE_CACHE": str(directory / "cache"),
+                "ACS_SESSION_STATE_DIR": str(directory / "state"), "ACS_DEFAULT_DENY": "1"}
+    return " ".join([*(f"{key}={shlex.quote(value)}" for key, value in settings.items()), shlex.quote(str(HOOK))])
 
 
 def decide_with(guardian: CaptureGuardian, decision: str, modifications: dict | None = None) -> None:
@@ -232,6 +240,51 @@ def verify_bash(codex: str, decision: str, evidence_dir: Path) -> dict:
                 "codex_exit_code": proc.returncode}
 
 
+def verify_patch(codex: str, decision: str, evidence_dir: Path) -> dict:
+    """Codex offers apply_patch only to a model its catalog says can use it, so this case names a catalog model."""
+    check = unittest.TestCase()
+    name = f"patch-{decision}"
+    with tempfile.TemporaryDirectory(prefix="acs-codex-live-") as tmp, CaptureGuardian() as guardian:
+        directory = Path(tmp)
+        original, replacement = directory / "original.marker", directory / "replacement.marker"
+        patch, rewritten = patch_adding(original.name), patch_adding(replacement.name)
+
+        def verdict(req):
+            result = guardian._default_allow(req)
+            if decision != "allow":
+                # response-envelope.json requires reasoning on a deny and a modify.
+                result.update(decision=decision, reasoning="ACS live fixture decision")
+            if decision == "modify":
+                result["modifications"] = {"parameter_overrides": {"command": rewritten}}
+            return result
+        guardian.handlers["steps/toolCallRequest"] = verdict
+
+        def decide(req):
+            if outputs(req):
+                return message("Fixture completed.")
+            return {"type": "custom_tool_call", "id": "ctc_fixture", "call_id": "call_patch",
+                    "name": "apply_patch", "input": patch}
+        proc, model = run_codex(codex, directory, hook_for(guardian, directory), decide, multi_agent=False,
+                                name=name, evidence_dir=evidence_dir, model_name=PATCH_MODEL)
+        check.assertEqual(proc.returncode, 0, proc.stderr)
+        check.assertEqual(model.errors, [])
+        check.assertIn("apply_patch", model.advertised(), f"Codex did not offer apply_patch to {PATCH_MODEL}")
+        check.assertEqual(len(model.tool_outputs), 1, "host must return the tool result to the model")
+        check.assertEqual(guardian.methods(), ["handshake/hello", "steps/toolCallRequest"])
+        guardian.assert_all_valid(check)
+        payload = guardian.payload_of("steps/toolCallRequest")
+        check.assertEqual(payload["tool"]["name"], "apply_patch")
+        check.assertEqual(payload["arguments"]["command"]["value"], patch)
+        check.assertEqual(original.exists(), decision == "allow")
+        check.assertEqual(replacement.exists(), decision == "modify")
+        if decision == "deny":
+            check.assertIn("ACS live fixture decision", json.dumps(model.tool_outputs))
+        save_wire(guardian, name, evidence_dir)
+        return {"case": name, "original_created": original.exists(), "replacement_created": replacement.exists(),
+                "signed_envelopes_valid": True, "guardian_methods": guardian.methods(),
+                "model_requests": len(model.requests), "codex_exit_code": proc.returncode}
+
+
 def verify_spawn(codex: str, decision: str, evidence_dir: Path) -> dict:
     """The parent spawns one subagent, whose only step creates the marker its task names, then waits for it."""
     check = unittest.TestCase()
@@ -270,8 +323,13 @@ def verify_spawn(codex: str, decision: str, evidence_dir: Path) -> dict:
             check.assertTrue(subagent_ran, "the allowed subagent never started")
             check.assertEqual(marker.exists(), decision == "allow")
             check.assertEqual(replacement.exists(), decision == "modify", "the subagent did not get the rewritten task")
-            # The subagent's own shell step goes through the same hook.
+            # The subagent's own shell step goes through the same hook, and names the subagent.
             check.assertEqual([s["tool"]["name"] for s in steps], ["spawn_agent", "Bash"])
+            spawn_meta, sub_meta = (c.parsed["params"]["metadata"] for c in guardian.captures
+                                    if c.parsed["method"] == "steps/toolCallRequest")
+            check.assertNotIn("codex_agent_id", spawn_meta)
+            check.assertTrue(UUID.fullmatch(sub_meta.get("codex_agent_id", "")), sub_meta)
+            check.assertEqual(sub_meta["session_id"], spawn_meta["session_id"])
         else:
             check.assertFalse(subagent_ran, "a denied subagent reached the model")
             check.assertFalse(marker.exists())
@@ -324,6 +382,9 @@ def main():
         results.append(verify_bash(executable, decision, args.evidence_dir))
         print(json.dumps(results[-1]), flush=True)
     for decision in ("allow", "deny", "modify"):
+        results.append(verify_patch(executable, decision, args.evidence_dir))
+        print(json.dumps(results[-1]), flush=True)
+    for decision in ("allow", "deny", "modify"):
         results.append(verify_spawn(executable, decision, args.evidence_dir))
         print(json.dumps(results[-1]), flush=True)
     results.append(verify_missing_hook(executable, args.evidence_dir))
@@ -331,7 +392,7 @@ def main():
     matcher, _ = example_hook()
     report = {"codex_version": version, "adapter_version": acs.__version__,
               "model": "local scripted Responses fixture (no inference)", "matcher": matcher,
-              "scope": "real CLI PreToolUse enforcement of exec_command/Bash and spawn_agent, "
+              "scope": "real CLI PreToolUse enforcement of exec_command/Bash, apply_patch and spawn_agent, "
                        "and the exit-2 fallback for a hook that cannot run", "cases": results}
     (args.evidence_dir / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     return 0

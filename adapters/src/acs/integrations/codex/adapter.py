@@ -124,13 +124,19 @@ def _metadata(event: dict[str, Any], session_id: str) -> dict[str, Any]:
     for name in ("cwd", "permission_mode", "model"):
         if isinstance(event.get(name), str) and event[name]:
             metadata[name] = event[name]
+    # A subagent's steps carry the parent's session_id; these name the subagent that took them.
+    for name in ("agent_id", "agent_type"):
+        if isinstance(event.get(name), str) and event[name]:
+            metadata[f"codex_{name}"] = event[name]
     return metadata
 
 
 def build_request(event: dict[str, Any]) -> dict[str, Any]:
     session_id = _session_id(event)
-    # Scoped to the session, since tool_use_id values can repeat across sessions.
-    request_id = str(uuid.uuid5(uuid.UUID(session_id), f"codex:tool_use:{event['tool_use_id']}"))
+    # tool_use_id is the model's own call id, which can repeat across sessions and turns, and a
+    # subagent runs under the parent's session in a turn of its own.
+    name = f"codex:tool_use:{event['turn_id']}:{event['tool_use_id']}"
+    request_id = str(uuid.uuid5(uuid.UUID(session_id), name))
     payload = {
         "tool": {"name": event["tool_name"]},
         "arguments": {k: {"value": v} for k, v in event["tool_input"].items()},

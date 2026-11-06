@@ -5,15 +5,18 @@
 | Input | ACS representation |
 |---|---|
 | `PreToolUse` | `steps/toolCallRequest`, a synchronous decision before the call runs |
-| `tool_name` | `payload.tool.name`, with Codex's own name kept (`Bash` for shell and `exec_command`, `spawn_agent` for a subagent spawn) |
+| `tool_name` | `payload.tool.name`, with Codex's own name kept (`Bash` for shell and `exec_command`, `apply_patch` for a file patch, `spawn_agent` for a subagent spawn) |
 | `tool_input` object | Each argument becomes `{ "value": original_value }`, with no invented provenance |
 | `session_id` | Kept when it is a UUID; otherwise a UUID5 in the `codex:session` namespace. The original goes in `metadata.codex_session_id` |
 | `turn_id` | Kept as `metadata.turn_id`. No `turnStart` or `turnEnd` is sent for it |
-| `tool_use_id` | A UUID5 scoped to the session becomes `request_id`; the original goes in `metadata.codex_tool_use_id` |
+| `tool_use_id` | With `turn_id`, a UUID5 scoped to the session becomes `request_id`; the original goes in `metadata.codex_tool_use_id` |
 | `cwd`, `model`, `permission_mode` | Metadata, when they are strings |
+| `agent_id`, `agent_type` | `metadata.codex_agent_id` and `metadata.codex_agent_type`, on a subagent's steps |
 | Any other hook event | Nothing sent; audited as `unmapped_hook_event` |
 
 The session ID, turn ID, tool-call ID, tool name and an object input are required. An event missing any of them is denied with no traffic, under either posture, rather than sent with invented identity. The adapter never reads the transcript, whose format is not a stable hook interface.
+
+`tool_use_id` is the model's own call ID, so a later turn can reuse it, and a subagent runs under the parent's session in a turn of its own. The request ID includes `turn_id`, so a reused call ID in another turn is not taken for a replay.
 
 The handshake runs on the first tool call of a session, and its result is stored under an HMAC for the session's later calls. It advertises exactly one step method, the Guardian URL's transport, no Wrapped MCP and no conformance profile. Signing alone is not ACS-Core conformance. No session or turn lifecycle, tool results, heartbeat or `steps/subagentStart` are emitted. A subagent spawn reaches the Guardian as a `steps/toolCallRequest` for `spawn_agent`, since Codex runs a spawn as a tool call and ignores `continue: false` from `SubagentStart`.
 
@@ -32,7 +35,7 @@ If a valid ServerHello leaves `steps/toolCallRequest` out of `methods_evaluated`
 
 For `Bash` and `apply_patch`, only a `command` override is accepted, and the merged `command` must stay a string. Other tools get the merged argument object, and Codex owns each tool's argument schema. The adapter supports no redaction and no wholesale content rewrite.
 
-Codex applies `updatedInput` only together with `permissionDecision: "allow"`, so a MODIFY is the one decision that prints an allow. The Codex hook documentation does not say whether that allow skips Codex's own approval prompt.
+Codex applies `updatedInput` only together with `permissionDecision: "allow"`, so a MODIFY is the one decision that prints an allow. That allow does not skip Codex's own approval: on Codex CLI 0.142.5 under `-a untrusted`, Codex still asked before a rewritten command ran, and the prompt showed the rewritten command.
 
 Do not return `permissionDecision: "ask"` to Codex. Codex parses it but does not support it yet: it marks the hook run as failed and continues the tool call. `PermissionRequest` is a different event, and it cannot carry an ASK for calls that never need approval.
 

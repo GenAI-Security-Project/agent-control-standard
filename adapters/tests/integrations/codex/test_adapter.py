@@ -373,13 +373,26 @@ class AdapterTests(unittest.TestCase):
                     refused = code == -32005
                     self.assertEqual(out.get("permissionDecision"), "deny" if refused or posture == "1" else None)
 
-    def test_a_session_handshakes_once_and_request_ids_are_session_scoped(self) -> None:
+    def test_a_session_handshakes_once_and_request_ids_are_session_and_turn_scoped(self) -> None:
         self.invoke()
         self.invoke(event(tool_use_id="call_4"))
+        # tool_use_id is the model's own call id, so a later turn, or a subagent's turn, can reuse it.
+        out, _ = self.invoke(event(turn_id="turn_8"))
+        self.assertEqual(out, {}, "a reused call id in another turn is not a replay")
         self.assertEqual(self.guardian.methods().count("handshake/hello"), 1)
         self.invoke(event(session_id="thr_other"))
         self.assertEqual(self.guardian.methods().count("handshake/hello"), 2)
         self.assertEqual(self.guardian.duplicate_request_ids(), [])
+        self.guardian.assert_all_valid(self)
+
+    def test_a_subagent_step_names_its_subagent(self) -> None:
+        self.invoke(event(agent_id="019e-subagent", agent_type="worker", turn_id="turn_sub"))
+        self.invoke(event(tool_use_id="call_parent"))
+        sub, parent = (c.parsed["params"]["metadata"] for c in self.guardian.captures
+                       if c.parsed["method"] == "steps/toolCallRequest")
+        self.assertEqual((sub["codex_agent_id"], sub["codex_agent_type"]), ("019e-subagent", "worker"))
+        self.assertEqual(sub["session_id"], parent["session_id"])
+        self.assertNotIn("codex_agent_id", parent)
         self.guardian.assert_all_valid(self)
 
     def test_disabled_sends_nothing_and_is_audited(self) -> None:
@@ -429,7 +442,7 @@ class AdapterTests(unittest.TestCase):
     def test_the_example_hook_covers_shell_and_spawns_and_blocks_when_it_cannot_run(self) -> None:
         example = Path(__file__).resolve().parents[3] / "docs" / "codex" / "hooks.json.example"
         entry = json.loads(example.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]
-        for name, matched in (("Bash", True), ("spawn_agent", True), ("BashTool", False), ("apply_patch", False),
+        for name, matched in (("Bash", True), ("apply_patch", True), ("spawn_agent", True), ("BashTool", False),
                               ("multi_agent_v1wait_agent", False), ("mcp__local__spawn_agent", False)):
             with self.subTest(tool=name):
                 self.assertEqual(re.search(entry["matcher"], name) is not None, matched)
@@ -438,6 +451,8 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(len(words), 3)
         hook, fallback = words[2].split(" || ", 1)
         self.assertTrue(hook.endswith("/acs-codex-hook"))
+        # sh takes the assignments itself, so the hook needs no env process.
+        self.assertTrue(all("=" in word for word in shlex.split(hook)[:-1]), hook)
         # Codex runs the call after any hook failure but exit 2, so a hook that cannot start must exit 2.
         missing = Path(self.tmp.name) / "missing" / "acs-codex-hook"
         proc = subprocess.run(["sh", "-c", f"{shlex.quote(str(missing))} || {fallback}"],
