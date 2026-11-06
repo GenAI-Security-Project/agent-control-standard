@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-start.json",
   "title": "steps/subagentStart payload",
-  "description": "Fires when a parent agent spawns a subagent in-process — i.e., delegation that does NOT cross an A2A boundary. A2A-mediated delegation flows through steps/agentTrigger with trigger_type='a2a_inbound' on the subagent's side; subagentStart is for the same-runtime case. The audit chain must record whether the subagent inherits the parent's Intent.parsed, gets a derived intent, or starts fresh — and a Guardian MAY deny the spawn if intent_derivation would grant capabilities the parent's Intent.parsed does not authorize. Sessions are per-subagent: each subagent gets its own session_id and SessionContext; the parent–child relation is captured here.",
+  "description": "Fires when a parent agent spawns a subagent in-process — i.e., delegation that does NOT cross an A2A boundary. A2A-mediated delegation flows through steps/agentTrigger with trigger_type='a2a_inbound' on the subagent's side; subagentStart is for the same-runtime case. The audit chain must record whether the subagent inherits the parent's Intent.parsed, gets a derived intent, or starts fresh, and every spawn carries the subagent_intent a Guardian checks. A Guardian MUST deny a spawn whose subagent_intent grants capabilities outside the parent's Intent.parsed when intent_derivation is 'inherit_full', 'inherit_subset' or 'derived_from_parent', where the parent's Intent.parsed is the one the Guardian holds for parent_session_id, never one the payload supplies. A Guardian MUST deny a spawn whose subagent_session_id equals parent_session_id or the metadata.session_id of the envelope, or names a session it already knows; JSON Schema cannot compare two members, so this one is not a schema rule. The subagent's SessionContext starts from the parent's provenance and IFC labels, not empty (see parent_provenance_summary). Sessions are per-subagent: each subagent gets its own session_id and SessionContext; the parent–child relation is captured here.",
   "type": "object",
-  "required": ["subagent_session_id", "parent_session_id", "parent_step_id", "intent_derivation"],
+  "required": ["subagent_session_id", "parent_session_id", "parent_step_id", "intent_derivation", "subagent_intent"],
   "properties": {
     "subagent_session_id": {
       "type": "string",
       "format": "uuid",
-      "description": "Fresh session identifier for the spawned subagent. Distinct from the envelope's metadata.session_id, which is the parent's session. The subagent's own steps/* hooks will carry this id in their envelope metadata.session_id."
+      "description": "Fresh session identifier for the spawned subagent. MUST differ from parent_session_id and from the envelope's metadata.session_id, which is the parent's session; a Guardian MUST deny a spawn where it does not, because a child that reuses the parent's id writes into the parent's chain and state. The subagent's own steps/* hooks will carry this id in their envelope metadata.session_id."
     },
     "parent_session_id": {
       "type": "string",
@@ -20,14 +20,24 @@
       "type": "string",
       "description": "step_id of the parent's hook that triggered the spawn (typically a steps/toolCallRequest for a delegation tool, or a steps/agentResponse that the framework interpreted as a spawn directive)."
     },
+    "parent_intent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "provenance_id of the parent's Intent, that is the parent's Intent.parser_provenance.provenance_id, from which a derived intent descends. REQUIRED when intent_derivation is 'derived_from_parent', where subagent_intent.parser_provenance.derived_from MUST include it. Both are provenance_ids, so the rule compares like with like; parent_step_id is a step_id and is not a member of that identifier space."
+    },
+    "parent_provenance_summary": {
+      "$ref": "../provenance-summary.json",
+      "description": "Session-level provenance summary of the parent's context at the spawn. OPTIONAL on the wire. The subagent's SessionContext MUST start from the parent's provenance and IFC labels for 'inherit_full', 'inherit_subset' and 'derived_from_parent', and SHOULD for 'fresh'. A Guardian seeds the child from its own record of parent_session_id and treats this member as a floor: it MUST NOT seed the child with less than its own record, so a sender cannot launder a parent's untrusted or secret context by omitting or understating it."
+    },
     "intent_derivation": {
       "type": "string",
       "enum": ["inherit_full", "inherit_subset", "derived_from_parent", "fresh"],
-      "description": "How the subagent's Intent.parsed relates to the parent's. 'inherit_full' = identical capability set (subagent can do anything the parent can). 'inherit_subset' = strict subset (subagent_intent.parsed MUST be a subset of parent's parsed; the Guardian SHOULD verify). 'derived_from_parent' = the parent emitted a parsed delegation directive that the framework's intent parser turned into the subagent's intent (parser_provenance MUST cite the parent step_id). 'fresh' = the subagent has its own user-derived Intent (typically only valid when the spawn was triggered by user-routed input)."
+      "description": "How the subagent's Intent.parsed relates to the parent's. 'inherit_full' = identical capability set (subagent_intent.parsed MUST equal the parent's parsed). 'inherit_subset' = strict subset (subagent_intent.parsed MUST be a subset of the parent's parsed). 'derived_from_parent' = the parent emitted a parsed delegation directive that the framework's intent parser turned into the subagent's intent (parent_intent_id is REQUIRED and subagent_intent.parser_provenance.derived_from MUST include it; subagent_intent.parsed MUST be a subset of the parent's parsed unless a Guardian policy explicitly admits more). 'fresh' = the subagent has its own user-derived Intent (subagent_intent.parser_provenance.origin MUST be 'user_input'; a spawn whose intent was generated by the agent is not 'fresh'). A Guardian MUST deny the first three when subagent_intent.parsed is outside the ceiling, and MUST resolve 'fresh' under its own policy, since no parent capability bounds it."
     },
     "subagent_intent": {
       "type": "object",
-      "description": "The Intent that will govern the subagent. Same shape as the Intent in agent-trigger.json. parser_provenance is REQUIRED — for 'derived_from_parent', parser_provenance.derived_from MUST include the parent_step_id. The Guardian MAY deny the spawn if subagent_intent grants capabilities outside the parent's Intent.parsed when intent_derivation='inherit_subset'.",
+      "description": "The Intent that will govern the subagent. Same shape as the Intent in agent-trigger.json. REQUIRED on every spawn, with parsed and parser_provenance, so a Guardian always has the capability set it is asked to check. For 'inherit_full' it restates the parent's parsed; for the other derivations see intent_derivation.",
+      "required": ["parsed", "parser_provenance"],
       "properties": {
         "raw": { "type": "string" },
         "parsed": {
@@ -46,9 +56,7 @@
           "type": "string",
           "enum": ["strict", "moderate", "permissive"]
         }
-      },
-      "if": { "required": ["parsed"] },
-      "then": { "required": ["parser_provenance"] }
+      }
     },
     "subagent_descriptor": {
       "type": "object",
@@ -59,5 +67,41 @@
         "model_id": { "type": "string" }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["intent_derivation"],
+        "properties": { "intent_derivation": { "const": "derived_from_parent" } }
+      },
+      "then": {
+        "required": ["parent_intent_id"],
+        "properties": {
+          "subagent_intent": {
+            "properties": {
+              "parser_provenance": {
+                "required": ["derived_from"],
+                "properties": { "derived_from": { "minItems": 1 } }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["intent_derivation"],
+        "properties": { "intent_derivation": { "const": "fresh" } }
+      },
+      "then": {
+        "properties": {
+          "subagent_intent": {
+            "properties": {
+              "parser_provenance": { "properties": { "origin": { "const": "user_input" } } }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
