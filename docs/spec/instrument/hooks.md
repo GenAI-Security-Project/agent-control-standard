@@ -87,7 +87,7 @@ Schema: [`hooks/session-start.json`](https://genai-security-project.github.io/ag
 
 Fires once per session, after the `handshake/hello` exchange completes and before any other `steps/*` hook for the same `session_id`. Establishes the audit chain root (`previous_hash: null`), session-level identity and policy bindings, and the initial `Intent` (when IBAC is the enforcement paradigm).
 
-**Payload:** session-level identity descriptors, declared policy mode, `intent` (optional, with `parser_provenance`), platform context.
+**Payload:** every field is optional: `user_identity` (`user_id`, `roles`, `authentication_method`), `policy_mode` (`strict`, `moderate`, `permissive`), `intent` (`raw`, `parsed`, `parser_provenance`, `scope_mode`), and `platform_context`.
 
 **Decision:** ALLOW / DENY. A Guardian MAY refuse a session whose identity, policy mode, or platform fails policy checks; this is the cleanest place to refuse before content enters.
 
@@ -101,7 +101,7 @@ Schema: [`hooks/agent-trigger.json`](https://genai-security-project.github.io/ag
 
 Fires when the agent is activated by an external triggering condition (event arrival, scheduled tick, A2A inbound message, user-initiated session, or system-issued activation). For A2A-mediated delegation, `trigger_type: "a2a_inbound"` carries the originating peer identity; for in-process subagent spawns, see [`subagentStart`](#subagentstart).
 
-**Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), `trigger_source` (shape depends on `trigger_type`), optional `intent` (IBAC adopters populate; the Intent registered at sessionStart, carried here for activation-time policy checks).
+**Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), and optionally `trigger_source` (shape depends on `trigger_type`) and `intent` (IBAC adopters populate; the Intent registered at sessionStart, carried here for activation-time policy checks).
 
 **Decision:** ALLOW / DENY / MODIFY. Guardian MAY rewrite the trigger payload (e.g. redact PII) before activation.
 
@@ -115,7 +115,7 @@ Lightweight hook marking the start of an agent turn. Many policies key on per-tu
 
 `turn_id` is added to the request envelope's `metadata` block and propagated onto every per-step ContextEntry between `turnStart` and `turnEnd`. AARM-style "no consequential action in N turns after taint" becomes computable from the audit chain in O(1) per check.
 
-**Payload:** `turn_id`, `triggered_by` (`user_message`, `auto_continuation`, `agent_loop`, `subagent_return`), optional `parent_turn_id` for nested turns.
+**Payload:** `turn_id`, `triggered_by` (`user_message`, `auto_continuation`, `agent_loop`, `subagent_return`, `scheduled`, `external_event`), and optionally `parent_turn_id` for nested turns and `expected_inputs`, a hint listing the hooks the framework expects this turn to fire.
 
 **Decision:** Decision-eligible — a Guardian MAY deny to block the turn from starting — but most deployments will return ALLOW and use the hook for state transitions in policy.
 
@@ -127,7 +127,7 @@ Schema: [`hooks/user-message.json`](https://genai-security-project.github.io/age
 
 Fires when external user input arrives, before it is presented to the agent's reasoning context. Provenance: `origin: user_input`.
 
-**Payload:** message content, optional citation/sources, user context.
+**Payload:** `content`, an array of parts. Each part has a `type` (`text`, `image`, `audio`, `file`), a `value`, and optional `provenance`.
 
 **Decision:** ALLOW / DENY / MODIFY. Guardian MAY redact content before delivery to the agent.
 
@@ -139,7 +139,7 @@ Schema: [`hooks/agent-response.json`](https://genai-security-project.github.io/a
 
 Fires after the agent has produced a response, before it is delivered to the recipient (user, A2A peer, parent agent, or external system). Provenance: `origin: agent_generated` with `derived_from` set to whatever inputs the response is derived from.
 
-**Payload:** response content, optional sources/citations, agent reasoning.
+**Payload:** `content`, an array of parts shaped as in [`userMessage`](#usermessage), and optional `reasoning`, the agent's natural-language rationale.
 
 **Decision:** ALLOW / DENY / MODIFY.
 
@@ -151,7 +151,7 @@ Schema: [`hooks/knowledge-retrieval.json`](https://genai-security-project.github
 
 Fires when the agent retrieves external knowledge (RAG, vector search, knowledge base lookup). Provenance: `origin: retrieved`, with `source_id` identifying the index or knowledge source.
 
-**Payload:** `query`, `keywords`, retrieved results (each with content, mime type, source id).
+**Payload:** `query` (`value`, optional `provenance`), `results` (each with a `value` and optional `source_id`, `score`, and `provenance`), and optional `source` (`name`, `type`, `version`).
 
 **Decision:** ALLOW / DENY / MODIFY. Guardian MAY redact retrieved content before injection into the agent context.
 
@@ -163,7 +163,7 @@ Schema: [`hooks/memory-context-retrieval.json`](https://genai-security-project.g
 
 Memory read — long-term, session-scoped, or user-scoped — into the agent's working context. Provenance: `origin: retrieved`, `source_id` identifies the memory store.
 
-**Payload:** memory entries pulled into context.
+**Payload:** `results`, the memory entries pulled into context (each with a `value` and optional `memory_id`, `stored_at`, and `provenance`), and optionally `query` (`value`, `provenance`) and `memory_store` (`name`, `scope`: `session`/`user`/`tenant`/`global`).
 
 **Decision:** ALLOW / DENY / MODIFY.
 
@@ -175,7 +175,7 @@ Schema: [`hooks/memory-store.json`](https://genai-security-project.github.io/age
 
 Memory write. The standard sink for cross-session influence; mediating it prevents memory poisoning.
 
-**Payload:** entries to be written, target store, scope (`session`/`user`/`tenant`/`global`), TTL.
+**Payload:** `content` (`value`, optional `provenance`), and optionally `memory_id`, `memory_store` (`name`, `scope`: `session`/`user`/`tenant`/`global`), `operation` (`create`, `update`, `delete`), and `metadata`.
 
 **Decision:** ALLOW / DENY / MODIFY.
 
@@ -189,7 +189,7 @@ Fires after the framework has parsed a tool call from the LLM's output, but befo
 
 Frameworks MUST fire `toolCallRequest` for every action that escapes the agent's reasoning context, regardless of whether the framework's tool registry models it as a tool. This includes built-in operations such as filesystem reads/writes, network fetches, process execution, and shell commands. The Guardian relies on a complete view of all outward actions; primitives that bypass `toolCallRequest` are invisible to policy.
 
-**Payload:** `tool` (id, capability), `arguments` (each value carrying optional Provenance), agent reasoning.
+**Payload:** `tool` (`name` required; `version`, `provider`), `arguments` (a map of objects, each with a required `value` and optional Provenance), and optionally `capability`, `operation`, `raw_command`, and `intent` (`description`, `goal`).
 
 **Decision:** ALLOW / DENY / MODIFY / ASK / DEFER. The full disposition vocabulary applies — this is the hook where most paradigm composition happens.
 
@@ -201,7 +201,7 @@ Schema: [`hooks/tool-call-result.json`](https://genai-security-project.github.io
 
 Fires after tool execution, before the result is ingested into the agent's reasoning context. Provenance: `origin: tool_output`, with `derived_from` set to the originating `toolCallRequest`'s provenance ids when the tool's output is data-derived.
 
-**Payload:** `request_id_ref` (the originating request), outputs, exit status, duration.
+**Payload:** `tool` (`name` required; `version`, `provider`), `exit_status` (`success`, `failure`, `timeout`, `blocked`), `outputs` (each with a required `value` and optional `provenance`), and optionally `operation`, `request_id_ref` (the originating request), and `duration_ms`.
 
 `request_id_ref`, when present, is the `request_id` of the originating `toolCallRequest`. A Guardian SHOULD resolve it against the `toolCallRequest` records it holds for the session, and MUST record the reference in its audit record when it cannot resolve it. Whether an unresolvable reference is grounds to deny is the deployment's policy. The record is required because an unresolvable reference is evidence, so it has to survive even when the result is allowed.
 
@@ -215,7 +215,7 @@ Schema: [`hooks/pre-compact.json`](https://genai-security-project.github.io/agen
 
 Fires before context-window compaction. Compaction is the chokepoint where provenance can be laundered: when the runtime LLM compresses a long context window into a summary, the post-compaction text is new `agent_generated` content whose `derived_from` lineage spans every untrusted item that was in the pre-compaction context. Without an explicit hook, the framework has no clean place to attach the rule that *the compacted summary's lineage is the union of all summarized entries' lineage*. AARM cumulative-context tracking breaks across compaction without it, FIDES's monotonicity claim is unverifiable, and Guardians cannot enforce "don't compact across a trust boundary" policies.
 
-**Payload:** `entries_to_compact` (array of `step_id`s that will be summarized), pre-compaction `provenance_summary` (so the Guardian can see what it's about to lose), `triggered_by` (`size_threshold`, `manual`, `agent_initiated`).
+**Payload:** `entries_to_compact` (array of `step_id`s that will be summarized), `triggered_by` (`size_threshold`, `manual`, `agent_initiated`, `framework_initiated`), and optionally `pre_compact_provenance_summary` (so the Guardian can see what it's about to lose), `estimated_input_tokens`, and `target_summary_tokens`.
 
 **Decision:** Decision-eligible. Guardian MAY return DENY to block compaction (e.g. because deployment policy disallows compacting after `untrusted` data has entered until a trusted re-grounding occurs).
 
@@ -227,7 +227,7 @@ Schema: [`hooks/post-compact.json`](https://genai-security-project.github.io/age
 
 Fires after compaction. Audit + provenance-binding hook.
 
-**Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`.
+**Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`. The payload also carries `entries_compacted` (the `step_id`s that were summarized), `pre_compact_chain_hash` and `post_compact_chain_hash` (the chain head before and after compaction, so a verifier can replay the chain), and optionally `lineage_depth_after`.
 
 **Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
 
@@ -241,7 +241,7 @@ In-process delegation — a parent agent spawning a subagent within the same run
 
 This matters for IBAC: when a subagent spawns, the audit chain must record whether it inherits the parent's `Intent.parsed`, gets a derived intent, or starts fresh — and whether subsequent operations are checked against the parent's, the subagent's, or both Intents. The composition case (IBAC outer + CaMeL inner) is precisely the case this hook handles.
 
-**Payload:** `subagent_session_id` (a fresh `session_id` distinct from the envelope's parent `session_id`), `parent_session_id`, `parent_step_id` (the originating step that triggered the spawn), `intent_derivation` (`inherit_full` / `inherit_subset` / `derived_from_parent` / `fresh`), `subagent_intent` (the new Intent for the subagent, with `parser_provenance`).
+**Payload:** `subagent_session_id` (a fresh `session_id` distinct from the envelope's parent `session_id`), `parent_session_id`, `parent_step_id` (the originating step that triggered the spawn), `intent_derivation` (`inherit_full` / `inherit_subset` / `derived_from_parent` / `fresh`), and optionally `subagent_intent` (the new Intent for the subagent, with `parser_provenance`) and `subagent_descriptor` (`agent_id`, `agent_name`, `model_id`).
 
 **Decision:** Decision-eligible. Guardian MAY DENY — refuse the subagent spawn, e.g. because the `intent_derivation` would grant capabilities the parent's `Intent.parsed` does not authorize.
 
@@ -253,7 +253,7 @@ Each subagent has its own SessionContext and audit chain; the parent–child rel
 
 Schema: [`hooks/subagent-stop.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-stop.json).
 
-**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`); optional `final_chain_hash` (a framework that maintains no session-chain omits it rather than fabricate a value — Guardian handling in [§8.6](specification.md#86-chain-head-publication-normative)); optional `summary` of what was returned to the parent; optional `subagent_step_count`. The summary's `provenance` follows the standard monotonicity rule.
+**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`), and optionally `final_chain_hash`, `summary` (what was returned to the parent), and `subagent_step_count`. A framework that maintains no session chain omits `final_chain_hash` rather than fabricate a value; Guardian handling is in [§8.6](specification.md#86-chain-head-publication-normative). The summary's `provenance` follows the standard monotonicity rule.
 
 **Decision:** Audit only.
 
@@ -267,7 +267,7 @@ Fires when a skill enters the agent's available set, before it is eligible to lo
 
 A skill is the loadable, composed counterpart to the passive `agent_capability` grouping. It is cataloged as a `skill` AgBOM component carrying its composition references, a least-privilege capability manifest, and the definition's reference and integrity digest. The `ref` and `digest` commit to the complete loadable artifact, including any bundled model weights or adapters, not only text. This matters for a model-bearing skill whose backdoor lives in opaque weights rather than any readable instruction: source inspection cannot see it, so the control is the digest plus `registration_provenance`, not body reading. The full definition body travels in this payload for inspection but is NOT persisted to the AgBOM; only the `ref` and `digest` persist. The approval recorded here is keyed on the `(skill_id, digest)` pair, which `skillLoad` is later checked against. Marketplace pre-publication scanning and publisher reputation are out of scope; ACS surfaces the definition, provenance, and manifest so the Guardian's policy can act.
 
-**Payload:** `skill_id`, `definition` (`ref`, `digest`, optional `body` for inspection), `declared_capabilities`, optional `composition` (`tools`/`mcp_servers`/`a2a_peers`/`models`/`composed_skills`), `registration_provenance`. A model-bearing skill lists its bundled model under `composition.models` so the AgBOM inventories it as a `model` component with its own provenance, rather than leaving the weights opaque inside the definition.
+**Payload:** `skill_id`, `definition` (`digest`, and optional `ref` and `body` for inspection), `declared_capabilities`, and optionally `skill` (`name`, `version`, `provider`), `composition` (`tools`/`mcp_servers`/`a2a_peers`/`models`/`composed_skills`), and `registration_provenance`. A model-bearing skill lists its bundled model under `composition.models` so the AgBOM inventories it as a `model` component with its own provenance, rather than leaving the weights opaque inside the definition.
 
 **Decision:** ALLOW / DENY. A Guardian MAY deny registration; a denied skill MUST NOT become eligible to load. A Guardian SHOULD compare `declared_capabilities` against the union of capabilities the composed tools expose and MAY deny over-broad declarations.
 
@@ -283,7 +283,7 @@ Fires when a registered skill activates into a session, before its actions run. 
 
 When a load is triggered by another skill, `load_trigger` is `skill_composition` and `load_path` carries more than one element.
 
-**Payload:** `skill_id`, `digest` (`algorithm`, `value`), `load_trigger` (`user`/`agent_decision`/`skill_composition`/`system`), `load_path` (ordered `{skill_id, step_id?}`, root first), optional `registration_ref`, optional `parent_step_id`, optional `digest_verified`, optional `declared_capabilities`.
+**Payload:** `skill_id`, `digest` (`algorithm`, `value`), `load_trigger` (`user`/`agent_decision`/`skill_composition`/`system`), `load_path` (ordered `{skill_id, step_id?}`, root first), and optionally `registration_ref`, `parent_step_id`, `digest_verified`, and `declared_capabilities`.
 
 **Decision:** ALLOW / DENY. A Guardian SHOULD deny a load it cannot correlate to an approved `skillRegister` for the same `(skill_id, digest)`, SHOULD deny when `load_path` shows a skill loading another outside its declared `composed_skills`, and SHOULD deny when the loaded artifact's digest does not match the one vetted at `skillRegister`.
 
@@ -295,7 +295,7 @@ Schema: [`hooks/skill-unload.json`](https://genai-security-project.github.io/age
 
 Fires when a skill leaves the active set. Its enforcement value is low: by unload time the skill's actions have already run, so a Guardian typically observes rather than denies. It keeps the AgBOM's active inventory accurate, and repeated load/unload churn of the same skill is itself a signal worth tracing.
 
-**Payload:** `skill_id`, `reason` (`session_end`/`explicit_unload`/`replaced`/`error`), optional `replaced_by`.
+**Payload:** `skill_id`, `reason` (`session_end`/`explicit_unload`/`replaced`/`error`), and optionally `replaced_by`.
 
 **Decision:** Audit only.
 
@@ -305,7 +305,7 @@ Fires when a skill leaves the active set. Its enforcement value is low: by unloa
 
 Schema: [`hooks/turn-end.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-end.json).
 
-**Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`), `step_count`, optional `summary`.
+**Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`, `interrupted`, `denied_at_start`), and optionally `step_count`, `tool_call_count`, and `summary` (`value`, `provenance`).
 
 **Decision:** Not decision-eligible — the turn has already happened.
 
@@ -317,7 +317,7 @@ Schema: [`hooks/session-end.json`](https://genai-security-project.github.io/agen
 
 Session termination, audit finalization. The Guardian seals the chain at this point.
 
-**Payload:** `reason` (`completed`, `cancelled`, `error`, `timeout`, `abandoned`), and an optional `summary` with the outcome, step count, errors, and `decision_failures`, the number of decision failures in each failure class (Specification §6.4).
+**Payload:** `reason` (`completed`, `cancelled`, `error`, `timeout`, `abandoned`), and optionally `final_chain_hash` and `summary`. `final_chain_hash` is the agent's own final chain hash, for the Guardian to check against its chain. `summary` carries the outcome, step count, errors, and `decision_failures`, the number of decision failures in each failure class (Specification §6.4).
 
 **Decision:** Audit only.
 
