@@ -5,8 +5,8 @@ drifted from the schemas under `specification/v0.1.0/hooks/` (#389). Rows left
 out required fields such as `toolCallResult`'s `tool`, listed three of four
 `preCompact` triggers, and named fields no schema defines, such as
 `knowledgeRetrieval`'s `keywords`. The schemas are the normative source, so
-these checks read them. They cover the 19 `steps/*` hooks, whose sections have
-bare names. Sections such as `agbom/snapshot` and `defer/subscribe` keep their
+these checks read them. They cover the `steps/*` hooks the schemas title as
+such, whose sections have bare names. Sections such as `agbom/snapshot` and `defer/subscribe` keep their
 namespace in the name and are not checked here.
 
 - every top-level payload field appears in the row, in backticks;
@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from test_hook_taxonomy import native_hook_methods
+
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "specification" / "v0.1.0"
 PAGE = ROOT / "docs" / "spec" / "instrument" / "hooks.md"
@@ -41,7 +43,8 @@ def hook_sections(text):
     for match in re.finditer(r"^## (\S+)\n(.*?)(?=^## |\Z)", text, re.M | re.S):
         schema = re.search(r"^Schema: \[`hooks/([a-z-]+\.json)`\]", match[2], re.M)
         if schema:
-            payload = re.search(r"^\*\*Payload:\*\* (.+)$", match[2], re.M)
+            # A row may wrap, so it runs to the next blank line.
+            payload = re.search(r"^\*\*Payload:\*\* (.+?)(?=\n[ \t]*\n|\Z)", match[2], re.M | re.S)
             found[match[1]] = (SPEC / "hooks" / schema[1], payload[1] if payload else None)
     return found
 
@@ -60,20 +63,30 @@ def load(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def resolve(node, document):
-    while isinstance(node, dict) and node.get("$ref", "").startswith("#/"):
-        for part in node["$ref"][2:].split("/"):
-            document = document[part]
-        node = document
+def at(document, fragment):
+    """The node a JSON Pointer fragment such as `/$defs/A` names in document."""
+    for part in filter(None, fragment.split("/")):
+        document = document[part]
+    return document
+
+
+def resolve(node, document, path):
+    """Follow a $ref chain, local or into another file, reading each pointer from its own file's root."""
+    while isinstance(node, dict) and isinstance(node.get("$ref"), str):
+        target, _, fragment = node["$ref"].partition("#")
+        if target:
+            path = (path.parent / target).resolve()
+            document = load(path)
+        node = at(document, fragment)
     return node
 
 
-def vocabulary(path, seen=None):
-    """Every property name and string enum value in a schema and the schemas it references."""
+def vocabulary(path, fragment="", seen=None):
+    """Every property name and string enum value in a schema, or the part a fragment names, and in what it references."""
     seen = set() if seen is None else seen
-    if path in seen:
+    if (path, fragment) in seen:
         return set()
-    seen.add(path)
+    seen.add((path, fragment))
     names = set()
 
     def walk(node):
@@ -83,14 +96,15 @@ def vocabulary(path, seen=None):
                     names.update(value)
                 elif key in ("enum", "const"):
                     names.update(v for v in (value if isinstance(value, list) else [value]) if isinstance(v, str))
-                elif key == "$ref" and isinstance(value, str) and not value.startswith("#"):
-                    names.update(vocabulary((path.parent / value.split("#")[0]).resolve(), seen))
+                elif key == "$ref" and isinstance(value, str):
+                    target, _, part = value.partition("#")
+                    names.update(vocabulary((path.parent / target).resolve() if target else path, part, seen))
                 walk(value)
         elif isinstance(node, list):
             for item in node:
                 walk(item)
 
-    walk(load(path))
+    walk(at(load(path), fragment))
     return names
 
 
@@ -115,20 +129,23 @@ def missing(path, row):
     schema = load(path)
     expected = set(schema["properties"])
     for prop in schema["properties"].values():
-        expected.update(v for v in resolve(prop, schema).get("enum", []) if isinstance(v, str))
+        expected.update(v for v in resolve(prop, schema, path).get("enum", []) if isinstance(v, str))
     return sorted(expected - named(row))
 
 
 def undefined(hook, path, row):
     """Backticked names in the row that nothing the row may draw on defines."""
-    allowed = vocabulary(path.resolve()) | shared_names() | set(SECTIONS) | set(ALSO_NAMED.get(hook, {}))
+    hook_names = {token for name in SECTIONS for token in named(f"`{name}`")}
+    allowed = vocabulary(path.resolve()) | shared_names() | hook_names | set(ALSO_NAMED.get(hook, {}))
     return sorted(named(row) - allowed)
 
 
 def test_every_steps_hook_has_a_payload_row():
-    without = {hook for hook, (_, row) in STEPS.items() if row is None}
-    assert not without, f"Hook sections with no **Payload:** row: {sorted(without)}"
-    assert len(ROWS) == 19, f"Expected a payload row for each of the 19 steps/* hooks, found {len(ROWS)}"
+    native = native_hook_methods()
+    without = sorted(native - set(ROWS))
+    assert not without, f"steps/* hooks with no `## <hook>` section, `Schema:` line, or **Payload:** row: {without}"
+    extra = sorted(set(STEPS) - native)
+    assert not extra, f"Sections checked as steps/* hooks that no schema titles as one: {extra}"
 
 
 def test_a_namespaced_section_with_a_payload_row_is_not_counted():

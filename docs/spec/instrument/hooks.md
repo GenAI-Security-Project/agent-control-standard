@@ -253,7 +253,7 @@ Each subagent has its own SessionContext and audit chain; the parent–child rel
 
 Schema: [`hooks/subagent-stop.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-stop.json).
 
-**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`); optional `final_chain_hash` (a framework that maintains no session-chain omits it rather than fabricate a value — Guardian handling in [§8.6](specification.md#86-chain-head-publication-normative)); optional `summary` of what was returned to the parent; optional `subagent_step_count`. The summary's `provenance` follows the standard monotonicity rule.
+**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`), and optionally `final_chain_hash`, `summary` (what was returned to the parent), and `subagent_step_count`. A framework that maintains no session chain omits `final_chain_hash` rather than fabricate a value; Guardian handling is in [§8.6](specification.md#86-chain-head-publication-normative). The summary's `provenance` follows the standard monotonicity rule.
 
 **Decision:** Audit only.
 
@@ -283,7 +283,7 @@ Fires when a registered skill activates into a session, before its actions run. 
 
 When a load is triggered by another skill, `load_trigger` is `skill_composition` and `load_path` carries more than one element.
 
-**Payload:** `skill_id`, `digest` (`algorithm`, `value`), `load_trigger` (`user`/`agent_decision`/`skill_composition`/`system`), `load_path` (ordered `{skill_id, step_id?}`, root first), optional `registration_ref`, optional `parent_step_id`, optional `digest_verified`, optional `declared_capabilities`.
+**Payload:** `skill_id`, `digest` (`algorithm`, `value`), `load_trigger` (`user`/`agent_decision`/`skill_composition`/`system`), `load_path` (ordered `{skill_id, step_id?}`, root first), and optionally `registration_ref`, `parent_step_id`, `digest_verified`, and `declared_capabilities`.
 
 **Decision:** ALLOW / DENY. A Guardian SHOULD deny a load it cannot correlate to an approved `skillRegister` for the same `(skill_id, digest)`, SHOULD deny when `load_path` shows a skill loading another outside its declared `composed_skills`, and SHOULD deny when the loaded artifact's digest does not match the one vetted at `skillRegister`.
 
@@ -295,7 +295,7 @@ Schema: [`hooks/skill-unload.json`](https://genai-security-project.github.io/age
 
 Fires when a skill leaves the active set. Its enforcement value is low: by unload time the skill's actions have already run, so a Guardian typically observes rather than denies. It keeps the AgBOM's active inventory accurate, and repeated load/unload churn of the same skill is itself a signal worth tracing.
 
-**Payload:** `skill_id`, `reason` (`session_end`/`explicit_unload`/`replaced`/`error`), optional `replaced_by`.
+**Payload:** `skill_id`, `reason` (`session_end`/`explicit_unload`/`replaced`/`error`), and optionally `replaced_by`.
 
 **Decision:** Audit only.
 
