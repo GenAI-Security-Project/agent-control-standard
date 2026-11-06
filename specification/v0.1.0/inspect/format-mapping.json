@@ -7,11 +7,31 @@
   "properties": {
     "cyclonedx_1_6": {
       "type": "object",
-      "description": "CycloneDX 1.6 JSON. Each canonical component → one entry in components[]. The CycloneDX bom-ref equals the canonical component id. Type mapping: model → 'machine-learning-model' (CycloneDX bom-types extension); mcp_server, a2a_peer, knowledge_source → 'service'; tool → 'application'; memory_store → 'data' (with type='database' subtype where applicable); agent_capability → represented in CycloneDX 'composition' aggregating its referenced components; skill → 'application' carrying its definition digest in component 'hashes' and a CycloneDX 'composition' aggregating its referenced components. The CycloneDX 'metadata.tools' SHOULD include the Observed Agent's framework as the BOM generator. Provenance attached to a component MUST be carried into CycloneDX 'evidence' or 'properties' (acs:provenance:origin, and acs:provenance:source_id when present). v0.1 carries factual provenance only; trust classification is computed by the Guardian against local policy and is not exported in CycloneDX (see §7.1)."
+      "description": "CycloneDX 1.6 JSON. This file is the single source for the type mapping; the Extending CycloneDX guide restates it. Each canonical component → one CycloneDX element whose bom-ref equals the canonical component id. Type mapping: model → a component of type 'machine-learning-model'; tool → a component of type 'application'; memory_store → a component of type 'data'; mcp_server, a2a_peer, knowledge_source → an entry in the top-level 'services' array, because 'service' is not a component type in CycloneDX 1.6; agent_capability → an entry in the top-level 'compositions' array aggregating its referenced components and services; skill → a component of type 'application' carrying its definition digest in component 'hashes', plus a 'compositions' entry aggregating its referenced components. The CycloneDX 'metadata.tools' SHOULD include the Observed Agent's framework as the BOM generator. Provenance attached to a component MUST be carried into CycloneDX 'evidence' or 'properties' (acs:provenance:origin, and acs:provenance:source_id when present). v0.1 carries factual provenance only; trust classification is computed by the Guardian against local policy and is not exported in CycloneDX (see §7.1).",
+      "x-acs-type-map": {
+        "model": "machine-learning-model",
+        "mcp_server": "service",
+        "a2a_peer": "service",
+        "tool": "application",
+        "knowledge_source": "service",
+        "memory_store": "data",
+        "agent_capability": "composition",
+        "skill": "application"
+      }
     },
     "spdx_3_0": {
       "type": "object",
-      "description": "SPDX 3.0 JSON-LD. Each canonical component → one Element node. Type mapping: model → spdx:AIPackage (SPDX 3.0 AI profile); tool → spdx:SoftwarePackage; mcp_server, a2a_peer, knowledge_source → spdx:Service; memory_store → spdx:DatasetPackage; agent_capability → spdx:Bundle aggregating its referenced components via 'contains' relationships; skill → spdx:SoftwarePackage with a verified checksum derived from its definition digest, aggregating its referenced components via 'contains' relationships. The graph is wired with SPDX relationships: agent_capability--CONTAINS-->{tool,mcp_server,a2a_peer}; skill--CONTAINS-->{tool,mcp_server,a2a_peer,skill}; mcp_server--EXPOSES-->tool. AgBOM-level metadata (agent.id, generated_at, agbom_hash) maps to spdx:CreationInfo and spdx:Element identifiers."
+      "description": "SPDX 3.0 JSON-LD. This file is the single source for the type mapping; the Extending SPDX guide restates it. Each canonical component → one Element node. Type mapping: model → ai_AIPackage (SPDX 3.0 AI profile); tool → software_Package; mcp_server, a2a_peer, knowledge_source → Service; memory_store → dataset_DatasetPackage (SPDX 3.0 Dataset profile); agent_capability → Bundle aggregating its referenced components via 'contains' relationships; skill → software_Package with a verified checksum derived from its definition digest, aggregating its referenced components via 'contains' relationships. The graph is wired with SPDX relationships: agent_capability--CONTAINS-->{tool,mcp_server,a2a_peer}; skill--CONTAINS-->{tool,mcp_server,a2a_peer,skill}; mcp_server--EXPOSES-->tool. AgBOM-level metadata (agent.id, generated_at, agbom_hash) maps to spdx:CreationInfo and spdx:Element identifiers.",
+      "x-acs-type-map": {
+        "model": "ai_AIPackage",
+        "mcp_server": "Service",
+        "a2a_peer": "Service",
+        "tool": "software_Package",
+        "knowledge_source": "Service",
+        "memory_store": "dataset_DatasetPackage",
+        "agent_capability": "Bundle",
+        "skill": "software_Package"
+      }
     },
     "swid": {
       "type": "object",

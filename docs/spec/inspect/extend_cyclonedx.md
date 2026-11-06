@@ -4,17 +4,20 @@ CycloneDX 1.6 is one of the three normative AgBOM serializations in v0.1.0. The 
 
 ## Component-type mapping
 
-Each canonical component becomes one entry in the CycloneDX `components[]` array. CycloneDX `bom-ref` equals the canonical component `id`, which makes round-tripping straightforward.
+[`format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json) states this mapping, and the table below restates it. A test (`tests/test_format_mapping_guides.py`) fails when the two disagree, so when they do, the schema wins.
 
-| Canonical type | CycloneDX `type` | Notes |
+Each canonical component becomes one CycloneDX element, and its `bom-ref` equals the canonical component `id`, which makes round-tripping straightforward. Most land in the `components[]` array. CycloneDX 1.6 has no `service` component type, so MCP servers, A2A peers and knowledge sources go in the separate top-level `services[]` array. An `agent_capability` becomes an entry in `compositions[]`.
+
+| Canonical type | CycloneDX element | Notes |
 |---|---|---|
-| `model` | `ai-model` | Uses CycloneDX's bom-types extension for AI models. |
-| `mcp_server` | `service` | An endpoint reachable via MCP. |
-| `a2a_peer` | `service` | Cross-agent endpoint; `agent_card_ref` flows into `externalReferences`. |
-| `tool` | `application` | Agent-callable code unit. Capability flows into `properties`. |
-| `knowledge_source` | `service` | A datastore or search endpoint. |
-| `memory_store` | `service` | Long-lived state store. |
-| `agent_capability` | `application` | A composed capability — its tool/MCP/A2A dependencies become CycloneDX `dependencies`. |
+| `model` | `machine-learning-model` | A component of this type. |
+| `mcp_server` | `service` | An entry in `services[]`. An endpoint reachable via MCP. |
+| `a2a_peer` | `service` | An entry in `services[]`. Cross-agent endpoint; `agent_card_ref` flows into `externalReferences`. |
+| `tool` | `application` | A component of this type. Agent-callable code unit. Capability flows into `properties`. |
+| `knowledge_source` | `service` | An entry in `services[]`. A datastore or search endpoint. |
+| `memory_store` | `data` | A component of this type. Long-lived state store. |
+| `agent_capability` | `composition` | An entry in `compositions[]` aggregating the tool, MCP and A2A components and services it references. |
+| `skill` | `application` | A component of this type. The definition digest goes in the component's `hashes`, and a `compositions[]` entry aggregates the components it references. |
 
 ## Example
 
@@ -30,7 +33,7 @@ Each canonical component becomes one entry in the CycloneDX `components[]` array
   },
   "components": [
     {
-      "type": "ai-model",
+      "type": "machine-learning-model",
       "bom-ref": "gpt-4o-2024-08-06",
       "name": "GPT-4o",
       "version": "2024-08-06",
@@ -41,13 +44,6 @@ Each canonical component becomes one entry in the CycloneDX `components[]` array
       ]
     },
     {
-      "type": "service",
-      "bom-ref": "urn:mcp:db-mcp",
-      "name": "db-mcp",
-      "version": "1.4.0",
-      "endpoints": ["https://mcp.internal/db"]
-    },
-    {
       "type": "application",
       "bom-ref": "urn:tool:database_query",
       "name": "database_query",
@@ -56,6 +52,14 @@ Each canonical component becomes one entry in the CycloneDX `components[]` array
         { "name": "acs:capability", "value": "datastore.read" },
         { "name": "acs:registration_provenance.origin", "value": "system" }
       ]
+    }
+  ],
+  "services": [
+    {
+      "bom-ref": "urn:mcp:db-mcp",
+      "name": "db-mcp",
+      "version": "1.4.0",
+      "endpoints": ["https://mcp.internal/db"]
     }
   ],
   "dependencies": [
