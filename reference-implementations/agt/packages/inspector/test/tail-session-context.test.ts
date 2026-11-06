@@ -273,10 +273,13 @@ describe("renderSessionChain", () => {
     const firstRow = renderSessionChainRow(withNewline, checkSessionChainLink(withNewline, state));
     const secondRow = renderSessionChainRow(next, checkSessionChainLink(next, state));
 
-    // The embedded newline reaches the row whole -- renderSessionChainRow
-    // never splits or rejoins rendered text, so nothing here can misalign
-    // it the way extracting a row by splitting joined output on "\n" would.
-    expect(firstRow).toContain("run_shell\nrm -rf /");
+    // The embedded newline is escaped, not printed: the row stays one line,
+    // so a logged field cannot start a second row that reads as its own. It
+    // is still one value -- renderSessionChainRow never splits or rejoins
+    // rendered text, so nothing here can misalign it the way extracting a row
+    // by splitting joined output on "\n" would.
+    expect(firstRow).toContain("run_shell\\x0arm -rf /");
+    expect(firstRow).not.toContain("\n");
     // And it did not corrupt the state carried into the next call: the
     // second row still reads its own predecessor's hash correctly.
     expect(secondRow).not.toContain("CHAIN BREAK");

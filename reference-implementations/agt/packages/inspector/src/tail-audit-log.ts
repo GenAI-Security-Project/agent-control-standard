@@ -57,6 +57,7 @@
  * not its absence was ever reported.
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { escapeControlCharacters } from "./terminal-safe.ts";
 
 /** What every audit line carries, whichever kind it is. */
 type AuditEntryIdentity = {
@@ -433,7 +434,9 @@ function reportPollError(onPollError: (error: unknown) => void, error: unknown):
 
 function warnMalformedLine(line: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`skipping unparseable audit-log line (${message}): ${line.slice(0, 120)}`);
+  console.error(
+    `skipping unparseable audit-log line (${escapeControlCharacters(message)}): ${escapeControlCharacters(line.slice(0, 120))}`,
+  );
 }
 
 function warnPollError(error: unknown): void {
