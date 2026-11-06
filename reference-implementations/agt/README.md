@@ -444,6 +444,7 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 - A secret in tool output is redacted at the result gate. Every sibling field of the output survives. Clean output is untouched. (`test/redaction.test.ts`, `hosts/claude-code/test/post-tool-use.test.ts`)
 - A `transform` verdict lands as the host's actual rewritten argument, keyed by that tool's own argument name. (`packages/guardian/test/map-verdict.test.ts`, `test/path-dialects.test.ts`)
 - An egress destination is extracted from a shell command and decided by AGT's stock egress gate. A `WebFetch` URL reaches the same gate with no extraction. Six coexistence rows are driven through a live Guardian. (`packages/guardian/test/annotate-egress.test.ts`, `packages/guardian/test/server.test.ts`)
+- A tool argument the gates read (the policy target, `url`, `endpoint`, `host`, `domain`) that is not a string, such as an argv array, is denied with `evaluation_failed` rather than allowed. A secret in a later output, or inside an object output, is redacted too, and the redaction is addressed to that leaf. (`packages/guardian/test/non-string-values.test.ts`, `packages/guardian/test/result-output-units.test.ts`)
 - Information-flow labels that AGT emits at one step come back as its input at the next step. A flow the configured clearance does not dominate is denied. (`test/ifc-round-trip.test.ts`)
 
 **Host behaviour, Claude Code**

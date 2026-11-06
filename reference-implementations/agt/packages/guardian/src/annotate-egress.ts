@@ -183,7 +183,7 @@
  * module stands down for needlessly. The shipped `policy/lib/data.json` sets no
  * such key. A deployment that sets one has to revisit this list.
  */
-const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as const;
+export const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as const;
 
 /**
  * The first absolute http(s) URL in a command line.

@@ -70,15 +70,18 @@ import type { Annotator, PolicyBridge } from "agt-bridge";
 import { createDeploymentBridge } from "./deployment-bridge.ts";
 import {
   assemblePostToolCallSnapshot,
+  assemblePostToolCallUnits,
   assemblePreToolCallSnapshot,
   type AgtPostToolCallSnapshot,
   type AgtPreToolCallSnapshot,
+  type ResultOutputUnit,
 } from "./assemble-snapshot.ts";
 import { finalResult, type AcsFinalResult } from "./acs-result.ts";
 import { denyOnInvalidEnvelope, type DenyOnInvalidEnvelopeResult } from "./deny-on-invalid-envelope.ts";
 import {
   loadMapping,
   mapVerdict,
+  type AcsDecision,
   resolveInterventionPoint,
   resolvePolicyTargetArgument,
   type Mapping,
@@ -934,7 +937,7 @@ async function dispatch(
   // The result gate, beside the request gate rather than merged into it.
   if (isToolCallResult(envelope)) {
     const findings = examineStepSafely(envelope, sessionContextStore, envelopeLog);
-    return { response: await evaluateStep(raw, envelope, assemblePostToolCallSnapshot, bridge, mapping, sessionContextStore, findings) };
+    return { response: await evaluateResultStep(raw, envelope, bridge, mapping, sessionContextStore, findings) };
   }
 
   // A well-formed envelope (it passed validateEnvelope: the method matched
@@ -1050,25 +1053,143 @@ async function evaluateStep<E extends SteppedEnvelope>(
 
     return successResponse(envelope.id, finalResult(envelope.params, decision));
   } catch (error) {
-    // This produces a parseable JSON-RPC error rather than an HTML 500.
-    // denyOnInvalidEnvelope goes one step further: AGT's evaluation layer
-    // fails closed, and this catch is where that failure surfaces, so it is
-    // delivered as an honoured `deny` decision rather than a bare error,
-    // keeping it inside §6.4's honoured path. An AGT evaluation failure is a
-    // deny; a delivery failure is the host's negotiated posture, decided
-    // elsewhere and never merged with this.
-    const message = toRepoRelativeMessage(error);
-    // The same best-effort id `dispatch` reads for its own failure paths, off
-    // the same raw body: a response the client cannot correlate is not a
-    // decision it can honour (see asDecisionResponse).
-    const rpcId = extractId(raw);
-    const denial = denyOnInvalidEnvelope(raw, { reasonCode: "evaluation_failed", message });
-    const decisionResponse = asDecisionResponse(rpcId, denial);
-    if (decisionResponse) {
-      return decisionResponse;
-    }
-    return errorResponse(rpcId, EVALUATION_FAILED_CODE, `evaluation failed: ${message}`);
+    return evaluationFailed(raw, error);
   }
+}
+
+/**
+ * The result gate's own evaluation, beside `evaluateStep` rather than inside
+ * it because it judges a step more than once.
+ *
+ * AGT's post_tool_call target is one leaf, `outputs[0].value`, guarded by
+ * is_string(). A result with several outputs, or an output that is an object,
+ * would have everything but that one leaf unexamined and answered `allow`. So
+ * the result is cut into one single-output snapshot per string leaf
+ * (`assemblePostToolCallUnits`), each is evaluated on its own, and the
+ * verdicts are folded back into one decision whose redactions are addressed to
+ * the leaves they came from.
+ *
+ * A result with no string leaf has nothing a redact rule could match, and is
+ * evaluated once as a whole, as it was before units existed.
+ */
+async function evaluateResultStep(
+  raw: unknown,
+  envelope: ToolCallResultEnvelope,
+  bridge: PolicyBridge<GuardianSnapshot>,
+  mapping: Mapping,
+  sessionContextStore: SessionContextStore,
+  findings?: StepFindings,
+): Promise<JsonRpcSuccess | JsonRpcFailure> {
+  try {
+    const sessionId = envelope.params.metadata.session_id;
+    appendContextEntry(sessionContextStore, sessionId, {
+      method: envelope.method,
+      request_id: envelope.params.request_id,
+      tool_name: envelope.params.payload.tool.name,
+      ...findings,
+    });
+
+    const point = resolveInterventionPoint(envelope.method, mapping);
+    const policyTargetArgument = resolvePolicyTargetArgument(mapping, point, envelope.params.payload.tool.name);
+    const sourceLabels = supplySourceLabels(sessionContextStore, sessionId);
+
+    const units = assemblePostToolCallUnits(envelope, sourceLabels);
+    const targets: { pointer: string | undefined; snapshot: AgtPostToolCallSnapshot }[] =
+      units.length > 0
+        ? units
+        : [{ pointer: undefined, snapshot: assemblePostToolCallSnapshot(envelope, sourceLabels) }];
+
+    const decisions: AcsDecision[] = [];
+    let resultLabels: string[] | undefined;
+    for (const target of targets) {
+      const verdict = await bridge.evaluate(point, target.snapshot);
+      decisions.push(retargetRedactions(mapVerdict(verdict, mapping, point, policyTargetArgument), target, mapping, point));
+      if (verdict.result_labels !== undefined) {
+        resultLabels = [...new Set([...(resultLabels ?? []), ...verdict.result_labels])];
+      }
+    }
+
+    // `undefined` when no evaluation ran the IFC gate and `[]` when one ran
+    // and propagated nothing; `persistIfcLabels` keeps those apart.
+    persistIfcLabels(sessionContextStore, sessionId, resultLabels);
+
+    return successResponse(envelope.id, finalResult(envelope.params, foldDecisions(decisions)));
+  } catch (error) {
+    return evaluationFailed(raw, error);
+  }
+}
+
+/** Points a redaction AGT addressed to the single-output snapshot's leaf at
+ * the leaf of the real result that snapshot was cut from. */
+function retargetRedactions(
+  decision: AcsDecision,
+  target: { pointer: string | undefined },
+  mapping: Mapping,
+  point: string,
+): AcsDecision {
+  const redactions = decision.modifications?.redactions;
+  const pointer = target.pointer;
+  if (pointer === undefined || redactions === undefined) return decision;
+  const rule = mapping.intervention_points[point]?.modifications;
+  const snapshotLeaf = rule !== undefined && rule.into === "redactions" ? rule.into_path : undefined;
+  return {
+    ...decision,
+    modifications: {
+      ...decision.modifications,
+      redactions: redactions.map((redaction) => {
+        if (redaction.path !== snapshotLeaf) {
+          throw new Error(
+            `a redaction addressed ${JSON.stringify(redaction.path)}, which is not the leaf ${JSON.stringify(snapshotLeaf)} ` +
+              `the result gate evaluated, so it cannot be moved to ${JSON.stringify(pointer)}`,
+          );
+        }
+        return { ...redaction, path: pointer };
+      }),
+    },
+  };
+}
+
+/**
+ * One decision for a result judged leaf by leaf. The most restrictive verdict
+ * decides: deny, then ask, then modify, then allow. Every `modify` keeps its
+ * redactions, since each addresses a different leaf and a result is only
+ * clean once all of them are applied.
+ */
+function foldDecisions(decisions: AcsDecision[]): AcsDecision {
+  const first = (kind: AcsDecision["decision"]) => decisions.find((candidate) => candidate.decision === kind);
+  const denied = first("deny");
+  if (denied !== undefined) return denied;
+  const asked = first("ask");
+  if (asked !== undefined) return asked;
+  const modifying = decisions.filter((candidate) => candidate.decision === "modify");
+  if (modifying.length > 0) {
+    const redactions = modifying.flatMap((candidate) => candidate.modifications?.redactions ?? []);
+    return { ...modifying[0]!, modifications: { redactions } };
+  }
+  return decisions.find((candidate) => candidate.policy_references !== undefined) ?? decisions[0]!;
+}
+
+/**
+ * An evaluation that threw. This produces a parseable JSON-RPC error rather
+ * than an HTML 500. denyOnInvalidEnvelope goes one step further: AGT's
+ * evaluation layer fails closed, and this is where that failure surfaces, so
+ * it is delivered as an honoured `deny` decision rather than a bare error,
+ * keeping it inside §6.4's honoured path. An AGT evaluation failure is a deny;
+ * a delivery failure is the host's negotiated posture, decided elsewhere and
+ * never merged with this.
+ */
+function evaluationFailed(raw: unknown, error: unknown): JsonRpcSuccess | JsonRpcFailure {
+  const message = toRepoRelativeMessage(error);
+  // The same best-effort id `dispatch` reads for its own failure paths, off
+  // the same raw body: a response the client cannot correlate is not a
+  // decision it can honour (see asDecisionResponse).
+  const rpcId = extractId(raw);
+  const denial = denyOnInvalidEnvelope(raw, { reasonCode: "evaluation_failed", message });
+  const decisionResponse = asDecisionResponse(rpcId, denial);
+  if (decisionResponse) {
+    return decisionResponse;
+  }
+  return errorResponse(rpcId, EVALUATION_FAILED_CODE, `evaluation failed: ${message}`);
 }
 
 function successResponse(id: string | number, result: AcsFinalResult | ServerHello): JsonRpcSuccess {
