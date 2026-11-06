@@ -257,6 +257,31 @@ Used both by Guardians that derive trust in policy and by vendor implementations
 
 Provenance MUST be populated by deterministic code outside the LLM's output path. Implementations MUST NOT instruct the LLM to produce it. The agent declares `provenance_producer: "deterministic" | "none"` in the handshake; a `none` producer emits no Provenance objects, and Guardians whose policies require Provenance MUST refuse the session at handshake time rather than silently degrading enforcement. LLM-authored Provenance is not a conformant producer mode because it makes an untrusted runtime output responsible for its own lineage.
 
+### 7.3 Memory lineage across sessions (normative)
+
+A memory write in one session and a read in a later one is the standard memory-poisoning path, and `user`, `tenant` and `global` scopes exist to make it work. A `provenance_id` is unique only within its own session, so the read cannot cite it, and a Guardian's session-level state does not follow the entry. Without a rule, untrusted content written at step N reads back as trusted recall. These rules close that gap. They carry facts only; trust classification stays in Guardian policy (§7.1).
+
+**On the write (`memoryStore`).**
+
+- `memory_id` MUST be present when `memory_store.scope` is `user`, `tenant` or `global`, so the write and a later read can be joined.
+- The write carries `lineage`: a `lineage_id` the framework mints for this version of the entry, the `origin_session_id` of the session that produced the content, and that session's `provenance_summary` at write time. The `provenance_id`s in `content.provenance` resolve in `origin_session_id`.
+- The store MUST keep `lineage` and `content.provenance` with the entry. A store that drops them cannot serve a conformant read.
+- `lineage` is REQUIRED under ACS-Provenance and OPTIONAL otherwise.
+
+**On the read (`memoryContextRetrieval`).**
+
+- Each result's `memory_id` MUST be present when the scope is `user`, `tenant` or `global`.
+- Each result carries `lineage`, echoed from the write: `lineage_id`, `origin_session_id`, the stored `provenance`, and the writer's `provenance_summary`. It is REQUIRED on every result under ACS-Provenance.
+- The result's own `provenance` is the node for the read. Its `origin` MUST be `retrieved` whenever `lineage` is present, and its `derived_from` MUST include `lineage.lineage_id`. A retrieval cannot relabel stored content as `system` or `user_input`.
+
+**What a Guardian does.**
+
+- It classifies an entry by `lineage.provenance` and `lineage.provenance_summary`, not by the `retrieved` origin of the read. Content stored from `tool_output` stays untrusted after the read, as it was on the write.
+- A result with no `lineage` has no known basis. The Guardian MUST treat it as the least-trusted origin its policy knows, or deny it. It MUST NOT treat it as fresh.
+- The reading session's provenance summary MUST include at least the `origins_seen` of every `lineage.provenance_summary` it ingests, so the writer's taint is visible to cumulative-context policy in the new session.
+
+A Guardian that does not dispatch `memoryStore` or `memoryContextRetrieval` does not enforce these rules. The [FAQ's ASI06 row](../../topics/faq.md) describes what the schemas carry, not what a given Guardian decides.
+
 ## 8. SessionContext and Intent
 
 State the Guardian Agent maintains across a session. The Guardian commits the chain head (`chain_hash`) on the wire in its response for every step where it writes a ContextEntry (§8.6), so the chain is externally observable rather than purely Guardian-internal. The Observed Agent MAY also send `session_id` and a `chain_hash` for cross-checking.
