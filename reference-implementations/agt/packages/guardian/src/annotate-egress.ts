@@ -186,7 +186,7 @@
 const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as const;
 
 /**
- * The first absolute http(s) URL in a command line.
+ * Every absolute http(s) URL in a command line.
  *
  * Scheme-anchored on purpose. A bare-host pattern would match package names,
  * file paths and flag values, and every false positive here becomes a denial
@@ -194,11 +194,30 @@ const ARGUMENTS_AGT_ALREADY_READS = ["url", "endpoint", "host", "domain"] as con
  * whitespace and at the shell metacharacters that end a word, so a trailing
  * `; ls` or `| tee` is not swallowed into the host.
  *
- * First match, not every match: the gate takes one destination. A command
- * reaching two hosts has its first examined and the rest unexamined, which is
- * this module's stated miss direction rather than a hidden one.
+ * Every match, not the first: the gate takes one destination, so the matches
+ * have to collapse to one origin or the module answers the sentinel. A URL in
+ * a `Referer` or `Origin` header, a `-e` value, a user-agent string or a `-d`
+ * body is a URL this module cannot tell from a destination without a shell
+ * parser, and judging only the first lets an allowlisted decoy placed before
+ * the real destination hide it.
  */
-const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\s'"`;|&()<>]+/;
+const DESTINATION_IN_COMMAND = /\bhttps?:\/\/[^\s'"`;|&()<>]+/g;
+
+/**
+ * Options and environment prefixes that change where a connection goes without
+ * naming a second destination URL: curl's `--resolve`, `--connect-to`, proxy
+ * and unix-socket options, and the proxy environment variables. Each makes the
+ * URL's own host the wrong answer, and the module header already concedes it
+ * cannot compute curl's final host, so a command carrying any of them gets the
+ * sentinel. The short `-x` is matched inside a cluster such as `-sSx`, and
+ * case-sensitively, because `-X` is the request method.
+ *
+ * Over-blocking is the direction this errs in. The pattern is only consulted
+ * when the command already carries a URL.
+ */
+const CONNECTION_REDIRECT_OPTION =
+  /(?:^|[\s'"`;|&(])(?:--(?:resolve|connect-to|proxy|proxy1\.0|preproxy|socks4a?|socks5(?:-hostname)?|unix-socket|abstract-unix-socket|doh-url)(?=[\s='"`;|&)]|$)|-[A-Za-z]*x)/;
+const CONNECTION_REDIRECT_ENVIRONMENT = /(?:^|[\s'"`;|&(])(?:https?|ftp|all)_proxy=/i;
 
 /**
  * The authority shapes on which no parser disagrees: a plain host, optionally a
@@ -273,14 +292,16 @@ export function annotateEgressDestination(_name: string, _config: unknown, preli
   const rawCommand = toolCall.raw_command;
   if (typeof rawCommand !== "string") return {};
 
-  const found = DESTINATION_IN_COMMAND.exec(rawCommand);
+  const found = rawCommand.match(DESTINATION_IN_COMMAND);
   // No URL in the command is the one case where silence is right: nothing here
   // is a destination, so there is nothing to be ambiguous about.
   if (found === null) return {};
 
   // Everything past this point is a URL, and from here `{}` would be an ALLOW.
-  // A shape the unambiguous test rejects gets the sentinel, not silence.
-  if (!UNAMBIGUOUS_AUTHORITY.test(found[0])) return { destination: AMBIGUOUS_DESTINATION };
+  // An option that moves the connection elsewhere gets the sentinel, not silence.
+  if (CONNECTION_REDIRECT_OPTION.test(rawCommand) || CONNECTION_REDIRECT_ENVIRONMENT.test(rawCommand)) {
+    return { destination: AMBIGUOUS_DESTINATION };
+  }
 
   // `new URL` throws on input it cannot parse, and this function may not: a
   // throw here becomes AGT's own `runtime_error:annotation_failed` deny on
@@ -289,11 +310,20 @@ export function annotateEgressDestination(_name: string, _config: unknown, preli
   // has the shape and still throws on the port range -- so the catch answers
   // the sentinel too. It is the same judgement: a URL this module cannot
   // resolve to an origin is one it will not vouch for.
-  let parsed: URL;
-  try {
-    parsed = new URL(found[0]);
-  } catch {
-    return { destination: AMBIGUOUS_DESTINATION };
+  const origins = new Set<string>();
+  for (const candidate of found) {
+    // A shape the unambiguous test rejects gets the sentinel, not silence.
+    if (!UNAMBIGUOUS_AUTHORITY.test(candidate)) return { destination: AMBIGUOUS_DESTINATION };
+    try {
+      origins.add(new URL(candidate).origin);
+    } catch {
+      return { destination: AMBIGUOUS_DESTINATION };
+    }
   }
-  return { destination: parsed.origin };
+
+  // Two origins in one command is not a destination this module can name: one
+  // may be a header or option value and the other the real target, and telling
+  // them apart takes a shell parser.
+  if (origins.size !== 1) return { destination: AMBIGUOUS_DESTINATION };
+  return { destination: [...origins][0] as string };
 }
