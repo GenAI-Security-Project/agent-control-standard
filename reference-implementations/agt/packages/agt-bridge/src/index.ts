@@ -1,4 +1,5 @@
 import { AgentControl, type JsonValue } from "agent-control-specification";
+import { assertManifestBundlesSafe } from "./bundle-path.ts";
 import { publishOpaPath } from "./opa-path.ts";
 
 export type AgtVerdict = {
@@ -121,6 +122,10 @@ export function createBridge(manifestPath: string, options?: CreateBridgeOptions
         `then drops the bundle's data document, silently disabling policy.`,
     );
   }
+
+  // A `./` in the manifest's `bundle:` value disables policy. A `/./` in the
+  // manifest path above did not when measured. See bundle-path.ts.
+  assertManifestBundlesSafe(manifestPath);
 
   // Adapts the caller's plain function into the SDK's AnnotatorDispatcher
   // shape ({ dispatch(...) }), wrapped in `async` so a throw inside the
