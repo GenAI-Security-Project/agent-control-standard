@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/post-compact.json",
   "title": "steps/postCompact payload",
-  "description": "Fires after compaction has occurred. The hook is audit + provenance-binding: the Guardian records the new summary's content and lineage, and MAY return 'modify' to rewrite or further redact the summary, but MUST NOT return 'deny' — compaction has already happened and the audit chain MUST record the post-compact state. Provenance on the summary is normative on origin and derived_from: origin MUST be 'agent_generated', and derived_from MUST equal the union of provenance_ids of every entry in entries_compacted. The framework — not the LLM — populates derived_from. The Guardian projects this lineage onto its own trust classification in policy (v0.1 does not carry a trust field on the wire — see §7.1); the integrity property the Guardian MUST enforce is the standard monotonicity rule, namely that the summary's effective trust cannot exceed the minimum effective trust of its derived_from entries. No amount of LLM processing launders untrusted-classified data into trusted-classified data.",
+  "description": "Fires after compaction has occurred. The hook is audit + provenance-binding: the Guardian records the new summary's content and lineage, and MAY return 'modify' to rewrite or further redact the summary, but MUST NOT return 'deny' — compaction has already happened and the audit chain MUST record the post-compact state. Under ACS-Provenance (post-compact.acs-provenance.json) the summary MUST carry provenance; the base schema leaves it OPTIONAL so a provenance_producer: none client can send a valid postCompact. When provenance is present it is normative on origin and derived_from: origin MUST be 'agent_generated', and derived_from MUST equal the union of provenance_ids of every entry in entries_compacted. The framework — not the LLM — populates derived_from. The Guardian projects this lineage onto its own trust classification in policy (v0.1 does not carry a trust field on the wire — see §7.1); the integrity property the Guardian MUST enforce is the standard monotonicity rule, namely that the summary's effective trust cannot exceed the minimum effective trust of its derived_from entries. No amount of LLM processing launders untrusted-classified data into trusted-classified data. The chain hash after this hook's ContextEntry is written is not a request field: the Guardian writes that entry and chooses its entry_id, so only the Guardian can compute it, and it publishes the value as the response's chain_hash (Specification §8.6).",
   "type": "object",
-  "required": ["summary", "entries_compacted", "pre_compact_chain_hash", "post_compact_chain_hash"],
+  "required": ["summary", "entries_compacted"],
   "properties": {
     "summary": {
       "type": "object",
-      "required": ["value", "provenance"],
+      "required": ["value"],
       "properties": {
         "value": {
           "type": "string",
@@ -16,7 +16,7 @@
         },
         "provenance": {
           "$ref": "../provenance.json",
-          "description": "MUST have origin='agent_generated' and derived_from = union of provenance_ids of every entry in entries_compacted. Conformant frameworks MUST compute this deterministically; the LLM MUST NOT be given the opportunity to forge or relabel it. Trust classification is computed by the Guardian against local policy and is not carried in this v0.1 wire object (see §7.1); the Guardian MUST enforce the monotonicity property that the summary's effective trust does not exceed the minimum effective trust of its derived_from lineage."
+          "description": "OPTIONAL in the base schema; REQUIRED under provenance_producer: deterministic (ACS-Provenance). Validate against post-compact.acs-provenance.json when the profile is claimed. When present: MUST have origin='agent_generated' and derived_from = union of provenance_ids of every entry in entries_compacted. Conformant frameworks MUST compute this deterministically; the LLM MUST NOT be given the opportunity to forge or relabel it. Trust classification is computed by the Guardian against local policy and is not carried in this v0.1 wire object (see §7.1); the Guardian MUST enforce the monotonicity property that the summary's effective trust does not exceed the minimum effective trust of its derived_from lineage."
         }
       }
     },
@@ -29,12 +29,7 @@
     "pre_compact_chain_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "The chain_hash at the moment compaction began (i.e., the chain_hash of the most recent ContextEntry written before this hook). Required for chain-replay verification: a verifier can check that the entries between this hash and post_compact_chain_hash correspond to the entries_compacted list."
-    },
-    "post_compact_chain_hash": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$",
-      "description": "The chain_hash after this postCompact ContextEntry is written. The next per-step ContextEntry will have previous_hash equal to this value."
+      "description": "OPTIONAL. The chain_hash at the moment compaction began (i.e., the chain_hash of the most recent ContextEntry written before this hook), for a client that tracks the chain from the chain_hash values the Guardian published (Specification §8.6). A client that tracks no chain omits it rather than fabricate a value. The Guardian holds the same value in its own chain, so chain-replay verification does not depend on the sender: a verifier checks that the entries between this hash and the postCompact ContextEntry correspond to the entries_compacted list. A supplied value that disagrees with the Guardian's chain is a chain_mismatch (§8.6)."
     },
     "lineage_depth_after": {
       "type": "integer",
