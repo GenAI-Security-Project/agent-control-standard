@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "acs-adapters"
 version = "0.2.0"
-description = "Reference adapters that connect Claude Code, Cursor and NVIDIA NeMo Agent Toolkit to an ACS Guardian"
+description = "Reference adapters that connect Claude Code, Codex, Cursor and NVIDIA NeMo Agent Toolkit to an ACS Guardian"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
@@ -19,6 +19,7 @@ nat = ["nvidia-nat-core>=1.7,<1.8", "ruamel.yaml>=0.19,<0.20"]
 [project.scripts]
 acs-claude-code-hook = "acs.integrations.claude_code.hook:main"
 acs-claude-code-wire = "acs.integrations.claude_code.wire:main"
+acs-codex-hook = "acs.integrations.codex.hook:main"
 acs-cursor-hook = "acs.integrations.cursor.hook:main"
 acs-cursor-wire = "acs.integrations.cursor.wire:main"
 acs-nat-wire = "acs.integrations.nat.wire:main"
@@ -28,6 +29,7 @@ acs-example-guardian = "acs.guardian.example_guardian:main"
 # distributions register here the same way.
 [project.entry-points."acs.integrations"]
 claude_code = "acs.integrations.claude_code"
+codex = "acs.integrations.codex"
 cursor = "acs.integrations.cursor"
 nat = "acs.integrations.nat"
 

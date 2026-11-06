@@ -21,6 +21,7 @@ SHARED_SUITES = (
 
 PLATFORM_SUITES = {
     "claude": ("claude-code", HERE, ("discover", "tests/integrations/claude_code")),
+    "codex": ("codex", HERE, ("discover", "tests/integrations/codex")),
     "cursor": ("cursor", HERE, ("discover", "tests/integrations/cursor")),
     "nat": ("nat", HERE, ("discover", "tests/integrations/nat")),
 }
@@ -28,6 +29,7 @@ PLATFORM_SUITES = {
 PLATFORM_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
+    "codex": "codex",
     "cursor": "cursor",
     "nat": "nat",
 }
@@ -74,7 +76,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PLATFORM",
         nargs="+",
         choices=tuple(PLATFORM_ALIASES),
-        help="one or more of: claude, cursor, nat",
+        help="one or more of: claude, codex, cursor, nat",
     )
     parser.add_argument(
         "--strict",

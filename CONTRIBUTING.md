@@ -115,7 +115,7 @@ For changes under `adapters/` (the reference adapters, example Guardian, and the
 ```bash
 cd adapters                                         # its own uv project and lockfile
 uv sync --locked --extra nat --group test
-uv run python run_conformance.py claude cursor nat  # shared checks + those adapter suites
+uv run python run_conformance.py claude codex cursor nat  # shared checks + those adapter suites
 ```
 
 Without the NAT runtime, sync without `--extra nat` and leave `nat` off the command. The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. The same workflow also builds the package and checks the installed wheel outside the repository (`adapters/scripts/check_wheel.py`). See `adapters/README.md` for what the suite proves and its scope.

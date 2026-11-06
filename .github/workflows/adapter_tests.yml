@@ -70,7 +70,7 @@ jobs:
       - name: Install the adapters, the NAT extra and the test group from the lockfile
         run: uv sync --locked --python 3.12 --extra nat --group test
       - name: Run every suite
-        run: uv run python run_conformance.py claude cursor nat
+        run: uv run python run_conformance.py claude codex cursor nat
 
   tests-without-nat:
     # The documented setup for Claude Code and Cursor users, who never install NAT.
@@ -89,8 +89,8 @@ jobs:
           version: "0.9.9"
       - name: Install the adapters and the test group, without the NAT extra
         run: uv sync --locked --python 3.12 --group test
-      - name: Run the shared and Claude Code and Cursor suites
-        run: uv run python run_conformance.py claude cursor
+      - name: Run the shared, Claude Code, Codex and Cursor suites
+        run: uv run python run_conformance.py claude codex cursor
       - name: Check that imports flow integrations, client, core
         run: uv run lint-imports
 
