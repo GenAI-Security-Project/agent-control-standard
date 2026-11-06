@@ -81,13 +81,19 @@ hooks:
     # posture. Nothing upstream of this hookmap produces an ACS `defer`
     # decision today, so this entry is a guard against a Guardian that emits
     # one rather than a path this deployment exercises.
+    #
+    # WHY `deny`, `defer` AND `modify` ALSO WRITE `additionalContext` (issue
+    # #109). When several hooks deny one call, Claude Code gives the model the
+    # denial reason of only the hook that finishes last. Claude Code keeps
+    # `additionalContext` from every hook, so it is the field that carries the
+    # Guardian's reasoning to the model whatever else answers. `allow` is left
+    # without it: under `on_decision_failure: proceed` its reasoning says the
+    # Guardian is unreachable, and the model must not learn that before the
+    # step runs. The host's audit log still records a fail-open proceed. `ask`
+    # is left without it too: its reason is shown to the person who answers.
+    # The README's "When another hook answers the same call" has the
+    # measurements.
     decisions:
-      # A genuine Guardian allow only rarely carries a `reasoning` string, but
-      # `applyFailurePosture` always sets one -- a fail-open proceed renders as
-      # a plain allow, and this reason field is the only way its explanation
-      # ("no decision arrived...") reaches the transcript a human reads. An
-      # audited bypass that says nothing to the operator is the thing this
-      # avoids.
       allow:
         output:
           hookSpecificOutput.permissionDecision:       { value: allow }
@@ -96,6 +102,7 @@ hooks:
         output:
           hookSpecificOutput.permissionDecision:       { value: deny }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
       ask:
         output:
           hookSpecificOutput.permissionDecision:       { value: ask }
@@ -104,6 +111,7 @@ hooks:
         output:
           hookSpecificOutput.permissionDecision:       { value: deny }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
       # `renderDecision` receives a decision that has already been validated,
       # which applies the ACS specification's modification rules to the
       # original tool arguments and puts the result in `applied_input`. Naming
@@ -111,15 +119,14 @@ hooks:
       # modifications object -- a shape its `updatedInput` does not accept, so
       # the rewrite would be reported and never take effect.
       #
-      # A reason path was the one thing this entry was missing. A policy-ordered
-      # rewrite is the only decision that changes what runs without the transcript
-      # saying anything: the command silently differs from the one that was asked
-      # for, and every sibling entry above carries an explanation while this one
-      # did not.
+      # A policy-ordered rewrite changes what runs, so the model has to be told
+      # why. That reaches it through `additionalContext`: like any allow's, the
+      # `permissionDecisionReason` here reaches only Claude Code's debug log.
       modify:
         output:
           hookSpecificOutput.permissionDecision:       { value: allow }
           hookSpecificOutput.permissionDecisionReason: { from: reasoning, type: string }
+          hookSpecificOutput.additionalContext:        { from: reasoning, type: string }
           hookSpecificOutput.updatedInput:             { from: applied_input }
   # The result gate. `outputs.from` is the leaf that becomes the ACS payload's
   # outputs[0].value; `outputs.within` is the object a `modify` decision is

@@ -29,7 +29,7 @@ echo '{"session_id":"demo","hook_event_name":"PreToolUse","tool_name":"Bash","to
 ```
 
 ```json
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0.","additionalContext":"This command was blocked because it matches a destructive-shell-command pattern. Policy: destructive_shell_command_blocked, from AGT's stock bundle (agt_stock). Matched at offset 0."}}
 ```
 
 The first hook of a session sends `handshake/hello` and stores the Guardian's answer under `.acs/sessions/<session_id>.json`, so the next subprocess for that session finds it and skips the handshake.
@@ -53,6 +53,12 @@ Claude Code reads the exit code before it reads stdout, so the shim uses exactly
 | `2`, with stderr only | The shim cannot trust its own input or configuration: stdin is not JSON, the payload has no string `hook_event_name` or `session_id`, the session id is unsafe as a path segment, the hookmap fails to load, or the hookmap declares an output Claude Code does not accept |
 
 Exit `1` never appears. Claude Code reads it as "the hook did not fire" and proceeds ungoverned.
+
+## When another hook answers the same call
+
+Claude Code runs every matching hook in parallel. A project that already has its own `PreToolUse` hook on `Bash` runs it beside this shim. A deny from either one blocks the call. But when several hooks deny, the model reads the denial reason of only the hook that finishes last, whether it denied by JSON or by exit 2 (issue #109, measured on Claude Code 2.1.285 and 2.1.311). Claude Code's [hooks documentation](https://code.claude.com/docs/en/hooks) agrees: an allow's `permissionDecisionReason` goes only to the debug log, and Claude receives every hook's `additionalContext`.
+
+So the request gate also writes the Guardian's `reasoning` to `additionalContext` on `deny`, `defer` and `modify`. Claude Code keeps that field from every hook, and the model reads it as `PreToolUse:Bash hook additional context: …`, so the Guardian's reasoning arrives even when another hook's denial is the one in the tool result. When the shim is the only hook, a deny's reasoning arrives twice. An `allow` does not write it: under `on_decision_failure: proceed`, a fail-open proceed is an allow whose reasoning says the Guardian is unreachable, and the model must not read that before the step runs. A fail-open proceed is still recorded in the host's audit log. The result gate needs no such step: Claude Code passes every hook's `block` reason to the model.
 
 ## The result gate
 
