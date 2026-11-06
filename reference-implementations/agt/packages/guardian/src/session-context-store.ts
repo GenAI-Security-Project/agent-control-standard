@@ -73,6 +73,7 @@
  * keeps instead of rebuilding the history around each new entry, so a
  * session's hundredth step costs what its first one did.
  */
+import { SessionIdentityError } from "./session-identity.ts";
 import {
   GENESIS_HASH,
   emptySessionState,
@@ -98,6 +99,8 @@ export {
 
 /** What the Guardian's request path is told and asks on every step. */
 export interface SessionContextStore {
+  /** Synchronous check-and-bind before any session read, append or evaluation. */
+  bindIdentity(sessionId: string, identityDigest: string): void;
   context(sessionId: string): SessionContext;
   hasToolCallRequest(sessionId: string, requestId: string): boolean;
   hasRequestId(sessionId: string, requestId: string): boolean;
@@ -164,6 +167,7 @@ export function createMemorySessionContextStore(
   const now = options.now ?? (() => new Date());
   const appendLine = options.appendLine;
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const identities = new Map<string, string>();
   const onEvict = options.onEvict ?? warnEvictedSession;
   if (!Number.isInteger(maxSessions) || maxSessions < 1) {
     // Thrown rather than clamped, for the reason `ACS_ON_DECISION_FAILURE`
@@ -200,6 +204,7 @@ export function createMemorySessionContextStore(
       const oldest = sessions.keys().next();
       if (oldest.done === true) return;
       sessions.delete(oldest.value);
+      identities.delete(oldest.value);
       reportEviction(onEvict, oldest.value);
     }
   };
@@ -221,6 +226,24 @@ export function createMemorySessionContextStore(
   };
 
   return {
+    bindIdentity(sessionId, identityDigest) {
+      const existing = identities.get(sessionId);
+      if (existing !== undefined) {
+        if (existing !== identityDigest) {
+          throw new SessionIdentityError("session_identity_mismatch", "session identity does not match its established binding");
+        }
+        return;
+      }
+      // Do not adopt an existing chain whose original identity is unknown.
+      if (sessions.has(sessionId)) {
+        throw new SessionIdentityError("session_identity_unbound", "existing session state has no identity binding");
+      }
+      identities.set(sessionId, identityDigest);
+      // Count a handshake-only session against the same bounded lifecycle as
+      // sessions with steps. This prevents unauthenticated hello floods from
+      // growing the identity map independently of the session cap.
+      ensure(sessionId);
+    },
     context(sessionId) {
       // Copied on the way out, like the labels below, and for one reason
       // more: `append` pushes onto the stored array, so an uncopied

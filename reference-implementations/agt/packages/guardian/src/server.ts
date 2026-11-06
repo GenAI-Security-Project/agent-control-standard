@@ -64,6 +64,7 @@
  * `hostname` option (main.ts reads ACS_GUARDIAN_HOST for it).
  */
 import { appendFileSync, mkdirSync } from "node:fs";
+import { sessionIdentityDigest, SessionIdentityError } from "./session-identity.ts";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Annotator, PolicyBridge } from "agt-bridge";
@@ -209,6 +210,7 @@ export function toRepoRelativeMessage(error: unknown): string {
  * part of the reserved band, so every application-level failure stays inside
  * -32000..-32099.
  */
+const SESSION_REFUSED_CODE = -32000;
 const ENVELOPE_INVALID_CODE = -32010;
 /**
  * Exported, unlike its two neighbours, because the conformance harness posts
@@ -898,6 +900,27 @@ async function dispatch(
     return { response: errorResponse(rpcId, ENVELOPE_INVALID_CODE, error.message, { pointer: error.pointer }), rejection: "envelope_invalid" };
   }
   const envelope = validation.envelope;
+
+  // Bind before the first handshake or supported step, before reading labels,
+  // appending to the chain, or awaiting policy evaluation. Repeated handshakes
+  // check the binding; they cannot replace it. Unknown methods create no state.
+  if (envelope.method === HANDSHAKE_METHOD || isToolCallRequest(envelope) || isToolCallResult(envelope)) {
+    try {
+      sessionContextStore.bindIdentity(envelope.params.metadata.session_id, sessionIdentityDigest(envelope.params));
+    } catch (error) {
+      if (!(error instanceof SessionIdentityError)) throw error;
+      if (isStepMethod(raw)) {
+        const denial = asDecisionResponse(rpcId, denyOnInvalidEnvelope(raw, {
+          reasonCode: error.reasonCode, message: error.message,
+        }));
+        if (denial) return denial;
+      }
+      const code = error.reasonCode === "session_identity_mismatch"
+        ? SESSION_REFUSED_CODE
+        : ENVELOPE_INVALID_CODE;
+      return errorResponse(rpcId, code, error.message, { reason_code: error.reasonCode });
+    }
+  }
 
   if (envelope.method === HANDSHAKE_METHOD) {
     const env = onDecisionFailure === undefined ? undefined : { ACS_ON_DECISION_FAILURE: onDecisionFailure };
