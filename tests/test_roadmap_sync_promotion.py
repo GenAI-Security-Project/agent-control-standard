@@ -78,12 +78,15 @@ def test_integration_work_is_pending_from_its_oldest_commit(repo):
     assert promotion_pending(repo.runner()) == ("2026-09-28", 2)
 
 
-def test_squashed_sync_from_main_is_not_pending(repo):
-    repo.commit("docs.md", "fixed\n", "Fix a typo (#40)")
+def test_content_already_on_main_is_still_pending_until_its_commits_land(repo):
+    """A single pull request promotion copies content to main without the commit, and
+    delivery is counted by ancestry, so the full promotion is still owed."""
     repo.git("checkout", "-q", "integration")
-    repo.commit("docs.md", "fixed\n", "Sync integration from main (#41)")
+    repo.commit("docs.md", "fixed\n", "Fix a typo (#40)", when="2026-10-01T00:00:00Z")
+    repo.git("checkout", "-q", "main")
+    repo.commit("docs.md", "fixed\n", "Promote PR #40: Fix a typo")
     repo.publish()
-    assert promotion_pending(repo.runner()) is None
+    assert promotion_pending(repo.runner()) == ("2026-10-01", 1)
 
 
 def test_conflicting_integration_work_is_pending(repo):

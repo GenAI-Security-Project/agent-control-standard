@@ -1,0 +1,74 @@
+# Re-runs the base-branch guard on every open pull request into main whenever main or
+# integration moves.
+#
+# The guard compares a promotion with the live tips of main and integration, so its answer
+# goes stale when either one moves: a change reverted on integration while its promotion
+# waits would otherwise publish behind a green check. The guard's own triggers fire only on
+# events of the pull request itself, and main's required checks are not strict, so nothing
+# else re-asks the question. This workflow does, and it needs only to re-run a workflow,
+# which the organization's Actions policy allows.
+name: Re-run base guard
+
+on:
+  push:
+    branches: ["main", "integration"]
+
+permissions: {}
+
+concurrency:
+  group: rerun-base-guard
+  cancel-in-progress: true
+
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    # A guard run takes under a minute. Waiting on one must not hang the job.
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - name: Re-run the guard for each open pull request into main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pulls="$(gh pr list --repo "$REPO" --base main --state open --json number,headRefOid \
+            --jq '.[] | [.number, .headRefOid] | @tsv')"
+          if [ -z "$pulls" ]; then
+            echo "No open pull request into main."
+            exit 0
+          fi
+          # A pull_request_target run often lists no pull request, so match it by the head
+          # commit it judged and the repository that commit came from. Newest run first.
+          gh api --paginate "repos/${REPO}/actions/workflows/pr-base-guard.yml/runs?event=pull_request_target&per_page=100" \
+            --jq '.workflow_runs[]' | jq -s '{workflow_runs: .}' > runs.json
+          # GitHub refuses to re-run a run older than 30 days. Leave a day of margin.
+          cutoff="$(date -u -d '29 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          stuck=""
+          while IFS=$'\t' read -r number sha; do
+            [[ "$number" =~ ^[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
+            run="$(jq -c --arg sha "$sha" --arg repo "$REPO" \
+              'first(.workflow_runs[] | select(.head_sha == $sha and .head_repository.full_name == $repo)) // empty' runs.json)"
+            if [ -z "$run" ]; then
+              echo "::error::Pull request ${number}: no guard run exists for its head. Close and reopen it before merging, which runs the guard."
+              stuck="${stuck} ${number}"
+              continue
+            fi
+            run_id="$(jq -r '.id' <<< "$run")"
+            # A run in progress may have read main and integration before this push. Let it
+            # finish, then re-run it so the answer reflects the new tips.
+            if [ "$(jq -r '.status' <<< "$run")" != "completed" ]; then
+              gh run watch "$run_id" --repo "$REPO" > /dev/null || true
+            fi
+            if [[ "$(jq -r '.run_started_at // .created_at' <<< "$run")" < "$cutoff" ]] || ! gh run rerun "$run_id" --repo "$REPO"; then
+              echo "::error::Pull request ${number}: the guard could not be re-run. Close and reopen it before merging, which runs the guard again."
+              stuck="${stuck} ${number}"
+            fi
+          done <<< "$pulls"
+          # Fail where a lead will see it. A green job here would vouch for a stale check.
+          if [ -n "$stuck" ]; then
+            echo "The guard is stale on:${stuck}"
+            exit 1
+          fi
