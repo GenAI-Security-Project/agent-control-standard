@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAuditSink, type AuditEntry as AdapterAuditEntry } from "host-adapter";
+import { hashAuditEntry } from "../packages/host-adapter/src/audit-sink.ts";
 // Not a bare "inspector" specifier: that string is a Node/Bun built-in
 // module name (`node:inspector`), which core-module resolution picks over
 // any workspace package of the same name with no way for us to override it.
@@ -22,6 +23,12 @@ import { tailAuditLog, type AuditEntry as InspectorAuditEntry } from "../package
  *
  * This file is the only place in the tree that imports both sides.
  */
+const GENESIS_HASH = "0".repeat(64);
+
+function sealed<T>(entry: T): T & { hash: string } {
+  return { ...entry, hash: hashAuditEntry(entry as Parameters<typeof hashAuditEntry>[0]) };
+}
+
 const dirs: string[] = [];
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), "acs-audit-rt-"));
@@ -180,17 +187,20 @@ describe("the audit log write and the Inspector's read agree on every field", ()
 
       // toEqual, not toMatchObject: an extra field on either side is drift,
       // and drift is exactly what this test exists to catch.
-      expect(await firstEntry(path)).toEqual({
-        seq: 1,
-        recorded_at: "2026-08-10T12:00:00.000Z",
-        session_id: "sess-1",
-        method: "steps/toolCallRequest",
-        rpc_id: outcome === "proceeded" ? "req-1" : 7,
-        posture: outcome === "proceeded" ? "proceed" : "deny",
-        posture_source: "negotiated",
-        outcome,
-        failure: { kind: "timeout", message: "no response within 5000ms" },
-      });
+      expect(await firstEntry(path)).toEqual(
+        sealed({
+          seq: 1,
+          prev_hash: GENESIS_HASH,
+          recorded_at: "2026-08-10T12:00:00.000Z",
+          session_id: "sess-1",
+          method: "steps/toolCallRequest",
+          rpc_id: outcome === "proceeded" ? "req-1" : 7,
+          posture: outcome === "proceeded" ? "proceed" : "deny",
+          posture_source: "negotiated",
+          outcome,
+          failure: { kind: "timeout", message: "no response within 5000ms" },
+        }),
+      );
     });
   }
 
@@ -212,18 +222,21 @@ describe("the audit log write and the Inspector's read agree on every field", ()
       session_failure: { kind: "session_config_unstored", message: "EACCES: permission denied" },
     });
 
-    expect(await firstEntry(path)).toEqual({
-      seq: 1,
-      recorded_at: "2026-08-10T12:00:00.000Z",
-      session_id: "sess-1",
-      method: null,
-      rpc_id: null,
-      posture: "proceed",
-      posture_source: "default",
-      outcome: "proceeded",
-      failure: { kind: "host_configuration", message: "no entry for this hook" },
-      session_failure: { kind: "session_config_unstored", message: "EACCES: permission denied" },
-    });
+    expect(await firstEntry(path)).toEqual(
+      sealed({
+        seq: 1,
+        prev_hash: GENESIS_HASH,
+        recorded_at: "2026-08-10T12:00:00.000Z",
+        session_id: "sess-1",
+        method: null,
+        rpc_id: null,
+        posture: "proceed",
+        posture_source: "default",
+        outcome: "proceeded",
+        failure: { kind: "host_configuration", message: "no entry for this hook" },
+        session_failure: { kind: "session_config_unstored", message: "EACCES: permission denied" },
+      }),
+    );
   });
 
   it("survives a null rpc_id, which an unpaired failure produces", async () => {
@@ -255,15 +268,18 @@ describe("the audit log write and the Inspector's read agree on every field", ()
       ungoverned: { tool: "read", tools: ["bash"] },
     });
 
-    expect(await firstEntry(path)).toEqual({
-      seq: 1,
-      recorded_at: "2026-08-10T12:00:00.000Z",
-      session_id: "sess-1",
-      method: "steps/toolCallResult",
-      rpc_id: null,
-      outcome: "ungoverned",
-      ungoverned: { tool: "read", tools: ["bash"] },
-    });
+    expect(await firstEntry(path)).toEqual(
+      sealed({
+        seq: 1,
+        prev_hash: GENESIS_HASH,
+        recorded_at: "2026-08-10T12:00:00.000Z",
+        session_id: "sess-1",
+        method: "steps/toolCallResult",
+        rpc_id: null,
+        outcome: "ungoverned",
+        ungoverned: { tool: "read", tools: ["bash"] },
+      }),
+    );
     expect(rejected).toEqual([]);
   });
 });

@@ -24,6 +24,16 @@
         "guardian": "workspace:*",
       },
     },
+    "hosts/grok": {
+      "name": "grok-host",
+      "version": "0.1.0",
+      "dependencies": {
+        "host-adapter": "workspace:*",
+      },
+      "devDependencies": {
+        "guardian": "workspace:*",
+      },
+    },
     "hosts/opencode": {
       "name": "opencode-host",
       "version": "0.1.0",
@@ -214,6 +224,8 @@
     "fast-uri": ["fast-uri@3.1.5", "", {}, "sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw=="],
 
     "find-my-way-ts": ["find-my-way-ts@0.1.6", "", {}, "sha512-a85L9ZoXtNAey3Y6Z+eBWW658kO/MwR7zIafkIUPUMf3isZG0NCs2pjW2wtjxAKuJPxMAsHUIP4ZPGv0o5gyTA=="],
+
+    "grok-host": ["grok-host@workspace:hosts/grok"],
 
     "guardian": ["guardian@workspace:packages/guardian"],
 

@@ -213,6 +213,8 @@ describe('AcsPlugin\'s "tool.execute.before" hook -- the request gate, against a
       expect(entries).toEqual([
         {
           seq: 1,
+          prev_hash: "0".repeat(64),
+          hash: expect.any(String),
           recorded_at: expect.any(String),
           session_id: "ses-request-gate-unlisted",
           method: "steps/toolCallRequest",
