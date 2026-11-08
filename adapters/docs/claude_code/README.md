@@ -255,6 +255,9 @@ r = ping('http://127.0.0.1:8787/acs'); print(json.dumps(r, indent=2)[:200] if r 
 - `docs/claude_code/mapping.md`: Claude Code hook → ACS step method table, plus disposition translation.
 - `tests/integrations/claude_code/`: round-trip, schema and live integration tests.
 - `docs/claude_code/example_payloads.md`: masked real-world payload examples showing exactly what Claude Code emits.
+- `docs/claude_code/claude-code-dogfooding-2026-11-09.md`: dogfooding report for [#434](https://github.com/GenAI-Security-Project/agent-control-standard/issues/434), with its captures in the directory alongside it.
+- `scripts/dogfood-claude-code.py` and `scripts/stub-anthropic-endpoint.py`: the runner and scripted endpoint those runs used.
+- `scripts/repro-request-id-replay.py`: isolates what replay detection keys on, without a host in the loop.
 
 The adapter shares `acs.core` (signing, decision rules, error codes) and `acs.client` (handshake cache, session state, audit events, URL allowlist) with the Cursor and NAT adapters.
 
