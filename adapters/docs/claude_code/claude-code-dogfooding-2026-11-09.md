@@ -118,8 +118,9 @@ implementation matches it: `check_replay` keeps the set of seen `request_id`s pe
 repeated call. That is why his two variants and my five calls behave identically: replay protection
 counts envelopes, not actions.
 
-So this is a policy question, not a replay bug, and there is no specification disagreement to file.
-The observation belongs here, in the report.
+So the repeated call is a policy question, not a replay bug, and there is no `MUST`-level
+disagreement to file. The observation belongs here, in the report. The `nonce` half of §10.3 is a
+separate, `SHOULD`-level matter, recorded at the end of this section.
 
 ### Minimal reproduction
 
@@ -133,12 +134,26 @@ sessionStart                           result: allow
 same action, request_id #1             result: allow
 same action, request_id #2             result: allow
 same action, request_id #1 again       error: -32005
+same nonce, first send                 result: allow
+same nonce, second send                result: allow
 
 distinct request_ids, same action, both allowed: True
 repeated request_id refused with -32005:         True
+repeated nonce refused with -32005 (SHOULD):     False
 ```
 
-The same command exits 1 if either half stops holding, so it can run in CI unchanged.
+The same command exits 1 if either of the two `MUST` halves stops holding, so it can run in CI
+unchanged. The nonce line is printed and does not affect the exit status.
+
+### Observation: the nonce half of §10.3 is not implemented
+
+§10.3 also makes a duplicate `nonce` a SHOULD. The example Guardian keeps nonce state — `seen_nonces`,
+merged across Guardian instances and evicted on a window — but never reads it back to reject
+anything: two envelopes carrying the same nonce and different `request_id`s are both allowed, as the
+run above shows. The adapters emit no `nonce` at all; the field is OPTIONAL in v0.1, and
+`docs/claude_code/README.md` already records that. So no client in these runs is affected, and this is
+a gap against a SHOULD rather than a MUST. Recorded here as an observation; no issue is filed with this
+report.
 
 ## Reproduce the runs
 

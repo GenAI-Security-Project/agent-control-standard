@@ -73,19 +73,19 @@ def start_guardian() -> tuple[subprocess.Popen, int]:
     raise SystemExit("guardian did not answer within 20s")
 
 
-def envelope(session_id: str, request_id: str, method: str, payload: dict) -> dict:
-    return sign_for_test({
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": method,
-        "params": {
-            "acs_version": "0.1.0",
-            "request_id": request_id,
-            "timestamp": core.iso8601_now(),
-            "metadata": {"agent_id": "repro", "session_id": session_id, "platform": "repro"},
-            "payload": payload,
-        },
-    })
+def envelope(session_id: str, request_id: str, method: str, payload: dict,
+             nonce: str | None = None) -> dict:
+    params = {
+        "acs_version": "0.1.0",
+        "request_id": request_id,
+        "timestamp": core.iso8601_now(),
+        "metadata": {"agent_id": "repro", "session_id": session_id, "platform": "repro"},
+        "payload": payload,
+    }
+    if nonce is not None:
+        params["nonce"] = nonce
+    return sign_for_test({"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method,
+                          "params": params})
 
 
 def post(port: int, body: dict) -> dict:
@@ -126,6 +126,15 @@ def main() -> int:
 
         repeated = post(port, envelope(session_id, first_id, "steps/toolCallRequest", tool_payload))
         steps.append(("same action, request_id #1 again", outcome(repeated)))
+
+        # 10.3 makes a duplicate nonce a SHOULD, not a MUST. Send one twice and record what happens.
+        nonce = uuid.uuid4().hex
+        with_nonce_a = post(port, envelope(session_id, str(uuid.uuid4()), "steps/toolCallRequest",
+                                          tool_payload, nonce=nonce))
+        steps.append(("same nonce, first send", outcome(with_nonce_a)))
+        with_nonce_b = post(port, envelope(session_id, str(uuid.uuid4()), "steps/toolCallRequest",
+                                          tool_payload, nonce=nonce))
+        steps.append(("same nonce, second send", outcome(with_nonce_b)))
     finally:
         process.terminate()
 
@@ -134,9 +143,12 @@ def main() -> int:
 
     fresh_ids_allowed = steps[1][1] == ("result", "allow") and steps[2][1] == ("result", "allow")
     replay_refused = steps[3][1] == ("error", -32005)
+    duplicate_nonce_refused = steps[5][1] == ("error", -32005)
     print()
     print(f"distinct request_ids, same action, both allowed: {fresh_ids_allowed}")
     print(f"repeated request_id refused with -32005:         {replay_refused}")
+    print(f"repeated nonce refused with -32005 (SHOULD):     {duplicate_nonce_refused}")
+    # The nonce case is reported, not required: exit status follows the two MUSTs only.
     return 0 if (fresh_ids_allowed and replay_refused) else 1
 
 
