@@ -61,6 +61,18 @@ export type HookmapOutputs = {
    * to say where the copies are; nothing here could infer it.
    */
   mirrors?: string[];
+  /**
+   * Further paths inside `within` that hold text the model also reads, different
+   * text from the leaf's. A mirror holds a copy of the leaf. A companion does not.
+   *
+   * The policy evaluates the leaf alone, so a redaction leaves a companion as the
+   * host produced it. A withholding does not: when the output is withheld, every
+   * companion that holds text is replaced too, because withholding the leaf while a
+   * neighbour still carries what the tool printed withholds nothing. A companion the
+   * payload does not carry is skipped. One that holds something other than text
+   * throws, the way a leaf of another type does.
+   */
+  companions?: string[];
 };
 
 /** The members every hook entry carries, whichever payload it builds. */
@@ -408,6 +420,42 @@ function assertMirrorsWellFormed(hookmap: Hookmap, path: string): void {
   }
 }
 
+function assertCompanionsWellFormed(hookmap: Hookmap, path: string): void {
+  for (const [hookEventName, entry] of Object.entries(hookmap.hooks ?? {})) {
+    const outputs = isPlainObject(entry) ? (entry as { outputs?: unknown }).outputs : undefined;
+    if (!isPlainObject(outputs)) {
+      continue;
+    }
+    const rawCompanions = outputs.companions ?? undefined;
+    if (rawCompanions === undefined) {
+      continue;
+    }
+    if (
+      !Array.isArray(rawCompanions) ||
+      rawCompanions.some((companion) => typeof companion !== "string" || companion.length === 0)
+    ) {
+      throw new Error(
+        `loadHookmap: ${path}'s "hooks.${hookEventName}.outputs.companions" is ${JSON.stringify(rawCompanions)} -- ` +
+          `when present, "companions" must be a list of non-empty JSONPath-lite strings, each a further path ` +
+          `inside "outputs.within"`,
+      );
+    }
+    const within = typeof outputs.within === "string" ? outputs.within : "";
+    if (within.length === 0) {
+      continue;
+    }
+    for (const companion of rawCompanions as string[]) {
+      if (!companion.startsWith(`${within}.`) || companion.length <= within.length + 1) {
+        throw new Error(
+          `loadHookmap: ${path}'s "hooks.${hookEventName}.outputs.companions" entry ${JSON.stringify(companion)} is ` +
+            `not a field inside "outputs.within" ${JSON.stringify(within)} -- a companion is a further path into ` +
+            `the same object the leaf lives in, the same relation "outputs.from" has to it`,
+        );
+      }
+    }
+  }
+}
+
 /**
  * Rejects a hookmap entry whose `tools` is malformed, at load time -- the
  * same seam `assertMirrorsWellFormed` uses, and for the identical reason: a
@@ -650,7 +698,9 @@ function normalizeTools(hookmap: Hookmap): Hookmap {
  * `deny`, or if any declared entry is not a renderable rule -- see
  * assertRenderableDecisions. Also throws if any entry's `outputs.mirrors` is
  * malformed or names a field outside `outputs.within` -- see
- * assertMirrorsWellFormed. Also throws if any entry's `tools` is malformed --
+ * assertMirrorsWellFormed. Also throws if any entry's `outputs.companions` is
+ * malformed or names a field outside `outputs.within` -- see
+ * assertCompanionsWellFormed. Also throws if any entry's `tools` is malformed --
  * see assertToolsWellFormed. Also throws if any entry's `exit_status`
  * declares both `literal` and `from` -- see assertExitStatusNotBothForms.
  * Also throws if a request-gate entry (one declaring `arguments`) also
@@ -664,6 +714,7 @@ export function loadHookmap(path: string): Hookmap {
   const hookmap = Bun.YAML.parse(readFileSync(path, "utf8")) as Hookmap;
   assertRenderableDecisions(hookmap, path);
   assertMirrorsWellFormed(hookmap, path);
+  assertCompanionsWellFormed(hookmap, path);
   assertToolsWellFormed(hookmap, path);
   assertExitStatusNotBothForms(hookmap, path);
   assertRequestGateDeclaresNoOutputs(hookmap, path);
