@@ -18,7 +18,8 @@ function request(method, payload) {
     params: {
       acs_version: "0.1.0",
       request_id: id,
-      timestamp: "2026-09-07T16:00:37.962Z",
+      // §10.3: a timestamp outside the skew window is refused.
+      timestamp: new Date().toISOString(),
       metadata: { agent_id: "claude-code", session_id: sessionId },
       payload,
     },
@@ -78,8 +79,17 @@ for (const [name, input] of cases) {
       assert.ok(response.result.timeout_config.default_ms > 0);
       delete response.result.timeout_config.default_ms;
     }
-    assert.deepStrictEqual(responses[0], responses[1], `${name} differs beyond default_ms`);
-    console.log(`${name}: equal except deployment-specific default_ms`);
+    // Rust declares its §10 signature support and §10.3 skew window, which the
+    // TypeScript reference does not advertise yet. Unsigned, it supports none.
+    const rust = responses[0].result;
+    assert.deepStrictEqual(rust.signature_algorithms_supported, []);
+    assert.ok(Number.isSafeInteger(rust.skew_window_ms));
+    for (const response of responses) {
+      delete response.result.signature_algorithms_supported;
+      delete response.result.skew_window_ms;
+    }
+    assert.deepStrictEqual(responses[0], responses[1], `${name} differs beyond default_ms and the Rust-only signing fields`);
+    console.log(`${name}: equal except default_ms and the Rust-only signing fields`);
   } else {
     assert.deepStrictEqual(responses[0], responses[1], `${name} differs`);
     console.log(`${name}: equal`);

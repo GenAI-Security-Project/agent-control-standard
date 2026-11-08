@@ -1,5 +1,9 @@
-use acs_agt_guardian::{Guardian, GuardianConfig};
+use acs_agt_guardian::{Guardian, GuardianConfig, HmacKeyring};
 use serde_json::{json, Value};
+
+fn now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
 
 fn request(method: &str, payload: Value, request_id: &str) -> Value {
     json!({
@@ -9,7 +13,7 @@ fn request(method: &str, payload: Value, request_id: &str) -> Value {
         "params": {
             "acs_version": "0.1.0",
             "request_id": request_id,
-            "timestamp": "2026-09-07T16:00:37.962Z",
+            "timestamp": now(),
             "metadata": {
                 "agent_id": "claude-code",
                 "session_id": "6ccc72b8-a167-5573-b3ea-a310262ea93f"
@@ -355,6 +359,155 @@ async fn guardian_matches_the_two_tool_gates_and_refuses_invalid_steps() {
     let chain = std::fs::read_to_string(session_path).expect("session log");
     assert!(chain.contains("steps/toolCallRequest"));
     assert!(chain.contains("steps/toolCallResult"));
+
+    server.abort();
+    let _ = server.await;
+}
+
+const SESSION: &str = "6ccc72b8-a167-5573-b3ea-a310262ea93f";
+
+/// Two secrets at once, as during a rotation from "2026-10" to "2026-11".
+fn keyring() -> HmacKeyring {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let mut keyring = HmacKeyring::default();
+    keyring
+        .insert_base64("2026-10", &STANDARD.encode([0x11u8; 32]))
+        .unwrap();
+    keyring
+        .insert_base64("2026-11", &STANDARD.encode([0x22u8; 32]))
+        .unwrap();
+    keyring
+}
+
+#[tokio::test]
+async fn signed_requests_are_verified_answered_signed_and_not_replayed() {
+    let mut config = GuardianConfig::from_repo();
+    let logs = tempfile::tempdir().expect("temporary log directory");
+    config.envelope_log = Some(logs.path().join("envelopes.jsonl"));
+    config.session_log = Some(logs.path().join("session-context.jsonl"));
+    config.hmac_keys = keyring();
+    let guardian = Guardian::new(config).expect("pinned AGT manifest should load");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("loopback listener");
+    let address = listener.local_addr().expect("listener address");
+    let server = tokio::spawn(async move { axum::serve(listener, guardian.router()).await });
+    let url = format!("http://{address}/acs");
+    let client = reqwest::Client::new();
+    let send = |value: Value| {
+        let client = client.clone();
+        let url = url.clone();
+        async move {
+            client
+                .post(url)
+                .json(&value)
+                .send()
+                .await
+                .expect("HTTP request")
+                .json::<Value>()
+                .await
+                .expect("JSON response")
+        }
+    };
+    let keys = keyring();
+    let signed = |mut value: Value, key_id: &str| {
+        keys.sign_request(key_id, &mut value).expect("sign request");
+        value
+    };
+    let allowed_step = |request_id: &str| {
+        request(
+            "steps/toolCallRequest",
+            json!({
+                "tool": {"name": "Bash"},
+                "arguments": {"command": {"value": "ls -la"}},
+                "raw_command": "ls -la"
+            }),
+            request_id,
+        )
+    };
+
+    // The newer of the two configured secrets: a response names the request's key_id.
+    let hello = send(signed(
+        request(
+            "handshake/hello",
+            json!({}),
+            "0e5f5c39-8f39-4c46-9d2a-3c1f6f0a7b11",
+        ),
+        "2026-11",
+    ))
+    .await;
+    assert_eq!(
+        hello["result"]["signature_algorithms_supported"],
+        json!(["HMAC-SHA256"])
+    );
+    assert_eq!(hello["result"]["skew_window_ms"], 300_000);
+    assert_eq!(hello["result"]["signature"]["key_id"], "2026-11");
+    keys.verify_response(SESSION, &hello)
+        .expect("hello response signature");
+
+    let step = signed(
+        allowed_step("5a3c0d9e-3b8f-4d3e-9a43-7d5e2c1b0f21"),
+        "2026-10",
+    );
+    let allowed = send(step.clone()).await;
+    assert_eq!(allowed["result"]["decision"], "allow", "{allowed}");
+    assert_eq!(allowed["result"]["signature"]["key_id"], "2026-10");
+    keys.verify_response(SESSION, &allowed)
+        .expect("decision signature");
+
+    // The same signed request again is a replay, and its refusal is signed.
+    let replayed = send(step).await;
+    assert_eq!(replayed["error"]["code"], -32005, "{replayed}");
+    keys.verify_response(SESSION, &replayed)
+        .expect("replay refusal signature");
+
+    let mut stale = allowed_step("9d7b6a5c-4e3f-4a2b-8c1d-0e9f8a7b6c5d");
+    stale["params"]["timestamp"] = json!("2026-01-01T00:00:00.000Z");
+    let stale = send(signed(stale, "2026-10")).await;
+    assert_eq!(stale["error"]["code"], -32006, "{stale}");
+    assert_eq!(stale["error"]["data"]["skew_window_ms"], 300_000);
+
+    let mut tampered = signed(
+        allowed_step("1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b"),
+        "2026-10",
+    );
+    tampered["params"]["payload"]["raw_command"] = json!("rm -rf /");
+    let tampered = send(tampered).await;
+    assert_eq!(tampered["error"]["code"], -32004, "{tampered}");
+
+    let mut retired = keyring();
+    retired
+        .insert_base64(
+            "2026-09",
+            &base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0x33u8; 32]),
+        )
+        .unwrap();
+    let mut unknown = allowed_step("2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091");
+    retired.sign_request("2026-09", &mut unknown).unwrap();
+    let unknown = send(unknown).await;
+    assert_eq!(unknown["error"]["code"], -32004, "{unknown}");
+    assert_eq!(
+        unknown["error"]["data"]["reason"],
+        "signature key_id names no configured secret"
+    );
+    assert!(
+        unknown["error"].get("signature").is_none(),
+        "an unknown key_id is answered unsigned"
+    );
+
+    let unsigned = send(allowed_step("3c4d5e6f-7081-4293-8a4b-5c6d7e8f90a1")).await;
+    assert_eq!(unsigned["error"]["code"], -32004, "{unsigned}");
+    assert!(unsigned["error"].get("signature").is_none());
+
+    // system/ping is never signature-checked, so it is not SIGNATURE_INVALID.
+    let ping = send(request(
+        "system/ping",
+        json!({}),
+        "4d5e6f70-8192-43a4-9b5c-6d7e8f90a1b2",
+    ))
+    .await;
+    assert_ne!(ping["error"]["code"], -32004, "{ping}");
+    assert!(ping["error"].get("signature").is_none());
 
     server.abort();
     let _ = server.await;

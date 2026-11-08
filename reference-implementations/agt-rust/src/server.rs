@@ -1,5 +1,11 @@
 use crate::{
-    audit::AuditLog, mapping::Mapping, policy::Policy, schema::Schemas, session::SessionStore,
+    audit::AuditLog,
+    mapping::Mapping,
+    policy::Policy,
+    replay::{Freshness, ReplayStore},
+    schema::Schemas,
+    session::SessionStore,
+    signing::{sign_response, verify_request, HmacKeyring, Verification, HMAC_SHA256},
 };
 use axum::{
     body::{to_bytes, Body},
@@ -8,7 +14,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
 use std::{
     io::{self, Write},
@@ -18,6 +24,8 @@ use std::{
 };
 
 const MAX_REQUEST_BYTES: usize = 1_048_576;
+/// §10.3 RECOMMENDED default for `skew_window_ms`.
+pub const DEFAULT_SKEW_WINDOW_MS: u64 = 300_000;
 
 /// Paths and the negotiated failure posture for the Rust Guardian.
 pub struct GuardianConfig {
@@ -31,6 +39,11 @@ pub struct GuardianConfig {
     /// Maximum retained files per sink, including its active segment.
     pub log_max_files: usize,
     pub on_decision_failure: String,
+    /// §10 HMAC secrets by `key_id`. Empty means requests are neither verified
+    /// nor signed, which is not ACS-Core.
+    pub hmac_keys: HmacKeyring,
+    /// §10.3 maximum clock skew, in milliseconds, for a request `timestamp`.
+    pub skew_window_ms: u64,
 }
 
 impl GuardianConfig {
@@ -46,6 +59,8 @@ impl GuardianConfig {
             log_max_bytes: 8 * 1024 * 1024,
             log_max_files: 5,
             on_decision_failure: "proceed".into(),
+            hmac_keys: HmacKeyring::default(),
+            skew_window_ms: DEFAULT_SKEW_WINDOW_MS,
         }
     }
 }
@@ -59,6 +74,9 @@ pub struct Guardian {
     envelope_log: AuditLog,
     session_log: AuditLog,
     posture: String,
+    hmac_keys: HmacKeyring,
+    replay: ReplayStore,
+    skew_window_ms: u64,
 }
 
 impl Guardian {
@@ -66,6 +84,9 @@ impl Guardian {
     pub fn new(config: GuardianConfig) -> Result<Arc<Self>, String> {
         if config.on_decision_failure != "proceed" && config.on_decision_failure != "deny" {
             return Err("ACS_ON_DECISION_FAILURE must be proceed or deny".into());
+        }
+        if i64::try_from(config.skew_window_ms).is_err() {
+            return Err("the skew window is too large to represent".into());
         }
         let policy = Policy::load(&config.manifest)?;
         let mapping = Mapping::load(&config.mapping)?;
@@ -92,6 +113,9 @@ impl Guardian {
             envelope_log,
             session_log,
             posture: config.on_decision_failure,
+            hmac_keys: config.hmac_keys,
+            replay: ReplayStore::default(),
+            skew_window_ms: config.skew_window_ms,
         }))
     }
 
@@ -102,17 +126,31 @@ impl Guardian {
 
     fn respond(&self, raw: Value) -> Value {
         let method = raw.get("method").and_then(Value::as_str).map(str::to_owned);
+        // §10: verify every request except system/ping when keys are configured.
+        // Ping stays outside the authenticated channel, so a liveness probe
+        // works during a key-resolution failure and its answer is never signed.
+        let verification = (!self.hmac_keys.is_empty() && method.as_deref() != Some("system/ping"))
+            .then(|| verify_request(&self.hmac_keys, &raw));
+        // A response is signed with the key and key_id of the request it
+        // answers. A request that did not verify gets an unsigned answer.
+        let sign = |mut response: Value| {
+            if let Some(Verification::Verified(key)) = &verification {
+                sign_response(key, &mut response);
+            }
+            response
+        };
         if !self.session_log.available()
             || self
                 .write_envelope("request", &raw, method.as_deref())
                 .is_err()
         {
-            return audit_failure(&raw);
+            return sign(audit_failure(&raw));
         }
-        let mut response = self.dispatch(&raw);
+        let mut response = self.dispatch(&raw, verification.as_ref());
         if !self.session_log.available() {
             response = audit_failure(&raw);
         }
+        let response = sign(response);
         if let Err(error) = self.schemas.validate_response(&response) {
             let _ = writeln!(
                 io::stderr().lock(),
@@ -123,12 +161,12 @@ impl Guardian {
             .write_envelope("response", &response, method.as_deref())
             .is_err()
         {
-            return audit_failure(&raw);
+            return sign(audit_failure(&raw));
         }
         response
     }
 
-    fn dispatch(&self, raw: &Value) -> Value {
+    fn dispatch(&self, raw: &Value, verification: Option<&Verification>) -> Value {
         let id = rpc_id(raw);
         if let Err(message) = self.schemas.validate_request(raw) {
             if raw
@@ -143,14 +181,26 @@ impl Guardian {
             return failure(id, -32010, &message, None);
         }
         let method = raw["method"].as_str().unwrap_or_default();
+        if method != "system/ping" {
+            if let Some(rejection) = self.reject_unauthenticated_or_stale(raw, verification) {
+                return rejection;
+            }
+        }
         if method == "handshake/hello" {
+            let algorithms: &[&str] = if self.hmac_keys.is_empty() {
+                &[]
+            } else {
+                &[HMAC_SHA256]
+            };
             return success(
                 id,
                 json!({
                     "negotiated_version": "0.1.0",
                     "methods_evaluated": ["steps/toolCallRequest", "steps/toolCallResult"],
                     "selected_transport": "http",
+                    "signature_algorithms_supported": algorithms,
                     "timeout_config": {"default_ms": self.policy.decision_timeout_ms()},
+                    "skew_window_ms": self.skew_window_ms,
                     "on_decision_failure": self.posture,
                 }),
             );
@@ -173,6 +223,64 @@ impl Guardian {
                     failure(id, -32020, &format!("evaluation failed: {message}"), None)
                 }
             }
+        }
+    }
+
+    /// §10 signature and §10.3 freshness checks, in that order. A request is
+    /// remembered for replay protection only once its signature and timestamp
+    /// pass, so a rejected request can be corrected and resent.
+    fn reject_unauthenticated_or_stale(
+        &self,
+        raw: &Value,
+        verification: Option<&Verification>,
+    ) -> Option<Value> {
+        let id = rpc_id(raw);
+        if let Some(Verification::Rejected(reason)) = verification {
+            return Some(failure(
+                id,
+                -32004,
+                "SIGNATURE_INVALID",
+                Some(json!({"reason": reason})),
+            ));
+        }
+        let window = i64::try_from(self.skew_window_ms).unwrap_or(i64::MAX);
+        let now_ms = Utc::now().timestamp_millis();
+        let timestamp_ms = raw
+            .pointer("/params/timestamp")
+            .and_then(Value::as_str)
+            .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+            .map(|timestamp| timestamp.timestamp_millis());
+        let Some(timestamp_ms) =
+            timestamp_ms.filter(|timestamp| now_ms.abs_diff(*timestamp) <= window.unsigned_abs())
+        else {
+            return Some(failure(
+                id,
+                -32006,
+                "TIMESTAMP_OUT_OF_WINDOW",
+                Some(json!({"skew_window_ms": self.skew_window_ms})),
+            ));
+        };
+        let session_id = raw.pointer("/params/metadata/session_id")?.as_str()?;
+        let request_id = raw.pointer("/params/request_id")?.as_str()?;
+        // A future-dated request stays valid until its timestamp plus the
+        // window, so its id is kept for that long, not for a fixed time.
+        match self.replay.check_and_remember(
+            session_id,
+            request_id,
+            now_ms,
+            timestamp_ms.saturating_add(window),
+        ) {
+            Ok(Freshness::Fresh) => None,
+            Ok(Freshness::Replay) => Some(failure(id, -32005, "REPLAY_DETECTED", None)),
+            // A full store is not a replay: regenerating request_id, the -32005
+            // recovery, cannot succeed here.
+            Ok(Freshness::Capacity) => Some(failure(
+                id,
+                -32000,
+                "SESSION_REFUSED",
+                Some(json!({"reason": "replay_protection_capacity"})),
+            )),
+            Err(message) => Some(failure(id, -32020, &message, None)),
         }
     }
 
