@@ -17,9 +17,13 @@ The TypeScript Claude Code and OpenCode shims can point to this server through `
 ```sh
 cd reference-implementations/agt-rust
 export ACS_OPA_PATH=/absolute/path/to/opa
+export ACS_HMAC_KEY_ID=2026-11
+export ACS_HMAC_SECRET="$(openssl rand -base64 32)"
 cargo build --locked
 cargo run --locked
 ```
+
+The Guardian refuses to start without an HMAC key. For local testing only, `ACS_ALLOW_UNSIGNED=1` runs it unsigned; see [Signatures and replay protection](#signatures-and-replay-protection).
 
 The endpoint is `http://127.0.0.1:8787/acs` by default. To use the existing Claude Code shim, start the Guardian above, then run the hook from `reference-implementations/agt`:
 
@@ -29,9 +33,9 @@ echo '{"session_id":"demo","hook_event_name":"PreToolUse","tool_name":"Bash","to
 
 The shim's `ACS_GUARDIAN_URL` defaults to the same endpoint. The shim does not execute the command.
 
-The Guardian reads `ACS_GUARDIAN_HOST`, `ACS_GUARDIAN_PORT`, `ACS_MANIFEST_PATH`, `ACS_ON_DECISION_FAILURE`, `ACS_ENVELOPE_LOG`, `ACS_SESSION_CONTEXT_LOG`, and `ACS_OPA_PATH`, plus the signing settings described in [Signatures and replay protection](#signatures-and-replay-protection). It binds to loopback and declares `proceed` on decision delivery failure by default. `ACS_ON_DECISION_FAILURE=deny` changes the handshake's declared posture; other values stop startup. The local logs default to `agt/.acs/envelopes-rust.jsonl` and `agt/.acs/session-context-rust.jsonl`. They can contain raw arguments and should be protected as sensitive local data. They are ignored by Git.
+The Guardian reads `ACS_GUARDIAN_HOST`, `ACS_GUARDIAN_PORT`, `ACS_MANIFEST_PATH`, `ACS_ON_DECISION_FAILURE`, `ACS_ENVELOPE_LOG`, `ACS_SESSION_CONTEXT_LOG`, and `ACS_OPA_PATH`, plus the settings described in [Signatures and replay protection](#signatures-and-replay-protection) and [Request limits](#request-limits). It binds to loopback and declares `proceed` on decision delivery failure by default. `ACS_ON_DECISION_FAILURE=deny` changes the handshake's declared posture; other values stop startup. The local logs default to `agt/.acs/envelopes-rust.jsonl` and `agt/.acs/session-context-rust.jsonl`. They can contain raw arguments and should be protected as sensitive local data. They are ignored by Git.
 
-The AGT SDK reads `ACS_OPA_TIMEOUT_MS`, defaulting to 5000 milliseconds. The handshake advertises this evaluator timeout plus 1000 milliseconds for request handling and decision delivery. The default host deadline is therefore 6000 milliseconds; setting `ACS_OPA_TIMEOUT_MS=30000` advertises 31000 milliseconds. A timeout too large to represent with the delivery margin stops startup.
+The AGT SDK reads `ACS_OPA_TIMEOUT_MS`, defaulting to 5000 milliseconds. The handshake advertises this evaluator timeout, plus 1000 milliseconds for request handling and decision delivery, plus the queue timeout described in [Request limits](#request-limits). The default host deadline is therefore 7000 milliseconds; setting `ACS_OPA_TIMEOUT_MS=30000` advertises 32000 milliseconds. A deadline too large to represent stops startup.
 
 ## Signatures and replay protection
 
@@ -39,7 +43,7 @@ The Guardian implements the [§10](../../docs/spec/instrument/specification.md#1
 
 **Keys.** Each secret is named by a `key_id` the deployment chooses. There is no built-in default. A secret is standard base64 (RFC 4648 §4) with padding, and surrounding whitespace is ignored. It must decode to at least 32 bytes from a cryptographically secure random source, such as `openssl rand -base64 32`. Configure secrets in either or both of these ways:
 
-- `ACS_HMAC_KEYS_FILE` names a JSON file that maps each `key_id` to its secret, for example `{"2026-10": "...", "2026-11": "..."}`. Keep this file readable only by the Guardian.
+- `ACS_HMAC_KEYS_FILE` names a JSON file that maps each `key_id` to its secret, for example `{"2026-10": "...", "2026-11": "..."}`. On Unix it must be a regular file, not a symbolic link, with no group or other access (`chmod 600`); otherwise startup stops.
 - `ACS_HMAC_KEY_ID` and `ACS_HMAC_SECRET` give one secret. These are the names the TypeScript host adapter reads. Setting one without the other stops startup.
 
 A malformed, short or duplicated secret stops startup. Error messages name the `key_id` and never the secret. Neither the secret nor a derived key is written to the audit logs or to standard error.
@@ -54,9 +58,19 @@ A malformed, short or duplicated secret stops startup. Error messages name the `
 
 **Responses.** A response to a verified request carries `result.signature`, or `error.signature` for an error, under the `key_id` and session key of that request. That includes the denial that replaces a decision when an audit record cannot be kept. A response to a request that failed verification is unsigned, because no configured secret matches it. `system/ping` is never signed or checked, so liveness probes keep working during a key-resolution failure.
 
-**Freshness.** A request whose `timestamp` is more than the skew window from the Guardian's clock is refused with `TIMESTAMP_OUT_OF_WINDOW` (`-32006`). The window defaults to 300000 milliseconds, and `ACS_SKEW_WINDOW_MS` changes it. A repeated `request_id` within a session is refused with `REPLAY_DETECTED` (`-32005`). Each id is kept until its timestamp could no longer pass the window. The store holds at most 65536 ids across 4096 sessions. When it is full of ids that are still valid, a new request is refused with `SESSION_REFUSED` (`-32000`, `reason: replay_protection_capacity`) instead of evicting an id that could then be replayed. These checks apply with or without signing. The handshake declares `signature_algorithms_supported` and `skew_window_ms`.
+**Freshness.** A request whose `timestamp` is more than the skew window from the Guardian's clock is refused with `TIMESTAMP_OUT_OF_WINDOW` (`-32006`). The window defaults to 300000 milliseconds, and `ACS_SKEW_WINDOW_MS` changes it. A repeated `request_id` within a session is refused with `REPLAY_DETECTED` (`-32005`). Each id is kept until its timestamp could no longer pass the window. The store holds at most 65536 ids across 4096 sessions. One session may hold at most 4096 of them, so a single session cannot fill the store for the others. When the store or the session's share is full of ids that are still valid, a new request is refused with `SESSION_REFUSED` (`-32000`, `reason: replay_protection_capacity`) instead of evicting an id that could then be replayed. These checks apply with or without signing. The handshake declares `signature_algorithms_supported` and `skew_window_ms`.
 
-Without any secret, the Guardian prints a warning at startup and neither verifies nor signs. That mode exists for the side-by-side comparison with the TypeScript Guardian and is not ACS-Core.
+Without any secret, the Guardian refuses to start. `ACS_ALLOW_UNSIGNED=1` lets it run unsigned for local testing, with a warning at startup; it then neither verifies nor signs. CI uses that setting only for the side-by-side comparison with the TypeScript Guardian. It is not ACS-Core.
+
+**`system/ping`.** Ping always answers `allow` with `status`, `server_timestamp` and any `echo`. It is not signed, not checked for a signature, timestamp or replay, and not written to the session chain.
+
+**Independent checks.** Unit tests reproduce the §10 example key, the RFC 8785 canonicalization example, and a request signature computed with Python's standard library rather than this Guardian's signer. Requests are parsed with exact float rounding (`serde_json`'s `float_roundtrip`), so a number canonicalizes as the signer's JavaScript or Python runtime prints it.
+
+## Request limits
+
+A request waits for one of `ACS_MAX_CONCURRENT_REQUESTS` evaluation slots (default 64) for at most `ACS_QUEUE_TIMEOUT_MS` (default 1000). A step that gets no slot in time is answered with an honoured `deny` (`reason_codes: ["guardian_busy"]`), signed if its request verified, and both envelopes are recorded. Another method gets a `-32020` error instead. The handshake deadline includes the queue timeout. `ACS_MAX_REQUEST_BYTES` (default 1048576) caps the body; a larger body cannot be parsed into a step, so it gets a `-32010` error.
+
+Steps of one session run one at a time. A step reads the session's information-flow labels, evaluates policy, and writes the propagated labels back while holding that session's lock, so a concurrent step cannot overwrite them. Steps of different sessions run in parallel.
 
 Not covered yet: the optional `nonce` is not checked, replay state is in memory and lost on restart, hook traffic is not refused before a handshake, and only `HMAC-SHA256` is supported.
 
@@ -66,17 +80,26 @@ Both audit logs are required. A missing or unopenable sink stops startup. Each s
 has a maximum segment size of 8 MiB and retains at most five files, including the
 active file: 40 MiB per sink and 80 MiB in total. `ACS_LOG_MAX_BYTES` and
 `ACS_LOG_MAX_FILES` configure those positive limits. The newline counts towards
-the size limit, and a single record larger than a segment is refused.
+the size limit. An envelope whose record would not fit in one segment is
+recorded as a summary instead: its identifiers, size and SHA-256 digest. A request
+that fails signature verification is always recorded as such a summary, so
+unauthenticated traffic cannot spend the audit budget on request bodies. Each
+summary still costs a few hundred bytes, so sustained unauthenticated traffic can
+still fill the retained segments.
 
 A full active file moves to `.1`, with older segments moving to `.2` and so on.
 Rotation never deletes or overwrites an audit record. When the retained segments
-are full, decisions are denied until an operator archives the segments and
-restarts the Guardian. Rotation uses same-directory hard links to prevent
+are full, the record is refused without changing any file, and the step is denied.
+The sink resumes on its own once an operator moves the oldest segment out of the
+way: archive `<log>.N`, where N is the highest retained index, and the next record
+rotates normally. No restart is needed. Rotation uses same-directory hard links to prevent
 overwriting an existing destination; a filesystem that cannot make these links
 causes a denial rather than losing history.
 
 Each append is serialized, written, flushed and synchronized to the filesystem.
-A write, flush, sync or rotation failure latches the sink unavailable. A valid
+A write, flush, sync or rotation failure can leave a partial record or a partial
+rotation behind, so it latches the sink unavailable. A refusal that changed no file,
+for a full retention budget or an oversized record, does not. A valid
 step receives a final `deny`, including when logging the response to an otherwise
 allowed request fails. It does not receive an error that could trigger the host's
 fail-open posture. Subsequent steps remain denied; the Guardian does not silently
@@ -120,13 +143,28 @@ This is evidence for those nine cases, not general parity. The comparison does n
 | `steps/toolCallRequest` and `steps/toolCallResult` | Implemented with AGT Rust SDK and the shared manifest | Implemented with AGT Node binding |
 | Repository request and hook schema validation | Implemented | Implemented |
 | §10 `HMAC-SHA256` signatures and §10.3 replay protection | Implemented; the optional `nonce` is not checked | Not yet; PR #229 adds them |
+| `system/ping` | Implemented, outside signing, replay and the session chain | Not yet |
+| Concurrency limit, queue deadline and per-session serialization | Implemented | Not yet (#310 for the session race) |
 | Five AGT verdict mappings from `mapping.yaml` | Implemented; live tests cover allow, deny and transform | Implemented and covered by its mapping tests |
 | Egress annotator and IFC source labels | Implemented; the Rust SDK cannot distinguish absent `result_labels` from an explicit empty array | Implemented |
 | Session hash chain and envelope JSONL | Implemented locally; no `chain_hash` on the wire | Implemented locally; no `chain_hash` on the wire |
 | Claude Code and OpenCode host shims | Use the existing TypeScript shims | Implemented |
 | Host adapter, Inspector and conformance runner in Rust | Not yet ported | Implemented |
 
-Both Guardians have these limits of the TypeScript reference: two of nineteen hooks are evaluated; `system/ping` and wrapped MCP are absent; `ask` lacks `ask_details`; and the chain head is not published on responses. The TypeScript Guardian also has no replay checks or signatures, so its wire is unauthenticated. An `ask` response therefore fails the current response schema. This stage must not be used as a claim of full ACS-Core support.
+Both Guardians share these limits: two of nineteen hooks are evaluated, wrapped MCP is absent, and the chain head is not published on responses. `ask` lacks `ask_details`, so an `ask` response fails the current response schema. The TypeScript Guardian also has no signatures or replay checks yet. This stage must not be used as a claim of full ACS-Core support.
+
+### Shared Guardian expectations
+
+Status against each heading of [the shared expectations](../README.md#requirements-for-each-maintained-implementation):
+
+- **ACS API.** **Not met yet.** The ServerHello is built from configuration, not from the ClientHello, and hook traffic is not refused before a `handshake/hello` (#165, #312).
+- **Policy evaluation with the AGT runtime.** **Not met yet.** `Cargo.toml` pins `agent_control_specification` to `=0.3.1-beta.0`, the `sdk_version` in `../agt/agt.lock`, and `tests/agt_pin.rs` keeps the two equal. The published 0.3.1-beta.0 crates record AGT commit `9de8cc1` in `.cargo_vcs_info.json`, while `agt.lock` pins `agt_ref` `81955d4`. Those commits differ in `policy-engine/core` and the Rust SDK, so the expected commit-equality check would fail until AGT publishes crates built from `agt_ref` (#314). Both Guardians load the same local policy bundle from `../agt/policy`.
+- **Architectural boundaries.** Met: `Guardian::respond` processes a parsed request independently of the HTTP handler.
+- **Signing and verification.** Met for `HMAC-SHA256`. The optional §10.3 `nonce` is not checked.
+- **Configurable storage.** **Not met yet.** Session, replay and lock state are in memory, behind no storage-provider interface, and are lost on restart (#312; replay persistence #233).
+- **Concurrency and session consistency.** Met: replay checks are atomic, and steps of one session are serialized.
+- **Bounded processing.** Met for time (`ACS_OPA_TIMEOUT_MS`, `ACS_QUEUE_TIMEOUT_MS`) and concurrency (`ACS_MAX_CONCURRENT_REQUESTS`). **Not met yet** for body size: an oversized body cannot be parsed into a step, so it gets a `-32010` error instead of a `deny` (#312).
+- **Bounded logging.** Met for size caps, rotation and denial when a record cannot be kept. **Not met yet** for archiving: rotated segments are archived by an operator, not by the Guardian (#312). Audit sequence numbers restart at 1 after a restart; record time and segment order identify a record.
 
 The pinned Rust AGT SDK represents `result_labels` as `Vec<String>` and normalizes both a missing field and an explicit empty array to an empty vector. This Guardian retains the current session labels when the vector is empty. That preserves the prior restriction but can differ from the TypeScript Guardian when a policy explicitly clears labels. Full IFC parity needs an SDK API that preserves this distinction.
 

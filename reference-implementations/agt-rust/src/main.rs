@@ -30,10 +30,33 @@ async fn main() -> Result<(), String> {
     config.on_decision_failure =
         env::var("ACS_ON_DECISION_FAILURE").unwrap_or_else(|_| "proceed".into());
     config.hmac_keys = hmac_keys_from_env()?;
-    if config.hmac_keys.is_empty() {
+    config.allow_unsigned = env::var("ACS_ALLOW_UNSIGNED").is_ok_and(|value| value == "1");
+    if config.hmac_keys.is_empty() && config.allow_unsigned {
         eprintln!(
-            "warning: no HMAC key is configured, so requests are not verified and responses are not signed (not ACS-Core)"
+            "warning: ACS_ALLOW_UNSIGNED=1 and no HMAC key: requests are not verified and responses are not signed (not ACS-Core; local testing only)"
         );
+    }
+    let positive = |name: &str| -> Result<Option<u64>, String> {
+        env::var_os(name)
+            .map(|value| {
+                value
+                    .to_str()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| format!("{name} must be a positive integer"))
+            })
+            .transpose()
+    };
+    if let Some(value) = positive("ACS_MAX_CONCURRENT_REQUESTS")? {
+        config.max_concurrent_requests =
+            usize::try_from(value).map_err(|_| "ACS_MAX_CONCURRENT_REQUESTS is too large")?;
+    }
+    if let Some(value) = positive("ACS_MAX_REQUEST_BYTES")? {
+        config.max_request_bytes =
+            usize::try_from(value).map_err(|_| "ACS_MAX_REQUEST_BYTES is too large")?;
+    }
+    if let Some(value) = positive("ACS_QUEUE_TIMEOUT_MS")? {
+        config.queue_timeout_ms = value;
     }
     if let Some(value) = env::var_os("ACS_SKEW_WINDOW_MS") {
         config.skew_window_ms = value

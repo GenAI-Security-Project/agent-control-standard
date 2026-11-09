@@ -61,7 +61,11 @@ impl HmacKeyring {
 
     /// Add every secret in a JSON object file that maps each `key_id` to its
     /// base64 secret, for example `{"2026-10": "...", "2026-11": "..."}`.
+    ///
+    /// On Unix the file must be a regular file, not a symbolic link, and must
+    /// not be readable or writable by its group or by others (`chmod 600`).
     pub fn insert_file(&mut self, path: &Path) -> Result<(), String> {
+        check_key_file(path)?;
         let text = fs::read_to_string(path)
             .map_err(|error| format!("cannot read HMAC key file {}: {error}", path.display()))?;
         let Ok(Value::Object(entries)) = serde_json::from_str::<Value>(&text) else {
@@ -151,6 +155,31 @@ impl HmacKeyring {
     fn secret(&self, key_id: &str) -> Option<&[u8]> {
         self.secrets.get(key_id).map(Vec::as_slice)
     }
+}
+
+#[cfg(unix)]
+fn check_key_file(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot read HMAC key file {}: {error}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "HMAC key file {} must be a regular file, not a symbolic link",
+            path.display()
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(format!(
+            "HMAC key file {} must not be accessible to its group or others; run chmod 600",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_key_file(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// A per-session key and the `key_id` of the secret it came from.
@@ -401,6 +430,71 @@ mod tests {
             hex,
             "80f0dc8c611279bfc2af2d5f374c5cb685888192ce1af5c3e0673d8fa748e8a4"
         );
+    }
+
+    #[test]
+    fn matches_the_rfc_8785_example() {
+        // RFC 8785 §3.2.2 input and §3.2.3 output.
+        let value: Value = serde_json::from_str(
+            r#"{
+              "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],
+              "string": "\u20ac$\u000F\u000aA'\u0042\u0022\u005c\\\"\/",
+              "literals": [null, true, false]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            canonicalize(&value),
+            r#"{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27],"string":"€$\u000f\nA'B\"\\\\\"/"}"#
+        );
+    }
+
+    #[test]
+    fn verifies_a_signature_computed_by_an_independent_implementation() {
+        // Computed with Python's standard library (hmac, hashlib, json with
+        // sorted keys), not with this module's signer.
+        let mut request = json!({
+            "jsonrpc": "2.0", "method": "steps/toolCallRequest", "id": "1",
+            "params": {
+                "acs_version": "0.1.0",
+                "request_id": "7a0f4f3e-1d2c-4b5a-9e8f-0a1b2c3d4e5f",
+                "timestamp": "2026-11-08T10:00:00Z",
+                "metadata": {"agent_id": "a", "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"},
+                "payload": {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls -la"}}}
+            }
+        });
+        request["params"]["signature"] = json!({
+            "algorithm": HMAC_SHA256,
+            "value": "R8qpMgH51Jh1aoo76K+YPjQRMHJ+38Kso4w01F3bFh8=",
+            "key_id": "2026-10"
+        });
+        assert!(matches!(
+            verify_request(&keyring(), &request),
+            Verification::Verified(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_files_must_be_private_regular_files() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        fs::write(
+            &path,
+            format!("{{\"2026-10\": \"{}\"}}", STANDARD.encode([9u8; 32])),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let error = HmacKeyring::default().insert_file(&path).unwrap_err();
+        assert!(error.contains("chmod 600"), "{error}");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join("link.json");
+        symlink(&path, &link).unwrap();
+        assert!(HmacKeyring::default().insert_file(&link).is_err());
+        let mut keyring = HmacKeyring::default();
+        keyring.insert_file(&path).unwrap();
+        assert!(!keyring.is_empty());
     }
 
     #[test]

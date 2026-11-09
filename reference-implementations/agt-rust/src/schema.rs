@@ -7,6 +7,7 @@ pub(crate) struct Schemas {
     response: Validator,
     tool_request: Validator,
     tool_result: Validator,
+    ping: Validator,
 }
 
 impl Schemas {
@@ -36,6 +37,7 @@ impl Schemas {
             response: build("response-envelope.json")?,
             tool_request: build("hooks/tool-call-request.json")?,
             tool_result: build("hooks/tool-call-result.json")?,
+            ping: build("hooks/system-ping.json")?,
         })
     }
 
@@ -52,6 +54,9 @@ impl Schemas {
                 &value["params"]["payload"],
                 "/params/payload",
             ),
+            Some("system/ping") => {
+                check(&self.ping, &value["params"]["payload"], "/params/payload")
+            }
             _ => Ok(()),
         }
     }

@@ -4,7 +4,7 @@ use crate::{
     policy::Policy,
     replay::{Freshness, ReplayStore},
     schema::Schemas,
-    session::SessionStore,
+    session::{SessionLocks, SessionStore},
     signing::{sign_response, verify_request, HmacKeyring, Verification, HMAC_SHA256},
 };
 use axum::{
@@ -16,14 +16,16 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
     io::{self, Write},
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
+use tokio::sync::Semaphore;
 
-const MAX_REQUEST_BYTES: usize = 1_048_576;
 /// §10.3 RECOMMENDED default for `skew_window_ms`.
 pub const DEFAULT_SKEW_WINDOW_MS: u64 = 300_000;
 
@@ -44,6 +46,16 @@ pub struct GuardianConfig {
     pub hmac_keys: HmacKeyring,
     /// §10.3 maximum clock skew, in milliseconds, for a request `timestamp`.
     pub skew_window_ms: u64,
+    /// Accept unsigned traffic when no HMAC key is configured. For local tests
+    /// and the side-by-side comparison only: it is not ACS-Core.
+    pub allow_unsigned: bool,
+    /// Requests evaluated at once. Further requests wait in a queue.
+    pub max_concurrent_requests: usize,
+    /// How long a request may wait for an evaluation slot before it is
+    /// answered with a denial. Added to the handshake's advertised deadline.
+    pub queue_timeout_ms: u64,
+    /// Largest accepted request body, in bytes.
+    pub max_request_bytes: usize,
 }
 
 impl GuardianConfig {
@@ -61,6 +73,10 @@ impl GuardianConfig {
             on_decision_failure: "proceed".into(),
             hmac_keys: HmacKeyring::default(),
             skew_window_ms: DEFAULT_SKEW_WINDOW_MS,
+            allow_unsigned: false,
+            max_concurrent_requests: 64,
+            queue_timeout_ms: 1000,
+            max_request_bytes: 1_048_576,
         }
     }
 }
@@ -77,6 +93,11 @@ pub struct Guardian {
     hmac_keys: HmacKeyring,
     replay: ReplayStore,
     skew_window_ms: u64,
+    session_locks: SessionLocks,
+    slots: Arc<Semaphore>,
+    queue_timeout: Duration,
+    max_request_bytes: usize,
+    advertised_timeout_ms: u64,
 }
 
 impl Guardian {
@@ -88,7 +109,18 @@ impl Guardian {
         if i64::try_from(config.skew_window_ms).is_err() {
             return Err("the skew window is too large to represent".into());
         }
+        if config.hmac_keys.is_empty() && !config.allow_unsigned {
+            return Err("no HMAC key is configured: set ACS_HMAC_KEYS_FILE, or ACS_HMAC_KEY_ID with ACS_HMAC_SECRET (§10). ACS_ALLOW_UNSIGNED=1 runs unsigned for local testing only".into());
+        }
+        if config.max_concurrent_requests == 0 || config.max_request_bytes == 0 {
+            return Err("request concurrency and body limits must be positive".into());
+        }
         let policy = Policy::load(&config.manifest)?;
+        // The host waits for queueing as well as evaluation and delivery.
+        let advertised_timeout_ms = policy
+            .decision_timeout_ms()
+            .checked_add(config.queue_timeout_ms)
+            .ok_or("the queue timeout is too large to advertise a host deadline")?;
         let mapping = Mapping::load(&config.mapping)?;
         let schemas = Schemas::load(&config.schemas)?;
         let envelope_log = AuditLog::open(
@@ -116,6 +148,11 @@ impl Guardian {
             hmac_keys: config.hmac_keys,
             replay: ReplayStore::default(),
             skew_window_ms: config.skew_window_ms,
+            session_locks: SessionLocks::default(),
+            slots: Arc::new(Semaphore::new(config.max_concurrent_requests)),
+            queue_timeout: Duration::from_millis(config.queue_timeout_ms),
+            max_request_bytes: config.max_request_bytes,
+            advertised_timeout_ms,
         }))
     }
 
@@ -124,7 +161,10 @@ impl Guardian {
         Router::new().route("/acs", post(handle)).with_state(self)
     }
 
-    fn respond(&self, raw: Value) -> Value {
+    /// Answer one parsed request. `busy` means no evaluation slot freed up in
+    /// time: the request is still authenticated, recorded and answered, but
+    /// with a denial instead of an evaluation.
+    fn respond(&self, raw: Value, busy: bool) -> Value {
         let method = raw.get("method").and_then(Value::as_str).map(str::to_owned);
         // §10: verify every request except system/ping when keys are configured.
         // Ping stays outside the authenticated channel, so a liveness probe
@@ -139,14 +179,21 @@ impl Guardian {
             }
             response
         };
+        // A request that failed verification is recorded in a bounded summary,
+        // so unauthenticated traffic cannot spend the audit budget on bodies.
+        let unverified = matches!(verification, Some(Verification::Rejected(_)));
         if !self.session_log.available()
             || self
-                .write_envelope("request", &raw, method.as_deref())
+                .write_envelope("request", &raw, method.as_deref(), unverified)
                 .is_err()
         {
             return sign(audit_failure(&raw));
         }
-        let mut response = self.dispatch(&raw, verification.as_ref());
+        let mut response = if busy {
+            busy_response(&raw)
+        } else {
+            self.dispatch(&raw, verification.as_ref())
+        };
         if !self.session_log.available() {
             response = audit_failure(&raw);
         }
@@ -158,7 +205,7 @@ impl Guardian {
             );
         }
         if self
-            .write_envelope("response", &response, method.as_deref())
+            .write_envelope("response", &response, method.as_deref(), false)
             .is_err()
         {
             return sign(audit_failure(&raw));
@@ -181,10 +228,26 @@ impl Guardian {
             return failure(id, -32010, &message, None);
         }
         let method = raw["method"].as_str().unwrap_or_default();
-        if method != "system/ping" {
-            if let Some(rejection) = self.reject_unauthenticated_or_stale(raw, verification) {
-                return rejection;
+        if method == "system/ping" {
+            // §13: always allow, never sign, never touch the session chain or
+            // replay state, so liveness works whatever the key state.
+            let mut payload = json!({"status": "ok", "server_timestamp": timestamp()});
+            if let Some(echo) = raw.pointer("/params/payload/echo") {
+                payload["echo"] = echo.clone();
             }
+            return success(
+                id,
+                json!({
+                    "type": "final",
+                    "acs_version": raw["params"]["acs_version"],
+                    "request_id": raw["params"]["request_id"],
+                    "decision": "allow",
+                    "payload": payload,
+                }),
+            );
+        }
+        if let Some(rejection) = self.reject_unauthenticated_or_stale(raw, verification) {
+            return rejection;
         }
         if method == "handshake/hello" {
             let algorithms: &[&str] = if self.hmac_keys.is_empty() {
@@ -199,7 +262,7 @@ impl Guardian {
                     "methods_evaluated": ["steps/toolCallRequest", "steps/toolCallResult"],
                     "selected_transport": "http",
                     "signature_algorithms_supported": algorithms,
-                    "timeout_config": {"default_ms": self.policy.decision_timeout_ms()},
+                    "timeout_config": {"default_ms": self.advertised_timeout_ms},
                     "skew_window_ms": self.skew_window_ms,
                     "on_decision_failure": self.posture,
                 }),
@@ -284,7 +347,18 @@ impl Guardian {
         }
     }
 
+    /// Evaluate one step while holding its session's lock, so the labels it
+    /// reads and the labels it writes back are not interleaved with another
+    /// step of the same session.
     fn evaluate(&self, raw: &Value) -> Result<Value, String> {
+        let session_id = raw["params"]["metadata"]["session_id"]
+            .as_str()
+            .ok_or("missing session_id")?;
+        self.session_locks
+            .run(session_id, || self.evaluate_step(raw))?
+    }
+
+    fn evaluate_step(&self, raw: &Value) -> Result<Value, String> {
         let method = raw["method"].as_str().ok_or("missing method")?;
         let params = &raw["params"];
         let payload = &params["payload"];
@@ -359,22 +433,46 @@ impl Guardian {
         Ok(Value::Object(decision))
     }
 
+    /// Record an envelope. A `summary` record, or any record too large for a
+    /// log segment, keeps the identifiers and a SHA-256 digest of the envelope
+    /// instead of its body, so the exchange is still on record.
     fn write_envelope(
         &self,
         direction: &str,
         envelope: &Value,
         method: Option<&str>,
+        summary: bool,
     ) -> Result<(), String> {
+        let limit = self.envelope_log.max_record_bytes();
         self.envelope_log.append(|seq| {
-            serde_json::to_vec(&json!({
+            let mut record = json!({
                 "seq": seq,
                 "recorded_at": timestamp(),
                 "direction": direction,
                 "method": method,
                 "rpc_id": rpc_id(envelope),
                 "envelope": envelope,
-            }))
-            .map_err(|error| error.to_string())
+            });
+            let full = serde_json::to_vec(&record).map_err(|error| error.to_string())?;
+            let oversized = u64::try_from(full.len()).map_or(true, |bytes| bytes > limit);
+            if !summary && !oversized {
+                return Ok(full);
+            }
+            let body = serde_json::to_vec(envelope).map_err(|error| error.to_string())?;
+            let object = record.as_object_mut().ok_or("audit record is not an object")?;
+            object.remove("envelope");
+            object.insert(
+                "envelope_summary".into(),
+                json!({
+                    "reason": if summary { "request failed signature verification" } else { "envelope exceeds the audit segment limit" },
+                    "bytes": body.len(),
+                    "sha256": format!("{:x}", Sha256::digest(&body)),
+                    "request_id": envelope.pointer("/params/request_id"),
+                    "session_id": envelope.pointer("/params/metadata/session_id"),
+                    "key_id": envelope.pointer("/params/signature/key_id"),
+                }),
+            );
+            serde_json::to_vec(&record).map_err(|error| error.to_string())
         })
     }
 
@@ -396,16 +494,17 @@ pub async fn serve(config: GuardianConfig, addr: SocketAddr) -> Result<(), Strin
 }
 
 async fn handle(State(guardian): State<Arc<Guardian>>, request: Request<Body>) -> Json<Value> {
-    let body = match to_bytes(request.into_body(), MAX_REQUEST_BYTES).await {
+    let limit = guardian.max_request_bytes;
+    let body = match to_bytes(request.into_body(), limit).await {
         Ok(bytes) => bytes,
         Err(_) => {
             let response = failure(
                 Value::Null,
                 -32010,
-                "request body exceeds the 1048576-byte limit",
+                &format!("request body exceeds the {limit}-byte limit"),
                 None,
             );
-            let _ = guardian.write_envelope("response", &response, None);
+            let _ = guardian.write_envelope("response", &response, None, false);
             return Json(response);
         }
     };
@@ -413,14 +512,29 @@ async fn handle(State(guardian): State<Arc<Guardian>>, request: Request<Body>) -
         Ok(raw) => raw,
         Err(_) => {
             let response = failure(Value::Null, -32700, "Parse error", None);
-            let _ = guardian.write_envelope("response", &response, None);
+            let _ = guardian.write_envelope("response", &response, None, false);
             return Json(response);
         }
     };
     let id = rpc_id(&raw);
     let method = raw.get("method").and_then(Value::as_str).map(str::to_owned);
     let on_failure = Arc::clone(&guardian);
-    match tokio::task::spawn_blocking(move || guardian.respond(raw)).await {
+    // Wait at most queue_timeout for an evaluation slot. A request that does
+    // not get one is still recorded and answered, with a denial.
+    let slot = tokio::time::timeout(
+        guardian.queue_timeout,
+        Arc::clone(&guardian.slots).acquire_owned(),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let busy = slot.is_none();
+    match tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        guardian.respond(raw, busy)
+    })
+    .await
+    {
         Ok(response) => Json(response),
         Err(error) => {
             let response = failure(
@@ -429,7 +543,7 @@ async fn handle(State(guardian): State<Arc<Guardian>>, request: Request<Body>) -
                 &format!("guardian failed to handle the request: {error}"),
                 None,
             );
-            let _ = on_failure.write_envelope("response", &response, method.as_deref());
+            let _ = on_failure.write_envelope("response", &response, method.as_deref(), false);
             Json(response)
         }
     }
@@ -477,12 +591,33 @@ fn deny_on_failure(raw: &Value, message: &str, reason: &str) -> Option<Value> {
     }))
 }
 
-fn audit_failure(raw: &Value) -> Value {
-    let message = "the required audit record could not be kept";
-    match deny_on_failure(raw, message, "audit_unavailable") {
+/// Only a step is answered with a decision; any other method gets an error,
+/// so a client expecting a ServerHello never receives a step result.
+fn deny_step_or_fail(raw: &Value, message: &str, reason: &str) -> Value {
+    let is_step = raw
+        .get("method")
+        .and_then(Value::as_str)
+        .is_some_and(|method| method.starts_with("steps/"));
+    match deny_on_failure(raw, message, reason).filter(|_| is_step) {
         Some(decision) => success(rpc_id(raw), decision),
         None => failure(rpc_id(raw), -32020, message, None),
     }
+}
+
+fn audit_failure(raw: &Value) -> Value {
+    deny_step_or_fail(
+        raw,
+        "the required audit record could not be kept",
+        "audit_unavailable",
+    )
+}
+
+fn busy_response(raw: &Value) -> Value {
+    deny_step_or_fail(
+        raw,
+        "the Guardian has no free evaluation slot within its queue timeout",
+        "guardian_busy",
+    )
 }
 
 fn timestamp() -> String {

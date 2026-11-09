@@ -123,7 +123,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          cargo run --locked > "$RUNNER_TEMP/rust-guardian.log" 2>&1 &
+          # Both Guardians run unsigned for this comparison only.
+          ACS_ALLOW_UNSIGNED=1 cargo run --locked > "$RUNNER_TEMP/rust-guardian.log" 2>&1 &
           rust_pid=$!
 
           (

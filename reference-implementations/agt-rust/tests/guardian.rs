@@ -1,6 +1,14 @@
 use acs_agt_guardian::{Guardian, GuardianConfig, HmacKeyring};
 use serde_json::{json, Value};
 
+/// The repository configuration with the explicit unsigned opt-in that the
+/// tests not about signing use.
+fn unsigned_config() -> GuardianConfig {
+    let mut config = GuardianConfig::from_repo();
+    config.allow_unsigned = true;
+    config
+}
+
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -26,7 +34,7 @@ fn request(method: &str, payload: Value, request_id: &str) -> Value {
 #[test]
 fn refuses_to_start_when_an_audit_log_cannot_be_opened() {
     let directory = tempfile::tempdir().expect("temporary log directory");
-    let mut config = GuardianConfig::from_repo();
+    let mut config = unsigned_config();
     config.envelope_log = Some(directory.path().to_owned());
     let Err(error) = Guardian::new(config) else {
         panic!("an unavailable audit log must stop startup");
@@ -41,7 +49,7 @@ async fn audit_write_failure_returns_an_honored_deny_over_http() {
         let directory = tempfile::tempdir().expect("temporary log directory");
         let failing_log = directory.path().join("failing.jsonl");
         std::os::unix::fs::symlink("/dev/full", &failing_log).unwrap();
-        let mut config = GuardianConfig::from_repo();
+        let mut config = unsigned_config();
         config.envelope_log = Some(if fail_session_log {
             directory.path().join("envelopes.jsonl")
         } else {
@@ -104,7 +112,7 @@ async fn a_response_log_failure_replaces_an_allow_with_an_honored_deny() {
         "rpc_id": raw["id"], "envelope": raw,
     });
     for audit_full in [false, true] {
-        let mut config = GuardianConfig::from_repo();
+        let mut config = unsigned_config();
         let envelopes = directory
             .path()
             .join(format!("envelopes-{audit_full}.jsonl"));
@@ -158,7 +166,7 @@ async fn a_response_log_failure_replaces_an_allow_with_an_honored_deny() {
 
 #[tokio::test]
 async fn guardian_matches_the_two_tool_gates_and_refuses_invalid_steps() {
-    let mut config = GuardianConfig::from_repo();
+    let mut config = unsigned_config();
     let logs = tempfile::tempdir().expect("temporary log directory");
     let envelope_path = logs.path().join("envelopes.jsonl");
     let session_path = logs.path().join("session-context.jsonl");
@@ -204,7 +212,8 @@ async fn guardian_matches_the_two_tool_gates_and_refuses_invalid_steps() {
         .as_millis();
     assert_eq!(
         hello["result"]["timeout_config"]["default_ms"],
-        json!(opa_timeout + 1000)
+        json!(opa_timeout + 1000 + 1000),
+        "evaluator deadline, delivery margin and the default queue timeout"
     );
 
     let denied = send(request(
@@ -499,16 +508,192 @@ async fn signed_requests_are_verified_answered_signed_and_not_replayed() {
     assert_eq!(unsigned["error"]["code"], -32004, "{unsigned}");
     assert!(unsigned["error"].get("signature").is_none());
 
-    // system/ping is never signature-checked, so it is not SIGNATURE_INVALID.
+    // system/ping is never signature-checked or signed: an unsigned probe is allowed.
     let ping = send(request(
         "system/ping",
-        json!({}),
+        json!({"echo": "probe-1"}),
         "4d5e6f70-8192-43a4-9b5c-6d7e8f90a1b2",
     ))
     .await;
-    assert_ne!(ping["error"]["code"], -32004, "{ping}");
-    assert!(ping["error"].get("signature").is_none());
+    assert_eq!(ping["result"]["decision"], "allow", "{ping}");
+    assert_eq!(ping["result"]["payload"]["status"], "ok");
+    assert_eq!(ping["result"]["payload"]["echo"], "probe-1");
+    assert!(ping["result"].get("signature").is_none());
 
     server.abort();
     let _ = server.await;
+}
+
+async fn serve_guardian(config: GuardianConfig) -> (String, tokio::task::JoinHandle<()>) {
+    let guardian = Guardian::new(config).expect("pinned AGT manifest should load");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("loopback listener");
+    let address = listener.local_addr().expect("listener address");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, guardian.router()).await;
+    });
+    (format!("http://{address}/acs"), server)
+}
+
+async fn post(url: &str, value: &Value) -> Value {
+    reqwest::Client::new()
+        .post(url)
+        .json(value)
+        .send()
+        .await
+        .expect("HTTP request")
+        .json()
+        .await
+        .expect("JSON response")
+}
+
+fn ls_step(request_id: &str) -> Value {
+    request(
+        "steps/toolCallRequest",
+        json!({
+            "tool": {"name": "Bash"},
+            "arguments": {"command": {"value": "ls -la"}},
+            "raw_command": "ls -la"
+        }),
+        request_id,
+    )
+}
+
+#[test]
+fn refuses_to_start_unsigned_without_the_explicit_opt_in() {
+    let logs = tempfile::tempdir().unwrap();
+    let mut config = GuardianConfig::from_repo();
+    config.envelope_log = Some(logs.path().join("envelopes.jsonl"));
+    config.session_log = Some(logs.path().join("sessions.jsonl"));
+    let Err(error) = Guardian::new(config) else {
+        panic!("a Guardian with no HMAC key must not start by default");
+    };
+    assert!(error.contains("ACS_ALLOW_UNSIGNED=1"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_with_no_free_slot_gets_an_honored_denial() {
+    let logs = tempfile::tempdir().unwrap();
+    let mut config = unsigned_config();
+    config.envelope_log = Some(logs.path().join("envelopes.jsonl"));
+    config.session_log = Some(logs.path().join("sessions.jsonl"));
+    config.max_concurrent_requests = 1;
+    config.queue_timeout_ms = 1;
+    let (url, server) = serve_guardian(config).await;
+    let ids = [
+        "a1b2c3d4-0001-4000-8000-000000000001",
+        "a1b2c3d4-0002-4000-8000-000000000002",
+        "a1b2c3d4-0003-4000-8000-000000000003",
+        "a1b2c3d4-0004-4000-8000-000000000004",
+        "a1b2c3d4-0005-4000-8000-000000000005",
+        "a1b2c3d4-0006-4000-8000-000000000006",
+        "a1b2c3d4-0007-4000-8000-000000000007",
+        "a1b2c3d4-0008-4000-8000-000000000008",
+    ];
+    let responses = futures_join(ids.iter().map(|id| {
+        let url = url.clone();
+        let step = ls_step(id);
+        async move { post(&url, &step).await }
+    }))
+    .await;
+    let mut busy = 0;
+    for response in &responses {
+        let decision = response["result"]["decision"].as_str();
+        assert!(matches!(decision, Some("allow" | "deny")), "{response}");
+        if response["result"]["reason_codes"] == json!(["guardian_busy"]) {
+            busy += 1;
+        }
+    }
+    assert!(
+        busy > 0,
+        "one slot and a 1 ms queue must turn some requests away"
+    );
+    assert!(
+        busy < ids.len(),
+        "the request holding the slot is evaluated"
+    );
+    // The busy denials were recorded too.
+    let envelopes = std::fs::read_to_string(logs.path().join("envelopes.jsonl")).unwrap();
+    assert_eq!(envelopes.lines().count(), ids.len() * 2);
+    server.abort();
+}
+
+async fn futures_join<F: std::future::Future<Output = Value> + Send + 'static>(
+    futures: impl Iterator<Item = F>,
+) -> Vec<Value> {
+    let handles: Vec<_> = futures.map(tokio::spawn).collect();
+    let mut out = Vec::new();
+    for handle in handles {
+        out.push(handle.await.expect("request task"));
+    }
+    out
+}
+
+#[tokio::test]
+async fn an_oversized_envelope_is_recorded_as_a_digest_without_closing_the_log() {
+    let logs = tempfile::tempdir().unwrap();
+    let envelopes = logs.path().join("envelopes.jsonl");
+    let mut config = unsigned_config();
+    config.envelope_log = Some(envelopes.clone());
+    config.session_log = Some(logs.path().join("sessions.jsonl"));
+    config.log_max_bytes = 2_048;
+    config.log_max_files = 8;
+    let (url, server) = serve_guardian(config).await;
+    let mut large = ls_step("b1c2d3e4-0001-4000-8000-000000000001");
+    large["params"]["payload"]["raw_command"] = json!(format!("ls {}", "x".repeat(4_096)));
+    let first = post(&url, &large).await;
+    assert!(first["result"]["decision"].is_string(), "{first}");
+    assert_ne!(
+        first["result"]["reason_codes"],
+        json!(["audit_unavailable"])
+    );
+    let second = post(&url, &ls_step("b1c2d3e4-0002-4000-8000-000000000002")).await;
+    assert_eq!(second["result"]["decision"], "allow", "{second}");
+    let log = std::fs::read_to_string(&envelopes).unwrap();
+    assert!(log.contains("envelope exceeds the audit segment limit"));
+    assert!(log.contains("b1c2d3e4-0001-4000-8000-000000000001"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_rejected_signature_is_recorded_as_a_summary() {
+    let logs = tempfile::tempdir().unwrap();
+    let envelopes = logs.path().join("envelopes.jsonl");
+    let mut config = GuardianConfig::from_repo();
+    config.envelope_log = Some(envelopes.clone());
+    config.session_log = Some(logs.path().join("sessions.jsonl"));
+    config.hmac_keys = keyring();
+    let (url, server) = serve_guardian(config).await;
+    let mut unsigned = ls_step("c1d2e3f4-0001-4000-8000-000000000001");
+    unsigned["params"]["payload"]["raw_command"] = json!("ls secret-looking-body");
+    let rejected = post(&url, &unsigned).await;
+    assert_eq!(rejected["error"]["code"], -32004, "{rejected}");
+    let log = std::fs::read_to_string(&envelopes).unwrap();
+    assert!(log.contains("request failed signature verification"));
+    assert!(log.contains("c1d2e3f4-0001-4000-8000-000000000001"));
+    assert!(!log.contains("secret-looking-body"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn non_step_methods_are_never_answered_with_a_step_decision() {
+    let logs = tempfile::tempdir().unwrap();
+    let mut config = unsigned_config();
+    config.envelope_log = Some(logs.path().join("envelopes.jsonl"));
+    config.session_log = Some(logs.path().join("sessions.jsonl"));
+    // One segment that the first request record fills: every later record is refused.
+    config.log_max_bytes = 600;
+    config.log_max_files = 1;
+    let (url, server) = serve_guardian(config).await;
+    let mut hello = request(
+        "handshake/hello",
+        json!({}),
+        "d1e2f3a4-0001-4000-8000-000000000001",
+    );
+    hello["params"]["payload"] = json!({"padding": "p".repeat(300)});
+    let response = post(&url, &hello).await;
+    assert!(response.get("result").is_none(), "{response}");
+    assert_eq!(response["error"]["code"], -32020, "{response}");
+    server.abort();
 }

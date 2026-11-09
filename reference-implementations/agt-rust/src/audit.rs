@@ -82,8 +82,17 @@ impl AuditLog {
         })
     }
 
+    /// Whether the sink can still accept records. It is false only after a
+    /// failure that may have left a partial record or rotation behind.
     pub(crate) fn available(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.failure.is_none())
+    }
+
+    /// The largest record, without its line separator, that fits in one segment.
+    pub(crate) fn max_record_bytes(&self) -> u64 {
+        self.state
+            .lock()
+            .map_or(0, |state| state.max_bytes.saturating_sub(1))
     }
 
     pub(crate) fn append(
@@ -94,39 +103,70 @@ impl AuditLog {
         if let Some(failure) = &state.failure {
             return Err(failure.clone());
         }
-        let result = record(state.seq + 1).and_then(|record| state.append_record(record));
-        if let Err(error) = &result {
-            // Never resume after a partial write, failed flush or incomplete rotation.
-            state.failure = Some(error.clone());
+        let record = record(state.seq + 1)?;
+        match state.append_record(record) {
+            Ok(()) => Ok(()),
+            // Nothing was written, so the sink stays usable. A full retention
+            // budget clears as soon as an operator archives a segment.
+            Err(Failure::Refused(error)) => Err(error),
+            Err(Failure::Broken(error)) => {
+                // Never resume after a partial write, failed flush or incomplete rotation.
+                state.failure = Some(error.clone());
+                Err(error)
+            }
         }
-        result
     }
 }
 
+/// Why an append failed, and whether the sink may have been changed.
+enum Failure {
+    /// Refused before anything was written or moved.
+    Refused(String),
+    /// A write, flush, sync or rotation step failed part way.
+    Broken(String),
+}
+
+fn broken(error: impl ToString) -> Failure {
+    Failure::Broken(error.to_string())
+}
+
 impl LogState {
-    fn append_record(&mut self, mut record: Vec<u8>) -> Result<(), String> {
+    fn append_record(&mut self, mut record: Vec<u8>) -> Result<(), Failure> {
         record.push(b'\n');
-        let bytes = u64::try_from(record.len()).map_err(|error| error.to_string())?;
+        let bytes = u64::try_from(record.len()).map_err(broken)?;
         if bytes > self.max_bytes {
-            return Err("audit record exceeds the log segment limit".into());
+            return Err(Failure::Refused(
+                "audit record exceeds the log segment limit".into(),
+            ));
         }
         if self.bytes > self.max_bytes - bytes {
-            self.rotate().map_err(|error| error.to_string())?;
+            self.rotate()?;
         }
-        let file = self.file.as_mut().ok_or("audit log is unavailable")?;
-        write_record(file, &record).map_err(|error| error.to_string())?;
-        file.sync_data().map_err(|error| error.to_string())?;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| broken("audit log is unavailable"))?;
+        write_record(file, &record).map_err(broken)?;
+        file.sync_data().map_err(broken)?;
         self.bytes += bytes;
         self.seq += 1;
         Ok(())
     }
 
-    fn rotate(&mut self) -> io::Result<()> {
-        if self.max_files == 1 || segment(&self.path, self.max_files - 1).try_exists()? {
-            return Err(io::Error::other(
-                "audit retention is full; archive retained segments first",
+    fn rotate(&mut self) -> Result<(), Failure> {
+        if self.max_files == 1
+            || segment(&self.path, self.max_files - 1)
+                .try_exists()
+                .map_err(broken)?
+        {
+            return Err(Failure::Refused(
+                "audit retention is full; archive retained segments first".into(),
             ));
         }
+        self.move_segments().map_err(broken)
+    }
+
+    fn move_segments(&mut self) -> io::Result<()> {
         let file = self
             .file
             .take()
@@ -270,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn rotates_without_losing_records_then_refuses_to_overwrite_retained_history() {
+    fn rotates_without_losing_records_and_resumes_once_a_segment_is_archived() {
         let dir = Directory::new();
         let log = AuditLog::open(dir.path(), 4, 3).unwrap();
         for record in [b"one", b"two", b"tri"] {
@@ -279,10 +319,19 @@ mod tests {
         assert_eq!(fs::read(segment(&dir.path(), 2)).unwrap(), b"one\n");
         assert_eq!(fs::read(segment(&dir.path(), 1)).unwrap(), b"two\n");
         assert_eq!(fs::read(dir.path()).unwrap(), b"tri\n");
+        // Full retention refuses the record without touching retained history.
         assert!(log.append(|_| Ok(b"end".to_vec())).is_err());
-        assert!(!log.available());
+        assert!(log.available());
         assert_eq!(fs::read(segment(&dir.path(), 2)).unwrap(), b"one\n");
         assert_eq!(fs::read(dir.path()).unwrap(), b"tri\n");
+        // An operator archives the oldest segment; the sink resumes without a restart.
+        let archived = dir.0.join("archived.jsonl");
+        fs::rename(segment(&dir.path(), 2), &archived).unwrap();
+        log.append(|_| Ok(b"end".to_vec())).unwrap();
+        assert_eq!(fs::read(&archived).unwrap(), b"one\n");
+        assert_eq!(fs::read(segment(&dir.path(), 2)).unwrap(), b"two\n");
+        assert_eq!(fs::read(segment(&dir.path(), 1)).unwrap(), b"tri\n");
+        assert_eq!(fs::read(dir.path()).unwrap(), b"end\n");
         drop(log);
     }
 
@@ -306,7 +355,11 @@ mod tests {
         let log = AuditLog::open(dir.path(), 4, 2).unwrap();
         assert!(log.append(|_| Ok(b"large".to_vec())).is_err());
         assert!(fs::read(dir.path()).unwrap().is_empty());
-        assert!(!log.available());
+        // Nothing was written, so the oversized record does not close the sink.
+        assert!(log.available());
+        assert_eq!(log.max_record_bytes(), 3);
+        log.append(|_| Ok(b"ok".to_vec())).unwrap();
+        assert_eq!(fs::read(dir.path()).unwrap(), b"ok\n");
         drop(log);
     }
 

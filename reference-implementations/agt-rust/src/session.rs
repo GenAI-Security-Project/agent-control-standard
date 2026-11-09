@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     io::{self, Write},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 #[derive(Clone)]
@@ -115,9 +115,42 @@ impl SessionStore {
     }
 }
 
+/// One lock per active session, so the steps of a session run one at a time.
+///
+/// A step reads the session's labels, evaluates policy, then replaces the
+/// labels. Without this lock two concurrent steps could both read the old
+/// labels, and the second write would drop the first step's propagated taint.
+/// Steps of different sessions still run in parallel. An entry is removed when
+/// its last holder finishes, so the map holds only sessions with a step in flight.
+#[derive(Default)]
+pub(crate) struct SessionLocks(Mutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl SessionLocks {
+    pub(crate) fn run<T>(&self, session_id: &str, step: impl FnOnce() -> T) -> Result<T, String> {
+        let lock = {
+            let mut locks = self.0.lock().map_err(|error| error.to_string())?;
+            Arc::clone(locks.entry(session_id.to_owned()).or_default())
+        };
+        let result = {
+            let _turn = lock.lock().map_err(|error| error.to_string())?;
+            step()
+        };
+        let mut locks = self.0.lock().map_err(|error| error.to_string())?;
+        // Two references remain when no other step holds or awaits this lock:
+        // the map's and this call's. Others clone it only under the map lock.
+        if locks
+            .get(session_id)
+            .is_some_and(|entry| Arc::strong_count(entry) == 2)
+        {
+            locks.remove(session_id);
+        }
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SessionStore, MAX_SESSIONS};
+    use super::{SessionLocks, SessionStore, MAX_SESSIONS};
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
 
@@ -207,5 +240,29 @@ mod tests {
             assert_eq!(entry.hash, format!("{:x}", Sha256::digest(canonical)));
             previous.clone_from(&entry.hash);
         }
+    }
+
+    #[test]
+    fn steps_of_one_session_never_interleave_and_the_lock_is_released() {
+        let locks = SessionLocks::default();
+        let labels = std::sync::Mutex::new(Vec::<usize>::new());
+        std::thread::scope(|scope| {
+            for index in 0..8 {
+                let (locks, labels) = (&locks, &labels);
+                scope.spawn(move || {
+                    locks
+                        .run("session", || {
+                            // Read, evaluate, then replace: the lost-update shape.
+                            let mut copy = labels.lock().unwrap().clone();
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                            copy.push(index);
+                            *labels.lock().unwrap() = copy;
+                        })
+                        .unwrap();
+                });
+            }
+        });
+        assert_eq!(labels.lock().unwrap().len(), 8, "no update was lost");
+        assert!(locks.0.lock().unwrap().is_empty());
     }
 }
