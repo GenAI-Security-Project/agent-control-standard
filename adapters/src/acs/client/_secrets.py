@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 
 from acs.client._audit import audit_event
 
@@ -25,6 +26,11 @@ class SigningMaterialMissing(RuntimeError):
 # §10: the secret MUST be at least 32 bytes from a cryptographically secure random source.
 MIN_SECRET_BYTES = 32
 
+# Windows carries no owner/group/other bits: stat() reports 0o666 for every ordinary file, so the
+# 0600 rule below cannot be evaluated there. The equivalent control is the file's NTFS ACL.
+_IS_WINDOWS = os.name == "nt"
+_ALLOW_UNCHECKED_ENV = "ACS_ALLOW_UNCHECKED_KEY_PERMS"
+
 
 def _check_secret_file_perms(path: str) -> None:
     # A symlink is refused: its target can change behind the visible path.
@@ -33,7 +39,23 @@ def _check_secret_file_perms(path: str) -> None:
             f"ACS_HMAC_SECRET_FILE {path!r} is a symlink; refusing to follow")
     st = os.stat(path)
     mode = stat.S_IMODE(st.st_mode)
-    if mode & 0o077:
+    if _IS_WINDOWS:
+        # Refuse by default: an unchecked secret is an unknown quantity, not a permitted one.
+        # Starting anyway takes an explicit opt-in and says so on stderr, which is where the
+        # Guardian's operator looks.
+        if os.environ.get(_ALLOW_UNCHECKED_ENV) != "1":
+            raise SecretFilePermissionsError(
+                f"ACS_HMAC_SECRET_FILE {path!r}: Windows has no owner/group/other mode bits "
+                f"(stat reports {oct(mode)} for every file), so the 0600 check cannot run. "
+                f"Restrict the file first:  icacls \"{path}\" /inheritance:r "
+                f"/grant:r \"%USERNAME%:R\"  then set {_ALLOW_UNCHECKED_ENV}=1 to confirm that "
+                f"this check is skipped on Windows.")
+        print(
+            f"[acs] WARNING: {_ALLOW_UNCHECKED_ENV}=1 — {path} was not checked for group/other "
+            f"access; verify its ACL yourself",
+            file=sys.stderr,
+        )
+    elif mode & 0o077:
         raise SecretFilePermissionsError(
             f"ACS_HMAC_SECRET_FILE {path!r} mode {oct(mode)} is too permissive; "
             f"must be 0600 or 0400 (no group/other access). "

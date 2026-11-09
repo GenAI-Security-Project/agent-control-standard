@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import errno
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 import hashlib
 import http.server
 import json
@@ -15,6 +19,15 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+
+def _flock(fd: int, how: str) -> None:
+    """flock(2) on POSIX, msvcrt byte-range locks on Windows (the idiom client/_store.py uses)."""
+    if fcntl is not None:
+        fcntl.flock(fd, {"sh": fcntl.LOCK_SH, "ex": fcntl.LOCK_EX, "un": fcntl.LOCK_UN}[how])
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    msvcrt.locking(fd, {"sh": msvcrt.LK_RLCK, "ex": msvcrt.LK_LOCK, "un": msvcrt.LK_UNLCK}[how], 1)
+
 
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
@@ -129,14 +142,14 @@ class SessionState:
             # Shared flock: never read a file mid-write by another instance.
             with open(path) as f:
                 try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    _flock(f.fileno(), "sh")
                 except OSError:
                     pass
                 try:
                     data = json.load(f)
                 finally:
                     try:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        _flock(f.fileno(), "un")
                     except OSError:
                         pass
             self.previous_hash = data.get("previous_hash")
@@ -162,7 +175,7 @@ class SessionState:
             lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
             try:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                    _flock(lock_fd, "ex")
                 except OSError as e:
                     if e.errno != errno.ENOLCK:
                         raise
@@ -215,7 +228,7 @@ class SessionState:
                 os.replace(tmp, path)
             finally:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    _flock(lock_fd, "un")
                 except OSError:
                     pass
                 os.close(lock_fd)
