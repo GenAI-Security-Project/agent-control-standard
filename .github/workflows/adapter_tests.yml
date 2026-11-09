@@ -1,0 +1,124 @@
+name: adapter-tests
+
+# Runs the adapter and conformance suites, and checks the built package,
+# on every push or PR that touches adapter or spec source.
+
+on:
+  push:
+    paths:
+      - 'adapters/**'
+      - 'specification/**'
+      - 'docs/spec/**'
+      - '.github/workflows/adapter_tests.yml'
+  pull_request:
+    paths:
+      - 'adapters/**'
+      - 'specification/**'
+      - 'docs/spec/**'
+      - '.github/workflows/adapter_tests.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Explicit bash turns on pipefail, so a failing command in a pipeline fails the step.
+    shell: bash
+
+jobs:
+  dco:
+    # Every commit needs a Signed-off-by trailer (the DCO in CONTRIBUTING.md).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check Signed-off-by on every PR commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          while read -r sha; do
+            if ! git log -1 --format=%B "$sha" | grep -qi '^Signed-off-by: .*<.*@.*>'; then
+              echo "::error::commit $sha has no Signed-off-by trailer (CONTRIBUTING.md DCO)"
+              missing=1
+            fi
+          done < <(git rev-list "$BASE_SHA..$HEAD_SHA" --no-merges)
+          exit $missing
+
+  tests:
+    # Every suite, with the NAT extra installed so NAT tests run. run_conformance.py
+    # reports passed, skipped and failed separately and fails on any skip outside
+    # its allowlist (only the manual Cursor procedure).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: adapters
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Install the adapters, the NAT extra and the test group from the lockfile
+        run: uv sync --locked --python 3.12 --extra nat --group test
+      - name: Run every suite
+        run: uv run python run_conformance.py claude cursor nat
+
+  tests-without-nat:
+    # The documented setup for Claude Code and Cursor users, who never install NAT.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: adapters
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Install the adapters and the test group, without the NAT extra
+        run: uv sync --locked --python 3.12 --group test
+      - name: Run the shared and Claude Code and Cursor suites
+        run: uv run python run_conformance.py claude cursor
+      - name: Check that imports flow integrations, client, core
+        run: uv run lint-imports
+
+  package:
+    # Builds the sdist and a wheel from it, then installs the wheel outside the
+    # repository and checks the console scripts, entry points, bundled schemas
+    # and NAT discovery that users depend on.
+    # Runs on the oldest supported Python as well as the one the tests use.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    env:
+      PYTHON: ${{ matrix.python }}
+    defaults:
+      run:
+        working-directory: adapters
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Build the sdist and a wheel from it
+        run: uv build --python "$PYTHON" -o dist
+      - name: Install the wheel outside the repository and check it
+        run: uv run --no-project --python "$PYTHON" python scripts/check_wheel.py dist/acs_adapters-*-py3-none-any.whl

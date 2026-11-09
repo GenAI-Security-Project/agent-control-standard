@@ -1,0 +1,123 @@
+{
+  "_comment": [
+    "Drop into ~/.claude/settings.json (or merge with your existing config).",
+    "Prefer generating this with acs-claude-code-wire, which validates hook coverage and",
+    "warns when a subset of the ACS-Core minimum is wired. This file is the wire tool's",
+    "output for the placeholder arguments below, as",
+    "tests/integrations/claude_code/test_example_config.py asserts. Every setting rides",
+    "inline in the command string, the only channel Claude Code passes to a command hook.",
+    "",
+    "Replace ACS_GUARDIAN_URL with your deployment's endpoint and the",
+    "/path/to/ placeholders with real absolute paths.",
+    "",
+    "ACS_HMAC_SECRET_FILE: REQUIRED for ACS-Core baseline integrity (\u00a710), at least 32 bytes.",
+    "ACS_HMAC_KEY_ID: REQUIRED with the secret. The label that names it; the Guardian holds the same one.",
+    "Without a secret and its label every hook refuses its session and",
+    "denies every step. Generate one:",
+    "  mkdir -p ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key",
+    "and give the SAME file to the Guardian.",
+    "",
+    "ACS_AUDIT_FILE: where \u00a76.4 audit events land durably. Hook-process",
+    "stderr is collected by nothing; this file is the durable record of every",
+    "decision failure.",
+    "",
+    "ACS_DEFAULT_DENY=1 and onFailure block are set on the GATE hooks (PreToolUse,",
+    "UserPromptSubmit), the ones whose verdict blocks an action. The other hooks",
+    "fail closed too unless their environment sets ACS_DEFAULT_DENY=0, and a",
+    "session whose handshake gets no answer refuses its steps. Incident kill",
+    "switch: set ACS_DISABLED=1 to bypass all hooks immediately."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_DEFAULT_DENY=1 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/path/to/.acs/audit.log /path/to/acs-claude-code-hook # acs-adapter-wired"
+          }
+        ]
+      }
+    ]
+  }
+}
