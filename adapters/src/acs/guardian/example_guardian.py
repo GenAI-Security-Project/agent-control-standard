@@ -308,6 +308,28 @@ def check_replay(session_id: str, request_id: str) -> None:
         st.persist()
 
 
+def check_nonce(session_id: str, nonce: str) -> None:
+    """§10.3: reject a duplicate `nonce` in a sliding window (a SHOULD, not a MUST).
+
+    The window is twice the skew window, the same span the persisted state is evicted over, so an
+    entry this check relies on cannot be dropped between the read and the write. Deployments that
+    configure a different window change SKEW_WINDOW_MS; there is no second knob.
+    """
+    if not nonce:
+        return
+    st = STATE.get(session_id)
+    with st.lock:
+        # Re-read, so this sees what other Guardian instances accepted.
+        st._load()
+        cutoff = time.time() - 2 * (SKEW_WINDOW_MS / 1000.0)
+        for seen in [k for k, ts in st.seen_nonces.items() if ts < cutoff]:
+            del st.seen_nonces[seen]
+        if nonce in st.seen_nonces:
+            raise GuardianError(-32005, f"REPLAY_DETECTED: nonce {nonce[:8]}... already seen in session")
+        st.seen_nonces[nonce] = time.time()
+        st.persist()
+
+
 def check_skew(timestamp: str) -> None:
     if not timestamp:
         return
@@ -510,6 +532,7 @@ def handle_request(request: dict) -> dict:
         check_signature(request, session_id)
         check_skew(timestamp)
         check_replay(session_id, acs_request_id)
+        check_nonce(session_id, params.get("nonce", ""))
     except GuardianError as e:
         return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
 
