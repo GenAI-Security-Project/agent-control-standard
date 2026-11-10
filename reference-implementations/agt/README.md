@@ -569,7 +569,7 @@ Everything above runs with no configuration. These are the variables each proces
 | `ACS_ON_DECISION_FAILURE` | `proceed` | The posture the ServerHello declares. `deny` fails closed. Any other value stops the Guardian at startup |
 | `ACS_GUARDIAN_PORT` | `8787` | The port for `POST /acs` |
 | `ACS_GUARDIAN_HOST` | `127.0.0.1` | The interface to bind. Set `0.0.0.0` only when you accept an unauthenticated routable endpoint |
-| `ACS_MANIFEST_PATH` | `policy/manifest.yaml` | The AGT manifest. `policy/manifest.drift.yaml` is the second manifest, used to reach the `warn` verdict |
+| `ACS_MANIFEST_PATH` | `policy/manifest.yaml` | The AGT manifest. `policy/manifest.drift.yaml` declares AGT's drift gate, but this Guardian has no `drift_score` annotator, so that manifest denies every call and does not reach `warn` |
 | `ACS_ENVELOPE_LOG` | `.acs/envelopes.jsonl` | Where every envelope is recorded |
 | `ACS_SESSION_CONTEXT_LOG` | `.acs/session-context.jsonl` | Where each session's hash chain is written |
 

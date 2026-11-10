@@ -1,5 +1,19 @@
-# A second manifest whose only purpose is to turn on AGT's stock drift gate,
-# so an observe-only warn verdict is reachable. Not policy/manifest.yaml,
+# A second manifest that declares AGT's stock drift gate. It does not work with
+# this Guardian today. It never reaches the `warn` verdict, and it denies every
+# call on runtime_error:annotation_failed, a destructive command included.
+# Two things are missing:
+#
+#   - An annotator. This Guardian answers for `egress` only
+#     (packages/guardian/src/deployment-bridge.ts) and throws for the
+#     `drift_score` this manifest declares, which AGT turns into a deny.
+#   - A threshold. policy/lib/data.json sets no `drift.warn_threshold`, so a
+#     score that did arrive would not warn. Measured: with an annotator
+#     answering 0.9 and the shipped data.json, the verdict is allow.
+#
+# packages/guardian/test/drift-manifest.test.ts pins both.
+#
+# It was written to turn on AGT's stock drift gate, so that an observe-only
+# warn verdict would be reachable. Not policy/manifest.yaml,
 # which stays untouched: this is a separate, sibling manifest so a deployment
 # that wants no annotator has none, and every demo that reads the ordinary
 # manifest keeps reading exactly the manifest it always has.
@@ -30,8 +44,8 @@
 # run a behaviour-drift detector outside the policy engine and attach its
 # score under `input.annotations.drift_score`"). The `classifier` annotator
 # type below is exactly that seam: a deployment wires its own drift
-# detector to it; this project's demo wires a stub that returns a fixed
-# score, to make the wiring visible without building a real detector.
+# detector to it. This project wires none, which is why the manifest does not
+# work today.
 #
 # Zero Rego authored here either: the drift THRESHOLD and the annotator's
 # wiring are both configuration (this manifest, and policy/lib/data.json's
