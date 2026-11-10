@@ -251,7 +251,7 @@ LANDING_PANE = """<nav id="site-nav" aria-label="Navigation"><ul>
 </ul></details></li>
 <li class="nav-section"><h2>External resources</h2><ul>
 <li><a href="https://github.com/GenAI-Security-Project/agent-control-standard">GitHub</a></li>
-<li><a href="https://owasp.slack.com">Slack</a></li>
+<li><a href="https://owasp.org/slack/invite">Slack</a></li>
 </ul></li>
 </ul></nav>
 """
@@ -324,7 +324,7 @@ def test_landing_walk_section_row_from_heading():
     assert rows[-3:] == [
         (1, "External resources", None, False, True),
         (2, "GitHub", REPO_URL, False, False),
-        (2, "Slack", "https://owasp.slack.com", False, False),
+        (2, "Slack", "https://owasp.org/slack/invite", False, False),
     ]
 
 
@@ -402,10 +402,11 @@ def test_patterns_accept_the_pane_and_reject_markup_and_lookalike_hosts():
     for internal in ("README.md", "concepts/identity.md", "topics/faq.md"):
         assert not EXTERNAL.match(internal)
 
-    for good in (REPO_URL, REPO_URL + "/milestones", "https://owasp.slack.com", "https://github.com"):
+    for good in (REPO_URL, REPO_URL + "/milestones", "https://owasp.org/slack/invite", "https://github.com"):
         assert EXTERNAL_URL.match(good)
     for bad in ("http://github.com/x", "https://github.com.evil.example/", "https://evilgithub.com/",
-                "https://github.com@evil.example/", "https://owasp.slack.com.evil.example",
+                "https://github.com@evil.example/", "https://owasp.org.evil.example/slack/invite",
+                "https://owasp.org/", "https://owasp.org/slack/invitex", "https://owasp.slack.com",
                 "https://GITHUB.com/x", "https://example.org/", "https://github.com\n"):
         # A prefix pattern, so match() is the call. The \Z tail still refuses a newline.
         assert not EXTERNAL_URL.match(bad)
