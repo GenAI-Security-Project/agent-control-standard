@@ -12,6 +12,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathSegments, resolvePath } from "./hookmap-path.ts";
+import { isReservedSegment } from "./reserved-segments.ts";
 
 /**
  * A hookmap value the host sent no field for: the constant this hook always
@@ -308,6 +309,14 @@ const ACS_VERSION = "0.1.0";
  * this module names none, and test/invariants.test.ts gates that -- so the
  * check is that the rule is renderable, not that it renders anything in
  * particular.
+ *
+ * It also means the block's paths can be written into one object together.
+ * `renderDecision` throws on a path with an empty or reserved segment, and on
+ * two paths where one is the other or sits under it. It throws only when a
+ * decision for that entry arrives, and the delivery posture answers that
+ * throw. Under `proceed` the decision is dropped and the step runs as though
+ * it had never been made. `assertOutputPathsPlaceable` asks the same question
+ * here, at load time.
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -370,6 +379,51 @@ function assertRenderableDecisions(hookmap: Hookmap, path: string): void {
               `or a non-empty string "from", got ${JSON.stringify(source)}`,
           );
         }
+      }
+      assertOutputPathsPlaceable(Object.keys(output), `${path}'s ${named}`);
+    }
+  }
+}
+
+/**
+ * Rejects an `output` block whose paths cannot be written into one object, at
+ * load time. Two things make that so: a path with an empty or reserved
+ * segment, and two paths where one is the other or sits under it. These are
+ * the cases `renderDecision`'s writer throws on, and it throws only when a
+ * decision for the entry arrives. The delivery posture answers that throw, so
+ * under `proceed` the decision is dropped and the step runs unmodified.
+ * Measured: a `modify` entry declaring both `a.b` and `a.b.c` loaded clean,
+ * the `modify` arrived, and the step ran as originally requested.
+ *
+ * Compared by segment, so `a.b` and `a.bc` do not collide. A key written
+ * twice in the YAML is not caught here: the parser keeps the last one before
+ * this function sees the map, so there is nothing left to compare.
+ */
+function assertOutputPathsPlaceable(paths: string[], where: string): void {
+  const split = paths.map((outputPath) => ({ outputPath, segments: outputPath.split(".") }));
+  for (const { outputPath, segments } of split) {
+    for (const segment of segments) {
+      if (segment.length === 0 || isReservedSegment(segment)) {
+        throw new Error(
+          `loadHookmap: ${where} output path ${JSON.stringify(outputPath)} names the segment ` +
+            `${JSON.stringify(segment)}, which addresses no field`,
+        );
+      }
+    }
+  }
+  for (let i = 0; i < split.length; i += 1) {
+    for (let j = i + 1; j < split.length; j += 1) {
+      const first = split[i] as { outputPath: string; segments: string[] };
+      const second = split[j] as { outputPath: string; segments: string[] };
+      const shorter = first.segments.length <= second.segments.length ? first.segments : second.segments;
+      const longer = first.segments.length <= second.segments.length ? second.segments : first.segments;
+      if (shorter.every((segment, index) => segment === longer[index])) {
+        throw new Error(
+          `loadHookmap: ${where} output paths ${JSON.stringify(first.outputPath)} and ` +
+            `${JSON.stringify(second.outputPath)} collide: one is the other or sits under it, so no single ` +
+            `output can hold both. A decision for this entry could not be rendered, and the delivery ` +
+            `posture would answer it`,
+        );
       }
     }
   }
@@ -647,7 +701,8 @@ function normalizeTools(hookmap: Hookmap): Hookmap {
 
 /** Loads and parses a hookmap YAML file (e.g. claude-code.hookmap.yaml).
  * Throws if any hook's `decisions` block is absent or missing `allow` or
- * `deny`, or if any declared entry is not a renderable rule -- see
+ * `deny`, or if any declared entry is not a renderable rule, including one
+ * whose output paths cannot be written together -- see
  * assertRenderableDecisions. Also throws if any entry's `outputs.mirrors` is
  * malformed or names a field outside `outputs.within` -- see
  * assertMirrorsWellFormed. Also throws if any entry's `tools` is malformed --
