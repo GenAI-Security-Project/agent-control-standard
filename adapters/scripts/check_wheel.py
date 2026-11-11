@@ -60,8 +60,8 @@ def base_checks(env_dir: Path, wheel_version: str, cwd: Path) -> None:
 
     p = run([py, "-c", "import json; from importlib.metadata import entry_points as e; "
              "print(json.dumps(sorted(x.name for x in e(group='acs.integrations'))))"], cwd)
-    check("acs.integrations lists claude_code, cursor and nat",
-          p.returncode == 0 and json.loads(p.stdout) == ["claude_code", "cursor", "nat"], p.stdout + p.stderr)
+    check("acs.integrations lists claude_code, cursor, nat and relay",
+          p.returncode == 0 and json.loads(p.stdout) == ["claude_code", "cursor", "nat", "relay"], p.stdout + p.stderr)
 
     for script in SCRIPTS:
         check(f"{script} is installed", (bindir / script).is_file())
