@@ -129,6 +129,36 @@ export class GuardianTimeoutError extends Error {
   }
 }
 
+/**
+ * Thrown when the endpoint answers with an HTTP 4xx other than 408 or 429.
+ *
+ * Something on the deployment's side answered and refused this request: the
+ * Guardian, or whatever authenticates in front of it rejecting the adapter's
+ * credential (401, 403). That is a refusal, not a decision that failed to
+ * arrive, so failure-posture.ts classifies it as `refused` and the step is
+ * blocked whatever the posture. 408 and 429 stay with the posture, as does
+ * every 5xx: those say "not now", which a timeout or an outage also says
+ * (#32).
+ *
+ * Read before the body, because the body of a refusal from an intermediary
+ * is rarely JSON-RPC. Parsing it first turned a 401 into a SyntaxError,
+ * classified `unknown`, and under `proceed` the step ran.
+ */
+export class GuardianHttpRefusalError extends Error {
+  readonly status: number;
+  constructor(status: number, statusText: string) {
+    super(`guardianClient.post: endpoint refused the request with HTTP ${status}${statusText ? ` ${statusText}` : ""}`);
+    this.name = "GuardianHttpRefusalError";
+    this.status = status;
+  }
+}
+
+/** An HTTP status that means the request was refused rather than not served:
+ * any 4xx except 408 (Request Timeout) and 429 (Too Many Requests). */
+function isRefusalStatus(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 export type PostOptions = {
   /** The negotiated `timeout_config` value for this method. Omitted means no
    * timeout, the same way the handshake calls it -- the handshake has no
@@ -172,7 +202,9 @@ export type GuardianClient = {
    * The wire primitive: POSTs `envelope` as JSON, parses the JSON-RPC
    * response, and returns it once it is confirmed to answer this request --
    * at the transport layer by `id`, and, when the result carries one, at the
-   * ACS layer by `request_id`. Throws for every delivery failure.
+   * ACS layer by `request_id`. Throws for every delivery failure, and
+   * throws GuardianHttpRefusalError for an HTTP 4xx other than 408 and 429
+   * (#32).
    *
    * One exception to the id check, and it is a correctness fix rather than a
    * relaxation: a response carrying `id: null` AND an `error` is returned
@@ -205,6 +237,12 @@ export function createGuardianClient(url: string): GuardianClient {
         // immediately -- fetch does not wait out the clock for those.
         signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
       });
+      if (isRefusalStatus(res.status)) {
+        // The body is not read, so release it rather than leave the
+        // connection holding it.
+        await res.body?.cancel().catch(() => {});
+        throw new GuardianHttpRefusalError(res.status, res.statusText);
+      }
       // Inside the same try as the fetch, deliberately. The abort signal
       // bounds the body too, and a Guardian whose headers beat the timeout
       // while its body does not is still "no usable decision within the
@@ -263,8 +301,8 @@ export function createGuardianClient(url: string): GuardianClient {
       try {
         response = await post(envelope, options);
       } catch (failure) {
-        // A timeout, a dead transport, an uncorrelated response, a body that is
-        // not JSON.
+        // A timeout, a dead transport, an HTTP refusal, an uncorrelated
+        // response, a body that is not JSON.
         // None of them carry a decision, so all of them are the same answer --
         // and turning the throw into that answer here is what stops a caller's
         // catch block from having to work out which stage of its own sequence

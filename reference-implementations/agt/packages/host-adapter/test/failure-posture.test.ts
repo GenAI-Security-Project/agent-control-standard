@@ -6,7 +6,7 @@ import {
   classifySessionFailure,
   DEFAULT_POSTURE,
 } from "../src/failure-posture.ts";
-import { GuardianTimeoutError } from "../src/guardian-client.ts";
+import { GuardianHttpRefusalError, GuardianTimeoutError } from "../src/guardian-client.ts";
 import { SessionConfigStoreFailedError, type ResolvedSessionConfig } from "../src/handshake.ts";
 import type { SessionConfig } from "../src/session-config.ts";
 
@@ -374,6 +374,12 @@ describe("applyFailurePosture — a session config that could not be established
 describe("classifyDeliveryFailure — what came back instead of a decision", () => {
   it("classifies a timeout", () => {
     expect(classifyDeliveryFailure(new GuardianTimeoutError(5000)).kind).toBe("timeout");
+  });
+
+  it("classifies an HTTP 4xx refusal as refused, not unknown (#32)", () => {
+    const { kind, message } = classifyDeliveryFailure(new GuardianHttpRefusalError(401, "Unauthorized"));
+    expect(kind).toBe("refused");
+    expect(message).toContain("HTTP 401");
   });
 
   // MUST NOT be replaced with a synthetic error. A hand-built

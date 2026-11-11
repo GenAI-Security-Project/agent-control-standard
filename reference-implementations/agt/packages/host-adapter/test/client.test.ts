@@ -9,6 +9,7 @@ import { buildEnvelope, loadHookmap, type Hookmap } from "../src/build-envelope.
 import { applyFailurePosture, classifyDeliveryFailure } from "../src/failure-posture.ts";
 import {
   createGuardianClient,
+  GuardianHttpRefusalError,
   GuardianResponseMismatchError,
   GuardianResultCorrelationError,
   GuardianTimeoutError,
@@ -366,6 +367,133 @@ describe("GuardianClient.requestDecision", () => {
       const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
 
       expect(outcome.decisionArrived).toBe(false);
+    } finally {
+      mock.stop(true);
+    }
+  });
+});
+
+describe("GuardianClient — an HTTP 4xx is a refusal (#32)", () => {
+  const proceedSession = {
+    config: {
+      negotiated_version: "0.1.0",
+      methods_evaluated: ["steps/toolCallRequest"],
+      selected_transport: "http",
+      timeout_config: { default_ms: 5000 },
+      on_decision_failure: "proceed" as const,
+    },
+    failure: undefined,
+  };
+
+  async function decideAgainst(status: number, body: string, contentType: string) {
+    const mock = Bun.serve({
+      port: 0,
+      fetch: () => new Response(body, { status, headers: { "content-type": contentType } }),
+    });
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      const events: AuditEvent[] = [];
+      const decision = applyFailurePosture({
+        failure: outcome.decisionArrived === false ? outcome.failure : undefined,
+        session: proceedSession,
+        sessionId: "sess-1",
+        method: envelope.method,
+        rpcId: envelope.id,
+        audit: { path: "test", write: (e) => (events.push(e), true) },
+      });
+      return { decision, events };
+    } finally {
+      mock.stop(true);
+    }
+  }
+
+  // The posture is `proceed` on purpose, so the decision itself shows the fix:
+  // the unfixed client read the body and never the status, and allowed these.
+  for (const [status, body, contentType] of [
+    [401, "Unauthorized", "text/plain"],
+    [403, "Forbidden", "text/plain"],
+    [404, "Not Found", "text/plain"],
+    [401, JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32001, message: "unauthorized" } }), "application/json"],
+  ] as const) {
+    it(`denies a step answered with HTTP ${status} (${contentType}) under a proceed posture`, async () => {
+      const { decision, events } = await decideAgainst(status, body, contentType);
+
+      expect(decision.decision).toBe("deny");
+      expect(decision.reason_codes).toEqual(["guardian_refused"]);
+      expect(events[0]).toMatchObject({
+        posture: "proceed",
+        outcome: "blocked",
+        failure: { kind: "refused", message: expect.stringContaining(`HTTP ${status}`) },
+      });
+    });
+  }
+
+  // 408, 429 and 5xx say "not now", which a timeout or an outage also says, so
+  // they stay with the negotiated posture.
+  for (const status of [408, 429, 500, 503]) {
+    it(`leaves HTTP ${status} to the posture`, async () => {
+      const { decision, events } = await decideAgainst(status, "try again later", "text/plain");
+
+      expect(decision.decision).toBe("allow");
+      expect(events[0]).toMatchObject({ posture: "proceed", outcome: "proceeded" });
+      expect(events[0]).not.toMatchObject({ failure: { kind: "refused" } });
+    });
+  }
+
+  // A 4xx is refused before its body is read, so an intermediary cannot pass
+  // an allow through a 403 by giving it a decision-shaped body.
+  it("refuses a 4xx even when its body carries an allow decision", async () => {
+    const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: envelope.id,
+      result: { decision: "allow", request_id: envelope.params.request_id },
+    });
+    const mock = Bun.serve({
+      port: 0,
+      fetch: () => new Response(body, { status: 403, headers: { "content-type": "application/json" } }),
+    });
+    try {
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      expect(outcome.decisionArrived).toBe(false);
+      expect(classifyDeliveryFailure(outcome.decisionArrived === false ? outcome.failure : undefined).kind).toBe(
+        "refused",
+      );
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  // The status check covers 4xx only. A 5xx with a JSON-RPC body is still
+  // read, so a Guardian refusal code sent with a 500 is still a refusal.
+  it("still reads a JSON-RPC body on a 5xx", async () => {
+    const envelope = buildEnvelope("PreToolUse", preToolUsePayload("rm -rf /"), hookmap);
+    const body = JSON.stringify({ jsonrpc: "2.0", id: envelope.id, error: { code: -32020, message: "evaluation failed" } });
+    const mock = Bun.serve({
+      port: 0,
+      fetch: () => new Response(body, { status: 500, headers: { "content-type": "application/json" } }),
+    });
+    try {
+      const outcome = await createGuardianClient(`http://localhost:${mock.port}/acs`).requestDecision(envelope);
+      const classified = classifyDeliveryFailure(outcome.decisionArrived === false ? outcome.failure : undefined);
+      expect(classified.kind).toBe("refused");
+      expect(classified.message).toContain("-32020");
+    } finally {
+      mock.stop(true);
+    }
+  });
+
+  it("throws GuardianHttpRefusalError from post, carrying the status", async () => {
+    const mock = Bun.serve({ port: 0, fetch: () => new Response("Forbidden", { status: 403 }) });
+    try {
+      const envelope = buildEnvelope("PreToolUse", preToolUsePayload("ls -la"), hookmap);
+      const thrown = await createGuardianClient(`http://localhost:${mock.port}/acs`)
+        .post(envelope)
+        .catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(GuardianHttpRefusalError);
+      expect((thrown as GuardianHttpRefusalError).status).toBe(403);
     } finally {
       mock.stop(true);
     }
