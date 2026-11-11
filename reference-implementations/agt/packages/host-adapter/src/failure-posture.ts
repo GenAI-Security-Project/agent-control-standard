@@ -20,6 +20,11 @@
  * a governance tool proceeding on the Guardian's own "no". See
  * REFUSAL_RPC_CODES for which codes mean that, and why the set is enumerated.
  *
+ * An HTTP 4xx other than 408 and 429 takes the same route (#32). It may come
+ * from whatever authenticates in front of the Guardian rather than from the
+ * Guardian itself, which is why the reasoning below names the endpoint, not
+ * the Guardian, for that case.
+ *
  * It is NOT reached when a decision arrived. A `deny` that arrives is
  * honoured regardless of posture, and that is enforced by the caller never
  * calling this on a decision.
@@ -49,7 +54,7 @@ import type {
   StepFailureKind,
 } from "./failure-kinds.ts";
 import type { AcsDecision } from "./decision-message.ts";
-import { GuardianTimeoutError } from "./guardian-client.ts";
+import { GuardianHttpRefusalError, GuardianTimeoutError } from "./guardian-client.ts";
 import { SessionConfigNotStoredError, type ResolvedSessionConfig } from "./handshake.ts";
 
 // The failure taxonomies this module classifies into live in
@@ -187,6 +192,13 @@ export function classifyDeliveryFailure(
   try {
     if (failure instanceof GuardianTimeoutError) {
       return { kind: "timeout", message: failure.message };
+    }
+    // An HTTP 4xx other than 408 and 429: the deployment answered and refused
+    // the request, for example the adapter's credential (401, 403). Checked
+    // before the generic Error branch, which would file it as `unknown` and
+    // leave it to the posture (#32).
+    if (failure instanceof GuardianHttpRefusalError) {
+      return { kind: "refused", message: failure.message };
     }
     if (failure instanceof Error) {
       // Two independent routes to "transport", because no single one is
@@ -373,8 +385,9 @@ export function applyFailurePosture({
   // (github.com/afogel/ACS_reference_implementation, docs/demos/v3-runbook.md), reproduced
   // against a live Guardian.
   // It is not to be reworded without re-capturing them.
+  const refuser = failure instanceof GuardianHttpRefusalError ? "the guardian's endpoint" : "the guardian";
   const cause = refused
-    ? `the guardian refused the envelope for ${method ?? "this step"} rather than deciding it ` +
+    ? `${refuser} refused the envelope for ${method ?? "this step"} rather than deciding it ` +
       `(${classified.kind}: ${classified.message})`
     : stage === "request"
       ? `this host could not build a request for this step, so no decision was ever sought ` +
@@ -404,7 +417,7 @@ export function applyFailurePosture({
     return {
       decision,
       reasoning:
-        `${cause};${sessionNote} the guardian was reachable and answered, so this is not a delivery failure ` +
+        `${cause};${sessionNote} ${refuser} was reachable and answered, so this is not a delivery failure ` +
         `and on_decision_failure=${posture} does not apply -- a step the guardian would not decide is not a ` +
         "step this host may proceed with, so it was blocked.",
       reason_codes: [REFUSAL_REASON_CODE],
