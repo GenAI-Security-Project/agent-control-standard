@@ -254,3 +254,7 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_REQUIRE_PROFILES`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, build envelopes with `acs.core.request_envelope` and send them unsigned to `acs.client.round_trip`, which signs as the last step and returns either the decision or the `FailPosture.resolve` resolution to write in the host's shape, and keep the open turn with `acs.client.open_turn` / `current_turn` / `close_turn`.
 
 The bar for "reference implementation" status is: round-trip tests pass against the example Guardian, documented configuration for users, and an explicit conformance posture statement matching the format in the Claude Code adapter's README.
+
+## NeMo Relay
+
+The optional [Relay adapter](docs/relay/README.md) governs managed tool calls and caller-visible results on Relay 0.11.1. It is the first increment of #543; the NAT adapter remains available during migration. Install `acs-adapters[relay]` and run `python run_conformance.py relay` to test it.

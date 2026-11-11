@@ -24,9 +24,10 @@ class Metadata(unittest.TestCase):
         from acs.integrations.claude_code import adapter as claude
         from acs.integrations.cursor import adapter as cursor
         from acs.integrations.nat import adapter as nat
+        from acs.integrations.relay import adapter as relay
         version = metadata.version("acs-adapters")
         self.assertEqual(acs.__version__, version)
-        for module in (claude, cursor, nat):
+        for module in (claude, cursor, nat, relay):
             with self.subTest(module=module.__name__):
                 self.assertEqual(module.ADAPTER_VERSION, version)
 
@@ -43,7 +44,7 @@ class Metadata(unittest.TestCase):
 
     def test_integrations_entry_point_group_lists_each_integration(self) -> None:
         group = {e.name: e for e in entry_points(group="acs.integrations")}
-        self.assertEqual(set(group), {"claude_code", "cursor", "nat"})
+        self.assertEqual(set(group), {"claude_code", "cursor", "nat", "relay"})
         for name, entry in group.items():
             with self.subTest(integration=name):
                 self.assertEqual(entry.load().__name__, f"acs.integrations.{name}")

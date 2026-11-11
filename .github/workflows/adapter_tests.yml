@@ -72,6 +72,29 @@ jobs:
       - name: Run every suite
         run: uv run python run_conformance.py claude cursor nat
 
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: adapters
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Install the pinned Relay runtime and adapter tests
+        run: uv sync --locked --python 3.12 --extra relay --group test
+      - name: Run shared checks and real Relay execution tests
+        run: uv run python run_conformance.py relay
+      - name: Check the installed Relay wheel outside the source tree
+        run: |
+          uv build -o dist
+          uv run python scripts/check_relay_wheel.py dist/acs_adapters-*-py3-none-any.whl
+
   tests-without-nat:
     # The documented setup for Claude Code and Cursor users, who never install NAT.
     runs-on: ubuntu-latest
