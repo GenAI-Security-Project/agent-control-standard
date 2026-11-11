@@ -1,13 +1,13 @@
-# Predicate: ACS conformance verdict evidence, version 1.0.1-draft
+# Predicate: ACS conformance verdict evidence, version 1 (draft 2)
 
 Predicate type URI (proposed, pending acceptance):
-`https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/docs/predicates/acs-verdict-evidence-v1.md`
+`https://owaspacs.org/docs/predicates/acs-verdict-evidence-v1/`
 
-Status: proposed draft `v1.0.1-draft`. Modeled on the
-[agent-change-admission-v1](https://github.com/probityai/agent-evidence-vocabulary/blob/main/docs/predicates/agent-change-admission-v1.md)
-predicate: same DSSE v1 envelope, same field table, same verification-step
+Status: proposed draft — `v1.0.0-draft.2` (draft 1 circulated as `v1.0.0-draft`; an intermediate `v1.0.1-draft` numbering is retired, so the accepted version is not lower than any draft). On acceptance this becomes `v1.0.0` at the URI above. The reference kit at `e2f85f6` writes no signature yet, so its sample records cannot pass the verification steps below; until the kit signs, its samples are illustrative drafts of records, not verifiable evidence. Modeled on the
+agent-change-admission-v1 predicate of the agent-evidence-vocabulary
+project: same DSSE v1 envelope, same field table, same verification-step
 layout, same versioning rule. This draft records the field list after the
-sharpening on issue #33 (2026-10-18). Breaking change versus `v1.0.0-draft`:
+sharpening on issue #33 (2026-10-18). Breaking change versus draft 1:
 the runner no longer writes a lift state; `witness_scope` lift falls out of a
 peer-authored artifact, and the quarantine record carries its own integrity
 envelope. Not normative until accepted.
@@ -56,15 +56,17 @@ this order and names the first one that is absent or malformed.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `vector_id` | 16 lowercase hex | First 16 chars of the SHA-256 of the vector input's canonical form |
+| `vector_id` | 16 lowercase hex | First 16 chars of the SHA-256 of the vector input's canonical form (RFC 8785 JCS); a verifier checks it equals `subject.digest.sha256[:16]` (step 7) |
 | `profile` | non-empty string | ACS profile the clause belongs to (e.g. `acs-core`) |
-| `anchor` | non-empty string | Repo-relative, resolvable anchor to the normative clause (a heading anchor, not bold text) |
+| `anchor` | non-empty string | Repo-relative, resolvable anchor to the normative clause (a heading anchor, not bold text), resolved against `anchor_release` |
+| `anchor_release` | non-empty string | The spec release tag or tree digest against which `anchor` resolves; a heading rename in a later release does not silently change what a verdict was about |
 | `clause` | non-empty string | Human-readable clause name, matching the anchor |
 | `verdict` | one of `pass`, `rejected`, `unmeasurable`, `quarantined` | The four-state verdict; `quarantined` uses the quarantine record below |
 | `witness_derivation.runner.id` | non-empty string | Runner identifier |
 | `witness_derivation.runner.hosting_operator_id` | non-empty string | Comparable identifier of the operator who runs the runner |
 | `witness_derivation.deployment_operator_id` | non-empty string | Comparable identifier of the operator of the deployment under test |
-| `witness_scope` | one of `SELF`, `PEER`, `EXTERNAL` | Derived per the table below; never asserted independently |
+
+"Comparable identifier" means an issuer-qualified identifier (`<issuer>:<id>`) drawn from the consumer's pinned operator registry. Equality is exact string equality of the qualified forms. An unqualified identifier, or one whose issuer is not in the pinned registry, is not comparable, and scope derivation fails closed (`not_established`, step 9). Equality of two runner-written strings is therefore not self-asserted: both must resolve in a registry the consumer pinned out of band, the same way keys are pinned.
 | `verification_basis` | non-empty array of strings | Values from the registry: `wire_transcript`, `signed_decision_record`, `policy_state`, `terminal_state_evidence`, `anchor_commitment` |
 | `expected` | object | Expected disposition and reason codes |
 | `observed` | object | Observed disposition and reason codes |
@@ -73,13 +75,14 @@ this order and names the first one that is absent or malformed.
 | `integrity.payload_digest_fields` | non-empty array | The names of the fields the digest covers |
 | `integrity.does_not_cover` | array | Lists `behavior_snapshot`, `integrity`, `provenance`, `subject` |
 | `integrity.binding` | non-empty string | States the binding consequences: observed hashes are bound only by the runner's own envelope signature; the subject is bound by the envelope, not by `payload_digest` |
-| `provenance.peer_artifact` | 64 lowercase hex or `null` | `null` when no peer artifact exists. Otherwise the SHA-256 of the canonical bytes of the peer-signed verification statement (see below) |
+| `provenance.peer_artifact` | 64 lowercase hex or `null` | `null` when no peer artifact exists. Otherwise the SHA-256 of the DSSE payload bytes of the peer-signed verification statement, exactly as signed (see below) |
 | `provenance.anchor` | object or `null` | Persistence only: `{kind: "rfc3161-timestamp" \| "transparency-log", reference}`; never lifts `witness_scope` |
 
 A record may carry further fields (e.g. `observed_at` RFC 3339 timestamps); a
 verifier ignores fields it does not check. A record must not carry any field
-by which the runner asserts its own scope — there is no `lift_state`, no
-`checked`, no `signer_relationship` written into the runner's envelope.
+by which the runner asserts its own scope — there is no `witness_scope`, no
+`lift_state`, no `checked`, no `signer_relationship` written into the runner's
+envelope. `witness_scope` is a verifier output (next section), not a record field.
 
 ### The peer verification statement
 
@@ -88,28 +91,35 @@ in-toto Statement v1 signed by a peer key the consumer pins, whose predicate
 
 - names **this vector** in its subject (digest equal to the verdict subject),
 - names **the requirement** it checked (`anchor`/clause match), and
+- states the **verdict it witnessed**: the `verdict` value of the record under verification and that record's `integrity.payload_digest`, so the statement cannot be re-attached to a different verdict record for the same vector, and
 - names the **evidence artifact** it checked it with — either
   `{"kind": "client_run", "deployment": ...}` (the peer drove its own client
   against this deployment) or
   `{"kind": "wire_transcript", "transcript_digest": ..., "vector": ...}`.
 
-`provenance.peer_artifact` is the SHA-256 of that statement's canonical bytes.
-The runner can point at it; it cannot produce it.
+`provenance.peer_artifact` is the SHA-256 of that statement's DSSE payload
+bytes exactly as signed — a signature covers specific bytes, so the digest is
+taken over the bytes the peer actually signed, never over a re-canonicalization
+of them. The runner can point at it; it cannot produce it.
 
 ## Deriving `witness_scope`
 
-`witness_scope` is computed by the consumer, never asserted by the runner.
-SELF falls out of identifier equality; a lift requires a verified
+`witness_scope` is computed by the consumer and reported as a verifier
+output; it is never a field of the record and never asserted by the runner.
+SELF falls out of identifier equality between comparable identifiers (see the
+definition above the field table); a lift requires a verified
 `peer_artifact`, and the signer's relationship comes from the pinned peer key's
 out-of-band record, not from a field in the runner's envelope.
 
-| `hosting_operator_id == deployment_operator_id` | `provenance.peer_artifact` | derived `witness_scope` |
+| `hosting_operator_id == deployment_operator_id` | `provenance.peer_artifact` | derived `witness_scope` (verifier output) |
 | --- | --- | --- |
 | equal | `null` | `SELF` |
 | equal | present, verifies, pinned relationship = peer | `PEER` |
 | equal | present, verifies, pinned relationship = external | `EXTERNAL` |
-| unequal | `null` | not a valid `SELF` record: rejected at verification step 9 (`witness_scope_misderived`) |
-| any | present but signature invalid, or requirement/artifact does not match this vector | `contradicted` (`peer_artifact_unverified`) |
+| unequal | present, verifies, pinned relationship = peer | `PEER` |
+| unequal | present, verifies, pinned relationship = external | `EXTERNAL` |
+| unequal | `null` | no scope derivable: the runner is not the deployment operator and no peer witnessed the verdict — step 9 returns `not_established` (`witness_scope_underivable`) |
+| any | present but signature invalid, or requirement/artifact/verdict does not match this record | `contradicted` (`peer_artifact_unverified`) |
 
 A co-signature over the runner's envelope is not in this table: absent a peer
 artifact, it is the default honest state — non-repudiation only — and the
@@ -123,11 +133,14 @@ anchor remains `SELF`.
 
 ## `payload_digest` scope
 
-`payload_digest` is SHA-256 of the canonical JSON (keys sorted, no whitespace,
-UTF-8) of exactly the fields listed in `integrity.payload_digest_fields` — in
-the reference sample: `anchor`, `clause`, `expected`, `observed`, `profile`,
-`vector_id`, `verdict`, `verification_basis`, `witness_derivation`,
-`witness_scope`. It proves those bytes are intact.
+`payload_digest` is SHA-256 of the canonical JSON of exactly the fields
+listed in `integrity.payload_digest_fields`, where canonical means
+RFC 8785 (JCS) canonicalization — the one definition used for every digest in
+this predicate, so two conforming verifiers cannot disagree on a digest over
+number serialization, escape forms or key ordering. In the reference sample
+the fields are: `anchor`, `anchor_release`, `clause`, `expected`, `observed`,
+`profile`, `vector_id`, `verdict`, `verification_basis`,
+`witness_derivation`. It proves those bytes are intact.
 
 It deliberately does **not** cover:
 
@@ -149,8 +162,10 @@ When `verdict` is `quarantined`, a second Statement carries:
 | `owner` | The accountable party (originator until the spec workstream takes the gap) |
 | `review_by` | ISO date by which the gap must be resolved or the vector re-triaged; follows the `review_by` precedent on proposed terms |
 | `excluded_from` | States the vector is excluded from formal results until the gap resolves |
+| `status` | The gap's lifecycle state, asserted by the owner: one of `open`, `resolved`, `expired` |
+| `reason` | Non-empty string stating why the vector cannot yet be scored — the normative uncertainty, in the owner's words |
 | `expiry_disposition` | What happens when `review_by` passes with the gap open: the vector reverts to `unmeasurable` and stays excluded; the owner must re-quarantine with a new `review_by` or reference the gap issue's resolution; a quarantined vector never becomes a formal pass or reject while the gap is open |
-| `integrity.payload_digest` | SHA-256 of the canonical bytes of the quarantine record's own declared fields (`vector_id`, `status`, `reason`, `quarantine_ref`, `quarantine_gap`, `owner`, `review_by`, `excluded_from`) — so a silent edit to any of them breaks the digest |
+| `integrity.payload_digest` | SHA-256 of the RFC 8785 JCS canonical bytes of the quarantine record's own declared fields (`vector_id`, `status`, `reason`, `quarantine_ref`, `quarantine_gap`, `owner`, `review_by`, `excluded_from`, `expiry_disposition`) — so a silent edit to any of them breaks the digest |
 
 ## Verification
 
@@ -163,13 +178,13 @@ of the first check that fails.
 | --- | --- | --- |
 | 1 | The bytes parse as a DSSE envelope with payload type, base64 payload and at least one signature | no verdict, `malformed_envelope` |
 | 2 | Payload type is `application/vnd.in-toto+json` | `not_established`, `unsupported_payload_type` |
-| 3 | A signature naming a pinned keyid verifies | `contradicted`, `untrusted_key` / `signature_invalid` |
+| 3 | A signature naming a pinned keyid verifies | `not_established`, `untrusted_key` (no signature names a pinned keyid — an unknown signer establishes nothing) / `contradicted`, `signature_invalid` (a pinned key's signature does not verify) |
 | 4 | The payload is an in-toto Statement v1 | `not_established`, `payload_not_statement` |
 | 5 | `predicateType` is this URI | `not_established`, `unsupported_predicate` |
 | 6 | Every field in the table is well formed, in table order; no runner-written lift field is present | `not_established`, `field_invalid:<field>` |
-| 7 | A subject carries `digest.sha256` equal to the canonical vector input | `contradicted`, `subject_digest_mismatch` |
+| 7 | A subject carries `digest.sha256` equal to the canonical (RFC 8785 JCS) vector input, and `vector_id` equals `subject.digest.sha256[:16]` | `contradicted`, `subject_digest_mismatch` / `contradicted`, `vector_id_mismatch` |
 | 8 | `payload_digest` recomputed over `payload_digest_fields` equals the claim | `contradicted`, `payload_digest_mismatch` |
-| 9 | `witness_scope` equals the value derived from ID equality and `provenance.peer_artifact` (signature, requirement match, evidence artifact kind, pinned relationship) | `contradicted`, `witness_scope_misderived` / `peer_artifact_unverified` |
+| 9 | Derive `witness_scope` per the table above: ID comparability, and for a lift the `peer_artifact` (signature verifies; requirement match; evidence artifact kind; pinned relationship; and the verdict it states — `verdict` value and `payload_digest` — equals this record's) | `not_established`, `witness_scope_underivable` / `contradicted`, `peer_artifact_unverified` |
 | 10 | A `quarantined` record carries `quarantine_ref` or `quarantine_gap`, `owner`, `review_by`, `expiry_disposition`, and its own `integrity.payload_digest` recomputes | `not_established`, `quarantine_field_missing:<field>` / `contradicted`, `quarantine_digest_mismatch` |
 
 A record that passes every step is `supported`. A verifier that also holds the
@@ -189,8 +204,10 @@ separate statements, and a verifier reports them separately.
 
 ## Versioning
 
-This document is `v1.0.1-draft`; on acceptance it becomes `v1.0.0` at the URI
-above. A change that adds an optional field or a reason code that refuses
+This document is `v1.0.0-draft.2`; on acceptance it becomes `v1.0.0` at the
+URI above. Drafts of an unaccepted version iterate as draft numbers, so a
+breaking change between drafts (as between draft 1 and this draft) moves no
+version number backwards. A change that adds an optional field or a reason code that refuses
 nothing previously supported edits this page. A change that adds a required
 field, renames a field, changes a field's type, or supports a verdict version
 1 refuses is breaking: it is published as `acs-verdict-evidence-v2.md` at a
