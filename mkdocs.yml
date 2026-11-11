@@ -93,6 +93,8 @@ nav:
       - AgBOM with CycloneDX: spec/inspect/extend_cyclonedx.md
       - AgBOM with SPDX: spec/inspect/extend_spdx.md
       - AgBOM with SWID: spec/inspect/extend_swid.md
+    - Predicates:
+      - ACS Verdict Evidence v1: predicates/acs-verdict-evidence-v1.md
   - About: about.md
 
 extra_css:
