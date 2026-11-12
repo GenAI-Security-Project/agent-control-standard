@@ -46,7 +46,9 @@ To see a decision without an agent client, pipe a hook payload into the Claude C
 8. One entry is appended to the session's hash chain. Information-flow labels AGT emitted are stored, so the next step of the session sends them back as input.
 9. The outgoing response is checked against `response-envelope.json`. The result is logged on stderr and never thrown. The response is then recorded and sent.
 
-`handshake/hello` is answered with a constant ServerHello that names exactly the methods this Guardian dispatches: `steps/toolCallRequest` and `steps/toolCallResult`. The Guardian does not read the ClientHello. Any other method is answered with a JSON-RPC error carrying `METHOD_NOT_DISPATCHED_CODE`, which the conformance harness reads back to confirm the ServerHello tells the truth.
+`handshake/hello` selects a supported version from the ClientHello and requires the HTTP transport. The ServerHello names exactly the methods this Guardian evaluates: `steps/toolCallRequest` and `steps/toolCallResult`. Each session's steps must use its negotiated version. A session with no negotiation entry, such as after a restart, may use any version accepted by `isSupportedAcsVersion`.
+
+A valid `steps/sessionEnd` with a matching version removes that session's negotiation entry. This cleanup does not evaluate policy: like other unevaluated methods, it still returns `METHOD_NOT_DISPATCHED_CODE`. The conformance harness checks that the ServerHello names only evaluated methods.
 
 Every throw on the request path is caught. Nothing escapes the fetch handler, because an unhandled rejection would produce an HTML error page, the host's client would fail to parse it, and Claude Code would read the failed hook as "never fired" and proceed ungoverned.
 

@@ -196,6 +196,87 @@ describe("startGuardian POST /acs", () => {
     expect(serverHello.on_decision_failure).toBe("proceed");
   });
 
+  it("negotiates the client's offered 0.1.x version per session, requires every step's acs_version to match negotiated_version (#139, #196), and rejects unsupported transports with -32003 (#165)", async () => {
+    const minorMismatchHello = await postAcs(url, makeEnvelope("handshake/hello", { acs_versions_supported: ["0.2.0"] }, { id: 42 }));
+    expect(minorMismatchHello.result).toBeUndefined();
+    expect(minorMismatchHello.error?.code).toBe(-32001);
+
+    const badHello = await postAcs(url, makeEnvelope("handshake/hello", { acs_versions_supported: ["1.0.0"] }, { id: 43 }));
+    expect(badHello.result).toBeUndefined();
+    expect(badHello.error?.code).toBe(-32001);
+
+    // Session that offers only 0.1.1 negotiates 0.1.1; steps on that session must carry 0.1.1
+    const sessionId = crypto.randomUUID();
+    const hello011 = makeEnvelope("handshake/hello", { acs_versions_supported: ["0.1.1"], transports_supported: ["http"] }, { id: 44, sessionId });
+    (hello011.params as Record<string, unknown>).acs_version = "0.1.1";
+    const hello011Res = await postAcs(url, hello011);
+    expect(hello011Res.error).toBeUndefined();
+    expect((hello011Res.result as Record<string, unknown>)?.negotiated_version).toBe("0.1.1");
+
+    const matchingStep = toolCallEnvelope("ls -la", { id: 45, sessionId });
+    (matchingStep.params as Record<string, unknown>).acs_version = "0.1.1";
+    const matchingStepRes = await postAcs(url, matchingStep);
+    expect(matchingStepRes.error).toBeUndefined();
+    expect((matchingStepRes.result as Record<string, unknown>)?.decision).toBe("allow");
+
+    // A step on the 0.1.1 session carrying 0.1.0 or 0.1.4 is refused with -32001
+    for (const wrongStepVersion of ["0.1.0", "0.1.4", "0.2.0"]) {
+      const wrongStep = toolCallEnvelope("ls -la", { id: 46, sessionId });
+      (wrongStep.params as Record<string, unknown>).acs_version = wrongStepVersion;
+      const wrongStepRes = await postAcs(url, wrongStep);
+      expect(wrongStepRes.result).toBeUndefined();
+      expect(wrongStepRes.error?.code).toBe(-32001);
+    }
+
+    const stdioOnly = await postAcs(url, makeEnvelope("handshake/hello", { transports_supported: ["stdio"] }, { id: 47 }));
+    expect(stdioOnly.result).toBeUndefined();
+    expect(stdioOnly.error?.code).toBe(-32003);
+  });
+
+  it("evicts only the ended session's negotiated version on steps/sessionEnd", async () => {
+    const sessionId = crypto.randomUUID();
+    const otherSessionId = crypto.randomUUID();
+    for (const id of [sessionId, otherSessionId]) {
+      const hello = makeEnvelope("handshake/hello", { acs_versions_supported: ["0.1.1"] }, { sessionId: id });
+      expect((await postAcs(url, hello)).result?.negotiated_version).toBe("0.1.1");
+    }
+
+    const wrongVersion = toolCallEnvelope("ls -la", { sessionId });
+    expect((await postAcs(url, wrongVersion)).error?.code).toBe(-32001);
+
+    const end = makeEnvelope("steps/sessionEnd", {}, { sessionId });
+    expect((await postAcs(url, end)).error?.code).toBe(-32001);
+    expect((await postAcs(url, wrongVersion)).error?.code).toBe(-32001);
+
+    (end.params as Record<string, unknown>).acs_version = "0.1.1";
+    // Session-end cleanup does not add a policy handler for this method.
+    expect((await postAcs(url, end)).error?.code).toBe(-32011);
+
+    const afterEnd = await postAcs(url, toolCallEnvelope("ls -la", { sessionId }));
+    expect(afterEnd.error).toBeUndefined();
+    expect(afterEnd.result?.decision).toBe("allow");
+    expect((await postAcs(url, toolCallEnvelope("ls -la", { sessionId: otherSessionId }))).error?.code).toBe(-32001);
+  });
+
+  it("accepts supported patch versions for a session with no negotiated entry after a restart", async () => {
+    const sessionId = crypto.randomUUID();
+    for (const version of ["0.1.1", "0.1.4", "0.1.0"]) {
+      const step = toolCallEnvelope("ls -la", { sessionId });
+      (step.params as Record<string, unknown>).acs_version = version;
+      const response = await postAcs(url, step);
+      expect(response.error).toBeUndefined();
+      expect(response.result?.decision).toBe("allow");
+    }
+  });
+
+  it.each(["0.2.0", "1.0.0"])("rejects unsupported version %s for a session with no negotiated entry", async (version) => {
+    const step = toolCallEnvelope("ls -la");
+    (step.params as Record<string, unknown>).acs_version = version;
+    const response = await postAcs(url, step);
+    expect(response.result).toBeUndefined();
+    expect(response.error?.code).toBe(-32001);
+  });
+
   it("steps/toolCallRequest carrying rm -rf / denies, with non-empty reasoning and reason_codes, echoing request_id", async () => {
     const requestId = crypto.randomUUID();
     const response = await postAcs(url, toolCallEnvelope("rm -rf /", { requestId }));
