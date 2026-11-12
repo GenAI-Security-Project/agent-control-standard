@@ -8,6 +8,10 @@ Transform AI agents from black boxes into trustworthy systems through standardiz
 
 Enterprises need to see what agents do, understand why they act, and control their behavior. ACS provides the specifications and protocols to make this possible.
 
+## Part of OWASP
+
+ACS is developed under the [OWASP GenAI Security Project](https://genai.owasp.org/) as part of its Agentic Security Initiative (ASI). [Get involved](https://genai.owasp.org/contributing/) to help shape the standard.
+
 ## What We're Building
 
 **Instrumentation Standard**: ACS standard for agent instrumentation.
