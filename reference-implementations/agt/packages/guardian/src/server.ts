@@ -95,7 +95,7 @@ import {
 import { checkResponse } from "./check-response.ts";
 import {
   buildServerHello,
-  NEGOTIATED_VERSION,
+  isSupportedAcsVersion,
   negotiateHandshake,
   UNSUPPORTED_VERSION_CODE,
   type ServerHello,
@@ -919,15 +919,25 @@ async function dispatch(
     return { response: successResponse(envelope.id, negotiated.serverHello) };
   }
 
-  const expectedVersion = negotiatedVersions.get(envelope.params.metadata.session_id) ?? NEGOTIATED_VERSION;
-  if (envelope.params.acs_version !== expectedVersion) {
+  const sessionId = envelope.params.metadata.session_id;
+  const expectedVersion = negotiatedVersions.get(sessionId);
+  const supportedVersion = expectedVersion === undefined
+    ? isSupportedAcsVersion(envelope.params.acs_version)
+    : envelope.params.acs_version === expectedVersion;
+  if (!supportedVersion) {
     return {
       response: errorResponse(
         envelope.id,
         UNSUPPORTED_VERSION_CODE,
-        `UNSUPPORTED_VERSION: step acs_version ${JSON.stringify(envelope.params.acs_version)} does not match negotiated_version ${JSON.stringify(expectedVersion)}`,
+        expectedVersion === undefined
+          ? `UNSUPPORTED_VERSION: unsupported step acs_version ${JSON.stringify(envelope.params.acs_version)}`
+          : `UNSUPPORTED_VERSION: step acs_version ${JSON.stringify(envelope.params.acs_version)} does not match negotiated_version ${JSON.stringify(expectedVersion)}`,
       ),
     };
+  }
+
+  if (envelope.method === "steps/sessionEnd") {
+    negotiatedVersions.delete(sessionId);
   }
 
   // Two gated branches, one per ACS method this Guardian assembles a snapshot
