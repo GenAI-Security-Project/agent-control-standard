@@ -1,0 +1,79 @@
+"""settings.json.example covers the Core hook set with fail-closed gates; Claude Code's command hooks carry no env field, so settings live in the command string."""
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ADAPTER_DIR = HERE.parents[2] / "src" / "acs" / "integrations" / "claude_code"
+from acs.integrations.claude_code import wire  # noqa: E402
+
+
+class ExampleConfigCoversCoreFloor(unittest.TestCase):
+    def setUp(self) -> None:
+        self.cfg = json.loads((HERE.parents[2] / "docs" / "claude_code" / "settings.json.example").read_text())
+        self.hooks = self.cfg.get("hooks", {})
+
+    def test_example_wires_full_core_minimum(self) -> None:
+        missing = set(wire.ACS_CORE_HOOKS) - set(self.hooks)
+        self.assertEqual(missing, set(),
+            f"settings.json.example (the copy-paste config) is missing "
+            f"Core-minimum hooks {sorted(missing)}; wired: {sorted(self.hooks)}")
+
+    def test_example_gate_hooks_are_fail_closed(self) -> None:
+        for hook in wire.GATE_HOOKS & set(wire.ACS_CORE_HOOKS):
+            entries = self.hooks.get(hook, [])
+            self.assertTrue(entries, f"gate hook {hook} missing from example")
+            entry = entries[0]["hooks"][0]
+            self.assertNotIn("env", entry,
+                "Claude Code's command-hook fields are command, args, async, "
+                "asyncRewake, shell plus the common ones. There is no `env`, so "
+                "anything there is dropped and the hook runs with Claude Code's "
+                "own environment. Use wire.py's inline VAR=value form.")
+            self.assertEqual(entry.get("onFailure"), "block",
+                f"gate hook {hook} must block its action when the hook itself fails (Claude Code v2.1.295+)")
+            cmd = entry["command"]
+            self.assertIn("ACS_DEFAULT_DENY=1", cmd,
+                f"gate hook {hook} must set ACS_DEFAULT_DENY=1 in the command "
+                f"string, the only channel Claude Code passes through")
+
+    def test_every_hook_carries_required_settings_inline(self) -> None:
+        """Without ACS_HMAC_SECRET_FILE every session is refused (§10), and without ACS_AUDIT_FILE the §6.4 audit stays on stderr."""
+        for hook, entries in self.hooks.items():
+            entry = entries[0]["hooks"][0]
+            self.assertNotIn("env", entry,
+                f"{hook}: per-hook `env` is not a Claude Code field and is "
+                f"silently dropped — use the inline VAR=value command form")
+            cmd = entry.get("command", "")
+            for required in ("ACS_GUARDIAN_URL=", "ACS_HMAC_SECRET_FILE=",
+                             "ACS_AUDIT_FILE="):
+                self.assertIn(required, cmd,
+                    f"{hook} must carry {required} inline: without a secret every session is refused (§10), "
+                    f"and without an audit file the §6.4 audit events land nowhere")
+
+    def test_example_equals_wire_py_output(self) -> None:
+        expected = {}
+        for hook in wire.ACS_CORE_HOOKS:
+            cmd = wire.build_command(
+                hook_command="/path/to/acs-claude-code-hook",
+                guardian_url="http://127.0.0.1:8787/acs",
+                secret_file="/path/to/.acs/hmac.key",
+                secret_env=None,
+                key_id="2026-11",
+                default_deny=(hook in wire.GATE_HOOKS),
+                host_allowlist=None,
+                audit_file="/path/to/.acs/audit.log",
+            )
+            gate = hook in wire.GATE_HOOKS
+            expected[hook] = [wire.build_hook_entry(cmd, block_on_failure=gate and hook in wire._ON_FAILURE_BLOCKS,
+                                                    timeout=wire.hook_timeout(hook))]
+        self.assertEqual(self.hooks, expected,
+            "settings.json.example has drifted from wire.py's output for "
+            "the documented placeholder arguments — regenerate it with "
+            "wire.build_command/build_hook_entry rather than hand-editing")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

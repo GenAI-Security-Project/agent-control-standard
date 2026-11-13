@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Run the selected adapter suites; any failure, or any skip outside EXPECTED_SKIPS (any skip with --strict), fails the run."""
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+# (label, cwd, discover-or-module)
+SHARED_SUITES = (
+    ("guardian-conformance", HERE, ("module", "tests.conformance.test_acs_core_conformance")),
+    ("_common",              HERE, ("discover", "tests/common")),
+    ("core",                 HERE, ("discover", "tests/core")),
+    ("client",               HERE, ("discover", "tests/client")),
+    ("package",              HERE, ("discover", "tests/package")),
+)
+
+PLATFORM_SUITES = {
+    "claude": ("claude-code", HERE, ("discover", "tests/integrations/claude_code")),
+    "cursor": ("cursor", HERE, ("discover", "tests/integrations/cursor")),
+    "nat": ("nat", HERE, ("discover", "tests/integrations/nat")),
+}
+
+PLATFORM_ALIASES = {
+    "claude": "claude",
+    "claude-code": "claude",
+    "cursor": "cursor",
+    "nat": "nat",
+}
+
+
+class _CountingResult(unittest.TextTestRunner.resultclass):
+    """Counts successes via addSuccess(): `testsRun - failures - skips`
+    underflows when a setUpClass error never increments testsRun."""
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.successes = 0
+
+    def addSuccess(self, test):  # noqa: N802
+        super().addSuccess(test)
+        self.successes += 1
+
+
+# Exact (suite, test id, reason) triples tolerated by default; any other skip fails the run.
+EXPECTED_SKIPS = frozenset({
+    ("cursor",
+     "tests.integrations.cursor.test_live.LiveCursorPlaceholder.test_run_manual_procedure",
+     "Cursor live verification is a manual procedure; see live_verification.md"),
+    ("claude-code",
+     "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_benign_bash_runs",
+     "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"),
+    ("claude-code",
+     "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_destructive_bash_blocked",
+     "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"),
+})
+
+
+def _is_expected_skip(suite: str, test_id: str, reason: str) -> bool:
+    return (suite, test_id, reason) in EXPECTED_SKIPS
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run shared ACS checks and the selected adapter emission suites."
+        )
+    )
+    parser.add_argument(
+        "platforms",
+        metavar="PLATFORM",
+        nargs="+",
+        choices=tuple(PLATFORM_ALIASES),
+        help="one or more of: claude, cursor, nat",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail on expected skips as well as unexpected skips",
+    )
+    return parser.parse_args(argv)
+
+
+def _select_suites(platforms: list[str]) -> list[tuple[str, Path, tuple[str, str]]]:
+    suites = list(SHARED_SUITES)
+    selected: set[str] = set()
+    for platform in platforms:
+        canonical = PLATFORM_ALIASES[platform]
+        if canonical not in selected:
+            suites.append(PLATFORM_SUITES[canonical])
+            selected.add(canonical)
+    return suites
+
+
+def _run_suite(cwd: Path, kind: tuple[str, str]) -> tuple[int, list[tuple[str, str]], int]:
+    """(passed, skipped, failed) for one suite; failed includes setUpClass and module errors, so a broken suite cannot read as green."""
+    loader = unittest.TestLoader()
+    sys.path.insert(0, str(cwd))
+    if kind[0] == "module":
+        suite = loader.loadTestsFromName(kind[1])
+    else:
+        suite = loader.discover(str(cwd / kind[1]), top_level_dir=str(cwd))
+    runner = unittest.TextTestRunner(verbosity=1, stream=sys.stderr,
+                                     resultclass=_CountingResult)
+    result = runner.run(suite)
+    failed = len(result.failures) + len(result.errors)
+    # t.id() is the module.Class.method form the allowlist keys on; str(t) differs on 3.11+.
+    skipped = [(t.id(), reason) for t, reason in result.skipped]
+    return result.successes, skipped, failed
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    suites = _select_suites(args.platforms)
+    rows: list[tuple[str, int, int, int]] = []
+    all_skips: list[tuple[str, str, str]] = []  # (suite, test id, reason)
+    # Each suite runs in its own subprocess, so module state cannot bleed between adapters.
+    for label, cwd, kind in suites:
+        cmd = [sys.executable, "-c",
+               "import sys, json; sys.argv=['x'];"
+               "from run_conformance import _run_suite; from pathlib import Path;"
+               f"p,s,f=_run_suite(Path({str(cwd)!r}), {kind!r});"
+               "print('__RESULT__' + json.dumps([p, s, f]))"]
+        proc = subprocess.run(cmd, cwd=str(HERE), capture_output=True, text=True)
+        sys.stderr.write(proc.stderr)
+        line = [ln for ln in proc.stdout.splitlines() if ln.startswith("__RESULT__")]
+        if not line:
+            sys.stderr.write(proc.stdout)
+            rows.append((label, 0, 0, 1))
+            continue
+        import json
+        p, skips, f = json.loads(line[0][len("__RESULT__"):])
+        rows.append((label, p, len(skips), f))
+        for test_id, reason in skips:
+            all_skips.append((label, test_id, reason))
+
+    print("\n" + "=" * 60)
+    print("ACS emission/reference-stack summary")
+    print("=" * 60)
+    print(f"{'suite':22s} {'pass':>5} {'skip':>5} {'fail':>5}")
+    tp = ts = tf = 0
+    for label, p, s, f in rows:
+        print(f"{label:22s} {p:5d} {s:5d} {f:5d}")
+        tp += p; ts += s; tf += f
+    print("-" * 60)
+    print(f"{'TOTAL':22s} {tp:5d} {ts:5d} {tf:5d}")
+    print("=" * 60)
+
+    unexpected = []
+    if all_skips:
+        print("Skipped tests:")
+        for suite, test_id, reason in all_skips:
+            expected = _is_expected_skip(suite, test_id, reason)
+            if not expected:
+                unexpected.append((suite, test_id, reason))
+            tag = "  (expected)" if expected else "  (UNEXPECTED)"
+            print(f"  - [{suite}] {test_id}\n      reason: {reason}{tag}")
+        print("=" * 60)
+
+    if tf:
+        print(f"FAILED — {tf} test(s) failed/errored.")
+        return 1
+    if unexpected:
+        print(f"FAILED — {len(unexpected)} UNEXPECTED skip(s). A skipped "
+              "test is not a passing test; a dependency-gated test that "
+              "silently skips must not bank as green. Install the missing "
+              "dependency (e.g. nvidia-nat-core) so it runs, or add it to "
+              "EXPECTED_SKIPS only if it genuinely cannot be automated.")
+        return 1
+    if args.strict and ts:
+        print(f"FAILED (--strict) — {ts} skipped; --strict requires zero "
+              "skips of any kind (including the manual Cursor procedure).")
+        return 1
+    print(f"OK — {tp} passed, {ts} skipped "
+          f"({len(all_skips) - len(unexpected)} expected).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

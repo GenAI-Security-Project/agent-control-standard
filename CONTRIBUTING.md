@@ -110,6 +110,16 @@ The guards in `tests/` check things the build itself will not catch, including s
 
 Put new guards in `tests/`. Collection is scoped there by `testpaths` in `pyproject.toml`, so a test written anywhere else never runs in CI and will pass review looking like coverage it does not provide. A suite that needs dependencies outside `uv.lock` belongs in its own workflow with its own environment, because the deploy gate installs only what the lockfile carries.
 
+For changes under `adapters/` (the reference adapters, example Guardian, and their test suites), run the adapter conformance gate before opening a PR — it lives in its own workflow (`.github/workflows/adapter_tests.yml`) with its own environment, per the rule above:
+
+```bash
+cd adapters                                         # its own uv project and lockfile
+uv sync --locked --extra nat --group test
+uv run python run_conformance.py claude cursor nat  # shared checks + those adapter suites
+```
+
+Without the NAT runtime, sync without `--extra nat` and leave `nat` off the command. The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. The same workflow also builds the package and checks the installed wheel outside the repository (`adapters/scripts/check_wheel.py`). See `adapters/README.md` for what the suite proves and its scope.
+
 For prose contributions, follow the [editorial style guide](./STYLE.md). For schema contributions, validate `specification/v0.1.0/acs_schema.json` against the JSON Schema spec before submitting.
 
 All submissions go through GitHub pull request review. See [GitHub's PR guide](https://docs.github.com/en/pull-requests) if you're new to the workflow.
