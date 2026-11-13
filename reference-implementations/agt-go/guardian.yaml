@@ -18,8 +18,11 @@ policy:
   opa_timeout: 4s
   ask_substitution: deny
   ask_approver: {type: human, id: deployment-default}
+  # The policy matches tool names exactly. Each alias maps a host's name for
+  # its shell tool to bash; Cursor sends `Shell`.
   tool_aliases:
     shell: bash
+    Shell: bash
 
 security:
   hmac_key_id: "2026-10"

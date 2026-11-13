@@ -149,8 +149,12 @@ func (p *process) clientWith(t *testing.T, key guardian.HMACKey) *observedagent.
 }
 
 func shell(command string) acs.ToolCallRequestPayload {
+	return shellTool("Bash", command)
+}
+
+func shellTool(tool, command string) acs.ToolCallRequestPayload {
 	return acs.ToolCallRequestPayload{
-		Tool:       acs.Tool{Name: "Bash"},
+		Tool:       acs.Tool{Name: tool},
 		Arguments:  map[string]acs.ToolArgument{"command": {Value: []byte(`"` + command + `"`)}},
 		RawCommand: &command,
 	}
@@ -178,13 +182,20 @@ func TestServesDecisions(t *testing.T) {
 			if o, err := c.Handshake(ctx, observedagent.DefaultHello(handshake.CoreMethods()...)); err != nil || o.Hello == nil || !o.Verified {
 				t.Fatalf("handshake: %v %s", err, o.Raw)
 			}
-			for command, want := range map[string]acs.Disposition{"echo rm -rf /": acs.Deny, "ls -la": acs.Allow} {
-				o, err := c.Send(ctx, observedagent.Request{Method: acs.StepToolCallRequest, Payload: shell(command)})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if o.Result == nil || !o.Verified || o.Result.Disposition != want || o.Result.ChainHash == "" {
-					t.Fatalf("%s: got %s", command, o.Raw)
+			// Bash is the policy's own name; shell (NAT) and Shell (Cursor) reach it
+			// through policy.tool_aliases in guardian.yaml.
+			for _, tool := range []string{"Bash", "shell", "Shell"} {
+				for command, want := range map[string]acs.Disposition{"echo rm -rf /": acs.Deny, "ls -la": acs.Allow} {
+					o, err := c.Send(ctx, observedagent.Request{Method: acs.StepToolCallRequest, Payload: shellTool(tool, command)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if o.Result == nil || !o.Verified || o.Result.Disposition != want || o.Result.ChainHash == "" {
+						t.Fatalf("%s %s: got %s", tool, command, o.Raw)
+					}
+					if want == acs.Deny && !slices.Contains(o.Result.ReasonCodes, "destructive_shell_command_blocked") {
+						t.Fatalf("%s %s: denied for %v, want destructive_shell_command_blocked", tool, command, o.Result.ReasonCodes)
+					}
 				}
 			}
 		})

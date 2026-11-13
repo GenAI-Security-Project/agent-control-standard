@@ -22,8 +22,8 @@ const MinHMACSecretBytes = sha256.Size
 // DecodeHMACSecret decodes input keying material written as standard base64
 // (RFC 4648 §4), surrounding whitespace ignored, and requires at least
 // MinHMACSecretBytes decoded bytes, the format #256 sets for every
-// reference implementation, so one secret file serves every
-// Guardian and host adapter in a deployment.
+// reference implementation. The adapters in adapters/ read their file
+// without decoding; docs/adapters.md shows how to give both the same secret.
 func DecodeHMACSecret(encoded []byte) ([]byte, error) {
 	secret, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(string(encoded)))
 	if err != nil {

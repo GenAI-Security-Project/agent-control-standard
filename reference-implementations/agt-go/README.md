@@ -29,6 +29,7 @@ These tests establish parity for the recorded behavior.
 | Configure a deployment | [Configuration](docs/configuration.md) |
 | Plug in your own engine, store, signer or audit log | [Extend the Guardian](docs/extending.md) |
 | Try a governed Codex or OpenCode session | [Codex example](examples/codex/README.md), [OpenCode example](examples/opencode/README.md) |
+| Govern Claude Code, Cursor or NAT through the reference adapters | [Run with the reference adapters](docs/adapters.md) |
 | Check the ACS-Core claims | [Conformance](docs/conformance.md) |
 | See what is signed and hashed, byte by byte | [Canonical form](docs/canonical-form.md) |
 | Compare with the TypeScript reference | [Differences](docs/differences.md), [TypeScript test parity](docs/test-parity.md) |
