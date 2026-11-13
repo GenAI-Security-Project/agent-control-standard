@@ -104,8 +104,9 @@ type ModificationsRule =
     };
 
 /** Which argument a tool's policy target lives in, for one intervention
- * point. `default` covers every tool `by_tool` does not name. */
-type PolicyTargetArgument = { default: string; by_tool?: Record<string, string> };
+ * point. `default` covers every tool `by_tool` does not name. Null or an
+ * absent entry means policy evaluates without copying a tool argument. */
+type PolicyTargetArgument = { default?: string | null; by_tool?: Record<string, string | null> };
 
 type InterventionPoint = {
   acs_method: string | null;
@@ -185,9 +186,10 @@ export function resolveInterventionPoint(acsMethod: string, mapping: Mapping): s
  * statements earlier -- and a resolver that took an envelope would couple this
  * module to the wire shape it currently knows nothing about.
  *
- * Answers `undefined` for a point that declares no table, which is the honest
- * answer for the result gate: that gate rewrites a leaf of the result payload
- * addressed by JSON pointer, and no tool argument is involved. A point the
+ * Answers `undefined` when no argument is named for this tool, including an
+ * explicit null entry. The result gate also declares no table: that gate
+ * rewrites a leaf of the result payload addressed by JSON pointer, and no
+ * tool argument is involved. A point the
  * table has no row for at all is a different thing and throws, for the same
  * reason `resolveInterventionPoint` throws rather than defaulting -- a mapping
  * that cannot answer must say so rather than guess.
@@ -210,18 +212,20 @@ export function resolvePolicyTargetArgument(
     return undefined;
   }
 
-  const named = table.by_tool?.[toolName];
-  if (typeof named === "string") {
-    return named;
+  const named = table.by_tool && Object.hasOwn(table.by_tool, toolName)
+    ? table.by_tool[toolName]
+    : table.default;
+  if (named === null || named === undefined) {
+    return undefined;
   }
 
-  if (typeof table.default !== "string") {
+  if (typeof named !== "string" || named.trim().length === 0) {
     throw new Error(
-      `mapping.yaml's intervention_points.${point}.policy_target_argument names no argument for tool ` +
-        `${JSON.stringify(toolName)} and declares no usable "default"`,
+      `mapping.yaml's intervention_points.${point}.policy_target_argument for tool ` +
+        `${JSON.stringify(toolName)} must name a non-empty argument or null`,
     );
   }
-  return table.default;
+  return named;
 }
 
 /** Resolves a field_synthesis `source: "verdict.<field>"` path against a verdict. */
