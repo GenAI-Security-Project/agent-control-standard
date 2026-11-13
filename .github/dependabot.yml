@@ -81,6 +81,21 @@ updates:
       # alone would always go red in CI.
       - dependency-name: "agent-control-specification*"
 
+  # The adapters are their own uv project, with their own lockfile, so the docs
+  # build never resolves NAT's dependency tree.
+  - package-ecosystem: "uv"
+    directory: "/adapters"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+
   # Go modules of the Go reference Guardian, so module updates arrive without
   # anyone touching the tree. The weekly run of reference-implementation-go.yml
   # covers advisories for the Go toolchain, which Dependabot does not move.
