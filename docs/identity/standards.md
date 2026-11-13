@@ -26,17 +26,17 @@ The diagram below frames how the standards on this page relate to each other and
 flowchart TB
     subgraph Legend["Legend"]
         direction LR
-        L1["Existing standard"]:::existing
+        L1["Published standard (adoption varies)"]:::existing
         L2["Emerging draft"]:::emerging
         L3["ACS"]:::acs
     end
 
     subgraph Human["Human Identity & Authorization"]
         OAuth20["OAuth 2.0 (RFC 6749)"]:::existing
-        OAuth21["OAuth 2.1"]:::existing
-        OIDC["OpenID Connect"]:::existingF
-        GNAP["GNAP (RFC 9635)"]:::existing
-        AMR["AMR (RFC 8176)"]:::existing
+        OAuth21["OAuth 2.1"]:::emerging
+        OIDC["OpenID Connect"]:::existing
+        GNAP["GNAP (RFC 9635, limited adoption)"]:::existing
+        AMR["OIDC method values: AMR (RFC 8176)"]:::existing
     end
 
     subgraph Workload["Workload Identity"]
@@ -92,7 +92,7 @@ flowchart TB
 
 ## Existing Standards
 
-The following standards are broadly adopted and form the foundation of modern identity systems.
+The following table includes published standards, claim-value registries, and the OAuth 2.1 draft. Adoption varies: OAuth 2.0 and OIDC are widely deployed; GNAP is published but has limited adoption. Publication does not imply broad deployment or make every entry a foundation of modern identity.
 
 | Standard | Description | Link |
 |---|---|---|
@@ -104,8 +104,8 @@ The following standards are broadly adopted and form the foundation of modern id
 | **RFC 9396, Rich Authorization Requests (RAR)** | Fine-grained, structured authorization requests beyond traditional OAuth scopes. **Required by ACS** for non-trivial agent actions. | [RFC 9396](https://datatracker.ietf.org/doc/rfc9396/) |
 | **RFC 9449, DPoP** | Sender-constrained access tokens that reduce token theft and replay attacks. Required by AIMS and ACS for agent contexts. | [RFC 9449](https://datatracker.ietf.org/doc/rfc9449/) |
 | **RFC 8705, mTLS Certificate-Bound Tokens** | Binds access tokens to client certificates for workload-to-workload authentication. | [RFC 8705](https://datatracker.ietf.org/doc/rfc8705/) |
-| **RFC 8176, AMR** | Standardized representation of authentication strength and methods. | [RFC 8176](https://datatracker.ietf.org/doc/rfc8176/) |
-| **GNAP (RFC 9635)** | Modern authorization protocol supporting interactive and delegated authorization flows. | [RFC 9635](https://datatracker.ietf.org/doc/rfc9635/) |
+| **RFC 8176, AMR** | Registry of authentication method values for the OIDC `amr` claim. Authentication context class belongs in `acr`, not `amr`. | [RFC 8176](https://datatracker.ietf.org/doc/rfc8176/) |
+| **GNAP (RFC 9635)** | Published authorization protocol supporting interactive and delegated flows, with limited adoption. | [RFC 9635](https://datatracker.ietf.org/doc/rfc9635/) |
 | **OpenID CIBA** | Client-Initiated Backchannel Authentication for out-of-band human approval. Used by AIMS for human-in-the-loop, but does **not** natively support mid-execution re-authorization (see [§ Why OAuth 2.0 Alone Doesn't Meet Agent Needs](#why-oauth-20-alone-doesnt-meet-agent-needs)). | [CIBA Core](https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html) |
 | **CAEP** | Continuous Access Evaluation Profile for near real-time session revocation and risk signaling. | [CAEP 1.0](https://openid.net/specs/openid-caep-specification-1_0.html) |
 | **OpenID Shared Signals Framework (SSF)** | Standardized risk, security, and session-change event sharing between systems. Adopted by AIMS as the eventing transport. | [Shared Signals WG](https://openid.net/wg/sharedsignals/) |
@@ -147,16 +147,16 @@ OAuth 2.0 is the foundation, but its design assumptions break for autonomous age
 
 | OAuth 2.0 Assumption | How Agents Break It | What Addresses It |
 |---|---|---|
-| **The client is a stable, registered software identity** with approximately constant behavior. | An agent's execution path is composed at runtime by a non-deterministic model over inputs that may include adversarial content (indirect prompt injection). A registered client with valid credentials can have its reasoning hijacked. OAuth client auth cannot distinguish "authenticated and behaving" from "authenticated and hijacked." | **ACS runtime enforcement.** No token-issuance standard can patch this; it requires inline behavioral verification at action time. |
-| **Delegation is single-hop** (`user → client → resource server`). | Agent chains are `user → orchestrator → sub-agent → tool → API`. RFC 8693 Token Exchange retrofits multi-hop but leaves chain verification, mandatory scope attenuation, and revocation propagation unspecified. A **delegation chain splicing vulnerability** was disclosed on the OAuth WG list in February 2026. | OAuth Identity Chaining draft; AIMS §10.5; **ACS delegation-integrity checks** at every hop. |
+| **The client is a stable, registered software identity** with approximately constant behavior. | An agent's execution path is composed at runtime by a non-deterministic model over inputs that may include adversarial content (indirect prompt injection). A registered client with valid credentials can have its reasoning hijacked. OAuth client auth cannot distinguish "authenticated and behaving" from "authenticated and hijacked." | RAR can express action-scoped authorization at issuance. Detecting misbehavior and checking intent at runtime are separate gaps addressed by Instrument and Intent controls; token issuance alone does not detect injected instructions. |
+| **Delegation is single-hop** (`user → client → resource server`). | Agent chains are `user → orchestrator → sub-agent → tool → API`. RFC 8693 represents actor history, but nested prior `act` claims are informational, not access control inputs. Recording and verifying history supports forensics; enforcement over a deep chain needs separate policy semantics. | OAuth Identity Chaining draft; AIMS §10.5. See the [example Guardian rule](overview.md#chain-integrity) using verified delegation grants, scope attenuation, and the immediate caller. General deep-chain enforcement remains unsettled. |
 | **Consent is grant-time, not action-time.** Approve scope once, client holds token until revoked. | Agents need consent that is **fresh** (user still present) and **granular** (this specific action, not just this scope). CAEP adds freshness signals; CIBA adds step-up, but **CIBA only covers client initiation**, not mid-execution re-authorization. AIMS §10.6 names this gap explicitly. | **ACS mid-execution step-up** and intent-aligned policy checks. |
 | **Scopes are pre-declared static strings** (`read`, `write`, `repo`). | Static scopes can't express per-action, per-resource, per-data-cell intent that agents operate at. | **RFC 9396 (RAR)**, required by ACS for non-trivial scopes. |
 | **Bearer tokens.** Possession is sufficient for use. | Agent memory, tool outputs, logs, and crash dumps are all token-leak surfaces. Prompt injection can exfiltrate tokens from working memory. | **DPoP (RFC 9449)** and **mTLS-bound tokens (RFC 8705)**, required by both AIMS and ACS. |
 | **Access tokens can live for an hour.** [RFC 6749 §4.2.2](https://www.rfc-editor.org/rfc/rfc6749#section-4.2.2) leaves `expires_in` RECOMMENDED, not REQUIRED, and 60-minute defaults are common in production. | The agent threat surface is continuous, not session-bounded. Any access token that outlives the current reasoning step is standing authority: an indirect prompt injection landing mid-task can spend whatever the token still permits, long after the step that justified it. | **Per-step, short-lived credentials** minted close to the call (see refresh-token row); proposed ACS lifetime ceilings (open work item). |
 | **Permissions are stateless between requests.** Each API call is evaluated against the token's fixed scope; there is no concept of accumulated effective authority. | Agents with persistent memory accumulate context, credentials, and derived permissions across sessions. A token issued for Task A can remain in memory when the agent pivots to Task B, and a hijacked session inherits everything the agent has accumulated. Cross-session memory lets a compromised session poison the authority of future ones. Token scope stays fixed while de facto capability grows. | **Session-scoped credential isolation, memory-bound token invalidation, and per-action re-authorization** (ACS mid-execution step-up). Identity workstream open work item. |
-| **Refresh tokens** assume the same user returning later to resume a session. | Long-lived refresh tokens stored in prompt-injection-readable agent memory are the worst-case credential. | **Short-lived credentials with aggressive rotation** (AIMS §6 sets the baseline; tighter ACS ceilings such as 15 min for LLM, 5 min for MCP, and 60 s for high-risk actions are **proposed** and tracked as an open work item until a normative clause exists to cite). |
-| **The IdP is always reachable.** | Agents operate at machine speed. An IdP outage forces a choice between denial of service and security regression (fall back to cached credentials). Neither OAuth nor AIMS specifies a failure-mode contract. | **Open ACS work item:** fail-closed vs. fail-cached vs. tier-dependent policy. |
-| **Client behavior is deterministic.** | Restatement of row 1, and the deepest problem: every other limitation can be patched with an extension. This one **cannot**. It requires a runtime layer that confines the authenticated client to its declared intent and scope, and intercepts actions that fall outside them. | **ACS, by definition.** |
+| **Refresh tokens** assume the same user returning later to resume a session. | Long-lived refresh tokens stored in prompt-injection-readable agent memory expose durable authority. Even a minute can permit harmful actions. | Keep refresh tokens outside model-visible context. For high-risk actions, use action-bound, single-use credentials where the risk warrants it, with replay prevention. A short lifetime alone is not the control; ACS does not set a high-risk lifetime ceiling here. |
+| **The IdP is always reachable.** | A resource server that cannot validate a token rejects the call. Local validation of a valid token may still work during an IdP outage; a cached policy decision is not equivalent to fresh validation. An attacker could cause an outage to trigger a permissive fallback. | **Fail-closed is the default** (`deny`), following [issue #32](https://github.com/GenAI-Security-Project/agent-control-standard/issues/32). Any fail-open or fail-cached path needs an explicit risk justification, bounded scope and duration, freshness and revocation checks, and trace evidence. Unavailable validation must not silently grant authority. |
+| **Client behavior is deterministic.** | A registered client can act on injected instructions while its credentials remain valid. Issuance can limit authorized actions but does not detect this change in behavior. | Combine action-scoped grants with runtime policy and intent checks. These controls need testing against misbehavior; no token format alone establishes the client's current intent. |
 
 > **Summary.** OAuth 2.0 plus its extensions (RAR, DPoP, mTLS-bound tokens, Token Exchange) plus the agent-specific drafts (AIMS, Transaction Tokens for Agents, Identity Chaining) cover **token issuance, binding, and propagation**. None of them cover **runtime enforcement of the authenticated agent's behavior**. That is the boundary ACS occupies.
 
@@ -255,7 +255,7 @@ If ACS and AIMS are positioned correctly, they are **complementary, not competin
 ### ACS handles, AIMS does not
 
 - **Runtime policy enforcement** as a policy decision point that returns allow / deny / modify verdicts inline, before an action reaches a production system
-- **Hook-level identity validation:** re-checking identity, delegation chain, and attestation at every agent decision point, not just at token issuance
+- **Hook-level identity validation:** consuming identity and attestation signals at action time. Recording and verifying delegation history supports forensics; using a deep chain for enforcement is separate, unsettled work. See the [example Guardian rule](overview.md#chain-integrity) and its deployment-specific prerequisites.
 - **Tainted-input handling:** tracking which agent invocations have ingested untrusted content and denying writes from tainted contexts
 - **Mid-execution step-up:** the runtime layer that recognizes when a CIBA challenge should fire (the gap AIMS §10.6 explicitly names)
 - **AgBOM enumeration:** dynamic inventory of every model, tool, capability, knowledge source, and dependency, joined to identity at runtime
@@ -269,7 +269,7 @@ If ACS and AIMS are positioned correctly, they are **complementary, not competin
 | Topic | Resolution |
 |---|---|
 | **Identifier model** | **Proposed: WIMSE identifier recommended, SPIFFE conformant.** Would align ACS with AIMS, WIMSE WG, and NIST. Pending WG sign-off and reconciliation with [docs/concepts/identity.md](../concepts/identity.md), which currently mandates no identifier scheme. |
-| **Token lifetimes** | AIMS sets the baseline; proposed ACS ceilings (15 min LLM / 5 min MCP / 60 s high-risk) are open work items pending a normative spec clause. |
+| **Token lifetimes** | Short lifetimes reduce exposure but are not sufficient for high-risk actions. Use action-bound, single-use credentials where the risk warrants it, with replay prevention; no high-risk lifetime ceiling is specified here. |
 | **Sender-constrained tokens** | Both require DPoP or mTLS. Cross-reference, no divergence. |
 | **Audit logging** | ACS identity blocks **extend** AIMS minimum audit event fields rather than diverging from them. |
 
