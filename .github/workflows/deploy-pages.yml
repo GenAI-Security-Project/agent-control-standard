@@ -1,0 +1,245 @@
+# Builds and publishes the landing page, the documentation site, and the JSON schemas.
+# Pull requests test and build without deploying. Merge to main publishes with no human
+# in the loop, so every guard runs here rather than on a contributor's laptop.
+name: Deploy Pages
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Who started this run. The nightly roadmap refresh passes 'nightly'."
+        type: string
+        default: manual
+      preview:
+        description: "Build roadmap data from live GitHub without publishing anything."
+        type: boolean
+        default: false
+
+# Deny by default. Each job grants itself only what it needs.
+permissions: {}
+
+# One group for every deploy so they serialize on the single Pages site they share.
+# Pull request builds group per ref and cancel stale runs. Keying everything on ref
+# would let a dispatch on a branch deploy alongside a push to main.
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked
+
+      - name: Run the guards
+        run: uv run pytest -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.gate.outputs.publish }}
+    permissions:
+      contents: read
+      # configure-pages calls GET /repos/{owner}/{repo}/pages, which needs this.
+      pages: read
+      # The roadmap fetch reads milestones and issues. Public data, read-only.
+      issues: read
+      # The fetch reads which pull request closed each issue, so roadmap.json can verify
+      # that the close landed on main (decision 13). Read-only.
+      pull-requests: read
+    steps:
+      - name: Decide whether this run deploys
+        id: gate
+        # Through env, never interpolated into the shell. sync_version.yml documents why:
+        # github context data is untrusted input and a run: string is not the place for it.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          PREVIEW: ${{ inputs.preview }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ] && [ "$REF_NAME" = "refs/heads/main" ] && [ "$PREVIEW" != "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          # The roadmap fetch asks git whether each closing commit is on main. A shallow
+          # clone cannot answer, and the fetch then reports the data unavailable.
+          fetch-depth: 0
+
+      - name: Fetch roadmap data
+        # The first tool step, before setup-uv installs anything, so no third-party code has
+        # run in this job while the token is in use. Pull requests render the committed
+        # fixture instead, so a fork pull request spends no API calls.
+        if: github.event_name != 'pull_request' && (vars.ROADMAP_RENDER_ENABLED == 'true' || inputs.preview)
+        timeout-minutes: 5
+        # A killed or failed fetch must never fail the job, which would skip the schema
+        # publish. The next step treats a missing data file as "unavailable".
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -S tools/fetch_roadmap.py --out "$RUNNER_TEMP/roadmap-data.json"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+          # setup-uv defaults this input to the job token, which now carries issues: read.
+          # The version is pinned, so it needs no API call.
+          github-token: ""
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked --no-dev
+
+      - name: Configure Pages
+        id: pages
+        # Gated on the same branch check the deploy job enforces. Without it, a
+        # workflow_dispatch from a feature branch configured Pages and uploaded an
+        # artifact that the deploy job then declined to publish.
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Build the documentation site
+        env:
+          # mkdocs.yml reads site_url from this, and MkDocs builds into _site/docs/, so
+          # the value must name the docs subpath. Passing the site root makes every
+          # canonical URL and every sitemap entry omit /docs/ and resolve to a 404.
+          GITHUB_PAGES_URL: ${{ steps.pages.outputs.base_url && format('{0}/docs/', steps.pages.outputs.base_url) || 'https://owaspacs.org/docs/' }}
+        run: uv run --no-dev mkdocs build --strict -d _site/docs
+
+      - name: Copy the 404 page to the site root
+        # Pages serves only a root-level 404.html, for a miss at any depth. The MkDocs
+        # page links from the site root, so it works from any address that missed.
+        run: cp _site/docs/404.html _site/404.html
+
+      - name: Render the landing page
+        run: uv run --no-dev python tools/render_landing.py landing _site
+
+      - name: Check the landing page names the release
+        # At build time rather than after publishing. The Pages CDN and the Cloudflare proxy
+        # in front of it can both serve the previous page for minutes after a good deploy.
+        # The match includes the link, because a spec version equal to the release would
+        # satisfy a search for the number alone.
+        run: |
+          VERSION="$(tr -d '[:space:]' < version.txt)"
+          grep -qF "/releases/tag/v${VERSION}\"><code>v${VERSION}</code>" _site/index.html || {
+            echo "::error file=landing/index.html::The landing page does not show release v${VERSION}"
+            exit 1
+          }
+
+      - name: Publish the schemas
+        # Fails when any $id is unsafe or duplicated, or any $ref does not resolve.
+        run: uv run --no-dev python tools/publish_schemas.py specification _site/schema
+
+      - name: Build the roadmap data
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE: ${{ inputs.source }}
+          PREVIEW: ${{ inputs.preview }}
+          RENDER_ENABLED: ${{ vars.ROADMAP_RENDER_ENABLED }}
+          COMMIT: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          PAGES_BASE: ${{ steps.pages.outputs.base_url || 'https://owaspacs.org' }}
+        run: >-
+          python3 tools/build_roadmap_data.py
+          --data "$RUNNER_TEMP/roadmap-data.json"
+          --fixture tests/fixtures/roadmap-data.json
+          --out _site/roadmap/roadmap.json
+          --repo-root .
+          --event "$EVENT_NAME" --source "$SOURCE" --preview "$PREVIEW"
+          --render-enabled "$RENDER_ENABLED"
+          --commit "$COMMIT" --run "$RUN_ID"
+          --published-url "${PAGES_BASE%/}/roadmap/roadmap.json"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the custom domain in the artifact
+        # GitHub ignores this file when Actions publishes the site. The repository's
+        # Pages setting is what binds the domain, so this records the intended name in
+        # the artifact and changes nothing on its own. It goes in here, not landing/,
+        # because the landing render copies only what it knows about.
+        run: printf 'owaspacs.org\n' > _site/CNAME
+
+      - name: Upload the artifact
+        # Gated on the same branch check the deploy job enforces, rather than on
+        # the event alone. If the gate step is ever skipped, its output is empty and this step
+        # fails closed rather than uploading an artifact the deploy job would decline.
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+          # The default is one day, which would expire the fastest rollback path:
+          # re-running the deploy job of the last good run.
+          retention-days: 30
+
+  deploy:
+    # event_name alone is not enough. workflow_dispatch can target any ref, so without
+    # the branch check a feature branch could publish to the production site.
+    if: needs.build.outputs.publish == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: Verify the published schemas
+        # 44 checks at six attempts of ten seconds apiece can run well over half an
+        # hour during a real outage. The cap sits on this step rather than the job so
+        # it cannot cancel the deploy action above it, which has already published.
+        timeout-minutes: 20
+        # The $id URIs, never the deployment's page_url. The verifier requires each
+        # schema to serve the URL it was asked for, and on the custom domain page_url
+        # names a host no $id declares. These URIs 301 to the domain and urllib follows.
+        env:
+          PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
+        run: |
+          python3 tools/verify_published.py "${PAGE_URL%/}/schema" --from specification
+
+      - name: Verify the published navigation
+        # Its own step, so a navigation failure never hides a schema failure or the
+        # reverse. The verifier polls up to thirteen minutes because the Pages CDN caches
+        # for ten and no request header clears it. The cap leaves room for slow fetches.
+        timeout-minutes: 15
+        # Through env, never interpolated into the shell. sync_version.yml documents why.
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: python3 tools/verify_site_nav.py "$PAGE_URL"

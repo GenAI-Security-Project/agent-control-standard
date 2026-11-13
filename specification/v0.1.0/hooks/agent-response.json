@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/agent-response.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agent-response.json",
   "title": "steps/agentResponse payload",
   "description": "Payload for the agentResponse hook. Fires when the agent's response is ready, before reaching the user.",
   "type": "object",

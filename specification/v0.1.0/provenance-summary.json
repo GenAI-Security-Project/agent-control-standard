@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/provenance-summary.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/provenance-summary.json",
   "title": "ACS Provenance Summary",
   "description": "Condensed view of provenance facts for cumulative or session-level policy decisions. Computed by Guardian framework code from the Provenance objects observed at a step (entry-level summary) or across the session to date (session-level summary). All fields are OPTIONAL — Guardians populate the fields their policies actually consume. Used by paradigms that reason over accumulated context (AARM cumulative-context, FIDES session-level integrity); paradigms that don't (e.g., pure IBAC) can omit the entire object. v0.1 summaries carry origin-derived aggregates only; trust-derived aggregates (e.g., lowest_trust, earliest_untrusted_step_id) are Guardian-internal in v0.1 because trust classification is computed in policy from origin/source_id, not carried on the wire (§7.1).",
   "type": "object",

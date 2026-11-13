@@ -1,22 +1,23 @@
-site_name: Agent Control Standard
+site_name: OWASP Agent Control Standard
 site_url: !ENV GITHUB_PAGES_URL
 site_description: >-
   An industry standard for building trustworthy AI agents - instrumentable, traceable and inspectable
    to enable enterprise-wide adoption with confidence.
 
 # Repository
-repo_name: Agent-Control-Standard/ACS
-repo_url: https://github.com/Agent-Control-Standard/ACS
-edit_uri: edit/dev/docs/
+repo_name: GenAI-Security-Project/agent-control-standard
+repo_url: https://github.com/GenAI-Security-Project/agent-control-standard
+edit_uri: edit/main/docs/
 
 # Copyright
-copyright: Copyright &copy; 2025 ACS
+copyright: Copyright &copy; 2025-2026 The OWASP GenAI Security Project and the ACS contributors. Documentation licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.
 
 docs_dir: docs
 
 theme:
   name: material
-  logo: assets/logo.png
+  custom_dir: overrides
+  logo: assets/icon.svg
   features:
     - search.suggest
     # edit this page for each doc page
@@ -24,52 +25,65 @@ theme:
     # enable synchronized tabs
     - content.tabs.link
   palette:
-    - media: "(prefers-color-scheme)"
-      toggle:
-        icon: material/link
-        name: Switch to light mode
+    # The media queries pick the reader's system preference on first load. The toggle
+    # then overrides it, which is the same two-state behavior the landing page has.
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
       toggle:
-        icon: material/toggle-switch
+        icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: black
-      accent: indigo
       toggle:
-        icon: material/toggle-switch-off
-        name: Switch to system preference
-  font:
-    text: Roboto
-    code: Roboto Mono
-  favicon: assets/logo.png
+        icon: material/weather-sunny
+        name: Switch to light mode
+  font: false
+  favicon: assets/icon.svg
 
 plugins:
   - search
 
 # Additional configuration
 extra:
-  analytics:
-    provider: google
-    property: !ENV GOOGLE_ANALYTICS_KEY
   social:
-    - icon: /fontawesome/regular/envelope
-      name: Send us an email
-      link: mailto:acs@zenity.io
+    - icon: /fontawesome/brands/github
+      name: Join the discussion on GitHub
+      link: https://github.com/GenAI-Security-Project/agent-control-standard/discussions
+  # The left navigation pane on both surfaces. The nav: list below is the docs half.
+  # This block holds what nav: cannot express. tools/render_landing.py and
+  # overrides/partials/nav.html both read it, so a change here changes the landing page
+  # and the docs site together.
+  acs_nav:
+    landing_sections:
+      - {title: The problem, anchor: problem}
+      - {title: The solution, anchor: solution}
+      - {title: How it works, anchor: architecture}
+      - {title: Why now, anchor: why-now}
+      - {title: Built with the community, anchor: built-with}
+      - {title: Spec status, anchor: status}
+      - {title: Contribute, anchor: contribute}
+    external_resources:
+      - {title: GitHub, url: "https://github.com/GenAI-Security-Project/agent-control-standard"}
+      - {title: Roadmap, url: "https://github.com/GenAI-Security-Project/agent-control-standard/milestones"}
+      - {title: Slack, url: "https://owasp.slack.com"}
+    # Pages that exist in the build but stay out of nav: on purpose.
+    out_of_nav_prefixes:
+      - spec/instrument/a2a/hooks/
 
 nav:
   - Trustworthy Agents: README.md
   - ACS: acs.md
+  - FAQ: topics/faq.md
   - Topics:
     - Core concepts: topics/core_concepts.md
     - ACS in Action: topics/ACS_in_action_example.md
   - Concepts:
     - Overview: concepts/README.md
     - Agents: concepts/agents.md
-    - Identity: concepts/identity.md
+    - Identity:
+      - Overview: concepts/identity.md
+      - Identity for Agents: identity/overview.md
+      - Standards: identity/standards.md
     - Session Lifecycle: concepts/session-lifecycle.md
     - Intent: concepts/intent.md
     - Capability: concepts/capability.md
@@ -78,6 +92,7 @@ nav:
     - Trust Basis: concepts/trust.md
   - Specification:
     - Conformance Profiles: spec/conformance.md
+    - Conformance Claim Template: spec/conformance-claim-template.md
     - Instrument:
       - Overview: spec/instrument/README.md
       - Supported Hooks: spec/instrument/hooks.md
@@ -100,6 +115,21 @@ nav:
 extra_css:
   - stylesheets/extra.css
 
+# Mermaid, served from this repository rather than fetched from a CDN.
+#
+# mkdocs-material's bundle lazily loads mermaid from https://unpkg.com/mermaid@11/
+# whenever it meets a diagram, which puts third-party executable code in a visitor's
+# browser on every page that has one. That defeats the premise of the third-party guard
+# in tests/, and the version there is a range rather than a pin, so unpkg decides which
+# 11.x a reader runs. Declaring the library here defines `window.mermaid` before the
+# theme checks for it, and the theme's own guard clause then skips the fetch.
+#
+# Pinned at 11.17.2. The byte-for-byte digest is asserted by tests/test_site_config.py,
+# so a silent swap fails the build rather than shipping.
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+  - assets/javascripts/mermaid-init.js
+
 markdown_extensions:
   # Emojis
   - attr_list
@@ -113,7 +143,19 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        # The class is deliberately NOT `mermaid`. mkdocs-material scans for that
+        # class, and finding it does two unwanted things: it fetches the mermaid
+        # library from https://unpkg.com at runtime, and its own rendering pass empties
+        # the block before drawing anything, which is why the one diagram already in
+        # this documentation has never rendered on the published site. Naming the class
+        # something the theme does not recognise leaves both to
+        # assets/javascripts/mermaid-init.js, which renders from the copy of the library
+        # this repository serves. Authors still write ```mermaid fences.
+        - name: mermaid
+          class: acs-diagram
+          format: !!python/name:pymdownx.superfences.fence_code_format
   # Callouts
   - admonition
   - pymdownx.details

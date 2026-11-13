@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/session-end.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-end.json",
   "title": "steps/sessionEnd payload",
   "description": "Payload for the sessionEnd hook. Fires when the session terminates. Asynchronous; does not block agent.",
   "type": "object",
@@ -19,6 +19,14 @@
         "errors": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "decision_failures": {
+          "type": "object",
+          "description": "Decision failures the Observed Agent recorded in this session, counted per failure class (Specification 6.4). The classes are the acs.failure.class values in trace/otel-mapping.json. A class with no failures MAY be omitted or set to 0. A reader treats a session that ends without this object as unmeasurable.",
+          "propertyNames": {
+            "enum": ["timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error", "signature_invalid", "handshake_failure", "other"]
+          },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
         }
       }
     },

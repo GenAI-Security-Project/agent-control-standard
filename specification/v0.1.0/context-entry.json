@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/context-entry.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/context-entry.json",
   "title": "ACS ContextEntry",
   "description": "Append-only entry in a SessionContext's audit chain. Maintained server-side by the Guardian; not transmitted in full on the wire (the wire-visible commitment is chain_hash inside the request envelope's metadata.session_state). Defined here so that hash-chain verification is portable across implementations: any conformant Guardian MUST produce the same entry_hash for the same step content under the rules below, otherwise cross-implementation audit comparison and chain-mismatch detection break. Storage representation is implementation-defined (in-memory, append-only log, SQL row, etc.); this schema constrains the canonical form used for hashing and audit export, not how Guardians store the data internally.",
   "type": "object",

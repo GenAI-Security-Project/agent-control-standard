@@ -1,0 +1,82 @@
+# Dependabot version updates.
+#
+# Security updates are enabled separately in repository settings and fire on
+# advisories regardless of this file. This config covers routine version
+# drift, so a dependency is current before it becomes a CVE. Bun is the
+# exception: Dependabot has no security updates for it, so the Bun entry below
+# is the only automated update path for the AGT reference implementation.
+#
+# Every ecosystem sets a cooldown. A compromised release is most dangerous in
+# the hours after publication, and registry takeovers are usually caught and
+# yanked within days. Waiting before proposing a bump costs nothing here and
+# keeps a poisoned version from landing in a PR that looks routine.
+
+version: 2
+# No target-branch key. Dependabot follows the default branch, which is `integration`,
+# so both routine and security updates land there and never meet the base-branch guard.
+# Setting target-branch would make this depend on undocumented security-update targeting
+# behavior for no benefit.
+updates:
+  # GitHub Actions run with write access to the repository. Actions are pinned
+  # to commit SHAs in the workflows, and Dependabot understands SHA pins and
+  # updates them along with the version comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+
+  # Python dependencies resolved through uv.lock. The only runtime surface is
+  # the documentation build and the version-sync script.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+    groups:
+      # Patch and minor bumps for the docs toolchain land as one PR. Majors
+      # stay separate, since mkdocs-material majors have broken builds before.
+      docs-toolchain:
+        patterns:
+          - "mkdocs*"
+          - "mike"
+          - "pymdown-extensions"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The AGT reference implementation is a Bun workspace. Dependabot reads the
+  # workspace list from the root package.json, so this one entry covers every
+  # package and host under it and updates bun.lock in the same PR.
+  - package-ecosystem: "bun"
+    directory: "/reference-implementations/agt"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+    ignore:
+      # agt.lock pins this SDK to the vendored AGT commit, and test/pin.test.ts
+      # fails when package.json and the lock disagree. The SDK moves together
+      # with agt_ref as one deliberate change, so a Dependabot bump of the SDK
+      # alone would always go red in CI.
+      - dependency-name: "agent-control-specification*"

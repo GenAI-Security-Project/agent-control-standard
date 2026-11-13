@@ -1,0 +1,19 @@
+{#-
+  Renders the repository link in the documentation header.
+
+  The theme's own partial sets data-md-component="source", which makes it fetch release
+  and star counts from api.github.com on every page load and sends each reader's IP
+  address to a third party. This override exists to render the link without that hook.
+
+  The class names come from the theme's stylesheet, which is what styles this element.
+  The mark comes from the Simple Icons set the theme bundles, which is CC0 and so adds
+  no attribution obligation to the pages it is inlined into.
+-#}
+<a class="md-source" href="{{ config.repo_url }}" title="{{ config.repo_name }}">
+  <div class="md-source__icon md-icon">
+    {% include ".icons/simple/github.svg" %}
+  </div>
+  <div class="md-source__repository">
+    {{ config.repo_name }}
+  </div>
+</a>

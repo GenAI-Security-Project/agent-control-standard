@@ -1,0 +1,98 @@
+/**
+ * The Guardian's standalone CLI entrypoint -- `bun run guardian`.
+ *
+ * The tests use the Guardian in-process, calling `startGuardian` directly. The
+ * demo needs it as a long-running process a hook subprocess can reach over
+ * HTTP, so this file makes the runbook's "start the Guardian" step a real
+ * command. Not re-exported from `./index.ts`: this is a process entrypoint,
+ * not a library call.
+ *
+ * `ACS_GUARDIAN_PORT` defaults to 8787 -- the same default port
+ * `hosts/claude-code/acs-hook.ts` assumes for `ACS_GUARDIAN_URL` when that
+ * env var is unset, so the runbook and the shim agree without either
+ * hardcoding the other's value.
+ *
+ * `ACS_GUARDIAN_HOST` is left unset by default, which leaves startGuardian's
+ * loopback bind in place -- see server.ts's header for why an unauthenticated
+ * endpoint defaults to the narrowest bind. This is where a deployment that
+ * needs a routable one says so, since env is this process's configuration
+ * surface and server.ts reads none itself.
+ */
+import { buildServerHello } from "./handshake.ts";
+import { keepLoopbackOffProxy, loopbackProxyWarning } from "./loopback-proxy.ts";
+import { startGuardian } from "./server.ts";
+
+const DEFAULT_PORT = 8787;
+const DEFAULT_MANIFEST_PATH = "policy/manifest.yaml";
+const DEFAULT_ENVELOPE_LOG = ".acs/envelopes.jsonl";
+const DEFAULT_SESSION_CONTEXT_LOG = ".acs/session-context.jsonl";
+
+const port = Number(process.env.ACS_GUARDIAN_PORT ?? DEFAULT_PORT);
+const hostname = process.env.ACS_GUARDIAN_HOST;
+const manifestPath = process.env.ACS_MANIFEST_PATH ?? DEFAULT_MANIFEST_PATH;
+const envelopeLogPath = process.env.ACS_ENVELOPE_LOG ?? DEFAULT_ENVELOPE_LOG;
+const sessionContextLog = process.env.ACS_SESSION_CONTEXT_LOG ?? DEFAULT_SESSION_CONTEXT_LOG;
+// Trace export is off unless one of these names an output. Read here and
+// passed in, like ACS_ENVELOPE_LOG: server.ts reads no env itself.
+const otelTraceFile = process.env.ACS_OTEL_FILE;
+const otelTraceEndpoint = process.env.ACS_OTEL_ENDPOINT;
+// The proxy variables are environment too, so they are read and edited here
+// and never by the exporter. The warning judges them as the operator set
+// them, before the edit: Bun 1.3.11 ignores a runtime edit, and there the
+// warning is all the operator gets. An endpoint that is not a URL is left to
+// the exporter, which reports it and disables that output without stopping
+// the Guardian.
+if (otelTraceEndpoint !== undefined) {
+  try {
+    const warning = loopbackProxyWarning(otelTraceEndpoint, process.env);
+    if (warning !== undefined) {
+      console.error(warning);
+    }
+    keepLoopbackOffProxy(otelTraceEndpoint, process.env);
+  } catch {
+    // Not a URL. createOtelTraceExporter reports it below.
+  }
+}
+
+// Read and validate the posture BEFORE starting the server. Not the audit
+// sink's path: that file is the host's, written by the hook, not by
+// this process, so this Guardian has no way to know it. What this process
+// does know -- and is about to declare to every session that handshakes --
+// is the posture. Calling buildServerHello() with no argument here reads
+// the same `process.env.ACS_ON_DECISION_FAILURE` a real handshake would, so
+// this line and the first handshake always agree. Reading it first, not
+// last, means an invalid override value throws before "Guardian listening"
+// ever prints -- an operator watching the terminal sees a crash, never a
+// healthy start immediately followed by one.
+const posture = buildServerHello().on_decision_failure;
+
+const guardian = await startGuardian({
+  port,
+  hostname,
+  manifestPath,
+  envelopeLogPath,
+  sessionContextLog,
+  otelTraceFile,
+  otelTraceEndpoint,
+});
+console.log(`Guardian listening at ${guardian.url}`);
+console.log(`Envelope log: ${envelopeLogPath}`);
+console.log(`Session context log: ${sessionContextLog}`);
+console.log(`Failure posture: ${posture}   (override with ACS_ON_DECISION_FAILURE=deny)`);
+
+// Only when export is on. The four lines above are what README.md captures
+// and test/readme-captures.test.ts holds them to the line, so a fifth line
+// appears only for a Guardian the quickstart does not run.
+const traceOutputs = [otelTraceFile, otelTraceEndpoint].filter((target): target is string => target !== undefined);
+if (traceOutputs.length > 0) {
+  console.log(`OTel traces: ${traceOutputs.join(", ")}`);
+  // The last batch of spans reaches its output only if the processor is
+  // flushed before the process goes, so a signal closes the Guardian rather
+  // than ending it mid-batch.
+  const stop = async (): Promise<void> => {
+    await guardian.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+}

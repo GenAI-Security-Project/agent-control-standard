@@ -1,0 +1,33 @@
+name: Documentation
+description: A page is wrong, unclear, or missing.
+title: "[Docs] "
+labels: ["type:docs", "status:needs-triage"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: URL or file path.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+    validations:
+      required: true
+  - type: dropdown
+    id: priority-scope
+    attributes:
+      label: Current Priority Scope
+      description: >-
+        Read the Current Priority Scope in CONTRIBUTING.md before answering. An honest
+        "deferred" is more useful to us than a hopeful "in focus".
+      options:
+        - Feeds the runnable Guardian reference implementation
+        - Feeds the AGT interoperability benchmark
+        - Feeds conformance evidence
+        - This is deferred or out of scope and I am filing it to be tracked
+        - I am not sure
+    validations:
+      required: true

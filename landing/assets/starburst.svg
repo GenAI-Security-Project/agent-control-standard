@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 680" fill="none"
+     role="img"
+     font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+     aria-label="Six agent decision points routed through a central ACS control panel">
+  <style>
+    /* SMIL does not respond to `animation: none`. Disabling the elements is what works. */
+    @media (prefers-reduced-motion: reduce) {
+      animate, animateMotion, animateTransform { display: none; }
+    }
+  </style>
+  <defs>
+    <radialGradient id="acs-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="currentColor" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="currentColor" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <circle cx="340" cy="340" r="150" fill="url(#acs-glow)" color="var(--acs-hex-stroke)">
+    <animate attributeName="r" values="140;170;140" dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Orbit rings expand outward on an eight second cycle, offset by half. -->
+  <circle cx="340" cy="340" r="60" fill="none" stroke="var(--acs-hex-stroke)" stroke-width="0.5" opacity="0">
+    <animate attributeName="r" values="60;240" dur="8s" begin="0s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.2;0" dur="8s" begin="0s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="340" cy="340" r="60" fill="none" stroke="var(--acs-hex-stroke)" stroke-width="0.5" opacity="0">
+    <animate attributeName="r" values="60;240" dur="8s" begin="4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.2;0" dur="8s" begin="4s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- One group per node: a dashed quadratic spoke, a particle traveling it, the node,
+       and a two-line label. Particle begin times stagger by 1.5s so traffic reads as
+       continuous rather than synchronized. -->
+  <g>
+    <path d="M340,340 Q356,197 340,80" stroke="var(--acs-spoke)" stroke-width="1.2" stroke-dasharray="4 3" fill="none"/>
+    <circle r="3.5" fill="var(--acs-node-stroke)" opacity="0.7">
+      <animateMotion dur="5s" begin="0s" repeatCount="indefinite" path="M340,340 Q356,197 340,80"/>
+    </circle>
+    <circle cx="340" cy="80" r="48" fill="var(--acs-node-fill)" stroke="var(--acs-node-stroke)" stroke-width="2"/>
+    <text x="340" y="75" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">LLM</text>
+    <text x="340" y="96" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">agent</text>
+  </g>
+  <g>
+    <path d="M340,340 Q471.84,282.36 565.17,210" stroke="var(--acs-spoke)" stroke-width="1.2" stroke-dasharray="4 3" fill="none"/>
+    <circle r="3.5" fill="var(--acs-node-stroke)" opacity="0.7">
+      <animateMotion dur="5.3s" begin="1.5s" repeatCount="indefinite" path="M340,340 Q471.84,282.36 565.17,210"/>
+    </circle>
+    <circle cx="565.17" cy="210" r="48" fill="var(--acs-node-fill)" stroke="var(--acs-node-stroke)" stroke-width="2"/>
+    <text x="565.17" y="205" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">Tool</text>
+    <text x="565.17" y="226" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">call</text>
+  </g>
+  <g>
+    <path d="M340,340 Q455.84,425.36 565.17,470" stroke="var(--acs-spoke)" stroke-width="1.2" stroke-dasharray="4 3" fill="none"/>
+    <circle r="3.5" fill="var(--acs-node-stroke)" opacity="0.7">
+      <animateMotion dur="5.6s" begin="3s" repeatCount="indefinite" path="M340,340 Q455.84,425.36 565.17,470"/>
+    </circle>
+    <circle cx="565.17" cy="470" r="48" fill="var(--acs-node-fill)" stroke="var(--acs-node-stroke)" stroke-width="2"/>
+    <text x="565.17" y="465" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">Output</text>
+    <text x="565.17" y="486" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">guard</text>
+  </g>
+  <g>
+    <path d="M340,340 Q324,483 340,600" stroke="var(--acs-spoke)" stroke-width="1.2" stroke-dasharray="4 3" fill="none"/>
+    <circle r="3.5" fill="var(--acs-node-stroke)" opacity="0.7">
+      <animateMotion dur="5.9s" begin="4.5s" repeatCount="indefinite" path="M340,340 Q324,483 340,600"/>
+    </circle>
+    <circle cx="340" cy="600" r="48" fill="var(--acs-node-fill)" stroke="var(--acs-node-stroke)" stroke-width="2"/>
+    <text x="340" y="595" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">Sub</text>
+    <text x="340" y="616" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">agent</text>
+  </g>
+  <g>
+    <path d="M340,340 Q208.16,397.64 114.83,470" stroke="var(--acs-spoke)" stroke-width="1.2" stroke-dasharray="4 3" fill="none"/>
+    <circle r="3.5" fill="var(--acs-node-stroke)" opacity="0.7">
+      <animateMotion dur="6.2s" begin="6s" repeatCount="indefinite" path="M340,340 Q208.16,397.64 114.83,470"/>
+    </circle>
+    <circle cx="114.83" cy="470" r="48" fill="var(--acs-node-fill)" stroke="var(--acs-node-stroke)" stroke-width="2"/>
+    <text x="114.83" y="465" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">Memory</text>
+    <text x="114.83" y="486" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">store</text>
+  </g>
+  <g>
+    <path d="M340,340 Q224.16,254.64 114.83,210" stroke="var(--acs-spoke)" stroke-width="1.2" stroke-dasharray="4 3" fill="none"/>
+    <circle r="3.5" fill="var(--acs-node-stroke)" opacity="0.7">
+      <animateMotion dur="6.5s" begin="7.5s" repeatCount="indefinite" path="M340,340 Q224.16,254.64 114.83,210"/>
+    </circle>
+    <circle cx="114.83" cy="210" r="48" fill="var(--acs-node-fill)" stroke="var(--acs-node-stroke)" stroke-width="2"/>
+    <text x="114.83" y="205" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">Code</text>
+    <text x="114.83" y="226" text-anchor="middle" fill="var(--acs-text-soft)" font-size="17">exec</text>
+  </g>
+
+  <g>
+    <polygon points="340,272 398.89,306 398.89,374 340,408 281.11,374 281.11,306"
+             fill="var(--acs-hex-fill)" stroke="var(--acs-hex-stroke)" stroke-width="2"/>
+    <polygon points="340,291.04 382.4,315.52 382.4,364.48 340,388.96 297.6,364.48 297.6,315.52"
+             fill="none" stroke="var(--acs-hex-stroke)" stroke-width="0.5" opacity="0.4"/>
+    <text x="340" y="326" text-anchor="middle" fill="var(--acs-text)" font-size="18">ACS</text>
+    <text x="340" y="346" text-anchor="middle" fill="var(--acs-text)" font-size="18">control</text>
+    <text x="340" y="366" text-anchor="middle" fill="var(--acs-text)" font-size="18">panel</text>
+  </g>
+</svg>

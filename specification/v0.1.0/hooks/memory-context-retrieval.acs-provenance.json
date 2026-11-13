@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/memory-context-retrieval.acs-provenance.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/memory-context-retrieval.acs-provenance.json",
   "title": "steps/memoryContextRetrieval payload (ACS-Provenance profile)",
   "description": "Strict variant of memory-context-retrieval.json for deployments running provenance_producer: deterministic / claiming ACS-Provenance. Every result MUST carry provenance. ACS-Core deployments validate against the base schema instead.",
   "allOf": [{ "$ref": "./memory-context-retrieval.json" }],

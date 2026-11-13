@@ -1,0 +1,68 @@
+# Tags a release the moment its version reaches main.
+#
+# v0.1.2 reached main on 2026-09-09 and stayed untagged for twelve days, because tagging
+# was a manual step nobody owned. version.txt is the release version and main is what
+# publishes, so a push to main that changes version.txt is the release event. The tag
+# lands on that commit, the same place v0.1.1 and v0.1.2 point.
+name: Tag release
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "version.txt"
+  workflow_dispatch:
+
+# Deny by default. The one job below grants itself only what it needs.
+permissions: {}
+
+# Two pushes to main in quick succession must not race each other to the same tag.
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    # A manual run dispatched from any other branch would tag a commit main never
+    # published.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push the tag
+    steps:
+      # The tag push below authenticates with the token this checkout persists, so it
+      # has to stay. The job uploads no artifacts, which is the leak zizmor's
+      # artipacked audit guards against.
+      - name: Check out the repository # zizmor: ignore[artipacked]
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag the release unless it is tagged already
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < version.txt)"
+          # version.txt is attacker-controlled by anyone with write access, and this
+          # value becomes a git ref. Anything not matching semver stops here.
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error file=version.txt::Not a valid semantic version"
+            exit 1
+          fi
+
+          # The release version lives in three files and no other check keeps them in
+          # step. A tag makes a mismatch permanent, so a mismatch fails here loudly.
+          PYPROJECT="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)"
+          LOCKED="$(awk '/^name = "acs"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' uv.lock)"
+          if [ "$PYPROJECT" != "$VERSION" ] || [ "$LOCKED" != "$VERSION" ]; then
+            echo "::error::version.txt says ${VERSION}, pyproject.toml says ${PYPROJECT:-nothing}, uv.lock says ${LOCKED:-nothing}"
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then
+            echo "${TAG} already exists. Nothing to do."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              tag -a "$TAG" "$GITHUB_SHA" -m "ACS ${TAG}"
+          git push origin "refs/tags/${TAG}"
+          echo "Tagged ${GITHUB_SHA} as ${TAG}."

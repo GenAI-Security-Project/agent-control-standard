@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/pre-compact.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/pre-compact.json",
   "title": "steps/preCompact payload",
   "description": "Fires before the runtime LLM compresses its context window into a summary. Decision-eligible — Guardians MAY return 'deny' to block compaction (e.g., because deployment policy forbids compacting after data the Guardian classifies as untrusted has entered until a re-grounding from a policy-trusted origin occurs). Compaction is the chokepoint where provenance can be laundered: the summary that comes out is new agent_generated content whose lineage spans every entry in the pre-compaction context. Without this hook, AARM cumulative-context tracking breaks across compaction, FIDES's monotonicity claim is unverifiable, and 'don't compact across a trust boundary' policies have nowhere to attach. (Trust classification is computed by the Guardian against local policy in v0.1 — see §7.1.)",
   "type": "object",

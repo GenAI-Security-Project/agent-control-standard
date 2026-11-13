@@ -1,55 +1,71 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors
 """
-Script to synchronize version from version.txt to all project files.
-"""
-# /// script
-# dependencies = ["toml"]
-# ///
+Synchronize the release version from version.txt to the packaging metadata.
 
-import os
+Two version numbers live in this repository and they move independently.
+
+The RELEASE version in version.txt tracks the repository: tooling, licensing,
+governance, and documentation changes. This script owns it.
+
+The SPECIFICATION version is the one implementers pin against. It appears in
+the schema $id (https://.../schema/v0.1.0/...), in the specification/v0.1.0/
+directory name, in every $ref between those files, and in the specification
+document headers. It changes only when the specification itself changes, and
+it changes through a deliberate migration that moves the directory and
+rewrites the references together.
+
+An earlier version of this script rewrote the specification version from
+version.txt. That produced a schema whose "version" field disagreed with its
+own $id and $refs, and it reformatted the whole schema file (json.dump at
+indent 4 over a 2-space document) on every run. Both are why the schema and
+the specification document are deliberately not touched here.
+"""
+
+import pathlib
 import re
-import json
 import sys
-import toml
+
+# Matches the version assignment in the [project] table, capturing the
+# surrounding quotes so the original quoting style survives the rewrite.
+PYPROJECT_VERSION = re.compile(r'^(version\s*=\s*)"[^"]*"', re.MULTILINE)
+
+# Same pattern the workflow validates against, repeated here so the script is
+# safe to run by hand outside CI.
+SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$")
 
 
-def main():
-    """Sync version from command line argument to all project files."""
+def main() -> int:
     if len(sys.argv) != 2:
-        print("Usage: sync_version.py <version>")
-        sys.exit(1)
-    
-    version = sys.argv[1]
-    
-    # Update pyproject.toml
-    with open('pyproject.toml', 'r') as f:
-        data = toml.load(f)
-    data['project']['version'] = version
-    with open('pyproject.toml', 'w') as f:
-        toml.dump(data, f)
-    print(f"✓ Updated pyproject.toml to version {version}")
-    
-    # Update specification.md
-    with open('docs/spec/instrument/specification.md', 'r') as f:
-        content = f.read()
-    # Replace **Version:** `x.y.z` pattern
-    updated_content = re.sub(
-        r'\*\*Version:\*\*\s*`[^`]+`',
-        f'**Version:** `{version}`',
-        content
-    )
-    with open('docs/spec/instrument/specification.md', 'w') as f:
-        f.write(updated_content)
-    print(f"✓ Updated specification.md to version {version}")
-    
-    # Update acs_schema.json
-    with open('specification/ACS/acs_schema.json', 'r') as f:
-        data = json.load(f)
-    data['version'] = version
-    with open('specification/ACS/acs_schema.json', 'w') as f:
-        json.dump(data, f, indent=4)
-    print(f"✓ Updated acs_schema.json to version {version}")
+        print("Usage: sync_version.py <version>", file=sys.stderr)
+        return 1
+
+    version = sys.argv[1].strip()
+    if not SEMVER.match(version):
+        print(f"Not a valid semantic version: {version!r}", file=sys.stderr)
+        return 1
+
+    pyproject = pathlib.Path("pyproject.toml")
+    if not pyproject.is_file():
+        print("pyproject.toml not found. Run from the repository root.", file=sys.stderr)
+        return 1
+
+    original = pyproject.read_text(encoding="utf-8")
+    updated, count = PYPROJECT_VERSION.subn(rf'\g<1>"{version}"', original, count=1)
+
+    if count == 0:
+        print("No version assignment found in pyproject.toml", file=sys.stderr)
+        return 1
+
+    if updated == original:
+        print(f"pyproject.toml already at version {version}")
+        return 0
+
+    pyproject.write_text(updated, encoding="utf-8")
+    print(f"Updated pyproject.toml to version {version}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

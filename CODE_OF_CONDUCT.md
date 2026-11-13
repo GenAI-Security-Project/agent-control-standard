@@ -55,11 +55,14 @@ further defined and clarified by project maintainers.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported by contacting the project team at [acs@zenity.io](mailto:acs@zenity.io). All
-complaints will be reviewed and investigated and will result in a response that
-is deemed necessary and appropriate to the circumstances. The project team is
-obligated to maintain confidentiality with regard to the reporter of an incident.
-Further details of specific enforcement policies may be posted separately.
+reported through the [OWASP Code of Conduct reporting process](https://owasp.org/www-policy/operational/code-of-conduct).
+ACS is a project of the [OWASP GenAI Security Project](https://genai.owasp.org/),
+and conduct reports are handled by OWASP rather than by individual project
+maintainers, so that reports about a maintainer reach someone independent of
+them. All complaints will be reviewed and investigated and will result in a
+response that is deemed necessary and appropriate to the circumstances. Reporter
+confidentiality is maintained throughout. Further details of specific enforcement
+policies may be posted separately.
 
 Project maintainers who do not follow or enforce the Code of Conduct in good
 faith may face temporary or permanent repercussions as determined by other

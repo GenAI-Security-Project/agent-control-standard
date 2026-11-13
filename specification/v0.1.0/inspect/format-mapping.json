@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/inspect/format-mapping.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json",
   "title": "ACS AgBOM Serialization Format Mapping",
   "description": "Normative mapping from the canonical AgBOM (agbom/document.json) into the three v0.1.0 serialization targets: CycloneDX 1.6, SPDX 3.0, and SWID (ISO/IEC 19770-2). This is a documentation-shaped JSON Schema — its body describes the transformation rules; conformant Guardians MUST be able to render at least one of these on request from a downstream consumer.",
   "type": "object",

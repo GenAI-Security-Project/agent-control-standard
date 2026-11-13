@@ -1,12 +1,12 @@
 # Core Concepts
 
-ACS specifies how an AI agent exposes its behavior so a separate **Guardian Agent** can permit, deny, or modify what the agent does, in real time, with a verifiable audit trail. The agent being monitored is an **Observed Agent**.
+ACS specifies how an AI agent exposes its behavior so a separate **Guardian Agent** can permit, deny, or modify what the agent does, in real time, with an observable, reconstructable audit trail. The agent being monitored is an **Observed Agent**.
 
 ## The three pillars
 
 ACS v0.1.0 organizes capabilities into three co-equal pillars:
 
-1. **Instrument**: real-time control points (hooks). Observed Agents send hook traffic to the Guardian; the Guardian returns one of five dispositions (`allow`, `deny`, `modify`, `ask`, `defer`). Hooks fire before actions execute, enabling preventive enforcement. See [Specification](../spec/instrument/specification.md) and [Hooks](../spec/instrument/hooks.md).
+1. **Instrument**: real-time control points (hooks). Observed Agents send hook traffic to the Guardian; the Guardian returns one of five dispositions (`allow`, `deny`, `modify`, `ask`, `defer`; `modify` is SHOULD-support — a Guardian substitutes `deny` for clients that cannot apply it, or `allow` with an audit event at `postCompact`, [§6.5](../spec/instrument/specification.md#65-modify-incapable-clients-normative)). Hooks fire before actions execute, enabling preventive enforcement. See [Specification](../spec/instrument/specification.md) and [Hooks](../spec/instrument/hooks.md).
 2. **Trace**: deterministic event emission. Every hook is also recordable as an OpenTelemetry span and an OCSF event. Decisions are recorded as span events on the parent step span, so the verdict and the action it gates share a parent. See [Trace Events](../spec/trace/events.md).
 3. **Inspect**: queryable, dynamic Agent Bill of Materials (AgBOM). The Observed Agent declares its components (models, MCP servers, A2A peers, tools, knowledge sources, memory stores) and reports mutations. See [Inspect](../spec/inspect/README.md).
 
@@ -18,6 +18,16 @@ A v0.1.0-conformant deployment implements **ACS-Core** (the Instrument baseline)
 - **Guardian Agent**: the policy enforcement point. Two internal layers:
     - **Deterministic layer** (OPA/Rego, Cedar): always runs first.
     - **Agent layer** (LLM): invoked only when the deterministic layer's chain config delegates. Optional in v0.1; deterministic-only deployments are fully conformant.
+
+## Identity
+
+Identity answers who is acting. A **principal** is the authenticated party initiating or acting within a session. ACS keeps three identities distinct: which agent is under governance, which Guardian decided, and who authored the policy that produced the decision. Conflating them collapses an audit trail into "the agent did it."
+
+ACS invents no identity format. Descriptors carry a `type` discriminator naming the scheme (`posix_uid`, `oauth_subject`, `cert_subject`), and ACS stays agnostic to the rest. No authentication mechanism is mandated. Deployments declare the one they use at handshake, which binds ACS to the identity infrastructure an organization already runs.
+
+Identity is an upstream dependency of authorization: a capability decision is only as meaningful as the identity bound to it. An asserted identity is weaker than one bound by a verified credential, so policy gating high-impact actions should require the stronger rung. See [Concepts › Identity](../concepts/identity.md) and [Concepts › Trust basis](../concepts/trust.md).
+
+Runtime identity for agents raises problems that human and workload identity models do not answer, from delegation chains spanning five to ten hops to intent that must survive mid-task reframing. The Identity workstream tracks those as open work. See [Identity › Overview](../identity/overview.md) for the five runtime challenges and [Identity › Standards](../identity/standards.md) for where existing standards stop short.
 
 ## Vocabulary
 
@@ -60,6 +70,7 @@ ACS carries MCP and A2A intact. Wrapped MCP messages flow through `protocols/MCP
 ## Read Next
 
 - [Concepts](../concepts/README.md)
+- [Identity for Agents](../identity/overview.md)
 - [ACS in Action](./ACS_in_action_example.md)
 - [Conformance Profiles](../spec/conformance.md)
 - [Specification](../spec/instrument/specification.md)

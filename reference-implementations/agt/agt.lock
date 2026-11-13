@@ -1,0 +1,7 @@
+{
+  "agt_repo": "https://github.com/microsoft/agent-governance-toolkit",
+  "agt_ref": "81955d48025c6b11deb3fc9dabf89f74f4145775",
+  "bundle_path": "policy-engine/policy/lib",
+  "sdk_package": "agent-control-specification",
+  "sdk_version": "0.3.1-beta.0"
+}

@@ -1,0 +1,98 @@
+# The published $id URIs are a machine-consumed contract, and every surface of the site
+# shares one navigation pane. Between merges nothing else checks either, so this does.
+# Each check is its own job, so each reports its own conclusion. A failed run emails only
+# whoever last changed this file's cron line, so report-failure opens the alarm issue.
+name: Monitor Pages
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # 44 checks at six attempts of ten seconds apiece can run well over half an hour
+    # during a real outage. Without a limit, a failing run holds the runner against
+    # GitHub's six-hour default.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          # A scheduled workflow runs from the default branch. Once the default moves to
+          # integration, checking out the default here would verify integration's schema
+          # set against a site that publishes from main, failing every six hours between
+          # promotions. The site publishes from main regardless of which branch is
+          # default, so this must always check out main.
+          ref: main
+
+      - name: Verify the published schemas still resolve
+        # The $id URIs stay on github.io and 301 to the custom domain, so this proves the
+        # redirect too. Do not move it to the domain. deploy-pages.yml explains why.
+        env:
+          PAGE_URL: https://genai-security-project.github.io/agent-control-standard/
+        run: |
+          python3 tools/verify_published.py "${PAGE_URL%/}/schema" --from specification
+
+  navigation:
+    runs-on: ubuntu-latest
+    # The verifier polls up to thirteen minutes because the Pages CDN caches for ten.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          # The site publishes from main, so the verifier must be main's copy. The check
+          # job above explains why the default branch is the wrong choice.
+          ref: main
+
+      - name: Verify the published navigation still matches
+        # main has no verifier until the first promotion after this job lands, and a
+        # scheduled run reads this file from integration, so the check waits for it.
+        if: hashFiles('tools/verify_site_nav.py') != ''
+        # The domain itself, never a URL that redirects to it. The verifier resolves
+        # links against the address it asked for, so a redirect makes the rows differ.
+        env:
+          PAGE_URL: https://owaspacs.org/
+        run: python3 tools/verify_site_nav.py "$PAGE_URL"
+
+  report-failure:
+    needs: [check, navigation]
+    # A job that hits its timeout reports cancelled, which only a real outage causes here.
+    # cancelled() itself is true only when someone cancels the whole run, which is no alarm.
+    if: "!cancelled() && github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # No contents grant: this repository is public, so the clone needs none, and the token
+    # stays limited to the issue it writes.
+    permissions:
+      issues: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          # A scheduled run is always the default branch's own code, so the alarm works
+          # from the merge onward instead of skipping until the next promotion.
+
+      - name: Open or update the alarm issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 -I -S tools/monitor_pages_alarm.py

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/system-ping.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/system-ping.json",
   "title": "system/ping payload",
   "description": "Liveness probe. Carries no enforcement semantics. Guardians MUST always return decision='allow' for system/ping regardless of policy, signature, or session state. system/ping MUST NOT be written into the SessionContext audit chain (no ContextEntry, no chain_hash advance) and MUST NOT require a signature even if the session otherwise mandates them, so liveness probing remains possible during signature-rotation or key-resolution failures. Connection failure or response timeout for system/ping is a transport-level signal — the Observed Agent MAY use it to renegotiate transport, re-handshake, or fail over.",
   "type": "object",

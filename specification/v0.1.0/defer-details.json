@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/defer-details.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/defer-details.json",
   "title": "ACS DEFER Details",
   "description": "Deferral metadata when the Guardian could not reach a verdict. Required when decision is 'defer'.",
   "type": "object",

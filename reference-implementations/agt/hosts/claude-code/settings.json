@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|WebFetch)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts\""
+          }
+        ]
+      }
+    ]
+  }
+}

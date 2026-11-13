@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://acs.org/schema/v0.1.0/hooks/post-compact.json",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/post-compact.json",
   "title": "steps/postCompact payload",
   "description": "Fires after compaction has occurred. The hook is audit + provenance-binding: the Guardian records the new summary's content and lineage, and MAY return 'modify' to rewrite or further redact the summary, but MUST NOT return 'deny' — compaction has already happened and the audit chain MUST record the post-compact state. Provenance on the summary is normative on origin and derived_from: origin MUST be 'agent_generated', and derived_from MUST equal the union of provenance_ids of every entry in entries_compacted. The framework — not the LLM — populates derived_from. The Guardian projects this lineage onto its own trust classification in policy (v0.1 does not carry a trust field on the wire — see §7.1); the integrity property the Guardian MUST enforce is the standard monotonicity rule, namely that the summary's effective trust cannot exceed the minimum effective trust of its derived_from entries. No amount of LLM processing launders untrusted-classified data into trusted-classified data.",
   "type": "object",

@@ -1,0 +1,616 @@
+/* ACS landing page. Tokens mirror agentcontrolstandard.org, except where the source
+   value failed a WCAG contrast measurement. Those five carry their ratio inline. */
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --acs-page: #ffffff;
+  --acs-surface: #f4f5f7;
+  --acs-surface-2: #eef0f4;
+  --acs-text: #121212;
+  --acs-text-soft: #5f636d;
+  --acs-text-muted: #6b7079;
+  --acs-text-inverse: #f7f7f7;
+  --acs-brand: #111111;
+  --acs-accent-navy: #1b4f72;
+  --acs-accent-teal: #17a2b8;
+  --acs-border: #e5e7eb;
+  --acs-border-strong: #d0d5dd;
+  --acs-footer: #111111;
+  /* Was hsla(0,0%,7%,.18), which composited to #d4d4d4 for 1.48:1 against the page.
+     SC 1.4.11 needs 3:1. Solid navy measures 8.72:1. */
+  --acs-focus-ring: #1b4f72;
+  --acs-grid-line: hsla(0, 0%, 7%, 0.04);
+  --acs-node-fill: #ffffff;
+  --acs-node-stroke: #6b7079;   /* 4.98:1 on the page */
+  --acs-spoke: #6b7079;
+  --acs-hex-fill: #f4f5f7;
+  /* Was #c4cdd8 for 1.47:1 against the hexagon fill. The center of the diagram was
+     close to invisible. #7d8899 measures 3.29:1. */
+  --acs-hex-stroke: #7d8899;
+  --acs-tier-1: #0f7b3f;
+  --acs-tier-2: #1b4f72;
+  --acs-tier-3: #6b46c1;
+  /* The chrome repeats the docs header and pane, so these equal the values that
+     docs/stylesheets/extra.css gives Material in each theme. */
+  --acs-chrome-bg: #111111;
+  --acs-chrome-fg: #f7f7f7;
+  --acs-nav-accent: #1b4f72;
+  --acs-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --acs-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "Fira Code", monospace;
+}
+
+/* Dark tokens are redefined in two places so the toggle wins in both directions. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --acs-page: #0a0a0a;
+    --acs-surface: #161616;
+    --acs-surface-2: #202020;
+    --acs-text: #ffffff;
+    --acs-text-soft: #9ca3af;
+    /* Was #6b7280 for 3.74:1 on the surface. SC 1.4.3 needs 4.5:1. This is 5.48:1. */
+    --acs-text-muted: #868e9c;
+    --acs-brand: #1b4f72;
+    --acs-accent-navy: #2e86c1;
+    --acs-accent-teal: #1abc9c;
+    --acs-border: #2a2a2a;
+    --acs-border-strong: #373737;
+    --acs-footer: #0a0a0a;
+    /* Was hsla(0,0%,100%,.2) for 1.77:1. Solid measures 8.67:1. */
+    --acs-focus-ring: #63b3ed;
+    --acs-grid-line: hsla(0, 0%, 100%, 0.04);
+    --acs-node-fill: #111111;
+    --acs-node-stroke: #a0aec0;
+    /* Was #3d4f65 for 2.36:1 against the page. This is 8.78:1. */
+    --acs-spoke: #a0aec0;
+    --acs-hex-fill: #0d1117;
+    --acs-hex-stroke: #63b3ed;
+    --acs-tier-1: #48bb78;
+    --acs-tier-2: #63b3ed;
+    --acs-tier-3: #805ad5;
+    --acs-chrome-bg: #0a0a0a;
+    --acs-nav-accent: #63b3ed;
+  }
+}
+
+:root[data-theme="dark"] {
+  --acs-page: #0a0a0a;
+  --acs-surface: #161616;
+  --acs-surface-2: #202020;
+  --acs-text: #ffffff;
+  --acs-text-soft: #9ca3af;
+  --acs-text-muted: #868e9c;
+  --acs-brand: #1b4f72;
+  --acs-accent-navy: #2e86c1;
+  --acs-accent-teal: #1abc9c;
+  --acs-border: #2a2a2a;
+  --acs-border-strong: #373737;
+  --acs-footer: #0a0a0a;
+  --acs-focus-ring: #63b3ed;
+  --acs-grid-line: hsla(0, 0%, 100%, 0.04);
+  --acs-node-fill: #111111;
+  --acs-node-stroke: #a0aec0;
+  --acs-spoke: #a0aec0;
+  --acs-hex-fill: #0d1117;
+  --acs-hex-stroke: #63b3ed;
+  --acs-tier-1: #48bb78;
+  --acs-tier-2: #63b3ed;
+  --acs-tier-3: #805ad5;
+  --acs-chrome-bg: #0a0a0a;
+  --acs-nav-accent: #63b3ed;
+}
+
+/* Material sizes its chrome in rem and steps the root font at these widths. This page's
+   rem has to stay 16px for its own content, so the chrome uses this unit, which is the
+   docs rem at every width. Each size below is the docs value times this unit. */
+:root { --acs-u: 20px; }
+@media screen and (min-width: 100em) { :root { --acs-u: 22px; } }
+@media screen and (min-width: 125em) { :root { --acs-u: 24px; } }
+
+/* The sticky header would otherwise cover the section a pane link jumps to. */
+html { scroll-padding-top: calc(var(--acs-u) * 2.4); }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--acs-font);
+  color: var(--acs-text);
+  background-color: var(--acs-page);
+  background-image: linear-gradient(var(--acs-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--acs-grid-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  line-height: 1.6;
+}
+
+a { color: inherit; }
+a:focus-visible,
+button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
+
+.layout {
+  display: grid;
+  grid-template-columns: calc(var(--acs-u) * 12.1) minmax(0, 1fr);
+  max-width: calc(var(--acs-u) * 61);
+  margin-inline: auto;
+}
+
+/* Material antialiases its whole page. Without this the same font at the same size
+   reads heavier here than it does in the docs chrome. */
+.site-header,
+.sidebar {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "kern", "liga";
+}
+
+/* The docs header at every width. It is one header rather than a desktop pane heading
+   plus a phone strip, because two copies are how the surfaces came to differ. */
+.site-header {
+  position: sticky;
+  top: 0;
+  /* Paints above the open panel, so the button that closes it stays reachable. */
+  z-index: 30;
+  color: var(--acs-chrome-fg);
+  background-color: var(--acs-chrome-bg);
+  box-shadow: 0 0 calc(var(--acs-u) * 0.2) rgba(0, 0, 0, 0.1), 0 calc(var(--acs-u) * 0.2) calc(var(--acs-u) * 0.4) rgba(0, 0, 0, 0.2);
+}
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  max-width: calc(var(--acs-u) * 61);
+  height: calc(var(--acs-u) * 2.4);
+  margin-inline: auto;
+  padding-inline: calc(var(--acs-u) * 0.2);
+}
+/* The page's focus ring is navy in the light theme, which is lost on this bar. */
+.site-header :focus-visible { outline-color: var(--acs-chrome-fg); outline-offset: -2px; }
+.site-header a { color: inherit; text-decoration: none; }
+
+.site-logo {
+  flex: none;
+  width: calc(var(--acs-u) * 2);
+  height: calc(var(--acs-u) * 2);
+  padding: calc(var(--acs-u) * 0.2);
+}
+.site-logo img { display: block; width: 100%; height: 100%; }
+.site-logo:hover,
+.site-source:hover,
+#menu-toggle:hover,
+#theme-toggle:hover { opacity: 0.7; }
+
+.wordmark {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-inline: calc(var(--acs-u) * 1) calc(var(--acs-u) * 0.4);
+  overflow: hidden;
+  font-size: calc(var(--acs-u) * 0.9);
+  font-weight: 700;
+  line-height: calc(var(--acs-u) * 2.4);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#menu-toggle,
+#theme-toggle {
+  flex: none;
+  width: calc(var(--acs-u) * 2);
+  height: calc(var(--acs-u) * 2);
+  margin: calc(var(--acs-u) * 0.2);
+  padding: calc(var(--acs-u) * 0.4);
+  color: inherit;
+  background-color: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: opacity 0.25s;
+}
+#menu-toggle { display: none; }
+#menu-toggle svg,
+#theme-toggle svg { display: block; width: 100%; height: 100%; fill: currentColor; }
+
+/* The docs search field, drawn as the link it is. This page has no search index, and an
+   input that went nowhere would be worse than sending the reader to the one that works. */
+.site-search {
+  position: relative;
+  display: block;
+  flex: none;
+  width: calc(var(--acs-u) * 11.7);
+  height: calc(var(--acs-u) * 1.8);
+  padding-inline-start: calc(var(--acs-u) * 2.2);
+  background-color: rgba(0, 0, 0, 0.26);
+  border-radius: calc(var(--acs-u) * 0.1);
+  transition: background-color 0.25s;
+}
+.site-search:hover { background-color: rgba(255, 255, 255, 0.12); }
+.site-search svg {
+  position: absolute;
+  top: calc(var(--acs-u) * 0.3);
+  left: calc(var(--acs-u) * 0.5);
+  width: calc(var(--acs-u) * 1.2);
+  height: calc(var(--acs-u) * 1.2);
+  fill: currentColor;
+}
+.site-search__label {
+  font-size: calc(var(--acs-u) * 0.8);
+  line-height: calc(var(--acs-u) * 1.8);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.site-header__source {
+  flex: none;
+  width: calc(var(--acs-u) * 11.7);
+  margin-inline-start: calc(var(--acs-u) * 1.4);
+}
+.site-source {
+  display: block;
+  height: calc(var(--acs-u) * 2.4);
+  font-size: calc(var(--acs-u) * 0.65);
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: opacity 0.25s;
+}
+.site-source__icon {
+  display: inline-block;
+  width: calc(var(--acs-u) * 2);
+  height: calc(var(--acs-u) * 2.4);
+  vertical-align: middle;
+}
+.site-source__icon svg {
+  display: block;
+  width: calc(var(--acs-u) * 1.2);
+  height: calc(var(--acs-u) * 1.2);
+  margin-block-start: calc(var(--acs-u) * 0.6);
+  margin-inline-start: calc(var(--acs-u) * 0.6);
+  fill: currentColor;
+}
+.site-source__repository {
+  display: inline-block;
+  max-width: calc(100% - var(--acs-u) * 1.2);
+  margin-inline-start: calc(var(--acs-u) * -2);
+  padding-inline-start: calc(var(--acs-u) * 2);
+  overflow: hidden;
+  vertical-align: middle;
+  text-overflow: ellipsis;
+}
+
+/* The docs pane. The pad differs on each side because Material insets the pane's list
+   by the scrollbar gutter on the right only. */
+.sidebar {
+  position: sticky;
+  top: calc(var(--acs-u) * 2.4);
+  align-self: start;
+  max-height: calc(100vh - var(--acs-u) * 2.4);
+  margin-top: calc(var(--acs-u) * 1.5);
+  padding: calc(var(--acs-u) * 1.2) calc(var(--acs-u) * 0.4) calc(var(--acs-u) * 1.2) calc(var(--acs-u) * 0.2);
+  overflow-y: auto;
+  /* Material's pane scrollbar. The default one is bright in the dark theme and wide
+     enough to wrap the drawer's rows. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--acs-text-muted) transparent;
+}
+.pane-title {
+  padding-inline: calc(var(--acs-u) * 0.6);
+  font-size: calc(var(--acs-u) * 0.7);
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--acs-text-soft);
+}
+/* The docs show these two only in the drawer. */
+.pane-logo,
+.pane-source { display: none; }
+
+#site-nav { font-size: calc(var(--acs-u) * 0.7); line-height: 1.3; }
+#site-nav ul { margin: 0; padding: 0 0 calc(var(--acs-u) * 0.4) calc(var(--acs-u) * 0.6); list-style: none; }
+#site-nav a,
+#site-nav summary {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 0.625em;
+  margin-right: calc(var(--acs-u) * 0.4);
+  color: var(--acs-text);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 125ms;
+}
+#site-nav summary { list-style: none; }
+#site-nav summary::-webkit-details-marker { display: none; }
+/* Home's row is a link inside the disclosure, so the row carries the spacing. */
+#site-nav summary a { flex: 1 1 auto; min-width: 0; margin: 0; }
+/* The docs chevron. A file rather than Material's data URI, which img-src 'self' blocks.
+   Rotation states that the row is open, so the state does not rest on color. */
+#site-nav summary::after {
+  flex: none;
+  width: calc(var(--acs-u) * 0.9);
+  height: calc(var(--acs-u) * 0.9);
+  margin-inline-start: auto;
+  content: "";
+  background-color: currentColor;
+  -webkit-mask: url("chevron.svg") center / contain no-repeat;
+  mask: url("chevron.svg") center / contain no-repeat;
+  transition: transform 0.25s;
+}
+#site-nav details[open] > summary::after { transform: rotate(90deg); }
+#site-nav a:hover,
+#site-nav summary:hover { color: var(--acs-nav-accent); }
+#site-nav summary:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
+/* Weight marks the current page as well as color, so the state survives without color. */
+#site-nav a[aria-current="page"] { font-weight: 600; color: var(--acs-nav-accent); }
+/* A section never collapses, so it reads as a heading, and its list sits flush with it. */
+#site-nav .nav-section { margin-top: 1.25em; }
+#site-nav .nav-section h2 {
+  margin: 0 calc(var(--acs-u) * 0.4) 0 0;
+  font-size: inherit;
+  font-weight: 700;
+  line-height: inherit;
+  color: var(--acs-text-soft);
+}
+#site-nav .nav-section ul { padding-left: 0; }
+
+/* Off screen until focused, so it costs sighted mouse users nothing and still comes
+   first for a keyboard. */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 1rem;
+  z-index: 40;
+  padding: 0.6rem 1rem;
+  font-weight: 600;
+  color: var(--acs-text);
+  background-color: var(--acs-page);
+  border: 1px solid var(--acs-border-strong);
+  border-radius: 8px;
+}
+.skip-link:focus { top: 1rem; }
+
+/* The inline pad is the docs content inset, so text starts at the same x on both surfaces. */
+main { padding: 4rem calc(var(--acs-u) * 1.2); }
+section { padding-block: 3.5rem; border-top: 1px solid var(--acs-border); }
+section:first-of-type { border-top: 0; }
+
+.hero { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: center; }
+.hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); line-height: 1.02; letter-spacing: -0.03em; margin: 0; }
+.hero p { font-size: 1.15rem; color: var(--acs-text-soft); }
+
+.film { margin: 0 0 3.5rem; }
+.film video {
+  display: block; width: 100%; height: auto; aspect-ratio: 3024 / 1900;
+  border: 1px solid var(--acs-border-strong); border-radius: 12px; background-color: var(--acs-surface);
+}
+.film figcaption { margin-top: 0.75rem; color: var(--acs-text-soft); font-size: 0.95rem; }
+.film figcaption strong { display: block; margin-bottom: 0.35rem; color: var(--acs-text); font-size: 1.35rem; line-height: 1.25; letter-spacing: -0.01em; }
+
+.cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
+.cta {
+  display: inline-flex; align-items: center; min-height: 50px; padding: 0.85rem 1.25rem;
+  border: 1px solid var(--acs-border-strong); border-radius: 999px;
+  font-weight: 600; text-decoration: none;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.cta:hover { background-color: var(--acs-surface); transform: translateY(-1px); }
+.cta-primary { background-color: var(--acs-brand); color: var(--acs-text-inverse); border-color: var(--acs-brand); }
+
+/* Show the mark for the theme a click would give, not the one already showing. */
+#theme-toggle .icon-sun { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #theme-toggle .icon-moon { display: none; }
+  :root:not([data-theme="light"]) #theme-toggle .icon-sun { display: inline; }
+}
+:root[data-theme="dark"] #theme-toggle .icon-moon { display: none; }
+:root[data-theme="dark"] #theme-toggle .icon-sun { display: inline; }
+:root[data-theme="light"] #theme-toggle .icon-moon { display: inline; }
+:root[data-theme="light"] #theme-toggle .icon-sun { display: none; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; }
+.card { padding: 1.5rem; border: 1px solid var(--acs-border); border-radius: 14px; background-color: var(--acs-surface); }
+.card h3 { margin-top: 0; }
+
+/* Reuses the tier accent-border pattern so the committed outcome reads as a callout,
+   not as a quoted aside, without adding a second visual language to the page. */
+blockquote {
+  margin: 1.5rem 0;
+  padding: 1rem 1.5rem;
+  border-left: 4px solid var(--acs-accent-navy);
+  border-radius: 0 12px 12px 0;
+  background-color: var(--acs-surface);
+  color: var(--acs-text-soft);
+  font-style: italic;
+}
+
+.standards {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+.standards li {
+  padding: 1.1rem;
+  border: 1px solid var(--acs-border);
+  border-radius: 12px;
+  background-color: var(--acs-surface);
+}
+.standards a {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.standards a:hover { color: var(--acs-accent-navy); }
+.standards span {
+  display: block;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--acs-text-soft);
+}
+
+/* Cap the measure so body text stays scannable on a wide screen. The card and
+   standards grids set their own widths and are excluded. */
+main section > p,
+main section > ul:not(.standards),
+main section > table,
+main section > blockquote { max-width: 72ch; }
+
+.tier { border-left: 4px solid var(--acs-border-strong); padding-left: 1rem; margin-bottom: 1.25rem; }
+.tier-1 { border-left-color: var(--acs-tier-1); }
+.tier-2 { border-left-color: var(--acs-tier-2); }
+.tier-3 { border-left-color: var(--acs-tier-3); }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--acs-border); }
+code { font-family: var(--acs-mono); background-color: var(--acs-surface-2); padding: 0.15em 0.4em; border-radius: 4px; }
+
+footer { background-color: var(--acs-footer); color: var(--acs-text-inverse); padding: 3rem; }
+footer a { color: var(--acs-text-inverse); }
+footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+
+/* The docs drop the pane into a drawer here, so the two surfaces change at one width. */
+@media (max-width: 76.234375em) {
+  .layout { grid-template-columns: minmax(0, 1fr); max-width: none; }
+  .site-logo { display: none; }
+  .site-header__source { margin-inline-start: calc(var(--acs-u) * 1); }
+  /* Without the drawer script the button would do nothing, and the pane is already
+     showing as a block below the header. The script adds has-drawer to the root. */
+  .has-drawer #menu-toggle { display: block; }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+    margin-top: 0;
+    padding: 0;
+    overflow-y: visible;
+    background-color: var(--acs-page);
+  }
+  .pane-title {
+    position: relative;
+    height: calc(var(--acs-u) * 5.6);
+    padding: calc(var(--acs-u) * 3) calc(var(--acs-u) * 0.8) calc(var(--acs-u) * 0.2);
+    overflow: hidden;
+    font-size: calc(var(--acs-u) * 0.8);
+    line-height: calc(var(--acs-u) * 2.4);
+    color: var(--acs-chrome-fg);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    background-color: var(--acs-chrome-bg);
+  }
+  .pane-logo {
+    position: absolute;
+    top: calc(var(--acs-u) * 0.4);
+    left: calc(var(--acs-u) * 0.4);
+    display: block;
+    padding: calc(var(--acs-u) * 0.4);
+  }
+  .pane-logo img { display: block; width: calc(var(--acs-u) * 2.4); height: calc(var(--acs-u) * 2.4); }
+  /* The theme's indigo, which docs/stylesheets/extra.css leaves on this one bar in both
+     themes. Kept equal so that retiring it there is a change to two named places. */
+  .pane-source {
+    display: block;
+    padding-inline: calc(var(--acs-u) * 0.2);
+    color: var(--acs-chrome-fg);
+    background-color: #303fa1;
+  }
+  .pane-source a { color: inherit; text-decoration: none; }
+
+  #site-nav { font-size: calc(var(--acs-u) * 0.8); line-height: 1.5; }
+  #site-nav ul,
+  #site-nav .nav-section ul { padding: 0; }
+  #site-nav li { border-top: 1px solid var(--acs-border-strong); }
+  #site-nav a,
+  #site-nav summary { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
+  #site-nav summary a { padding: 0; }
+  /* The docs slide a nested list in over its parent. Here it opens in place, so the
+     indent carries the depth the slide would have shown. */
+  #site-nav ul ul a,
+  #site-nav ul ul summary { padding-inline-start: calc(var(--acs-u) * 1.6); }
+  #site-nav ul ul ul a,
+  #site-nav ul ul ul summary { padding-inline-start: calc(var(--acs-u) * 2.4); }
+  #site-nav ul ul summary a { padding: 0; }
+  #site-nav .nav-section ul a { padding-inline-start: calc(var(--acs-u) * 0.8); }
+  #site-nav summary::after {
+    width: calc(var(--acs-u) * 1.2);
+    height: calc(var(--acs-u) * 1.2);
+    margin-inline-end: calc(var(--acs-u) * -0.2);
+  }
+  #site-nav .nav-section { margin-top: 0; }
+  #site-nav .nav-section h2 { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
+
+  /* Hidden as well as moved, so a closed panel's links leave the tab order. The panel
+     starts below the header rather than over it, as the docs drawer does, because the
+     button that closes it lives in the header. */
+  .has-drawer .sidebar {
+    position: fixed;
+    top: calc(var(--acs-u) * 2.4);
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    /* The sticky rule's start alignment would size this box to its rows and push it
+       past both insets, which leaves nothing for the panel to scroll. */
+    align-self: stretch;
+    width: calc(var(--acs-u) * 12.1);
+    overflow-y: auto;
+    box-shadow: 0 calc(var(--acs-u) * 0.2) calc(var(--acs-u) * 0.5) rgba(0, 0, 0, 0.2), 0 0 1px rgba(0, 0, 0, 0.35);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0.25s;
+  }
+  .has-drawer .nav-open .sidebar { transform: none; visibility: visible; }
+  /* The docs scrim. A tap on it lands on the body, which the drawer script reads as a
+     tap outside the panel. */
+  .has-drawer .nav-open::after {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    content: "";
+    background-color: rgba(0, 0, 0, 0.54);
+  }
+}
+
+/* The docs fold the search field to its icon and move the repository link to the drawer. */
+@media (max-width: 59.984375em) {
+  .site-search {
+    width: calc(var(--acs-u) * 2);
+    height: calc(var(--acs-u) * 2);
+    margin: calc(var(--acs-u) * 0.2);
+    padding: 0;
+    background-color: transparent;
+  }
+  .site-search:hover { background-color: transparent; opacity: 0.7; }
+  .site-search svg { top: calc(var(--acs-u) * 0.4); left: calc(var(--acs-u) * 0.4); }
+  .site-search__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .site-header__source { display: none; }
+}
+
+@media (max-width: 1024px) {
+  .hero { grid-template-columns: 1fr; }
+  main { padding: 2rem 1.25rem; }
+}
+
+/* Continuous motion is a vestibular trigger and a battery cost. CSS animation is
+   stopped here. The SVG's SMIL elements carry their own guard, because
+   `animation: none` does not reach them. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

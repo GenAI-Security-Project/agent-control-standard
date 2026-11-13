@@ -1,0 +1,53 @@
+name: Bug report
+description: Something is broken in the specification, a schema, the site, CI, or tooling.
+title: "[Bug] "
+labels: ["type:bug", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not file a security vulnerability here. Use private vulnerability reporting.
+        See SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What is broken
+      description: One or two sentences.
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: File path, schema $id, documentation page, or workflow name.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the specification says, and what happens instead
+      description: Quote the line if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact on implementers
+      description: Who breaks, and how badly.
+    validations:
+      required: false
+  - type: dropdown
+    id: priority-scope
+    attributes:
+      label: Current Priority Scope
+      description: >-
+        Read the Current Priority Scope in CONTRIBUTING.md before answering. An honest
+        "deferred" is more useful to us than a hopeful "in focus".
+      options:
+        - Feeds the runnable Guardian reference implementation
+        - Feeds the AGT interoperability benchmark
+        - Feeds conformance evidence
+        - This is deferred or out of scope and I am filing it to be tracked
+        - I am not sure
+    validations:
+      required: true

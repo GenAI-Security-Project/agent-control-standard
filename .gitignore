@@ -4,3 +4,14 @@ book/
 site/
 references/
 .DS_Store
+
+# Python build artifacts from `uv pip install -e .`
+*.egg-info/
+__pycache__/
+
+# Subagent-driven development scratch. Never committed.
+.superpowers/
+_site/
+
+# Browser session logs. Never committed.
+.playwright-mcp/
