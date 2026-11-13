@@ -65,7 +65,7 @@ A worked example appears in [ACS in Action](../../topics/ACS_in_action_example.m
 | Envelope | JSON-RPC 2.0, with `acs_version` in `params` (requests) and `result` (responses) |
 | Transports | HTTP(S) and stdio (Content-Length framing, UTF-8) |
 | Method namespaces | `steps/*`, `protocols/A2A/*`, `protocols/MCP/*`, `agbom/*`, `system/*`, `handshake/*`, `trace/*` (reserved) |
-| Wrapped methods | `protocols/MCP/*` is the canonical v0.1 namespace for MCP wrapping (e.g. `protocols/MCP/tools/call`). The `wrapped:` prefix is an alternative explicit-version form for deployments that pin a specific protocol version on the wire (e.g. `wrapped:mcp-2025-06-18/tools/call`). Both are valid; `protocols/*` is preferred. A2A wrapping deferred to v0.2. |
+| Wrapped methods | `protocols/MCP/*` is the canonical v0.1 namespace for MCP wrapping (e.g. `protocols/MCP/tools/call`). The `wrapped:` prefix is an alternative explicit-version form for deployments that pin a specific protocol version on the wire (e.g. `wrapped:mcp-2025-06-18/tools/call`). Both are valid; `protocols/*` is preferred. The payload and result schemas for `protocols/MCP/*` are [`protocols/mcp-payload.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/protocols/mcp-payload.json) and [`protocols/mcp-result.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/protocols/mcp-result.json). A2A wrapping deferred to v0.2. |
 | Error code range | `-32000` to `-32099` reserved for ACS |
 | Response shape | Discriminated union: `{ "type": "final", ... }` |
 | Forward compat | Accept `X.Y.Z` matching major version; ignore unknown fields |

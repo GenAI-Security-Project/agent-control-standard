@@ -129,6 +129,12 @@
           "required_attributes": ["acs.agbom.format"],
           "conditional_attributes": ["acs.agbom.change_reason"],
           "_note": "acs.agbom.format is sourced as on agbom/snapshot."
+        },
+        "protocols/MCP/*": {
+          "span_name": "acs.mcp",
+          "required_attributes": ["acs.mcp.method", "acs.mcp.direction"],
+          "optional_attributes": ["acs.mcp.id", "acs.mcp.server_id", "acs.mcp.transport", "acs.mcp.protocol_version"],
+          "_note": "One entry covers every method in the namespace, as in protocols/MCP/tools/call and the explicit-version form wrapped:mcp-<version>/<method>. acs.mcp.method is the payload's mcp_method, acs.mcp.direction its direction, and the optional attributes come from mcp_id, server_id, transport and protocol_version. A wrapped tools/call span is not a gen_ai.tool.call span: the tool hooks emit those."
         }
       }
     },
