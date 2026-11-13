@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-changed.json",
+  "title": "agbom/changed payload",
+  "description": "AgBOM mutation notification. Emitted by the Observed Agent whenever a component is added, removed, or version-changed mid-session. MAY be denied by the Guardian to block a hot-swap (e.g., refuse a model upgrade mid-session); otherwise audited. MUST be written into the SessionContext audit chain alongside the originating mutation.",
+  "type": "object",
+  "oneOf": [
+    { "required": ["diff"] },
+    { "required": ["full_snapshot"] }
+  ],
+  "properties": {
+    "diff": {
+      "type": "object",
+      "description": "Incremental change set. Preferred for small mutations; the resulting AgBOM after applying the diff MUST equal the AgBOM the Observed Agent would emit as a fresh snapshot.",
+      "minProperties": 1,
+      "anyOf": [
+        { "required": ["added"] },
+        { "required": ["removed"] },
+        { "required": ["changed"] }
+      ],
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": { "$ref": "../agbom/component.json" }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type"],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string" }
+            },
+            "description": "Component identifier and type for removal — full component record not needed."
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "before", "after"],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string" },
+              "before": { "$ref": "../agbom/component.json" },
+              "after": { "$ref": "../agbom/component.json" }
+            }
+          }
+        }
+      }
+    },
+    "full_snapshot": {
+      "$ref": "../agbom/document.json",
+      "description": "Full re-snapshot. Used when the change is large or when the Observed Agent cannot construct a minimal diff."
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["component_added", "component_removed", "component_upgraded", "configuration_changed", "discovery", "user_action", "policy_action"],
+      "description": "Why the AgBOM changed. Lets policies key on cause (e.g., deny user-initiated tool installs but allow framework-driven upgrades)."
+    },
+    "trigger_step_id": {
+      "type": "string",
+      "description": "Optional step_id of the originating action that caused the AgBOM mutation (e.g., the toolCallRequest that installed a new MCP server)."
+    }
+  }
+}

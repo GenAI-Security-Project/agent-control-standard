@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-end.json",
+  "title": "steps/turnEnd payload",
+  "description": "Fires at the end of an agent turn. Audit-only — the turn has already happened, so the Guardian writes a ContextEntry but cannot return 'deny' or 'modify'. The matching turnStart's turn_id is referenced via metadata.turn_id on the envelope (and SHOULD also appear in this payload for self-containment). Closes the per-turn audit window so policies that key on per-turn state (cumulative-taint reset, tool-call counts, etc.) have a clean boundary to compute against.",
+  "type": "object",
+  "required": ["turn_id", "outcome"],
+  "properties": {
+    "turn_id": {
+      "type": "string",
+      "description": "Identifier of the turn that just ended. MUST equal the turn_id from the matching turnStart and from metadata.turn_id on this envelope."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["completed", "deferred", "error", "interrupted", "denied_at_start"],
+      "description": "Terminal status of the turn. 'completed' = turn finished normally. 'deferred' = a step in this turn returned 'defer' and the turn is paused awaiting resolution; the next turn (or this same turn after resolution) MAY have triggered_by='auto_continuation'. 'error' = the turn errored. 'interrupted' = an external signal (user cancellation, parent-agent recall) ended it early. 'denied_at_start' = the matching turnStart returned 'deny'; this turnEnd is recorded for audit symmetry."
+    },
+    "step_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of per-step ContextEntries written during this turn (between turnStart and this turnEnd, exclusive of both). Useful for per-turn rate-limit policies and for resource accounting."
+    },
+    "summary": {
+      "type": "object",
+      "description": "Optional summary of what happened in the turn. Provenance: origin='agent_generated' and derived_from = the union of the steps' provenance_ids. (Trust on the resulting summary is computed by the Guardian against local policy from the lineage's origins; v0.1 does not carry a trust field on the wire — see §7.1.) Lets the Guardian record a turn-level summary distinct from any agentResponse content.",
+      "properties": {
+        "value": { "type": "string" },
+        "provenance": { "$ref": "../provenance.json" }
+      },
+      "required": ["value", "provenance"]
+    },
+    "tool_call_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. Number of toolCallRequest steps this turn. Convenience field for the common 'limit tool calls per turn' policy; also derivable by a Guardian that walks ContextEntries between turnStart and turnEnd."
+    }
+  }
+}
