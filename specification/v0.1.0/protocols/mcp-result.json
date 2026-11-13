@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/protocols/mcp-result.json",
+  "title": "protocols/MCP/* result",
+  "description": "Result of a wrapped MCP message. It is the AcsResult of response-envelope.json with the rules that apply to protocols/MCP/*. Wrapped MCP adds no new result fields: the verdict is `decision`, the explanation is `reasoning`, and the audit chain head is `chain_hash`. A MODIFY uses `modifications` (Specification 6.3) and is limited to structured edits. `redactions[].path` is a JSON pointer into the wrapped payload (for example /mcp_params/arguments/body or /mcp_result/content/0/text). `parameter_overrides` replaces whole top-level members of `mcp_params` by name (for example `arguments`) and therefore applies to direction 'request' only. `modified_content` is not allowed, because replacing the payload with an opaque string would leave no valid MCP message to forward. A deployment that cannot apply MODIFY is handled per Specification 6.5.",
+  "allOf": [
+    { "$ref": "../response-envelope.json#/$defs/AcsResult" },
+    {
+      "if": { "properties": { "decision": { "const": "modify" } }, "required": ["decision"] },
+      "then": {
+        "properties": {
+          "modifications": { "not": { "required": ["modified_content"] } }
+        }
+      }
+    }
+  ]
+}

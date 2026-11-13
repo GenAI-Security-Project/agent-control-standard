@@ -45,6 +45,7 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | Decision failure | `acs.decision.failure` (span event; on the `acs.session` span for `handshake_failure`) | `acs.failure.class`, `acs.failure.posture`, `acs.failure.reported_by`; `acs.failure.detail` (required for class `other`), `acs.failure.error_code`, `acs.failure.timeout_ms`, `acs.failure.elapsed_ms`, `acs.failure.payload_bytes` (conditional) |
 | `agbom/snapshot` | `acs.agbom` | `acs.agbom.format`, `acs.agbom.component_count` |
 | `agbom/changed` | `acs.agbom` | `acs.agbom.format`; `acs.agbom.change_reason` (conditional) |
+| `protocols/MCP/*` | `acs.mcp` | `acs.mcp.method`, `acs.mcp.direction`; `acs.mcp.id`, `acs.mcp.server_id`, `acs.mcp.transport`, `acs.mcp.protocol_version` (optional) |
 
 Every step span also carries `acs.request_id` and `acs.session.id`, the step's own `request_id` and `session_id`. A `steps/toolCallResult` span's `acs.request_id_ref` joins to its request. The Observed Agent chooses `request_id`, and it is unique only within a session ([Specification §10.3](../instrument/specification.md#103-replay-protection)), so a join keys on the two together. The Observed Agent and the Guardian may each emit a span for one request, and a reader joins the two. When the Observed Agent retries a step with a new `request_id`, each attempt is its own request. The Observed Agent emits a step span for each attempt that reached the Guardian, carrying that attempt's `request_id`. A Guardian event whose pair matches no Observed Agent step span is a discrepancy worth investigating.
 
@@ -59,6 +60,8 @@ In v0.1 the Observed Agent reports this event about its own conduct. A missing e
 Some unusable responses are not decision failures, because the spec already defines their outcome. A response whose `modifications` break §6.3 gets `DENY`, whether or not schema validation also rejects it. A `MODIFY` the client cannot apply gets `DENY`, or at `postCompact` the original summary (§6.5). `malformed_response` covers a response that does not parse, or that fails schema validation for any other reason.
 
 No AgBOM payload carries a format field, because the Observed Agent always sends the canonical form. An exporter recording the payload sets `acs.agbom.format` to `canonical`. A Guardian recording a serialization it rendered sets the value it advertises in the handshake's `agbom_serializations_supported` (`cyclonedx-1.6`, `spdx-3.0`, or `swid`).
+
+One `protocols/MCP/*` row covers every wrapped MCP method, including the explicit-version `wrapped:mcp-<version>/<method>` form. `acs.mcp.method` is the payload's `mcp_method` and `acs.mcp.direction` is its `direction`. The optional attributes come from `mcp_id`, `server_id`, `transport`, and `protocol_version`. A wrapped `tools/call` produces an `acs.mcp` span, not a `gen_ai.tool.call` span, which only the tool hooks emit. See [Extending MCP](../instrument/extend_mcp.md).
 
 When Provenance is attached to a hook payload, the resulting span MUST carry `acs.provenance.origin` as an attribute, and SHOULD carry `acs.provenance.source_id` when populated. Both are string arrays, also for a single Provenance object. `acs.provenance.source_id` is emitted whenever at least one attached object has a `source_id`. It then has the same length and order as `acs.provenance.origin`, with `""` where an object has none. v0.1 emits factual provenance attributes. Trust classification is computed by the Guardian against local policy and is not a v0.1 span attribute (see [Specification §7](../instrument/specification.md#7-provenance)). Provenance lineage edges MAY be linked via OTel span links keyed by `provenance_id`.
 
@@ -81,6 +84,7 @@ The full mapping lives in [`trace/ocsf-mapping.json`](https://genai-security-pro
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
 | Decision (allow) | Application Lifecycle | 6002 |
 | `agbom/snapshot`, `agbom/changed` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
+| `protocols/MCP/*` | API Activity | 6003 (no fixed `activity_id`) |
 | `steps/skillRegister` | Device Inventory Info | 5001 (`activity_id` 2, Collect: skill enters the component set) |
 | `steps/sessionEnd` | Authentication | 3002 (logoff) |
 
