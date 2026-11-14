@@ -12,16 +12,16 @@
     },
     "step_id": {
       "type": "string",
-      "description": "Identifier of the step that produced this entry. SHOULD equal the request_id of the originating envelope."
+      "description": "Identifier of the step that produced this entry. SHOULD equal the request_id of the originating envelope. A 'defer_resolution' entry has no originating envelope: its step_id is a new UUID that the Guardian generates and returns as defer_resolution.step_id (Specification 6.6)."
     },
     "step_type": {
       "type": "string",
-      "description": "The method name from the originating request envelope (e.g., 'steps/toolCallRequest', 'steps/toolCallResult')."
+      "description": "The method name from the originating request envelope (e.g., 'steps/toolCallRequest', 'steps/toolCallResult'). Two entry types the Guardian writes without a request use a fixed value instead: 'intent_extension' (Specification 9.1) and 'defer_resolution' (Specification 6.6)."
     },
     "request_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Lowercase-hex SHA-256 of the JCS-canonicalized (RFC 8785) request envelope's params object. RECOMMENDED. Without request_hash, the chain commits only to step metadata (step_id, step_type) and not to the actual request content; retroactive request-content tampering would be undetectable from the chain alone. RECOMMENDED for any deployment that relies on the chain for tamper-evidence."
+      "description": "Lowercase-hex SHA-256 of the JCS-canonicalized (RFC 8785) request envelope's params object; for a 'defer_resolution' entry, of the resolution record defined in Specification 6.6. RECOMMENDED. Without request_hash, the chain commits only to step metadata (step_id, step_type) and not to the actual request content; retroactive request-content tampering would be undetectable from the chain alone. RECOMMENDED for any deployment that relies on the chain for tamper-evidence."
     },
     "provenance_summary": {
       "$ref": "provenance-summary.json",

@@ -14,7 +14,7 @@ permissions: {}
 jobs:
   check:
     runs-on: ubuntu-latest
-    # 44 checks at six attempts of ten seconds apiece can run well over half an hour
+    # 46 checks at six attempts of ten seconds apiece can run well over half an hour
     # during a real outage. Without a limit, a failing run holds the runner against
     # GitHub's six-hour default.
     timeout-minutes: 20

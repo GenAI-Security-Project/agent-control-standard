@@ -100,7 +100,7 @@
         },
         "alert_mapping": {
           "type": "object",
-          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. It is true exactly when severity_id is 3 or higher, so the two fields never disagree. ask and defer alert because an ASK can time out to allow and a DEFER can fall back to that ASK, and v0.1.0 has no Trace event for how either one ends, so this event is the only signal a SOC gets. modify does not alert, because the action ran in the form the policy required. A MODIFY the client cannot apply becomes a DENY (Specification §6.5), which alerts.",
+          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. It is true exactly when severity_id is 3 or higher, so the two fields never disagree. ask and defer alert because the step is still unresolved. An ASK can time out to allow, and v0.1.0 has no Trace event for how an ASK ends, so for an ASK this event is the only signal a SOC gets. modify does not alert, because the action ran in the form the policy required. A MODIFY the client cannot apply becomes a DENY (Specification §6.5), which alerts.",
           "additionalProperties": { "type": "boolean" },
           "default": {
             "allow": false,
@@ -132,7 +132,7 @@
         },
         "late_decision": {
           "type": "object",
-          "description": "A Guardian that finishes a decision after the negotiated timeout still emits the decision event. A late deny under fail-open means the policy said no and the action ran, so suppressing the event would leave OCSF silent exactly when someone slows the Guardian down. action_id and disposition_id stay the verdict, as on an on-time decision. finding_info.types includes late_decision_fail_open or late_decision_fail_closed, from the on_decision_failure posture the Guardian sent in its ServerHello. unmapped.acs.failure carries the failure facts, named as the OTel acs.failure.* attributes are. is_alert follows alert_mapping, and is also true for any verdict other than allow under fail-open, because the action ran without what the policy required. severity_id stays the value severity_mapping gives the verdict, so a late decision is the one case where is_alert can be true below severity 3. A reader MUST NOT count a decision event whose finding_info.types includes late_decision_fail_open or late_decision_fail_closed as an enforced outcome. The Guardian measures its own processing time, not network time, so a decision can still arrive late and look on time.",
+          "description": "A Guardian that finishes a decision after the negotiated timeout still emits the decision event. These late-decision rules do not apply to a DEFER resolution, which uses the deadlines of Specification §6.6. A late deny under fail-open means the policy said no and the action ran, so suppressing the event would leave OCSF silent exactly when someone slows the Guardian down. action_id and disposition_id stay the verdict, as on an on-time decision. finding_info.types includes late_decision_fail_open or late_decision_fail_closed, from the on_decision_failure posture the Guardian sent in its ServerHello. unmapped.acs.failure carries the failure facts, named as the OTel acs.failure.* attributes are. is_alert follows alert_mapping, and is also true for any verdict other than allow under fail-open, because the action ran without what the policy required. severity_id stays the value severity_mapping gives the verdict, so a late decision is the one case where is_alert can be true below severity 3. A reader MUST NOT count a decision event whose finding_info.types includes late_decision_fail_open or late_decision_fail_closed as an enforced outcome. The Guardian measures its own processing time, not network time, so a decision can still arrive late and look on time.",
           "properties": {
             "finding_types": {
               "type": "array",
@@ -149,13 +149,13 @@
         "join_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Fields every decision event carries under unmapped.acs to join it to the step event it gated. request_id comes from the response, and session_id from the gated request's metadata.session_id. metadata.correlation_uid carries the same pair as <session_id>:<request_id>.",
+          "description": "Fields every decision event carries under unmapped.acs to join it to the step event it gated. request_id comes from the response (from defer_resolution.deferred_request_id for a DEFER resolution, Specification §6.6), and session_id from the gated request's metadata.session_id. metadata.correlation_uid carries the same pair as <session_id>:<request_id>.",
           "default": ["request_id", "session_id"]
         },
         "acs_fields": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Decision facts carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same facts as the OTel acs.decision event. finding_info.desc SHOULD carry reasoning, and unmapped.acs.reasoning is the exact copy. policy_references keeps its object form, so it needs no padding rule. An empty source array counts as absent. OCSF does not validate unmapped, so each field takes the type and pattern of its definition in response-envelope.json.",
+          "description": "Decision facts carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same facts as the OTel acs.decision event. For a DEFER resolution, request_id follows join_fields. finding_info.desc SHOULD carry reasoning, and unmapped.acs.reasoning is the exact copy. policy_references keeps its object form, so it needs no padding rule. An empty source array counts as absent. OCSF does not validate unmapped, so each field takes the type and pattern of its definition in response-envelope.json.",
           "default": ["request_id", "decision", "reasoning", "reason_codes", "policy_references", "cited_provenance_ids", "chain_hash", "metadata"]
         }
       }

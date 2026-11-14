@@ -10,6 +10,7 @@ GUARDIAN_ERROR_CAUSE: dict[int, str] = {
     -32005: "replay_detected_response",
     -32006: "timestamp_out_of_window_response",
     -32007: "chain_mismatch_response",
+    -32012: "deferral_not_found_response",
     -32600: "malformed_envelope_response",
     -32601: "method_not_found_response",
     -32602: "invalid_params_response",

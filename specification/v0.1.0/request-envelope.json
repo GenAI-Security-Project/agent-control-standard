@@ -10,8 +10,8 @@
     "jsonrpc": { "const": "2.0" },
     "method": {
       "type": "string",
-      "description": "Hook or wrapped-protocol method name. Reserved namespaces: steps/* (Instrument hooks), protocols/* (wrapped sub-protocols MCP and A2A), agbom/* (Inspect pillar AgBOM methods), trace/* (reserved for future ACS-native trace methods; v0.1 does not define any), system/* (low-level transport/control methods, including system/ping for liveness), handshake/* (capability negotiation, including handshake/hello), wrapped: (explicit-version wrapped form, e.g. wrapped:a2a-0.2/message/send).",
-      "pattern": "^(steps/|protocols/|agbom/|trace/|system/|handshake/|wrapped:).+"
+      "description": "Hook or wrapped-protocol method name. Reserved namespaces: steps/* (Instrument hooks), protocols/* (wrapped sub-protocols MCP and A2A), agbom/* (Inspect pillar AgBOM methods), trace/* (reserved for future ACS-native trace methods; v0.1 does not define any), system/* (low-level transport/control methods, including system/ping for liveness), handshake/* (capability negotiation, including handshake/hello), defer/* (DEFER resolution, including defer/subscribe), wrapped: (explicit-version wrapped form, e.g. wrapped:a2a-0.2/message/send).",
+      "pattern": "^(steps/|protocols/|agbom/|trace/|system/|handshake/|defer/|wrapped:).+"
     },
     "id": {
       "oneOf": [{ "type": "string" }, { "type": "number" }],

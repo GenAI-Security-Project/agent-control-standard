@@ -222,7 +222,7 @@ jobs:
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
       - name: Verify the published schemas
-        # 44 checks at six attempts of ten seconds apiece can run well over half an
+        # 46 checks at six attempts of ten seconds apiece can run well over half an
         # hour during a real outage. The cap sits on this step rather than the job so
         # it cannot cancel the deploy action above it, which has already published.
         timeout-minutes: 20
