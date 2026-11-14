@@ -266,7 +266,7 @@ The final decision is `allow`, `deny`, `modify` or `ask`. The final decision MUS
 
 `deferred_metadata` MUST be a copy of `params.metadata` of the deferred step's request. This `metadata` holds the identity that the deferred step carried.
 
-With `human_approval`, `defer_resolution` also carries `approval`. `approval` carries `approver`, `decision` and `decided_at`. `approver` has the shape of `ask_details.approver`.
+When `resolution_method` is `human_approval`, `defer_resolution` MUST include `approval`. For every other `resolution_method`, `defer_resolution` MUST NOT include `approval`. `approval` carries `approver`, `decision` and `decided_at`. `approver` has the shape of `ask_details.approver`.
 
 `approval.decision` is the approver's answer, `allow` or `deny`, not the final decision. `approval.decided_at` is when the approver answered. Schema: [`defer-resolution.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/defer-resolution.json).
 

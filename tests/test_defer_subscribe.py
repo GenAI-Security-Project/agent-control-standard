@@ -121,6 +121,15 @@ def _resolution_result():
             lambda r: (r["defer_resolution"].update(resolution_method="timeout"), r["defer_resolution"].pop("approval")),
             id="timeout-with-allow",
         ),
+        pytest.param(lambda r: r.pop("chain_hash"), id="resolution-without-chain_hash"),
+        pytest.param(lambda r: r["defer_resolution"].update(resolution_method="additional_context"), id="additional_context-with-approval"),
+        pytest.param(
+            lambda r: (
+                r.update(decision="deny", reasoning="No resolution in time.", reason_codes=["timeout"]),
+                r["defer_resolution"].update(resolution_method="timeout"),
+            ),
+            id="timeout-with-approval",
+        ),
     ],
 )
 def test_the_schemas_refuse_a_resolution_section_6_6_forbids(change):
