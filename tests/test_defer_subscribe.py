@@ -21,6 +21,7 @@ BASE = "https://genai-security-project.github.io/agent-control-standard/schema/v
 SESSION = "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"
 DEFERRED = "8c1d5e2a-4b7f-4e19-a3c6-0f9e2d7b1a54"
 SUBSCRIBE = "b27e4f90-1c3a-4d5b-8e6f-7a9c0d2e3f41"
+RESOLUTION = "e3a94c17-6b2d-4f58-9d01-5c7b8e2a4f63"
 SIGNATURE = {"algorithm": "HMAC-SHA256", "key_id": "2026-10", "value": "R1r68MKnbdN3tsgmm0geCJvjEfgI9yDvk5xe1KQzEvU="}
 
 REQUEST = {
@@ -48,6 +49,7 @@ RESPONSE = {
         "reasoning": "Approved by the operator; no policy objects to the step as the session now stands.",
         "defer_resolution": {
             "deferred_request_id": DEFERRED,
+            "step_id": RESOLUTION,
             "resolution_method": "human_approval",
             "resolved_at": "2026-11-02T18:04:10Z",
             "deferred_metadata": {"agent_id": "mail-agent", "session_id": SESSION, "user_context": {"user_id": "u-1001"}},
@@ -122,6 +124,8 @@ def _resolution_result():
             id="timeout-with-allow",
         ),
         pytest.param(lambda r: r.pop("chain_hash"), id="resolution-without-chain_hash"),
+        pytest.param(lambda r: r["defer_resolution"].pop("step_id"), id="no-step_id"),
+        pytest.param(lambda r: r["defer_resolution"].update(step_id="step-7"), id="step_id-not-uuid"),
         pytest.param(lambda r: r["defer_resolution"].update(resolution_method="additional_context"), id="additional_context-with-approval"),
         pytest.param(
             lambda r: (

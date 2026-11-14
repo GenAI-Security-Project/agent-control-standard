@@ -4,12 +4,17 @@
   "title": "ACS DEFER Resolution",
   "description": "This object describes how and when a DEFER resolved. The resolution record of Specification 6.6 holds this object next to decision, the Guardian's final decision on the deferred step.",
   "type": "object",
-  "required": ["deferred_request_id", "resolution_method", "resolved_at", "deferred_metadata"],
+  "required": ["deferred_request_id", "step_id", "resolution_method", "resolved_at", "deferred_metadata"],
   "properties": {
     "deferred_request_id": {
       "type": "string",
       "format": "uuid",
       "description": "The request_id of the deferred step."
+    },
+    "step_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The step_id of the resolution's ContextEntry. The Guardian generates it when the deferral resolves, so the Observed Agent can name the resolution apart from the deferred step (Specification 6.6)."
     },
     "resolution_method": {
       "type": "string",

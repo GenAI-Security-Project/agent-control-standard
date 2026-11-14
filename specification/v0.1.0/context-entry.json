@@ -12,7 +12,7 @@
     },
     "step_id": {
       "type": "string",
-      "description": "Identifier of the step that produced this entry. SHOULD equal the request_id of the originating envelope."
+      "description": "Identifier of the step that produced this entry. SHOULD equal the request_id of the originating envelope. A 'defer_resolution' entry has no originating envelope: its step_id is a new UUID that the Guardian generates and returns as defer_resolution.step_id (Specification 6.6)."
     },
     "step_type": {
       "type": "string",

@@ -262,7 +262,7 @@ An approver's `deny` MUST resolve to `deny`. After an approver's `allow`, the Gu
 
 The final decision is `allow`, `deny`, `modify` or `ask`. The final decision MUST NOT be `defer`. A resolution with `resolution_method: timeout` or `session_end` MUST have the decision `deny`. When the Guardian cannot decide yet, the Guardian sends no response, and the deferral stays pending until its deadline. Where §9.2 forbids ASK, the Guardian MUST send the `DENY` substitute of §9.2 instead of a final `ask`.
 
-**`defer_resolution`.** `defer_resolution` carries `deferred_request_id`, `resolution_method`, `resolved_at` and `deferred_metadata`. `defer_resolution.resolution_method` names what actually resolved the deferral: `human_approval`, `additional_context`, `timeout` or `session_end`. This value can differ from the `resolution_method` that `defer_details` expected.
+**`defer_resolution`.** `defer_resolution` carries `deferred_request_id`, `step_id`, `resolution_method`, `resolved_at` and `deferred_metadata`. `defer_resolution.resolution_method` names what actually resolved the deferral: `human_approval`, `additional_context`, `timeout` or `session_end`. This value can differ from the `resolution_method` that `defer_details` expected.
 
 `deferred_metadata` MUST be a copy of `params.metadata` of the deferred step's request. This `metadata` holds the identity that the deferred step carried.
 
@@ -290,7 +290,11 @@ When the request is not valid JSON or its method is unknown, the Guardian answer
 
 On stdio the messages share the session channel. The Observed Agent uses `deferred_request_id` in `defer/pending` to match the notification to the deferral. The Observed Agent MAY stop listening to a subscription, by closing its HTTP stream or by ignoring the stdio messages for that deferral.
 
-**Audit.** When a deferral resolves, the Guardian MUST write one ContextEntry for the resolution. The entry has `step_type: "defer_resolution"` and `step_id` set to the `deferred_request_id`. The response that carries the resolution MUST include the resulting `chain_hash` (§8.6). `defer/subscribe` is not a step, so the Guardian writes no ContextEntry for the request.
+**Audit.** When a deferral resolves, the Guardian MUST write one ContextEntry for the resolution. The entry has `step_type: "defer_resolution"` and a new `step_id`: a UUID that the Guardian generates, unique within the session. `defer_resolution.step_id` carries this `step_id`, and `deferred_request_id` links the resolution to the deferred step. The Guardian MUST reject a later request of the session whose `request_id` equals a `defer_resolution.step_id`, with `REPLAY_DETECTED` (`-32005`, §10.3).
+
+The deferred step and its resolution have separate ContextEntries, so `entries_to_compact` (`preCompact`) and `entries_compacted` (`postCompact`) can name either one: the deferred step's `step_id` names the step's entry, and `defer_resolution.step_id` names the resolution's entry. For example, an Observed Agent that passed the `reasoning` of a resolved `DENY` to the model names `defer_resolution.step_id` when it compacts that content.
+
+The response that carries the resolution MUST include the resulting `chain_hash` (§8.6). `defer/subscribe` is not a step, so the Guardian writes no ContextEntry for the request.
 
 The resolution record is the `result` that a response to `defer/subscribe` carries, without `request_id`, `chain_hash` and `signature`. The Guardian builds the record when the deferral resolves, before it sends any response that carries the resolution. For the resolution ContextEntry, `request_hash` covers the resolution record instead of request params (§8.1).
 
@@ -570,7 +574,7 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 | `-32002` | `PROVENANCE_REQUIRED` | Policy requires provenance but the client declared `provenance_producer: "none"` (§4, §7). | Re-handshake as a `deterministic` producer, or connect to a Guardian that does not require provenance. |
 | `-32003` | `CAPABILITY_NOT_NEGOTIATED` | A method or profile was exercised that the handshake did not negotiate for this session (§4). | Re-handshake to negotiate the method or profile named in `data.method`. |
 | `-32004` | `SIGNATURE_INVALID` | A required signature is missing, malformed, or fails verification (§10). | Re-sign the request; if it persists, re-resolve `key_id`. |
-| `-32005` | `REPLAY_DETECTED` | Duplicate `request_id` or `nonce` within the session (§10.3). | Regenerate `request_id` (and `nonce`) and retry. |
+| `-32005` | `REPLAY_DETECTED` | Duplicate `request_id` or `nonce` within the session (§10.3), or a `request_id` that equals a `defer_resolution.step_id` of the session (§6.6). | Regenerate `request_id` (and `nonce`) and retry. |
 | `-32006` | `TIMESTAMP_OUT_OF_WINDOW` | `timestamp` falls outside the negotiated skew window (§10.3); `data.skew_window_ms` carries the window. | Correct clock drift and retry within the window. |
 | `-32007` | `CHAIN_MISMATCH` | The client's `chain_hash` does not match the Guardian's computed head (§8.6). Also exposable as a deny `reason_code: "chain_mismatch"` when the Guardian can still return a decision. | Re-fetch session state; a persistent mismatch is an integrity event, not a transient error. |
 | `-32012` | `DEFERRAL_NOT_FOUND` | The `deferred_request_id` of a `defer/subscribe` does not identify a deferred step of this session (§6.6). | Treat the deferred step as `deny` (§6.6); do not subscribe again for that `deferred_request_id`. |
