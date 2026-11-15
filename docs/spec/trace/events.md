@@ -24,10 +24,10 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 
 | ACS step | OTel span name | Required attributes |
 |---|---|---|
-| `steps/sessionStart` | `acs.session` | `acs.session.id`; `acs.tenant_id` if set |
+| `steps/sessionStart` | `acs.session` | `acs.session.id`; `acs.tenant_id` from `params.tenant_id`, `acs.user.id` from `payload.user_identity.user_id`, and `acs.policy_mode` from `payload.policy_mode` (conditional) |
 | `steps/agentTrigger` | `acs.agent.trigger` | `acs.agent.id`, `acs.trigger.type` |
-| `steps/userMessage` | `acs.message.user` | `acs.session.id`, `acs.content.types[]` |
-| `steps/agentResponse` | `acs.message.agent` | `acs.session.id`, `acs.agent.id` |
+| `steps/userMessage` | `acs.message.user` | `acs.session.id`, `acs.content.types` |
+| `steps/agentResponse` | `acs.message.agent` | `acs.session.id`, `acs.agent.id`, `acs.content.types` |
 | `steps/toolCallRequest` | `gen_ai.tool.call` | `gen_ai.tool.name`; `acs.capability` (conditional); `acs.tool.provider` (optional) |
 | `steps/toolCallResult` | `gen_ai.tool.result` | `gen_ai.tool.name`, `acs.exit_status`; `acs.request_id_ref` (conditional); `acs.duration_ms` (optional) |
 | `steps/knowledgeRetrieval` | `acs.knowledge.retrieval` | `acs.results.count`; `acs.source.type` (conditional) |
@@ -47,6 +47,8 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | `agbom/changed` | `acs.agbom` | `acs.agbom.format`; `acs.agbom.change_reason` (conditional) |
 
 Every step span also carries `acs.request_id` and `acs.session.id`, the step's own `request_id` and `session_id`. A `steps/toolCallResult` span's `acs.request_id_ref` joins to its request. The Observed Agent chooses `request_id`, and it is unique only within a session ([Specification §10.3](../instrument/specification.md#103-replay-protection)), so a join keys on the two together. The Observed Agent and the Guardian may each emit a span for one request, and a reader joins the two. When the Observed Agent retries a step with a new `request_id`, each attempt is its own request. The Observed Agent emits a step span for each attempt that reached the Guardian, carrying that attempt's `request_id`. A Guardian event whose pair matches no Observed Agent step span is a discrepancy worth investigating.
+
+For `steps/userMessage` and `steps/agentResponse`, `acs.content.types` is required. It contains one `type` entry for each item in `payload.content`, in the same order. It is not a set, so repeated types remain repeated. The three conditional `steps/sessionStart` attributes use the source paths named in the table; an exporter emits each when its source exists and omits it otherwise.
 
 The three `acs.policy.*` attributes are parallel arrays built from `policy_references`. Their source field is `policy_references` itself: all three are emitted whenever the response carries a non-empty `policy_references`, and none otherwise. Each has the same length and order as `policy_references`, with `""` where an entry lacks the field. A reader can then line up a policy, its version, and its rule by position. A `""` on the wire could not be told from an absent field, so the response envelope rejects one in a `policy_references` entry, and the Provenance schema rejects an empty `source_id`. A producer SHOULD omit a member it has no value for rather than send `""`, because a peer validating against these schemas now rejects the empty string. `acs.reason_codes` is a set. Its order carries no meaning, and it does not line up with the policy arrays.
 

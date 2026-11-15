@@ -31,7 +31,8 @@
         "steps/sessionStart": {
           "span_name": "acs.session",
           "required_attributes": ["acs.session.id"],
-          "optional_attributes": ["acs.tenant_id", "acs.user.id", "acs.policy_mode"]
+          "conditional_attributes": ["acs.tenant_id", "acs.user.id", "acs.policy_mode"],
+          "_note": "acs.tenant_id is params.tenant_id; acs.user.id is payload.user_identity.user_id; acs.policy_mode is payload.policy_mode. Emit each when its source is present."
         },
         "steps/agentTrigger": {
           "span_name": "acs.agent.trigger",
@@ -39,11 +40,13 @@
         },
         "steps/userMessage": {
           "span_name": "acs.message.user",
-          "required_attributes": ["acs.session.id", "acs.content.types"]
+          "required_attributes": ["acs.session.id", "acs.content.types"],
+          "_note": "acs.content.types contains one payload.content[].type entry per item, in payload.content order."
         },
         "steps/agentResponse": {
           "span_name": "acs.message.agent",
-          "required_attributes": ["acs.session.id", "acs.agent.id"]
+          "required_attributes": ["acs.session.id", "acs.agent.id", "acs.content.types"],
+          "_note": "acs.content.types contains one payload.content[].type entry per item, in payload.content order."
         },
         "steps/toolCallRequest": {
           "span_name": "gen_ai.tool.call",

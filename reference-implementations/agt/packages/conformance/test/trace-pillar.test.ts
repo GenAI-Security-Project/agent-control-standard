@@ -217,15 +217,15 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     expect(spanCounts).toEqual({
       "gen_ai.tool.call": 2, // steps/toolCallRequest: gen_ai.tool.name, acs.capability
       "gen_ai.tool.result": 3, // steps/toolCallResult: gen_ai.tool.name, acs.exit_status, acs.request_id_ref
-      "acs.session": 1, // steps/sessionStart: acs.session.id
+      "acs.session": 4, // steps/sessionStart: acs.session.id + conditional acs.tenant_id, acs.user.id, acs.policy_mode
       "acs.session.end": 1, // steps/sessionEnd: acs.session.reason
       "acs.message.user": 2, // steps/userMessage: acs.session.id, acs.content.types
-      "acs.message.agent": 2, // steps/agentResponse: acs.session.id, acs.agent.id
+      "acs.message.agent": 3, // steps/agentResponse: acs.session.id, acs.agent.id, acs.content.types
       "acs.decision": 12, // decision_event: 1 required + 11 conditional
       "(every step span)": 2, // step_span_attributes: acs.request_id, acs.session.id
       "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
     });
-    expect(rows).toHaveLength(26);
+    expect(rows).toHaveLength(30);
   });
 
   it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {

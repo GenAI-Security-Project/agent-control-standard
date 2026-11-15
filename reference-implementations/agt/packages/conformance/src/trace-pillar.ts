@@ -349,8 +349,10 @@ export function checkTracePillar(): TraceRow[] {
   const otelMapping = readSpecJson<OtelMappingSchema>("trace/otel-mapping.json");
   const toolCallRequest = readSpecJson<SchemaNode>("hooks/tool-call-request.json");
   const toolCallResult = readSpecJson<SchemaNode>("hooks/tool-call-result.json");
+  const sessionStart = readSpecJson<SchemaNode>("hooks/session-start.json");
   const sessionEnd = readSpecJson<SchemaNode>("hooks/session-end.json");
   const userMessage = readSpecJson<SchemaNode>("hooks/user-message.json");
+  const agentResponse = readSpecJson<SchemaNode>("hooks/agent-response.json");
   const requestEnvelope = readSpecJson<SchemaNode>("request-envelope.json");
   const responseEnvelope = readSpecJson<SchemaNode>("response-envelope.json");
   const provenance = readSpecJson<SchemaNode>("provenance.json");
@@ -395,6 +397,30 @@ export function checkTracePillar(): TraceRow[] {
           path: ["metadata", "session_id"],
           label: "AcsParams.metadata.session_id",
         };
+      case "acs.session::acs.tenant_id":
+        return {
+          file: "request-envelope.json",
+          fileRoot: requestEnvelope,
+          startNode: acsParams,
+          path: ["tenant_id"],
+          label: "AcsParams.tenant_id",
+        };
+      case "acs.session::acs.user.id":
+        return {
+          file: "hooks/session-start.json",
+          fileRoot: sessionStart,
+          startNode: sessionStart,
+          path: ["user_identity", "user_id"],
+          label: "user_identity.user_id",
+        };
+      case "acs.session::acs.policy_mode":
+        return {
+          file: "hooks/session-start.json",
+          fileRoot: sessionStart,
+          startNode: sessionStart,
+          path: ["policy_mode"],
+          label: "policy_mode",
+        };
       case "acs.session.end::acs.session.reason":
         return { file: "hooks/session-end.json", fileRoot: sessionEnd, startNode: sessionEnd, path: ["reason"], label: "reason" };
       case "acs.message.user::acs.content.types":
@@ -402,6 +428,14 @@ export function checkTracePillar(): TraceRow[] {
           file: "hooks/user-message.json",
           fileRoot: userMessage,
           startNode: userMessage,
+          path: ["content", "[]", "type"],
+          label: "content[].type",
+        };
+      case "acs.message.agent::acs.content.types":
+        return {
+          file: "hooks/agent-response.json",
+          fileRoot: agentResponse,
+          startNode: agentResponse,
           path: ["content", "[]", "type"],
           label: "content[].type",
         };
