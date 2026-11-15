@@ -74,6 +74,10 @@ Streaming and notifications are not supported in v0.1.0. Batching is permitted a
 
 The full envelope schemas are [`request-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/request-envelope.json) and [`response-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json).
 
+### 3.1 Executing service identity
+
+An Observed Agent MAY set `params.metadata.service_identity` to identify the service account or workload credential that executes an action. The descriptor requires `type` and `id`; it can also carry `issuer`, `scopes`, and `claims`. It is separate from the human `user_identity`, the Observed Agent identity, and the Guardian identity. A Guardian can use it in policy and audit records after applying deployment-defined credential verification.
+
 ## 4. Capability Negotiation Handshake
 
 Required at session start, before any hook traffic. Wire method: `handshake/hello`. Schema: [`handshake.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/handshake.json) (`$defs/ClientHello` and `$defs/ServerHello`).
