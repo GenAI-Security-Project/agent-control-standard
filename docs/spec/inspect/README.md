@@ -15,7 +15,7 @@ The `agbom/*` namespace is reserved by [Specification §3](../instrument/specifi
 
 | Method | Direction | Trigger |
 |---|---|---|
-| `agbom/snapshot` | Observed → Guardian | Once after `sessionStart`, before any content-bearing hook; and after any handshake renegotiation. Carries the full AgBOM. |
+| `agbom/snapshot` | Observed → Guardian | Once after `sessionStart`, before any content-bearing hook; and after a successful [mid-session capability update](../instrument/specification.md#42-mid-session-capability-updates-normative) that accepts ACS-Inspect. Carries the full AgBOM and continues the existing chain. |
 | `agbom/changed` | Observed → Guardian | Whenever a component is added, removed, or version-changed mid-session. Carries either a full snapshot or a diff (`added[]`, `removed[]`, `changed[]`). |
 
 Both methods follow the standard ACS request envelope and are written into the SessionContext audit chain — AgBOM mutation is part of the security-relevant history of the session. Decisions are normally `allow`; Guardians MAY return `deny` to refuse a session whose component graph contains a banned component, or to block a hot-swap.

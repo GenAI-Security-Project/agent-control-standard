@@ -82,7 +82,7 @@ Required at session start, before any hook traffic. Wire method: `handshake/hell
 
 **Guardian Agent → Observed Agent (ServerHello):** `negotiated_version`, `methods_evaluated`, `selected_transport`, `signature_algorithms_supported`, `timeout_config` (default and per-method), `on_decision_failure` (failure posture, §6.4), `skew_window_ms` (request-timestamp skew tolerance for replay protection, §10.3), `approver_types_supported`, `policy_requires_provenance`, `agbom_serializations_supported` (Inspect-pillar serialization formats the Guardian renders on request), `trace_emission` (whether the Guardian emits OTel and/or OCSF for the Trace pillar, plus optional OTLP collector endpoint), `profiles_accepted`.
 
-Version mismatch terminates with `UNSUPPORTED_VERSION` (`-32001`, §17.1). Unknown fields MUST be ignored. If the client declares `provenance_producer: "none"` and the Guardian's `policy_requires_provenance` is true, the Guardian MUST refuse the session at handshake time with `PROVENANCE_REQUIRED` (`-32002`, §17.1) rather than silently degrading enforcement.
+Version mismatch terminates the handshake attempt with `UNSUPPORTED_VERSION` (`-32001`, §17.1). Unknown fields MUST be ignored. If the client declares `provenance_producer: "none"` and the Guardian's `policy_requires_provenance` is true, the Guardian MUST refuse the handshake with `PROVENANCE_REQUIRED` (`-32002`, §17.1) rather than silently degrading enforcement.
 
 The sequence below shows the handshake: the Observed Agent sends ClientHello, the Guardian answers with ServerHello, and hook traffic begins only after negotiation succeeds.
 
@@ -99,7 +99,19 @@ sequenceDiagram
 
 `on_decision_failure` is negotiated in the handshake, so it cannot govern a handshake that never completes. When `handshake/hello` fails — the Guardian is unreachable, silent past the deployment's connection timeout, or errors without producing a ServerHello — the Observed Agent applies its **startup posture**, configured out of band: `proceed` starts the session unguarded, `refuse` does not start it. The default is `proceed`, matching `on_decision_failure`, so a Guardian outage does not block new sessions.
 
-A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) has decided; the startup posture applies only when no answer arrives. A session started unguarded MUST be recorded in the deployment's own audit log — there is no Guardian to receive the event — and SHOULD be surfaced on Trace as an `acs.decision.failure` event with class `handshake_failure` and posture `fail_open` on the session span when the deployment claims ACS-Trace. The Observed Agent SHOULD retry the handshake for subsequent sessions. Whether a Guardian can attach mid-flight to a session that started unguarded is undefined in v0.1; renegotiation is deferred to v0.2 alongside `system/handshake_renegotiate` (§13).
+A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) has decided; the startup posture applies only when no answer arrives. A session started unguarded MUST be recorded in the deployment's own audit log because no Guardian can receive the event. When the deployment claims ACS-Trace, it SHOULD surface an `acs.decision.failure` event with class `handshake_failure` and posture `fail_open` on the session span. The Observed Agent SHOULD retry the handshake for subsequent sessions. Whether a Guardian can attach mid-flight to a session that started unguarded remains undefined in v0.1. The capability update below applies only to an established, guarded session.
+
+### 4.2 Mid-session capability updates (normative)
+
+An Observed Agent MAY send another `ClientHello` using `handshake/hello` on an existing `session_id`. The Guardian responds with `ServerHello` to update negotiated methods, wrapped protocols, or profiles. This exchange is permitted after `PROVENANCE_REQUIRED` (`-32002`), `CAPABILITY_NOT_NEGOTIATED` (`-32003`), or an `agbom/changed` notification reveals a need for different coverage. v0.1 defines no separate renegotiation method; `system/handshake_renegotiate` remains reserved for a future version (§13).
+
+Both parties MUST preserve the `session_id`, the existing `SessionContext`, and `chain_hash` continuity. A repeated hello MUST NOT reset the chain or emit another `sessionStart`. The hello exchange does not create a ContextEntry; the next content-bearing hook continues from the existing chain head. Intent and its immutability rules (§8.4) remain in force.
+
+Both parties MUST preserve the session's replay-detection state, including `request_id` and `nonce` history for the retention period in §10.3. The hello itself uses fresh replay identifiers and the existing authentication binding. Both parties MUST preserve that authentication binding and the existing session keys; a repeated hello does not rotate keys or change the authenticated principal. The negotiated ACS version and transport MUST remain unchanged. Changing those bindings requires a new session, not a capability update.
+
+The client MUST finish outstanding hook exchanges before sending the new hello and MUST pause new hook traffic until it receives a successful `ServerHello`. Accepted settings replace the previous negotiated settings only after that response. On refusal or timeout, the previous settings and session state remain in force; the client MUST NOT use unaccepted capabilities. Startup posture (§4.1) MUST NOT restart an established session unguarded after an update failure.
+
+After a successful update that accepts ACS-Inspect, the client MUST send `agbom/snapshot` before resuming content-bearing hooks. That snapshot extends the existing chain rather than opening a new one. An initial handshake refusal has no established session to update; a corrected hello retries session establishment.
 
 ## 5. Hook Taxonomy
 
@@ -484,8 +496,8 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 |---|---|---|---|
 | `-32000` | `SESSION_REFUSED` | Guardian policy refuses the session and no more specific code applies (for example an `agent_id` the policy does not permit). | Do not retry without a policy or configuration change; read `data.reason`. |
 | `-32001` | `UNSUPPORTED_VERSION` | No common `acs_version` at handshake (§4). | Retry the handshake with a version from `data.supported_versions`. |
-| `-32002` | `PROVENANCE_REQUIRED` | Policy requires provenance but the client declared `provenance_producer: "none"` (§4, §7). | Re-handshake as a `deterministic` producer, or connect to a Guardian that does not require provenance. |
-| `-32003` | `CAPABILITY_NOT_NEGOTIATED` | A method or profile was exercised that the handshake did not negotiate for this session (§4). | Re-handshake to negotiate the method or profile named in `data.method`. |
+| `-32002` | `PROVENANCE_REQUIRED` | Policy requires provenance but the client declared `provenance_producer: "none"` (§4, §7). | Retry hello as a `deterministic` producer only if the client implements it. For an established session, use §4.2 and preserve session state. Otherwise connect to a Guardian that does not require provenance. |
+| `-32003` | `CAPABILITY_NOT_NEGOTIATED` | A method or profile was exercised that the handshake did not negotiate for this session (§4). | Send a mid-session `ClientHello` to negotiate the method or profile named in `data.method` (§4.2), preserving chain, replay, and authentication state. Retry the rejected request only after success, with fresh replay identifiers. |
 | `-32004` | `SIGNATURE_INVALID` | A required signature is missing, malformed, or fails verification (§10). | Re-sign the request; if it persists, re-resolve `key_id`. |
 | `-32005` | `REPLAY_DETECTED` | Duplicate `request_id` or `nonce` within the session (§10.3). | Regenerate `request_id` (and `nonce`) and retry. |
 | `-32006` | `TIMESTAMP_OUT_OF_WINDOW` | `timestamp` falls outside the negotiated skew window (§10.3); `data.skew_window_ms` carries the window. | Correct clock drift and retry within the window. |
