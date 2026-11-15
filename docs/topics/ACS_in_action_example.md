@@ -1,10 +1,10 @@
 # ACS in Action
 
-A worked example of an Observed Agent calling the `email.send` tool, with a Guardian Agent enforcing IBAC + FIDES policies, emitting a Trace event, and updating the AgBOM. Read [Core Concepts](./core_concepts.md) first if you haven't.
+A worked example of an Observed Agent calling the `email.send` tool, with a Guardian Agent enforcing a conventional authorization policy, emitting a Trace event, and updating the AgBOM. Read [Core Concepts](./core_concepts.md) first if you haven't.
 
 ## Sequence
 
-The diagram below shows the whole walkthrough: one handshake, one AgBOM snapshot, a tool call the Guardian evaluates and traces, and the result.
+The diagram below shows the whole walkthrough: one handshake, session initialization, one AgBOM snapshot, a tool call the Guardian evaluates and traces, and the result. Display snippets omit `signature` and `chain_hash` for brevity; conforming envelopes carry them as required by their applicable profile.
 
 ```mermaid
 sequenceDiagram
@@ -14,21 +14,26 @@ sequenceDiagram
 
     O->>G: handshake/hello
     G-->>O: ServerHello
-    O->>G: agbom/snapshot
-    G->>T: Trace acs.agbom
-    G-->>O: allow
     O->>G: steps/sessionStart
     Note right of G: Open chain root
-    G-->>O: allow
+    G-->>O: ALLOW or DENY
+    O->>G: agbom/snapshot
+    G->>T: Trace acs.agbom
+    G-->>O: ALLOW or DENY
     O->>G: steps/userMessage
-    G-->>O: allow
+    G-->>O: ALLOW, DENY, or MODIFY
     O->>G: steps/toolCallRequest
-    Note right of G: Evaluate IBAC + FIDES
+    Note right of G: Evaluate policy
     G->>T: Trace acs.decision
-    G-->>O: allow
-    Note left of O: Execute tool
-    O->>G: steps/toolCallResult
-    G-->>O: allow
+    alt ALLOW
+        G-->>O: ALLOW
+        Note left of O: Execute tool
+        O->>G: steps/toolCallResult
+        G-->>O: ALLOW, DENY, or MODIFY
+    else DENY
+        G-->>O: DENY
+        Note left of O: Do not execute tool
+    end
 ```
 
 ## The decision point: `steps/toolCallRequest`
@@ -65,6 +70,7 @@ This example shows a deployment that elects to populate the OPTIONAL `trust` fie
             "provenance_id": "p1",
             "origin": "user_input",
             "source_id": "user-12345",
+            "trust": "trusted",
             "derived_from": []
           }
         },
@@ -74,6 +80,7 @@ This example shows a deployment that elects to populate the OPTIONAL `trust` fie
             "provenance_id": "p3",
             "origin": "agent_generated",
             "source_id": "llm-gpt-4",
+            "trust": "untrusted",
             "derived_from": ["p2"]
           }
         }
@@ -83,9 +90,23 @@ This example shows a deployment that elects to populate the OPTIONAL `trust` fie
 }
 ```
 
+### Ordinary authorization policy
+
+Most deployments start with a role, identity, and resource rule. For example, an OPA/Rego policy can permit a manager to send project status to their own organization without adopting a research paradigm:
+
+```rego
+package acs.email
+
+allow if {
+  input.user.role == "manager"
+  input.tool.name == "email.send"
+  endswith(input.arguments.recipient.value, "@acme.example")
+}
+```
+
 ### Decision
 
-The Guardian's deterministic layer evaluates against IBAC (does `email.send` to `manager@example.com` fall inside `Intent.parsed`?) and FIDES (does the trusted-recipient + possibly-tainted-body combination satisfy the P-F flow check?). Both pass.
+The Guardian's deterministic layer applies the role, identity, and resource rule. The request satisfies the local policy.
 
 ```json
 {
@@ -96,15 +117,13 @@ The Guardian's deterministic layer evaluates against IBAC (does `email.send` to 
     "acs_version": "0.1.0",
     "request_id": "550e8400-e29b-41d4-a716-446655440000",
     "decision": "allow",
-    "reasoning": "Recipient is trusted (user_input); body lineage is untrusted but the trusted recipient + possibly-tainted body combination is permitted by FIDES P-F under acme-baseline version v1.",
-    "reason_codes": ["fides_p_f_check_passed", "ibac_capability_match"],
+    "reasoning": "A manager may send project status to an approved recipient.",
+    "reason_codes": ["role_resource_match"],
     "policy_references": [
-      { "policy_id": "acme-baseline", "policy_version": "v1", "rule_id": "allow-trusted-recipients" },
-      { "policy_id": "acme-ibac", "policy_version": "v1", "rule_id": "email-send-in-intent" }
+      { "policy_id": "acme-email", "policy_version": "v1", "rule_id": "manager-project-status" }
     ],
     "policy_data": {
-      "fides": { "recipient_trust": "trusted", "body_trust": "untrusted", "p_f_passed": true },
-      "ibac": { "matched_capability": { "tool": "email.send", "resource": "manager@example.com" } }
+      "authorization": { "role": "manager", "resource": "manager@example.com" }
     },
     "cited_provenance_ids": ["p1", "p3"],
     "metadata": {
@@ -126,7 +145,14 @@ The decision above is one of three concurrent obligations:
 
 ## What different paradigms cite
 
-The same wire format supports four published agent-security architectures and their compositions. Each cites different primitives in `policy_data` and `cited_provenance_ids`, but the envelope shape is identical. Below: one denial-shaped example per paradigm.
+The ACS wire is paradigm-neutral. The handshake negotiates conformance profiles, not paradigm names, and no ACS field declares a paradigm. IBAC, FIDES, CaMeL, and AARM are optional policy citation styles that use the same `policy_references`, `reason_codes`, `policy_data`, and provenance surfaces as an ordinary OPA or Cedar policy.
+
+- [IBAC](https://arxiv.org/abs/2402.07332) maps intent-bound authorization to `Intent.parsed`, capabilities, and ASK-based extensions. This is an ACS policy mapping, not a complete implementation of IBAC-DB.
+- [FIDES](https://arxiv.org/abs/2505.23643) maps information-flow labels to provenance, trust, and per-argument lineage. ACS carries the facts; a Guardian implements the label arithmetic.
+- [CaMeL](https://arxiv.org/abs/2503.18813) maps program capabilities and data dependencies to tool arguments and provenance. ACS does not prescribe CaMeL's planner or interpreter.
+- [AARM](https://arxiv.org/abs/2602.09433) maps cumulative context and receipts to SessionContext, dispositions, audit chains, and ACS-Crypto. Its broader runtime architecture remains deployment-defined.
+
+Below is one denial-shaped citation example for each style.
 
 ### IBAC â€” Intent-based authorization
 
@@ -135,7 +161,7 @@ User's committed Intent: `["summarize Project X"]`. The agent attempts `email.se
 ```json
 {
   "decision": "deny",
-  "reasoning": "Tool call email.send falls outside Intent.parsed for session abc-123.",
+  "reasoning": "This email action is outside the approved intent.",
   "reason_codes": ["ibac_capability_mismatch"],
   "policy_references": [
     { "policy_id": "acme-ibac", "policy_version": "v1", "rule_id": "tool-call-must-be-in-intent" }
@@ -158,7 +184,7 @@ A second tool call later in the same session: `email.send` with a `recipient` de
 ```json
 {
   "decision": "deny",
-  "reasoning": "Outbound email.send recipient and body both derive from untrusted retrieval (provenance_id=p2); FIDES P-T denies under acme-baseline version v1.",
+  "reasoning": "Untrusted retrieval controls this outbound email.",
   "reason_codes": ["fides_p_t_failed", "untrusted_recipient_derivation"],
   "policy_references": [
     { "policy_id": "acme-baseline", "policy_version": "v1", "rule_id": "no-untrusted-recipient-derivation" }
@@ -182,7 +208,7 @@ A calendar agent: privileged LLM emits a program `schedule_meeting(attendees=USE
 ```json
 {
   "decision": "deny",
-  "reasoning": "Argument 'attendees' derives from retrieved content (provenance_id=p7) along a path the synthesized program's capability set forbids.",
+  "reasoning": "The attendee value uses a source this program cannot authorize.",
   "reason_codes": ["camel_argument_dependency_violation"],
   "policy_references": [
     { "policy_id": "acme-camel", "policy_version": "v1", "rule_id": "consequential-args-must-trace-to-trusted-input" }
@@ -206,7 +232,7 @@ Much later in a session that has touched untrusted email content, the agent atte
 ```json
 {
   "decision": "deny",
-  "reasoning": "Session abc-123 has processed retrieved content from step s-14 onward without trusted re-grounding; payment.transfer is consequential per acme-aarm version v1.",
+  "reasoning": "This financial action follows untrusted session context.",
   "reason_codes": ["aarm_cumulative_taint", "consequential_action_in_tainted_window"],
   "policy_references": [
     { "policy_id": "acme-aarm", "policy_version": "v1", "rule_id": "no-consequential-finance-after-untrusted-retrieval" }
@@ -231,7 +257,7 @@ In multi-paradigm deployments a single decision MAY cite all firing paradigms â€
 ```json
 {
   "decision": "deny",
-  "reasoning": "Action outside Intent.parsed (IBAC) and arguments derived from untrusted retrieval (FIDES P-T); either alone would deny.",
+  "reasoning": "The action exceeds approved intent and uses untrusted input.",
   "reason_codes": ["ibac_capability_mismatch", "fides_p_t_failed"],
   "policy_references": [
     { "policy_id": "acme-ibac", "policy_version": "v1", "rule_id": "tool-call-must-be-in-intent" },
