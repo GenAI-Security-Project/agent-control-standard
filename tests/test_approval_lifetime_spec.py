@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 
 SPEC = Path(__file__).resolve().parents[1] / "docs" / "spec" / "instrument" / "specification.md"
+POSTURE = (Path(__file__).resolve().parents[1] / "reference-implementations" / "agt" / "packages"
+           / "host-adapter" / "src" / "failure-posture.ts")
 CODE = "REPLAY_CONSUMED"
 NUMBER = "-32009"
 
@@ -63,3 +65,14 @@ def test_the_error_registry_row_covers_all_three_refusals():
 def test_replay_protection_points_at_the_approval_rule():
     body = section("10.3 Replay protection")
     assert "(#93-approval-lifetime-normative)" in body, "section 10.3 no longer points at section 9.3"
+
+
+def test_the_host_adapter_fails_closed_on_the_code():
+    """A host that does not count -32009 as a refusal keeps its failure posture, and the default
+    posture is proceed, so a Guardian emitting the code would fail open on the replayed approval."""
+    text = POSTURE.read_text(encoding="utf-8")
+    match = re.search(r"const REFUSAL_RPC_CODES = new Set\(\[([^\]]*)\]\)", text)
+    assert match, "failure-posture.ts no longer declares REFUSAL_RPC_CODES"
+    codes = {c.strip() for c in match.group(1).split(",")}
+    assert NUMBER in codes, f"REFUSAL_RPC_CODES no longer holds {NUMBER}, so the host fails open on it"
+
