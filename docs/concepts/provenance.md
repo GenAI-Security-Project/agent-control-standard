@@ -1,6 +1,6 @@
 # Provenance
 
-Provenance answers where a piece of data came from and how it got here. It is the substrate every information-flow control reads, and the thing that, if dropped at a boundary, lets trust launder silently.
+Provenance answers where a piece of data came from and how it got here. It is the substrate every information-flow control reads. If provenance is dropped at a boundary, untrusted data can be treated as trusted on the far side.
 
 A distinct but related question (*how much may I rely on this?*) is the [trust basis](./trust.md). Provenance is the primary input to the lower rungs of that spectrum; it is not the whole of it.
 
@@ -18,7 +18,7 @@ Argument-level provenance lets a Guardian reason about the lineage of individual
 
 > **Lineage spans derivation (normative).** When data is derived from other data, its `derived_from` lineage is the union of the lineage of its inputs. Summarization and compaction are derivations: the summary that comes out carries the combined lineage of everything that went in.
 
-This is what makes compaction a controllable chokepoint rather than a laundering path. Without transitive lineage, untrusted content could enter, be summarized into new `agent_generated` text, and lose the mark of where it came from.
+This is what makes compaction a controllable chokepoint rather than a way to lose the origin of data. Without transitive lineage, untrusted content could enter, be summarized into new `agent_generated` text, and lose the mark of where it came from.
 
 *Example.* The model summarizes a retrieved web page (`origin: retrieved`). The summary text is `agent_generated`, but its `derived_from` includes the page's Provenance, so a Guardian still sees that the summary rests on retrieved content.
 

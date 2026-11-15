@@ -26,7 +26,7 @@ The Approver's grant MAY extend `Intent.parsed` through an `intent_extension` (s
 
 ## Trust between agents
 
-What the Observed Agent puts on the wire is asserted by the Observed Agent. The Guardian decides whether to rely on it. How much weight a given fact carries depends on its [trust basis](./trust.md), not on the fact that it arrived.
+What the Observed Agent puts on the wire is asserted by the Observed Agent. The Guardian decides whether to rely on it. How much weight a given fact carries depends on its [trust basis](./trust.md). Arrival on the wire does not make a claim true. Reliance follows how the fact was produced: asserted, attached by the framework, or cryptographically attested.
 
 ---
 

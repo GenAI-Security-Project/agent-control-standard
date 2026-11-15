@@ -6,7 +6,7 @@ Trust basis is a property of every fact, not a field on the wire. ACS carries no
 
 ## The spectrum
 
-Trust basis runs from asserted to attested. Each rung is a stronger ground for reliance than the one before.
+Trust basis runs from asserted to attested. Each rung is a stronger ground for relying on a claim that ACS carries: a provenance field, an envelope, or an audit record. The rungs rate the claim, not the data it describes. Text from an untrusted source stays untrusted at every rung.
 
 ### Asserted
 
@@ -14,11 +14,11 @@ The emitter says so; reliance equals reliance on the emitter. Unsigned Trace eve
 
 ### Deterministically attached
 
-Framework code, not the LLM, attaches the fact from a structural property of how the data moved. Two cases qualify: a [Provenance](./provenance.md) record's `origin`, `source_id`, and `derived_from`, assigned by the framework under `provenance_producer: deterministic`; and the AgBOM `registration_provenance` (framework-declared versus runtime-discovered). The model cannot influence either, which makes them stronger than assertions. They are only as trustworthy as the framework that attaches them.
+Framework code, not the LLM, attaches the metadata from a structural property of how the data moved. Two cases qualify: a [Provenance](./provenance.md) record's `origin`, `source_id`, and `derived_from`, assigned by the framework under `provenance_producer: deterministic`; and the AgBOM `registration_provenance` (framework-declared versus runtime-discovered). The model cannot influence either, so each is a firmer record of origin than an assertion. They are only as trustworthy as the framework that attaches them, and they do not make the content any more believable: a tool output labeled `origin: tool_output` is reliably recorded as coming from a tool, and it stays untrusted data.
 
 ### Cryptographically attested
 
-The fact is bound by a signature or a hash chain and is verifiable without trusting the emitter at evaluation time. Signed envelopes (ACS-Crypto), the SessionContext audit chain via `previous_hash` and `request_hash` (ACS-Audit), and the future Policy Attestation profile are attested. An attested fact survives a compromised or replayed emitter.
+The envelope or record that carries the claim is bound by a signature or a hash chain, so a verifier can confirm who emitted it and that its bytes are unchanged, without trusting the emitter at evaluation time. Signed envelopes (ACS-Crypto), the SessionContext audit chain via `previous_hash` and `request_hash` (ACS-Audit), and the future Policy Attestation profile are attested. A signature authenticates the emitter and the bytes, so tampering and replay are detected. It does not vouch for the content.
 
 ## Invariants
 
@@ -28,7 +28,7 @@ The fact is bound by a signature or a hash chain and is verifiable without trust
 
 ## The basis must travel
 
-When a fact is summarized, written to memory, or passed across a boundary, its trust basis must travel with it. A derivation of asserted content is asserted; it does not become attested by being restated. This is the same rule that makes [Provenance](./provenance.md) lineage transitive, viewed from the trust side: dropping the basis at a boundary lets asserted content be treated as if it were attested, trust laundering up the spectrum.
+When a fact is summarized, written to memory, or passed across a boundary, its trust basis must travel with it. A derivation of asserted content is asserted; it does not become attested by being restated. This is the same rule that makes [Provenance](./provenance.md) lineage transitive, viewed from the trust side: dropping the basis at a boundary lets asserted content be treated as if it were attested. That is trust laundering: a claim climbs the spectrum with nothing backing it.
 
 *Example.* An agent reads an untrusted email (asserted) and writes a summary to memory. If the summary keeps the email's basis, a second agent that retrieves it still treats it as asserted. If the basis is dropped, the memory reads like trusted recall.
 
