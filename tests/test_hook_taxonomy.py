@@ -198,7 +198,7 @@ def test_specification_taxonomy_numbering_runs_without_gaps():
 
 
 def test_hooks_page_overview_lists_every_native_hook():
-    rows = [OVERVIEW_ROW.match(line) for line in section(HOOKS_PAGE, "## Overview")]
+    rows = [OVERVIEW_ROW.match(line) for line in section(HOOKS_PAGE, "## Disposition catalog (normative)")]
     listed = {match.group(1) for match in rows if match}
     expected = native_hook_methods()
 

@@ -22,33 +22,35 @@ flowchart TB
     Liveness["system/ping<br/>liveness probe, no audit"]
 ```
 
-## Overview
+## Disposition catalog (normative)
 
-| Hook | When it fires | Decision-eligible | Audit-chain |
+Each row names the dispositions the hook accepts. The table is the **disposition catalog**: the one place the legal set per method is defined, and the table [Specification §5](./specification.md#5-hook-taxonomy) and the `x-acs-allowed-dispositions` keyword in each hook schema repeat. A hook is decision-eligible when the Guardian's verdict can block or reshape the step before it happens. A hook that accepts only `ALLOW` is audit-only. A Guardian MUST NOT return a disposition the method does not list, and an Observed Agent that receives one treats it as a decision failure ([Specification §6](./specification.md#6-disposition-vocabulary)).
+
+| Hook | When it fires | Dispositions | Audit-chain |
 |---|---|---|---|
-| [`sessionStart`](#sessionstart) | Session initiation | Yes | Root entry |
-| [`agentTrigger`](#agenttrigger) | Agent activation by event/schedule | Yes | Yes |
-| [`turnStart`](#turnstart) | Beginning of an agent turn | Yes (most return ALLOW) | Yes |
-| [`userMessage`](#usermessage) | User input received | Yes | Yes |
-| [`agentResponse`](#agentresponse) | Agent output before user delivery | Yes | Yes |
-| [`knowledgeRetrieval`](#knowledgeretrieval) | RAG / knowledge lookup | Yes | Yes |
-| [`memoryContextRetrieval`](#memorycontextretrieval) | Memory read | Yes | Yes |
-| [`memoryStore`](#memorystore) | Memory write | Yes | Yes |
-| [`toolCallRequest`](#toolcallrequest) | Before tool execution | Yes | Yes |
-| [`toolCallResult`](#toolcallresult) | After tool execution, before agent ingestion | Yes | Yes |
-| [`preCompact`](#precompact) | Before context-window compaction | Yes | Yes |
-| [`postCompact`](#postcompact) | After compaction; carries new summary | No (audit + lineage binding) | Yes |
-| [`subagentStart`](#subagentstart) | In-process subagent spawned | Yes | Yes |
-| [`subagentStop`](#subagentstop) | Subagent terminated | No | Yes |
-| [`skillRegister`](#skillregister) | Skill enters the available set, before it can load | Yes | Yes |
-| [`skillLoad`](#skillload) | Registered skill activates into a session, before its actions run | Yes | Yes |
-| [`skillUnload`](#skillunload) | Skill leaves the active set | No (audit) | Yes |
-| [`turnEnd`](#turnend) | End of an agent turn | No (audit) | Yes |
-| [`sessionEnd`](#sessionend) | Session termination | No (audit finalization) | Yes |
-| [`agbom/snapshot`](#agbomsnapshot) | Full AgBOM, once per session | Yes (banned components) | Yes |
-| [`agbom/changed`](#agbomchanged) | Mid-session AgBOM mutation | Yes | Yes |
-| [`system/ping`](#systemping) | Liveness probe | Always ALLOW | No |
-| `protocols/MCP/*` | Wrapped MCP messages | Yes | Yes |
+| [`sessionStart`](#sessionstart) | Session initiation | `ALLOW`, `DENY` | Root entry |
+| [`agentTrigger`](#agenttrigger) | Agent activation by event/schedule | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`turnStart`](#turnstart) | Beginning of an agent turn | `ALLOW`, `DENY` (most return ALLOW) | Yes |
+| [`userMessage`](#usermessage) | User input received | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`agentResponse`](#agentresponse) | Agent output before user delivery | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`knowledgeRetrieval`](#knowledgeretrieval) | RAG / knowledge lookup | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`memoryContextRetrieval`](#memorycontextretrieval) | Memory read | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`memoryStore`](#memorystore) | Memory write | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`toolCallRequest`](#toolcallrequest) | Before tool execution | `ALLOW`, `DENY`, `MODIFY`, `ASK`, `DEFER` | Yes |
+| [`toolCallResult`](#toolcallresult) | After tool execution, before agent ingestion | `ALLOW`, `DENY`, `MODIFY` | Yes |
+| [`preCompact`](#precompact) | Before context-window compaction | `ALLOW`, `DENY` | Yes |
+| [`postCompact`](#postcompact) | After compaction; carries new summary | `ALLOW`, `MODIFY` (DENY is illegal: compaction has happened) | Yes |
+| [`subagentStart`](#subagentstart) | In-process subagent spawned | `ALLOW`, `DENY` | Yes |
+| [`subagentStop`](#subagentstop) | Subagent terminated | `ALLOW` (audit-only) | Yes |
+| [`skillRegister`](#skillregister) | Skill enters the available set, before it can load | `ALLOW`, `DENY` | Yes |
+| [`skillLoad`](#skillload) | Registered skill activates into a session, before its actions run | `ALLOW`, `DENY` | Yes |
+| [`skillUnload`](#skillunload) | Skill leaves the active set | `ALLOW` (audit-only) | Yes |
+| [`turnEnd`](#turnend) | End of an agent turn | `ALLOW` (audit-only) | Yes |
+| [`sessionEnd`](#sessionend) | Session termination | `ALLOW` (audit-only) | Yes |
+| [`agbom/snapshot`](#agbomsnapshot) | Full AgBOM, once per session | `ALLOW`, `DENY` (banned components) | Yes |
+| [`agbom/changed`](#agbomchanged) | Mid-session AgBOM mutation | `ALLOW`, `DENY` | Yes |
+| [`system/ping`](#systemping) | Liveness probe | `ALLOW` always | No |
+| `protocols/MCP/*` | Wrapped MCP messages | `ALLOW`, `DENY`, `MODIFY`, `ASK`, `DEFER` | Yes |
 
 `protocols/A2A/*` is reserved for v0.2. The namespace is recognized in the handshake's `wrapped_protocols` for forward compatibility, but no normative wrapping semantics are defined in v0.1.
 
@@ -117,7 +119,7 @@ Lightweight hook marking the start of an agent turn. Many policies key on per-tu
 
 **Payload:** `turn_id`, `triggered_by` (`user_message`, `auto_continuation`, `agent_loop`, `subagent_return`), optional `parent_turn_id` for nested turns.
 
-**Decision:** Decision-eligible — a Guardian MAY deny to block the turn from starting — but most deployments will return ALLOW and use the hook for state transitions in policy.
+**Decision:** ALLOW / DENY. A Guardian MAY deny to block the turn from starting, but most deployments return ALLOW and use the hook for state transitions in policy.
 
 ---
 
@@ -217,7 +219,7 @@ Fires before context-window compaction. Compaction is the chokepoint where prove
 
 **Payload:** `entries_to_compact` (array of `step_id`s that will be summarized), pre-compaction `provenance_summary` (so the Guardian can see what it's about to lose), `triggered_by` (`size_threshold`, `manual`, `agent_initiated`).
 
-**Decision:** Decision-eligible. Guardian MAY return DENY to block compaction (e.g. because deployment policy disallows compacting after `untrusted` data has entered until a trusted re-grounding occurs).
+**Decision:** ALLOW / DENY. Guardian MAY return DENY to block compaction (e.g. because deployment policy disallows compacting after `untrusted` data has entered until a trusted re-grounding occurs).
 
 ---
 
@@ -229,7 +231,7 @@ Fires after compaction. Audit + provenance-binding hook.
 
 **Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`.
 
-**Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
+**Decision:** ALLOW / MODIFY. Compaction has already occurred, so DENY is not legal here. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution: the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
 
 ---
 
@@ -243,7 +245,7 @@ This matters for IBAC: when a subagent spawns, the audit chain must record wheth
 
 **Payload:** `subagent_session_id` (a fresh `session_id` distinct from the envelope's parent `session_id`), `parent_session_id`, `parent_step_id` (the originating step that triggered the spawn), `intent_derivation` (`inherit_full` / `inherit_subset` / `derived_from_parent` / `fresh`), `subagent_intent` (the new Intent for the subagent, with `parser_provenance`).
 
-**Decision:** Decision-eligible. Guardian MAY DENY — refuse the subagent spawn, e.g. because the `intent_derivation` would grant capabilities the parent's `Intent.parsed` does not authorize.
+**Decision:** ALLOW / DENY. Guardian MAY DENY: refuse the subagent spawn, e.g. because the `intent_derivation` would grant capabilities the parent's `Intent.parsed` does not authorize.
 
 Each subagent has its own SessionContext and audit chain; the parent–child relation is captured in the `subagentStart` payload.
 
@@ -307,7 +309,7 @@ Schema: [`hooks/turn-end.json`](https://genai-security-project.github.io/agent-c
 
 **Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`), `step_count`, optional `summary`.
 
-**Decision:** Not decision-eligible — the turn has already happened.
+**Decision:** ALLOW only (audit-only); the turn has already happened.
 
 ---
 
@@ -329,7 +331,7 @@ Schema: [`hooks/agbom-snapshot.json`](https://genai-security-project.github.io/a
 
 Inspect-pillar method. Fires once per session, after `sessionStart` and before `agentTrigger` (the first content-bearing hook), and again after handshake-renegotiation. Carries the full AgBOM (the Observed Agent's component graph: models, MCP servers, A2A peers, tools, knowledge sources, memory stores, agent capabilities, skills).
 
-**Decision:** Normally ALLOW. Guardian MAY DENY to refuse a session whose component graph contains a banned model, tool, or peer.
+**Decision:** ALLOW / DENY. Normally ALLOW. Guardian MAY DENY to refuse a session whose component graph contains a banned model, tool, or peer.
 
 See the [Inspect pillar](../inspect/README.md) for the full AgBOM schema and serialization mapping.
 

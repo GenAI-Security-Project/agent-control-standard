@@ -39,17 +39,18 @@
         "request_id": { "type": "string", "format": "uuid" },
         "decision": {
           "type": "string",
-          "enum": ["allow", "deny", "modify", "ask", "defer"]
+          "enum": ["allow", "deny", "modify", "ask", "defer"],
+          "description": "The verdict. This schema does not know which method was called, so it cannot check that the disposition is legal for it. The hook schemas under hooks/ declare the legal set in x-acs-allowed-dispositions, and a runtime checks the pair (Specification 6). A decision outside that set is a decision failure, not a disposition to apply."
         },
         "reasoning": {
           "type": "string",
-          "description": "Human-renderable explanation of the verdict. REQUIRED on 'deny', 'modify', 'ask', and 'defer' (these decisions affect or interrupt the agent's action and the operator/end-user needs an explanation). RECOMMENDED on 'allow' when the deployment expects user-visible audit trails. This is the single explanation field — it serves both end-user display and audit/agent-internal consumption; deployments that want different text for those audiences SHOULD compose them client-side from reasoning + policy_data + reason_codes rather than expecting separate fields here."
+          "description": "Human-renderable explanation of the verdict. OPTIONAL on every decision. RECOMMENDED on 'deny', 'modify', 'ask', and 'defer' (these decisions affect or interrupt the agent's action) and on 'allow' when the deployment expects user-visible audit trails. The Observed Agent receives this text, so a deployment that keeps its policy confidential MAY omit it from the wire and record the full explanation in the Guardian's audit log instead (Specification 6). The Observed Agent MUST NOT invent a substitute for an omitted value. This is the single explanation field. It serves both end-user display and audit/agent-internal consumption; deployments that want different text for those audiences SHOULD compose them client-side from reasoning + policy_data + reason_codes rather than expecting separate fields here."
         },
         "reason_codes": {
           "type": "array",
           "items": { "type": "string" },
           "uniqueItems": true,
-          "description": "Optional machine-readable categorization of why the decision was reached. Free vocabulary in v0.1 (a registry MAY be layered in a future version once patterns stabilize). Common categories that fall out of the v0.1 paradigms: 'fides_p_t_violation', 'fides_p_f_violation', 'untrusted_into_consequential', 'ibac_intent_mismatch', 'ibac_scope_mode_strict', 'aarm_cumulative_taint', 'camel_dependency_graph_violation', 'pii_detected', 'rate_limited', 'chain_mismatch' (the submitted chain_hash does not match the Guardian's computed head; see Specification 8). UIs and meta-policies SHOULD switch on these codes rather than parsing reasoning text or policy/rule ids (which are bundle-specific)."
+          "description": "Optional machine-readable categorization of why the decision was reached. A deployment that keeps its policy confidential MAY omit it from the wire along with reasoning and record it in the Guardian's audit log (Specification 6). Free vocabulary in v0.1 (a registry MAY be layered in a future version once patterns stabilize). Common categories that fall out of the v0.1 paradigms: 'fides_p_t_violation', 'fides_p_f_violation', 'untrusted_into_consequential', 'ibac_intent_mismatch', 'ibac_scope_mode_strict', 'aarm_cumulative_taint', 'camel_dependency_graph_violation', 'pii_detected', 'rate_limited', 'chain_mismatch' (the submitted chain_hash does not match the Guardian's computed head; see Specification 8). UIs and meta-policies SHOULD switch on these codes rather than parsing reasoning text or policy/rule ids (which are bundle-specific)."
         },
         "policy_references": {
           "type": "array",
@@ -111,10 +112,9 @@
         }
       },
       "allOf": [
-        { "if": { "properties": { "decision": { "const": "deny" } }, "required": ["decision"] }, "then": { "required": ["reasoning"] } },
-        { "if": { "properties": { "decision": { "const": "modify" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "modifications"] } },
-        { "if": { "properties": { "decision": { "const": "ask" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "ask_details"] } },
-        { "if": { "properties": { "decision": { "const": "defer" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "defer_details"] } }
+        { "if": { "properties": { "decision": { "const": "modify" } }, "required": ["decision"] }, "then": { "required": ["modifications"] } },
+        { "if": { "properties": { "decision": { "const": "ask" } }, "required": ["decision"] }, "then": { "required": ["ask_details"] } },
+        { "if": { "properties": { "decision": { "const": "defer" } }, "required": ["decision"] }, "then": { "required": ["defer_details"] } }
       ]
     },
     "JsonRpcError": {

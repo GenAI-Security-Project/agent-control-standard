@@ -12,11 +12,13 @@ The Observed Agent emits; it does not adjudicate its own actions. That separatio
 
 The policy authority. It receives hooks from the Observed Agent, evaluates them against deployment policy, and returns a disposition: `allow`, `deny`, `modify`, `ask`, or `defer`. It consumes AgBOM for inventory-dependent policy and emits Trace events for the decisions it makes.
 
-> **Decision logging (normative).** A Guardian MUST log every decision with its reasoning, the evaluator's model identifier, and confidence when available.
+> **Decision logging (normative).** A Guardian MUST log every decision with its reasoning, the evaluator's model identifier, and confidence when available. A deployment that keeps its policy confidential MAY omit `reasoning` from the response the Observed Agent receives. The log still carries it.
 
 ## Approver
 
-A party the Guardian consults when a request falls outside standing policy and an `ask` disposition is raised. An Approver MAY be human, agent, or service. It receives an ACS-shaped request and returns an ACS-shaped decision.
+The party the Guardian designates, in `ask_details.approver`, when a request falls outside standing policy and an `ask` disposition is raised. An Approver MAY be human, agent, or service. The Guardian names the Approver and authenticates its answer. The Observed Agent's client holds the step paused and presents the prompt to a human Approver, or routes it to the endpoint of an agent or service Approver. The Approver receives an ACS-shaped request and returns an ACS-shaped decision.
+
+> **Approver designation (normative).** `ask_details.approver` is REQUIRED on every `ask`. A Guardian with no Approver it can designate, or none the client can reach, MUST NOT return `ask`. It substitutes `defer` or `deny` ([§9.2](../spec/instrument/specification.md#92-approver-incapable-clients-normative)).
 
 > **Approver authentication (normative).** Approver authentication is REQUIRED. The Guardian MUST verify the Approver's identity against policy before honoring the returned decision.
 

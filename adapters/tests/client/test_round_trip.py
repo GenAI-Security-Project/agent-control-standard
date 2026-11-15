@@ -130,7 +130,8 @@ class ResultProblems(unittest.TestCase):
     def test_conformant_results_pass_and_each_problem_is_also_a_schema_violation(self) -> None:
         from acs.client._exchange import result_problem
         from acs.testing.harness import validate_response_envelope
-        conformant = [self._result(decision="allow"), self._result(decision="deny", reasoning="no"),
+        conformant = [self._result(decision="allow"), self._result(decision="deny"),
+                      self._result(decision="deny", reasoning="no"),
                       self._result(decision="modify", reasoning="r", modifications={"modified_content": "x"}),
                       self._result(decision="ask", reasoning="r", ask_details=self.ASK),
                       self._result(decision="defer", reasoning="r", defer_details=self.DEFER)]
@@ -139,7 +140,7 @@ class ResultProblems(unittest.TestCase):
                      self._result(decision="allow", acs_version="0.1"),
                      {**self._result(decision="allow"), "request_id": 5},
                      self._result(decision="maybe"), self._result(decision=["deny"]), self._result(decision="DENY"),
-                     self._result(decision="deny"), self._result(decision="deny", reasoning=5),
+                     self._result(decision="deny", reasoning=5),
                      self._result(decision="modify", reasoning="r"),
                      self._result(decision="ask", reasoning="r"),
                      self._result(decision="ask", reasoning="r", ask_details={"question": "q"}),

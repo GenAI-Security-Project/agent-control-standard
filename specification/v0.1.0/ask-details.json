@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/ask-details.json",
   "title": "ACS ASK Details",
-  "description": "Approver descriptor and prompt details. Required when decision is 'ask'.",
+  "description": "Approver descriptor and prompt details. Required when decision is 'ask'. 'approver' is required: the Guardian designates the Approver, and a Guardian with no Approver it can name, or none this client can reach, MUST NOT return 'ask' and substitutes 'defer' or 'deny' (Specification 9.2). The Observed Agent's client presents the prompt, or routes it to the endpoint of an agent or service Approver, while the step is paused.",
   "type": "object",
   "required": ["approver", "question", "timeout_seconds"],
   "properties": {
