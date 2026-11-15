@@ -189,6 +189,8 @@ Fires after the framework has parsed a tool call from the LLM's output, but befo
 
 Frameworks MUST fire `toolCallRequest` for every action that escapes the agent's reasoning context, regardless of whether the framework's tool registry models it as a tool. This includes built-in operations such as filesystem reads/writes, network fetches, process execution, and shell commands. The Guardian relies on a complete view of all outward actions; primitives that bypass `toolCallRequest` are invisible to policy.
 
+For intent-based checks, compare the payload's `capability`, `tool.name`, and `operation` against the session's `Intent.parsed` entries using [Specification §8.4](./specification.md#84-intent). An entry can name an abstract `capability` directly. Resource matching and capability mappings for entries without `capability` remain deployment-defined policy.
+
 **Payload:** `tool` (id, capability), `arguments` (each value carrying optional Provenance), agent reasoning.
 
 **Decision:** ALLOW / DENY / MODIFY / ASK / DEFER. The full disposition vocabulary applies — this is the hook where most paradigm composition happens.

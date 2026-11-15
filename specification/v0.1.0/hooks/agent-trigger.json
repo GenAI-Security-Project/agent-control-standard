@@ -24,6 +24,10 @@
           "items": {
             "type": "object",
             "properties": {
+              "capability": {
+                "type": "string",
+                "description": "Abstract capability identifier, compared exactly to toolCallRequest.capability. Other supplied members constrain the same entry. See Specification section 8.4."
+              },
               "tool": { "type": "string" },
               "operation": { "type": "string" },
               "resource": { "type": "string" }
