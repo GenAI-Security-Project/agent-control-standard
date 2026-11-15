@@ -62,6 +62,21 @@
             "enum": ["acs-core", "acs-trace", "acs-inspect", "acs-inspect-dynamic", "acs-provenance", "acs-crypto", "acs-audit"]
           },
           "description": "Conformance profiles this Observed Agent implements. 'acs-core' is the mandatory baseline and SHOULD always be included. Other profiles are optional and independently claimable. See Section 4 (Conformance Profiles) for definitions."
+        },
+        "authentication_mechanism": {
+          "type": "string",
+          "examples": ["mtls", "oauth2", "oidc", "spiffe", "api_key", "hmac_shared_secret"],
+          "description": "Deployment-defined mechanism that authenticated the Observed Agent for this session."
+        },
+        "signature": {
+          "type": "object",
+          "required": ["algorithm", "key_id", "value"],
+          "properties": {
+            "algorithm": { "type": "string", "enum": ["HMAC-SHA256", "ECDSA-P256", "RSA-PSS-SHA256", "ML-DSA-65", "ML-DSA-44", "ML-DSA-87", "SLH-DSA-128s", "SLH-DSA-128f", "ML-DSA-65+ECDSA-P256", "ML-DSA-65+RSA-PSS-SHA256"] },
+            "key_id": { "type": "string" },
+            "value": { "type": "string" }
+          },
+          "description": "Cryptographic signature envelope for the canonical ClientHello with this field removed."
         }
       }
     },
@@ -100,7 +115,8 @@
               "ML-DSA-65+RSA-PSS-SHA256"
             ]
           },
-          "description": "Signature algorithms the Guardian can verify on incoming requests. Empty array = signatures not supported / not required. 'HMAC-SHA256' is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256') and PQC ('ML-DSA-*', 'SLH-DSA-*') are OPTIONAL. A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures."
+          "minItems": 1,
+          "description": "Signature algorithms the Guardian can verify on incoming requests. An ACS-Core session requires at least one algorithm; an empty list is invalid. 'HMAC-SHA256' is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256') and PQC ('ML-DSA-*', 'SLH-DSA-*') are OPTIONAL. A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures."
         },
         "timeout_config": {
           "type": "object",
@@ -129,6 +145,21 @@
           "enum": ["proceed", "deny"],
           "default": "proceed",
           "description": "Posture the Observed Agent applies on a decision failure: no usable decision within the negotiated timeout, whether the Guardian is silent, the transport fails, or an error response carries no decision (Specification 6.4). 'proceed' (default) is fail-open, so a slow, erroring, or unreachable Guardian does not halt production; 'deny' is fail-closed. Every decision failure MUST be recorded as an audit event, fail-open or fail-closed (Specification 6.4). A decision that arrives within the timeout MUST be honored regardless of this posture."
+        },
+        "authentication_mechanism": {
+          "type": "string",
+          "examples": ["mtls", "oauth2", "oidc", "spiffe", "api_key", "hmac_shared_secret"],
+          "description": "Deployment-defined mechanism that authenticated the Guardian for this session."
+        },
+        "signature": {
+          "type": "object",
+          "required": ["algorithm", "key_id", "value"],
+          "properties": {
+            "algorithm": { "type": "string", "enum": ["HMAC-SHA256", "ECDSA-P256", "RSA-PSS-SHA256", "ML-DSA-65", "ML-DSA-44", "ML-DSA-87", "SLH-DSA-128s", "SLH-DSA-128f", "ML-DSA-65+ECDSA-P256", "ML-DSA-65+RSA-PSS-SHA256"] },
+            "key_id": { "type": "string" },
+            "value": { "type": "string" }
+          },
+          "description": "Cryptographic signature envelope for the canonical ServerHello with this field removed. It authenticates negotiated fields including on_decision_failure."
         },
         "approver_types_supported": {
           "type": "array",

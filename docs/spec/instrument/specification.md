@@ -78,9 +78,11 @@ The full envelope schemas are [`request-envelope.json`](https://genai-security-p
 
 Required at session start, before any hook traffic. Wire method: `handshake/hello`. Schema: [`handshake.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/handshake.json) (`$defs/ClientHello` and `$defs/ServerHello`).
 
-**Observed Agent → Guardian Agent (ClientHello):** `acs_versions_supported`, `methods_implemented`, `transports_supported`, `max_payload_size_bytes`, `provenance_producer`, `wrapped_protocols`, `profiles_supported` (conformance profiles the client implements; see [Conformance](../conformance.md)).
+**Observed Agent → Guardian Agent (ClientHello):** `acs_versions_supported`, `methods_implemented`, `transports_supported`, `max_payload_size_bytes`, `provenance_producer`, `wrapped_protocols`, `profiles_supported` (conformance profiles the client implements; see [Conformance](../conformance.md)), optional `authentication_mechanism`, and optional `signature`.
 
-**Guardian Agent → Observed Agent (ServerHello):** `negotiated_version`, `methods_evaluated`, `selected_transport`, `signature_algorithms_supported`, `timeout_config` (default and per-method), `on_decision_failure` (failure posture, §6.4), `skew_window_ms` (request-timestamp skew tolerance for replay protection, §10.3), `approver_types_supported`, `policy_requires_provenance`, `agbom_serializations_supported` (Inspect-pillar serialization formats the Guardian renders on request), `trace_emission` (whether the Guardian emits OTel and/or OCSF for the Trace pillar, plus optional OTLP collector endpoint), `profiles_accepted`.
+**Guardian Agent → Observed Agent (ServerHello):** `negotiated_version`, `methods_evaluated`, `selected_transport`, non-empty `signature_algorithms_supported` for ACS-Core, `timeout_config` (default and per-method), `on_decision_failure` (failure posture, §6.4), `skew_window_ms` (request-timestamp skew tolerance for replay protection, §10.3), `approver_types_supported`, `policy_requires_provenance`, `agbom_serializations_supported` (Inspect-pillar serialization formats the Guardian renders on request), `trace_emission` (whether the Guardian emits OTel and/or OCSF for the Trace pillar, plus optional OTLP collector endpoint), `profiles_accepted`, optional `authentication_mechanism`, and optional `signature`.
+
+When signed, the handshake message carries the signature at `ClientHello.signature` or `ServerHello.signature`. The ServerHello signature covers its canonical message with `signature` removed, including `on_decision_failure`; the Observed Agent verifies it before applying the negotiated failure posture.
 
 Version mismatch terminates with `UNSUPPORTED_VERSION` (`-32001`, §17.1). Unknown fields MUST be ignored. If the client declares `provenance_producer: "none"` and the Guardian's `policy_requires_provenance` is true, the Guardian MUST refuse the session at handshake time with `PROVENANCE_REQUIRED` (`-32002`, §17.1) rather than silently degrading enforcement.
 
@@ -389,7 +391,7 @@ ACS MUST be deployable across IDE, SaaS, on-prem on Linux/Windows/macOS/mobile/b
 - Resource identifiers MUST use URI form (`file:///C:/...`, `posix:///etc/...`, `https://...`).
 - Capability vocabulary uses abstract names (`filesystem.delete`, `network.egress`, `process.execute`).
 - Identity descriptors carry a `type` discriminator (`posix_uid`, `windows_sid`, `oauth_subject`, `cert_subject`, …). Schema owned by the Identity workstream.
-- Authentication mechanism declared in handshake; spec mandates none.
+- Authentication mechanism is optionally declared as `authentication_mechanism` in ClientHello or ServerHello; spec mandates none.
 
 ## 12. Policy Engine and Agent Layers
 
