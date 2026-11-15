@@ -96,11 +96,11 @@
               "ML-DSA-87",
               "SLH-DSA-128s",
               "SLH-DSA-128f",
-              "ML-DSA-65+ECDSA-P256",
-              "ML-DSA-65+RSA-PSS-SHA256"
+              "id-MLDSA65-ECDSA-P256-SHA512",
+              "id-MLDSA65-RSA3072-PSS-SHA512"
             ]
           },
-          "description": "Signature algorithms the Guardian can verify on incoming requests. Empty array = signatures not supported / not required. 'HMAC-SHA256' is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256') and PQC ('ML-DSA-*', 'SLH-DSA-*') are OPTIONAL. A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures."
+          "description": "Signature algorithms the Guardian can verify on incoming requests. Empty array = signatures not supported / not required. 'HMAC-SHA256' (a MAC) is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256'), PQC ('ML-DSA-*', 'SLH-DSA-*'), and the RFC 10073 composite ML-DSA algorithms ('id-MLDSA65-*') are OPTIONAL. A verifier takes the algorithm from the key that key_id resolves to and rejects a wire 'algorithm' that does not match it (Specification 10). A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures."
         },
         "timeout_config": {
           "type": "object",
@@ -121,8 +121,8 @@
         "skew_window_ms": {
           "type": "integer",
           "minimum": 0,
-          "default": 300000,
-          "description": "Maximum clock skew, in milliseconds, the Guardian tolerates between a request's 'timestamp' and its own clock, in either direction. Bounds timestamp freshness for replay protection (Specification 10.3); a request whose 'timestamp' is further than this from the Guardian's clock is rejected with TIMESTAMP_OUT_OF_WINDOW (-32006, Specification 17.1). When omitted the RECOMMENDED default is 300000 (5 minutes); deployments with well-synchronized clocks SHOULD tighten it. The Observed Agent uses the value for clock-drift diagnostics and MAY surface it on Trace events."
+          "default": 30000,
+          "description": "Maximum clock skew, in milliseconds, the Guardian tolerates between a request's 'timestamp' and its own clock, in either direction. Bounds timestamp freshness for replay protection (Specification 10.3); a request whose 'timestamp' is further than this from the Guardian's clock is rejected with TIMESTAMP_OUT_OF_WINDOW (-32006, Specification 17.1). When omitted the RECOMMENDED default is 30000 (30 seconds), which fits hosts synchronized by NTP, where the residual error is seconds. Deployments whose clocks are not synchronized MAY widen it up to 300000 (5 minutes) and SHOULD record why. The Observed Agent uses the value for clock-drift diagnostics and MAY surface it on Trace events."
         },
         "on_decision_failure": {
           "type": "string",
