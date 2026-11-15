@@ -14,6 +14,8 @@ A typical agent session produces a tree of spans:
 - Each **decision** is a span event on the step span carrying `acs.decision`, plus `acs.evaluator` (`deterministic` / `agent` / `composite`), `acs.reasoning`, and `acs.confidence` when the response carries them. The replay attributes on [Trace Events](./events.md) ride the same event. Decisions are not separate spans because the verdict and the action it gates share a parent.
 - A **decision failure** is a separate span event, `acs.decision.failure`, on the same step span. It records that no usable decision arrived and the deployment's failure posture.
 
+Tool requests and results use `execute_tool {gen_ai.tool.name}` and the required attribute `gen_ai.operation.name=execute_tool`, following the [OpenTelemetry GenAI execute-tool convention](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/#execute-tool-span). The mapping's `response_attributes` also requires the decision's `acs.decision` on each tool span for attribute-only readers. Keep the decision event and all existing ACS attributes. A failure without a decision has no mirrored verdict; a late decision remains subject to its failure event.
+
 This hierarchy is deterministic — implementations that follow the mapping produce comparable traces across vendors and Guardians.
 
 ## Example: a denied tool call
@@ -26,7 +28,7 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
 {
   "traceId": "13717f291e2368066d2fa3f2434ed2f6",
   "spanId": "2a7efedbb7ee3881",
-  "name": "gen_ai.tool.call",
+  "name": "execute_tool Bash",
   "kind": 1,
   "startTimeUnixNano": "1792534253716796645",
   "endTimeUnixNano": "1792534253780000000",
@@ -47,6 +49,12 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
       "key": "gen_ai.tool.name",
       "value": {
         "stringValue": "Bash"
+      }
+    },
+    {
+      "key": "gen_ai.operation.name",
+      "value": {
+        "stringValue": "execute_tool"
       }
     },
     {
@@ -77,6 +85,12 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
             }
           ]
         }
+      }
+    },
+    {
+      "key": "acs.decision",
+      "value": {
+        "stringValue": "deny"
       }
     }
   ],

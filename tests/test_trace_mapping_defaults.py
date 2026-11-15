@@ -19,7 +19,7 @@ from jsonschema import Draft202012Validator
 
 TRACE = Path(__file__).resolve().parents[1] / "specification" / "v0.1.0" / "trace"
 MAPPINGS = sorted(TRACE.glob("*.json"))
-ATTRIBUTE_LISTS = ("required_attributes", "conditional_attributes", "optional_attributes")
+ATTRIBUTE_LISTS = ("required_attributes", "conditional_attributes", "optional_attributes", "response_attributes")
 
 
 def nodes_with_defaults(node, path="#"):
@@ -72,6 +72,17 @@ def test_no_attribute_sits_in_two_lists_of_one_step_span():
                     overlaps.setdefault(method, []).append(f"{attribute} in {seen[attribute]} and {name}")
                 seen[attribute] = name
     assert not overlaps, f"attributes listed twice: {overlaps}"
+
+
+def test_tool_spans_expose_genai_operation_and_attribute_only_verdict():
+    mapping = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))
+    table = mapping["properties"]["step_to_span"]["default"]
+    for method in ["steps/toolCallRequest", "steps/toolCallResult"]:
+        entry = table[method]
+        assert entry["span_name"] == "execute_tool {gen_ai.tool.name}"
+        assert {"gen_ai.tool.name", "gen_ai.operation.name"} <= set(entry["required_attributes"])
+        assert "acs.decision" in entry["response_attributes"]
+    assert mapping["properties"]["decision_event"]["properties"]["event_name"]["const"] == "acs.decision"
 
 
 # Every conditional attribute and the wire field it comes from. The

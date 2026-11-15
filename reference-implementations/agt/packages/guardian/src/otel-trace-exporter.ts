@@ -76,6 +76,7 @@ import {
   requestParts,
   resultParts,
   STEP_ATTRIBUTE_SOURCES,
+  stepSpanName,
   type DecisionFailure,
   type FailureClass,
   type OtelMapping,
@@ -520,7 +521,7 @@ export function createOtelTraceExporter({
       }
     }
     const stepSpan: StepSpan = {
-      span: tracer.startSpan(entry.span_name, { root: true, startTime }),
+      span: tracer.startSpan(stepSpanName(entry, typeof parts.tool.name === "string" ? parts.tool.name : undefined), { root: true, startTime }),
       method,
       startedAt,
       payloadBytes: step.payloadBytes,
@@ -572,6 +573,9 @@ export function createOtelTraceExporter({
     } else {
       const attributes: Attributes = {};
       collect(attributes, new Set([...mapping.decisionAttributes, ...DECISION_DETAIL_NAMES]), DECISION_ATTRIBUTE_SOURCES, decision);
+      const mirrored: Attributes = {};
+      collect(mirrored, mapping.stepToSpan[stepSpan.method]?.response_attributes ?? [], DECISION_ATTRIBUTE_SOURCES, decision);
+      span.setAttributes(mirrored);
       if (attributes["acs.decision"] !== undefined) {
         span.addEvent(mapping.decisionEventName, attributes);
       }

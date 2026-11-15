@@ -28,8 +28,8 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | `steps/agentTrigger` | `acs.agent.trigger` | `acs.agent.id`, `acs.trigger.type` |
 | `steps/userMessage` | `acs.message.user` | `acs.session.id`, `acs.content.types[]` |
 | `steps/agentResponse` | `acs.message.agent` | `acs.session.id`, `acs.agent.id` |
-| `steps/toolCallRequest` | `gen_ai.tool.call` | `gen_ai.tool.name`; `acs.capability` (conditional); `acs.tool.provider` (optional) |
-| `steps/toolCallResult` | `gen_ai.tool.result` | `gen_ai.tool.name`, `acs.exit_status`; `acs.request_id_ref` (conditional); `acs.duration_ms` (optional) |
+| `steps/toolCallRequest` | `execute_tool {gen_ai.tool.name}` | `gen_ai.tool.name`, `gen_ai.operation.name=execute_tool`; `acs.capability` (conditional); `acs.tool.provider` (optional); `acs.decision` (when a decision arrives) |
+| `steps/toolCallResult` | `execute_tool {gen_ai.tool.name}` | `gen_ai.tool.name`, `gen_ai.operation.name=execute_tool`, `acs.exit_status`; `acs.request_id_ref` (conditional); `acs.duration_ms` (optional); `acs.decision` (when a decision arrives) |
 | `steps/knowledgeRetrieval` | `acs.knowledge.retrieval` | `acs.results.count`; `acs.source.type` (conditional) |
 | `steps/memoryStore` | `acs.memory.store` | `acs.memory_store.name`, `acs.operation` (both conditional) |
 | `steps/memoryContextRetrieval` | `acs.memory.retrieval` | `acs.results.count`; `acs.memory_store.name` (conditional) |
@@ -45,6 +45,8 @@ The full mapping lives in [`trace/otel-mapping.json`](https://genai-security-pro
 | Decision failure | `acs.decision.failure` (span event; on the `acs.session` span for `handshake_failure`) | `acs.failure.class`, `acs.failure.posture`, `acs.failure.reported_by`; `acs.failure.detail` (required for class `other`), `acs.failure.error_code`, `acs.failure.timeout_ms`, `acs.failure.elapsed_ms`, `acs.failure.payload_bytes` (conditional) |
 | `agbom/snapshot` | `acs.agbom` | `acs.agbom.format`, `acs.agbom.component_count` |
 | `agbom/changed` | `acs.agbom` | `acs.agbom.format`; `acs.agbom.change_reason` (conditional) |
+
+Tool request and result spans follow the OpenTelemetry GenAI execute-tool convention. Replace `{gen_ai.tool.name}` with the tool's name and set `gen_ai.operation.name` to `execute_tool`. If a failure-only recorder has no tool name, use `execute_tool` without a suffix. When a decision arrives, mirror `acs.decision` onto the span as well as the decision event. The mirror carries the same verdict, not proof of enforcement; failure-event precedence still applies. These changes preserve all existing `acs.*` attributes and the request/result join.
 
 Every step span also carries `acs.request_id` and `acs.session.id`, the step's own `request_id` and `session_id`. A `steps/toolCallResult` span's `acs.request_id_ref` joins to its request. The Observed Agent chooses `request_id`, and it is unique only within a session ([Specification §10.3](../instrument/specification.md#103-replay-protection)), so a join keys on the two together. The Observed Agent and the Guardian may each emit a span for one request, and a reader joins the two. When the Observed Agent retries a step with a new `request_id`, each attempt is its own request. The Observed Agent emits a step span for each attempt that reached the Guardian, carrying that attempt's `request_id`. A Guardian event whose pair matches no Observed Agent step span is a discrepancy worth investigating.
 

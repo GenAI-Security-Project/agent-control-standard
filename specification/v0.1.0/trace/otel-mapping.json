@@ -7,7 +7,7 @@
   "properties": {
     "step_to_span": {
       "type": "object",
-      "description": "Map ACS step methods to OTel span names and attributes. A required attribute's source field is required on the wire. A conditional attribute's source field is optional on the wire.",
+      "description": "Map ACS step methods to OTel span names and attributes. A required attribute's source field is required on the wire, or its value is a mapping-defined constant. A conditional attribute's source field is optional on the wire. In a span_name, {gen_ai.tool.name} is replaced with the tool name; if unavailable, omit the placeholder and its preceding space. For tool execution spans gen_ai.operation.name MUST be execute_tool.",
       "additionalProperties": {
         "type": "object",
         "required": ["span_name", "required_attributes"],
@@ -23,6 +23,11 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Attributes an exporter MAY emit when its source field is present."
+          },
+          "response_attributes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Decision attributes an exporter MUST mirror onto the step span whenever the response carries their source field, in addition to the decision event. Omit them when no decision was received; a mirrored verdict does not prove enforcement."
           },
           "_note": { "type": "string", "description": "Explanation for readers. The normative rules are in the lists and descriptions." }
         }
@@ -46,16 +51,18 @@
           "required_attributes": ["acs.session.id", "acs.agent.id"]
         },
         "steps/toolCallRequest": {
-          "span_name": "gen_ai.tool.call",
-          "required_attributes": ["gen_ai.tool.name"],
+          "span_name": "execute_tool {gen_ai.tool.name}",
+          "required_attributes": ["gen_ai.tool.name", "gen_ai.operation.name"],
           "conditional_attributes": ["acs.capability"],
-          "optional_attributes": ["acs.tool.provider", "acs.tool.version", "acs.operation"]
+          "optional_attributes": ["acs.tool.provider", "acs.tool.version", "acs.operation"],
+          "response_attributes": ["acs.decision"]
         },
         "steps/toolCallResult": {
-          "span_name": "gen_ai.tool.result",
-          "required_attributes": ["gen_ai.tool.name", "acs.exit_status"],
+          "span_name": "execute_tool {gen_ai.tool.name}",
+          "required_attributes": ["gen_ai.tool.name", "gen_ai.operation.name", "acs.exit_status"],
           "conditional_attributes": ["acs.request_id_ref"],
-          "optional_attributes": ["acs.duration_ms"]
+          "optional_attributes": ["acs.duration_ms"],
+          "response_attributes": ["acs.decision"]
         },
         "steps/knowledgeRetrieval": {
           "span_name": "acs.knowledge.retrieval",

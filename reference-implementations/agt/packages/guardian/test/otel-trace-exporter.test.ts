@@ -9,6 +9,7 @@ import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
+import { stepSpanName } from "../src/otel-mapping.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
 import {
   createFileSpanExporter,
@@ -36,7 +37,10 @@ const MAPPING = loadOtelMapping();
 /** The methods this Guardian evaluates, from the ServerHello it sends --
  * the same source server.ts builds the exporter from. */
 const METHODS_EVALUATED = buildServerHello().methods_evaluated;
-const TOOL_CALL_SPAN = MAPPING.stepToSpan["steps/toolCallRequest"]!;
+const TOOL_CALL_SPAN = {
+  ...MAPPING.stepToSpan["steps/toolCallRequest"]!,
+  span_name: stepSpanName(MAPPING.stepToSpan["steps/toolCallRequest"]!, "run_shell"),
+};
 
 /** A Provenance object as provenance.json defines it: `provenance_id` and
  * `origin` required, everything else optional. */
@@ -129,6 +133,8 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
       expect({ attribute, present: span?.attributes[attribute] !== undefined }).toEqual({ attribute, present: true });
     }
     expect(span?.attributes["gen_ai.tool.name"]).toBe("run_shell");
+    expect(span?.attributes["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(span?.attributes["acs.decision"]).toBe("deny");
     expect(span?.attributes["acs.session.id"]).toBe(sessionId);
     expect(span?.attributes["acs.request_id"]).toBe(requestId);
     expect(span?.resource.attributes["service.name"]).toBe(OTEL_SERVICE_NAME);
@@ -269,6 +275,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     const [span] = spans();
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
     expect(span?.status.message).toBe(FAILURE_DETAIL_BY_KIND.error_without_decision);
+    expect(span?.attributes["acs.decision"]).toBeUndefined();
     expect(span?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
     const failure = span?.events[0]?.attributes;
     expect(failure?.["acs.failure.class"]).toBe("guardian_error");
@@ -465,7 +472,9 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     await exporter.flush();
 
     const [span] = spans();
-    expect(span?.name).toBe(MAPPING.stepToSpan["steps/toolCallResult"]!.span_name);
+    expect(span?.name).toBe(stepSpanName(MAPPING.stepToSpan["steps/toolCallResult"]!, "Bash"));
+    expect(span?.attributes["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(span?.attributes["acs.decision"]).toBe("allow");
     expect(span?.attributes["acs.provenance.origin"]).toEqual(["tool_output"]);
     expect(span?.attributes["acs.provenance.source_id"]).toEqual(["Bash"]);
   });
@@ -607,6 +616,9 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
       for (const attribute of listed) {
         expect({ method, attribute, known: attribute in STEP_ATTRIBUTE_SOURCES }).toEqual({ method, attribute, known: true });
       }
+      for (const attribute of entry.response_attributes ?? []) {
+        expect({ method, attribute, known: attribute in DECISION_ATTRIBUTE_SOURCES }).toEqual({ method, attribute, known: true });
+      }
     }
     for (const attribute of MAPPING.decisionAttributes) {
       expect({ attribute, known: attribute in DECISION_ATTRIBUTE_SOURCES }).toEqual({ attribute, known: true });
@@ -676,9 +688,9 @@ describe("Guardian trace export wiring", () => {
       );
       await exporter.flush();
 
-      const names = new Set(Object.values(MAPPING.stepToSpan).map((entry) => entry.span_name));
       expect(spans()).toHaveLength(2);
       for (const span of spans()) {
+        const names = new Set(Object.values(MAPPING.stepToSpan).map((entry) => stepSpanName(entry, String(span.attributes["gen_ai.tool.name"]))));
         expect({ span: span.name, mapped: names.has(span.name) }).toEqual({ span: span.name, mapped: true });
       }
     } finally {

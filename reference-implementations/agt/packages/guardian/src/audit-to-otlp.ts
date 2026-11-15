@@ -59,6 +59,7 @@ import {
   GUARDIAN_ERROR_STATUS,
   loadOtelMapping,
   REPLAY_DETECTED_CODE,
+  stepSpanName,
   type FailureClass,
   type JsonObject,
 } from "./otel-mapping.ts";
@@ -271,8 +272,8 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
       summary.skippedNoMethod[key] = (summary.skippedNoMethod[key] ?? 0) + 1;
       continue;
     }
-    const spanName = mapping.stepToSpan[method]?.span_name;
-    if (spanName === undefined) {
+    const spanEntry = mapping.stepToSpan[method];
+    if (spanEntry === undefined) {
       summary.skippedUnmapped += 1;
       continue;
     }
@@ -286,6 +287,9 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     const instant = readInstant(entry.recorded_at);
     const detail = (kind !== undefined ? FAILURE_DETAIL_BY_KIND[kind] : undefined) ?? GENERIC_DETAIL;
     const attributes: Attributes = {};
+    for (const attribute of spanEntry.required_attributes) {
+      if (attribute === "gen_ai.operation.name") attributes[attribute] = "execute_tool";
+    }
     const sessionId = readString(entry.session_id);
     if (sessionId !== undefined) {
       attributes["acs.session.id"] = sessionUuid(sessionId);
@@ -300,7 +304,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     }
     // The entry is one instant, so the span is too: it opens and closes at
     // recorded_at. The host, not the Guardian, is the reporter.
-    const span = tracer.startSpan(spanName, { attributes, root: true, startTime: instant });
+    const span = tracer.startSpan(stepSpanName(spanEntry), { attributes, root: true, startTime: instant });
     span.addEvent(
       DECISION_FAILURE_EVENT,
       decisionFailureAttributes({

@@ -19,10 +19,22 @@ function only(attribute: string): TraceRow {
 }
 
 describe("checkTracePillar resolves every row against the v0.1.0 schema files at runtime", () => {
+  it("tool operation names come from the mapping constant, not a new wire field", () => {
+    const operation = rows.filter((row) => row.attribute === "gen_ai.operation.name");
+    expect(operation).toHaveLength(2);
+    for (const row of operation) {
+      expect(row.wireSource).toBe("constant:execute_tool");
+      expect(row.emittableByWireConsumer).toBe(true);
+    }
+  });
+
   it("gen_ai.tool.name is emittable on both spans that require it -- `tool.name` is required in both hook payloads that carry it", () => {
     const toolName = rows.filter((r) => r.attribute === "gen_ai.tool.name");
-    // steps/toolCallRequest's gen_ai.tool.call and steps/toolCallResult's gen_ai.tool.result.
-    expect(toolName.map((r) => r.span).sort()).toEqual(["gen_ai.tool.call", "gen_ai.tool.result"]);
+    expect(toolName.map((r) => r.span).sort()).toEqual(["execute_tool {gen_ai.tool.name}", "execute_tool {gen_ai.tool.name}"]);
+    expect(toolName.map((r) => r.wireSource).sort()).toEqual([
+      "hooks/tool-call-request.json#tool.name",
+      "hooks/tool-call-result.json#tool.name",
+    ]);
     for (const row of toolName) {
       expect(row.emittableByWireConsumer).toBe(true);
       expect(row.wireSource).not.toBeNull();
@@ -32,7 +44,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
 
   it("acs.capability is NOT emittable -- present but optional, and the reason names the optionality rather than claiming absence", () => {
     const row = only("acs.capability");
-    expect(row.span).toBe("gen_ai.tool.call");
+    expect(row.span).toBe("execute_tool {gen_ai.tool.name}");
     expect(row.emittableByWireConsumer).toBe(false);
     // The field EXISTS on the wire (hooks/tool-call-request.json declares
     // "capability") -- this is the "present but optional" case, not the "no
@@ -44,11 +56,15 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
   });
 
   it("acs.decision is emittable -- AcsResult.decision is unconditionally required", () => {
-    const row = only("acs.decision");
-    expect(row.span).toBe("acs.decision");
-    expect(row.emittableByWireConsumer).toBe(true);
-    expect(row.wireSource).toContain("response-envelope.json");
-    expect(row.reason).toBeUndefined();
+    const decisions = rows.filter((row) => row.attribute === "acs.decision");
+    expect(decisions.map((row) => row.span).sort()).toEqual([
+      "acs.decision", "execute_tool {gen_ai.tool.name}", "execute_tool {gen_ai.tool.name}",
+    ]);
+    for (const row of decisions) {
+      expect(row.emittableByWireConsumer).toBe(true);
+      expect(row.wireSource).toContain("response-envelope.json");
+      expect(row.reason).toBeUndefined();
+    }
   });
 
   it("acs.evaluator is NOT emittable -- present at AcsResult.metadata.evaluator, but optional there, not absent", () => {
@@ -215,8 +231,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       spanCounts[row.span] = (spanCounts[row.span] ?? 0) + 1;
     }
     expect(spanCounts).toEqual({
-      "gen_ai.tool.call": 2, // steps/toolCallRequest: gen_ai.tool.name, acs.capability
-      "gen_ai.tool.result": 3, // steps/toolCallResult: gen_ai.tool.name, acs.exit_status, acs.request_id_ref
+      "execute_tool {gen_ai.tool.name}": 9,
       "acs.session": 1, // steps/sessionStart: acs.session.id
       "acs.session.end": 1, // steps/sessionEnd: acs.session.reason
       "acs.message.user": 2, // steps/userMessage: acs.session.id, acs.content.types
@@ -225,20 +240,20 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
       "(every step span)": 2, // step_span_attributes: acs.request_id, acs.session.id
       "(every step span, when Provenance is attached)": 1, // provenance_attributes.required
     });
-    expect(rows).toHaveLength(26);
+    expect(rows).toHaveLength(30);
   });
 
   it("reads both obligation lists for each in-scope step span -- the rows are exactly required_attributes plus conditional_attributes, and never optional_attributes", () => {
     // Read straight from the mapping, so moving an attribute between lists
     // (as #227 moved acs.capability) cannot silently drop its row.
-    type Entry = { span_name: string; required_attributes: string[]; conditional_attributes?: string[]; optional_attributes?: string[] };
+    type Entry = { span_name: string; required_attributes: string[]; conditional_attributes?: string[]; optional_attributes?: string[]; response_attributes?: string[] };
     const mappingPath = fileURLToPath(new URL("../../../../../specification/v0.1.0/trace/otel-mapping.json", import.meta.url));
     const stepToSpan = (JSON.parse(readFileSync(mappingPath, "utf8")) as { properties: { step_to_span: { default: Record<string, Entry> } } })
       .properties.step_to_span.default;
 
     const expected = METHODS_IN_SCOPE.flatMap((method) => {
       const entry = stepToSpan[method]!;
-      return [...entry.required_attributes, ...(entry.conditional_attributes ?? [])].map((attribute) => `${entry.span_name}::${attribute}`);
+      return [...entry.required_attributes, ...(entry.conditional_attributes ?? []), ...(entry.response_attributes ?? [])].map((attribute) => `${entry.span_name}::${attribute}`);
     }).sort();
     const stepSpans = new Set(METHODS_IN_SCOPE.map((method) => stepToSpan[method]!.span_name));
     const actual = rows.filter((r) => stepSpans.has(r.span)).map((r) => `${r.span}::${r.attribute}`).sort();
@@ -267,7 +282,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
     expect(only("acs.capability").obligation).toBe("conditional");
     expect(only("acs.evaluator").obligation).toBe("conditional");
     expect(only("acs.request_id_ref").obligation).toBe("conditional");
-    expect(only("acs.decision").obligation).toBe("required");
+    expect(rows.find((row) => row.attribute === "acs.decision" && row.span === "acs.decision")?.obligation).toBe("required");
     const table = renderTraceRows(rows);
     expect(table).toContain("○ acs.capability");
     // The legend names ✖ too, so only the row lines are checked.
@@ -332,7 +347,7 @@ describe("renderTraceRows", () => {
     // produces byte-identical output to the plain render, and this test
     // would pass without exercising the colour path at all.
     const fixture: TraceRow[] = [
-      { attribute: "gen_ai.tool.name", span: "gen_ai.tool.call", wireSource: "hooks/tool-call-request.json#tool.name", emittableByWireConsumer: true, obligation: "required" },
+      { attribute: "gen_ai.tool.name", span: "execute_tool {gen_ai.tool.name}", wireSource: "hooks/tool-call-request.json#tool.name", emittableByWireConsumer: true, obligation: "required" },
       { attribute: "acs.made_up", span: "acs.decision", wireSource: null, emittableByWireConsumer: false, obligation: "required", reason: "no wire source for acs.made_up" },
     ];
 
