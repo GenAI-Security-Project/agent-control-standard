@@ -32,6 +32,18 @@ Providing hard-controls, not soft-guardrails.
 
 For agents to become trustworthy they must be instrumentable, traceable, and inspectable.
 
+## Who ACS is for
+
+ACS is written for agent developers, platform maintainers, and operators of:
+
+- **Enterprise production agents**: apply organization policy at instrumented action boundaries, trace decisions, and inspect component inventories.
+- **Coding agents**: govern tool execution, including shell commands and filesystem access, and trace the resulting decisions.
+- **Personal agents**: govern instrumented actions involving connected services and personal data under the owner's deployment policy.
+
+These classes use the same protocol and choose the conformance profiles their deployment needs. ACS covers actions and components exposed through its hooks and Inspect methods, not activity outside that coverage. Interactive approval requires a connected approver. ASK support alone does not guarantee a human prompt; an approver-incapable client can receive DEFER or DENY ([Specification §9.2](./spec/instrument/specification.md#92-approver-incapable-clients-normative)).
+
+## Three pillars
+
 **Instrumentable**: we can hook into agent execution and steer it in the right direction. 
 We can put hard controls around agents and define their scope of action. 
 Apply centralized enterprise logic, be it security, compliance or legal, uniformly across agent platforms. 
@@ -47,6 +59,8 @@ Which tools, models and capabilities are being used.
 What software version is running and who built it. 
 What are the services behind them, and which data they can access.
 Must dynamically adapt to account for rapid changes in agent components.
+
+The AgBOM inventory of services and data access also aids an attacker planning reconnaissance if exposed. Restrict access to Inspect outputs to authorized operators and policy consumers; do not publish them as an unrestricted discovery endpoint.
 
 Driven by high risk and high rewards, we are collectively thinking about these cybersecurity challenges with agents early on. 
 Early standardization provides a unique opportunity to build trustworthiness into agents.
