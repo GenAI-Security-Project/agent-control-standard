@@ -20,15 +20,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-def _flock(fd: int, how: str) -> None:
-    """flock(2) on POSIX, msvcrt byte-range locks on Windows (the idiom client/_store.py uses)."""
-    if fcntl is not None:
-        fcntl.flock(fd, {"sh": fcntl.LOCK_SH, "ex": fcntl.LOCK_EX, "un": fcntl.LOCK_UN}[how])
-        return
-    os.lseek(fd, 0, os.SEEK_SET)
-    msvcrt.locking(fd, {"sh": msvcrt.LK_RLCK, "ex": msvcrt.LK_LOCK, "un": msvcrt.LK_UNLCK}[how], 1)
-
-
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
 from acs.core import (
@@ -76,6 +67,21 @@ except ImportError:
     _spec_validation_unavailable_reason = (
         "jsonschema is not installed (pip install jsonschema)"
     )
+
+
+def _flock(fd: int, how: str) -> None:
+    """flock(2) on POSIX, msvcrt byte-range locks on Windows (the idiom client/_store.py uses).
+
+    On Windows "sh" is really an exclusive lock: msvcrt's LK_RLCK behaves like LK_LOCK, and
+    msvcrt gives up after about 10 seconds of retries. Safe for the Guardian state file,
+    just stronger than the shared-lock name suggests.
+    """
+    if fcntl is not None:
+        fcntl.flock(fd, {"sh": fcntl.LOCK_SH, "ex": fcntl.LOCK_EX, "un": fcntl.LOCK_UN}[how])
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    msvcrt.locking(fd, {"sh": msvcrt.LK_RLCK, "ex": msvcrt.LK_LOCK, "un": msvcrt.LK_UNLCK}[how], 1)
+
 
 if not _SPEC_VALIDATION_AVAILABLE:
     # Without validation, malformed envelopes reach policy unchecked.

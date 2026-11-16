@@ -15,6 +15,20 @@ Production deployments swap the policy code in the example Guardian's `evaluate_
 
 Running the Guardian — terminal window, `launchd`, `systemd`, container — is the operator's responsibility. The adapter expects it to be reachable at `$ACS_GUARDIAN_URL`; if it isn't, the §6.4 fail posture applies and an `ACS_AUDIT` event is emitted.
 
+## Windows: the secret-file check
+
+The secret-file permission check is shared client code, so on Windows it stops **every adapter** — Claude Code, Cursor, and the example Guardian — by default: `stat()` reports 0o666 for every ordinary file there, so the 0600 rule cannot run and the check fails closed. Restrict the key file's NTFS ACL first, then opt in:
+
+```bat
+icacls "%ACS_HMAC_SECRET_FILE%" /inheritance:r /grant:r "%USERNAME%:R"
+```
+
+```powershell
+icacls $env:ACS_HMAC_SECRET_FILE /inheritance:r /grant:r "${env:USERNAME}:R"
+```
+
+Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every process that starts with the opt-in set prints a warning to stderr; the refusal stays the default.
+
 ## ACS v0.1.0 emission-conformance check
 
 **What this proves — and what it does not.** This suite proves **emission conformance**: the reference adapters, driven through their real production entry points, emit schema-valid, signed ACS v0.1.0 Core traffic and honor the decisions it tests. It is **not** a requirement-by-requirement audit of every ACS-Core MUST — `docs/spec/conformance.md` and the sections it cites contain far more normative requirements (handshake/negotiation edge cases, full decision semantics, two-sided live payload validation, hook-completeness, Wrapped MCP) than are checked here. A full ACS-Core deployment-conformance claim also spans the Guardian, the framework wiring, and production configuration — not the adapter alone. That larger program is tracked in issue #33 (requirement ledger + behavioral tests); do not read a green run here as "ACS-Core conformant."

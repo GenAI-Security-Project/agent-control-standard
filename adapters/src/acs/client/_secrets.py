@@ -47,8 +47,9 @@ def _check_secret_file_perms(path: str) -> None:
             raise SecretFilePermissionsError(
                 f"ACS_HMAC_SECRET_FILE {path!r}: Windows has no owner/group/other mode bits "
                 f"(stat reports {oct(mode)} for every file), so the 0600 check cannot run. "
-                f"Restrict the file first:  icacls \"{path}\" /inheritance:r "
-                f"/grant:r \"%USERNAME%:R\"  then set {_ALLOW_UNCHECKED_ENV}=1 to confirm that "
+                f"Restrict the file first:  cmd.exe:  icacls \"{path}\" /inheritance:r "
+                f"/grant:r \"%USERNAME%:R\"   PowerShell:  icacls \"{path}\" /inheritance:r "
+                f"/grant:r \"$env:USERNAME:R\"   then set {_ALLOW_UNCHECKED_ENV}=1 to confirm that "
                 f"this check is skipped on Windows.")
         print(
             f"[acs] WARNING: {_ALLOW_UNCHECKED_ENV}=1 — {path} was not checked for group/other "
