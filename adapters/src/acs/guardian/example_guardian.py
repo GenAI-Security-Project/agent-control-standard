@@ -47,7 +47,7 @@ try:
         _spec_dir = Path("<no bundled or in-repo schemas>")
     _envelope_schema_path = _spec_dir / "request-envelope.json"
     if _envelope_schema_path.exists():
-        with open(_envelope_schema_path) as _f:
+        with open(_envelope_schema_path, encoding="utf-8") as _f:
             _schema_obj = json.load(_f)
         _REQUEST_ENVELOPE_VALIDATOR = Draft202012Validator(
             _schema_obj,
@@ -146,7 +146,7 @@ class SessionState:
             return
         try:
             # Shared flock: never read a file mid-write by another instance.
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 try:
                     _flock(f.fileno(), "sh")
                 except OSError:
@@ -191,7 +191,7 @@ class SessionState:
                 merged_prev = self.previous_hash
                 if path.exists():
                     try:
-                        with open(path) as rf:
+                        with open(path, encoding="utf-8") as rf:
                             disk = json.load(rf)
                         disk_seen = disk.get("seen_request_ids") or {}
                         if isinstance(disk_seen, list):
