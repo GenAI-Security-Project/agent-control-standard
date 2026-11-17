@@ -402,7 +402,7 @@ class RequestBinding(unittest.TestCase):
     def test_a_server_hello_binds_by_its_json_rpc_id(self) -> None:
         # A ServerHello carries no request_id under the current schema, so the id is the whole binding.
         hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello",
-                 "params": {"acs_version": "0.1.0", "request_id": "hello-request-1"}}
+                 "params": {"acs_version": "0.1.0", "request_id": "hello-request-1", "payload": {}}}
         server_hello = {"jsonrpc": "2.0", "id": "hello-1",
                         "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
                                    "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
@@ -412,7 +412,7 @@ class RequestBinding(unittest.TestCase):
 
     def test_a_server_hello_id_must_match_in_type(self) -> None:
         # Review finding R5-M2 on the handshake branch: True is not the id 1.
-        hello = {"jsonrpc": "2.0", "id": 1, "method": "handshake/hello", "params": {"acs_version": "0.1.0"}}
+        hello = {"jsonrpc": "2.0", "id": 1, "method": "handshake/hello", "params": {"acs_version": "0.1.0", "payload": {}}}
         server_hello = {"jsonrpc": "2.0", "id": True,
                         "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
                                    "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
@@ -421,6 +421,20 @@ class RequestBinding(unittest.TestCase):
         # Review finding CR8-3: a bool is no request id, so a ClientHello carrying one is a caller error.
         with self.assertRaises(ValueError):
             self._verify(server_hello, {**hello, "id": True})
+
+    def test_a_server_hello_binds_only_a_client_hello_with_an_object_payload(self) -> None:
+        # Review findings CR12-4, R12-M2: the ClientHello condition lives in request_binding_problem.
+        server_hello = {"jsonrpc": "2.0", "id": "hello-9",
+                        "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
+                                   "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
+        sign_with_signing_key(server_hello, _signer())
+        base = {"jsonrpc": "2.0", "id": "hello-9", "method": "handshake/hello"}
+        self.assertTrue(self._verify(server_hello, {**base, "params": {"payload": {}}}))
+        for name, hello in (("no params", base), ("payload not an object", {**base, "params": {"payload": "odd"}}),
+                            ("no payload", {**base, "params": {}})):
+            with self.subTest(name):
+                self.assertFalse(response_matches_request(hello, server_hello))
+                self.assertFalse(self._verify(server_hello, hello))
 
     def test_a_step_decision_against_a_handshake_request_fails(self) -> None:
         # Review finding R6-M1: a matching id isn't enough when the result carries request_id.
@@ -481,7 +495,8 @@ class RequestBinding(unittest.TestCase):
                 self.assertFalse(self._verify(self.signed, request))
         without_params = {k: v for k, v in _request().items() if k != "params"}
         self.assertFalse(self._verify(self.signed, without_params))
-        hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello", "params": {"acs_version": "0.1.0"}}
+        hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello",
+                 "params": {"acs_version": "0.1.0", "payload": {}}}
         server_hello = {"jsonrpc": "2.0", "id": "hello-1",
                         "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
                                    "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}

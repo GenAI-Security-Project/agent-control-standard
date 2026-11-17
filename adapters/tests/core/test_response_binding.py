@@ -81,7 +81,7 @@ SERVER_HELLO = {"negotiated_version": "0.1.0", "methods_evaluated": [], "selecte
 
 def _client_hello(json_rpc_id: object = "hello-1") -> dict:
     return {"jsonrpc": "2.0", "id": json_rpc_id, "method": "handshake/hello",
-            "params": {"acs_version": "0.1.0", "request_id": "hello-request-1"}}
+            "params": {"acs_version": "0.1.0", "request_id": "hello-request-1", "payload": {}}}
 
 
 class OneHandshakeAwareRule(unittest.TestCase):
@@ -198,7 +198,7 @@ class OneRequestPrecondition(unittest.TestCase):
         from acs.core._envelope import request_binding_problem
         self.assertIsNone(request_binding_problem(_request("1")))
         self.assertIsNone(request_binding_problem(_client_hello()))
-        hello_without_request_id = {**_client_hello(), "params": {"acs_version": "0.1.0"}}
+        hello_without_request_id = {**_client_hello(), "params": {"acs_version": "0.1.0", "payload": {}}}
         self.assertIsNone(request_binding_problem(hello_without_request_id), "a ClientHello needs no request_id")
 
     def test_a_request_id_must_be_a_string_or_a_number(self) -> None:
@@ -219,6 +219,20 @@ class OneRequestPrecondition(unittest.TestCase):
             with self.subTest(id=json_rpc_id):
                 self.assertEqual(request_envelope_problem(_request(json_rpc_id)),
                                  "request must carry a string or numeric JSON-RPC id")
+
+    def test_a_client_hello_needs_object_params_with_an_object_payload(self) -> None:
+        # CR12-4, R12-M2: core and client agree on what a ClientHello is.
+        from acs.core._envelope import request_binding_problem
+        hello = _client_hello()
+        for name, broken in (("no params", {k: v for k, v in hello.items() if k != "params"}),
+                             ("params not an object", {**hello, "params": "odd"}),
+                             ("no payload", {**hello, "params": {"acs_version": "0.1.0"}}),
+                             ("payload not an object", {**hello, "params": {"payload": "odd"}})):
+            with self.subTest(name):
+                self.assertEqual(request_binding_problem(broken),
+                                 "a handshake/hello request must carry object params with an object payload")
+                server_hello = {"jsonrpc": "2.0", "id": "hello-1", "result": dict(SERVER_HELLO)}
+                self.assertFalse(response_matches_request(broken, server_hello))
 
     def test_a_request_that_is_not_a_mapping_binds_nothing(self) -> None:
         for request in ("request", ["request"], None, 7):

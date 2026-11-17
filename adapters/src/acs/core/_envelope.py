@@ -80,21 +80,25 @@ def request_envelope_problem(request: object) -> str | None:
 def request_binding_problem(request: object) -> str | None:
     """Why this request can bind no result, or None.
 
-    It adds to request_envelope_problem: params, when present, must be a Mapping, and only the
-    handshake binds on the id alone, so any other request must carry a non-empty string
-    params.request_id. response_matches_request answers False for a result when this reports a
-    problem. An error still binds by id alone.
+    It adds to request_envelope_problem. A handshake/hello request must carry object params with
+    an object payload, the only ClientHello a ServerHello answers, and it binds on the id alone.
+    For any other request, params, when present, must be a Mapping, and it must carry a
+    non-empty string params.request_id. response_matches_request answers False for a result
+    when this reports a problem. An error still binds by id alone.
     """
     problem = request_envelope_problem(request)
     if problem is not None:
         return problem
     params = request.get("params")
+    if request.get("method") == HANDSHAKE_METHOD:
+        if not isinstance(params, Mapping) or not isinstance(params.get("payload"), Mapping):
+            return "a handshake/hello request must carry object params with an object payload"
+        return None
     if params is not None and not isinstance(params, Mapping):
         return "request params must be an object when present"
-    if request.get("method") != HANDSHAKE_METHOD:
-        request_id = (params or {}).get("request_id")
-        if not isinstance(request_id, str) or not request_id:
-            return "a request other than the handshake must carry a string params.request_id"
+    request_id = (params or {}).get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        return "a request other than the handshake must carry a string params.request_id"
     return None
 
 

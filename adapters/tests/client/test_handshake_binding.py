@@ -107,7 +107,8 @@ class SignedServerHellos(_SessionTest):
             response = _signed({"jsonrpc": "2.0", "id": "hello-x", "result": result}, SESSION_ID)
             with self.subTest(name):
                 outcome = _handshake._classify_hello(hello, response, SESSION_ID)
-                self.assertEqual(outcome, SessionRefused("response_binding_mismatch"))
+                # Review finding CR12-3: a request that is no real ClientHello is the caller's error.
+                self.assertEqual(outcome, SessionRefused("request_envelope_invalid"))
 
     def test_the_client_hello_sent_uses_the_core_constant(self) -> None:
         # CR7-7: the ClientHello actually sent, not a grep of the source.
