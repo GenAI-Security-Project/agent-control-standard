@@ -60,10 +60,14 @@ def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: R
 
     The key comes from the document by key_id (issue #308, RFC 8725 section 3.1). The envelope's
     algorithm never selects it, and D-026 applies per key_id: an exact match, no fallback. The
-    answer must also answer request (D-029), and an HMAC signature never passes.
+    answer must also answer request (D-029), and an HMAC signature never passes. It must also
+    carry the hash of request's signed input, since one key signs every session and ids alone
+    let an answer be relayed between sessions (lab convention, issue #13 is the closest issue).
     """
-    return verify_signature(response, keyring=response_keys.keyring, expected_key_id=response_keys.key_id,
-                            request=request)
+    # The lazy public export loads cryptography only on this path.
+    import acs.core
+    return acs.core.verify_with_keyring(response, response_keys.keyring, expected_key_id=response_keys.key_id,
+                                        request=request, require_request_digest=True)
 
 
 def _response_verified(response: dict[str, Any], request: Mapping[str, Any], session_id: str | None,

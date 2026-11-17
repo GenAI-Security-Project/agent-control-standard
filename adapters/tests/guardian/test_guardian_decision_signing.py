@@ -16,7 +16,7 @@ from decision_signing_helpers import KEY_ID, configure_in_process, mldsa_env, re
 
 require_pqc()
 
-from acs.core import verify_with_keyring  # noqa: E402
+from acs.core import REQUEST_DIGEST_FIELD, request_sha256, verify_with_keyring  # noqa: E402
 from acs.guardian import example_guardian  # noqa: E402
 from acs.testing.harness import launch_guardian, signing_env  # noqa: E402
 
@@ -34,7 +34,11 @@ def assert_ml_dsa(response: dict, request: dict, signer) -> None:
     container = response.get("result") or response.get("error")
     assert container["signature"]["algorithm"] == "ML-DSA-65"
     assert container["signature"]["key_id"] == KEY_ID
-    assert verify_with_keyring(response, signer.keys.keyring, expected_key_id=KEY_ID, request=request)
+    # Lab convention: every ML-DSA-signed response names its request by hash, inside the signed bytes.
+    holder = response["result"] if "result" in response else response["error"]["data"]
+    assert holder[REQUEST_DIGEST_FIELD] == request_sha256(request)
+    assert verify_with_keyring(response, signer.keys.keyring, expected_key_id=KEY_ID, request=request,
+                               require_request_digest=True)
 
 
 def test_server_hello_and_errors_carry_ml_dsa(signer, capsys):
@@ -73,7 +77,8 @@ def test_an_unsignable_decision_falls_back_to_a_signed_deny(signer):
     request = signed_step("steps/toolCallRequest", ALLOWED)
     result = {"type": "final", "acs_version": "0.1.0", "request_id": request["params"]["request_id"],
               "decision": "allow", "reasoning": "lone surrogate \ud800"}
-    response = example_guardian._signed_step_response(request["id"], "session", result)
+    with example_guardian._answering(request):
+        response = example_guardian._signed_step_response(request["id"], "session", result)
     assert response["result"]["reason_codes"] == ["response_not_signable"]
     assert_ml_dsa(response, request, signer)
 
@@ -84,6 +89,14 @@ def test_unknown_key_id_stays_unsigned(signer):
     response = example_guardian.handle_request(request)
     assert response["error"]["code"] == -32004
     assert "signature" not in response["error"]
+
+
+def test_a_signed_answer_never_carries_another_requests_digest(signer):
+    # The digest is set per request, so concurrent or later requests never see an earlier one's.
+    first, second = (signed_step("steps/toolCallRequest", ALLOWED) for _ in range(2))
+    assert example_guardian.handle_request(first)["result"][REQUEST_DIGEST_FIELD] == request_sha256(first)
+    assert example_guardian.handle_request(second)["result"][REQUEST_DIGEST_FIELD] == request_sha256(second)
+    assert example_guardian._REQUEST_DIGEST.get() is None
 
 
 def test_ping_stays_unsigned(signer):
@@ -100,7 +113,7 @@ def test_hmac_only_client_hello_is_refused(signer, capsys, offered):
     response = example_guardian.handle_request(hello)
     assert response["error"]["code"] == -32000
     assert response["error"]["message"] == "SESSION_REFUSED: unsupported_signature_algorithm"
-    assert response["error"]["data"] == REFUSAL_DATA
+    assert response["error"]["data"] == {**REFUSAL_DATA, REQUEST_DIGEST_FIELD: request_sha256(hello)}
     assert_ml_dsa(response, hello, signer)
     line = capsys.readouterr().err
     assert "[guardian] handshake refused: unsupported_signature_algorithm offered=" in line
@@ -111,7 +124,8 @@ def test_an_unauthenticated_client_hello_gets_signature_invalid_first(signer):
     hello["params"]["signature"]["value"] = "AAAA"
     response = example_guardian.handle_request(hello)
     assert response["error"]["code"] == -32004
-    assert "data" not in response["error"]
+    # The signed -32004 names its request, and never states a refusal reason.
+    assert set(response["error"]["data"]) == {REQUEST_DIGEST_FIELD}
 
 
 def test_server_hello_names_the_algorithm(signer):
@@ -141,6 +155,7 @@ def test_default_guardian_is_unchanged(monkeypatch):
     replay = example_guardian.handle_request(step)
     assert replay["error"]["signature"]["algorithm"] == "HMAC-SHA256"
     assert "data" not in replay["error"]
+    assert REQUEST_DIGEST_FIELD not in response["result"]
 
 
 def _launch(env: dict) -> tuple:

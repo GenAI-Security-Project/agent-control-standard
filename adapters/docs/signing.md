@@ -116,9 +116,19 @@ Error binding rests on the JSON-RPC `id` alone, on both paths, as D-029 sets. A 
 
 One ML-DSA key signs every session, and a response names no session, so keyring verification binds a response only by its JSON-RPC `id` and `result.request_id`. An attacker who sits on the path to the Guardian and is also an authenticated client of the same Guardian can copy a victim's ids into its own request. It can then relay the Guardian's signed answer to the victim, and that answer verifies.
 
-HMAC prevents this, because each session's key is derived from its `session_id`, so an answer signed for one session fails in another. A single ML-DSA key gives no such separation. Closing the gap needs the signed response to carry the session, or a hash of the request it answers. Specification section 10 says a response carries no `session_id`, so that is a wire change for the specification, not a library fix.
+HMAC prevents this, because each session's key is derived from its `session_id`, so an answer signed for one session fails in another. A single ML-DSA key gives no such separation. Closing the gap needs the signed response to carry the session, or a hash of the request it answers. Specification section 10 says a response carries no `session_id`, so that is a wire change for the specification, not a library fix. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) is the closest tracking issue.
 
-Until then, the connection to the Guardian must use TLS, which keeps an attacker off the path.
+The limit holds without the lab convention below and is closed with it. Without the convention, the connection to the Guardian must use TLS, which keeps an attacker off the path.
+
+#### Lab convention: the request hash
+
+In ML-DSA response mode (issue #576), every response the example Guardian signs carries `x_acs_lab_request_sha256`: the lowercase hex SHA-256 of the request's section 10 signed input, the JCS bytes of the request envelope without its `signature`. A result carries it in `result`, and an error carries it in `error.data`, the ServerHello and the session refusal included. It sits inside the signed bytes, so it can't be changed without breaking the signature.
+
+That one value binds the response to the request's session, `request_id`, timestamp and content. A relayed answer names the attacker's request, not the victim's, so it fails.
+
+`acs.core.verify_with_keyring(..., require_request_digest=True)` requires the field and compares it with `acs.core.request_sha256(request)`. `acs.client` always passes it when `response_keys` is set, on the step exchange and the handshake. A missing or different hash leaves the response unverified, so the step blocks as `signature_invalid`. The default is False, so a caller of `verify_with_keyring` that doesn't ask still has the limit above. The HMAC path never reads the field.
+
+The field is a lab convention, not part of the specification.
 
 ### The handshake
 

@@ -33,6 +33,7 @@ from acs.core._signing import (
     _attach_signature,
     container_key,
     decode_signature_value,
+    response_names_request,
     signing_input,
 )
 
@@ -145,7 +146,7 @@ def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, mess
 _VERIFIERS = {ML_DSA_65: _verify_ml_dsa_65}
 
 def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str,
-                        request: Mapping) -> bool:
+                        request: Mapping, require_request_digest: bool = False) -> bool:
     """Whether the response's signature verifies under expected_key_id, as the answer to request.
 
     A keyring can hold several keys, so the caller names the one it trusts here, and a
@@ -164,6 +165,11 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     request that fails acs.core.request_envelope_problem (no Mapping, or no string or finite
     numeric id), is a caller error and raises ValueError with that problem's text. Any other
     request goes to response_matches_request, so an error binds by id here as on the HMAC path.
+
+    require_request_digest closes the relay that ids alone leave open (lab convention, issue
+    #576): the signed response must carry acs.core.request_sha256(request), in result or in
+    error.data, which binds it to the request's session, ids, timestamp and content. Without it,
+    a response relayed from another session that copied this request's ids still verifies.
     """
     check_key_id(expected_key_id)
     # Only a request that is no envelope with a usable id is the caller's mistake. Everything
@@ -174,6 +180,8 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     # The one binding rule, before any crypto. It also refuses a response that isn't a JSON-RPC
     # 2.0 object, carries "method", or carries both or neither of result and error.
     if not response_matches_request(request, envelope):
+        return False
+    if require_request_digest and not response_names_request(envelope, request):
         return False
     container = envelope.get(container_key(envelope))
     if not isinstance(container, dict):

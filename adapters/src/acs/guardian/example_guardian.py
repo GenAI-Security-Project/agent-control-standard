@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
 import copy
 import errno
 try:
@@ -41,10 +43,12 @@ from acs.core import (
     ACS_VERSION,
     DEFAULT_SKEW_WINDOW_MS,
     MAX_REQUEST_BODY_BYTES,
+    REQUEST_DIGEST_FIELD,
     derive_session_key,
     iso8601_now,
     jcs_canonicalize,
     parse_iso8601,
+    request_sha256,
 )
 
 import datetime
@@ -151,13 +155,48 @@ DECISION_SIGNER: Any = None
 UNSUPPORTED_SIGNATURE_ALGORITHM = "unsupported_signature_algorithm"
 
 
+# The hash of the request being answered, set for the length of one request so every ML-DSA-signed answer to it
+# names it. A context variable, so concurrent handler threads never see each other's.
+_REQUEST_DIGEST: contextvars.ContextVar[str | None] = contextvars.ContextVar("acs_request_digest", default=None)
+
+
+@contextlib.contextmanager
+def _answering(request: Any):
+    """Name the request every ML-DSA-signed answer inside this block binds to. HMAC never needs it."""
+    digest = None
+    if RESPONSE_SIGNING_NAME == ML_DSA_65 and isinstance(request, dict):
+        try:
+            digest = request_sha256(request)
+        except Exception:  # noqa: BLE001
+            # No canonical form, so no client could have signed this request, and an answer without the hash
+            # fails the client's check. That fails closed.
+            digest = None
+    token = _REQUEST_DIGEST.set(digest)
+    try:
+        yield
+    finally:
+        _REQUEST_DIGEST.reset(token)
+
+
 def _sign_response(envelope: dict, session_id: str) -> dict:
-    """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key."""
+    """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
+
+    One ML-DSA key signs every session and section 10 gives a response no session_id, so an answer that matched only
+    by ids could be relayed from one session to another. Each ML-DSA-signed answer therefore carries the hash of the
+    request's signed input, in result or in error.data, inside the signed bytes. A lab convention, and issue #13 is
+    the closest tracking issue.
+    """
     if RESPONSE_SIGNING_NAME == ML_DSA_65:
         if DECISION_SIGNER is None:
             # Named at import but never loaded, as when a caller serves handle_request without main(). Falling back
             # to HMAC would hand clients a signature their key document can't verify, so the floor answers.
             raise RuntimeError("ACS_RESPONSE_SIGNING=ML-DSA-65 but no decision key was loaded")
+        digest = _REQUEST_DIGEST.get()
+        if digest is not None:
+            if "result" in envelope:
+                envelope["result"] = {**envelope["result"], REQUEST_DIGEST_FIELD: digest}
+            else:
+                envelope["error"]["data"] = {**(envelope["error"].get("data") or {}), REQUEST_DIGEST_FIELD: digest}
         from acs.core import sign_with_signing_key
         return sign_with_signing_key(envelope, DECISION_SIGNER.signing_key)
     return sign_envelope(envelope, session_id=session_id)
@@ -820,7 +859,8 @@ def _handle(request: Any, read: RequestRead) -> tuple[int, dict]:
     goes out as 200 like any other answer.
     """
     try:
-        return 200, _answer(request, read)
+        with _answering(request):
+            return 200, _answer(request, read)
     except CANONICALIZATION_ERRORS as e:
         # Signing itself failed, as for a session_id JCS can't encode. A direct caller gets the same unsigned floor
         # envelope do_POST sends, so handle_request never raises for one, and it is logged the same way.

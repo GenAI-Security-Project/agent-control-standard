@@ -6,7 +6,9 @@ blocks the step whatever the posture (D-040) and carries failure class signature
 """
 from __future__ import annotations
 
+import copy
 import datetime
+import hashlib
 import os
 import tempfile
 import unittest
@@ -30,12 +32,27 @@ from acs.client import (  # noqa: E402
     sign_envelope,
 )
 from acs.client import _exchange, _handshake  # noqa: E402
-from acs.core import ACS_VERSION, MLDSA65SigningKey, sign_with_signing_key  # noqa: E402
+from acs.core import (  # noqa: E402
+    ACS_VERSION,
+    Keyring,
+    MLDSA65SigningKey,
+    sign_with_signing_key,
+    signing_input,
+    verify_with_keyring,
+)
 from acs.testing.harness import signing_env  # noqa: E402
 from tests.client.test_key_document import KEY_ID, _document, _entry  # noqa: E402
 from tests.client.test_on_wire import HELLO, PROCEED, SESSION, URL, Recorder, decision_for, step_request  # noqa: E402
 
 UTC = datetime.timezone.utc
+# Lab convention: an ML-DSA-signed response names the request it answers by this hash. Section 10 gives a response
+# no session_id, and issue #13 is the closest tracking issue.
+DIGEST = "x_acs_lab_request_sha256"
+ATTACKER_SESSION = "77777777-7777-4777-8777-777777777777"
+
+
+def _digest(request: dict) -> str:
+    return hashlib.sha256(signing_input(request)).hexdigest()
 
 
 def _window() -> dict:
@@ -70,20 +87,26 @@ class ResponseKeysTest(unittest.TestCase):
 
     # Signed answers.
 
-    def ml_decision(self, request: dict, decision: str = "deny", signer: MLDSA65SigningKey | None = None) -> dict:
+    def ml_decision(self, request: dict, decision: str = "deny", signer: MLDSA65SigningKey | None = None,
+                    digest: bool = True) -> dict:
         result = {"type": "final", "acs_version": ACS_VERSION, "request_id": request["params"]["request_id"],
                   "decision": decision, "reasoning": "destructive Bash pattern in: rm -rf /"}
+        if digest:
+            result[DIGEST] = _digest(request)
         return sign_with_signing_key({"jsonrpc": "2.0", "id": request["id"], "result": result},
                                      signer or self.signer)
 
-    def ml_error(self, request: dict, code: int = -32005, data: dict | None = None) -> dict:
+    def ml_error(self, request: dict, code: int = -32005, data: dict | None = None, digest: bool = True) -> dict:
         error: dict[str, Any] = {"code": code, "message": "REPLAY_DETECTED: request_id already seen"}
-        if data is not None:
+        data = {**(data or {}), **({DIGEST: _digest(request)} if digest else {})}
+        if data:
             error["data"] = data
         return sign_with_signing_key({"jsonrpc": "2.0", "id": request["id"], "error": error}, self.signer)
 
-    def ml_hello(self, hello: dict, **extra: Any) -> dict:
+    def ml_hello(self, hello: dict, digest: bool = True, **extra: Any) -> dict:
         result = {**HELLO, "x_acs_lab_response_algorithm": "ML-DSA-65", **extra}
+        if digest:
+            result[DIGEST] = _digest(hello)
         return sign_with_signing_key({"jsonrpc": "2.0", "id": hello["id"], "result": result}, self.signer)
 
     # Calls.
@@ -202,6 +225,7 @@ class ResponseKeysTest(unittest.TestCase):
             with self.subTest(name):
                 def answer(hello: dict) -> dict:
                     result = {**HELLO} if value is None else {**HELLO, "x_acs_lab_response_algorithm": value}
+                    result[DIGEST] = _digest(hello)
                     return sign_with_signing_key({"jsonrpc": "2.0", "id": hello["id"], "result": result},
                                                  self.signer)
                 decision = self.hello(answer, session_id=f"no-field-{name}")
@@ -237,6 +261,60 @@ class ResponseKeysTest(unittest.TestCase):
     def test_a_stored_ml_dsa_session_fails_closed_without_keys(self) -> None:
         self.assertIsInstance(self.hello(self.ml_hello, session_id="ml-first"), Negotiated)
         self.assert_blocked(self.step(self.ml_decision, keys=None), "response_signature_invalid")
+
+
+class RequestDigestBinding(ResponseKeysTest):
+    """One ML-DSA key signs every session, so a response names its request by hash (lab convention, issue #13)."""
+
+    def test_the_relay_attack_is_refused(self) -> None:
+        # An authenticated client of the same Guardian copies the victim's ids into its own request, gets an honest
+        # signed allow for it, and relays that allow to the victim. Ids and request_id all match.
+        def relay(sent: dict) -> dict:
+            attacker = copy.deepcopy(sent)
+            del attacker["params"]["signature"]
+            attacker["params"]["metadata"]["session_id"] = ATTACKER_SESSION
+            attacker["params"]["payload"] = {"tool": {"name": "ls"}, "arguments": {}}
+            sign_envelope(attacker, session_id=ATTACKER_SESSION)
+            return self.ml_decision(attacker, decision="allow")
+        self.assert_blocked(self.step(relay), "response_signature_invalid")
+
+    def test_a_missing_request_digest_is_refused(self) -> None:
+        self.assert_blocked(self.step(lambda r: self.ml_decision(r, digest=False)), "response_signature_invalid")
+        self.assert_blocked(self.step(lambda r: self.ml_error(r, digest=False)), "error_signature_invalid")
+        decision = self.hello(lambda h: self.ml_hello(h, digest=False))
+        self.assertEqual(decision, SessionRefused("server_hello_signature_invalid"))
+
+    def test_a_relayed_refusal_is_refused(self) -> None:
+        def relay(hello: dict) -> dict:
+            other = copy.deepcopy(hello)
+            other["params"]["timestamp"] = "2026-01-01T00:00:00.000Z"
+            return self.ml_error(other, -32000, {"reason": "unsupported_signature_algorithm"})
+        decision = self.hello(relay)
+        self.assertIsInstance(decision, SessionRefused)
+        self.assertEqual(decision.cause, "error_signature_invalid")
+
+    def test_a_matching_digest_verifies(self) -> None:
+        self.assertIsInstance(self.step(self.ml_decision), Decided)
+        self.assertIsInstance(self.hello(self.ml_hello), Negotiated)
+
+    def test_core_checks_the_digest_only_when_asked(self) -> None:
+        request = step_request()
+        keyring = Keyring([self.signer.verification_key()])
+        bare = self.ml_decision(request, digest=False)
+        named = self.ml_decision(request)
+        self.assertTrue(verify_with_keyring(bare, keyring, expected_key_id=KEY_ID, request=request))
+        self.assertFalse(verify_with_keyring(bare, keyring, expected_key_id=KEY_ID, request=request,
+                                             require_request_digest=True))
+        self.assertTrue(verify_with_keyring(named, keyring, expected_key_id=KEY_ID, request=request,
+                                            require_request_digest=True))
+        for wrong in ("0" * 64, _digest(request).upper(), 7, None):
+            with self.subTest(wrong=wrong):
+                forged = copy.deepcopy(named)
+                forged["result"][DIGEST] = wrong
+                del forged["result"]["signature"]
+                sign_with_signing_key(forged, self.signer)
+                self.assertFalse(verify_with_keyring(forged, keyring, expected_key_id=KEY_ID, request=request,
+                                                     require_request_digest=True))
 
 
 if __name__ == "__main__":
