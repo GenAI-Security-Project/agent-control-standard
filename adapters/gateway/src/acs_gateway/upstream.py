@@ -355,8 +355,9 @@ def _recording(raw: str) -> Recording:
 class RecordingStore:
     """Every recording under ACS_RECORDINGS_DIR, loaded once at startup so a bad line stops the gateway there."""
 
-    def __init__(self, recordings: list[Recording]) -> None:
-        self.recordings = recordings
+    def __init__(self, files: list[list[Recording]]) -> None:
+        # One list per file, in file name order, each in line order.
+        self.files = files
 
     @classmethod
     def load(cls, directory: Path, scenario: str | None = None) -> RecordingStore:
@@ -371,8 +372,9 @@ class RecordingStore:
             paths = [only]
         else:
             paths = sorted(directory.glob("*.jsonl"))
-        recordings = []
+        files = []
         for path in paths:
+            recordings = []
             for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if not raw.strip():
                     continue
@@ -380,19 +382,25 @@ class RecordingStore:
                     recordings.append(_recording(raw))
                 except ValueError as e:
                     raise ValueError(f"{path}:{number}: {e}") from None
-        return cls(recordings)
+            files.append(recordings)
+        return cls(files)
 
     def find(self, first_user: str, turn: int, step: int, branch: str, stream: bool,
              ids: list[str]) -> tuple[Recording | None, bool]:
-        """The first recording, in file and line order, that fits every part of the key, the id skeleton included
-        (fix round 3, CR3-3), and whether some line fit all but the skeleton."""
+        """The recording that fits every part of the key, the id skeleton included (fix round 3, CR3-3), and whether
+        some line fit all but the skeleton.
+
+        Files are searched in name order, and within a file the last fitting line wins. Capture refuses to start over
+        an existing file, so within one file a later line for the same key is a retry's reply, the one the client
+        kept and followed up on (fix round 4, I-1)."""
         shape_only = False
-        for recording in self.recordings:
-            if (recording.turn == turn and recording.step == step and recording.branch == branch
-                    and recording.stream == stream and recording.match.fullmatch(first_user)):
-                if recording.ids == ids:
-                    return recording, False
-                shape_only = True
+        for recordings in self.files:
+            for recording in reversed(recordings):
+                if (recording.turn == turn and recording.step == step and recording.branch == branch
+                        and recording.stream == stream and recording.match.fullmatch(first_user)):
+                    if recording.ids == ids:
+                        return recording, False
+                    shape_only = True
         return None, shape_only
 
 

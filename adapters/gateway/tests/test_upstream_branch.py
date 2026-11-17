@@ -112,19 +112,23 @@ def test_a_retry_whose_first_reply_was_removed_replays_with_the_same_branch(gate
                                  call_item("bash", {"command": "rm -rf /"}, "call_3")))
     upstream.reply(response_body(message_item("done")))
     client.post("/v1/responses", json=finbot_request())
-    retried = client.post("/v1/responses", json=finbot_request()).json()
-    [kept] = [i for i in retried["output"] if i["type"] == "function_call"]
-    follow_up = finbot_request(kept, output("call_2", "{}"))
-    client.post("/v1/responses", json=follow_up)
-    captured = lines(tmp_path)[2]["branch"]
-    # Replay serves the first reply to both attempts, so its own removed call is the one that counts there.
+    kept_reply = client.post("/v1/responses", json=finbot_request()).json()
+    [kept] = [i for i in kept_reply["output"] if i["type"] == "function_call"]
+    captured_end = client.post("/v1/responses", json=finbot_request(kept, output("call_2", "{}"))).json()
+    assert lines(tmp_path)[2]["branch"] == "d,a,a"
+
+    # Fix round 4, I-1: replay serves the reply the client kept, the last matching line, and the client follows up
+    # on exactly what replay served, so the whole conversation must match the capture.
     replay = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"), ACS_LAB_MODE="enforce",
                      ACS_GUARDIAN_URL=guardian)
-    replay.post("/v1/responses", json=finbot_request())
-    replay.post("/v1/responses", json=finbot_request())
-    answer = replay.post("/v1/responses", json=follow_up).json()
-    assert captured == "d,a,a"
-    assert answer["output"][0]["content"][0]["text"] == "done"
+    served = replay.post("/v1/responses", json=finbot_request()).json()
+    assert replay.post("/v1/responses", json=finbot_request()).json() == served
+    assert served["output"] == kept_reply["output"]
+    calls = [i for i in served["output"] if i["type"] == "function_call"]
+    follow_up = finbot_request(*calls, *(output(c["call_id"], "{}") for c in calls))
+    replayed_end = replay.post("/v1/responses", json=follow_up).json()
+    assert replayed_end["output"] == captured_end["output"]
+    assert replayed_end["output"][0]["content"][0]["text"] == "done"
     assert not [e for e in audit() if e["acs_audit_event"] == "replay_miss"]
 
 

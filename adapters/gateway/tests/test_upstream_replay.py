@@ -160,6 +160,15 @@ def test_the_id_skeleton_is_part_of_the_lookup(gateway, tmp_path, audit, no_netw
     assert miss_events(audit) == []
 
 
+def test_the_last_line_in_a_file_wins_and_files_go_in_name_order(gateway, tmp_path, no_network):
+    """Fix round 4, I-1: a later line for the same key in one capture is the retry's reply the client kept."""
+    write(tmp_path / "rec", line(0, response_body(message_item("first attempt"))),
+          line(0, response_body(message_item("kept retry"))), name="a.jsonl")
+    write(tmp_path / "rec", line(0, response_body(message_item("other scenario"))), name="b.jsonl")
+    reply = replay(gateway, tmp_path).post("/v1/responses", json=finbot_request()).json()
+    assert reply["output"][0]["content"][0]["text"] == "kept retry"
+
+
 def test_replay_scenario_restricts_replay_to_one_file(gateway, tmp_path, no_network):
     """Fix round 3, CR3-3: two scenarios sharing a key no longer collide."""
     write(tmp_path / "rec", line(0, response_body(message_item("from s1"))), name="s1.jsonl")
