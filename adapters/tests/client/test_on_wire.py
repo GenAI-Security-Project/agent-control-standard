@@ -183,6 +183,20 @@ class OnWireTest(unittest.TestCase):
                 self.assertEqual(decision.fields["dir"], direction)
                 self.assertEqual(sent.call_count, 0 if direction == "req" else 1)
 
+    def test_a_failed_hello_callback_is_never_stored(self) -> None:
+        # The refusal covers that attempt only, so the next hook retries the handshake (review CR1).
+        for direction in ("req", "resp"):
+            with self.subTest(direction=direction):
+                session_id = f"retry-{direction}"
+                decision, _ = self._open(Recorder(fail_on=direction), session_id=session_id)
+                self.assertEqual(decision.cause, "on_wire_failed")
+                self.assertFalse(_handshake._handshake_cache_path(session_id, URL).exists())
+                recorder = Recorder()
+                decision, sent = self._open(recorder, session_id=session_id)
+                self.assertIsInstance(decision, Negotiated)
+                sent.assert_called_once()
+                self.assertEqual([d for d, _ in recorder.calls], ["req", "resp"])
+
     def test_a_stored_session_reports_nothing(self) -> None:
         self._open(Recorder())
         recorder = Recorder()

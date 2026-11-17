@@ -23,6 +23,7 @@ from acs.client._exchange import (
     claims_json_rpc_answer,
     key_id_rejected,
     post,
+    ON_WIRE_FAILED,
     keyring_verified,
     report_on_wire,
 )
@@ -230,6 +231,10 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
             timeout=_handshake_timeout_s() if timeout is None else timeout,
             response_keys=response_keys, on_wire=on_wire,
         )
+        if isinstance(decision, SessionRefused) and decision.cause == ON_WIRE_FAILED:
+            # A local transcript failure, not the Guardian's decision: refuse this attempt only and store nothing,
+            # so the next hook retries the handshake (review CR1). report_on_wire already audited it.
+            return decision
     decision, ours = _store_first(path, decision, ikm, session_id, config.guardian_url)
     if ours:
         _audit_start(decision, config, session_id, claimed)
@@ -307,7 +312,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
                         {"error": str(e)})
     failed = report_on_wire(on_wire, "req", client_hello, HANDSHAKE_METHOD)
     if failed is not None:
-        return SessionRefused("on_wire_failed", {"dir": "req", "error": failed["error"]})
+        return SessionRefused(ON_WIRE_FAILED, {"dir": "req", "error": failed["error"]})
     reported = False
     try:
         response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout)
@@ -317,7 +322,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
             reported = True
             failed = report_on_wire(on_wire, "resp", e.body, HANDSHAKE_METHOD)
             if failed is not None:
-                return SessionRefused("on_wire_failed", {"dir": "resp", "error": failed["error"]})
+                return SessionRefused(ON_WIRE_FAILED, {"dir": "resp", "error": failed["error"]})
         if response_shape_problem(e.body) is not None:
             return NoAnswer(f"http_{e.status}_error", {"http_status": e.status})
         response = e.body
@@ -331,7 +336,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     if not reported:
         failed = report_on_wire(on_wire, "resp", response, HANDSHAKE_METHOD)
         if failed is not None:
-            return SessionRefused("on_wire_failed", {"dir": "resp", "error": failed["error"]})
+            return SessionRefused(ON_WIRE_FAILED, {"dir": "resp", "error": failed["error"]})
     try:
         return _classify_hello(client_hello, response, session_id, response_keys)
     except Exception as e:  # noqa: BLE001

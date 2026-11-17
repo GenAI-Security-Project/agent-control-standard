@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 # answer before it is classified (PREMORTEM P6). It gets a deep copy, so it can't change what is sent
 # or judged. No "resp" call means no answer arrived, and the outcome's cause says why.
 OnWire = Callable[[str, Any], None]
+# The cause for a callback that raised. A local failure, so the handshake never stores it.
+ON_WIRE_FAILED = "on_wire_failed"
 
 
 def report_on_wire(on_wire: OnWire | None, direction: str, envelope: Any, method: Any) -> dict[str, Any] | None:
@@ -89,7 +91,7 @@ def _response_verified(response: dict[str, Any], request: Mapping[str, Any], ses
 
 
 def _on_wire_refusal(fields: dict[str, Any]) -> Refused:
-    return Refused("on_wire_failed", fields, f"on_wire callback failed on {fields['dir']}: {fields['error']}")
+    return Refused(ON_WIRE_FAILED, fields, f"on_wire callback failed on {fields['dir']}: {fields['error']}")
 
 
 class RequestTooLargeError(Exception):
