@@ -75,7 +75,8 @@ def response_matches_request(request: dict, response: dict) -> bool:
         return "request_id" not in result
     params = request.get("params")
     want = params.get("request_id") if isinstance(params, dict) else None
-    return same_json_rpc_id(result.get("request_id"), want)
+    # Present and equal on both sides: a step request without a request_id binds no result.
+    return isinstance(want, str) and bool(want) and same_json_rpc_id(result.get("request_id"), want)
 
 
 def iso8601_now() -> str:

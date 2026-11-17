@@ -83,6 +83,13 @@ class OneHandshakeAwareRule(unittest.TestCase):
                 with self.subTest(method=request["method"], result=result):
                     self.assertFalse(response_matches_request(request, {"jsonrpc": "2.0", "id": "1", "result": result}))
 
+    def test_a_step_result_must_carry_the_request_id(self) -> None:
+        # CR6-2: present and equal. A step request without one binds nothing beyond the id.
+        bare_request = {"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", "params": {}}
+        bare_result = {"jsonrpc": "2.0", "id": "1", "result": {"decision": "allow"}}
+        self.assertFalse(response_matches_request(bare_request, bare_result))
+        self.assertFalse(response_matches_request(_request("1"), bare_result))
+
     def test_a_server_hello_never_answers_a_step_request(self) -> None:
         self.assertFalse(response_matches_request(_request("1"), {"jsonrpc": "2.0", "id": "1",
                                                                   "result": dict(SERVER_HELLO)}))

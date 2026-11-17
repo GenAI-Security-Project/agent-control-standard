@@ -465,14 +465,33 @@ class RequestBinding(unittest.TestCase):
         with self.assertRaises(TypeError):
             verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID)  # type: ignore[call-arg]
 
+    def test_a_step_request_without_a_string_request_id_is_a_caller_error(self) -> None:
+        # Review finding CR6-2: only the handshake binds on the id alone, so a step request
+        # that can't name its request_id is the caller's mistake, not a weaker binding.
+        for request_id in (None, 7, "", ["r"]):
+            request = _request()
+            if request_id is None:
+                del request["params"]["request_id"]
+            else:
+                request["params"]["request_id"] = request_id
+            with self.subTest(request_id=request_id), self.assertRaises(ValueError):
+                self._verify(self.signed, request)
+        without_params = {k: v for k, v in _request().items() if k != "params"}
+        with self.assertRaises(ValueError):
+            self._verify(self.signed, without_params)
+        hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello", "params": {"acs_version": "0.1.0"}}
+        server_hello = {"jsonrpc": "2.0", "id": "hello-1",
+                        "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
+                                   "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
+        sign_with_signing_key(server_hello, _signer())
+        self.assertTrue(self._verify(server_hello, hello), "a ClientHello needs no request_id")
+
     def test_a_request_whose_params_is_not_an_object_is_a_caller_error(self) -> None:
         # Review findings R5-M1, CR5-2: ValueError, not an AttributeError from deep inside.
         for params in ("params", ["request_id"], 7, True):
             request = {**_request(), "params": params}
             with self.subTest(params=params), self.assertRaises(ValueError):
                 self._verify(self.signed, request)
-        without = {k: v for k, v in _request().items() if k != "params"}
-        self.assertFalse(self._verify(self.signed, without))
 
 
 class Rejections(unittest.TestCase):
