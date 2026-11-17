@@ -105,9 +105,10 @@ ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "")
 
 # /proc/ is here because /proc/self/root/ reaches the whole filesystem on Linux.
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/", "/proc/")
+# macOS reaches the whole root again under its Data volume.
+DATA_VOLUME_PREFIX = "/system/volumes/data/"
 # macOS links /etc to /private/etc, so that spelling is compared as /etc. /var and /tmp have the same links but
 # aren't protected, so they need none.
-DATA_VOLUME_PREFIX = "/system/volumes/data/"
 PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"),)
 # Case-folded tool names that write a file, and the arguments that name the file.
 WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit"})
@@ -534,7 +535,8 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                 return {**base, "decision": "deny",
                         "reasoning": f"relative path leaves its starting directory: {path}",
                         "reason_codes": ["path_traversal"]}
-            if any(_comparable_path(normalized).startswith(p) for p in PROTECTED_PATH_PREFIXES):
+            comparable = _comparable_path(normalized)
+            if any(comparable.startswith(p) for p in PROTECTED_PATH_PREFIXES):
                 return {**base, "decision": "deny",
                         "reasoning": f"write to protected system path: {path}",
                         "reason_codes": ["protected_path"]}
