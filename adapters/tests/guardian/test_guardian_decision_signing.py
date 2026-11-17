@@ -77,8 +77,7 @@ def test_an_unsignable_decision_falls_back_to_a_signed_deny(signer):
     request = signed_step("steps/toolCallRequest", ALLOWED)
     result = {"type": "final", "acs_version": "0.1.0", "request_id": request["params"]["request_id"],
               "decision": "allow", "reasoning": "lone surrogate \ud800"}
-    with example_guardian._answering(request):
-        response = example_guardian._signed_step_response(request["id"], "session", result)
+    response = example_guardian._signed_step_response(request["id"], "session", result, request=request)
     assert response["result"]["reason_codes"] == ["response_not_signable"]
     assert_ml_dsa(response, request, signer)
 
@@ -96,7 +95,20 @@ def test_a_signed_answer_never_carries_another_requests_digest(signer):
     first, second = (signed_step("steps/toolCallRequest", ALLOWED) for _ in range(2))
     assert example_guardian.handle_request(first)["result"][REQUEST_DIGEST_FIELD] == request_sha256(first)
     assert example_guardian.handle_request(second)["result"][REQUEST_DIGEST_FIELD] == request_sha256(second)
-    assert example_guardian._REQUEST_DIGEST.get() is None
+
+
+def test_signing_without_the_request_raises(signer):
+    # The hash comes from the request passed in, never from ambient state, so a caller that forgets it fails loudly
+    # instead of sending an answer without the hash (review CR4).
+    request = signed_step("steps/toolCallRequest", ALLOWED)
+    result = {"type": "final", "acs_version": "0.1.0", "request_id": request["params"]["request_id"],
+              "decision": "allow"}
+    with pytest.raises(example_guardian.SigningUnavailable):
+        example_guardian._signed_step_response(request["id"], "session", result)
+    with pytest.raises(example_guardian.SigningUnavailable):
+        example_guardian._error_envelope(request["id"], "session", -32600, "Invalid Request")
+    signed = example_guardian._error_envelope(request["id"], "session", -32600, "Invalid Request", request=request)
+    assert_ml_dsa(signed, request, signer)
 
 
 def test_ping_stays_unsigned(signer):

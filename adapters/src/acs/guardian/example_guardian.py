@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import contextvars
 import copy
 import errno
 try:
@@ -156,29 +154,6 @@ DECISION_SIGNER: Any = None
 UNSUPPORTED_SIGNATURE_ALGORITHM = "unsupported_signature_algorithm"
 
 
-# The hash of the request being answered, set for the length of one request so every ML-DSA-signed answer to it
-# names it. A context variable, so concurrent handler threads never see each other's.
-_REQUEST_DIGEST: contextvars.ContextVar[str | None] = contextvars.ContextVar("acs_request_digest", default=None)
-
-
-@contextlib.contextmanager
-def _answering(request: Any):
-    """Name the request every ML-DSA-signed answer inside this block binds to. HMAC never needs it."""
-    digest = None
-    if RESPONSE_SIGNING_NAME == ML_DSA_65 and isinstance(request, dict):
-        try:
-            digest = request_sha256(request)
-        except Exception:  # noqa: BLE001
-            # No canonical form, so no client could have signed this request, and an answer without the hash
-            # fails the client's check. That fails closed.
-            digest = None
-    token = _REQUEST_DIGEST.set(digest)
-    try:
-        yield
-    finally:
-        _REQUEST_DIGEST.reset(token)
-
-
 class SigningUnavailable(RuntimeError):
     """ML-DSA-65 is on but the decision key can't sign now. handle_request answers the -32603 floor for it."""
 
@@ -188,13 +163,14 @@ def _utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def _sign_response(envelope: dict, session_id: str) -> dict:
+def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict:
     """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
 
     One ML-DSA key signs every session and section 10 gives a response no session_id, so an answer that matched only
     by ids could be relayed from one session to another. Each ML-DSA-signed answer therefore carries the hash of the
     request's signed input, in result or in error.data, inside the signed bytes. A lab convention, and issue #13 is
-    the closest tracking issue.
+    the closest tracking issue. The caller passes the request it answers. Without one, ML-DSA signing raises
+    SigningUnavailable, so the floor answers instead of an answer without the hash (review CR4).
     """
     if RESPONSE_SIGNING_NAME == ML_DSA_65:
         if DECISION_SIGNER is None:
@@ -208,12 +184,14 @@ def _sign_response(envelope: dict, session_id: str) -> dict:
                              "(outside its validity window or revoked), refusing to sign\n")
             sys.stderr.flush()
             raise SigningUnavailable("the decision key is not live")
-        digest = _REQUEST_DIGEST.get()
-        if digest is not None:
-            if "result" in envelope:
-                envelope["result"] = {**envelope["result"], REQUEST_DIGEST_FIELD: digest}
-            else:
-                envelope["error"]["data"] = {**(envelope["error"].get("data") or {}), REQUEST_DIGEST_FIELD: digest}
+        if not isinstance(request, dict):
+            raise SigningUnavailable("an ML-DSA-65 answer needs the request it answers")
+        # A request JCS can't encode raises here like any canonicalization failure, and no client could sign it.
+        digest = request_sha256(request)
+        if "result" in envelope:
+            envelope["result"] = {**envelope["result"], REQUEST_DIGEST_FIELD: digest}
+        else:
+            envelope["error"]["data"] = {**(envelope["error"].get("data") or {}), REQUEST_DIGEST_FIELD: digest}
         from acs.core import sign_with_signing_key
         return sign_with_signing_key(envelope, DECISION_SIGNER.signing_key)
     return sign_envelope(envelope, session_id=session_id)
@@ -765,7 +743,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
 
 def _error_envelope(request_id, session_id: str, code: int, message: str, *, signed: bool = True,
-                    data: dict | None = None) -> dict:
+                    data: dict | None = None, request: Any = None) -> dict:
     """A JSON-RPC error, signed whenever the session key is derivable, since Baseline integrity covers errors.
 
     The decision key needs no session, so with ML-DSA-65 on every error is signed except an unsigned one by name.
@@ -775,7 +753,7 @@ def _error_envelope(request_id, session_id: str, code: int, message: str, *, sig
     if data is not None:
         envelope["error"]["data"] = data
     if signed and (session_id or RESPONSE_SIGNING_NAME == ML_DSA_65):
-        _sign_response(envelope, session_id)
+        _sign_response(envelope, session_id, request)
     return envelope
 
 
@@ -876,8 +854,7 @@ def _handle(request: Any, read: RequestRead) -> tuple[int, dict]:
     goes out as 200 like any other answer.
     """
     try:
-        with _answering(request):
-            return 200, _answer(request, read)
+        return 200, _answer(request, read)
     except (*CANONICALIZATION_ERRORS, SigningUnavailable) as e:
         # Signing itself failed, as for a session_id JCS can't encode, or a decision key that can't sign now. A direct
         # caller gets the same unsigned floor envelope do_POST sends, so handle_request never raises for one, and it
@@ -913,17 +890,18 @@ def _answer(request: dict, read: RequestRead) -> dict:
     if _foreign_key_id(request):
         return _error_envelope(read.id, "", -32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
     if read.problem:
-        return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}")
+        return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}", request=request)
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
         return _error_envelope(read.id, read.session_id, -32600,
-                               f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
+                               f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels",
+                               request=request)
     try:
         return _handle_request(request, read)
     except CANONICALIZATION_ERRORS as e:
         # Last resort, after the depth bound. If even this error can't be signed, _handle returns the -32603 floor.
         cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
         return _error_envelope(read.id, read.session_id, -32600,
-                               f"Invalid Request: the envelope could not be canonicalized{cause}")
+                               f"Invalid Request: the envelope could not be canonicalized{cause}", request=request)
 
 
 def _handle_request(request: dict, read: RequestRead) -> dict:
@@ -947,7 +925,8 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
                 f"{'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
                 for e in errors[:5]
             )
-            return _error_envelope(request_id, session_id, -32600, f"Invalid Request: envelope failed schema: {paths}")
+            return _error_envelope(request_id, session_id, -32600, f"Invalid Request: envelope failed schema: {paths}",
+                                   request=request)
 
     if method == "handshake/hello":
         # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
@@ -955,9 +934,10 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
             check_signature(request, session_id)
             result = evaluate_handshake(params, acs_request_id)
         except GuardianError as e:
-            return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, data=e.data)
+            return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, data=e.data,
+                                   request=request)
         envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        _sign_response(envelope, session_id)
+        _sign_response(envelope, session_id, request)
         return envelope
 
     try:
@@ -966,7 +946,7 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
         check_replay(session_id, acs_request_id)
         check_nonce(session_id, params.get("nonce", ""))
     except GuardianError as e:
-        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
+        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, request=request)
 
     payload_canonical = jcs_canonicalize(params).decode("utf-8")
     chain_hash = append_to_chain(session_id, method, acs_request_id, payload_canonical, timestamp)
@@ -974,9 +954,9 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
     try:
         result = evaluate_step(method, params, acs_request_id, chain_hash)
     except GuardianError as e:
-        return _error_envelope(request_id, session_id, e.code, e.message)
+        return _error_envelope(request_id, session_id, e.code, e.message, request=request)
 
-    return _signed_step_response(request_id, session_id, result)
+    return _signed_step_response(request_id, session_id, result, request=request)
 
 
 # Fixed ASCII. The fallback holds only this, constants, and the request_id and chain_hash the Guardian already
@@ -984,13 +964,13 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
 UNSIGNABLE_REASONING = "The Guardian could not sign its decision for this step, so the step is denied."
 
 
-def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dict:
+def _signed_step_response(request_id: Any, session_id: str, result: dict, request: Any = None) -> dict:
     """Sign a step's decision. One JCS can't canonicalize (a lone surrogate, an integer beyond 2^53, a non-finite
     float, or nesting past the recursion limit) is answered with a signed deny instead of a dropped connection,
     which a proceed posture would run."""
     envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
     try:
-        _sign_response(envelope, session_id)
+        _sign_response(envelope, session_id, request)
         return envelope
     except CANONICALIZATION_ERRORS:
         # Only a canonicalization failure is relabeled, recursion depth included. Any other error is a bug and
@@ -999,7 +979,7 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
         envelope = {"jsonrpc": "2.0", "id": request_id,
                     "result": {**fallback, "decision": "deny", "reasoning": UNSIGNABLE_REASONING,
                                "reason_codes": ["response_not_signable"]}}
-        _sign_response(envelope, session_id)
+        _sign_response(envelope, session_id, request)
         return envelope
 
 
