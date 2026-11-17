@@ -541,3 +541,23 @@ def test_an_absent_or_null_intent_derivation_keeps_todays_answer(no_backend):
 def test_an_unprotected_path_beside_a_protected_one_still_writes(no_backend, path):
     # Prefixes end at a path separator, and only /private/etc is an alias, so these neighbours stay writable.
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
+
+
+
+def _string_literals(source: str) -> list[tuple[str, int]]:
+    """String constants in source, docstrings left out, with their line numbers."""
+    import ast
+    tree = ast.parse(source)
+    docstrings = {id(node.body[0].value) for node in ast.walk(tree)
+                  if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body
+                  and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)}
+    return [(node.value, node.lineno) for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings]
+
+
+def test_the_backend_variable_name_is_defined_once():
+    # Every message uses the one constant, so the literal appears only where it is defined.
+    from pathlib import Path
+    found = [path.name for path in sorted(Path(example_guardian.__file__).parent.glob("*.py"))
+             for value, _ in _string_literals(path.read_text(encoding="utf-8")) if "ACS_POLICY_BACKEND" in value]
+    assert found == ["_policy_backend.py"]

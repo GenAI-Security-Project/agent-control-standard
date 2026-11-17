@@ -20,9 +20,9 @@ import sys
 import threading
 import time
 from pathlib import Path
-from collections.abc import Mapping
 from typing import Any
 
+from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
 from acs.core._canonical import CANONICALIZATION_ERRORS
@@ -119,13 +119,7 @@ PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target
 
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
-POLICY_BACKEND_ENV = "ACS_POLICY_BACKEND"
 OPA_CONFIG: Any = None
-
-
-def policy_backend_name(env: Mapping[str, str] = os.environ) -> str:
-    """The one rule for which policy backend was asked for. Any non-empty name counts, an unknown one included."""
-    return env.get(POLICY_BACKEND_ENV, "").strip()
 
 
 # Read once, at import, and never again: a later change to the environment can't switch a running Guardian's
