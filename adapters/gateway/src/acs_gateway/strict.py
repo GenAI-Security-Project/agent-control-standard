@@ -68,3 +68,31 @@ def has_lone_surrogate(value: Any) -> bool:
         elif isinstance(item, list):
             stack.extend(item)
     return False
+
+
+def request_has_lone_surrogate(body: dict[str, Any]) -> bool:
+    """Whether a request body holds a lone surrogate anywhere the gateway refuses one.
+
+    A function_call_output's output is exempt: it is tool data an attacker can plant, so it is gated per result
+    (it can't be signed, so its step is refused) rather than refusing the whole request every turn. A call's
+    arguments are JSON text, so a surrogate escaped inside them is found by parsing them too.
+    """
+    items = body.get("input")
+    rest = {k: v for k, v in body.items() if k != "input"}
+    if has_lone_surrogate(rest):
+        return True
+    for item in items if isinstance(items, list) else [items]:
+        if isinstance(item, dict) and item.get("type") == "function_call_output":
+            # Every key and every other field is still checked, only the output's content is exempt.
+            if has_lone_surrogate({k: v for k, v in item.items() if k != "output"}):
+                return True
+            continue
+        if has_lone_surrogate(item):
+            return True
+        if isinstance(item, dict) and item.get("type") == "function_call" and isinstance(item.get("arguments"), str):
+            try:
+                if has_lone_surrogate(loads_recording(item["arguments"])[0]):
+                    return True
+            except (ValueError, RecursionError):
+                pass
+    return False

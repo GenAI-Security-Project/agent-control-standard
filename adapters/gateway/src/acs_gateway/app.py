@@ -57,7 +57,7 @@ from acs_gateway.sessions import (
     fingerprint,
     same_content,
 )
-from acs_gateway.strict import has_lone_surrogate, loads_recording, repeated_key
+from acs_gateway.strict import loads_recording, repeated_key, request_has_lone_surrogate
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -190,10 +190,10 @@ class Gateway:
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
-        if has_lone_surrogate(body):
-            # A lone surrogate can't be encoded as UTF-8 or signed under RFC 8785, anywhere it sits, keys included.
-            # Enforce refuses it here, before any check could echo it or any step could carry it. Shadow records it
-            # and goes on, and the ASCII-escaping writers keep its logs safe.
+        if request_has_lone_surrogate(body):
+            # A lone surrogate can't be encoded as UTF-8 or signed under RFC 8785. Enforce refuses one anywhere but
+            # in tool output, here, before any check could echo it or any step could carry it. Tool output is gated
+            # per result instead. Shadow records it and goes on, and the ASCII-escaping writers keep its logs safe.
             _audit("lone_surrogate", mode=self.config.mode)
             if self.enforce:
                 return openai_error(400, "The request body contains text that can't be encoded.",
