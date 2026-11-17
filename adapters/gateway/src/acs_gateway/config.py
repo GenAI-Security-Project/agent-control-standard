@@ -72,10 +72,11 @@ def _port(env: Mapping[str, str], name: str) -> int | None:
         raise ValueError(f"{name} must be a port from 1 to 65535 in plain ASCII digits, got {raw!r}")
     return int(raw)
 def _otlp_endpoint(env: Mapping[str, str]) -> str | None:
-    """OTEL_EXPORTER_OTLP_ENDPOINT, the base URL of an OTLP HTTP receiver such as Jaeger's port 4318, or None.
+    """OTEL_EXPORTER_OTLP_ENDPOINT, the URL of an OTLP HTTP receiver such as Jaeger's port 4318, or None.
 
     Unset leaves tracing off. A value that can't be an export target stops startup, so a typo never means spans quietly
-    go nowhere.
+    go nowhere. The value is never echoed in an error, since it could carry a credential, and a URL that does carry
+    one is refused: credentials belong in OTEL_EXPORTER_OTLP_HEADERS, which the gateway never logs.
     """
     raw = env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
     if not raw:
@@ -86,9 +87,12 @@ def _otlp_endpoint(env: Mapping[str, str]) -> str | None:
         _ = parts.port
     except ValueError:
         parts = None
+    if parts is not None and "@" in parts.netloc:
+        raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT must not carry a user name or password. Put credentials in "
+                         "OTEL_EXPORTER_OTLP_HEADERS instead")
     if parts is None or parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
-        raise ValueError(f"OTEL_EXPORTER_OTLP_ENDPOINT must be an http or https base URL such as http://jaeger:4318, "
-                         f"got {raw!r}")
+        raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT must be an http or https URL with a host and no query, such as "
+                         "http://jaeger:4318")
     return raw.rstrip("/")
 
 

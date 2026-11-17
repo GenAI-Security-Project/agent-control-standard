@@ -27,6 +27,14 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger("acs_gateway.telemetry")
 SERVICE_NAME = "acs-gateway"
+# Longest string on any span attribute. Model names, tool names and call_ids come from the client or the model.
+ATTRIBUTE_LIMIT = 256
+# The loggers the OTLP HTTP exporter writes its per-batch failures to. The gateway filters only the records its own
+# exports produce on them, and leaves every logger's level, and every other exporter's records, as they were.
+_EXPORTER_LOGGERS = ("opentelemetry.exporter.otlp.proto.http.trace_exporter", "opentelemetry.exporter.otlp.common.http",
+                     "opentelemetry.exporter.otlp.proto.http._common")
+# Set on the batch processor's thread while it runs one of the gateway's exports.
+_EXPORTING = threading.local()
 TRACES_PATH = "/v1/traces"
 # Names from specification/v0.1.0/trace/otel-mapping.json on integration, verbatim. PR #557 would rename the tool spans
 # to execute_tool, and these follow it only once it merges (issue #582).
@@ -56,8 +64,22 @@ _MODEL_SPAN: ContextVar[Any] = ContextVar("acs_gateway_model_span", default=None
 
 
 def traces_url(endpoint: str) -> str:
-    """The OTLP HTTP traces URL under a base endpoint, as the OpenTelemetry exporter specification builds it."""
-    return endpoint.rstrip("/") + TRACES_PATH
+    """The OTLP HTTP traces URL for an endpoint: a base URL gets /v1/traces appended, as the OpenTelemetry exporter
+    specification builds it, and a URL already ending in /v1/traces is taken as it is."""
+    base = endpoint.rstrip("/")
+    return base if base.endswith(TRACES_PATH) else base + TRACES_PATH
+
+
+def display_endpoint(url: str) -> str:
+    """Only the scheme, host and port of an export URL, for a log line. The path and anything else stay out."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    port = f":{parts.port}" if parts.port is not None else ""
+    return f"{parts.scheme}://{host}{port}"
 
 
 def session_trace_id(session_id: str) -> int:
@@ -235,6 +257,8 @@ class Tracing:
             yield _OFF_CALL
             return
         model = body.get("model") if isinstance(body, dict) else None
+        # The span name has no length limit of its own, so the model name is capped here like an attribute.
+        model = model[:ATTRIBUTE_LIMIT] if isinstance(model, str) else None
         attributes: dict[str, Any] = {"gen_ai.operation.name": MODEL_OPERATION, "gen_ai.provider.name": PROVIDER_NAME,
                                       "acs.lab.mode": self.mode, "acs.lab.stream": stream}
         if isinstance(model, str) and model:
@@ -333,9 +357,12 @@ def _session_outcome(span: Any, request_id: str | None, handshake: Any) -> None:
 def new_provider() -> TracerProvider:
     """A tracer provider whose id generator can give a session's root span the session's own ids."""
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 
-    return TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}), id_generator=_session_ids())
+    # shutdown_on_exit off: the gateway's lifespan flushes within a bound, and an exit hook could wait on a hung
+    # Jaeger for the exporter's whole timeout.
+    return TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}), id_generator=_session_ids(),
+                          span_limits=SpanLimits(max_attribute_length=ATTRIBUTE_LIMIT), shutdown_on_exit=False)
 
 
 def build_provider(endpoint: str) -> TracerProvider:
@@ -348,18 +375,37 @@ def build_provider(endpoint: str) -> TracerProvider:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     # The exporter logs every failed batch. quiet_exporter logs once per failure window instead.
-    logging.getLogger("opentelemetry.exporter.otlp.proto.http").setLevel(logging.CRITICAL + 1)
+    _filter_own_export_records()
     url = traces_url(endpoint)
     provider = new_provider()
-    provider.add_span_processor(BatchSpanProcessor(quiet_exporter(OTLPSpanExporter(endpoint=url), url)))
+    provider.add_span_processor(BatchSpanProcessor(quiet_exporter(OTLPSpanExporter(endpoint=url),
+                                                                  display_endpoint(url))))
     return provider
 
 
-def quiet_exporter(inner: Any, url: str) -> Any:
+class _OwnExportRecords(logging.Filter):
+    """Drops a record only when the gateway's own export wrote it, which the flag on the exporting thread tells."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not getattr(_EXPORTING, "active", False)
+
+
+_OWN_EXPORT_FILTER = _OwnExportRecords()
+
+
+def _filter_own_export_records() -> None:
+    for name in _EXPORTER_LOGGERS:
+        logger = logging.getLogger(name)
+        if _OWN_EXPORT_FILTER not in logger.filters:
+            logger.addFilter(_OWN_EXPORT_FILTER)
+
+
+def quiet_exporter(inner: Any, where: str) -> Any:
     """Wrap a span exporter so a failure, raised or returned, is one log line per failure window and never raises.
 
     A window opens on the first failure after a success, or at startup, and closes on the next success. The error
-    text stays out of the log, since an exporter's message can quote a response body.
+    text stays out of the log, since an exporter's message can quote a response body, and where names only the
+    endpoint's scheme, host and port.
     """
     from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
@@ -368,16 +414,19 @@ def quiet_exporter(inner: Any, url: str) -> Any:
             self._failing = False
 
         def export(self, spans: Any) -> SpanExportResult:
+            _EXPORTING.active = True
             try:
                 result = inner.export(spans)
             except Exception:  # noqa: BLE001
                 result = SpanExportResult.FAILURE
+            finally:
+                _EXPORTING.active = False
             if result is SpanExportResult.SUCCESS:
                 self._failing = False
                 return result
             if not self._failing:
                 self._failing = True
-                _LOG.warning("acs-gateway: span export to %s is failing, so spans are dropped until it recovers", url)
+                _LOG.warning("acs-gateway: span export to %s is failing, so spans are dropped until it recovers", where)
             return SpanExportResult.FAILURE
 
         def shutdown(self) -> None:

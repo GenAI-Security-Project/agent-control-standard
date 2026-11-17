@@ -100,7 +100,7 @@ def test_a_failing_exporter_never_touches_a_request_and_logs_once(gateway, upstr
         tracing.shutdown()
     failing = [r for r in caplog.records if r.name == "acs_gateway.telemetry"]
     assert [r.getMessage() for r in failing] == [
-        "acs-gateway: span export to http://127.0.0.1:9/v1/traces is failing, so spans are dropped until it recovers"]
+        "acs-gateway: span export to http://127.0.0.1:9 is failing, so spans are dropped until it recovers"]
     assert not [r for r in caplog.records if r.name.startswith("opentelemetry") and r.levelno >= logging.WARNING]
 
 
@@ -132,3 +132,70 @@ def test_export_failures_log_once_per_window_and_never_raise(caplog):
                         SpanExportResult.FAILURE, SpanExportResult.FAILURE]
     assert len([r for r in caplog.records if r.name == "acs_gateway.telemetry"]) == 2
     assert "boom" not in caplog.text
+
+
+@pytest.mark.parametrize("value", ["http://user:s3cr3t-pw@jaeger:4318", "https://tok3n-only@jaeger:4318/v1/traces",
+                                   "http://:s3cr3t-pw@jaeger:4318"])
+def test_an_endpoint_with_credentials_is_refused_without_echoing_them(value):
+    # Credentials go in OTEL_EXPORTER_OTLP_HEADERS, which the gateway never logs (CR5).
+    with pytest.raises(ValueError, match="OTEL_EXPORTER_OTLP_HEADERS") as raised:
+        GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": value})
+    assert "s3cr3t" not in str(raised.value) and "tok3n" not in str(raised.value)
+
+
+def test_a_bad_endpoint_error_never_echoes_the_value():
+    with pytest.raises(ValueError) as raised:
+        GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "ftp://s3cr3t-host-part:99999"})
+    assert "s3cr3t" not in str(raised.value)
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("http://jaeger:4318/v1/traces", "http://jaeger:4318/v1/traces"),
+    ("http://jaeger:4318/v1/traces/", "http://jaeger:4318/v1/traces"),
+    ("http://jaeger:4318/otlp", "http://jaeger:4318/otlp/v1/traces"),
+])
+def test_an_endpoint_already_naming_v1_traces_is_not_doubled(value, expected):
+    from acs_gateway.telemetry import traces_url
+
+    assert traces_url(GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": value}).otlp_endpoint) == expected
+
+
+def test_the_export_log_names_only_scheme_host_and_port():
+    from acs_gateway.telemetry import display_endpoint
+
+    assert display_endpoint("https://jaeger.example:4318/otlp/v1/traces") == "https://jaeger.example:4318"
+    assert display_endpoint("http://jaeger/v1/traces") == "http://jaeger"
+
+
+def test_tracing_leaves_the_exporter_loggers_level_alone(caplog):
+    import logging as logging_module
+
+    from acs_gateway.telemetry import Tracing
+
+    names = ["opentelemetry.exporter.otlp.proto.http", "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+             "opentelemetry.exporter.otlp.common.http"]
+    before = {name: logging_module.getLogger(name).level for name in names}
+    tracing = Tracing.from_config(GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"}))
+    tracing.shutdown()
+    assert {name: logging_module.getLogger(name).level for name in names} == before
+    # Another exporter's records on the same logger still get through (CR7).
+    with caplog.at_level(logging_module.WARNING):
+        logging_module.getLogger("opentelemetry.exporter.otlp.proto.http.trace_exporter").warning("someone else's")
+    assert "someone else's" in caplog.text
+
+
+def test_long_client_strings_are_capped_on_spans():
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from acs_gateway.telemetry import ATTRIBUTE_LIMIT, Tracing, new_provider
+
+    exporter = InMemorySpanExporter()
+    provider = new_provider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with Tracing(provider, "off").model_call(None, {"model": "m" * 5000}, stream=False):
+        pass
+    (span,) = exporter.get_finished_spans()
+    assert ATTRIBUTE_LIMIT == 256
+    assert len(span.attributes["gen_ai.request.model"]) == 256
+    assert len(span.name) <= len("chat ") + 256
