@@ -25,6 +25,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from acs.guardian._chain import PING_METHOD, chains_method
 from acs.guardian._limits import depth_exceeds
 from acs.guardian._logging import log_value
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
@@ -947,21 +948,39 @@ def _answer(request: dict, read: RequestRead) -> dict:
                                f"Invalid Request: the envelope could not be canonicalized{cause}", request=request)
 
 
+def _answer_unchained(request: dict, read: RequestRead) -> dict:
+    """system/ping and handshake/hello, the two methods the Guardian answers without a chain entry."""
+    method, request_id, params = read.method, read.id, read.params
+    session_id, acs_request_id = read.session_id, read.request_id
+
+    # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
+    if method == PING_METHOD:
+        result = evaluate_ping(params, acs_request_id)
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+    # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
+    try:
+        check_signature(request, session_id)
+        result = evaluate_handshake(params, acs_request_id)
+    except GuardianError as e:
+        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, data=e.data,
+                               request=request)
+    envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
+    _sign_response(envelope, session_id, request)
+    return envelope
+
+
 def _handle_request(request: dict, read: RequestRead) -> dict:
     method, request_id, params = read.method, read.id, read.params
     session_id, acs_request_id = read.session_id, read.request_id
     timestamp = params.get("timestamp", "")
 
-    # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
-    if method == "system/ping":
-        result = evaluate_ping(params, acs_request_id)
-        envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        return envelope
+    # Ping and the handshake are answered without a chain entry. acs-verify reads the same predicate (issue #584).
+    if not chains_method(method):
+        return _answer_unchained(request, read)
 
-
-    # Validated before policy; ping and handshake have their own payload shapes.
-    if (_SPEC_VALIDATION_AVAILABLE
-            and method not in ("system/ping", "handshake/hello")):
+    # Validated before policy. Ping and handshake, which have their own payload shapes, never reach this.
+    if _SPEC_VALIDATION_AVAILABLE:
         errors = list(_REQUEST_ENVELOPE_VALIDATOR.iter_errors(request))
         if errors:
             paths = "; ".join(
@@ -970,18 +989,6 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
             )
             return _error_envelope(request_id, session_id, -32600, f"Invalid Request: envelope failed schema: {paths}",
                                    request=request)
-
-    if method == "handshake/hello":
-        # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
-        try:
-            check_signature(request, session_id)
-            result = evaluate_handshake(params, acs_request_id)
-        except GuardianError as e:
-            return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, data=e.data,
-                                   request=request)
-        envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        _sign_response(envelope, session_id, request)
-        return envelope
 
     try:
         check_signature(request, session_id)
