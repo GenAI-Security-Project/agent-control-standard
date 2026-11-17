@@ -243,9 +243,16 @@ def test_an_unknown_key_id_gets_an_unsigned_minus_32004(served):
 
 
 def test_a_400_digit_integer_id_is_refused_never_500(served):
-    # JCS signs only integers within 2^53, so a longer one is refused as an invalid id, with id null.
+    # JCS signs only integers within 2^53, so a longer one is refused as an invalid id, with id null. This ping
+    # carries no session_id, so there is no key to sign with and the refusal is unsigned.
     status, answer = post(served, _ping(int("9" * 400)))
     assert status != 500 and (answer["id"], answer["error"]["code"]) == (None, -32600)
+    assert "signature" not in answer["error"]
+
+
+def test_the_production_timeouts_are_30_seconds():
+    # The behavior tests override both with short values, so this pins what a real Guardian runs with.
+    assert (example_guardian.GuardianHandler.timeout, example_guardian.BODY_READ_SECONDS) == (30, 30.0)
 
 
 @pytest.mark.parametrize("request_id", [2**53, -(2**53), 2**60, int("9" * 400)])
