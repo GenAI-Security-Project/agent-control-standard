@@ -110,27 +110,27 @@ def response_binding_problem(request: object, response: object) -> str | None:
     """Why the response doesn't answer this request (D-029), as one BINDING_* reason, or None.
 
     This is the one binding rule. response_matches_request, verify_with_keyring, the client's
-    step exchange and its handshake all decide through it. The rule follows the request, never
-    the response's shape, and it checks in this order:
+    step exchange and its handshake all decide through it. It checks the request first, then the
+    response, in this order, so a caller error is reported as one whatever the response is:
 
-    BINDING_SHAPE: the response is a JSON-RPC 2.0 object, carries no "method", and carries
-    exactly one of result or error, which is an object. BINDING_REQUEST: the request passes
-    request_envelope_problem. BINDING_ID: the response carries the request's JSON-RPC id. An
-    error then binds by that id alone, whatever the request's request_id. BINDING_RESULT: a
+    BINDING_REQUEST: the request passes request_envelope_problem. BINDING_SHAPE: the response is
+    a JSON-RPC 2.0 object, carries no "method", and carries exactly one of result or error,
+    which is an object. BINDING_ID: the response carries the request's JSON-RPC id. An error
+    then binds by that id alone, whatever the request's request_id. BINDING_RESULT: a
     result binds only a request that passes request_binding_problem. For the handshake, a
     ServerHello echoes nothing else from the ClientHello, so its result binds by the id and must
     carry no request_id, which keeps a step decision from answering a ClientHello. Issue #13
     tracks binding the handshake to the traffic after it. For any other request, the result
     must carry the request's request_id.
     """
+    if request_envelope_problem(request) is not None:
+        return BINDING_REQUEST
     if (not isinstance(response, Mapping) or response.get("jsonrpc") != "2.0"
             or "method" in response or ("result" in response) == ("error" in response)):
         return BINDING_SHAPE
     answer = response["result"] if "result" in response else response["error"]
     if not isinstance(answer, Mapping):
         return BINDING_SHAPE
-    if request_envelope_problem(request) is not None:
-        return BINDING_REQUEST
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return BINDING_ID
     if "error" in response:

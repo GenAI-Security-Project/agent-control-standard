@@ -169,6 +169,17 @@ class TheRuleOwnsTheResponseShape(unittest.TestCase):
         self.assertEqual(response_binding_problem(_request("1"), _response("1", request_id="r-2")), BINDING_RESULT)
 
 
+class TheRequestIsCheckedFirst(unittest.TestCase):
+    """Review findings CR11-6, CR11-7: a caller error is reported as one whatever the response looks like."""
+
+    def test_a_bad_request_is_the_reason_even_against_a_malformed_response(self) -> None:
+        from acs.core import BINDING_REQUEST, response_binding_problem
+        for response in ({"id": True, "result": {}}, "response", None, {"jsonrpc": "2.0", "id": True}):
+            with self.subTest(response=response):
+                self.assertEqual(response_binding_problem(_request(True), response), BINDING_REQUEST)
+                self.assertEqual(response_binding_problem("request", response), BINDING_REQUEST)
+
+
 class NonFiniteIdsBindNothing(unittest.TestCase):
     """Review finding CR10-7: a NaN or infinite id binds nothing through the rule, not only the precondition."""
 

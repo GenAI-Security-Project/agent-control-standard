@@ -310,8 +310,9 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     binding = response_binding_problem(client_hello, response)
     if binding == BINDING_SHAPE:
         return NoAnswer("malformed_response")
-    error = response.get("error")
-    code = error.get("code") if error is not None else None
+    # A request problem can come with any response at all, so read the claimed code defensively.
+    error = response.get("error") if isinstance(response, Mapping) else None
+    code = error.get("code") if isinstance(error, Mapping) else None
     if binding in (BINDING_REQUEST, BINDING_ID):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})

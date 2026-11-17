@@ -35,6 +35,12 @@ class ServerHelloIdBinding(unittest.TestCase):
             with self.subTest(id=json_rpc_id):
                 self.assertEqual(_cause(_client_hello(json_rpc_id), response), "response_binding_mismatch")
 
+    def test_a_bool_id_client_hello_is_a_request_problem_whatever_the_response(self) -> None:
+        # Review findings CR11-6, CR11-7: the request is checked before the response's shape.
+        for response in ({"id": True, "result": dict(HELLO)}, "not a response", None):
+            with self.subTest(response=response):
+                self.assertEqual(_cause(_client_hello(True), response), "response_binding_mismatch")
+
     def test_a_matching_id_passes_the_binding_check(self) -> None:
         for response_id in (1, 1.0):
             response = {"jsonrpc": "2.0", "id": response_id, "result": dict(HELLO)}
