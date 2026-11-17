@@ -55,7 +55,7 @@ from acs_gateway.sessions import (
     fingerprint,
     same_content,
 )
-from acs_gateway.strict import repeated_key
+from acs_gateway.strict import DuplicateKey, loads_strict, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -167,7 +167,7 @@ class Gateway:
         if raw is None:
             _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
             return openai_error(413, "The request body is too large.", "invalid_request_error", "request_too_large")
-        body = _parse(raw)
+        body, repeated = _parse_governed(raw)
         if is_stream(body):
             # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
             return openai_error(501, "Streaming responses are not supported by this endpoint.",
@@ -178,10 +178,9 @@ class Gateway:
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
-        repeated = _repeated_key_in_request(raw, body)
         if repeated is not None:
-            key, where = repeated
-            _audit("duplicate_json_key", key=key, where=where, mode=self.config.mode)
+            # The message structure itself repeats a key, so the gateway can't know which copy the upstream reads.
+            _audit("duplicate_json_key", key=repeated, where="body", mode=self.config.mode)
             if self.enforce:
                 return openai_error(400, "The request body repeats a JSON key.", "invalid_request_error",
                                     "duplicate_json_key")
@@ -254,6 +253,8 @@ class Gateway:
                 await self._ensure_open(session)
                 if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
+        except RequestRefused as e:
+            return e.response
         except SessionsBusy:
             raise
         except Exception as e:  # noqa: BLE001
@@ -386,6 +387,16 @@ class Gateway:
             if not isinstance(call_id, str):
                 kept.append(item)
                 continue
+            if item.get("type") == "function_call" and call_id not in session.calls:
+                repeated = repeated_key(item.get("arguments"))
+                if repeated is not None:
+                    # A call the gateway never delivered, with no copy to restore, whose arguments the model could
+                    # read either way. Only a forged history carries one.
+                    _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
+                           where="function_call.arguments", mode=self.config.mode)
+                    if self.enforce:
+                        raise RequestRefused(openai_error(400, "The request body repeats a JSON key.",
+                                                          "invalid_request_error", "duplicate_json_key"))
             if item.get("type") == "function_call" and call_id in session.calls:
                 cached = session.calls[call_id]
                 if cached.item is None:
@@ -422,7 +433,15 @@ class Gateway:
                         resent = names.get(call_id)
                         name = resent if isinstance(resent, str) else ""
                         _audit("result_name_from_client", session_id=session.session_id, call_id=call_id, tool=name)
-                    cached = await self._gate_result(session, item, name, known)
+                    repeated = repeated_key(item.get("output"))
+                    if repeated is not None:
+                        # Tool output is third-party data. A repeated key in it denies only this result, so the run
+                        # goes on, and the cached outcome reapplies on every resend without parsing it again.
+                        _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
+                               where="function_call_output.output", mode=self.config.mode)
+                        cached = self._refuse_result(session, item, name, known, "duplicate_json_key")
+                    else:
+                        cached = await self._gate_result(session, item, name, known)
                     session.results[call_id] = cached
                 if self.enforce and cached.item is not None and item.get("output") != cached.item.get("output"):
                     item, changed = {**item, "output": cached.item.get("output")}, True
@@ -430,6 +449,17 @@ class Gateway:
         if changed:
             body["input"] = kept
         return changed
+
+    def _refuse_result(self, session: Session, item: dict[str, Any], name: str, call: CachedOutcome | None,
+                       cause: str) -> CachedOutcome:
+        """Deny a result without asking the Guardian, as the normal path would: the neutral line in enforce."""
+        result = StepResult(TOOL_CALL_RESULT, None, cause=cause, failure_class="observed_agent_error")
+        applied = Applied("deny", {**item, "output": NEUTRAL_LINE}, cause)
+        self._record(session, result, applied, name, item.get("call_id"))
+        first, raw = fingerprint(item), content(item)
+        if not self.enforce:
+            return CachedOutcome("delivered", name, item, call.request_id if call else None, first, raw)
+        return CachedOutcome("rewritten", name, applied.item, call.request_id if call else None, first, raw)
 
     async def _gate_result(self, session: Session, item: dict[str, Any], name: str,
                            call: CachedOutcome | None) -> CachedOutcome:
@@ -582,20 +612,23 @@ def _pin(session: Session, pins: list[Session]) -> None:
         session.active += 1
 
 
-def _repeated_key_in_request(raw: bytes, body: dict[str, Any]) -> tuple[str, str] | None:
-    """A key repeated anywhere in the body, or inside the JSON strings of a function_call's arguments or a
-    function_call_output's output, which the model reads as text. Returns (key, where) or None."""
-    key = repeated_key(raw)
-    if key is not None:
-        return key, "body"
-    items = body.get("input")
-    for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and item.get("type") in ("function_call", "function_call_output"):
-            field = "arguments" if item["type"] == "function_call" else "output"
-            key = repeated_key(item.get(field))
-            if key is not None:
-                return key, f"{item['type']}.{field}"
-    return None
+def _parse_governed(raw: bytes) -> tuple[Any, str | None]:
+    """Parse a governed body once, strictly. Returns the body (last copy wins when a key repeats, as Python reads
+    it) and the first repeated key, or None. A body that isn't JSON parses to None."""
+    try:
+        return loads_strict(raw), None
+    except DuplicateKey as e:
+        return _parse(raw), e.key
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None, None
+
+
+class RequestRefused(Exception):
+    """Gating found the request itself unacceptable in enforce, and this is the answer to send."""
+
+    def __init__(self, response: Response) -> None:
+        super().__init__("request refused")
+        self.response = response
 
 
 def _opened(handshake: Any) -> bool:

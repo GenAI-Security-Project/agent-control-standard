@@ -27,9 +27,6 @@ CASES = {
     "inside_arguments": body_with_item(json.dumps(
         {"type": "function_call", "call_id": "c1", "name": "send",
          "arguments": '{"to": "attacker@evil.example", "to": "ops@ns1.finbot"}'})),
-    "inside_an_output": body_with_item(json.dumps(
-        {"type": "function_call_output", "call_id": "c1",
-         "output": '{"bank_account_number": "12345678", "bank_account_number": "x"}'})),
 }
 
 
@@ -67,3 +64,27 @@ def test_enforce_refuses_an_upstream_answer_that_repeats_a_key(gateway, guardian
     response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
     assert response.status_code == 502
     assert events(audit, "upstream_error")[0]["cause"] == "upstream_unparseable"
+
+
+DUPLICATED_OUTPUT = '{"bank_account_number": "12345678", "bank_account_number": "x"}'
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_a_tool_output_that_repeats_a_key_denies_only_that_result(gateway, guardian, upstream, audit, mode):
+    from conftest import message_item
+
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    output = {"type": "function_call_output", "call_id": "call_1", "output": DUPLICATED_OUTPUT}
+    for turn in range(2):
+        upstream.reply(response_body(message_item(f"turn {turn}")))
+        response = client.post("/v1/responses", json=finbot_request(call, output))
+        assert response.status_code == 200
+        sent = [i for i in upstream.received[-1].json()["input"] if i.get("type") == "function_call_output"][0]
+        assert sent["output"] == (NEUTRAL if mode == "enforce" else DUPLICATED_OUTPUT)
+    assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["function_call_output.output"]
+    name = "decision_applied" if mode == "enforce" else "shadow_decision"
+    results = [e for e in events(audit, name) if e["method"] == "steps/toolCallResult"]
+    assert [(e["decision"], e["cause"]) for e in results] == [("deny", "duplicate_json_key")]
