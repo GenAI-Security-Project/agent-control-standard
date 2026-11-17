@@ -203,14 +203,12 @@ def test_a_structure_error_with_a_readable_session_is_signed(served):
     _assert_signed_malformed(body, answer, STRUCT_SESSION)
 
 
-@pytest.mark.parametrize("variant", ["big integer id", "lone surrogate session_id"])
-def test_an_error_that_cannot_be_signed_gets_the_unsigned_floor_never_a_drop(served, variant):
+def test_an_error_that_cannot_be_signed_gets_the_unsigned_floor_never_a_drop(served):
+    # An id beyond 2^53 is now refused as an invalid id, signed with id null, so the unsignable case left is a
+    # session_id JCS can't encode.
     depth = example_guardian.MAX_REQUEST_DEPTH + 50
-    if variant == "big integer id":
-        body, session = _envelope_text(depth=depth, request_id=2**60, session_id=FLOOR_SESSION), FLOOR_SESSION
-    else:
-        body = _envelope_text(depth=depth, session_id="SURROGATE").replace(b'"SURROGATE"', b'"\\ud800"')
-        session = "\ud800"
+    body = _envelope_text(depth=depth, session_id="SURROGATE").replace(b'"SURROGATE"', b'"\\ud800"')
+    session = "\ud800"
     status, answer = post(served, body)
     _assert_unsigned_and_stateless(answer, -32603, session)
 
@@ -239,11 +237,30 @@ def test_an_unknown_key_id_gets_an_unsigned_minus_32004(served):
 # Round 10 items below.
 
 
-def test_a_400_digit_integer_id_is_answered_never_500(served):
-    # Any int that isn't a bool is a valid id. math.isfinite overflowed on one this long.
-    big = int("9" * 400)
-    status, answer = post(served, _ping(big))
-    assert status != 500 and answer["id"] == big
+def test_a_400_digit_integer_id_is_refused_never_500(served):
+    # JCS signs only integers within 2^53, so a longer one is refused as an invalid id, with id null.
+    status, answer = post(served, _ping(int("9" * 400)))
+    assert status != 500 and (answer["id"], answer["error"]["code"]) == (None, -32600)
+
+
+@pytest.mark.parametrize("request_id", [2**53, -(2**53), 2**60, int("9" * 400)])
+def test_a_signed_step_with_an_id_beyond_2_53_is_refused_before_any_state_change(served, request_id):
+    from acs.client import verify_signature
+    from acs.testing.harness import make_envelope
+    secret = "guardian-http-test-secret-32-bytes-long"
+    envelope = make_envelope("steps/sessionStart", {}, sign_with_secret=secret)
+    session_id = envelope["params"]["metadata"]["session_id"]
+    envelope["id"] = request_id
+    status, answer = post(served, json.dumps(envelope).encode())
+    assert (answer["id"], answer["error"]["code"]) == (None, -32600)
+    assert verify_signature(answer, session_id=session_id)
+    assert session_id not in example_guardian.STATE.sessions
+
+
+@pytest.mark.parametrize("request_id", [2**53 - 1, -(2**53 - 1)])
+def test_an_id_at_the_edge_of_2_53_is_echoed(served, request_id):
+    status, answer = post(served, _ping(request_id))
+    assert answer["id"] == request_id
 
 
 def test_the_floor_echoes_an_id_that_parsed(served, monkeypatch):

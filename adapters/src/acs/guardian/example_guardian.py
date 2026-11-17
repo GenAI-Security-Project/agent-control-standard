@@ -686,14 +686,18 @@ class RequestFields(NamedTuple):
     session_id: str
 
 
+MAX_SAFE_ID = 2**53 - 1
+
+
 def _valid_id(value: Any) -> bool:
-    """A JSON-RPC id: a string, a finite number that isn't a bool, or null. The rule LAB-01's client uses too."""
+    """A JSON-RPC id: a string, an int within 2^53 - 1 or a finite float (never a bool), or null."""
     if value is None or isinstance(value, str):
         return True
     if isinstance(value, bool):
         return False
     if isinstance(value, int):
-        return True  # any int: math.isfinite would overflow on a very long one
+        # JCS (RFC 8785) signs only integers within 2^53 - 1, so a larger one could never get a signed answer.
+        return -MAX_SAFE_ID <= value <= MAX_SAFE_ID
     return isinstance(value, float) and math.isfinite(value)
 
 
@@ -714,9 +718,6 @@ def read_request(request: Any) -> ReadResult:
     if not isinstance(request, dict):
         kind = "batch" if isinstance(request, list) else type(request).__name__
         return ReadResult(None, f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)", None, "")
-    raw_id = request.get("id")
-    if not _valid_id(raw_id):
-        return ReadResult(None, "id must be a string, a finite number, or null", None, "")
     # Null reads as absent for params, metadata, request_id, and session_id, as it always has.
     params = request.get("params")
     params = {} if params is None else params
@@ -725,6 +726,12 @@ def read_request(request: Any) -> ReadResult:
     session_id = metadata.get("session_id") if isinstance(metadata, dict) else None
     session_id = "" if session_id is None else session_id
     signing_session = session_id if isinstance(session_id, str) else ""
+
+    raw_id = request.get("id")
+    if not _valid_id(raw_id):
+        # Read after the session, so this refusal is signed whenever the session is readable, with id null.
+        return ReadResult(None, "id must be a string, an int within 2^53 - 1, a finite float, or null", None,
+                          signing_session)
 
     def refuse(problem: str) -> ReadResult:
         return ReadResult(None, problem, raw_id, signing_session)
