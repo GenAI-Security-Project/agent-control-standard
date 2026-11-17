@@ -234,7 +234,8 @@ class Gateway:
         # One order in both modes: decide which session will be used, check, then create. Every refusal is decided
         # before a Guardian session opens and before any session is created or evicted.
         audited: set[tuple[str, str]] = set()
-        peeked, prepass_ok = None, False
+        # The session the pre-pass checked, or _UNCHECKED when the pre-pass didn't finish.
+        checked: Any = _UNCHECKED
         try:
             peeked = self.sessions.peek(key)
             refused = self._refuse_input(key, peeked, body)
@@ -242,7 +243,7 @@ class Gateway:
                 # Calls are only ever added to a session, so if the peeked one is still the one used, this check
                 # needs no repeat under the lock. Shadow audits here, so the line survives a later 503.
                 refused = self._refuse_unrestorable(key, peeked, body, audited=audited)
-            prepass_ok = True
+            checked = peeked
         except Exception as e:  # noqa: BLE001
             # The pre-pass is gating code too: shadow forwards unchanged and enforce fails closed.
             failed = self._gating_failed(None, "pre_pass", e)
@@ -255,7 +256,7 @@ class Gateway:
         # Every session the request takes is pinned, in this list, before it waits for the session's lock.
         pins: list[Session] = []
         try:
-            return await self._governed(key, raw, body, headers, pins, audited, peeked if prepass_ok else _UNCHECKED)
+            return await self._governed(key, raw, body, headers, pins, audited, checked)
         except SessionsBusy:
             # A new session was needed and every slot was busy.
             return self._busy()
@@ -271,15 +272,13 @@ class Gateway:
                         pins: list[Session], audited: set[tuple[str, str]], checked: Any) -> Response:
         session = None
 
-        def recheck(candidate: Session | None, first: bool) -> None:
+        def recheck(candidate: Session | None) -> None:
             """The pre-pass checked unrestorable calls against the session it peeked (checked). When the session used
-            is another one, the check runs again against that session's real calls, or against no calls when one is
-            about to be created. Calls are only ever added to a session, so the peeked session needs no second check,
-            and neither does a first-pass creation when the pre-pass peeked no session. Shadow audits only what the
-            pre-pass didn't, and a fault there doesn't stop gating."""
-            if candidate is not None and candidate is checked:
-                return
-            if candidate is None and first and checked is None:
+            is another one, the check runs again against that session's real calls, or against no calls (None) when
+            one is about to be created. Calls are only ever added to a session, so the peeked session needs no second
+            check, and when the pre-pass peeked no session it already checked against no calls, which is what a new
+            session starts with. Shadow audits only what the pre-pass didn't, and a fault there doesn't stop gating."""
+            if candidate is checked:
                 return
             try:
                 refused = self._refuse_unrestorable(key, candidate, body, audited=audited)
@@ -348,7 +347,7 @@ class Gateway:
 
     @contextlib.asynccontextmanager
     async def _current(self, key: str, pins: list[Session],
-                       recheck: Callable[[Session | None, bool], None] | None = None) -> AsyncIterator[Session]:
+                       recheck: Callable[[Session | None], None] | None = None) -> AsyncIterator[Session]:
         """The key's session for the current epoch, locked. sessions.get touches its LRU entry, and the session is
         pinned before the request waits for its lock, so it can't be evicted from under a queued request. A bump, an
         eviction or a retirement that lands while this waits moves the request to the key's new session, so nothing
@@ -356,11 +355,10 @@ class Gateway:
 
         recheck runs before any session is created (with None) and, under the lock, against an existing session the
         request moved to. It may refuse the request by raising, and then nothing has been created or evicted."""
-        first = True
         while True:
             created = self.sessions.peek(key) is None
             if created and recheck is not None:
-                recheck(None, first)
+                recheck(None)
             session = self.sessions.get(key)
             _pin(session, pins)
             await session.lock.acquire()
@@ -370,10 +368,9 @@ class Gateway:
             session.lock.release()
             # The request leaves this session for good, so it stops holding it against eviction.
             _unpin(session, pins)
-            first = False
         try:
             if recheck is not None and not created:
-                recheck(session, first)
+                recheck(session)
         except BaseException:
             session.lock.release()
             raise
