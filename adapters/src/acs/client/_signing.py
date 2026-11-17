@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from acs.client._secrets import load_hmac_secret, load_key_id, load_signing_material
@@ -28,7 +29,7 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 def verify_signature(envelope: dict, *, key: bytes | None = None,
                      session_id: str | None = None, key_id: str | None = None,
                      keyring: Keyring | None = None, expected_key_id: str | None = None,
-                     request: dict | None = None) -> bool:
+                     request: Mapping | None = None) -> bool:
     """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid.
 
     With a keyring, the signature must name expected_key_id, the key this caller trusts to

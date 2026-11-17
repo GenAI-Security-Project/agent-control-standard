@@ -65,6 +65,8 @@ def request_envelope_problem(request: object) -> str | None:
     infinity can never bind a response. verify_with_keyring treats this as a caller error and
     raises ValueError with this text.
     """
+    # Any Mapping is accepted, not only dict: _classify_hello types the ClientHello as a
+    # Mapping, and a caller may hold its request read-only.
     if not isinstance(request, Mapping):
         return "request must be the request envelope this response answers"
     json_rpc_id = request.get("id")

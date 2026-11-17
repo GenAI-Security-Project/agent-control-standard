@@ -15,6 +15,7 @@ and fails at import without it. A backend that lacks ML-DSA fails loudly on firs
 from __future__ import annotations
 
 import functools
+from collections.abc import Mapping
 
 try:
     import cryptography
@@ -137,7 +138,7 @@ def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, mess
 
 _VERIFIERS = {ML_DSA_65: _verify_ml_dsa_65}
 
-def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str, request: dict) -> bool:
+def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str, request: Mapping) -> bool:
     """Whether the response's signature verifies under expected_key_id, as the answer to request.
 
     A keyring can hold several keys, so the caller names the one it trusts here, and a
