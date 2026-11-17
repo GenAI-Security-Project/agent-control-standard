@@ -682,13 +682,8 @@ class RequestFields(NamedTuple):
     method: str
     id: Any
     params: dict
-    metadata: dict
     request_id: str
     session_id: str
-
-
-def _absent_if_null(value: Any, empty: Any) -> Any:
-    return empty if value is None else value
 
 
 def _valid_id(value: Any) -> bool:
@@ -723,9 +718,12 @@ def read_request(request: Any) -> ReadResult:
     if not _valid_id(raw_id):
         return ReadResult(None, "id must be a string, a finite number, or null", None, "")
     # Null reads as absent for params, metadata, request_id, and session_id, as it always has.
-    params = _absent_if_null(request.get("params"), {})
-    metadata = _absent_if_null(params.get("metadata"), {}) if isinstance(params, dict) else None
-    session_id = _absent_if_null(metadata.get("session_id"), "") if isinstance(metadata, dict) else ""
+    params = request.get("params")
+    params = {} if params is None else params
+    metadata = params.get("metadata") if isinstance(params, dict) else None
+    metadata = {} if metadata is None and isinstance(params, dict) else metadata
+    session_id = metadata.get("session_id") if isinstance(metadata, dict) else None
+    session_id = "" if session_id is None else session_id
     signing_session = session_id if isinstance(session_id, str) else ""
 
     def refuse(problem: str) -> ReadResult:
@@ -741,12 +739,11 @@ def read_request(request: Any) -> ReadResult:
     # Every method reads its payload as an object, ping and handshake included, so any other value is refused here.
     if "payload" in params and not isinstance(params["payload"], dict):
         return refuse("params.payload must be an object")
-    request_id = _absent_if_null(params.get("request_id"), "")
+    request_id = "" if params.get("request_id") is None else params["request_id"]
     for name, value in (("params.request_id", request_id), ("params.metadata.session_id", session_id)):
         if not isinstance(value, str):
             return refuse(f"{name} must be a string")
-    return ReadResult(RequestFields(method, raw_id, params, metadata, request_id, session_id), None, raw_id,
-                      session_id)
+    return ReadResult(RequestFields(method, raw_id, params, request_id, session_id), None, raw_id, session_id)
 
 
 def handle_request(request: dict, read: "ReadResult | None" = None) -> dict:

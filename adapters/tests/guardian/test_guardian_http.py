@@ -110,7 +110,7 @@ def test_null_params_metadata_request_id_and_session_id_read_as_absent_on_ping(s
     assert (status, answer["result"]["decision"]) == (200, "allow")
 
 
-@pytest.mark.parametrize("field,read_as", [("metadata", ("metadata", {})), ("request_id", ("request_id", "")),
+@pytest.mark.parametrize("field,read_as", [("metadata", ("session_id", "")), ("request_id", ("request_id", "")),
                                            ("session_id", ("session_id", ""))])
 def test_null_fields_read_as_absent_on_a_step(field, read_as):
     params = {"metadata": {"session_id": "s"}, "request_id": "r", "payload": {}}
