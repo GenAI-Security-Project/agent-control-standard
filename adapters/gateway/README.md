@@ -138,7 +138,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The neutral line stands in for a removed call or a denied output | This issue, #577 |
 | ASK and DEFER deny | LAB-08, issue #581, adds the approver |
 | Streamed requests answer 501 in shadow and enforce. Off relays them untouched | LAB-05, issue #578 |
-| Responses are verified with acs.client's HMAC check. `GuardianClient(verifier=...)` is where the key-document keyring plugs in | LAB-03, issue #576, and issue #460 |
+| Responses are verified with acs.client's HMAC-SHA256 check inside its round trip. LAB-03 changes the algorithm dispatch inside acs.client to verify by key_id from the key document | LAB-03, issue #576, and issue #460 |
 | `tool.version` is not sent yet | LAB-07, issue #580, sends the tool digest (issue #38) |
 | `previous_response_id` and `conversation` answer 501 in shadow and enforce, since server-side history would hide items from the gateway. FinBot never sends either | This issue, #577 |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |

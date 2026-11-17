@@ -8,7 +8,6 @@ import math
 import re
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -17,7 +16,6 @@ from acs.client import (
     Decided,
     FailPosture,
     Negotiated,
-    Refused,
     Resolution,
     Undecided,
     audit_event,
@@ -25,7 +23,6 @@ from acs.client import (
     ping,
     round_trip,
     sign_envelope,
-    verify_signature,
 )
 from acs.core import Decision, method_evaluated, normalize_decision, request_envelope
 
@@ -38,15 +35,6 @@ TOOL_CALL_REQUEST = "steps/toolCallRequest"
 TOOL_CALL_RESULT = "steps/toolCallResult"
 METHODS = [SESSION_START, TOOL_CALL_REQUEST, TOOL_CALL_RESULT]
 PLATFORM = "openai-responses-gateway"
-
-# Verifies a Guardian response for a session. acs.client's round trip already checks the HMAC signature, and
-# this seam is where LAB-03 (issue #576) puts the key-document keyring that verifies ML-DSA-65 decisions.
-ResponseVerifier = Callable[[dict[str, Any], str], bool]
-
-
-def hmac_verifier(response: dict[str, Any], session_id: str) -> bool:
-    return verify_signature(response, session_id=session_id)
-
 
 @dataclass(frozen=True)
 class StepResult:
@@ -98,11 +86,9 @@ def jcs_problem(value: Any, depth: int = 0) -> str | None:
 
 
 class GuardianClient:
-    def __init__(self, config: GatewayConfig, transcript: Transcript,
-                 verifier: ResponseVerifier = hmac_verifier) -> None:
+    def __init__(self, config: GatewayConfig, transcript: Transcript) -> None:
         self.config = config
         self.transcript = transcript
-        self.verifier = verifier
         # The gateway's own configuration always denies on a decision failure, and no startup posture lets an
         # unnegotiated session proceed. A ServerHello can't loosen either (D-045, PREMORTEM P23).
         self.base_posture = FailPosture(deny_on_failure=True, timeout_s=config.decision_timeout_s)
@@ -194,8 +180,7 @@ class GuardianClient:
         if isinstance(outcome, Resolution):
             self.transcript.append(session_id, "resp", None, cause=outcome.cause)
         if isinstance(outcome, Decided):
-            if not self.verifier(outcome.response, session_id):
-                return posture.resolve(Refused("response_signature_invalid", {"request_id": request_id},
-                                               "response failed verification")), request_id
+            # round_trip has already verified the response's signature. acs.client accepts HMAC-SHA256 only, and
+            # LAB-03 (issue #576) changes its algorithm dispatch to verify by key_id from the key document.
             self.transcript.append(session_id, "resp", outcome.response)
         return outcome, request_id
