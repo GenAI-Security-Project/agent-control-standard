@@ -16,7 +16,7 @@ from decision_signing_helpers import KEY_ID, configure_in_process, mldsa_env, re
 
 require_pqc()
 
-from acs.core import REQUEST_DIGEST_FIELD, request_sha256, verify_with_keyring  # noqa: E402
+from acs.core import REQUEST_DIGEST_FIELD, NoSignedInput, request_sha256, verify_with_keyring  # noqa: E402
 from acs.guardian import example_guardian  # noqa: E402
 from acs.testing.harness import launch_guardian, signing_env  # noqa: E402
 
@@ -274,7 +274,42 @@ def test_a_request_that_cannot_be_hashed_gets_an_unsigned_answer(signer, params)
     assert response["id"] == "p-1"
     assert response["error"]["code"] == -32600
     assert "signature" not in response["error"]
-    assert request_sha256(request) is None
+    with pytest.raises(NoSignedInput):
+        request_sha256(request)
+
+
+def test_any_other_hashing_error_reaches_the_floor(signer, monkeypatch, capsys):
+    # Review round 4 CR4: only "no signed input" and canonicalization errors mean an unsigned error. Anything else is
+    # a bug, so handle_request raises and do_POST answers the -32603 floor and logs the type.
+    import http.server
+    import threading
+    import urllib.request
+
+    def broken(request):
+        raise KeyError("hash bug")
+
+    monkeypatch.setattr(example_guardian, "request_sha256", broken)
+    request = signed_step("steps/toolCallRequest", ALLOWED)
+    with pytest.raises(KeyError):
+        example_guardian.handle_request(request)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), example_guardian.GuardianHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        post = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/acs",
+                                      data=json.dumps(signed_step("steps/toolCallRequest", ALLOWED)).encode(),
+                                      headers={"Content-Type": "application/json"})
+        try:
+            opener.open(post, timeout=5)
+            raise AssertionError("expected HTTP 500")
+        except urllib.error.HTTPError as e:
+            status, body = e.code, json.loads(e.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 500
+    assert body["error"]["code"] == -32603
+    assert "[guardian] internal error: KeyError" in capsys.readouterr().err
 
 
 def test_a_non_object_metadata_still_gets_a_signed_answer(signer):

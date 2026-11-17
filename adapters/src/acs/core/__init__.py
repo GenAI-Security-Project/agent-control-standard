@@ -16,6 +16,7 @@ _EXPORTS = {
     "HANDSHAKE_METHOD": "_envelope",
     "KNOWN_DECISIONS": "_decision",
     "MAX_REQUEST_BODY_BYTES": "_envelope",
+    "NoSignedInput": "_signing",
     "REQUEST_DIGEST_FIELD": "_signing",
     "SESSION_REFUSAL_CODES": "_errors",
     "coerce_uuid": "_envelope",

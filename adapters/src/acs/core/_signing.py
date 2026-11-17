@@ -8,7 +8,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from acs.core._canonical import jcs_canonicalize
+from acs.core._canonical import CANONICALIZATION_ERRORS, jcs_canonicalize
 
 
 def derive_session_key(input_key_material: bytes, session_id: str) -> bytes:
@@ -47,16 +47,23 @@ REQUEST_DIGEST_FIELD = "x_acs_lab_request_sha256"
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
-def request_sha256(request: object) -> str | None:
+class NoSignedInput(ValueError):
+    """The request isn't an object, or its params aren't one, so it has no section 10 signed input to hash."""
+
+
+def request_sha256(request: object) -> str:
     """Lowercase hex SHA-256 of the request's section 10 signed input, which covers its session, ids, time and content.
 
-    None when the request has no signed input: it isn't an object, its params aren't an object, or RFC 8785 has no
-    form for it. No client could have signed such a request, so no answer can name it. Never raises.
+    Raises NoSignedInput when the request or its params aren't objects, and one of CANONICALIZATION_ERRORS when RFC
+    8785 has no form for it. No client could have signed either, so no answer can name it. Nothing else is caught
+    here, so a bug surfaces as itself (review round 4 CR4).
     """
-    try:
-        return hashlib.sha256(signing_input(request)).hexdigest()  # type: ignore[arg-type]
-    except Exception:  # noqa: BLE001
-        return None
+    if not isinstance(request, Mapping):
+        raise NoSignedInput("the request is not a JSON object")
+    container = request.get(container_key(request), {})
+    if not isinstance(container, Mapping):
+        raise NoSignedInput(f"the request's {container_key(request)} is not a JSON object")
+    return hashlib.sha256(signing_input(request)).hexdigest()  # type: ignore[arg-type]
 
 
 def response_names_request(response: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
@@ -71,9 +78,12 @@ def response_names_request(response: Mapping[str, Any], request: Mapping[str, An
     # first and anything else simply fails.
     if not isinstance(claimed, str) or not _SHA256_HEX.fullmatch(claimed):
         return False
-    expected = request_sha256(request)
-    # A request with no signed input has no hash, so nothing can name it.
-    return expected is not None and hmac.compare_digest(claimed, expected)
+    try:
+        expected = request_sha256(request)
+    except (NoSignedInput, *CANONICALIZATION_ERRORS):
+        # A request with no signed input has no hash, so nothing can name it.
+        return False
+    return hmac.compare_digest(claimed, expected)
 
 
 def decode_signature_value(value: object) -> bytes | None:
