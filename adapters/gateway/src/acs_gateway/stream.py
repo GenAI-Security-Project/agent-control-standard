@@ -111,7 +111,8 @@ class StreamEditor:
     to record. limit bounds both a partial event and the bytes held back at once.
     """
 
-    def __init__(self, *, enforce: bool, limit: int, decide: Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]],
+    def __init__(self, *, enforce: bool, limit: int,
+                 decide: Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]],
                  audit: Callable[..., None], audit_fields: dict[str, Any] | None = None) -> None:
         self.enforce, self.limit, self.decide, self._audit = enforce, limit, decide, audit
         self._fields = audit_fields or {}
@@ -120,6 +121,8 @@ class StreamEditor:
         self._turn_items, self._turn_kept = 0, False
         self._released: list[_Item] = []
         self._removed: list[dict[str, Any]] = []
+        # The upstream's own copy of each call the gateway rewrote, which a terminal event may still list.
+        self._replaced: list[dict[str, Any]] = []
         self._dropped: list[int] = []
         self._held_bytes = 0
         self._last_emitted = -1
@@ -325,6 +328,8 @@ class StreamEditor:
             for event in events:
                 yield self._emit(event, entry)
             return
+        if entry.final is not None:
+            self._replaced.append(entry.final)
         entry.final = kept
         yield from self._rewritten(entry, events, kept)
 
@@ -403,7 +408,7 @@ class StreamEditor:
         edited = [e.final for e in self._released if e.final is not None]
         upstream = response.get("output")
         if terminal and isinstance(upstream, list):
-            extra = [i for i in upstream if i not in edited and i not in self._removed]
+            extra = [i for i in upstream if i not in edited and i not in self._removed and i not in self._replaced]
             if extra:
                 # The terminal event lists items the stream never carried. Only what was gated and streamed goes out.
                 self._audit("upstream_error", cause="upstream_unparseable", detail="terminal_lists_unstreamed_items",

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from conftest import finbot_request, message_item, response_body
+from conftest import call_item, finbot_request, message_item, response_body
 
 
 def events(audit, name):
@@ -45,10 +45,13 @@ def test_shadow_forwards_a_compressed_request_unchanged(gateway, guardian, upstr
 
 @pytest.mark.parametrize("stream", ["true", 1, "yes", 0, ""])
 def test_any_stream_value_but_false_or_null_counts_as_streaming(gateway, guardian, upstream, stream):
+    # An upstream that reads the value as false answers with JSON. Taken as a stream, that answer is never relayed
+    # ungated: enforce refuses a success that isn't an event stream.
+    upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_1")))
     body = {**finbot_request(), "stream": stream}
     response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=body)
-    assert response.status_code == 501
-    assert upstream.received == []
+    assert response.status_code == 502
+    assert b"rm -rf" not in response.content
 
 
 @pytest.mark.parametrize("stream", [False, None])

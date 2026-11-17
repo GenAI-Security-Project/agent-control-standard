@@ -139,8 +139,10 @@ def test_a_modified_call_streams_its_new_arguments():
     async def decide(item):
         return rewritten
 
-    events = decode(run(encode(stream_events(send)), decide=decide)[0])
+    out, audits, _ = run(encode(stream_events(send)), decide=decide)
+    events = decode(out)
     assert b"evil" not in json.dumps(events).encode()
+    assert audits == [], "the original call in completed was gated, so it isn't unstreamed"
     added = next(e for e in events if e["type"] == "response.output_item.added")
     deltas = "".join(e["delta"] for e in events if e["type"] == "response.function_call_arguments.delta")
     assert added["item"]["arguments"] + deltas == rewritten["arguments"]

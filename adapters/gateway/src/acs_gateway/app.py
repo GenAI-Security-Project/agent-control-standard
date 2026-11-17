@@ -57,6 +57,7 @@ from acs_gateway.sessions import (
     fingerprint,
     same_content,
 )
+from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 
@@ -102,7 +103,7 @@ def _client_headers(headers: httpx.Headers, *, decoded: bool) -> dict[str, str]:
 
 
 def is_stream(body: Any) -> bool:
-    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the 501."""
+    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the gate."""
     return isinstance(body, dict) and body.get("stream") is not None and body["stream"] is not False
 
 
@@ -184,10 +185,6 @@ class Gateway:
                                     "invalid_request_error", "unsupported_content_encoding")
             return await self._relay_verbatim(raw, headers, logged={"compressed": encoding, "bytes": len(raw)})
         body, repeated = _parse_governed(raw)
-        if is_stream(body):
-            # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
-            return openai_error(501, "Streaming responses are not supported by this endpoint.",
-                                "invalid_request_error", "unsupported_parameter")
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
@@ -311,6 +308,8 @@ class Gateway:
             failed = self._gating_failed(session, "input", e)
             if failed is not None:
                 return failed
+        if is_stream(body):
+            return await self._governed_stream(key, raw, body, headers, pins)
         upstream = await self._upstream(raw, body, headers)
         if isinstance(upstream, Response):
             return upstream
@@ -349,6 +348,107 @@ class Gateway:
                 return failed
             return _relay(upstream, None)
         return _relay(upstream, reply if changed else None)
+
+    async def _governed_stream(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str],
+                               pins: list[Session]) -> Response:
+        """A streamed answer (issue #578). Text streams as it arrives and each call waits for its decision. The session
+        lock is held for the life of the stream, so the session's steps stay in order, and the response owns the lock,
+        the pins and the upstream from here on, releasing them however the stream ends."""
+        self.model_inputs.append(body)
+        assert self.http is not None
+        try:
+            upstream = await self.http.send(
+                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
+                                        headers=headers), stream=True)
+        except httpx.HTTPError as e:
+            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
+            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
+        media = upstream.headers.get("content-type", "").split(";")[0].strip().lower()
+        if not 200 <= upstream.status_code < 300 or media != "text/event-stream":
+            return await self._stream_refused(upstream)
+        stack = contextlib.AsyncExitStack()
+        session: Session | None = None
+        try:
+            session = await stack.enter_async_context(self._current(key, pins))
+            # The input phase already made this request's one attempt, so only a new epoch's session opens here.
+            if session.handshake is None:
+                await self._ensure_open(session)
+        except Exception as e:  # noqa: BLE001
+            await stack.aclose()
+            if isinstance(e, SessionsBusy):
+                await upstream.aclose()
+                raise
+            failed = self._gating_failed(session, "output", e)
+            if failed is not None:
+                await upstream.aclose()
+                return failed
+            # Shadow only observes, so a fault before gating relays the stream ungated.
+            return StreamingResponse(upstream.aiter_bytes(), status_code=upstream.status_code,
+                                     headers=_client_headers(upstream.headers, decoded=True),
+                                     background=BackgroundTask(upstream.aclose))
+        except BaseException:
+            await stack.aclose()
+            await upstream.aclose()
+            raise
+        owned = pins[:]
+        # The response releases these pins, so responses() must not.
+        pins.clear()
+        closed = False
+
+        async def cleanup() -> None:
+            nonlocal closed
+            if closed:
+                return
+            closed = True
+            try:
+                await upstream.aclose()
+            finally:
+                await stack.aclose()
+                for pinned in owned:
+                    pinned.active -= 1
+
+        async def decide(item: dict[str, Any]) -> dict[str, Any] | None:
+            # One item through the same gate a whole answer takes, so every rule applies unchanged. A removed item
+            # comes back as the neutral message, which means remove it here.
+            reply = {"output": [item]}
+            await self._gate_output(session, reply)
+            kept = reply["output"]
+            return kept[0] if kept and item_type(kept[0]) == item_type(item) else None
+
+        editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes, decide=decide, audit=_audit,
+                              audit_fields={"session_id": session.session_id})
+        return GovernedStream(editor.edit(upstream.aiter_bytes()), cleanup, status_code=upstream.status_code,
+                              headers=_client_headers(upstream.headers, decoded=True))
+
+    async def _stream_refused(self, upstream: httpx.Response) -> Response:
+        """A streamed request whose answer isn't a successful event stream. An error status is relayed as today. A
+        success in another form could carry calls the gateway never gated, so enforce refuses it and shadow relays
+        it."""
+        chunks, size = [], 0
+        try:
+            async for chunk in upstream.aiter_bytes():
+                size += len(chunk)
+                if size > self.config.max_body_bytes:
+                    break
+                chunks.append(chunk)
+        except httpx.HTTPError as e:
+            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
+            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
+        finally:
+            await upstream.aclose()
+        if size > self.config.max_body_bytes:
+            _audit("upstream_error", cause="upstream_too_large", max_body_bytes=self.config.max_body_bytes)
+            return openai_error(502, "The model service returned a response that is too large.", "server_error",
+                                "upstream_too_large")
+        answer = UpstreamAnswer(upstream.status_code, upstream.headers, b"".join(chunks))
+        if not 200 <= upstream.status_code < 300:
+            _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
+            return _relay(answer, None)
+        _audit("upstream_error", cause="upstream_unparseable", http_status=upstream.status_code, stream=True)
+        if not self.enforce:
+            return _relay(answer, None)
+        return openai_error(502, "The model service returned an unreadable response.", "server_error",
+                            "upstream_unreadable")
 
     @contextlib.asynccontextmanager
     async def _current(self, key: str, pins: list[Session],
