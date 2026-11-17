@@ -29,7 +29,12 @@ except ImportError as exc:
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
 from acs.core._envelope import request_envelope_problem, response_matches_request
-from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
+from acs.core._signing import (
+    _attach_signature,
+    container_key,
+    decode_signature_value,
+    signing_input,
+)
 
 ML_DSA_MODE = "pure"
 ML_DSA_CONTEXT = b""
@@ -103,7 +108,8 @@ class MLDSA65SigningKey:
         return self._private.private_bytes_raw()
 
     def verification_key(self) -> VerificationKey:
-        return VerificationKey(self._key_id, ML_DSA_65, self._private.public_key().public_bytes_raw())
+        public_key = self._private.public_key().public_bytes_raw()
+        return VerificationKey(self._key_id, ML_DSA_65, public_key)
 
     def sign(self, message: bytes) -> bytes:
         return self._private.sign(message, ML_DSA_CONTEXT)
@@ -138,7 +144,8 @@ def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, mess
 
 _VERIFIERS = {ML_DSA_65: _verify_ml_dsa_65}
 
-def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str, request: Mapping) -> bool:
+def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str,
+                        request: Mapping) -> bool:
     """Whether the response's signature verifies under expected_key_id, as the answer to request.
 
     A keyring can hold several keys, so the caller names the one it trusts here, and a
