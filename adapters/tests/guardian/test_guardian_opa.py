@@ -337,3 +337,35 @@ def test_a_rewrite_to_a_protected_path_is_caught_in_every_spelling(opa_on, path,
 @pytest.mark.parametrize("path", ["/tmp/notes.txt", "notes/../todo.txt", "./notes.txt", "/tmp/etc/passwd"])
 def test_an_ordinary_path_still_writes(no_backend, path):
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
+
+
+
+WRITE_CAPABLE = [
+    ("Write", "file_path"), ("Edit", "file_path"), ("MultiEdit", "file_path"),
+    ("NotebookEdit", "notebook_path"), ("edit", "file_path"), ("write", "file_path"),
+]
+
+
+@pytest.mark.parametrize("tool,argument", WRITE_CAPABLE)
+@pytest.mark.parametrize("path,code", [("/etc/passwd", "protected_path"), ("../../etc/passwd", "path_traversal")])
+def test_every_write_capable_tool_meets_the_path_denies_without_a_backend(no_backend, tool, argument, path, code):
+    payload = {"tool": {"name": tool}, "arguments": {argument: {"value": path}}}
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+
+
+@pytest.mark.parametrize("tool,argument", WRITE_CAPABLE)
+def test_every_write_capable_tool_meets_the_path_denies_under_opa(opa_on, tool, argument):
+    payload = {"tool": {"name": tool}, "arguments": {argument: {"value": "/etc/passwd"}}}
+    with StubOpa(ALLOW) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
+    assert opa.inputs == []
+
+
+def test_a_notebook_path_of_the_wrong_type_denies(no_backend):
+    payload = {"tool": {"name": "NotebookEdit"}, "arguments": {"notebook_path": {"value": 7}}}
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+

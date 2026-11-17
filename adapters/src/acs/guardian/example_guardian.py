@@ -103,6 +103,9 @@ ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "")
 
 
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/")
+# Case-folded tool names that write a file, and the arguments that name the file.
+WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit"})
+PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path")
 
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
@@ -488,21 +491,24 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                     "reasoning": f"destructive Bash pattern in: {cmd[:120]}",
                     "reason_codes": ["destructive_command"]}
 
-    if tool_name == "write":
-        path = args.get("file_path", "")
-        path = "" if path is None else path
-        if not isinstance(path, str):
-            return _argument_type_deny(base, tool_name, "file_path", path)
-        # Compared after normalizing, so /tmp/../etc/passwd and //etc/passwd can't step around the prefixes.
-        normalized = _normalize_path(path)
-        if normalized == ".." or normalized.startswith("../"):
-            return {**base, "decision": "deny",
-                    "reasoning": f"relative path leaves its starting directory: {path}",
-                    "reason_codes": ["path_traversal"]}
-        if any((normalized + "/").startswith(p) for p in PROTECTED_PATH_PREFIXES):
-            return {**base, "decision": "deny",
-                    "reasoning": f"write to protected system path: {path}",
-                    "reason_codes": ["protected_path"]}
+    if tool_name in WRITE_CAPABLE_TOOLS:
+        # Every tool that writes a file meets the same path denies: Write, Edit, MultiEdit and NotebookEdit in
+        # Claude Code, Write and Edit in Cursor.
+        for name in PATH_ARGUMENTS:
+            path = args.get(name, "")
+            path = "" if path is None else path
+            if not isinstance(path, str):
+                return _argument_type_deny(base, tool_name, name, path)
+            # Compared after normalizing, so /tmp/../etc/passwd and //etc/passwd can't step around the prefixes.
+            normalized = _normalize_path(path)
+            if normalized == ".." or normalized.startswith("../"):
+                return {**base, "decision": "deny",
+                        "reasoning": f"relative path leaves its starting directory: {path}",
+                        "reason_codes": ["path_traversal"]}
+            if any((normalized + "/").startswith(p) for p in PROTECTED_PATH_PREFIXES):
+                return {**base, "decision": "deny",
+                        "reasoning": f"write to protected system path: {path}",
+                        "reason_codes": ["protected_path"]}
     return None
 
 
