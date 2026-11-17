@@ -718,7 +718,8 @@ def read_request(request: Any) -> RequestRead:
     """
     if not isinstance(request, dict):
         kind = "batch" if isinstance(request, list) else type(request).__name__
-        return RequestRead("", None, {}, "", "", f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)")
+        return RequestRead("", None, {}, "", "",
+                           f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)")
     # Null reads as absent for params, metadata, request_id, and session_id, as it always has.
     params = request.get("params")
     params = {} if params is None else params
