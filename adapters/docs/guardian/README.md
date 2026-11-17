@@ -37,9 +37,11 @@ The Guardian can hand its tool decisions to [Open Policy Agent](https://www.open
 | `ACS_OPA_URL` | The OPA data API URL of the rule that returns the verdict, for example `http://opa:8181/v1/data/finbot/verdict`. Required with `opa`. Only `http` and `https` are accepted. |
 | `ACS_OPA_TIMEOUT_MS` | How long the Guardian waits for OPA, from 1 to 4000. Default 2000. The cap leaves the Guardian a second of the 5000 ms the ServerHello advertises to validate, sign, and answer. A value outside the range stops the Guardian at startup. |
 
-The Guardian refuses to start when the backend is named but its settings can't be used. As a backstop, a running Guardian that finds a bad setting denies both tool methods with `policy_backend_misconfigured`.
+The Guardian reads these settings once, at startup, and refuses to start when the backend is named but its settings can't be used. As a backstop, a Guardian that sees a backend named in its environment without settings loaded at startup denies both tool methods with `policy_backend_misconfigured`.
 
-Under the backend, `steps/toolCallRequest` and `steps/toolCallResult` go to OPA after the signature, skew, replay, and nonce checks pass and the step is on the chain. `steps/toolCallResult` is judged instead of allowed, so a result can be denied or redacted. Every other method keeps its row in the table above. The Guardian sends one POST per step:
+The OPA host is not restricted. The operator sets `ACS_OPA_URL`, the Guardian ignores proxy variables for the policy call, and it never follows a redirect, so the request goes only where the setting points. Logs print the URL without its userinfo.
+
+Under the backend, `steps/toolCallRequest` and `steps/toolCallResult` go to OPA after the signature, skew, replay, and nonce checks pass and the step is on the chain. The built-in denies for `steps/toolCallRequest` in the table above (destructive Bash, an oversized command, the Task tool, and protected writes) still run first, so OPA decides only the calls they allow and never sees one they deny. `steps/toolCallResult` is judged instead of allowed, so a result can be denied or redacted. Every other method keeps its row in the table above. The Guardian sends one POST per step:
 
 ```json
 {
@@ -69,24 +71,29 @@ Under the backend, `steps/toolCallRequest` and `steps/toolCallResult` go to OPA 
 A verdict may carry `decision`, `reasoning`, `reason_codes`, `modifications`, `ask_details`, `policy_references`, and `policy_data`, and nothing else. The Guardian adds `type`, `acs_version`, `request_id`, and `chain_hash`, then signs the result. Before it does, the verdict has to pass these checks:
 
 - `decision` is `allow`, `deny`, `modify`, or `ask`. The lab has no use for `defer`.
+- The verdict nests no deeper than 64 levels, since the Guardian canonicalizes and signs it.
 - The merged result validates against `AcsResult` in `response-envelope.json`, which applies `modifications.json` and `ask-details.json` and requires `reasoning` on deny, modify, and ask.
 - `modifications` appears only on modify, and `ask_details` only on ask.
-- A modify follows the section 6.3 composition rules. `parameter_overrides` names only arguments the call carries and never appears on a tool result. Every redaction path names a value in the payload, so a typo can't leave the value in place. A result with several outputs needs one redaction per output.
+- A modify follows the section 6.3 composition rules, with each `parameter_overrides` key compared as `/arguments/<key>` against the redaction paths, which are rooted at the payload.
+- On a tool call, a modify uses `parameter_overrides`, and each key names an argument the call carries. `modified_content` isn't accepted on a tool call.
+- On a tool result, a modify uses `redactions` or `modified_content`. `parameter_overrides` isn't accepted on a tool result.
+- `redactions`, when present, isn't empty. Every redaction path names a value in the payload, so a typo can't leave the value in place.
+- A redaction at `/outputs/N/value/<field>` is repeated at `/outputs/M/value/<field>` for every other output whose value carries that field. Redacting only the first output let the rest through in issue #469 (The reference Guardian allows a call whose policy-target argument is not a string, and redacts only the first output of a result).
 - An ask leaves `timeout_disposition` unset or sets it to `deny`. Under [D-043 (Treat ASK as a soft deny)](../../../docs/decisions/index.md#d-043-treat-ask-as-a-soft-deny) the Guardian owns the ASK timeout, and nothing in the Guardian turns an ask into an allow.
 
-The Guardian never reads an OPA failure as allow. Each failure becomes a signed `deny` whose reason code says which, per [D-036 (Default the failure posture to deny)](../../../docs/decisions/index.md#d-036-default-the-failure-posture-to-deny) and [D-040 (Split decision failures from refusals)](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals):
+The Guardian never reads an OPA failure as allow. Each failure becomes a signed `deny` whose reason code says which. Its `reasoning` is one short fixed sentence per code, because it reaches the agent. The details, such as the HTTP status or the check a verdict failed, go to the Guardian's stderr log. This follows [D-036 (Default the failure posture to deny)](../../../docs/decisions/index.md#d-036-default-the-failure-posture-to-deny) and [D-040 (Split decision failures from refusals)](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals):
 
 | Reason code | Raised when |
 |---|---|
 | `opa_unreachable` | The connection to OPA fails |
 | `opa_timeout` | OPA doesn't answer within `ACS_OPA_TIMEOUT_MS` |
 | `opa_http_error` | OPA answers with any status but 200, a redirect included |
-| `opa_response_malformed` | The body isn't a JSON object, or is larger than 1 MiB |
+| `opa_response_malformed` | The body isn't a JSON object, nests past the JSON parser's limit, or is larger than 1 MiB |
 | `opa_result_missing` | The body has no `result`, which is how OPA reports an undefined rule |
-| `opa_verdict_invalid` | The verdict fails a check above |
-| `policy_backend_misconfigured` | `ACS_POLICY_BACKEND` names an unknown backend, or the OPA settings can't be used |
+| `opa_verdict_invalid` | The verdict fails a check above, or validating it fails unexpectedly |
+| `policy_backend_misconfigured` | `ACS_POLICY_BACKEND` is set, but no OPA settings were loaded at startup |
 
-`tests/guardian/policy/lab_test.rego` is a minimal policy for the tests, with its entry point at `data.lab.verdict`. The lab's policy pack replaces it.
+`tests/guardian/policy/lab_test.rego` is a minimal policy for the tests, with its entry point at `data.lab.verdict`. `tests/guardian/test_guardian_real_opa.py` runs it against a real `opa` 1.x binary when one is on `PATH`, and skips otherwise, so adapter CI skips it. The lab's policy pack replaces this policy.
 
 ## Why it's shared
 
