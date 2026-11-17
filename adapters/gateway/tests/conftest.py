@@ -60,6 +60,27 @@ def finbot_request(*extra: dict[str, Any], system: str = "You are FinBot for ns1
 
 
 @dataclass
+class SSE:
+    """A streamed reply: each entry is written and flushed on its own, like a model emitting events."""
+    events: list[bytes]
+
+
+def sse_events(text: str) -> list[bytes]:
+    """The Responses API events FinBot's chat reads, for one assistant message carrying text."""
+    item = message_item(text)
+    events = [("response.created", {"type": "response.created", "sequence_number": 0,
+                                    "response": {**response_body(), "status": "in_progress"}}),
+              ("response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": 1,
+                                              "item_id": item["id"], "output_index": 0, "content_index": 0,
+                                              "delta": text, "logprobs": []}),
+              ("response.output_item.done", {"type": "response.output_item.done", "sequence_number": 2,
+                                             "output_index": 0, "item": item}),
+              ("response.completed", {"type": "response.completed", "sequence_number": 3,
+                                      "response": response_body(item)})]
+    return [f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events]
+
+
+@dataclass
 class Received:
     path: str
     headers: dict[str, str]
@@ -88,6 +109,16 @@ def upstream() -> Iterator[FakeUpstream]:
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             state.received.append(Received(self.path, {k.lower(): v for k, v in self.headers.items()}, body))
             status, reply = state.replies.pop(0) if state.replies else (200, response_body(message_item("ok")))
+            if isinstance(reply, SSE):
+                self.send_response(status)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("x-request-id", "req_upstream_1")
+                self.end_headers()
+                for event in reply.events:
+                    self.wfile.write(event)
+                    self.wfile.flush()
+                self.close_connection = True
+                return
             raw = reply if isinstance(reply, bytes) else json.dumps(reply).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")

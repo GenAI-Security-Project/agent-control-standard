@@ -1,3 +1,5 @@
+import pytest
+
 from conftest import finbot_request
 
 
@@ -10,8 +12,9 @@ def test_other_paths_return_404_with_an_upstream_error_audit(gateway, upstream, 
     assert [e["cause"] for e in events] == ["route_not_found", "route_not_found"]
 
 
-def test_streaming_returns_501_until_lab_05(gateway, upstream):
-    response = gateway().post("/v1/responses", json={**finbot_request(), "stream": True})
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_streaming_returns_501_in_shadow_and_enforce_until_lab_05(gateway, guardian, upstream, mode):
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post("/v1/responses", json={**finbot_request(), "stream": True})
     assert response.status_code == 501
     assert response.json()["error"]["type"] == "invalid_request_error"
     assert upstream.received == []

@@ -25,3 +25,22 @@ def test_off_writes_the_model_input_log(gateway, upstream, tmp_path):
     gateway().post("/v1/responses", json=finbot_request())
     logged = [json.loads(line) for line in (tmp_path / "model-inputs.jsonl").read_text().splitlines()]
     assert logged == [finbot_request()]
+
+
+def test_off_relays_a_streamed_response_byte_for_byte(gateway, upstream, audit, tmp_path):
+    from conftest import SSE, sse_events
+
+    events = sse_events("Hello from the vendor desk")
+    upstream.reply(SSE(events))
+    body = json.dumps({**finbot_request(), "stream": True}).encode()
+    client = gateway()
+    with client.stream("POST", "/v1/responses", content=body,
+                       headers={"Content-Type": "application/json", "X-ACS-Lab-Session": "s1"}) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        received = b"".join(response.iter_bytes())
+    assert received == b"".join(events)
+    assert upstream.received[0].body == body
+    assert "x-acs-lab-session" not in upstream.received[0].headers
+    assert transcript_lines(tmp_path) == []
+    assert audit() == []

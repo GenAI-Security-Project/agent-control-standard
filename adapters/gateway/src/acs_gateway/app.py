@@ -14,7 +14,8 @@ from typing import Any
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.background import BackgroundTask
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from acs_gateway.apply import Applied, apply_call, apply_result, call_payload, neutral_message, parse_arguments, result_payload
@@ -87,11 +88,13 @@ class Gateway:
             return await self.not_found(request)
         raw = await request.body()
         body = _parse(raw)
+        headers = forward_headers(request.headers)
         if isinstance(body, dict) and body.get("stream") is True:
-            # Streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
+            if not self.governed:
+                return await self._stream_upstream(raw, body, headers)
+            # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
             return openai_error(501, "Streaming responses are not supported by this endpoint.",
                                 "invalid_request_error", "unsupported_parameter")
-        headers = forward_headers(request.headers)
         if not self.governed:
             upstream = await self._upstream(raw, body, headers)
             return upstream if isinstance(upstream, Response) else _relay(upstream, None)
@@ -124,6 +127,24 @@ class Gateway:
         if not 200 <= upstream.status_code < 300:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
         return upstream
+
+    async def _stream_upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> Response:
+        """Off mode relays a streamed answer as it arrives, so an ungoverned chat streams exactly as it would direct."""
+        self.model_inputs.append(body)
+        assert self.http is not None
+        try:
+            upstream = await self.http.send(
+                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
+                                        headers=headers), stream=True)
+        except httpx.HTTPError as e:
+            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
+            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
+        if not 200 <= upstream.status_code < 300:
+            _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
+        # httpx decodes any content encoding, and _client_headers drops that header to match.
+        return StreamingResponse(upstream.aiter_bytes(), status_code=upstream.status_code,
+                                 headers=_client_headers(upstream.headers),
+                                 background=BackgroundTask(upstream.aclose))
 
     async def _gate_input(self, session: Session, body: dict[str, Any]) -> bool:
         """Gate each new function_call_output before it reaches the model, and reapply cached outcomes on resends."""

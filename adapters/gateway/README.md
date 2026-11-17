@@ -14,7 +14,7 @@ The gateway forwards `POST /v1/responses` to a model upstream. In shadow and enf
 - Before a request reaches the model, each new `function_call_output` in it goes to the Guardian as `steps/toolCallResult`.
 - In enforce mode the gateway applies each decision. In shadow mode it records each decision and changes nothing.
 
-Every other path answers 404. A streamed request (`"stream": true`) answers 501 until issue #578 adds streaming.
+Every other path answers 404. Off mode relays a streamed request (`"stream": true`) as the upstream sends it. Shadow and enforce answer a streamed request with 501 until issue #578 adds governed streaming.
 
 ## Run it
 
@@ -40,7 +40,7 @@ Run the tests with `uv run pytest -v`. They start the example Guardian and a fak
 
 | Mode | Hooks sent | Transcript | What reaches the client and the model |
 |---|---|---|---|
-| `off` | None | None | Exactly what each side sent, byte for byte |
+| `off` | None | None | Exactly what each side sent, byte for byte, streamed answers included |
 | `shadow` | Every one | Yes | Unchanged. Each decision is recorded as `shadow_decision` |
 | `enforce` | Every one | Yes | Each decision applied, as below |
 
@@ -131,7 +131,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The gateway denies on any decision failure whatever the ServerHello says, a missing posture included | D-045 and issue #32 |
 | The neutral line stands in for a removed call or a denied output | This issue, #577 |
 | ASK and DEFER deny | LAB-08, issue #581, adds the approver |
-| Streamed requests answer 501 | LAB-05, issue #578 |
+| Streamed requests answer 501 in shadow and enforce. Off relays them untouched | LAB-05, issue #578 |
 | Responses are verified with acs.client's HMAC check. `GuardianClient(verifier=...)` is where the key-document keyring plugs in | LAB-03, issue #576, and issue #460 |
 | `tool.version` is not sent yet | LAB-07, issue #580, sends the tool digest (issue #38) |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
