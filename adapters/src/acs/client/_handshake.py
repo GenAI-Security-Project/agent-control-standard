@@ -25,6 +25,9 @@ from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
 from acs.core import (
     ACS_VERSION,
+    BINDING_ID,
+    BINDING_REQUEST,
+    BINDING_SHAPE,
     HANDSHAKE_METHOD,
     MAX_REQUEST_BODY_BYTES,
     derive_session_key,
@@ -34,8 +37,7 @@ from acs.core import (
     iso8601_now,
     jcs_canonicalize,
     normalize_decision,
-    request_binding_problem,
-    same_json_rpc_id,
+    response_binding_problem,
     server_hello_problem,
 )
 
@@ -297,20 +299,18 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
 
 def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
     """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
-    if not is_jsonrpc_response(response):
+    # The one binding rule decides. Each reason keeps the outcome the handshake always gave it.
+    binding = response_binding_problem(client_hello, response)
+    if binding == BINDING_SHAPE:
         return NoAnswer("malformed_response")
     error = response.get("error")
     code = error.get("code") if error is not None else None
-    # The id binds the ServerHello, compared as JSON values. A result carrying request_id is no
-    # answer, through server_hello_problem below, which SignedServerHellos in
-    # tests/client/test_handshake_binding.py pins. This stays an id check because
-    # response_matches_request would refuse the session instead.
-    # The ClientHello must pass the same precondition the keyring path uses, so a bool id binds
-    # nothing here either. The client's own ClientHello ids are UUID strings.
-    if (request_binding_problem(client_hello) is not None
-            or not same_json_rpc_id(response.get("id"), client_hello["id"])):
+    if binding in (BINDING_REQUEST, BINDING_ID):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
+    # BINDING_RESULT here means the result carries request_id, or the ClientHello's params aren't
+    # a mapping, which this module never builds. It still has its signature checked below, and
+    # server_hello_problem then makes it no answer, as the legacy-wrapper contract asks.
     verified = verify_signature(response, session_id=session_id)
     if error is not None:
         if not verified:

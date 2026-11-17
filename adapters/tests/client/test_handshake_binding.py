@@ -6,7 +6,7 @@ import unittest
 from acs.client import _handshake
 from acs.client._outcome import Negotiated, NoAnswer, SessionRefused
 from acs.core import HANDSHAKE_METHOD
-from tests.client.test_session import HELLO, _answer, _result, _SessionTest
+from tests.client.test_session import HELLO, _answer, _result, _SessionTest, _signed
 
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
@@ -68,6 +68,18 @@ class SignedServerHellos(_SessionTest):
                 decision, _ = self._open(_answer(lambda h, body=body: {**body, "id": h["id"]}),
                                          session_id=f"hello-bare-{len(body)}-{list(body)[-1]}")
                 self.assertEqual(decision, NoAnswer("malformed_response"))
+
+    def test_a_signed_refusal_binds_by_id_whatever_the_client_hello_params(self) -> None:
+        # Review findings CR10-1, CR10-4: the handshake decides binding through the one rule, so a
+        # signed error binds by id and keeps the Guardian's cause, as response_matches_request says.
+        from acs.core import response_matches_request
+        hello = {"jsonrpc": "2.0", "id": "hello-odd", "method": HANDSHAKE_METHOD, "params": "not an object"}
+        refusal = _signed({"jsonrpc": "2.0", "id": "hello-odd", "error": {"code": -32000, "message": "refused"}},
+                          SESSION_ID)
+        self.assertTrue(response_matches_request(hello, refusal))
+        outcome = _handshake._classify_hello(hello, refusal, SESSION_ID)
+        self.assertIsInstance(outcome, SessionRefused)
+        self.assertEqual(outcome.cause, "session_refused_response")
 
     def test_the_client_hello_sent_uses_the_core_constant(self) -> None:
         # CR7-7: the ClientHello actually sent, not a grep of the source.
