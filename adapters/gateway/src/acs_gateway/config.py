@@ -97,8 +97,9 @@ def prepare_state_dirs(env: MutableMapping[str, str]) -> Path:
         state = Path(tempfile.mkdtemp(prefix="acs-gateway-"))
         env["ACS_GATEWAY_STATE_DIR"] = str(state)
     os.chmod(state, 0o700)
-    env.setdefault("ACS_SESSION_STATE_DIR", str(state / "sessions"))
-    env.setdefault("ACS_HANDSHAKE_CACHE", str(state / "handshakes"))
+    for name, default in (("ACS_SESSION_STATE_DIR", "sessions"), ("ACS_HANDSHAKE_CACHE", "handshakes")):
+        if not env.get(name, "").strip():
+            env[name] = str(state / default)
     for name in ("ACS_SESSION_STATE_DIR", "ACS_HANDSHAKE_CACHE"):
         if _under_home(Path(env[name])):
             raise ValueError(f"{name}={env[name]} is under the home directory; the gateway keeps its state elsewhere")
