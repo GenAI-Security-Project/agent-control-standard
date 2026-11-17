@@ -37,7 +37,8 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     both. The ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra
     (issue #574). Without it, the keyring path raises AttributeError naming the extra, since
     it reaches verify_with_keyring through acs.core's gated export. On an OpenSSL without
-    ML-DSA, building the keyring raises acs.core.MLDSAUnavailableError first.
+    ML-DSA, building a VerificationKey for the keyring raises acs.core.MLDSAUnavailableError
+    first. acs.core.ml_dsa_available() answers that question before any key is built.
     """
     if keyring is None:
         if expected_key_id is not None or request is not None:
