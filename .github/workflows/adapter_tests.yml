@@ -127,6 +127,8 @@ jobs:
         run: uv run python -c "import acs.core._mldsa"
       - name: Run the shared and Claude Code and Cursor suites with ML-DSA
         run: uv run python run_conformance.py claude cursor
+      - name: Run the example Guardian tests with ML-DSA
+        run: uv run pytest tests/guardian -q
       - name: Check ML-DSA-65 signatures against Go crypto/mldsa
         env:
           ACS_REQUIRE_GO_INTEROP: "1"
