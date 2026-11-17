@@ -24,10 +24,10 @@ from acs.client._exchange import (
     key_id_rejected,
     post,
     ON_WIRE_FAILED,
-    RequestTooLargeError,
-    encode_request,
+    OnWireFailed,
     report_on_wire,
     response_verified,
+    wire_body,
 )
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
@@ -312,20 +312,16 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     except Exception as e:  # noqa: BLE001
         return NoAnswer("guardian_url_rejected" if isinstance(e, ValueError) else "adapter_exception",
                         {"error": str(e)})
-    if on_wire is not None:
-        # As in exchange(): a ClientHello post() would refuse to send is never reported as sent (review CR6).
-        try:
-            encode_request(client_hello)
-        except RequestTooLargeError as e:
-            return NoAnswer("adapter_exception", {"error": str(e)})
-        except Exception:  # noqa: BLE001
-            pass
-    failed = report_on_wire(on_wire, "req", client_hello, HANDSHAKE_METHOD)
-    if failed is not None:
-        return SessionRefused(ON_WIRE_FAILED, {"dir": "req", "error": failed["error"]})
+    try:
+        body = wire_body(client_hello, on_wire, HANDSHAKE_METHOD)
+    except OnWireFailed as e:
+        return SessionRefused(ON_WIRE_FAILED, {"dir": "req", "error": e.fields["error"]})
+    except Exception as e:  # noqa: BLE001
+        # post() used to raise these from inside its own call, which ended the same way.
+        return NoAnswer("adapter_exception", {"error": str(e)})
     reported = False
     try:
-        response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout)
+        response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout, body=body)
     except GuardianHTTPError as e:
         # Any decoded body is an answer that arrived, so on_wire sees it whatever its shape.
         if e.body is not None:

@@ -116,9 +116,35 @@ def encode_request(request: dict[str, Any]) -> bytes:
     return body
 
 
-def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
-    """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or bad JSON."""
+class OnWireFailed(Exception):
+    """The on_wire callback raised on "req". fields say which direction and why."""
+
+    def __init__(self, fields: dict[str, Any]) -> None:
+        super().__init__(fields["error"])
+        self.fields = fields
+
+
+def wire_body(request: dict[str, Any], on_wire: OnWire | None, method: Any) -> bytes:
+    """Encode the request once, hand on_wire exactly those bytes decoded, and return them for post() to send.
+
+    The step exchange and the handshake both use it, so what the transcript records is what goes out, and a request
+    post() would refuse never reaches on_wire (reviews CR6, CR3-7). Raises RequestTooLargeError past the body cap,
+    OnWireFailed when the callback raises, and whatever json.dumps raises for an envelope it can't encode.
+    """
     body = encode_request(request)
+    if on_wire is not None:
+        failed = report_on_wire(on_wire, "req", json.loads(body), method)
+        if failed is not None:
+            raise OnWireFailed(failed)
+    return body
+
+
+def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float, body: bytes | None = None) -> Any:
+    """POST the request and return the decoded JSON body. Raises on oversize, a non-2xx status, transport failure or bad JSON.
+
+    body is the request already encoded by wire_body, so it is never encoded twice.
+    """
+    body = body if body is not None else encode_request(request)
     req = urllib.request.Request(
         guardian_url, data=body,
         headers={"Content-Type": "application/json"}, method="POST",
@@ -404,22 +430,18 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
     except ValueError as e:
         return Undecided("guardian_url_rejected", {"method": method, "error": str(e)},
                          f"Guardian URL rejected: {e}")
-    if on_wire is not None:
-        # post() refuses an oversized body before sending, so on_wire must not record it as sent (review CR6).
-        # Any other encoding error is post()'s to report, so it is left to that call.
-        try:
-            encode_request(request)
-        except RequestTooLargeError as e:
-            return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
-                           f"envelope exceeds body cap: {e}")
-        except Exception:  # noqa: BLE001
-            pass
-    failed = report_on_wire(on_wire, "req", request, method)
-    if failed is not None:
-        return _on_wire_refusal(failed)
+    try:
+        body = wire_body(request, on_wire, method)
+    except RequestTooLargeError as e:
+        return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
+                       f"envelope exceeds body cap: {e}")
+    except OnWireFailed as e:
+        return _on_wire_refusal(e.fields)
+    except Exception as e:  # noqa: BLE001
+        return Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
     http_status, reported = None, False
     try:
-        response = post(request, guardian_url=guardian_url, timeout_s=timeout_s)
+        response = post(request, guardian_url=guardian_url, timeout_s=timeout_s, body=body)
     except RequestTooLargeError as e:
         return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
                        f"envelope exceeds body cap: {e}")

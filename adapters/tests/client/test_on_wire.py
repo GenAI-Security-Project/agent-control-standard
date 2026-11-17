@@ -208,6 +208,34 @@ class OnWireTest(unittest.TestCase):
         self.assertEqual(outcome.cause, "request_exceeds_max_payload")
         self.assertFalse(outcome.proceed)
 
+    def test_the_request_is_encoded_once_and_reported_as_sent(self) -> None:
+        # Review CR3-7: the bytes post() sends are the bytes on_wire saw, encoded once.
+        import json
+        recorder, bodies = Recorder(), []
+
+        def post(request: dict, **kwargs: Any) -> dict:
+            bodies.append(kwargs.get("body"))
+            return decision_for(request)
+
+        with mock.patch.object(_exchange, "encode_request", wraps=_exchange.encode_request) as encode:
+            self._round_trip(post, recorder)
+        self.assertEqual(encode.call_count, 1)
+        self.assertIsInstance(bodies[0], bytes)
+        self.assertEqual(json.loads(bodies[0]), recorder.calls[0][1])
+
+    def test_the_client_hello_is_encoded_once_and_reported_as_sent(self) -> None:
+        import json
+        recorder, bodies = Recorder(), []
+
+        def post(hello: dict, **kwargs: Any) -> dict:
+            bodies.append(kwargs.get("body"))
+            return server_hello_for(hello)
+
+        with mock.patch.object(_exchange, "encode_request", wraps=_exchange.encode_request) as encode:
+            self._open(recorder, post=post, session_id="encoded-once")
+        self.assertEqual(encode.call_count, 1)
+        self.assertEqual(json.loads(bodies[0]), recorder.calls[0][1])
+
     def test_a_stored_session_reports_nothing(self) -> None:
         self._open(Recorder())
         recorder = Recorder()
