@@ -35,7 +35,7 @@ A flag wins over its variable. The Inspector honours `NO_COLOR` and prints no co
 
 ## What each line means
 
-An envelope prints as a header line and the envelope body. The header carries the sequence number from the log, the time it was recorded, the direction, the method and the JSON-RPC id. A response carries a decision badge above the body, with the reason codes and policy references on the same line:
+An envelope prints as a header line and the envelope body. The header carries the sequence number from the log, the time it was recorded, the direction, the method and the JSON-RPC id. A `finding` line, which the Guardian writes for a `request_id_ref` it cannot resolve, prints with `! FINDING` in place of the direction. A response carries a decision badge above the body, with the reason codes and policy references on the same line:
 
 ```
 ● DENY  reason_codes=[destructive_shell_command_blocked]  policy_references=[agt_stock#destructive_shell_command_blocked]

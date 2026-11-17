@@ -19,6 +19,9 @@ hooks:
   PreToolUse:
     acs_method: steps/toolCallRequest
     tool_name: $.tool_name
+    # Claude Code's id for this one tool call, the same on PreToolUse and
+    # PostToolUse, so the result can name the request it answers.
+    call_id: $.tool_use_id
     arguments: $.tool_input
     # ACS's own raw_command: the command line this step IS, verbatim, which is
     # a different thing from the argument bag above and is why it gets its own
@@ -128,6 +131,9 @@ hooks:
   PostToolUse:
     acs_method: steps/toolCallResult
     tool_name: $.tool_name
+    # Claude Code's id for this one tool call, the same on PreToolUse and
+    # PostToolUse, so the result can name the request it answers.
+    call_id: $.tool_use_id
     # THIS GATE'S MATCHER STAYS SINGLE-TOOL WHILE `outputs.from` IS A SINGLE
     # PATH, and that is the fact to read before widening `^Bash$` in
     # settings.json to match the request gate's `^(Bash|WebFetch)$`. JSON

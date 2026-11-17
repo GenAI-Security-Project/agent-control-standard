@@ -325,3 +325,30 @@ def test_every_docs_page_states_the_real_hook_count():
         + f"\nUpdate the count. To count a subset, write it as \"9 of the {expected} "
         "native hooks\" so the total stays checked."
     )
+
+
+def test_agbom_update_triggers_cover_every_component_type():
+    """Every component type in agbom/component.json must have a bullet in
+    docs/spec/inspect/README.md under '## Triggers for AgBOM updates' (#120)."""
+    component_schema = json.loads(
+        (ROOT / "specification" / "v0.1.0" / "agbom" / "component.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    component_types = component_schema["properties"]["type"]["enum"]
+    inspect_readme = DOCS / "spec" / "inspect" / "README.md"
+    bullets = [
+        line.strip()
+        for line in section(inspect_readme, "## Triggers for AgBOM updates")
+        if line.strip().startswith("- ")
+    ]
+    assert len(bullets) == len(component_types), (
+        f"AgBOM update trigger list has {len(bullets)} bullets for "
+        f"{len(component_types)} component types"
+    )
+    for comp_type in component_types:
+        phrase = comp_type.replace("_", " ").lower()
+        assert any(phrase in b.lower() for b in bullets), (
+            f"AgBOM update triggers omit component type {comp_type!r}"
+        )
+

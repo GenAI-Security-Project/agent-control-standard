@@ -201,7 +201,9 @@ Schema: [`hooks/tool-call-result.json`](https://genai-security-project.github.io
 
 Fires after tool execution, before the result is ingested into the agent's reasoning context. Provenance: `origin: tool_output`, with `derived_from` set to the originating `toolCallRequest`'s provenance ids when the tool's output is data-derived.
 
-**Payload:** `execution_id` (correlated to the request), outputs, exit status, duration.
+**Payload:** `request_id_ref` (the originating request), outputs, exit status, duration.
+
+`request_id_ref`, when present, is the `request_id` of the originating `toolCallRequest`. A Guardian SHOULD resolve it against the `toolCallRequest` records it holds for the session, and MUST record the reference in its audit record when it cannot resolve it. Whether an unresolvable reference is grounds to deny is the deployment's policy. The record is required because an unresolvable reference is evidence, so it has to survive even when the result is allowed.
 
 **Decision:** ALLOW / DENY / MODIFY.
 
@@ -315,7 +317,7 @@ Schema: [`hooks/session-end.json`](https://genai-security-project.github.io/agen
 
 Session termination, audit finalization. The Guardian seals the chain at this point.
 
-**Payload:** `session_reason` (`completed`, `cancelled`, `error`, `timeout`), final aggregates.
+**Payload:** `reason` (`completed`, `cancelled`, `error`, `timeout`, `abandoned`), and an optional `summary` with the outcome, step count, errors, and `decision_failures`, the number of decision failures in each failure class (Specification §6.4).
 
 **Decision:** Audit only.
 

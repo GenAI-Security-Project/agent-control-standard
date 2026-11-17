@@ -1,6 +1,6 @@
-# Agent Control Standard
+# OWASP Agent Control Standard
 
-The Agent Control Standard (ACS) is a wire-format specification that lets a separate **Guardian Agent** permit, deny, or modify what an AI agent does in real time, over an authenticated channel and with an observable, reconstructable audit trail.
+The OWASP Agent Control Standard (ACS) is a wire-format specification that lets a separate **Guardian Agent** permit, deny, or modify what an AI agent does in real time, over an authenticated channel and with an observable, reconstructable audit trail.
 
 Agents that implement ACS-Core run every step through a Guardian over an authenticated channel and honor its decisions in real time. With the Trace, Inspect, and Crypto profiles they also emit OpenTelemetry spans and OCSF events, expose a dynamic Agent Bill of Materials (models, MCP servers, A2A peers, tools, knowledge sources, memory stores), and gain cryptographic non-repudiation of the audit chain. ACS-Core authenticates the channel and binds the agent to the Guardian's decisions; it does not by itself make a deployment secure or its policies strict, and tamper-evidence against a compromised Guardian is the Crypto and Audit profiles, not Core.
 
@@ -21,6 +21,8 @@ flowchart LR
 ```
 
 ## What v0.1.0 ships
+
+`v0.1.0` is the specification version, which names the schema namespace, and a release can update the schemas inside it. The release number changes with each release, as the [releases page](https://github.com/GenAI-Security-Project/agent-control-standard/releases) and the [CHANGELOG](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CHANGELOG.md) record.
 
 - **ACS-Core** (mandatory baseline) — capability-negotiation handshake, JSON-RPC envelope, minimum hook set (`sessionStart`, `userMessage` or `agentTrigger`, `toolCallRequest`/`Result`, `agentResponse`, `sessionEnd`, `subagentStart` for subagent-capable frameworks), four MUST-support dispositions (`allow`, `deny`, `ask`, `defer`) with `modify` SHOULD-support, SessionContext with rolling SHA-256 chain hash, optional Intent with immutability rule, replay protection, baseline HMAC-SHA256 signature, decision honoring, declared liveness mechanism (`system/ping` or a transport-level alternative), and Wrapped MCP when sessions involve MCP. Additional hooks (`turnStart`/`End`, `preCompact`/`postCompact`, `subagentStop`, `knowledgeRetrieval`, `memoryContextRetrieval`, `memoryStore`, `skillRegister`/`Load`/`Unload`) are normatively defined and SHOULD be implemented when the harness can observe the corresponding event.
 - **ACS-Trace** profile — OpenTelemetry semconv mapping + OCSF event-class mapping, with decisions emitted as span events on the parent step span.
@@ -172,149 +174,77 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
     **Standards**: [ACS Instrument](./spec/instrument/README.md).
 
-    === "LangChain (Python)"
+    === "ACS wire (JSON-RPC)"
 
-        ```python
-        from acs import GuardianAgent, PolicyResponse
-        
-        # Create a Guardian Agent to enforce policies
-        guardian = GuardianAgent(
-            endpoint="https://guardian.example.com",
-            policies=["data-protection", "cost-control"]
-        )
-        
-        # Hook into agent runtime
-        @acs_agent.hook("toolCallRequest")
-        async def on_tool_call(context):
-            # Guardian evaluates the tool call
-            response = await guardian.evaluate({
-                "hook": "toolCallRequest",
-                "tool": context.tool_name,
-                "parameters": context.parameters,
-                "session": context.session_id
-            })
-            
-            if response.action == "DENY":
-                raise PermissionError(f"Tool call denied: {response.reason}")
-            elif response.action == "MODIFY":
-                # Apply Guardian's modifications
-                context.parameters = response.modifications
-            
-            return response
-        
-        # Example: Guardian denies sensitive data access
-        result = await acs_agent.run("Search for employee SSN records")
-            # > PermissionError: Tool call denied: Accessing PII data violates policy
-        ```
-
-    === "Vercel AI (TypeScript)"
-
-        ```typescript
-        import { GuardianAgent, HookContext } from '@acs/guardian'
-        
-        // Configure Guardian Agent
-        const guardian = new GuardianAgent({
-          endpoint: 'https://guardian.example.com',
-          policies: ['data-protection', 'cost-control']
-        })
-        
-        // Register hooks for runtime control
-        acsAgent.registerHook('toolCallRequest', async (context: HookContext) => {
-          const response = await guardian.evaluate({
-            hook: 'toolCallRequest',
-            tool: context.toolName,
-            parameters: context.parameters,
-            session: context.sessionId
-          })
-          
-          switch (response.action) {
-            case 'DENY':
-              throw new Error(`Denied: ${response.reason}`)
-            case 'MODIFY':
-              context.parameters = response.modifications
-              break
-          }
-          
-          return response
-        })
-        
-        // Example: Cost control policy in action
-        await acsAgent.run('Generate 1000 images using DALL-E')
-        // > Error: Denied: Request exceeds cost threshold ($50 limit)
-        ```
-
-    === "MCP"
+        Before a tool runs, the agent sends the call to the Guardian as [`steps/toolCallRequest`](./spec/instrument/hooks.md#toolcallrequest) and waits for the decision. Here the agent wants to run `SELECT * FROM customers`:
 
         ```json
         {
           "jsonrpc": "2.0",
-          "method": "acs/registerHook",
+          "method": "steps/toolCallRequest",
+          "id": "rpc-42",
           "params": {
-            "hook": "toolCallRequest",
-            "guardianEndpoint": "https://guardian.example.com/evaluate",
-            "policies": ["data-protection", "cost-control"]
-          }
-        }
-        
-        // Example hook evaluation request from Guardian
-        {
-          "jsonrpc": "2.0",
-          "method": "guardian/evaluate",
-          "params": {
-            "hook": "toolCallRequest",
-            "context": {
-              "tool": "database_query",
-              "parameters": {
-                "query": "SELECT * FROM customers"
-              },
-              "session": "sess_123"
+            "acs_version": "0.1.0",
+            "request_id": "c329d5a4-97ae-44c8-986d-77d1da194ab7",
+            "timestamp": "2026-10-13T09:15:00Z",
+            "metadata": {
+              "agent_id": "research-assistant",
+              "session_id": "17a301f1-6d17-4941-8bea-92320f0773aa"
+            },
+            "payload": {
+              "tool": { "name": "database_query" },
+              "capability": "datastore.read",
+              "arguments": {
+                "query": { "value": "SELECT * FROM customers" }
+              }
+            },
+            "signature": {
+              "algorithm": "HMAC-SHA256",
+              "value": "<base64 HMAC-SHA256 over UTF-8 JCS(envelope without params.signature)>",
+              "key_id": "acs-hmac-key-1"
             }
           }
         }
-        
-        // Guardian response
+        ```
+
+        The Guardian answers `modify`. Its `parameter_overrides` replaces the `query` argument, so the agent runs the narrowed query instead of the original:
+
+        ```json
         {
           "jsonrpc": "2.0",
+          "id": "rpc-42",
           "result": {
-            "action": "MODIFY",
+            "type": "final",
+            "acs_version": "0.1.0",
+            "request_id": "c329d5a4-97ae-44c8-986d-77d1da194ab7",
+            "decision": "modify",
+            "reasoning": "Narrowed the query to two columns and 100 rows. A full customer export violates the data-protection policy.",
+            "reason_codes": ["pii_detected"],
+            "policy_references": [
+              { "policy_id": "data-protection", "rule_id": "limit-customer-export" }
+            ],
             "modifications": {
-              "query": "SELECT id, name FROM customers LIMIT 100"
+              "parameter_overrides": {
+                "query": "SELECT id, name FROM customers LIMIT 100"
+              }
             },
-            "reason": "Limited query to prevent full data exposure"
+            "chain_hash": "25d878e6726ecf3bd9ee823d7642bdd78f148c0db5c06a585d16bc23494e2175",
+            "metadata": { "evaluator": "deterministic" },
+            "signature": {
+              "algorithm": "HMAC-SHA256",
+              "value": "<base64 HMAC-SHA256 over UTF-8 JCS(envelope without result.signature)>",
+              "key_id": "acs-hmac-key-1"
+            }
           }
         }
         ```
 
-    === "A2A"
+        The exchange follows four rules:
 
-        ```yaml
-        # Available ACS hooks for instrumentation
-        
-        agentTrigger:
-          description: Fires when agent starts processing
-          can_modify: true
-          can_deny: true
-          
-        message:
-          description: Fires for each message in conversation
-          can_modify: true
-          can_deny: true
-          
-        toolCallRequest:
-          description: Fires before tool execution
-          can_modify: true
-          can_deny: true
-          
-        knowledgeRetrieval:
-          description: Fires when accessing knowledge bases
-          can_modify: false
-          can_deny: true
-          
-        memoryStore:
-          description: Fires when storing to memory
-          can_modify: true
-          can_deny: true
-        ```
+        - **Signatures.** ACS-Core requires signatures on this request and response. Remove `params.signature` from the request or `result.signature` from the response, canonicalize the remaining envelope with JCS, and encode it as UTF-8 before signing ([§10](./spec/instrument/specification.md#10-cryptographic-signatures)). The `value` fields above are placeholders. The identifiers and `chain_hash` are sample values.
+        - **Chain head.** The Guardian publishes `chain_hash` on every content-bearing step, so an observer can detect a rewritten audit chain ([§8.6](./spec/instrument/specification.md#86-chain-head-publication-normative)).
+        - **MODIFY support.** `modify` is SHOULD-support. A client that doesn't implement it receives `deny` with `reason_codes: ["modify_unsupported"]` instead ([§6.5](./spec/instrument/specification.md#65-modify-incapable-clients-normative)).
+        - **Protocols.** An MCP `tools/call` can travel through this same hook ([Instrument MCP](./spec/instrument/extend_mcp.md)). A2A wrapping is reserved for v0.2.
 
 ### Traceable
 
@@ -448,63 +378,86 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
     === "OCSF"
 
-        ```python
-        from acs.trace import OCSFLogger
-        
-        # Configure OCSF security event logging
-        security_logger = OCSFLogger(
-            endpoint="https://siem.example.com/ocsf",
-            api_key="your-api-key"
-        )
-        
-        # Attach to agent for security events
-        acs_agent.attach_logger(security_logger)
-        
-        # Execute agent - security events logged automatically
-        result = await acs_agent.run("Access customer database")
-        ```
-        
+        This OCSF 1.9.0 example follows the [Trace class mapping](./spec/trace/events.md#ocsf-event-classes). A `run_command` tool launches `/usr/bin/printf hello`, and the host runtime observes its subprocess exit with code `0` at `2026-10-09T12:00:00Z`.
+
+        The `steps/toolCallResult` trace uses Process Activity (`1007`). This is a reflexive [Terminate activity](https://schema.ocsf.io/classes/process_activity): `printf` exits on its own, so both `actor.process` and `process` identify `printf`. Each records the Python runtime as `parent_process`. The identifiers below are sample values for this scenario.
+
         ```json
         {
-          "activity_id": 1,
-          "activity_name": "Agent Execution",
-          "category_uid": 3,
-          "category_name": "Application Activity",
-          "class_uid": 3001,
-          "class_name": "AI Agent Activity",
+          "activity_id": 2,
+          "activity_name": "Terminate",
+          "category_uid": 1,
+          "category_name": "System Activity",
+          "class_uid": 1007,
+          "class_name": "Process Activity",
+          "type_uid": 100702,
           "severity_id": 1,
-          "time": 1705318200,
+          "time": 1791547200000,
+          "status_id": 1,
+          "status": "Success",
           "metadata": {
-            "version": "1.0.0",
+            "version": "1.9.0",
             "product": {
-              "name": "ACS Agent",
+              "name": "ACS trace example",
               "vendor_name": "Example Corp"
-            }
+            },
+            "correlation_uid": "7673ad6b-b5b3-4eec-8f46-66c83eef0b52:1287ce09-fcda-4588-a5e9-3fa83bfe5291"
           },
           "actor": {
-            "session": {
-              "uid": "sess_123",
-              "created_time": 1705318200
-            },
-            "idp": {
-              "name": "research-assistant",
-              "uid": "agent_456"
+            "process": {
+              "pid": 4243,
+              "name": "printf",
+              "cmd_line": "/usr/bin/printf hello",
+              "terminated_time": 1791547200000,
+              "parent_process": {
+                "pid": 4242,
+                "name": "python",
+                "cmd_line": "python agent.py"
+              }
             }
           },
-          "acs_extensions": {
-            "reasoning_chain": [
-              {
-                "step": 1,
-                "thought": "User wants database access",
-                "action": "evaluate_permissions"
-              }
-            ],
-            "tools_invoked": ["database_query"],
-            "data_accessed": ["customers.personal_info"],
-            "risk_score": 8.5
+          "device": {
+            "uid": "host_001",
+            "hostname": "agent-host.example",
+            "type_id": 1,
+            "type": "Server"
+          },
+          "process": {
+            "pid": 4243,
+            "name": "printf",
+            "cmd_line": "/usr/bin/printf hello",
+            "terminated_time": 1791547200000,
+            "parent_process": {
+              "pid": 4242,
+              "name": "python",
+              "cmd_line": "python agent.py"
+            }
+          },
+          "exit_code": 0,
+          "unmapped": {
+            "acs": {
+              "method": "steps/toolCallResult",
+              "request_id": "1287ce09-fcda-4588-a5e9-3fa83bfe5291",
+              "agent_id": "agent_456",
+              "session_id": "7673ad6b-b5b3-4eec-8f46-66c83eef0b52",
+              "tool": {
+                "name": "run_command"
+              },
+              "exit_status": "success",
+              "request_id_ref": "e1572c78-689e-4bdb-91d4-6e019b416849",
+              "outputs": [
+                { "value": "hello" }
+              ]
+            }
           }
         }
         ```
+
+        The host runtime supplies `actor.process`, `device`, `process`, the OS `exit_code`, and the occurrence time in milliseconds. These facts supplement the ACS payload; a generic tool call may not have subprocess details.
+
+        `unmapped.acs` copies the request's `method` and `request_id`, the envelope metadata's `agent_id` and `session_id`, and fields from the [tool-call result payload](./spec/instrument/hooks.md#toolcallresult). `request_id_ref` links the result to its earlier `toolCallRequest`. The request and session identifiers are UUIDs.
+
+        `metadata.correlation_uid` repeats the step's pair as `<session_id>:<request_id>`, because SIEM content reads native fields, not `unmapped`. The Guardian's decision is a separate trace event with the same `correlation_uid`, so a SIEM can join the two on that one field. This example shows the step event only, with no attached provenance.
 
     === "Real-time Streaming"
 

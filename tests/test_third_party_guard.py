@@ -76,6 +76,39 @@ MUST_CATCH = {
     # Markup a script writes fetches like any other markup.
     "markup written by a script":
         '<script>document.write(\'<img src="//evil.tld/k.png">\')</script>',
+    # A less-than sign before anything but a letter, /, !, or ? is text, so it opens no tag.
+    "less-than sign in prose": '<p>1 < 2 <script>fetch("https://evil.tld/l")</script>',
+    "less-than sign before a space and a quote":
+        '<p>a <"b <script>fetch("https://evil.tld/l2")</script>">',
+    # A comment delimiter inside a text-only element is text, so it hides nothing after it.
+    "comment delimiter in a title":
+        '<title><!--</title><script>fetch("https://evil.tld/m")</script><!-- -->',
+    "comment delimiter in a textarea":
+        '<textarea><!--</textarea><script>fetch("https://evil.tld/n")</script><!-- -->',
+    "comment delimiter in xmp":
+        '<xmp><!--</xmp><script>fetch("https://evil.tld/n2")</script><!-- -->',
+    "comment delimiter in noscript":
+        '<noscript><!--</noscript><script>fetch("https://evil.tld/n3")</script><!-- -->',
+    # A style opened inside a title closes with the title, so it cannot own what follows.
+    "style opened in a title":
+        '<title><style></title><script>fetch("https://evil.tld/n4")</script></style>',
+    # Inside svg a title holds real markup, so this script runs. Skipping the span as text
+    # would hide it, which is why the span is scanned rather than skipped.
+    "script in an svg title": '<svg><title><script>fetch("https://evil.tld/n5")</script></title></svg>',
+    # In the double-escaped state an inner end tag leaves that state and closes nothing.
+    "double-escaped script body":
+        '<script><!-- <script> </script>fetch("https://evil.tld/o")--></script>',
+    "double-escaped script, tag closed by a slash":
+        '<script><!-- <script/> </script>fetch("https://evil.tld/o2")--></script>',
+    # An end tag needs a boundary after its name.
+    "closing tag name with a suffix": '<script>a="</scripty>";fetch("https://evil.tld/p")</script>',
+    "style closing tag name with a suffix":
+        '<style>a{content:"</styled>"}b{background:url(//evil.tld/q.png)}</style>',
+    # A quoted value in an end tag can hold a bracket, so the tag ends after the quote.
+    "comment delimiter in a closing tag's quoted value":
+        '<script></script x="><!--"><script>fetch("https://evil.tld/r")</script>',
+    "style with image-set, second url":
+        '<style>a{background:image-set("/ok.png" 1x,"https://evil.tld/s" 2x)}</style>',
 }
 
 MUST_IGNORE = {
@@ -106,6 +139,17 @@ MUST_IGNORE = {
     "script inside an unterminated comment":
         '<!-- <script>fetch("https://evil.tld/x")</script>',
     "html comment": "<!-- https://evil.tld/x --><p>ok</p>",
+    # Each fix above must not start reading prose as script.
+    "script after a less-than sign stays prose": "<p>1 < 2 and https://evil.tld/x is text</p>",
+    "doctype": "<!doctype html><p>https://evil.tld/x is text</p>",
+    "url in prose after a closing tag with a suffix":
+        '<script>a="</scripty>"</script><p>https://evil.tld/x is text</p>',
+    "url in prose after an escaped script": "<script><!-- a --></script><p>https://evil.tld/x is text</p>",
+    "url in prose after a double-escaped script":
+        "<script><!-- <script> </script> --></script><p>https://evil.tld/x is text</p>",
+    "url in prose after a title": "<title>a</title><p>https://evil.tld/x is text</p>",
+    "comment after a title": '<title>a</title><!-- <script>fetch("https://evil.tld/x")</script> -->',
+    "text in a textarea": "<textarea>https://evil.tld/x</textarea>",
 }
 
 CSS_CATCH = {
@@ -117,6 +161,14 @@ CSS_CATCH = {
     "import with no space": '@import"https://evil.tld/t.css";',
     "image-set": 'a{background:image-set("https://evil.tld/a.png" 1x)}',
     "font-face src": "@font-face{src:url(https://evil.tld/f.woff2)}",
+    "image-set second url": 'a{background:image-set("/ok.png" 1x,"https://evil.tld/x" 2x)}',
+    "webkit image-set second url": 'a{background:-webkit-image-set("/ok.png" 1x,"https://evil.tld/x" 2x)}',
+    "image-set third url": """a{background:image-set('/a.png' 1x,"/b.png" 2x,'//evil.tld/x' 3x)}""",
+    "image-set uppercase": 'a{background:IMAGE-SET("/ok.png" 1x,"https://evil.tld/x" 2x)}',
+    "image-set first entry a url function": "a{background:image-set(url(https://evil.tld/x) 1x)}",
+    "image-set bracket inside a string": 'a{background:image-set("/o)k.png" 1x,"https://evil.tld/x" 2x)}',
+    "image-set after a type function": 'a{background:image-set("/a" type("image/png"),"//evil.tld/x" 2x)}',
+    "image-set unquoted first value": "a{background:image-set(//evil.tld/x 1x)}",
 }
 
 CSS_IGNORE = {
@@ -125,6 +177,11 @@ CSS_IGNORE = {
     "licence comment": "/* icons from https://fontawesome.com */a{color:red}",
     "self host": "a{background:url(https://genai-security-project.github.io/a.png)}",
     "relative": "a{background:url(../img/a.png)}",
+    "image-set relative": 'a{background:image-set("/a.png" 1x,"../b.png" 2x)}',
+    "image-set self host": 'a{background:image-set("/a.png" 1x,"//genai-security-project.github.io/b.png" 2x)}',
+    "image-set data uri holding an svg":
+        """a{background:image-set("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>" 1x)}""",
+    "url after an image-set is not part of it": 'a{background:image-set("/a" 1x);content:"//evil.tld/x"}',
 }
 
 

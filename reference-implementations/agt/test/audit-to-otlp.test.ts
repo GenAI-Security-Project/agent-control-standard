@@ -272,6 +272,15 @@ describe("audit-to-otlp: review fixes", () => {
     });
   });
 
+  it("prefers the entry's request_id over rpc_id, because a derived request id differs from the JSON-RPC id", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const requestId = crypto.randomUUID();
+      appendFileSync(auditPath, entryLine({ rpc_id: crypto.randomUUID(), request_id: requestId }));
+      await convertAuditLog(auditPath, otelPath);
+      expect(attribute(spansIn(otelPath)[0], "acs.request_id")).toBe(requestId);
+    });
+  });
+
   it("derives the session UUID exactly as the host adapter does", () => {
     for (const raw of ["sess-1", "ses_opencode_abc", "6B1F2C9E-4D7A-4E3B-8A51-9C0D2E7F1A36", "セッション-é", ""]) {
       expect({ raw, uuid: converterSessionUuid(raw) }).toEqual({ raw, uuid: toSessionUuid(raw) });

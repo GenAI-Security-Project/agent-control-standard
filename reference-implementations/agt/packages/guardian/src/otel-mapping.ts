@@ -26,6 +26,11 @@ const PROVENANCE_COLUMN_LIMIT = 64;
  * earlier request, so #228 forbids a failure event for it: one would mark
  * that earlier, legitimate decision as not enforced. */
 export const REPLAY_DETECTED_CODE = -32005;
+/** JSON-RPC SIGNATURE_INVALID and TIMESTAMP_OUT_OF_WINDOW (Specification
+ * §17.1). Defined here beside REPLAY_DETECTED_CODE so the Guardian's checks
+ * and the trace's rejection mapping read one number for each. */
+export const SIGNATURE_INVALID_CODE = -32004;
+export const TIMESTAMP_OUT_OF_WINDOW_CODE = -32006;
 
 // The repository's own mapping, five directories up from this file, the
 // same relationship SCHEMA_ROOT in validate-envelope.ts relies on.
@@ -47,6 +52,46 @@ export const DECISION_FAILURE_EVENT = "acs.decision.failure";
  * One sentence for both writers, the Guardian here and the audit converter,
  * so a query on status text finds both sides of the same failure. */
 export const GUARDIAN_ERROR_STATUS = "The Guardian returned an error instead of a decision.";
+
+/**
+ * A request this Guardian cannot vouch for, recorded apart from the steps it
+ * governed. Trace Events forbids an acs.decision or acs.decision.failure
+ * under the pair of a request rejected before it was trusted, because such a
+ * request can carry any pair, a genuine request's included. Issue #283 ruled
+ * that it is still recorded, under names outside `step_to_span`, so a forged
+ * or replayed request stays visible without being attributed to the request
+ * whose ids it carries. These names belong to this reference Guardian, not
+ * to the ACS mapping.
+ */
+export const REJECTED_SPAN_NAME = "guardian.rejected_request";
+export const REJECTED_CLAIMED_SESSION_ID = "guardian.rejected.claimed_session_id";
+export const REJECTED_CLAIMED_REQUEST_ID = "guardian.rejected.claimed_request_id";
+export const REJECTED_REASON = "guardian.rejected.reason";
+export const REJECTED_ERROR_CODE = "guardian.rejected.error_code";
+export const REJECTED_STATUS = "The Guardian could not vouch for this request, so it carries no ACS ids or events.";
+
+/** Why a request was rejected before it was trusted. `guardian_fault` is the
+ * Guardian failing to check the request at all (a missing schema directory,
+ * say): its ids are just as unverified, so it is recorded the same way. */
+export type RejectionReason =
+  | "envelope_invalid"
+  | "guardian_fault"
+  | "signature_invalid"
+  | "replay_detected"
+  | "timestamp_out_of_window";
+
+/**
+ * The §17.1 codes that mean the Guardian rejected a request before trusting
+ * it. dispatch reports its own rejections to the exporter directly. This is
+ * the backstop: a step answered with one of these codes is recorded as a
+ * rejected request even if the check that produced it forgot to report, so
+ * a rejected request's ids never land on a step span.
+ */
+export const PRE_TRUST_REJECTION_CODES: ReadonlyMap<number, RejectionReason> = new Map([
+  [SIGNATURE_INVALID_CODE, "signature_invalid"],
+  [REPLAY_DETECTED_CODE, "replay_detected"],
+  [TIMESTAMP_OUT_OF_WINDOW_CODE, "timestamp_out_of_window"],
+]);
 
 /** The event's attribute keys: the three required ones first, then the
  * ones carried when known. */

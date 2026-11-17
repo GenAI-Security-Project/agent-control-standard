@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { buildEnvelope, loadHookmap } from "host-adapter";
+import { buildEnvelope, loadHookmap, toInvocationRequestId } from "host-adapter";
 import { validateEnvelope } from "guardian";
 
 const HOOKMAP = fileURLToPath(new URL("../opencode.hookmap.yaml", import.meta.url));
@@ -138,7 +138,7 @@ describe("opencode.hookmap.yaml", () => {
     expect(hooks["tool.execute.before"]?.tools).toEqual(["bash", "webfetch"]);
   });
 
-  it("builds a wire payload of exactly {tool, exit_status, outputs:[{value}]}, with no mirrors anywhere in it", () => {
+  it("builds a wire payload of exactly {tool, request_id_ref, exit_status, outputs:[{value}]}, with no mirrors anywhere in it", () => {
     // This is the first hookmap that actually declares `outputs.mirrors`, so
     // this is the first place a mirror leaking onto the wire could be caught.
     // `buildPayload` never reads `mirrors` -- this asserts the envelope it
@@ -167,6 +167,8 @@ describe("opencode.hookmap.yaml", () => {
     expect(() => validateEnvelope(envelope)).not.toThrow();
     expect(envelope.params.payload).toEqual({
       tool: { name: "bash" },
+      // From the hookmap's call_id: the request this result answers.
+      request_id_ref: toInvocationRequestId("6c616a11-495a-4f05-878a-c1bfaa29f0e5", "call-1"),
       exit_status: "success",
       outputs: [{ value: "TOKEN=ghp_ABCDEF123456" }],
     });

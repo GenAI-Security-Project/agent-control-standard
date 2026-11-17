@@ -131,7 +131,7 @@ def evaluate_checks(env: dict, read_json, read_issue, now: datetime) -> dict[str
     """Problems per check. Each check runs only while the switch it watches is on."""
     checks: dict[str, list[str]] = {}
     if env.get("ROADMAP_RENDER_ENABLED") == "true":
-        base = env.get("PAGE_URL", "https://genai-security-project.github.io/agent-control-standard")
+        base = env.get("PAGE_URL", "https://owaspacs.org")
         checks["page"] = check_page(read_json(f"{base.rstrip('/')}/roadmap/roadmap.json"), now)
     if env.get("ROADMAP_SYNC_ENABLED") == "true":
         configured = env.get("ROADMAP_HEALTH_ISSUE", "")

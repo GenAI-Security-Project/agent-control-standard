@@ -129,6 +129,9 @@ hooks:
   tool.execute.before:
     acs_method: steps/toolCallRequest
     tool_name: $.tool
+    # OpenCode's id for this one tool call, the same before and after it,
+    # so the result can name the request it answers.
+    call_id: $.callID
     arguments: $.args
     # The same declaration Claude Code's hookmap makes, at this host's own
     # field: OpenCode hands the plugin a mutable `{args}`, so the shell tool's
@@ -209,6 +212,9 @@ hooks:
   tool.execute.after:
     acs_method: steps/toolCallResult
     tool_name: $.tool
+    # OpenCode's id for this one tool call, the same before and after it,
+    # so the result can name the request it answers.
+    call_id: $.callID
     # SCOPED TO bash ONLY, and this is data because OpenCode has no matcher to
     # get it from. OpenCode fires this hook for EVERY tool, and `metadata` is
     # PER-TOOL -- measured on 1.18.15 across four tools: `bash`'s metadata is

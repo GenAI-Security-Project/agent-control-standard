@@ -85,3 +85,5 @@ Without -Dynamic, a deployment that hot-swaps components silently is not Inspect
 - Knowledge source connected or disconnected.
 - Memory store attached or detached.
 - Agent capability declared or revoked.
+- Skill registered, unloaded, or definition-changed.
+

@@ -70,6 +70,8 @@ type AuditEntryIdentity = {
    * host's own event name: this reader knows ACS and nothing else. */
   method: string | null;
   rpc_id: string | number | null;
+  /** The envelope's request_id. Absent on entries written before it existed. */
+  request_id?: string | null;
 };
 
 /** A step the writer's negotiated posture answered, because no decision
@@ -136,7 +138,8 @@ function isAuditEntryShape(value: unknown): value is AuditEntry {
       typeof candidate.recorded_at === "string" &&
       typeof candidate.session_id === "string" &&
       (typeof candidate.method === "string" || candidate.method === null) &&
-      (typeof candidate.rpc_id === "string" || typeof candidate.rpc_id === "number" || candidate.rpc_id === null)
+      (typeof candidate.rpc_id === "string" || typeof candidate.rpc_id === "number" || candidate.rpc_id === null) &&
+      (candidate.request_id === undefined || typeof candidate.request_id === "string" || candidate.request_id === null)
     )
   ) {
     return false;

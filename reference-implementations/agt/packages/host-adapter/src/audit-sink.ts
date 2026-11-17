@@ -68,6 +68,13 @@ type AuditEntryIdentity = {
    */
   method: string | null;
   rpc_id: string | number | null;
+  /**
+   * The envelope's `params.request_id`, or null when no request was built.
+   * It differs from `rpc_id` when the shim derived the request id from the
+   * host's call id, and it is what the Guardian's own span for the request
+   * carries. Optional so entries written before it existed still read.
+   */
+  request_id?: string | null;
 };
 
 /**

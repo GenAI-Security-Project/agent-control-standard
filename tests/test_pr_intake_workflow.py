@@ -1,12 +1,12 @@
-"""Runs pr-intake's shell steps against a fake gh, as the workflow would.
+"""Runs pr-intake's closing-keyword step against a fake gh, and pins the workflow's safety.
 
-pr-intake checks out no code by design, so its logic lives in the YAML. These tests lift
-each step's script out of the YAML and run it, so the behavior is tested, not only read.
+The keyword logic lives in the YAML, so these tests lift the script out and run it. The
+intake check itself is tools/pr_intake.py, tested in tests/test_pr_intake.py.
 """
 from __future__ import annotations
 
 import json
-import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,18 +21,10 @@ with open(log, "a") as handle:
     handle.write(json.dumps(sys.argv[1:]) + "\n")
 args = sys.argv[1:]
 state = json.loads(os.environ["GH_STATE"])
-if args[:2] == ["issue", "list"]:
-    if state.get("fail_list"):
-        sys.exit(1)
-    print("\n".join(str(n) for n in state["accepted"]))
-elif args[:1] == ["api"] and "milestone=*" in " ".join(args):
+if args[:1] == ["api"] and "milestone=*" in " ".join(args):
     print("\n".join(str(n) for n in state["milestoned"]))
 elif args[:2] == ["pr", "view"]:
-    jq = args[args.index("--jq") + 1] if "--jq" in args else ""
-    if "length" in jq:
-        print(state.get("bot_comment_count", 0))
-    else:
-        print("\n".join(state.get("comments", [])))
+    print("\n".join(state.get("comments", [])))
 '''
 
 
@@ -58,17 +50,9 @@ def run_step(tmp_path, name, body, state):
     return done, calls
 
 
-def test_accepted_lookup_is_one_call_whatever_the_body(tmp_path):
-    body = " ".join(f"#{n}" for n in range(1, 400))
-    done, calls = run_step(tmp_path, "Check whether a referenced issue is accepted", body, {"accepted": [399], "milestoned": []})
-    assert done.returncode == 0, done.stderr
-    assert sum(1 for c in calls if c[:2] == ["issue", "list"]) == 1
-    assert not any(c[:2] == ["issue", "view"] for c in calls)
-
-
 def test_closing_keyword_on_a_roadmap_issue_comments_once(tmp_path):
     name = "Flag closing keywords on roadmap issues"
-    done, calls = run_step(tmp_path, name, "Fixes typo. Closes: #132 and resolves #9", {"accepted": [], "milestoned": [132]})
+    done, calls = run_step(tmp_path, name, "Fixes typo. Closes: #132 and resolves #9", {"milestoned": [132]})
     assert done.returncode == 0, done.stderr
     comments = [c for c in calls if c[:2] == ["pr", "comment"]]
     assert len(comments) == 1
@@ -80,29 +64,19 @@ def test_closing_keyword_on_a_roadmap_issue_comments_once(tmp_path):
 def test_url_and_qualified_forms_are_caught(tmp_path):
     name = "Flag closing keywords on roadmap issues"
     body = "Resolves https://github.com/GenAI-Security-Project/agent-control-standard/issues/132"
-    _done, calls = run_step(tmp_path, name, body, {"accepted": [], "milestoned": [132]})
+    _done, calls = run_step(tmp_path, name, body, {"milestoned": [132]})
     assert any(c[:2] == ["pr", "comment"] for c in calls)
 
 
 def test_no_comment_when_already_flagged_or_not_on_roadmap(tmp_path):
     name = "Flag closing keywords on roadmap issues"
-    state = {"accepted": [], "milestoned": [132], "comments": ["<!-- acs-closing-keyword:132 -->"]}
+    state = {"milestoned": [132], "comments": ["<!-- acs-closing-keyword:132 -->"]}
     _done, calls = run_step(tmp_path, name, "Closes #132", state)
     assert not any(c[:2] == ["pr", "comment"] for c in calls)
     other = tmp_path / "b"
     other.mkdir()
-    _done, calls = run_step(other, name, "Closes #5. disclose #132", {"accepted": [], "milestoned": [132]})
+    _done, calls = run_step(other, name, "Closes #5. disclose #132", {"milestoned": [132]})
     assert not any(c[:2] == ["pr", "comment"] for c in calls)
-
-
-def test_keyword_comment_does_not_suppress_the_queue_comment(tmp_path):
-    # One bot comment exists, but it is the keyword comment, so the length check reads 0.
-    done, calls = run_step(
-        tmp_path, "Check whether a referenced issue is accepted", "Closes #132",
-        {"accepted": [], "milestoned": [132], "bot_comment_count": 0},
-    )
-    assert done.returncode == 0, done.stderr
-    assert any(c[:2] == ["pr", "comment"] for c in calls)
 
 
 def test_no_step_interpolates_into_run():
@@ -110,16 +84,17 @@ def test_no_step_interpolates_into_run():
     assert all("${{" not in s.get("run", "") for s in steps)
 
 
-def test_failed_accepted_listing_queues_the_pull_request_and_exits_zero(tmp_path):
-    done, calls = run_step(
-        tmp_path, "Check whether a referenced issue is accepted", "Closes #132",
-        {"accepted": [132], "milestoned": [], "fail_list": True},
-    )
-    assert done.returncode == 0, done.stderr
-    assert any(c[:2] == ["pr", "comment"] for c in calls)
-
-
 def test_keyword_step_runs_after_an_earlier_failure_but_skips_body_free_edits():
     steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["triage"]["steps"]
     flag = next(s for s in steps if s["name"] == "Flag closing keywords on roadmap issues")
     assert flag["if"] == "always() && (github.event.action != 'edited' || github.event.changes.body)"
+
+
+def test_the_intake_step_runs_the_base_commit_and_never_the_pull_request_head():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "pull_request.head" not in text
+    steps = yaml.safe_load(text)["jobs"]["triage"]["steps"]
+    checkout = steps[0]
+    assert re.fullmatch(r"actions/checkout@[0-9a-f]{40}", checkout["uses"])
+    assert checkout["with"] == {"persist-credentials": False, "ref": "${{ github.sha }}"}
+    assert steps[1]["run"] == "python3 -I -S tools/pr_intake.py"

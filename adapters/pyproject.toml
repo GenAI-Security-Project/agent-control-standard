@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acs-adapters"
+version = "0.2.0"
+description = "Reference adapters that connect Claude Code, Cursor and NVIDIA NeMo Agent Toolkit to an ACS Guardian"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+# jsonschema is here, not in an extra, so the example Guardian validates envelopes in every install.
+# format-nongpl brings the RFC 3339 date-time checker without the GPL rfc3987 package.
+dependencies = ["rfc8785>=0.1.4,<0.2", "jsonschema[format-nongpl]>=4.25,<5"]
+
+[project.optional-dependencies]
+nat = ["nvidia-nat-core>=1.7,<1.8", "ruamel.yaml>=0.19,<0.20"]
+
+[project.scripts]
+acs-claude-code-hook = "acs.integrations.claude_code.hook:main"
+acs-claude-code-wire = "acs.integrations.claude_code.wire:main"
+acs-cursor-hook = "acs.integrations.cursor.hook:main"
+acs-cursor-wire = "acs.integrations.cursor.wire:main"
+acs-nat-wire = "acs.integrations.nat.wire:main"
+acs-example-guardian = "acs.guardian.example_guardian:main"
+
+# One entry per integration, naming its package; integrations from other
+# distributions register here the same way.
+[project.entry-points."acs.integrations"]
+claude_code = "acs.integrations.claude_code"
+cursor = "acs.integrations.cursor"
+nat = "acs.integrations.nat"
+
+# NAT imports this module at startup, which registers `_type: acs_guardian`.
+[project.entry-points."nat.components"]
+acs_guardian = "acs.integrations.nat.adapter"
+
+[dependency-groups]
+test = ["import-linter>=2", "pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Imports flow integrations -> client -> core; checked in CI with `lint-imports`.
+[tool.importlinter]
+root_package = "acs"
+
+[[tool.importlinter.contracts]]
+name = "Integrations use the client, the client uses core, and core uses neither"
+type = "layers"
+layers = ["acs.integrations", "acs.client", "acs.core"]
+
+[[tool.importlinter.contracts]]
+name = "The protocol, the client and the integrations import no Guardian, example or test code"
+type = "forbidden"
+source_modules = ["acs.core", "acs.client", "acs.integrations"]
+forbidden_modules = ["acs.guardian", "acs.examples", "acs.testing"]

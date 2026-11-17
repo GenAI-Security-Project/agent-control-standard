@@ -101,12 +101,12 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
                 "from": {
                     "agent": {
                         "name": "Entertainment Agent",
-                        "url": "https://entertainment.openai.com/api/v1",
+                        "url": "https://entertainment.example.com/api/v1",
                         "instructions": "You are a helpful assistant and your main purpose is entertainment.",
                         "version": "1.0.0",
                         "provider": {
-                            "name": "OpenAI",
-                            "url": "https://openai.com"
+                            "name": "Example Provider",
+                            "url": "https://example.com"
                         }
                     },
                     "role": "client"

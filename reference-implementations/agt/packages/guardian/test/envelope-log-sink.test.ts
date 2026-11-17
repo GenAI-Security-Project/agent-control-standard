@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -182,5 +182,35 @@ describe("extractRpcId", () => {
     expect(extractRpcId({ id: null })).toBeNull();
     expect(extractRpcId({ id: { nested: true } })).toBeNull();
     expect(extractRpcId("not an object")).toBeNull();
+  });
+});
+
+describe("createEnvelopeLogSink -- write says whether the line landed", () => {
+  it("answers true for a written line, and false once a write fails mid-run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-envelope-log-"));
+    const path = join(dir, "envelopes.jsonl");
+    const sink = createEnvelopeLogSink({ path, onError: () => {} });
+    try {
+      expect(sink.write("request", { id: 1 }, "steps/toolCallRequest")).toBe(true);
+      // A directory where the log file was: the next append throws EISDIR,
+      // which is a failure after earlier writes succeeded.
+      unlinkSync(path);
+      mkdirSync(path);
+      expect(sink.write("request", { id: 2 }, "steps/toolCallRequest")).toBe(false);
+      expect(sink.write("request", { id: 3 }, "steps/toolCallRequest")).toBe(false);
+    } finally {
+      // Non-recursive, like the rest of this file: the log path is a
+      // directory if the test got that far and a file if it did not.
+      try {
+        rmdirSync(path);
+      } catch {
+        unlinkSync(path);
+      }
+      rmdirSync(dir);
+    }
+  });
+
+  it("answers false from the null sink, which writes nowhere", () => {
+    expect(NULL_ENVELOPE_LOG_SINK.write("finding", {}, "steps/toolCallResult")).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ export {
   loadHookmap,
   modificationDocumentOf,
   toSessionUuid,
+  toInvocationRequestId,
   type Hookmap,
   type HookmapHookEntry,
   type HookmapOutputs,
