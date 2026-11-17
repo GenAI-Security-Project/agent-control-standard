@@ -308,7 +308,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
 | `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
 | Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | Issue #579 |
-| Replay runs inside the gateway, so no lab header goes to a separate replay server | Issue #579 |
+| Replay runs inside the gateway rather than as a separate replay server, so the branch tokens travel on an internal `x-acs-lab-branch` header that the gateway sets after stripping the client's `x-acs-*` headers and removes before any request leaves for a real upstream | Issue #579 |
 
 Spans (LAB-09, issue #582) build on this gateway as a separate module.
 
