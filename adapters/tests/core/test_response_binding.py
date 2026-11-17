@@ -147,6 +147,14 @@ class OneRequestPrecondition(unittest.TestCase):
             with self.subTest(id=json_rpc_id):
                 self.assertIsNone(request_binding_problem(_request(json_rpc_id)))
 
+    def test_a_non_finite_numeric_id_is_refused(self) -> None:
+        # Review finding CR9-7: NaN never equals itself and an infinity binds nothing useful.
+        from acs.core._envelope import request_envelope_problem
+        for json_rpc_id in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(id=json_rpc_id):
+                self.assertEqual(request_envelope_problem(_request(json_rpc_id)),
+                                 "request must carry a string or numeric JSON-RPC id")
+
     def test_a_request_that_is_not_a_mapping_binds_nothing(self) -> None:
         for request in ("request", ["request"], None, 7):
             with self.subTest(request=request):

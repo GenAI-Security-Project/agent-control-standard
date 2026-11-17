@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -59,14 +60,17 @@ HANDSHAKE_METHOD = "handshake/hello"
 def request_envelope_problem(request: object) -> str | None:
     """Why this is no request envelope a response could answer, or None.
 
-    The request must be a Mapping with a JSON-RPC id that is a string or a number. A missing or
-    null id matches nothing, and a bool would otherwise pass as a number. verify_with_keyring
-    treats this as a caller error and raises ValueError with this text.
+    The request must be a Mapping with a JSON-RPC id that is a string or a finite number. A
+    missing or null id matches nothing, a bool would otherwise pass as a number, and NaN or an
+    infinity can never bind a response. verify_with_keyring treats this as a caller error and
+    raises ValueError with this text.
     """
     if not isinstance(request, Mapping):
         return "request must be the request envelope this response answers"
     json_rpc_id = request.get("id")
     if isinstance(json_rpc_id, bool) or not isinstance(json_rpc_id, (str, int, float)):
+        return "request must carry a string or numeric JSON-RPC id"
+    if isinstance(json_rpc_id, float) and not math.isfinite(json_rpc_id):
         return "request must carry a string or numeric JSON-RPC id"
     return None
 
