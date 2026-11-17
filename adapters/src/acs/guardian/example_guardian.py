@@ -116,12 +116,11 @@ PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"),)
 # a tool under any other name, an MCP file tool included, meets no path deny here, and a policy has to cover it.
 WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit", "delete", "remove", "move", "rename"})
 # Path arguments read for every file tool. paths may hold a list, and each string in it is checked.
-PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file", "paths")
-# Read only for move and rename, where they name the source or the destination. On another tool, such as Edit,
-# target or to can be ordinary text, so reading them there would over-deny.
-MOVE_TOOLS = frozenset({"move", "rename"})
-MOVE_PATH_ARGUMENTS: tuple[str, ...] = ("destination", "new_path", "target", "to",
-                                        "source", "from", "old_path", "src")
+# Every name is read on every file tool. A move or rename names its source and destination with these, and so can
+# a delete that names its target. On Edit, target can be ordinary text, so text that names a protected path is
+# over-denied. That fails closed, and the README says so.
+PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file", "paths",
+                                   "destination", "new_path", "target", "to", "source", "from", "old_path", "src")
 
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
@@ -546,10 +545,8 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                     "reason_codes": ["destructive_command"]}
 
     if tool_name in WRITE_CAPABLE_TOOLS:
-        # Each tool on the list meets the same path denies, on every path argument it carries, and a move or
-        # rename on its source and destination too.
-        names = PATH_ARGUMENTS + (MOVE_PATH_ARGUMENTS if tool_name in MOVE_TOOLS else ())
-        for name in names:
+        # Each tool on the list meets the same path denies, on every path argument it carries.
+        for name in PATH_ARGUMENTS:
             value = args.get(name, "")
             # None reads as absent. A list is checked item by item, and an item that isn't a string denies.
             for path in value if isinstance(value, list) else ["" if value is None else value]:

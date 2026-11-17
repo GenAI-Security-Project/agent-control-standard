@@ -629,11 +629,14 @@ def test_a_path_list_with_a_non_string_item_denies(no_backend, paths):
 
 
 @pytest.mark.parametrize("payload", [
+    _file_call("Delete", target="/etc/passwd"),
+    _file_call("Delete", destination="/etc/cron.d/x"),
+    _file_call("Remove", source="/usr/bin/ls"),
+    _file_call("Write", file_path="/tmp/notes.txt", to="/etc/hosts"),
+    # Known over-deny, documented in docs/guardian/README.md: on Edit, target can be ordinary text, and text that
+    # names a protected path still denies. That fails closed.
     _file_call("Edit", file_path="/tmp/notes.txt", target="/etc/passwd is the file I mean"),
-    _file_call("Edit", file_path="/tmp/notes.txt", to="/etc/hosts", source="/etc/hosts"),
-    _file_call("Write", file_path="/tmp/notes.txt", destination="/usr/bin"),
-    _file_call("Delete", paths=["/tmp/a", "/tmp/b"]),
 ])
-def test_move_and_rename_names_are_read_only_for_move_and_rename(no_backend, payload):
-    # target, to, source, and the rest are path arguments only for move and rename. On Edit they can be text.
-    assert _step("steps/toolCallRequest", payload)["decision"] == "allow"
+def test_every_path_name_counts_on_every_file_tool(no_backend, payload):
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
