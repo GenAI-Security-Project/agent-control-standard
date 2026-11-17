@@ -486,6 +486,14 @@ class RequestBinding(unittest.TestCase):
         sign_with_signing_key(server_hello, _signer())
         self.assertTrue(self._verify(server_hello, hello), "a ClientHello needs no request_id")
 
+    def test_the_caller_error_is_the_shared_precondition(self) -> None:
+        # CR7-6: the keyring path raises exactly what request_binding_problem names.
+        from acs.core._envelope import request_binding_problem
+        bad = {**_request(), "params": {}}
+        with self.assertRaises(ValueError) as raised:
+            self._verify(self.signed, bad)
+        self.assertEqual(str(raised.exception), request_binding_problem(bad))
+
     def test_a_request_whose_params_is_not_an_object_is_a_caller_error(self) -> None:
         # Review findings R5-M1, CR5-2: ValueError, not an AttributeError from deep inside.
         for params in ("params", ["request_id"], 7, True):

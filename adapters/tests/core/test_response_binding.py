@@ -110,5 +110,34 @@ class OneHandshakeAwareRule(unittest.TestCase):
                                                                   "result": dict(SERVER_HELLO)}))
 
 
+class OneRequestPrecondition(unittest.TestCase):
+    """Review finding CR7-6: request_binding_problem states the precondition once, for both paths."""
+
+    def test_a_well_formed_request_has_no_problem(self) -> None:
+        from acs.core._envelope import request_binding_problem
+        self.assertIsNone(request_binding_problem(_request("1")))
+        self.assertIsNone(request_binding_problem(_client_hello()))
+        hello_without_request_id = {**_client_hello(), "params": {"acs_version": "0.1.0"}}
+        self.assertIsNone(request_binding_problem(hello_without_request_id), "a ClientHello needs no request_id")
+
+    def test_each_malformed_request_names_its_problem_and_binds_nothing(self) -> None:
+        from acs.core._envelope import request_binding_problem
+        cases = {
+            "not an object": "request",
+            "no id": {k: v for k, v in _request("1").items() if k != "id"},
+            "null id": _request(None),
+            "params not an object": {**_request("1"), "params": "params"},
+            "no request_id": {**_request("1"), "params": {}},
+            "request_id not a string": _request("1", request_id=7),
+            "empty request_id": _request("1", request_id=""),
+        }
+        for name, request in cases.items():
+            with self.subTest(name):
+                problem = request_binding_problem(request)  # type: ignore[arg-type]
+                self.assertIsInstance(problem, str)
+                if isinstance(request, dict):
+                    self.assertFalse(response_matches_request(request, _response("1")))
+
+
 if __name__ == "__main__":
     unittest.main()

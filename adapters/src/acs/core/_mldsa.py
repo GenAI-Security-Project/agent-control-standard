@@ -27,7 +27,7 @@ except ImportError as exc:
         "can't be installed together (see adapters/README.md).") from exc
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
-from acs.core._envelope import HANDSHAKE_METHOD, response_matches_request
+from acs.core._envelope import request_binding_problem, response_matches_request
 from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
 
 ML_DSA_MODE = "pure"
@@ -143,29 +143,22 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     A keyring can hold several keys, so the caller names the one it trusts here, and a
     signature naming any other key_id fails before any crypto runs. One key signs every
     session, so the key alone can't stop a response from one exchange being replayed onto
-    another. The response must answer request (D-029): the same JSON-RPC id and, when the
-    result carries one, the same request_id. A mismatch fails before any crypto, and a binding
-    rewritten after signing fails the signature. This stops replay only as far as the caller's
-    ids are unique, which this function doesn't check. request_envelope gives every request a
-    fresh UUID4 JSON-RPC id. A request envelope answers nothing and fails. The algorithm comes from the
+    another. The response must answer request (D-029) under acs.core.response_matches_request:
+    the same JSON-RPC id, and for any request but the handshake a result carrying the
+    request's request_id. A mismatch fails before any crypto, and a binding rewritten after
+    signing fails the signature. This stops replay only as far as the caller's ids are unique,
+    which this function doesn't check. request_envelope gives every request a fresh UUID4
+    JSON-RPC id. A request envelope answers nothing and fails. The algorithm comes from the
     resolved key, never from the envelope (RFC 8725 section 3.1, issue #308). An unknown
     key_id, an envelope algorithm that disagrees with the key's, an unsigned or malformed
-    envelope, and a bad signature all return False (D-026). A missing expected_key_id, a
-    request that isn't an envelope with a JSON-RPC id, a request whose params is present but
-    not an object, or a request other than the handshake without a string params.request_id,
-    is a caller error and raises ValueError.
+    envelope, and a bad signature all return False (D-026). A missing expected_key_id, or a
+    request that fails acs.core._envelope.request_binding_problem, is a caller error and
+    raises ValueError with that problem's text.
     """
     check_key_id(expected_key_id)
-    if not isinstance(request, dict) or request.get("id") is None:
-        raise ValueError("request must be the request envelope this response answers, with its JSON-RPC id")
-    if not isinstance(request.get("params", {}), (dict, type(None))):
-        raise ValueError("request params must be an object when present")
-    if request.get("method") != HANDSHAKE_METHOD:
-        params = request.get("params") or {}
-        request_id = params.get("request_id")
-        # Only the handshake binds on the id alone, so a step request must name its request_id.
-        if not isinstance(request_id, str) or not request_id:
-            raise ValueError("a request other than the handshake must carry a string params.request_id")
+    problem = request_binding_problem(request)
+    if problem is not None:
+        raise ValueError(problem)
     if not isinstance(envelope, dict) or "method" in envelope:
         return False
     container = envelope.get(container_key(envelope))

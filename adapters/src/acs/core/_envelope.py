@@ -56,16 +56,42 @@ def same_json_rpc_id(a: object, b: object) -> bool:
 HANDSHAKE_METHOD = "handshake/hello"
 
 
+def request_binding_problem(request: object) -> str | None:
+    """Why this request can't bind a response, or None. The one precondition both paths share.
+
+    A request needs a string or numeric JSON-RPC id, since a missing or null id matches
+    nothing, and params, when present, must be an object. Only the handshake binds on the id
+    alone, so any other request must carry a non-empty string params.request_id.
+    verify_with_keyring raises ValueError with this text, and response_matches_request
+    returns False.
+    """
+    if not isinstance(request, dict):
+        return "request must be the request envelope this response answers"
+    if request.get("id") is None:
+        return "request must carry its JSON-RPC id"
+    params = request.get("params")
+    if params is not None and not isinstance(params, dict):
+        return "request params must be an object when present"
+    if request.get("method") != HANDSHAKE_METHOD:
+        request_id = (params or {}).get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            return "a request other than the handshake must carry a string params.request_id"
+    return None
+
+
 def response_matches_request(request: dict, response: dict) -> bool:
     """Whether the response answers this request, so a signed response can't be replayed onto another call (D-029).
 
-    The rule follows the request, never the response's shape. Every response needs the
-    request's JSON-RPC id. An error is bound by the id alone. For the handshake, a ServerHello
-    echoes nothing else from the ClientHello, so its result must carry no request_id, which
-    keeps a step decision from answering a ClientHello. Issue #13 tracks binding the
-    handshake to the traffic after it. For every other request, a result must carry the
-    request's request_id. A result that isn't an object answers nothing.
+    The rule follows the request, never the response's shape. A request that fails
+    request_binding_problem binds nothing. Every response needs the request's JSON-RPC id. An
+    error is bound by the id alone, and an id with neither a result nor an error answers
+    nothing. For the handshake, a ServerHello echoes nothing else from the ClientHello, so its
+    result must carry no request_id, which keeps a step decision from answering a ClientHello.
+    Issue #13 tracks binding the handshake to the traffic after it. For every other request, a
+    result must carry the request's request_id. A result that isn't an object answers nothing.
     """
+    if request_binding_problem(request) is not None:
+        return False
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return False
     result = response.get("result")
@@ -76,10 +102,8 @@ def response_matches_request(request: dict, response: dict) -> bool:
         return False
     if request.get("method") == HANDSHAKE_METHOD:
         return "request_id" not in result
-    params = request.get("params")
-    want = params.get("request_id") if isinstance(params, dict) else None
-    # Present and equal on both sides: a step request without a request_id binds no result.
-    return isinstance(want, str) and bool(want) and same_json_rpc_id(result.get("request_id"), want)
+    # request_binding_problem already required a non-empty string request_id here.
+    return same_json_rpc_id(result.get("request_id"), request["params"]["request_id"])
 
 
 def iso8601_now() -> str:
