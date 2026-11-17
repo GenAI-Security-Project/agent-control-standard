@@ -204,3 +204,41 @@ def test_usable_ask_details_are_read():
     assert ask_settings({"approver": {"type": "human", "id": "lab-approver"}, "question": "Pay?",
                          "timeout_seconds": 30}) == ("Pay?", "lab-approver", 30)
 
+
+def _streamed(client: Any) -> list[dict[str, Any]]:
+    from streams import decode
+
+    with client.stream("POST", "/v1/responses", json={**finbot_request(), "stream": True}) as response:
+        return decode(b"".join(response.iter_bytes()))
+
+
+def _streamed_calls(received: list[dict[str, Any]]) -> list[str]:
+    return [e["item"]["call_id"] for e in received
+            if e["type"] == "response.output_item.done" and e["item"]["type"] == "function_call"]
+
+
+def test_a_streamed_ask_is_held_and_released_after_approval(gateway, harness_guardian, upstream, audit):
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {"vendor_id": 7}, "call_1")))))
+    client = enforce(gateway, harness_guardian)
+    thread = approver(client, "approve")
+    received = _streamed(client)
+    thread.join()
+    assert _streamed_calls(received) == ["call_1"]
+    assert [(r["outcome"], r["decision"]) for r in events(audit, "ask_resolved")] == [("approved", "allow")]
+
+
+def test_two_streamed_asks_share_one_deadline(gateway, harness_guardian, upstream, audit):
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {"n": 1}, "call_1"),
+                                            call_item("ask_tool", {"n": 2}, "call_2")))))
+    client = enforce(gateway, harness_guardian, ACS_GATEWAY_ASK_MAX_S="1")
+    started = time.monotonic()
+    received = _streamed(client)
+    assert time.monotonic() - started < 1.8
+    assert _streamed_calls(received) == []
+    assert [r["outcome"] for r in events(audit, "ask_resolved")] == ["timed_out", "timed_out"]

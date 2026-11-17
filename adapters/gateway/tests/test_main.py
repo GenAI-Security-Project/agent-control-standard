@@ -48,3 +48,27 @@ def test_the_entry_point_exits_when_the_guardian_never_answers(tmp_path):
     _, stderr = proc.communicate(timeout=30)
     assert proc.returncode != 0
     assert "system/ping" in stderr
+
+
+def test_the_entry_point_serves_the_approver_page_on_its_own_loopback_port(guardian, upstream, tmp_path):
+    port, approver_port = free_port(), free_port()
+    proc = start({"ACS_LAB_MODE": "enforce", "ACS_GUARDIAN_URL": guardian, "ACS_UPSTREAM_URL": upstream.url,
+                  "ACS_GATEWAY_PORT": str(port), "ACS_GATEWAY_APPROVER_PORT": str(approver_port),
+                  "ACS_GATEWAY_STATE_DIR": str(tmp_path / "state"), "ACS_SESSION_STATE_DIR": "",
+                  "ACS_HANDSHAKE_CACHE": ""})
+    try:
+        deadline = time.monotonic() + 20
+        while True:
+            try:
+                response = httpx.get(f"http://127.0.0.1:{approver_port}/", timeout=5)
+                break
+            except httpx.ConnectError:
+                assert time.monotonic() < deadline and proc.poll() is None
+                time.sleep(0.2)
+        assert response.status_code == 200
+        assert "No action is waiting for approval." in response.text
+        # The model port never serves the page.
+        assert httpx.get(f"http://127.0.0.1:{port}/", timeout=5).status_code == 404
+    finally:
+        proc.terminate()
+        proc.wait(10)

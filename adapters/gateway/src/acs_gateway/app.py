@@ -403,7 +403,10 @@ class Gateway:
         # The response releases these pins, so responses() must not.
         pins.clear()
         editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes,
-                              decide=functools.partial(self._gate_item, session), audit=_audit,
+                              # The stream is one model response, so its calls share one ASK deadline though
+                              # each is decided alone (P26).
+                              decide=functools.partial(self._gate_item, session,
+                                                       asks=AskDeadline(self.config.ask_max_s)), audit=_audit,
                               audit_fields={"session_id": session.session_id},
                               idle_timeout=self.config.stream_idle_timeout_s,
                               deadline=self.config.stream_deadline_s if self.enforce else None)

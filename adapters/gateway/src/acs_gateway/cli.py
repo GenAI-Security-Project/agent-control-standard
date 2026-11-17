@@ -48,5 +48,14 @@ def main() -> int:
         admin = create_admin_app(app.state.gateway, token)
         servers.append(uvicorn.Server(uvicorn.Config(admin, host=config.admin_host, port=config.admin_port,
                                                      lifespan="off", log_level="info")))
+    approvals = app.state.gateway.approvals
+    if approvals is not None:
+        from acs_gateway.approver import create_approver_app
+
+        # The approver page (LAB-08). Same process and event loop as the model port, so an answer wakes the held
+        # request directly. Opens after the model port's startup, like the admin port.
+        servers.append(uvicorn.Server(uvicorn.Config(create_approver_app(approvals, config.approver_host),
+                                                     host=config.approver_host, port=config.approver_port,
+                                                     lifespan="off", log_level="info")))
     sys.stderr.write(f"acs-gateway: mode {config.mode}, model port {config.listen_port}\n")
     return asyncio.run(_serve(servers))
