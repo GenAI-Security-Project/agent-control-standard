@@ -299,3 +299,75 @@ def test_an_extra_key_added_to_the_real_document_fails_at_the_first_response_it_
     forged = flipped[:number - 1] + resign(flipped[number - 1:number], signing_key) + flipped[number:]
     report = mldsa_verify(mldsa_run, forged, key_document=document, expect_fingerprints=[fingerprint])
     assert (report.failure.line, report.failure.code) == (number, "fingerprint_mismatch")
+
+
+# The tail. Entries cut from the end of a transcript leave no trace, so without a verified sessionEnd acs-verify
+# passes only up to its last checkpoint and says so (PREMORTEM P31).
+
+
+def test_no_session_end_prints_tail_unverified(mldsa_run):
+    lines = record_session(mldsa_run, end=False)
+    report = mldsa_verify(mldsa_run, lines)
+    assert report.ok
+    assert not report.complete
+    assert report.checkpoint_line == len(lines)
+    text = report.to_text()
+    assert "tail unverified" in text
+    assert "whole transcript verified" not in text
+    assert report.to_json()["complete"] is False
+
+
+def test_a_truncated_transcript_does_not_claim_the_whole_log(mldsa_run):
+    lines = record_session(mldsa_run)
+    report = mldsa_verify(mldsa_run, lines[:-2])
+    assert report.ok and not report.complete
+    assert "tail unverified" in report.to_text()
+
+
+def test_a_request_with_no_answer_after_the_last_checkpoint_is_unverified(mldsa_run):
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run, end=False)
+    tail = [lines[-2].replace(json.loads(lines[-2])["envelope"]["id"], "no-answer"),
+            transcript_line("resp", None, "decision_timeout")]
+    report = mldsa_verify(mldsa_run, lines + tail)
+    assert report.ok and not report.complete
+    assert report.unverified_lines == [len(lines) + 1, len(lines) + 2]
+    assert f"Lines {len(lines) + 1} to {len(lines) + 2}" in report.to_text()
+
+
+def test_a_replayed_request_between_two_decisions_settles(mldsa_run):
+    lines = record_session(mldsa_run, replay=True)
+    codes = [(json.loads(line)["envelope"].get("error") or {}).get("code") for line in lines
+             if json.loads(line)["dir"] == "resp"]
+    assert -32005 in codes
+    report = mldsa_verify(mldsa_run, lines)
+    assert report.ok and report.complete, report.to_text()
+
+
+def test_keys_only_checks_signatures_without_the_chain(mldsa_run):
+    lines = record_session(mldsa_run)
+    allow_req = tool_request_line(lines, "ls -la")
+    deny_req = tool_request_line(lines, "rm -rf /")
+    reordered = list(lines)
+    reordered[allow_req - 1:allow_req + 3] = lines[deny_req - 1:deny_req + 1] + lines[allow_req - 1:allow_req + 1]
+    report = mldsa_verify(mldsa_run, reordered, keys_only=True)
+    assert report.ok and not report.complete and not report.chain_checked
+    assert "chain: not checked (--keys-only)" in report.to_text()
+    flipped = rewrite(lines, deny_req + 1, lambda r: r["envelope"]["result"].update({"decision": "allow"}))
+    assert mldsa_verify(mldsa_run, flipped, keys_only=True).failure.code == "signature_invalid"
+
+
+def test_a_chained_request_whose_answer_was_lost_settles_at_the_next_checkpoint(mldsa_run):
+    # The Guardian chained the allow, but the answer never reached the gateway (a timeout). The deny's signed
+    # chain_hash settles that the entry is in the chain (PREMORTEM P6).
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run)
+    number = tool_request_line(lines, "ls -la") + 1
+    lost = list(lines)
+    lost[number - 1] = transcript_line("resp", None, "decision_timeout")
+    report = mldsa_verify(mldsa_run, lost)
+    assert report.ok and report.complete, report.to_text()
+    # Dropping the request line too leaves an entry the chain needs, so the next checkpoint fails.
+    dropped = lines[:number - 2] + lines[number:]
+    report = mldsa_verify(mldsa_run, dropped)
+    assert (report.failure.line, report.failure.code) == (number - 1, "chain_mismatch")
