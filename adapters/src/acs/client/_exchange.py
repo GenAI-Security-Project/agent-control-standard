@@ -26,6 +26,7 @@ from acs.core import (
     normalize_decision,
     request_envelope_problem,
     response_binding_problem,
+    response_shape_problem,
     schemas_dir,
 )
 
@@ -48,11 +49,8 @@ class GuardianHTTPError(Exception):
 
 
 def is_jsonrpc_response(body: Any) -> bool:
-    """True for a JSON-RPC 2.0 response: "jsonrpc": "2.0", and a result or error, each present one an object."""
-    if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
-        return False
-    members = [body[k] for k in ("result", "error") if k in body]
-    return bool(members) and all(isinstance(m, dict) for m in members)
+    """Whether the body has the JSON-RPC 2.0 response shape the binding rule requires (response_shape_problem)."""
+    return response_shape_problem(body) is None
 
 
 def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:

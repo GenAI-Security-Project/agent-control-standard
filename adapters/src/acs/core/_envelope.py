@@ -106,6 +106,19 @@ BINDING_ID = "id"
 BINDING_RESULT = "result"
 
 
+def response_shape_problem(response: object) -> str | None:
+    """BINDING_SHAPE unless the response is a JSON-RPC 2.0 object with exactly one object result or error and no method.
+
+    The shape part of the one binding rule, on its own, so the client judges an HTTP error body
+    by the same check as any other response.
+    """
+    if (not isinstance(response, Mapping) or response.get("jsonrpc") != "2.0"
+            or "method" in response or ("result" in response) == ("error" in response)):
+        return BINDING_SHAPE
+    answer = response["result"] if "result" in response else response["error"]
+    return None if isinstance(answer, Mapping) else BINDING_SHAPE
+
+
 def response_binding_problem(request: object, response: object) -> str | None:
     """Why the response doesn't answer this request (D-029), as one BINDING_* reason, or None.
 
@@ -125,12 +138,9 @@ def response_binding_problem(request: object, response: object) -> str | None:
     """
     if request_envelope_problem(request) is not None:
         return BINDING_REQUEST
-    if (not isinstance(response, Mapping) or response.get("jsonrpc") != "2.0"
-            or "method" in response or ("result" in response) == ("error" in response)):
+    if response_shape_problem(response) is not None:
         return BINDING_SHAPE
     answer = response["result"] if "result" in response else response["error"]
-    if not isinstance(answer, Mapping):
-        return BINDING_SHAPE
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return BINDING_ID
     if "error" in response:

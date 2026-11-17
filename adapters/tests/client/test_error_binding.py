@@ -72,6 +72,34 @@ class TheStepExchangeUsesTheOneRule(unittest.TestCase):
         self.assertEqual(outcome.cause, "malformed_response")
 
 
+class OneShapeRule(unittest.TestCase):
+    """Review finding CR11-2: an HTTP error body is judged by the same shape check as any response."""
+
+    def test_an_http_400_body_with_both_result_and_error_is_not_json_rpc(self) -> None:
+        import io
+        import json
+        import urllib.error
+
+        from acs.client import exchange
+        body = {"jsonrpc": "2.0", "id": "rpc-1", "result": {"request_id": "req-1", "decision": "allow"},
+                "error": {"code": -32000, "message": "refused"}}
+
+        def refuse(*args, **kwargs):
+            raise urllib.error.HTTPError("http://127.0.0.1:8787/acs", 400, "Bad Request", {},
+                                         io.BytesIO(json.dumps(body).encode()))
+        with mock.patch.object(_exchange, "_open", side_effect=refuse):
+            outcome = exchange(_request({"request_id": "req-1"}), guardian_url="http://127.0.0.1:8787/acs",
+                               timeout_s=1.0, session_id=SESSION)
+        self.assertEqual(outcome.cause, "http_400_refusal")
+
+    def test_is_jsonrpc_response_is_the_rule_shape_check(self) -> None:
+        from acs.core import response_shape_problem
+        for body in ({"jsonrpc": "2.0", "id": "1", "result": {}}, {"jsonrpc": "2.0", "id": "1", "result": {}, "error": {}},
+                     {"jsonrpc": "2.0", "id": "1", "method": "x", "result": {}}, {"jsonrpc": "2.0"}, "body", None):
+            with self.subTest(body=body):
+                self.assertEqual(_exchange.is_jsonrpc_response(body), response_shape_problem(body) is None)
+
+
 class ExchangeNeverRaises(unittest.TestCase):
     """Review finding CR11-3: exchange() refuses a request it can't bind, before any I/O, and never raises."""
 

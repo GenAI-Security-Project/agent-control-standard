@@ -34,6 +34,7 @@ _EXPORTS = {
     "request_envelope_problem": "_envelope",
     "response_matches_request": "_envelope",
     "response_binding_problem": "_envelope",
+    "response_shape_problem": "_envelope",
     "same_json_rpc_id": "_envelope",
     "schemas_dir": "_schemas",
     "server_hello_problem": "_handshake",
