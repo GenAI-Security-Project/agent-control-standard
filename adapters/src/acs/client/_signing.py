@@ -35,7 +35,9 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     answer, and the response must answer request, the envelope this caller sent (D-029).
     That key's algorithm decides (RFC 8725 section 3.1). Core verify_with_keyring enforces
     both. The ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra
-    (issue #574).
+    (issue #574). Without it, the keyring path raises AttributeError naming the extra, since
+    it reaches verify_with_keyring through acs.core's gated export. On an OpenSSL without
+    ML-DSA, building the keyring raises acs.core.MLDSAUnavailableError first.
     """
     if keyring is None:
         if expected_key_id is not None or request is not None:
