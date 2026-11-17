@@ -382,8 +382,13 @@ def replace_at(document: Any, pointer: str, value: Any) -> None:
     *parents, leaf = decode_pointer(pointer)
     node = document
     for token in parents:
-        node = node[int(token)] if isinstance(node, list) else node[token]
+        found, node = _step(node, token)
+        if not found:
+            raise PointerError(f"{pointer!r} does not resolve")
     if isinstance(node, list):
+        found, _ = _step(node, leaf)
+        if not found:
+            raise PointerError(f"{pointer!r} does not resolve")
         node[int(leaf)] = value
     else:
         node[leaf] = value
@@ -479,12 +484,12 @@ def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | Non
         tokens = decode_pointer(path)
         node, shape = payload, root
         for token in tokens:
-            if isinstance(node, list):
-                node = node[int(token)]
+            is_array = isinstance(node, list)
+            _, node = _step(node, token)  # every path here already resolved
+            if is_array:
                 shape.items = shape.items or _Shape()
                 shape = shape.items
             else:
-                node = node[token]
                 shape = shape.keys.setdefault(token, _Shape())
         shape.path = path
         redacted.add("/" + "/".join(_encode(token) for token in tokens))
