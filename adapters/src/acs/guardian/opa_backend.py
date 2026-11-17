@@ -263,40 +263,6 @@ VERDICT_DECISIONS = frozenset({"allow", "deny", "modify", "ask"})
 # The Guardian canonicalizes and signs the result recursively, so a verdict nests no deeper than this.
 MAX_VERDICT_DEPTH = 64
 
-_validator_lock = threading.Lock()
-_validator: Any = None
-_validator_error: str | None = None
-
-
-def _result_validator() -> Any:
-    """A validator for an AcsResult from specification/v0.1.0, or None with _validator_error set."""
-    global _validator, _validator_error
-    with _validator_lock:
-        if _validator is None and _validator_error is None:
-            try:
-                from jsonschema import Draft202012Validator
-                from referencing import Registry, Resource
-
-                from acs.core import schemas_dir
-                spec_dir = schemas_dir(os.environ.get("ACS_SPEC_DIR"))
-                resources = []
-                for path in sorted(spec_dir.glob("*.json")):
-                    with open(path, encoding="utf-8") as f:
-                        contents = json.load(f)
-                    if isinstance(contents, dict) and isinstance(contents.get("$id"), str):
-                        resources.append((contents["$id"], Resource.from_contents(contents)))
-                envelope_id = next(uri for uri, _ in resources if uri.endswith("/response-envelope.json"))
-                # Validating the result against AcsResult directly, not the envelope's oneOf, keeps errors specific.
-                _validator = Draft202012Validator(
-                    {"$ref": envelope_id + "#/$defs/AcsResult"},
-                    registry=Registry().with_resources(resources),
-                    format_checker=Draft202012Validator.FORMAT_CHECKER,
-                )
-            except Exception as e:  # noqa: BLE001
-                _validator_error = f"the decision schemas could not be loaded ({e})"
-        return _validator
-
-
 def _depth_exceeds(value: Any, limit: int) -> bool:
     """Whether value nests deeper than limit, checked without recursion."""
     stack = [(value, 1)]
@@ -397,14 +363,12 @@ def verdict_problem(verdict: Any, method: str, payload: Mapping[str, Any], base:
         return f"decision {decision} carries modifications"
     if "ask_details" in verdict and decision != "ask":
         return f"decision {decision} carries ask_details"
-    validator = _result_validator()
-    if validator is None:
-        return _validator_error
-    from jsonschema.exceptions import best_match
-    error = best_match(validator.iter_errors({**base, **verdict}))
-    if error is not None:
-        where = "/".join(str(p) for p in error.absolute_path) or "the result"
-        return f"{where} fails response-envelope.json AcsResult: {error.message}"
+    # The same AcsResult check acs.client applies to every answer it receives. It passes a section 6.3
+    # composition violation, which _modification_problem below rejects.
+    from acs.client._exchange import result_problem
+    problem = result_problem({**base, **verdict})
+    if problem:
+        return f"the result fails response-envelope.json AcsResult: {problem}"
     if decision == "ask" and verdict["ask_details"].get("timeout_disposition", "deny") != "deny":
         # D-043: the Guardian owns the ASK timeout, and an unanswered ASK denies.
         return "ask_details.timeout_disposition must be deny (D-043)"
