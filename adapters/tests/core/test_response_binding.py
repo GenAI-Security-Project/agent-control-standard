@@ -21,7 +21,7 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
     and 1 equals 1.0, since JSON and JCS treat them as one number."""
 
     def test_equal_ids_match(self) -> None:
-        for a, b in (("1", "1"), (1, 1), (1, 1.0), (1.0, 1), (True, True), (False, False), (None, None),
+        for a, b in (("1", "1"), (1, 1), (1, 1.0), (1.0, 1), (True, True), (False, False),
                      ("c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60", "c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60")):
             with self.subTest(a=a, b=b):
                 self.assertTrue(same_json_rpc_id(a, b))
@@ -32,6 +32,14 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
             with self.subTest(a=a, b=b):
                 self.assertFalse(same_json_rpc_id(a, b))
                 self.assertFalse(response_matches_request(_request(a), _response(b)))
+
+    def test_a_missing_or_null_id_never_matches(self) -> None:
+        # Review finding CR7-5: a request with no id must not bind to a response with no id.
+        self.assertFalse(same_json_rpc_id(None, None))
+        no_id_request = {k: v for k, v in _request("1").items() if k != "id"}
+        no_id_response = {k: v for k, v in _response("1").items() if k != "id"}
+        self.assertFalse(response_matches_request(no_id_request, no_id_response))
+        self.assertFalse(response_matches_request(_request(None), _response(None)))
 
     def test_an_error_binds_by_id_with_the_same_rule(self) -> None:
         error = {"jsonrpc": "2.0", "id": True, "error": {"code": -32000, "message": "refused"}}

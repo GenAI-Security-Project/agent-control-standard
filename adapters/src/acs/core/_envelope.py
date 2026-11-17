@@ -36,10 +36,12 @@ def turn_start_envelope(metadata: Mapping[str, Any], turn_id: str) -> dict[str, 
 
 
 def same_json_rpc_id(a: object, b: object) -> bool:
-    """Whether two ids are the same JSON value: strings, numbers, booleans or null, compared as JSON does.
+    """Whether two ids name the same request: strings compare exactly, numbers as Python values.
 
-    Python's == treats True as 1, and JSON doesn't, so a bool never equals a number. JSON and
-    JCS treat 1 and 1.0 as one number, so a re-serialized numeric id still matches.
+    A bool never equals a number, although Python's == treats True as 1. Numbers compare as
+    Python values, so 1 equals 1.0, but integers past 2**53 compare exactly where JSON parsers
+    that use doubles would not. A missing or null id never matches, so a request without an id
+    binds nothing. Ids should be strings, as acs.core.request_envelope makes them.
     """
     if isinstance(a, bool) or isinstance(b, bool):
         return isinstance(a, bool) and isinstance(b, bool) and a == b
@@ -47,7 +49,7 @@ def same_json_rpc_id(a: object, b: object) -> bool:
         return a == b
     if isinstance(a, str) and isinstance(b, str):
         return a == b
-    return a is None and b is None
+    return False
 
 
 # The ClientHello's method, as handshake.json and request-envelope.json name it.
