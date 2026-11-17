@@ -407,6 +407,9 @@ def check_skew(timestamp: str) -> None:
 
 
 def check_signature(envelope: dict, session_id: str) -> None:
+    # Signed, unlike every error before it: §10 exempts only an unknown key_id, and acs.client reads a signed -32004
+    # as signature_invalid_response, the cause the conformance suite requires (Core08). An unknown key_id gets its
+    # unsigned -32004 earlier, in _handle_request.
     if not verify_signature(envelope, session_id=session_id):
         raise GuardianError(-32004, "SIGNATURE_INVALID")
 
@@ -729,32 +732,26 @@ def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
 
 def handle_request(request: dict) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
+    # The order is parse (in do_POST), structure, depth, signature, replay, then the step. Nothing before the
+    # signature verifies is signed: signing for a session_id the sender chose, before verifying the sender, is an
+    # oracle, and signing a value JCS can't encode is also what would raise and drop the connection.
     fields, problem, answer_id = read_request(request)
-    session_id = fields.session_id if fields else ""
     if problem:
-        return _error_envelope(answer_id, session_id, -32600, f"Invalid Request: {problem}")
-    request_id = answer_id
+        return _unsigned_error(answer_id, -32600, f"Invalid Request: {problem}")
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
-        return _error_envelope(request_id, session_id, -32600,
+        return _unsigned_error(answer_id, -32600,
                                f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
     try:
         return _handle_request(request, fields)
     except CANONICALIZATION_ERRORS as e:
-        # Last resort, after the depth bound: anything else the Guardian can't canonicalize still gets an answer,
-        # never a dropped connection, which a proceed posture would run as a decision failure.
+        # Last resort, after the depth bound. The failing step is unknown, so the answer is unsigned.
         cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
-        return _last_resort_error(request_id, session_id,
-                                  f"Invalid Request: the envelope could not be canonicalized{cause}")
+        return _unsigned_error(answer_id, -32600, f"Invalid Request: the envelope could not be canonicalized{cause}")
 
 
-def _last_resort_error(request_id: Any, session_id: str, message: str) -> dict:
-    """A signed -32600, retried with a null id when the id itself can't be signed, unsigned only as a last step."""
-    for candidate in (request_id, None):
-        try:
-            return _error_envelope(candidate, session_id, -32600, message)
-        except CANONICALIZATION_ERRORS:
-            continue
-    return _error_envelope(None, "", -32600, message, signed=False)
+def _unsigned_error(request_id: Any, code: int, message: str) -> dict:
+    """An error for a sender not yet verified. The id is the request's own when it has a valid type, else null."""
+    return _error_envelope(request_id, "", code, message, signed=False)
 
 
 def _handle_request(request: dict, fields: RequestFields) -> dict:
@@ -783,8 +780,8 @@ def _handle_request(request: dict, fields: RequestFields) -> dict:
                 f"{'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
                 for e in errors[:5]
             )
-            return _error_envelope(request_id, session_id, -32600,
-                                   f"Invalid Request: envelope failed schema: {paths}")
+            # Before the signature check, so unsigned (§10, ruling 1 of LAB-02 fix round 9).
+            return _unsigned_error(request_id, -32600, f"Invalid Request: envelope failed schema: {paths}")
 
     if method == "handshake/hello":
         # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.

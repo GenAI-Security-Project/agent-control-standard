@@ -23,6 +23,8 @@ def served(monkeypatch):
     monkeypatch.delenv("ACS_HMAC_SECRET_FILE", raising=False)
     monkeypatch.setattr(example_guardian, "OPA_CONFIG", None)
     monkeypatch.setattr(example_guardian, "POLICY_BACKEND_NAME", "")
+    # In memory, so no test writes Guardian state to the home directory, and a test can read STATE directly.
+    monkeypatch.setattr(example_guardian, "PERSIST_ENABLED", False)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), example_guardian.GuardianHandler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -129,3 +131,71 @@ def test_a_payload_that_is_not_an_object_is_refused_on_ping_and_hello(served, me
                        "params": {"metadata": {"session_id": "s"}, "payload": payload}}).encode()
     status, answer = post(served, body)
     assert answer["error"]["code"] == -32600
+
+
+
+def _envelope_text(session_id: str = "ok-session", key_id: str = "test-key", depth: int = 0,
+                   request_id: object = "1", acs_request_id: str = "11111111-1111-4111-8111-111111111111") -> bytes:
+    """A step envelope with a made-up signature, so nothing here is a verified sender."""
+    deep: list = []
+    for _ in range(depth):
+        deep = [deep]
+    envelope = {"jsonrpc": "2.0", "id": request_id, "method": "steps/toolCallRequest",
+                "params": {"acs_version": "0.1.0", "request_id": acs_request_id,
+                           "timestamp": "2026-11-17T00:00:00Z",
+                           "metadata": {"agent_id": "a", "session_id": session_id, "platform": "p"},
+                           "payload": {"tool": {"name": "ls"}, "arguments": {"x": {"value": deep}}},
+                           "signature": {"algorithm": "HMAC-SHA256", "value": "AAAA", "key_id": key_id}}}
+    return json.dumps(envelope).encode()
+
+
+def _assert_unsigned_and_stateless(answer: dict, code: int, session_id: str) -> None:
+    assert answer["error"]["code"] == code
+    assert "signature" not in answer["error"] and "signature" not in answer
+    assert session_id not in example_guardian.STATE.sessions, "an unverified request changed Guardian state"
+
+
+@pytest.mark.parametrize("variant", ["big integer id", "lone surrogate session_id", "foreign key_id"])
+def test_a_deep_request_from_an_unverified_sender_gets_an_unsigned_answer(served, variant):
+    depth = example_guardian.MAX_REQUEST_DEPTH + 50
+    if variant == "big integer id":
+        body, session = _envelope_text(depth=depth, request_id=2**60, session_id="deep-1"), "deep-1"
+    elif variant == "lone surrogate session_id":
+        body = _envelope_text(depth=depth, session_id="SURROGATE").replace(b'"SURROGATE"', b'"\\ud800"')
+        session = "\ud800"
+    else:
+        body, session = _envelope_text(depth=depth, key_id="someone-else", session_id="deep-3"), "deep-3"
+    status, answer = post(served, body)
+    _assert_unsigned_and_stateless(answer, -32600, session)
+
+
+def test_a_structure_error_is_unsigned(served):
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart",
+                       "params": {"metadata": {"session_id": "struct-1"}, "request_id": 5}}).encode()
+    status, answer = post(served, body)
+    _assert_unsigned_and_stateless(answer, -32600, "struct-1")
+
+
+# UUIDs, so the envelope passes the schema and only the step under test can refuse it.
+SCHEMA_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SIG_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def test_a_schema_error_is_unsigned(served):
+    status, answer = post(served, _envelope_text(session_id=SCHEMA_SESSION, acs_request_id="not-a-uuid"))
+    _assert_unsigned_and_stateless(answer, -32600, SCHEMA_SESSION)
+
+
+def test_a_signature_that_does_not_verify_gets_a_signed_minus_32004_and_no_state_change(served):
+    # §10 exempts only an unknown key_id from signing, and the conformance suite (Core08) requires a signed -32004
+    # here, so acs.client can tell a bad signature from a refused key_id.
+    from acs.client import verify_signature
+    status, answer = post(served, _envelope_text(session_id=SIG_SESSION))
+    assert answer["error"]["code"] == -32004
+    assert verify_signature(answer, session_id=SIG_SESSION)
+    assert SIG_SESSION not in example_guardian.STATE.sessions
+
+
+def test_an_unknown_key_id_gets_an_unsigned_minus_32004(served):
+    status, answer = post(served, _envelope_text(session_id=SIG_SESSION, key_id="someone-else"))
+    _assert_unsigned_and_stateless(answer, -32004, SIG_SESSION)
