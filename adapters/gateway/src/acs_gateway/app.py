@@ -681,7 +681,7 @@ def _without_orphaned_reasoning(marked: list[Any]) -> list[Any]:
 
     A run of reasoning belongs to the non-reasoning items after it, up to the next reasoning run, which is how a
     model emits one reasoning step before several parallel calls. A reasoning model rejects resent reasoning whose
-    turn is gone, and also a call resent without its reasoning. So [R, removed, kept] keeps R, [R, removed] drops it,
+    turn is gone, and also a call resent without its reasoning. With that rule, [R, removed, kept] keeps R, [R, removed] drops it,
     and [R1, R2, kept, R3, removed] keeps R1 and R2 and drops R3. A run with nothing after it stays.
     """
     kept: list[Any] = []

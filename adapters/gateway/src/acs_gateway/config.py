@@ -108,7 +108,7 @@ def prepare_state_dirs(env: MutableMapping[str, str]) -> Path:
     """Point acs.client's session and handshake state at the gateway's own directory (PREMORTEM P19).
 
     acs.client reads ACS_SESSION_STATE_DIR and ACS_HANDSHAKE_CACHE when it is first imported, and falls back to
-    ~/.cache, where a NoAnswer stored before the Guardian was ready would outlive the gateway. So this runs before
+    ~/.cache, where a NoAnswer stored before the Guardian was ready would outlive the gateway. This runs before
     any acs.client import, and a path under the home directory is refused outright.
     """
     raw = env.get("ACS_GATEWAY_STATE_DIR", "").strip()

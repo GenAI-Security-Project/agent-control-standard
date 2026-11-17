@@ -58,7 +58,7 @@ def jcs_problem(value: Any, depth: int = 0) -> str | None:
     """Why RFC 8785 can't encode value, or None.
 
     acs.client would rewrite such a value before signing, and then the transcript line written before the send would
-    differ from the envelope sent. So the gateway refuses the step instead, and refusing a gated step denies it.
+    differ from the envelope sent. The gateway refuses the step instead, and refusing a gated step denies it.
     """
     if depth > 100:
         return "nesting deeper than 100"
