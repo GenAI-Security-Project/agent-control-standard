@@ -160,6 +160,8 @@ The example Guardian can sign every response with its own ML-DSA-65 key (issue #
 
 A stored session decision is reused with no call, since nothing crosses the wire. A transcript of a session whose decision was stored by an earlier hook therefore has no ClientHello or ServerHello. The gateway follow-up that wires `on_wire` should record that the session was resumed, or open each session in the process that writes its transcript.
 
+To check a whole session afterwards, chain included, from the gateway's transcript and the key document alone, see [acs-verify](acs-verify.md) (issue #584).
+
 ## Lab conventions
 
 Each item below is a lab convention. Each stays off by default and changes nothing for the Claude Code, Cursor, and NAT adapters.
