@@ -197,6 +197,17 @@ class OnWireTest(unittest.TestCase):
                 sent.assert_called_once()
                 self.assertEqual([d for d, _ in recorder.calls], ["req", "resp"])
 
+    def test_an_oversized_request_is_never_reported(self) -> None:
+        # post() would refuse to send it, so on_wire must not record it as sent (review CR6).
+        from acs.core import MAX_REQUEST_BODY_BYTES
+        recorder = Recorder()
+        request = request_envelope("steps/toolCallRequest", request_id=str(uuid.uuid4()), metadata=METADATA,
+                                   payload={"tool": {"name": "ls"}, "blob": "x" * MAX_REQUEST_BODY_BYTES})
+        _, outcome, sent = self._round_trip(lambda r, **_: decision_for(r), recorder, request=request)
+        self.assertEqual(recorder.calls, [])
+        self.assertEqual(outcome.cause, "request_exceeds_max_payload")
+        self.assertFalse(outcome.proceed)
+
     def test_a_stored_session_reports_nothing(self) -> None:
         self._open(Recorder())
         recorder = Recorder()

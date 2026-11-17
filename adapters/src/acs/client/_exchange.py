@@ -111,11 +111,17 @@ class GuardianHTTPError(Exception):
         super().__init__(f"HTTP {status}")
 
 
-def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
-    """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or bad JSON."""
+def encode_request(request: dict[str, Any]) -> bytes:
+    """The request body post() sends; raises RequestTooLargeError past the Guardian's body cap."""
     body = json.dumps(request).encode("utf-8")
     if len(body) > MAX_REQUEST_BODY_BYTES:
         raise RequestTooLargeError(len(body))
+    return body
+
+
+def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
+    """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or bad JSON."""
+    body = encode_request(request)
     req = urllib.request.Request(
         guardian_url, data=body,
         headers={"Content-Type": "application/json"}, method="POST",
@@ -401,6 +407,16 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
     except ValueError as e:
         return Undecided("guardian_url_rejected", {"method": method, "error": str(e)},
                          f"Guardian URL rejected: {e}")
+    if on_wire is not None:
+        # post() refuses an oversized body before sending, so on_wire must not record it as sent (review CR6).
+        # Any other encoding error is post()'s to report, so it is left to that call.
+        try:
+            encode_request(request)
+        except RequestTooLargeError as e:
+            return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
+                           f"envelope exceeds body cap: {e}")
+        except Exception:  # noqa: BLE001
+            pass
     failed = report_on_wire(on_wire, "req", request, method)
     if failed is not None:
         return _on_wire_refusal(failed)
