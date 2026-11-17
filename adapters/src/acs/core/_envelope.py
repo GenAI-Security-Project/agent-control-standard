@@ -93,13 +93,24 @@ def response_matches_request(request: dict, response: dict) -> bool:
     Issue #13 tracks binding the handshake to the traffic after it. For every other request, a
     result must carry the request's request_id. A result that isn't an object answers nothing.
     """
+    if not isinstance(request, Mapping):
+        return False
+    return _binds(request, response, request_checked=False)
+
+
+def _binds(request: Mapping, response: dict, *, request_checked: bool) -> bool:
+    """The binding rule behind response_matches_request.
+
+    request_checked says the caller already ran request_binding_problem on this request, as
+    verify_with_keyring does before it raises, so the precondition runs once per verification.
+    """
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return False
     result = response.get("result")
     if result is None:
         # An error object answers by id alone. Anything else without a result answers nothing.
         return isinstance(response.get("error"), dict)
-    if request_binding_problem(request) is not None:
+    if not request_checked and request_binding_problem(request) is not None:
         return False
     if not isinstance(result, dict):
         return False

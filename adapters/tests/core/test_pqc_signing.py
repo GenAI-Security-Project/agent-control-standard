@@ -488,6 +488,16 @@ class RequestBinding(unittest.TestCase):
         sign_with_signing_key(server_hello, _signer())
         self.assertTrue(self._verify(server_hello, hello), "a ClientHello needs no request_id")
 
+    def test_the_precondition_runs_once_per_verification(self) -> None:
+        # Review finding CR8-7: verify_with_keyring checks the request, then binds without re-checking.
+        import acs.core._envelope as envelope_module
+        import acs.core._mldsa as module
+        spy = mock.Mock(wraps=envelope_module.request_binding_problem)
+        with mock.patch.object(envelope_module, "request_binding_problem", spy), \
+                mock.patch.object(module, "request_binding_problem", spy):
+            self.assertTrue(self._verify(self.signed, _request()))
+        self.assertEqual(spy.call_count, 1)
+
     def test_the_caller_error_is_the_shared_precondition(self) -> None:
         # CR7-6: the keyring path raises exactly what request_binding_problem names.
         from acs.core._envelope import request_binding_problem

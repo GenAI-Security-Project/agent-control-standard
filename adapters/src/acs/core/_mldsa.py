@@ -27,7 +27,7 @@ except ImportError as exc:
         "can't be installed together (see adapters/README.md).") from exc
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
-from acs.core._envelope import request_binding_problem, response_matches_request
+from acs.core._envelope import _binds, request_binding_problem
 from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
 
 ML_DSA_MODE = "pure"
@@ -169,7 +169,8 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
         return False
     if sig.get("key_id") != expected_key_id:
         return False
-    if not response_matches_request(request, envelope):
+    # request_binding_problem already ran above, so bind without running it again.
+    if not _binds(request, envelope, request_checked=True):
         return False
     key = keyring.resolve(expected_key_id)
     if key is None:

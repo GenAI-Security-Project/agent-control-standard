@@ -145,6 +145,11 @@ class OneRequestPrecondition(unittest.TestCase):
             with self.subTest(id=json_rpc_id):
                 self.assertIsNone(request_binding_problem(_request(json_rpc_id)))
 
+    def test_a_request_that_is_not_a_mapping_binds_nothing(self) -> None:
+        for request in ("request", ["request"], None, 7):
+            with self.subTest(request=request):
+                self.assertFalse(response_matches_request(request, _response("1")))  # type: ignore[arg-type]
+
     def test_a_read_only_mapping_request_binds(self) -> None:
         # Review finding CR8-5: _handshake passes a Mapping such as MappingProxyType, not a dict.
         from types import MappingProxyType
