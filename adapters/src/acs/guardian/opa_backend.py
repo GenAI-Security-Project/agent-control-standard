@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from acs.guardian._limits import depth_exceeds
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV
 
 URL_ENV = "ACS_OPA_URL"
@@ -321,18 +322,6 @@ MAX_REDACTED_OUTPUTS = 1000
 MAX_REDACTION_PATH_DEPTH = 64
 
 
-def _depth_exceeds(value: Any, limit: int) -> bool:
-    """Whether value nests deeper than limit, checked without recursion."""
-    stack = [(value, 1)]
-    while stack:
-        node, depth = stack.pop()
-        if isinstance(node, (dict, list)):
-            if depth > limit:
-                return True
-            stack.extend((child, depth + 1) for child in (node.values() if isinstance(node, dict) else node))
-    return False
-
-
 class PointerError(ValueError):
     """A string that isn't an RFC 6901 JSON Pointer this backend accepts."""
 
@@ -534,7 +523,7 @@ def verdict_problem(verdict: Any, method: str, payload: Mapping[str, Any], base:
     """Why the verdict cannot become this step's decision, or None when it can."""
     if not isinstance(verdict, dict):
         return f"the verdict is a {type(verdict).__name__}, not an object"
-    if _depth_exceeds(verdict, MAX_VERDICT_DEPTH):
+    if depth_exceeds(verdict, MAX_VERDICT_DEPTH):
         return f"the verdict nests deeper than {MAX_VERDICT_DEPTH} levels"
     extra = sorted(set(verdict) - VERDICT_KEYS)
     if extra:

@@ -491,22 +491,56 @@ def test_the_guardian_refuses_to_start_when_the_backend_changed_after_import(no_
 
 
 
-def test_a_request_too_deep_to_canonicalize_gets_a_signed_invalid_request(no_backend, monkeypatch):
-    # The request-side canonicalization (the chain's request hash) recurses. It must answer, not drop the connection.
-    from acs.client import verify_signature
-    from acs.testing.harness import make_envelope
-    monkeypatch.setenv("ACS_HMAC_SECRET", "guardian-opa-test-secret-32-bytes-long")
-    monkeypatch.setenv("ACS_HMAC_KEY_ID", "test-key")
+def _nested_request(depth: int, monkeypatch) -> dict:
+    """A request the test client signs for real, with a value nested depth levels inside its arguments."""
+    from acs.testing.harness import make_envelope, signing_env
+    for name, value in signing_env().items():
+        monkeypatch.setenv(name, value)
     monkeypatch.delenv("ACS_HMAC_SECRET_FILE", raising=False)
-    for name in ("check_signature", "check_skew", "check_replay", "check_nonce"):
-        monkeypatch.setattr(example_guardian, name, lambda *args, **kwargs: None)
-    monkeypatch.setattr(example_guardian, "_SPEC_VALIDATION_AVAILABLE", False)
     deep: list = []
-    for _ in range(sys.getrecursionlimit() + 100):
+    for _ in range(depth):
         deep = [deep]
-    request = make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {"x": {"value": deep}}})
+    return make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {"x": {"value": deep}}},
+                         sign_with_secret=signing_env()["ACS_HMAC_SECRET"])
+
+
+def test_a_signed_request_past_the_depth_bound_is_refused_before_any_state_changes(no_backend):
+    # The client signs 900 levels, well past the bound, so this request is genuine and only the bound refuses it.
+    from acs.client import verify_signature
+    request = _nested_request(example_guardian.MAX_REQUEST_DEPTH + 50, no_backend)
+    session_id = request["params"]["metadata"]["session_id"]
     response = example_guardian.handle_request(request)
     assert response["error"]["code"] == -32600
+    assert "deeper than" in response["error"]["message"]
+    assert verify_signature(response, session_id=session_id)
+    state = example_guardian.STATE.get(session_id)
+    assert (state.previous_hash, state.seen_request_ids, state.seen_nonces) == (None, {}, {})
+
+
+def test_a_signed_request_under_the_depth_bound_gets_a_decision(no_backend):
+    request = _nested_request(example_guardian.MAX_REQUEST_DEPTH - 20, no_backend)
+    assert example_guardian.handle_request(request)["result"]["decision"] == "allow"
+
+
+@pytest.mark.parametrize("error,word", [(RecursionError("deep"), "recursion"), (UnicodeEncodeError("utf-8", "x", 0, 1, "bad"), None)])
+def test_the_last_resort_guard_names_the_cause_accurately(no_backend, monkeypatch, error, word):
+    request = _nested_request(3, no_backend)
+
+    def fail(value):
+        raise error
+    monkeypatch.setattr(example_guardian, "jcs_canonicalize", fail)
+    message = example_guardian.handle_request(request)["error"]["message"]
+    assert "could not be canonicalized" in message and "nested" not in message
+    assert (word in message) if word else ("recursion" not in message)
+
+
+def test_the_last_resort_guard_retries_with_a_null_id_before_going_unsigned(no_backend, monkeypatch):
+    from acs.client import verify_signature
+    request = _nested_request(3, no_backend)
+    request["id"] = 2**60  # a JSON number JCS can't encode, so the first signed answer fails
+    monkeypatch.setattr(example_guardian, "jcs_canonicalize", lambda value: (_ for _ in ()).throw(RecursionError()))
+    response = example_guardian.handle_request(request)
+    assert response["id"] is None
     assert verify_signature(response, session_id=request["params"]["metadata"]["session_id"])
 
 
@@ -569,3 +603,4 @@ def test_known_limit_a_symlink_or_firmlink_spelling_passes_the_lexical_check(no_
     # Known limit, documented in docs/guardian/README.md: the built-in path denies compare spellings, not files.
     # The Guardian may not share the agent's filesystem, so it can't resolve links, and a policy is the control.
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
+

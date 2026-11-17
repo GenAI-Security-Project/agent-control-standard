@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from acs.guardian._limits import depth_exceeds
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
@@ -644,6 +645,11 @@ def _error_envelope(request_id, session_id: str, code: int, message: str, *, sig
     return envelope
 
 
+# Deeper requests are refused right after parsing, before replay or chain state changes. Well inside the parser's
+# and the canonicalizer's recursion limits, and far deeper than any tool call the reference adapters send.
+MAX_REQUEST_DEPTH = 128
+
+
 def _log_value(value: Any, width: int = 8) -> str:
     """A field for the log line: a string as is, anything else as its repr, cut to width."""
     text = value if isinstance(value, str) else repr(value)
@@ -684,25 +690,31 @@ def _safe_ids(request: Any) -> tuple[Any, str]:
 
 def handle_request(request: dict) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
+    request_id, session_id = _safe_ids(request)
     problem = _structure_problem(request)
     if problem:
-        request_id, session_id = _safe_ids(request)
         return _error_envelope(request_id, session_id, -32600, f"Invalid Request: {problem}")
+    if depth_exceeds(request, MAX_REQUEST_DEPTH):
+        return _error_envelope(request_id, session_id, -32600,
+                               f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
     try:
         return _handle_request(request)
-    except CANONICALIZATION_ERRORS:
-        # Schema validation, the request hash, and the chain all walk the request, and a nested one can exhaust
-        # the recursion limit in any of them. Answer instead of dropping the connection, which a proceed posture
-        # would run as a decision failure.
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
-        meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
-        session_id = meta.get("session_id") if isinstance(meta.get("session_id"), str) else ""
-        request_id = request.get("id") if isinstance(request.get("id"), (str, int)) else None
-        message = "Invalid Request: the envelope is nested too deeply to canonicalize"
+    except CANONICALIZATION_ERRORS as e:
+        # Last resort, after the depth bound: anything else the Guardian can't canonicalize still gets an answer,
+        # never a dropped connection, which a proceed posture would run as a decision failure.
+        cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
+        return _last_resort_error(request_id, session_id,
+                                  f"Invalid Request: the envelope could not be canonicalized{cause}")
+
+
+def _last_resort_error(request_id: Any, session_id: str, message: str) -> dict:
+    """A signed -32600, retried with a null id when the id itself can't be signed, unsigned only as a last step."""
+    for candidate in (request_id, None):
         try:
-            return _error_envelope(request_id, session_id, -32600, message)
+            return _error_envelope(candidate, session_id, -32600, message)
         except CANONICALIZATION_ERRORS:
-            return _error_envelope(None, "", -32600, message, signed=False)
+            continue
+    return _error_envelope(None, "", -32600, message, signed=False)
 
 
 def _handle_request(request: dict) -> dict:
