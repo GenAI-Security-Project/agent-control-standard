@@ -448,6 +448,47 @@ def evaluate_ping(params: dict, request_id: str) -> dict:
     }
 
 
+def _argument_type_deny(base: dict, tool_name: str, name: str, value: Any) -> dict:
+    return {**base, "decision": "deny",
+            "reasoning": f"{tool_name} argument {name} must be a string, got {type(value).__name__}",
+            "reason_codes": ["argument_type_invalid"]}
+
+
+def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
+    """The built-in denies for a tool call, or None. They hold under every policy backend."""
+    if tool_name == "task" and not ALLOW_SUBAGENT:
+        return {**base, "decision": "deny",
+                "reasoning": "Task tool (in-process subagent) is gated by default. Set ACS_ALLOW_SUBAGENT=1 to allow.",
+                "reason_codes": ["subagent_gated"]}
+
+    if tool_name in ("bash", "shell"):
+        cmd = args.get("command", "")
+        cmd = "" if cmd is None else cmd
+        # The pattern scan reads a string. Anything else is denied here instead of crashing the request handler.
+        if not isinstance(cmd, str):
+            return _argument_type_deny(base, tool_name, "command", cmd)
+        match = matches_destructive_bash(cmd)
+        if match == "too_large":
+            return {**base, "decision": "deny",
+                    "reasoning": f"command length {len(cmd)} exceeds safe-scan cap "
+                                 f"({DESTRUCTIVE_SCAN_MAX_LEN}); cannot evaluate destructive patterns",
+                    "reason_codes": ["input_too_large"]}
+        if match is not None:
+            return {**base, "decision": "deny",
+                    "reasoning": f"destructive Bash pattern in: {cmd[:120]}",
+                    "reason_codes": ["destructive_command"]}
+
+    if tool_name == "write":
+        path = args.get("file_path", "")
+        if not isinstance(path, str):
+            return _argument_type_deny(base, tool_name, "file_path", path)
+        if any(path.startswith(p) for p in PROTECTED_PATH_PREFIXES):
+            return {**base, "decision": "deny",
+                    "reasoning": f"write to protected system path: {path}",
+                    "reason_codes": ["protected_path"]}
+    return None
+
+
 def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -> dict:
     payload = params.get("payload") or {}
 
@@ -465,32 +506,11 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         tool_name = tool_name_raw.lower()
         args = _unwrap_arguments(payload.get("arguments") or {})
 
-        if tool_name == "task" and not ALLOW_SUBAGENT:
-            return {**base, "decision": "deny",
-                    "reasoning": "Task tool (in-process subagent) is gated by default. Set ACS_ALLOW_SUBAGENT=1 to allow.",
-                    "reason_codes": ["subagent_gated"]}
+        hard_deny = _hard_deny(base, tool_name, args)
+        if hard_deny is not None:
+            return hard_deny
 
-        if tool_name in ("bash", "shell"):
-            cmd = args.get("command", "") or ""
-            match = matches_destructive_bash(cmd)
-            if match == "too_large":
-                return {**base, "decision": "deny",
-                        "reasoning": f"command length {len(cmd)} exceeds safe-scan cap "
-                                     f"({DESTRUCTIVE_SCAN_MAX_LEN}); cannot evaluate destructive patterns",
-                        "reason_codes": ["input_too_large"]}
-            if match is not None:
-                return {**base, "decision": "deny",
-                        "reasoning": f"destructive Bash pattern in: {cmd[:120]}",
-                        "reason_codes": ["destructive_command"]}
-
-        if tool_name == "write":
-            path = args.get("file_path", "")
-            if any(path.startswith(p) for p in PROTECTED_PATH_PREFIXES):
-                return {**base, "decision": "deny",
-                        "reasoning": f"write to protected system path: {path}",
-                        "reason_codes": ["protected_path"]}
-
-        # The hard denies above hold under every backend. A policy backend decides only what they allow.
+        # The hard denies hold under every backend. A policy backend decides only what they allow.
         if policy_backend_requested():
             return _policy_backend_decision(method, params, base)
         return {**base, "decision": "allow"}

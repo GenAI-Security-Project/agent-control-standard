@@ -154,3 +154,27 @@ def test_built_in_hard_denies_hold_under_opa_even_when_the_policy_allows(opa_on,
         result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", [code])
     assert opa.inputs == [], "OPA decides only what the built-in rules allow"
+
+
+TYPE_ERRORS = [
+    {"tool": {"name": "Bash"}, "arguments": {"command": {"value": ["rm", "-rf", "/"]}}},
+    {"tool": {"name": "shell"}, "arguments": {"command": {"value": {"cmd": "ls"}}}},
+    {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": 42}}},
+    {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": None}}},
+]
+
+
+@pytest.mark.parametrize("payload", TYPE_ERRORS)
+def test_a_non_string_argument_a_hard_deny_reads_denies_under_opa(opa_on, payload):
+    with StubOpa(ALLOW) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+    assert opa.inputs == []
+
+
+@pytest.mark.parametrize("payload", TYPE_ERRORS)
+def test_a_non_string_argument_a_hard_deny_reads_denies_without_a_backend(no_backend, payload):
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
