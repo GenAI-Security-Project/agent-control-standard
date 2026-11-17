@@ -151,9 +151,10 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     A keyring can hold several keys, so the caller names the one it trusts here, and a
     signature naming any other key_id fails before any crypto runs. One key signs every
     session, so the key alone can't stop a response from one exchange being replayed onto
-    another. The response must answer request (D-029) under acs.core.response_matches_request:
-    the same JSON-RPC id, and for any request but the handshake a result carrying the
-    request's request_id. A mismatch fails before any crypto, and a binding rewritten after
+    another. The response must answer request (D-029) under acs.core.response_binding_problem,
+    the one rule: a JSON-RPC 2.0 object with exactly one result or error and no method, the same
+    JSON-RPC id, and for any request but the handshake a result carrying the request's
+    request_id. A mismatch fails before any crypto, and a binding rewritten after
     signing fails the signature. This stops replay only as far as the caller's ids are unique,
     which this function doesn't check. request_envelope gives every request a fresh UUID4
     JSON-RPC id. A response must not be a request envelope. The algorithm comes from the

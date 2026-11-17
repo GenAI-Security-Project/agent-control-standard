@@ -88,7 +88,9 @@ Verification takes two required arguments besides the keyring. `expected_key_id`
 
 `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key. One ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another.
 
-`acs.core.response_matches_request` holds the one rule, and the keyring path and the client's step exchange both call it. The response must carry the request's JSON-RPC `id`, and a response must not be a request envelope. An error object binds by the id alone, whatever the request's `request_id`, and an id with neither a result nor an error object answers nothing. A result binds only when the request is the handshake, or when the request carries a string `params.request_id` that the result repeats.
+`acs.core.response_binding_problem` holds the one rule and names why a response doesn't bind, and `acs.core.response_matches_request` is that check finding no reason. The keyring path, the client's step exchange, and the client's handshake all decide through it. The response must be a JSON-RPC 2.0 object with exactly one of a result or an error, which is an object, and must carry no `method`, so a request envelope never counts as an answer. It must also carry the request's JSON-RPC `id`.
+
+An error object binds by the id alone, whatever the request's `request_id`. A result binds only when the request is the handshake and the result carries no `request_id`, or when the request carries a string `params.request_id` that the result repeats. `acs.core.request_binding_problem` is the exported check for whether a request can bind a result at all.
 
 A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. A request with no usable `request_id` binds no result, the same answer on both paths.
 
@@ -101,6 +103,8 @@ Ids compare as values, and a boolean never equals a number, so `true` and `1` ar
 ### Replay depends on unique ids
 
 The binding protects against replay only as far as the ids are unique, and core doesn't check that. `acs.core.request_envelope`, which `acs.client` and the adapters use, gives every request a fresh UUID4 as its JSON-RPC `id`. `params.request_id` is only as fresh as its source, and an adapter may derive it from the host's event id, as the Cursor adapter does. A caller that reuses ids weakens replay protection.
+
+Error binding rests on the JSON-RPC `id` alone, on both paths, as D-029 sets. A caller that picks predictable ids could accept a signed error captured from another session. A caller must use the UUIDs `acs.client` generates, or ids just as unique.
 
 ### The handshake
 
