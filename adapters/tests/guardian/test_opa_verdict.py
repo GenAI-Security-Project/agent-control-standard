@@ -399,3 +399,21 @@ def test_a_redaction_path_64_tokens_deep_passes():
     payload, path = _deep_result(64)
     verdict = {"decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": path}]}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) is None
+
+
+
+@pytest.mark.parametrize("pointer", ["/a~2", "/a~", "/~x/b", "a/b"])
+def test_one_pointer_parser_rejects_an_invalid_pointer_everywhere(pointer):
+    document = {"a~2": 1, "a~": 1, "~x": {"b": 1}, "a": {"b": 1}}
+    with pytest.raises(opa_backend.PointerError):
+        opa_backend.decode_pointer(pointer)
+    assert opa_backend._resolve_pointer(document, pointer) is False
+    with pytest.raises(opa_backend.PointerError):
+        opa_backend.replace_at(document, pointer, "x")
+
+
+def test_a_redaction_with_an_invalid_escape_is_invalid_even_when_its_raw_key_exists():
+    payload = {**RESULT, "outputs": [{"value": {"a~2": "secret"}}]}
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": "/outputs/0/value/a~2"}]}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE)

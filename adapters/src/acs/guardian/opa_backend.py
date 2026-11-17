@@ -331,24 +331,60 @@ def _depth_exceeds(value: Any, limit: int) -> bool:
     return False
 
 
-def _resolve_pointer(document: Any, pointer: str) -> bool:
+class PointerError(ValueError):
+    """A string that isn't an RFC 6901 JSON Pointer this backend accepts."""
+
+
+_INVALID_ESCAPE = re.compile(r"~(?![01])")
+
+
+def decode_pointer(path: Any) -> list[str]:
+    """The reference tokens of an RFC 6901 pointer. The one parser every pointer here goes through.
+
+    It refuses a pointer that doesn't start with / or uses an escape other than ~0 and ~1, so two spellings
+    can never name the same key.
+    """
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise PointerError(f"{path!r} is not a JSON Pointer")
+    if _INVALID_ESCAPE.search(path):
+        raise PointerError(f"{path!r} has an escape RFC 6901 does not allow (only ~0 and ~1)")
+    return [token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")]
+
+
+def _step(node: Any, token: str) -> tuple[bool, Any]:
+    """One pointer step: whether token names a child of node, and the child."""
+    if isinstance(node, dict):
+        return (True, node[token]) if token in node else (False, None)
+    if isinstance(node, list):
+        if token.isdigit() and (token == "0" or not token.startswith("0")) and int(token) < len(node):
+            return True, node[int(token)]
+    return False, None
+
+
+def _resolve_pointer(document: Any, pointer: Any) -> bool:
     """Whether an RFC 6901 pointer names a value inside document."""
-    if not pointer.startswith("/"):
+    try:
+        tokens = decode_pointer(pointer)
+    except PointerError:
         return False
     node = document
-    for raw in pointer[1:].split("/"):
-        token = raw.replace("~1", "/").replace("~0", "~")
-        if isinstance(node, dict):
-            if token not in node:
-                return False
-            node = node[token]
-        elif isinstance(node, list):
-            if not token.isdigit() or (token != "0" and token.startswith("0")) or int(token) >= len(node):
-                return False
-            node = node[int(token)]
-        else:
+    for token in tokens:
+        found, node = _step(node, token)
+        if not found:
             return False
     return True
+
+
+def replace_at(document: Any, pointer: str, value: Any) -> None:
+    """Replace the value the pointer names inside document. The caller has checked that it resolves."""
+    *parents, leaf = decode_pointer(pointer)
+    node = document
+    for token in parents:
+        node = node[int(token)] if isinstance(node, list) else node[token]
+    if isinstance(node, list):
+        node[int(leaf)] = value
+    else:
+        node[leaf] = value
 
 
 def _modification_problem(modifications: Mapping[str, Any], method: str, payload: Mapping[str, Any]) -> str | None:
@@ -393,20 +429,17 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
     return _overlap_problem(paths) or _coverage_problem(paths, payload)
 
 
-_INVALID_ESCAPE = re.compile(r"~(?![01])")
-
-
 def _overlap_problem(paths: list[str]) -> str | None:
     """Section 6.3 wants disjoint targets, so no redaction path repeats or sits inside another.
 
     Paths sort as token tuples, where every path that starts with P follows P directly, so comparing each path
     with the next finds every repeat and every nesting. The cost is the sort plus one pass over the tokens.
     """
-    for path in paths:
-        if _INVALID_ESCAPE.search(path):
-            return f"redaction path {path!r} has an escape RFC 6901 does not allow (only ~0 and ~1)"
-    # Decoded tokens, so two spellings of one key compare equal.
-    ordered = sorted((tuple(decode_pointer(path)), path) for path in paths)
+    try:
+        # Decoded tokens, so two spellings of one key compare equal.
+        ordered = sorted((tuple(decode_pointer(path)), path) for path in paths)
+    except PointerError as e:
+        return f"redaction path {e}"
     for (tokens, path), (next_tokens, next_path) in zip(ordered, ordered[1:]):
         if tokens == next_tokens:
             return f"redaction path {path!r} appears more than once"
@@ -424,23 +457,6 @@ class _Shape:
         self.keys: dict[str, _Shape] = {}
         self.items: _Shape | None = None
         self.path: str | None = None  # set where a redaction path ends
-
-
-def decode_pointer(path: str) -> list[str]:
-    """The RFC 6901 reference tokens of a JSON Pointer that starts with /."""
-    return [token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")]
-
-
-def replace_at(document: Any, tokens: list[str], value: Any) -> None:
-    """Replace the value the tokens name inside document. The caller has checked that they resolve."""
-    *parents, leaf = tokens
-    node = document
-    for token in parents:
-        node = node[int(token)] if isinstance(node, list) else node[token]
-    if isinstance(node, list):
-        node[int(leaf)] = value
-    else:
-        node[leaf] = value
 
 
 def _encode(token: str) -> str:

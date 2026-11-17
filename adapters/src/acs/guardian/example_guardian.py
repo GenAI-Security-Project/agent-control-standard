@@ -551,7 +551,7 @@ def _recheck_rewritten_call(base: dict, tool_name: str, payload: dict, result: d
         # The modify allowlist keeps every edit under /arguments, so only that subtree is copied.
         rewritten = {"arguments": copy.deepcopy(payload.get("arguments") or {})}
         for redaction in modifications.get("redactions") or []:
-            opa_backend.replace_at(rewritten, opa_backend.decode_pointer(redaction["path"]),
+            opa_backend.replace_at(rewritten, redaction["path"],
                                    redaction.get("replacement", "[REDACTED]"))
         arguments = _unwrap_arguments(rewritten["arguments"])
         # Overrides replace the tool's own argument values, exactly as the Claude Code and Cursor adapters merge
