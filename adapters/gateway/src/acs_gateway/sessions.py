@@ -155,6 +155,10 @@ class SessionMap:
         self._sessions[key] = session
         return session
 
+    def peek(self, key: str) -> Session | None:
+        """The key's session if one exists, without creating one, evicting or touching the LRU order."""
+        return self._sessions.get(key)
+
     def retire(self, session: Session) -> None:
         """Take a session out of the map, so the next request for its conversation opens a fresh one."""
         session.retired = True
