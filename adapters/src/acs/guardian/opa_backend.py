@@ -25,8 +25,9 @@ BACKEND_ENV = "ACS_POLICY_BACKEND"
 URL_ENV = "ACS_OPA_URL"
 TIMEOUT_ENV = "ACS_OPA_TIMEOUT_MS"
 DEFAULT_TIMEOUT_MS = 2000
-# The ServerHello advertises timeout_config.default_ms 5000, so OPA has to answer well inside it.
-MAX_TIMEOUT_MS = 4999
+# The ServerHello advertises timeout_config.default_ms 5000. OPA gets at most 4000 of it, so the Guardian keeps
+# a second to validate, sign, and answer before the client gives up.
+MAX_TIMEOUT_MS = 4000
 # A verdict is a few hundred bytes. The cap keeps a broken or hostile policy server from filling memory.
 MAX_RESPONSE_BYTES = 1024 * 1024
 

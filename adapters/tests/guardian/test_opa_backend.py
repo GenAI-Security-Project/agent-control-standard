@@ -115,6 +115,8 @@ def test_load_config_reads_url_and_timeout():
                                       "ACS_OPA_TIMEOUT_MS": "750"})
     assert config == OpaConfig(url="http://opa:8181/v1/data/finbot/verdict", timeout_s=0.75)
     assert opa_backend.load_config({"ACS_OPA_URL": "https://opa/x"}).timeout_s == 2.0
+    # The client waits 5000 ms for the Guardian, so OPA gets at most 4000 and the Guardian keeps a margin to sign.
+    assert opa_backend.load_config({"ACS_OPA_URL": "https://opa/x", "ACS_OPA_TIMEOUT_MS": "4000"}).timeout_s == 4.0
 
 
 @pytest.mark.parametrize("env", [
@@ -125,6 +127,7 @@ def test_load_config_reads_url_and_timeout():
     {"ACS_OPA_URL": "http://opa/x", "ACS_OPA_TIMEOUT_MS": "0"},
     {"ACS_OPA_URL": "http://opa/x", "ACS_OPA_TIMEOUT_MS": "abc"},
     {"ACS_OPA_URL": "http://opa/x", "ACS_OPA_TIMEOUT_MS": "5000"},
+    {"ACS_OPA_URL": "http://opa/x", "ACS_OPA_TIMEOUT_MS": "4001"},
 ])
 def test_load_config_rejects_a_bad_setting(env):
     with pytest.raises(OpaConfigError):

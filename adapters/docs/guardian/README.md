@@ -35,7 +35,7 @@ The Guardian can hand its tool decisions to [Open Policy Agent](https://www.open
 |---|---|
 | `ACS_POLICY_BACKEND` | `opa` turns the backend on. Unset or empty keeps the built-in rules. Any other value is an error. |
 | `ACS_OPA_URL` | The OPA data API URL of the rule that returns the verdict, for example `http://opa:8181/v1/data/finbot/verdict`. Required with `opa`. Only `http` and `https` are accepted. |
-| `ACS_OPA_TIMEOUT_MS` | How long the Guardian waits for OPA, from 1 to 4999. Default 2000, which stays inside the 5000 ms the ServerHello advertises. |
+| `ACS_OPA_TIMEOUT_MS` | How long the Guardian waits for OPA, from 1 to 4000. Default 2000. The cap leaves the Guardian a second of the 5000 ms the ServerHello advertises to validate, sign, and answer. A value outside the range stops the Guardian at startup. |
 
 The Guardian refuses to start when the backend is named but its settings can't be used. As a backstop, a running Guardian that finds a bad setting denies both tool methods with `policy_backend_misconfigured`.
 
