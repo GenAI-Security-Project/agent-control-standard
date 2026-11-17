@@ -36,6 +36,13 @@ def _get_json(port: int, path: str):
         return response.status, json.loads(response.read() or b"null")
 
 
+def _probe_label(config) -> str | None:
+    """labels.probe from a /v1/config body, or None when the body isn't the shape OPA reports."""
+    result = config.get("result") if isinstance(config, dict) else None
+    labels = result.get("labels") if isinstance(result, dict) else None
+    return labels.get("probe") if isinstance(labels, dict) else None
+
+
 def healthy(port: int, process, label: str, *, deadline_s: float = HEALTH_DEADLINE_S) -> bool:
     """Poll GET /health until 200, then check the listener is the OPA this run started.
 
@@ -50,8 +57,7 @@ def healthy(port: int, process, label: str, *, deadline_s: float = HEALTH_DEADLI
             status, _ = _get_json(port, "/health")
             if status == 200:
                 _, config = _get_json(port, "/v1/config")
-                labels = ((config or {}).get("result") or {}).get("labels") or {}
-                return labels.get("probe") == label and process.poll() is None
+                return _probe_label(config) == label and process.poll() is None
         except (urllib.error.URLError, OSError, ValueError):
             pass
         time.sleep(0.1)
