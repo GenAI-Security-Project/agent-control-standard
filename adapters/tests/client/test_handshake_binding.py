@@ -14,7 +14,7 @@ SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 def _client_hello(json_rpc_id: object = 1) -> dict:
     return {"jsonrpc": "2.0", "id": json_rpc_id, "method": HANDSHAKE_METHOD,
             "params": {"acs_version": "0.1.0", "request_id": "hello-request-1",
-                       "metadata": {"session_id": SESSION_ID}}}
+                       "metadata": {"session_id": SESSION_ID}, "payload": {}}}
 
 
 def _cause(client_hello: dict, response: dict) -> str | None:
@@ -80,6 +80,27 @@ class SignedServerHellos(_SessionTest):
         outcome = _handshake._classify_hello(hello, refusal, SESSION_ID)
         self.assertIsInstance(outcome, SessionRefused)
         self.assertEqual(outcome.cause, "session_refused_response")
+
+    def test_a_result_answers_only_a_real_client_hello(self) -> None:
+        # Review findings CR11-4, R11-M1: a signed, complete ServerHello goes on to its checks only
+        # when the request is a real ClientHello. Anything else refuses the session, never raises.
+        base = {"jsonrpc": "2.0", "id": "hello-x", "method": HANDSHAKE_METHOD,
+                "params": {"acs_version": "0.1.0", "request_id": "r-x", "payload": {}}}
+        step_like = {**base, "method": "steps/toolCallRequest"}
+        cases = {
+            "params not an object": {**base, "params": "odd"},
+            "no params": {k: v for k, v in base.items() if k != "params"},
+            "payload not an object": {**base, "params": {"request_id": "r-x", "payload": "odd"}},
+            "not handshake/hello": step_like,
+        }
+        for name, hello in cases.items():
+            result = dict(HELLO)
+            if name == "not handshake/hello":
+                result["request_id"] = "r-x"   # so it would bind as a step answer
+            response = _signed({"jsonrpc": "2.0", "id": "hello-x", "result": result}, SESSION_ID)
+            with self.subTest(name):
+                outcome = _handshake._classify_hello(hello, response, SESSION_ID)
+                self.assertEqual(outcome, SessionRefused("response_binding_mismatch"))
 
     def test_the_client_hello_sent_uses_the_core_constant(self) -> None:
         # CR7-7: the ClientHello actually sent, not a grep of the source.

@@ -297,6 +297,13 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
         return SessionRefused("response_unverifiable", {"error": str(e)})
 
 
+def _is_client_hello(request: Mapping[str, Any]) -> bool:
+    """A handshake/hello request whose params and payload are objects, the only kind a ServerHello answers."""
+    params = request.get("params")
+    return (request.get("method") == HANDSHAKE_METHOD and isinstance(params, Mapping)
+            and isinstance(params.get("payload"), Mapping))
+
+
 def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
     """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
     # The one binding rule decides. Each reason keeps the outcome the handshake always gave it.
@@ -308,9 +315,13 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     if binding in (BINDING_REQUEST, BINDING_ID):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
-    # BINDING_RESULT here means the result carries request_id, or the ClientHello's params aren't
-    # a mapping, which this module never builds. It still has its signature checked below, and
-    # server_hello_problem then makes it no answer, as the legacy-wrapper contract asks.
+    # A result goes on to the signature and ServerHello checks only when the request is a real
+    # ClientHello. Anything else could never be answered by a ServerHello, and the checks below
+    # read its payload. There BINDING_RESULT means the result carries request_id: its signature is
+    # still checked, and server_hello_problem then makes it no answer, as the legacy-wrapper
+    # contract asks.
+    if "result" in response and not _is_client_hello(client_hello):
+        return SessionRefused("response_binding_mismatch")
     verified = verify_signature(response, session_id=session_id)
     if error is not None:
         if not verified:
