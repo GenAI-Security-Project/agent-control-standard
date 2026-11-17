@@ -265,3 +265,21 @@ def test_a_modify_cannot_rename_the_tool_after_the_hard_denies_ran(opa_on):
         opa_on(opa)
         result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
+
+
+
+
+def test_the_recheck_copies_only_the_arguments(opa_on, monkeypatch):
+    copied = []
+    real_deepcopy = example_guardian.copy.deepcopy
+
+    def recording_deepcopy(value, *args, **kwargs):
+        copied.append(value)
+        return real_deepcopy(value, *args, **kwargs)
+    monkeypatch.setattr(example_guardian.copy, "deepcopy", recording_deepcopy)
+    payload = {**LISTING, "context": {"history": ["x"] * 1000}}
+    verdict = _modify(parameter_overrides={"command": "ls -l"})
+    with StubOpa(verdict) as opa:
+        opa_on(opa)
+        assert _step("steps/toolCallRequest", payload)["decision"] == "modify"
+    assert copied == [LISTING["arguments"]]

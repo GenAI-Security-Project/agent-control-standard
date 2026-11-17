@@ -493,7 +493,8 @@ def _recheck_rewritten_call(base: dict, tool_name: str, payload: dict, result: d
     """The hard denies run on the arguments as a modify would leave them. A deny there replaces the modify."""
     modifications = result.get("modifications") or {}
     try:
-        rewritten = copy.deepcopy(payload)
+        # The modify allowlist keeps every edit under /arguments, so only that subtree is copied.
+        rewritten = {"arguments": copy.deepcopy(payload.get("arguments") or {})}
         for redaction in modifications.get("redactions") or []:
             *parents, leaf = [t.replace("~1", "/").replace("~0", "~") for t in redaction["path"][1:].split("/")]
             node = rewritten
