@@ -501,19 +501,27 @@ class Gateway:
             # acs.client bounds the exchange itself. The grace covers a worker stuck outside it, such as a slow disk.
             return await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
         except asyncio.TimeoutError:
-            if not token.cancel():
-                # The worker claimed the step before the deadline, so its transcript lines are on the way. The lock
-                # stays held while they land, which keeps the chain in send order, but only for one more timeout.
-                try:
-                    await asyncio.wait_for(asyncio.shield(future), timeout)
-                except asyncio.TimeoutError:
-                    # Something below acs.client hung, such as a stalled disk. The session can no longer promise
-                    # chain order, so it retires and the worker writes and sends nothing more.
-                    token.retire()
-                    self.sessions.retire(session)
-                    _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung",
-                           request_id=token.request_id)
+            await self._settle_abandoned(session, method, token, future, timeout)
             return StepResult(method, token.request_id, cause="decision_timeout", failure_class="timeout")
+        except asyncio.CancelledError:
+            # The request itself was cancelled (a client disconnect, a shutdown). The step must not outlive it.
+            await self._settle_abandoned(session, method, token, future, timeout)
+            raise
+
+    async def _settle_abandoned(self, session: Session, method: str, token: StepToken, future: Any,
+                                timeout: float) -> None:
+        """Stop a step the loop no longer waits for. An unclaimed step is cancelled and writes nothing. A claimed one
+        holds the session lock while its lines land, for one more timeout at most, and past that the session retires
+        and the worker writes and sends nothing more."""
+        if token.cancel():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(future), timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            token.retire()
+            self.sessions.retire(session)
+            _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung",
+                   request_id=token.request_id)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:
         """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since

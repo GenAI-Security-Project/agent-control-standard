@@ -344,3 +344,30 @@ def test_a_hung_claimed_step_is_bounded_and_retires_its_session(gateway, harness
     upstream.reply(response_body(message_item("again")))
     client.post("/v1/responses", json=finbot_request())
     assert len(events(audit, "session_opened")) == 2
+
+
+def test_a_cancelled_request_leaves_no_later_transcript_line(gateway, guardian, upstream, tmp_path):
+    import asyncio
+    import time
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_WORKERS="1")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    session = next(iter(gw.sessions._sessions.values()))
+    payload = {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+
+    async def cancel_while_queued():
+        gw.executor.submit(time.sleep, 1.0)
+        task = asyncio.create_task(gw._step(session, "steps/toolCallRequest", payload))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    client.portal.call(cancel_while_queued)
+    time.sleep(1.5)
+    assert not [line for line in transcript_lines(tmp_path) if line["envelope"]
+                and line["envelope"].get("method") == "steps/toolCallRequest"]
