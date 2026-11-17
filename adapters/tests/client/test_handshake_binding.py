@@ -28,6 +28,13 @@ class ServerHelloIdBinding(unittest.TestCase):
         response = {"jsonrpc": "2.0", "id": True, "result": dict(HELLO)}
         self.assertEqual(_cause(_client_hello(1), response), "response_binding_mismatch")
 
+    def test_a_client_hello_with_a_bool_id_binds_nothing(self) -> None:
+        # Review finding CR9-4: the keyring path refuses such a ClientHello, so the HMAC path does too.
+        for json_rpc_id in (True, False):
+            response = {"jsonrpc": "2.0", "id": json_rpc_id, "result": dict(HELLO)}
+            with self.subTest(id=json_rpc_id):
+                self.assertEqual(_cause(_client_hello(json_rpc_id), response), "response_binding_mismatch")
+
     def test_a_matching_id_passes_the_binding_check(self) -> None:
         for response_id in (1, 1.0):
             response = {"jsonrpc": "2.0", "id": response_id, "result": dict(HELLO)}

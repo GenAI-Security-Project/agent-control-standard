@@ -34,6 +34,7 @@ from acs.core import (
     iso8601_now,
     jcs_canonicalize,
     normalize_decision,
+    request_binding_problem,
     same_json_rpc_id,
     server_hello_problem,
 )
@@ -304,7 +305,10 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     # answer, through server_hello_problem below, which SignedServerHellos in
     # tests/client/test_handshake_binding.py pins. This stays an id check because
     # response_matches_request would refuse the session instead.
-    if not same_json_rpc_id(response.get("id"), client_hello["id"]):
+    # The ClientHello must pass the same precondition the keyring path uses, so a bool id binds
+    # nothing here either. The client's own ClientHello ids are UUID strings.
+    if (request_binding_problem(client_hello) is not None
+            or not same_json_rpc_id(response.get("id"), client_hello["id"])):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
     verified = verify_signature(response, session_id=session_id)

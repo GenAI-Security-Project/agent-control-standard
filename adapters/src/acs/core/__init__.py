@@ -26,6 +26,8 @@ _EXPORTS = {
     "normalize_decision": "_decision",
     "parse_iso8601": "_envelope",
     "request_envelope": "_envelope",
+    "request_binding_problem": "_envelope",
+    "request_envelope_problem": "_envelope",
     "response_matches_request": "_envelope",
     "same_json_rpc_id": "_envelope",
     "schemas_dir": "_schemas",
