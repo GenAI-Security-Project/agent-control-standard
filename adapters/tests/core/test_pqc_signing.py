@@ -146,12 +146,16 @@ class KeysAreParsedOnce(unittest.TestCase):
             self.assertTrue(verify_with_keyring(envelope, keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
 
     def test_building_a_key_without_the_extra_names_it(self) -> None:
-        code = ("import sys\nsys.modules['cryptography'] = None\n"
-                "from acs.core import VerificationKey\nVerificationKey('k', 'ML-DSA-65', bytes(1952))\n")
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("ImportError", proc.stderr)
-        self.assertIn("pqc", proc.stderr)
+        # The public name is gated (AttributeError), and the private module fails at build (ImportError).
+        for route, error in (("import acs.core\nacs.core.VerificationKey", "AttributeError"),
+                             ("from acs.core._keyring import VerificationKey\n"
+                              "VerificationKey('k', 'ML-DSA-65', bytes(1952))", "ImportError")):
+            code = "import sys\nsys.modules['cryptography'] = None\n" + route + "\n"
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+            with self.subTest(error=error):
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn(error, proc.stderr)
+                self.assertIn("pqc", proc.stderr)
 
 
 class SignatureLengthIsCheckedFirst(unittest.TestCase):

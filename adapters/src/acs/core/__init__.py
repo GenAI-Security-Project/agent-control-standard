@@ -10,9 +10,7 @@ _EXPORTS = {
     "GUARDIAN_ERROR_CAUSE": "_errors",
     "GUARDIAN_REFUSAL_CODES": "_errors",
     "KNOWN_DECISIONS": "_decision",
-    "Keyring": "_keyring",
     "MAX_REQUEST_BODY_BYTES": "_envelope",
-    "ML_DSA_65": "_keyring",
     "SESSION_REFUSAL_CODES": "_errors",
     "coerce_uuid": "_envelope",
     "container_key": "_signing",
@@ -33,15 +31,19 @@ _EXPORTS = {
     "sign_with_key": "_signing",
     "signing_input": "_signing",
     "turn_start_envelope": "_envelope",
-    "VerificationKey": "_keyring",
     "verify_with_key": "_signing",
-    "WIRE_ALGORITHMS": "_keyring",
 }
 
 # ML-DSA-65 needs the pqc extra (issue #574). These names resolve on access but stay out of
 # __all__ and __dir__, so `from acs.core import *` and tab completion never load cryptography.
 # Without the extra, access raises AttributeError, so hasattr() answers False instead of raising.
+# The keyring names live in a standard-library module but share the gate, since no key can be
+# built without the extra.
 _PQC_EXPORTS = {
+    "Keyring": "_keyring",
+    "ML_DSA_65": "_keyring",
+    "VerificationKey": "_keyring",
+    "WIRE_ALGORITHMS": "_keyring",
     "ML_DSA_CONTEXT": "_mldsa",
     "ML_DSA_MODE": "_mldsa",
     "MLDSA65SigningKey": "_mldsa",
@@ -59,7 +61,8 @@ def __getattr__(name: str) -> Any:
         if module is None:
             raise AttributeError(f"module 'acs.core' has no attribute {name!r}")
         try:
-            import_module(f"acs.core.{module}")
+            # acs.core._mldsa is the gate: it fails to import without the extra or its backend.
+            import_module("acs.core._mldsa")
         except ImportError as exc:
             raise AttributeError(f"acs.core.{name} needs the pqc extra: {exc}") from exc
     value = getattr(import_module(f"acs.core.{module}"), name)

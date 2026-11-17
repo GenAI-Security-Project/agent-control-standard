@@ -8,7 +8,9 @@ import unittest
 
 from tests.pqc_extra import pqc_installed
 
-PQC_NAMES = ("ML_DSA_CONTEXT", "ML_DSA_MODE", "MLDSA65SigningKey", "sign_with_signing_key", "verify_with_keyring")
+# Review finding CR3-6: the keyring names are useless without the extra, so they share the gate.
+PQC_NAMES = ("ML_DSA_CONTEXT", "ML_DSA_MODE", "MLDSA65SigningKey", "sign_with_signing_key", "verify_with_keyring",
+             "Keyring", "VerificationKey", "ML_DSA_65", "WIRE_ALGORITHMS")
 
 PROBE = """
 import json, os, sys
@@ -34,7 +36,7 @@ print(json.dumps({
     "has_ecdsa_name": hasattr(acs.core, "ECDSA_P256"),
 }))
 # Last, since with the extra installed this loads cryptography.
-print(json.dumps({"has_ml_dsa_mode": hasattr(acs.core, "ML_DSA_MODE")}))
+print(json.dumps({"has_pqc": {n: hasattr(acs.core, n) for n in names}}))
 """ % (PQC_NAMES,)
 
 
@@ -56,7 +58,7 @@ class DefaultPathImportsNoCryptography(unittest.TestCase):
 
     def test_a_pqc_name_resolves_only_with_the_extra(self) -> None:
         # hasattr is False, not an ImportError, when the extra is missing.
-        self.assertEqual(self.result["has_ml_dsa_mode"], pqc_installed())
+        self.assertEqual(self.result["has_pqc"], {n: pqc_installed() for n in PQC_NAMES})
 
 
 if __name__ == "__main__":

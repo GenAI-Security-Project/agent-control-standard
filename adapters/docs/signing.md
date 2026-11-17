@@ -63,7 +63,7 @@ The envelope names its session in `params.metadata.session_id` for a request, `r
 
 On the adapter side, `acs.client.verify_signature(envelope, keyring=keyring, expected_key_id="lab-guardian-1", expected_session_id=session_id)` verifies a response by keyring, and core enforces both pins. Without `keyring`, `verify_signature` applies the HMAC rules exactly as before.
 
-The ML-DSA names stay out of `acs.core.__all__`, so `from acs.core import *` never loads `cryptography`. Without the extra, `hasattr(acs.core, "ML_DSA_MODE")` is False.
+The ML-DSA and keyring names (`Keyring`, `VerificationKey`, `ML_DSA_65`, `WIRE_ALGORITHMS`, and the signing names) stay out of `acs.core.__all__`, so `from acs.core import *` never loads `cryptography`. They resolve on access when the extra is installed. Without it, access raises AttributeError naming the `pqc` extra, so `hasattr(acs.core, "Keyring")` is False.
 
 ## Lab conventions
 
