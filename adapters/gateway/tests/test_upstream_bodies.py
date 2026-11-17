@@ -88,3 +88,11 @@ def test_lab_headers_from_the_upstream_never_reach_the_client(gateway, guardian,
     assert response.status_code == 200
     assert not [h for h in response.headers if h.lower().startswith("x-acs-")]
     assert response.headers["x-request-id"] == "req_upstream_1"
+
+
+def test_shadow_logs_a_marker_for_a_compressed_request_not_its_bytes(gateway, guardian, upstream, tmp_path):
+    body = gzip.compress(json.dumps(finbot_request()).encode())
+    gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", content=body, headers={"Content-Encoding": "gzip", "Content-Type": "application/json"})
+    logged = [json.loads(line) for line in (tmp_path / "model-inputs.jsonl").read_text().splitlines()]
+    assert logged == [{"compressed": "gzip", "bytes": len(body)}]

@@ -175,7 +175,7 @@ class Gateway:
             if self.enforce:
                 return openai_error(415, "Compressed request bodies are not supported by this endpoint.",
                                     "invalid_request_error", "unsupported_content_encoding")
-            return await self._relay_verbatim(raw, headers)
+            return await self._relay_verbatim(raw, headers, logged={"compressed": encoding, "bytes": len(raw)})
         body, repeated = _parse_governed(raw)
         if is_stream(body):
             # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
@@ -377,10 +377,11 @@ class Gateway:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
         return UpstreamAnswer(upstream.status_code, upstream.headers, b"".join(chunks))
 
-    async def _relay_verbatim(self, raw: bytes, headers: dict[str, str]) -> Response:
-        """Off mode relays the answer, streamed or not, as it arrives, encoding and headers included."""
+    async def _relay_verbatim(self, raw: bytes, headers: dict[str, str], logged: Any = None) -> Response:
+        """Relay the answer, streamed or not, as it arrives, encoding and headers included. logged replaces the body
+        in the model input log, for a body that can't be read as text."""
         if self.model_inputs.enabled:
-            body = _parse(raw)
+            body = logged if logged is not None else _parse(raw)
             self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
         assert self.http is not None
         try:
