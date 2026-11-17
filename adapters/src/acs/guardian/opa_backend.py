@@ -91,10 +91,16 @@ class OpaConfig:
 
 def load_config(env: Mapping[str, str] = os.environ) -> OpaConfig:
     url = env.get(URL_ENV, "").strip()
-    parts = urllib.parse.urlsplit(url)
+    unusable = OpaConfigError(f"{URL_ENV} must be an http or https URL to the OPA data API, got {redact_url(url)!r}")
+    try:
+        parts = urllib.parse.urlsplit(url)
+        # Reading port raises on a port that is not a number or out of range, so a bad one stops startup here.
+        parts.port  # noqa: B018
+    except ValueError:
+        raise unusable from None
     # Only http(s) to a named host: urllib would otherwise open file: and ftp: URLs from the environment.
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise OpaConfigError(f"{URL_ENV} must be an http or https URL to the OPA data API, got {redact_url(url)!r}")
+        raise unusable
     raw_timeout = env.get(TIMEOUT_ENV, "").strip() or str(DEFAULT_TIMEOUT_MS)
     try:
         timeout_ms = int(raw_timeout)

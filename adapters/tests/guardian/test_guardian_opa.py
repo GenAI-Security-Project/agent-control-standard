@@ -132,6 +132,7 @@ def _run_main(monkeypatch) -> list[int]:
 
 @pytest.mark.parametrize("env", [{"ACS_POLICY_BACKEND": "opa"},
                                  {"ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "file:///etc/passwd"},
+                                 {"ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "http://[::1/x"},
                                  {"ACS_POLICY_BACKEND": "rego", "ACS_OPA_URL": "http://127.0.0.1:1/x"}])
 def test_the_guardian_refuses_to_start_with_a_misconfigured_backend(no_backend, capsys, env):
     for name, value in env.items():
