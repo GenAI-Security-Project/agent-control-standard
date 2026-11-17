@@ -85,10 +85,6 @@ class OpaConfig:
     timeout_s: float
 
 
-def selected(env: Mapping[str, str] = os.environ) -> bool:
-    return env.get(BACKEND_ENV, "").strip().lower() == "opa"
-
-
 def load_config(env: Mapping[str, str] = os.environ) -> OpaConfig:
     url = env.get(URL_ENV, "").strip()
     parts = urllib.parse.urlsplit(url)

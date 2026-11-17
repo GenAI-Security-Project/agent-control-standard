@@ -104,12 +104,6 @@ def test_an_undefined_rule_is_a_missing_result():
         assert _failure(_config(opa.url)).reason_code == "opa_result_missing"
 
 
-def test_selected_only_for_opa():
-    assert opa_backend.selected({}) is False
-    assert opa_backend.selected({"ACS_POLICY_BACKEND": ""}) is False
-    assert opa_backend.selected({"ACS_POLICY_BACKEND": " OPA "}) is True
-
-
 def test_load_config_reads_url_and_timeout():
     config = opa_backend.load_config({"ACS_OPA_URL": "http://opa:8181/v1/data/finbot/verdict",
                                       "ACS_OPA_TIMEOUT_MS": "750"})

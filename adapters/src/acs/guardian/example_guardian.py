@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
@@ -107,8 +108,12 @@ POLICY_BACKEND_ENV = "ACS_POLICY_BACKEND"
 OPA_CONFIG: Any = None
 
 
-def _policy_backend_named() -> bool:
-    return OPA_CONFIG is not None or bool(os.environ.get(POLICY_BACKEND_ENV, "").strip())
+def policy_backend_requested(env: Mapping[str, str] = os.environ) -> bool:
+    """The one rule for whether a policy backend is on, used by main() and by every step.
+
+    Any non-empty name counts, an unknown one included, so a typo fails closed instead of falling back.
+    """
+    return bool(env.get(POLICY_BACKEND_ENV, "").strip())
 
 
 def _policy_backend_decision(method: str, params: dict, base: dict) -> dict:
@@ -486,7 +491,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                         "reason_codes": ["protected_path"]}
 
         # The hard denies above hold under every backend. A policy backend decides only what they allow.
-        if _policy_backend_named():
+        if policy_backend_requested():
             return _policy_backend_decision(method, params, base)
         return {**base, "decision": "allow"}
 
@@ -506,7 +511,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                     "reason_codes": [code]}
         return {**base, "decision": "allow"}
 
-    if method == "steps/toolCallResult" and _policy_backend_named():
+    if method == "steps/toolCallResult" and policy_backend_requested():
         # Under a policy backend a tool result is judged, so it can be denied or redacted.
         return _policy_backend_decision(method, params, base)
 
@@ -678,7 +683,7 @@ def main() -> int:
         return 1
 
     global OPA_CONFIG
-    if os.environ.get(POLICY_BACKEND_ENV, "").strip():
+    if policy_backend_requested():
         from acs.guardian import opa_backend
         backend_problem = opa_backend.backend_problem()
         if backend_problem:

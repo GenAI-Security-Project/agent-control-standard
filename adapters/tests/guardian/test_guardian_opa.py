@@ -47,6 +47,14 @@ def opa_on(no_backend):
     return start
 
 
+@pytest.mark.parametrize("value,requested", [(None, False), ("", False), ("  ", False), ("opa", True),
+                                             (" OPA ", True), ("rego", True)])
+def test_one_function_decides_whether_a_policy_backend_is_requested(value, requested):
+    # main() and every step use this one rule. An unknown name counts as requested, so it fails closed.
+    env = {} if value is None else {"ACS_POLICY_BACKEND": value}
+    assert example_guardian.policy_backend_requested(env) is requested
+
+
 def test_without_a_backend_a_tool_result_is_informational_and_opa_is_never_called(no_backend):
     with StubOpa(DENY) as opa:
         no_backend.setenv("ACS_OPA_URL", opa.url)
