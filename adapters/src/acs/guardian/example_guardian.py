@@ -23,6 +23,7 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -1068,6 +1069,27 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             sys.stderr.write(f"[guardian] -> {log_value(decision, 16)}{tail}\n")
             sys.stderr.flush()
         self._respond(status, response)
+
+    def do_GET(self) -> None:  # noqa: N802
+        """GET /keys serves the key document when ML-DSA-65 response signing is on (lab convention, issue #460).
+
+        With the mode off, GET answers 501 on every path, as BaseHTTPRequestHandler does with no do_GET. The body is
+        the document as loaded at startup, so a file changed later never reaches a client the running key can't serve.
+        """
+        if DECISION_SIGNER is None:
+            self.send_error(501, f"Unsupported method ({self.command!r})")
+            return
+        if urllib.parse.urlsplit(self.path).path != "/keys":
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        payload = json.dumps(DECISION_SIGNER.keys.document).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _read_body(self, length: int) -> bytes:
         """Read the body within one deadline for the whole read, so a client dripping one byte per interval
