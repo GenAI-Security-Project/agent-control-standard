@@ -196,7 +196,8 @@ def _modify(**modifications) -> dict:
 
 @pytest.mark.parametrize("payload,verdict,code", [
     (LISTING, _modify(parameter_overrides={"command": "rm -rf /"}), "destructive_command"),
-    (LISTING, _modify(parameter_overrides={"command": {"value": "rm -rf /"}}), "destructive_command"),
+    # Overrides are raw tool values, as the Claude Code and Cursor adapters apply them. A dict is not a command.
+    (LISTING, _modify(parameter_overrides={"command": {"value": "ls"}}), "argument_type_invalid"),
     (LISTING, _modify(parameter_overrides={"command": ["rm", "-rf", "/"]}), "argument_type_invalid"),
     (WRITE_TMP, _modify(parameter_overrides={"file_path": "/etc/passwd"}), "protected_path"),
     (LISTING, _modify(redactions=[{"path": "/arguments/command/value", "replacement": "rm -rf /"}]),

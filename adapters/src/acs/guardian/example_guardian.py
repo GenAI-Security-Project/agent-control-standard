@@ -503,9 +503,11 @@ def _recheck_rewritten_call(base: dict, tool_name: str, payload: dict, result: d
                 node[int(leaf)] = redaction.get("replacement", "[REDACTED]")
             else:
                 node[leaf] = redaction.get("replacement", "[REDACTED]")
-        arguments = rewritten.setdefault("arguments", {})
+        arguments = _unwrap_arguments(rewritten.get("arguments") or {})
+        # Overrides replace the tool's own argument values, exactly as the Claude Code and Cursor adapters merge
+        # them into the tool input, so they are never unwrapped.
         arguments.update(modifications.get("parameter_overrides") or {})
-        return _hard_deny(base, tool_name, _unwrap_arguments(arguments)) or result
+        return _hard_deny(base, tool_name, arguments) or result
     except Exception:  # noqa: BLE001
         # The verdict already validated, so this is unexpected. It still ends in a deny, never an unchecked modify.
         return {**base, "decision": "deny",
