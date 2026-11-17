@@ -231,7 +231,14 @@ class Gateway:
             key = conversation_key(body)
         except RecursionError:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
-        refused, deferred = self._refuse_input(key, self.sessions.peek(key), body)
+        try:
+            refused, deferred = self._refuse_input(key, self.sessions.peek(key), body)
+        except Exception as e:  # noqa: BLE001
+            # The pre-pass is gating code too: shadow forwards unchanged and enforce fails closed.
+            failed = self._gating_failed(None, "pre_pass", e)
+            if failed is not None:
+                return failed
+            refused, deferred = None, set()
         if refused is not None:
             return refused
         try:

@@ -1,3 +1,5 @@
+import pytest
+
 from conftest import NEUTRAL, call_item, finbot_request, response_body, transcript_lines
 
 DENIED = response_body(call_item("bash", {"command": "rm -rf /"}, "call_1"))
@@ -47,3 +49,12 @@ def test_enforce_fails_closed_when_gating_itself_fails(gateway, guardian, upstre
     assert response.status_code == 500
     assert "rm -rf" not in response.text and "bash" not in response.text
     assert [e["phase"] for e in audit() if e["acs_audit_event"] == "gateway_step_error"] == ["output"]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_a_fault_in_the_pre_pass_follows_the_mode(gateway, guardian, upstream, audit, mode):
+    client = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian)
+    client.app.state.gateway._refuse_input = boom
+    response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == (200 if mode == "shadow" else 500)
+    assert [e["phase"] for e in audit() if e["acs_audit_event"] == "gateway_step_error"] == ["pre_pass"]
