@@ -50,6 +50,16 @@ class SignedServerHellos(_SessionTest):
         self.assertIsInstance(decision, NoAnswer)
         self.assertEqual(decision.cause, "invalid_server_hello")
 
+    def test_an_id_with_neither_result_nor_error_is_malformed(self) -> None:
+        # Review finding R8-M5. is_jsonrpc_response refuses it before binding runs, so it is no
+        # answer (malformed_response) today. A signature can't be attached, since it lives inside
+        # the result or error object.
+        for body in ({"jsonrpc": "2.0"}, {"jsonrpc": "2.0", "result": None}, {"jsonrpc": "2.0", "error": None}):
+            with self.subTest(body=body):
+                decision, _ = self._open(_answer(lambda h, body=body: {**body, "id": h["id"]}),
+                                         session_id=f"hello-bare-{len(body)}-{list(body)[-1]}")
+                self.assertEqual(decision, NoAnswer("malformed_response"))
+
     def test_the_client_hello_sent_uses_the_core_constant(self) -> None:
         # CR7-7: the ClientHello actually sent, not a grep of the source.
         sent: list[dict] = []
