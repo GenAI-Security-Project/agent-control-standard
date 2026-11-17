@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from acs.testing.harness import wait_port
-from test_guardian_opa_round_trip import TRANSFER, VENDOR_RESULT, _send, guardian  # noqa: F401  (guardian is a fixture)
+from round_trip_helpers import TRANSFER, VENDOR_RESULT, send_step
 
 OPA = shutil.which("opa")
 POLICY = Path(__file__).resolve().parent / "policy" / "lab_test.rego"
@@ -36,7 +36,7 @@ def opa_url():
 
 
 def test_the_policy_redacts_every_output(guardian, opa_url):
-    _, result = _send(guardian(opa_url), "steps/toolCallResult", VENDOR_RESULT)
+    _, result = send_step(guardian(opa_url), "steps/toolCallResult", VENDOR_RESULT)
     assert result["decision"] == "modify"
     assert result["modifications"] == {"redactions": [{"path": "/outputs/0/value/bank_account_number"},
                                                       {"path": "/outputs/1/value/bank_account_number"}]}
@@ -44,10 +44,10 @@ def test_the_policy_redacts_every_output(guardian, opa_url):
 
 def test_the_policy_denies_an_external_recipient(guardian, opa_url):
     mail = {"tool": {"name": "finmail__send_email"}, "arguments": {"to": {"value": ["collector@exfil.example"]}}}
-    _, result = _send(guardian(opa_url), "steps/toolCallRequest", mail)
+    _, result = send_step(guardian(opa_url), "steps/toolCallRequest", mail)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["external_recipient"])
 
 
 def test_the_policy_allows_anything_else(guardian, opa_url):
-    _, result = _send(guardian(opa_url), "steps/toolCallRequest", TRANSFER)
+    _, result = send_step(guardian(opa_url), "steps/toolCallRequest", TRANSFER)
     assert result["decision"] == "allow"
