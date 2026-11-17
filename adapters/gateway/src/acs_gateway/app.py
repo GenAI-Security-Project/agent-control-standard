@@ -213,23 +213,28 @@ class Gateway:
         except SessionsBusy:
             return self._busy()
         # Pinned from the input phase through the output phase, so eviction never splits one turn over two sessions.
+        # A session the request moves to after an epoch bump is pinned too, in the same list.
+        pins = [pinned]
         pinned.active += 1
         try:
-            return await self._governed(key, raw, body, headers)
+            return await self._governed(key, raw, body, headers, pins)
         except SessionsBusy:
             # An epoch bump mid-request needed a new session and every slot was busy.
             return self._busy()
         finally:
-            pinned.active -= 1
+            for session in pins:
+                session.active -= 1
 
     def _busy(self) -> Response:
         _audit("sessions_full", max_sessions=self.config.max_sessions)
         return openai_error(503, "The service is busy. Try again shortly.", "server_error", "busy")
 
-    async def _governed(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str]) -> Response:
+    async def _governed(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str],
+                        pins: list[Session]) -> Response:
         session = None
         try:
             async with self._current(key) as session:
+                _pin(session, pins)
                 await self._ensure_open(session)
                 if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
@@ -255,6 +260,7 @@ class Gateway:
                                 "upstream_unreadable")
         try:
             async with self._current(key) as session:
+                _pin(session, pins)
                 # The input phase already made this request's one attempt, so only a new epoch's session opens here.
                 if session.handshake is None:
                     await self._ensure_open(session)
@@ -543,6 +549,13 @@ class Gateway:
             _audit("verification_failed", **fields)
         elif result.cause and result.cause.startswith("http_"):
             _audit("guardian_http_error", **fields)
+
+
+def _pin(session: Session, pins: list[Session]) -> None:
+    """Pin a session for the rest of the request, once."""
+    if not any(pinned is session for pinned in pins):
+        pins.append(session)
+        session.active += 1
 
 
 def _repeated_key_in_request(raw: bytes, body: dict[str, Any]) -> tuple[str, str] | None:

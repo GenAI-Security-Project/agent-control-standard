@@ -110,3 +110,25 @@ def test_an_admin_token_fifo_is_refused_without_blocking(tmp_path):
     os.mkfifo(fifo, 0o600)
     with pytest.raises(ValueError, match="regular file"):
         load_admin_token(fifo)
+
+
+def test_the_session_a_request_moves_to_stays_pinned_through_the_upstream_call(gateway, guardian, upstream):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    gw = client.app.state.gateway
+    original_get, original_upstream, seen = gw.sessions.get, gw._upstream, []
+
+    def get(key):
+        session = original_get(key)
+        if not seen:
+            seen.append("bumped")
+            gw.sessions.bump_epoch()
+        return session
+
+    async def upstream_call(*args, **kwargs):
+        # While the model answers, try to evict: a pinned session must refuse to go.
+        seen.append([(s.epoch, s.busy) for s in gw.sessions._sessions.values()])
+        return await original_upstream(*args, **kwargs)
+
+    gw.sessions.get, gw._upstream = get, upstream_call
+    client.post("/v1/responses", json=finbot_request())
+    assert seen[1] == [(1, True)]
