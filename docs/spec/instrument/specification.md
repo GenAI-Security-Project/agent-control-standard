@@ -80,7 +80,7 @@ Required at session start, before any hook traffic. Wire method: `handshake/hell
 
 **Observed Agent → Guardian Agent (ClientHello):** `acs_versions_supported`, `methods_implemented`, `transports_supported`, `max_payload_size_bytes`, `provenance_producer`, `wrapped_protocols`, `profiles_supported` (conformance profiles the client implements; see [Conformance](../conformance.md)).
 
-**Guardian Agent → Observed Agent (ServerHello):** `negotiated_version`, `methods_evaluated`, `selected_transport`, `signature_algorithms_supported`, `timeout_config` (default and per-method), `on_decision_failure` (failure posture, §6.4), `skew_window_ms` (request-timestamp skew tolerance for replay protection, §10.3), `approver_types_supported`, `policy_requires_provenance`, `agbom_serializations_supported` (Inspect-pillar serialization formats the Guardian renders on request), `trace_emission` (whether the Guardian emits OTel and/or OCSF for the Trace pillar, plus optional OTLP collector endpoint), `profiles_accepted`.
+**Guardian Agent → Observed Agent (ServerHello):** `negotiated_version`, `methods_evaluated`, `selected_transport`, `signature_algorithms_supported`, `timeout_config` (default and per-method), `on_decision_failure` (a stricter failure posture the Guardian requires, §6.4), `skew_window_ms` (request-timestamp skew tolerance for replay protection, §10.3), `approver_types_supported`, `policy_requires_provenance`, `agbom_serializations_supported` (Inspect-pillar serialization formats the Guardian renders on request), `trace_emission` (whether the Guardian emits OTel and/or OCSF for the Trace pillar, plus optional OTLP collector endpoint), `profiles_accepted`.
 
 Version mismatch terminates with `UNSUPPORTED_VERSION` (`-32001`, §17.1). Unknown fields MUST be ignored. If the client declares `provenance_producer: "none"` and the Guardian's `policy_requires_provenance` is true, the Guardian MUST refuse the session at handshake time with `PROVENANCE_REQUIRED` (`-32002`, §17.1) rather than silently degrading enforcement.
 
@@ -97,9 +97,11 @@ sequenceDiagram
 
 ### 4.1 Handshake failure (normative)
 
-`on_decision_failure` is negotiated in the handshake, so it cannot govern a handshake that never completes. When `handshake/hello` fails — the Guardian is unreachable, silent past the deployment's connection timeout, or errors without producing a ServerHello — the Observed Agent applies its **startup posture**, configured out of band: `proceed` starts the session unguarded, `refuse` does not start it. The default is `proceed`, matching `on_decision_failure`, so a Guardian outage does not block new sessions.
+`on_decision_failure` is negotiated in the handshake, so it cannot govern a handshake that never completes. When `handshake/hello` gets no usable answer (a decision failure, §6.4), the Observed Agent applies its **startup posture**, set in its own deployment configuration: `refuse` does not start the session, and `proceed` starts it unguarded. The default is `refuse`, so a session that never reached a Guardian runs nothing ungoverned.
 
-A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) has decided; the startup posture applies only when no answer arrives. A session started unguarded MUST be recorded in the deployment's own audit log — there is no Guardian to receive the event — and SHOULD be surfaced on Trace as an `acs.decision.failure` event with class `handshake_failure` and posture `fail_open` on the session span when the deployment claims ACS-Trace. The Observed Agent SHOULD retry the handshake for subsequent sessions. Whether a Guardian can attach mid-flight to a session that started unguarded is undefined in v0.1; renegotiation is deferred to v0.2 alongside `system/handshake_renegotiate` (§13).
+A Guardian that answers with a refusal (§6.4), such as `SESSION_REFUSED`, `UNSUPPORTED_VERSION` or `PROVENANCE_REQUIRED`, has decided, and the session does not start whatever the startup posture. A failed handshake MUST be recorded in the deployment's own audit log under either posture, since no Guardian received it, and SHOULD be surfaced on Trace as an `acs.decision.failure` event with class `handshake_failure` and the posture applied, on the session span, when the deployment claims ACS-Trace. The Observed Agent SHOULD retry the handshake for subsequent sessions.
+
+Whether a Guardian can attach mid-flight to a session that started unguarded is undefined in v0.1; renegotiation is deferred to v0.2 alongside `system/handshake_renegotiate` (§13).
 
 ## 5. Hook Taxonomy
 
@@ -143,7 +145,7 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 
 DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session.
 
-`timeout_decision` defaulting to `deny` is deliberately the opposite of `on_decision_failure` defaulting to `proceed` (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, not one that never answered: a degraded Guardian that can still emit DEFER fails closed where a silent one fails open.
+`timeout_decision` defaults to `deny`, as the failure posture does (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, so it fails closed even in a deployment that opted into `proceed` for a Guardian that never answers.
 
 The diagram below shows the five dispositions. ALLOW, DENY, and MODIFY resolve immediately. ASK and DEFER pause the step until it resolves.
 
@@ -197,9 +199,21 @@ The provenance of a value introduced by `parameter_overrides` (its `origin`, and
 
 A hook is a control point only if the Observed Agent waits for the verdict and applies it. For every step it submits, the Observed Agent MUST wait for the Guardian's decision, up to the negotiated timeout (`timeout_config`, §4), and MUST apply it: `ALLOW` proceeds, `DENY` blocks the action, `MODIFY` proceeds with the modified payload (§6.3) — or, for a client that cannot apply it, falls back per [§6.5](#65-modify-incapable-clients-normative) — `ASK` pauses for approval, `DEFER` suspends pending resolution. A framework that emits hooks but proceeds without applying the verdict is not conformant; the one defined substitution is §6.5's MODIFY fallback, which blocks rather than proceeds unmodified at every hook except `postCompact`, where compaction has already happened, so the client keeps the original summary and records an audit event (§6.5).
 
-A step suffers a **decision failure** when no usable decision arrives within the negotiated timeout: the Guardian stays silent, the transport fails (connection refused, TLS failure, malformed response), or the Guardian returns an error instead of a decision. All three resolve the same way: the Observed Agent applies the deployment's failure posture, declared as `on_decision_failure` in the handshake (§4) and defaulting to `proceed` (fail-open) so that a slow, erroring, or unreachable Guardian does not halt production. A deployment MAY set `on_decision_failure: deny` (fail-closed). The negotiated timeout bounds every failure mode: an error from the §17.1 registry carries a recovery action the agent MAY attempt within the remaining budget, and an unambiguous failure (a refused connection) MAY resolve immediately rather than waiting out the clock.
+A step ends in one of three ways, and only the first is a decision:
 
-Every decision failure MUST be recorded as an audit event, under either posture. Under `proceed` the record makes the bypass visible rather than silent, and under `deny` it shows why the step was blocked. The Observed Agent records it in the deployment's own audit log, the rule §4.1 sets for a session started unguarded, and SHOULD also emit it as an `acs.decision.failure` event when the deployment claims ACS-Trace ([Trace Events](../trace/events.md)). At `sessionEnd`, the Observed Agent SHOULD report how many failures it recorded in each failure class, in `summary.decision_failures`. A reader treats a session that ends without that count as unmeasurable. When a decision does arrive within the timeout, the agent MUST honor it regardless of the posture. Fail-open trades enforcement for availability under disruption: an adversary who can disrupt the channel converts control into audit. Deployments for which that trade is unacceptable set `on_decision_failure: deny`.
+- **A verified decision.** The Observed Agent honors it as above, whatever the failure posture.
+- **A decision failure.** No usable answer arrives within the negotiated timeout: the Guardian stays silent, the connection fails, the TLS handshake fails (an alert included, since it cannot be told apart from an outage), an HTTP `408` or `5xx` arrives with no JSON-RPC body, or the Guardian answers with a signed `-32603` `Internal error`. A decision failure follows the failure posture below.
+- **A refusal or an integrity failure.** The answer is not a decision the agent may carry out: any other HTTP `4xx`, `429` included; a JSON-RPC error that carries no valid signature; a signed error other than `-32603`, which covers every §17.1 code and any code added later; a response whose signature fails verification or whose `key_id` does not resolve; a response whose JSON-RPC `id` or `result.request_id` does not match the request; or a response that fails `response-envelope.json`, an `allow` included. The Observed Agent MUST block the step whatever the posture.
+
+A §17.1 recovery is a new request with a new `request_id`, judged on its own. Until a request gets a verified decision, a refused step stays blocked and a failed step follows the posture.
+
+**Failure posture.** The posture is `deny` (fail-closed) unless the Observed Agent's own deployment configuration opts into `proceed` (fail-open). The Guardian's `on_decision_failure` (§4) can only make it stricter: `deny` overrides the agent's opt-in, and `proceed` or an absent field leaves the agent's setting in force. A Guardian serves many agents and is the party a denial of service targets, so the agent's own deployment decides whether disrupting the Guardian may let actions through. The negotiated timeout bounds every failure mode, and an unambiguous failure, such as a refused connection, MAY resolve immediately rather than waiting out the clock.
+
+Each outcome applies to its own step, and the session continues. A refusal ends the session only where the step is the session's start: at `handshake/hello` (§4.1) and at `sessionStart` ([Hooks › sessionStart](hooks.md#sessionstart)). The fail-closed rules for a contradictory `modifications` object (§6.3) and for a MODIFY the client cannot apply (§6.5) are this rule applied to a decision the agent cannot carry out as sent, with §6.5's `postCompact` exception.
+
+Every decision failure and every refusal MUST be recorded as an audit event, under either posture, with its failure class and its cause: the JSON-RPC error code, the HTTP status, or the timeout that elapsed. The Observed Agent records it in the deployment's own audit log, the rule §4.1 sets for a failed handshake, and SHOULD also emit it as an `acs.decision.failure` event when the deployment claims ACS-Trace ([Trace Events](../trace/events.md)). At `sessionEnd`, the Observed Agent SHOULD report how many it recorded in each failure class, in `summary.decision_failures`, and a reader treats a session that ends without that count as unmeasurable.
+
+Under `deny` the record shows why the step was blocked, and under `proceed` it makes the bypass visible rather than silent. When the Observed Agent blocks a step that got no decision, it SHOULD tell the user and the agent that ACS blocked it and why, in text it composes from the class and cause rather than copying from the response. A deployment that opts into `proceed` trades enforcement for availability: an adversary who can disrupt the channel converts control into audit.
 
 ### 6.5 MODIFY-incapable clients (normative)
 
@@ -317,6 +331,8 @@ Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline
 ASK approvers MAY be human, agent, or service. `ask_details.approver = { type, id, endpoint }`. The Approver receives an ACS-shaped request and returns an ACS-shaped decision. Approver authentication is REQUIRED. Guardian MUST verify approver identity against policy.
 
 Single-hop only in v0.1. Approvers MUST NOT return ASK. Quorum and recursive ASK deferred to v0.2.
+
+An ASK whose `timeout_seconds` elapse with no approval resolves as `DENY`: the Observed Agent never proceeds on an ASK on its own. A Guardian that cannot be reached while an ASK is pending leaves the step blocked whatever the failure posture (§6.4), because the Guardian has already answered.
 
 ### 9.1 Intent extension via ASK (normative)
 
@@ -473,12 +489,12 @@ ACS uses standard [JSON-RPC 2.0 error codes](https://www.jsonrpc.org/specificati
 | `-32600` | Invalid Request | Not a valid JSON-RPC Request, or array-shaped input to a Guardian that does not support batching |
 | `-32601` | Method not found | The requested ACS method does not exist |
 | `-32602` | Invalid params | `params` are invalid (wrong type, missing required field) |
-| `-32603` | Internal error | Unexpected server error |
+| `-32603` | Internal error | Unexpected server error. A signed `-32603` is the one error that follows the failure posture (§6.4). |
 | `-32000` to `-32099` | ACS-specific | See the registry in §17.1 |
 
 ### 17.1 ACS error code registry
 
-Every mandated refusal maps to a fixed code, so an SDK can branch on the code without parsing prose. An error response MAY carry a `data` object; when present it SHOULD include a machine-readable `reason` and a human-readable `message`, plus the per-code fields noted below.
+Every mandated refusal maps to a fixed code, so an SDK can branch on the code without parsing prose. The error object carries JSON-RPC's `code` and `message`, and the Guardian signs it in `error.signature` (§10), except a `SIGNATURE_INVALID` for a `key_id` it cannot resolve. `data`, when present, is an object: it carries the per-code fields the table names and MAY carry a machine-readable `reason`. Every error in this registry is a refusal, so the Observed Agent blocks the step whatever the failure posture (§6.4), and each recovery below is a new request judged on its own.
 
 | Code | Name | Raised when | Observed Agent recovery |
 |---|---|---|---|
@@ -489,6 +505,6 @@ Every mandated refusal maps to a fixed code, so an SDK can branch on the code wi
 | `-32004` | `SIGNATURE_INVALID` | A required signature is missing, malformed, or fails verification (§10). | Re-sign the request; if it persists, re-resolve `key_id`. |
 | `-32005` | `REPLAY_DETECTED` | Duplicate `request_id` or `nonce` within the session (§10.3). | Regenerate `request_id` (and `nonce`) and retry. |
 | `-32006` | `TIMESTAMP_OUT_OF_WINDOW` | `timestamp` falls outside the negotiated skew window (§10.3); `data.skew_window_ms` carries the window. | Correct clock drift and retry within the window. |
-| `-32007` | `CHAIN_MISMATCH` | The client's `chain_hash` does not match the Guardian's computed head (§8.6). Also exposable as a deny `reason_code: "chain_mismatch"` when the Guardian can still return a decision. | Re-fetch session state; a persistent mismatch is an integrity event, not a transient error. |
+| `-32007` | `CHAIN_MISMATCH` | The client's `chain_hash` does not match the Guardian's computed head (§8.6). Also returned as a DENY with `reason_codes: ["chain_mismatch"]` when the Guardian can still return a decision. | Re-fetch session state; a persistent mismatch is an integrity event, not a transient error. |
 
 `system/ping` MUST NOT return an ACS-specific error, so liveness probing survives signature-rotation and key-resolution failures (§13).

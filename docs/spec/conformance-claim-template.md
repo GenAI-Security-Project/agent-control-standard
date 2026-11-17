@@ -96,13 +96,13 @@ code invented on the page.
 
 ## 5. ACS-Core decision posture
 
-Required whenever `acs-core` is `EXERCISED`. ACS-Core mandates decision honoring, and its
-defaults are permissive, so a claim that omits this reports the default posture as evidence of
-enforcement.
+Required whenever `acs-core` is `EXERCISED`. ACS-Core mandates decision honoring, and a
+deployment can opt into `proceed`, so a claim that omits this cannot show whether a permitted
+action was decided or let through.
 
 | Field | Value |
 |---|---|
-| `on_decision_failure` posture as configured (§6.4) | `<proceed / deny>` |
+| Failure posture in force (§6.4): the deployment's setting, or a stricter `on_decision_failure` the Guardian declared | `<proceed / deny>` |
 | Startup posture on handshake failure (§4.1) | `<proceed / refuse>` |
 | Sessions observed in this run | `<n>` |
 | Decision failures recorded, by failure class (`sessionEnd` `summary.decision_failures`) | `<class: n, ...>` |
@@ -111,7 +111,7 @@ enforcement.
 
 An action permitted by policy and an action permitted because no decision happened are
 indistinguishable on the wire and both look like conformance. Section 6.4 requires every
-decision failure to be recorded as an audit event, fail-open or fail-closed, and `sessionEnd`
+decision failure and refusal to be recorded as an audit event, under either posture, and `sessionEnd`
 reports the count for each failure class in `summary.decision_failures`. A session started
 unguarded has no Guardian to receive that event, so it belongs in the deployment's own log.
 

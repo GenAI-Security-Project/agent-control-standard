@@ -174,7 +174,7 @@ describe("checkTracePillar resolves every row against the v0.1.0 schema files at
         "handshake_failure",
         "other",
       ],
-      "acs.failure.posture": ["fail_open", "fail_closed"],
+      "acs.failure.posture": ["fail_open", "fail_closed", "unknown"],
       "acs.failure.reported_by": ["observed_agent", "guardian"],
     });
     expect(rows.some((r) => r.span === "acs.decision.failure" || r.attribute.startsWith("acs.failure."))).toBe(false);

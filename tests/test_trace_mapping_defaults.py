@@ -134,7 +134,7 @@ def test_ocsf_decision_codes_match_the_answered_proposal():
         "finding_info", "finding_info.title", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid",
     ]
     assert decision["late_decision"]["properties"]["finding_types"]["default"] == [
-        "late_decision_fail_open", "late_decision_fail_closed",
+        "late_decision_fail_closed", "late_decision_posture_unknown",
     ]
     failure = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["decision_failure_event"]["properties"]
     failure_fields = {name.removeprefix("acs.failure.") for name in failure["required_attributes"]["default"] + failure["conditional_attributes"]["default"]}

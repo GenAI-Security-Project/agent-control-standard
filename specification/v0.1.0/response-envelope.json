@@ -126,7 +126,31 @@
           "description": "JSON-RPC error code. ACS reserves -32000 to -32099 for application errors."
         },
         "message": { "type": "string" },
-        "data": {}
+        "data": {
+          "type": "object",
+          "description": "The per-code fields the Specification 17.1 registry names, plus an optional machine-readable reason.",
+          "properties": {
+            "reason": { "type": "string" },
+            "supported_versions": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+              "description": "UNSUPPORTED_VERSION (-32001): the acs_version values the Guardian accepts."
+            },
+            "method": {
+              "type": "string",
+              "description": "CAPABILITY_NOT_NEGOTIATED (-32003): the method or profile the handshake did not negotiate."
+            },
+            "skew_window_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "TIMESTAMP_OUT_OF_WINDOW (-32006): the skew window the request fell outside."
+            }
+          }
+        },
+        "signature": {
+          "$ref": "request-envelope.json#/$defs/Signature",
+          "description": "Signature over this error response, computed on the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed). Absent only on a SIGNATURE_INVALID for a key_id the Guardian cannot resolve. The Observed Agent treats any other unsigned error as a refusal (Specification 6.4)."
+        }
       }
     }
   }
