@@ -36,10 +36,12 @@ from acs_gateway.apply import (
     NEUTRAL_LINE,
     neutral_message,
     parse_arguments,
+    rebuilt_message,
     result_payload,
     unsupported_content_part,
     unsupported_field,
     unsupported_input_item,
+    unsupported_message_part,
     unsupported_tool,
     unsupported_tool_choice,
 )
@@ -711,6 +713,17 @@ class Gateway:
             _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
                    direction="output", mode=self.config.mode)
             return None if self.enforce else item
+        if item_type(item) == "message" and isinstance(item, dict):
+            # The one message-part allowlist, shared with streams, so a function_call-shaped part can't ride along.
+            part = unsupported_message_part(item)
+            if part is not None:
+                _audit("unsupported_content_part", session_id=session.session_id, part_type=part,
+                       direction="output", mode=self.config.mode)
+                return None if self.enforce else item
+            if not self.enforce:
+                return item
+            rebuilt = rebuilt_message(item)
+            return item if rebuilt == item else rebuilt
         if not isinstance(item, dict) or item.get("type") != "function_call":
             return item
         if not isinstance(call_id, str) or not call_id:

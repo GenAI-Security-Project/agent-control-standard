@@ -17,6 +17,44 @@ NEUTRAL_LINE = "I couldn't complete that action."
 DEFAULT_REDACTION = "[REDACTED]"
 
 
+def message_part(part: Any) -> dict[str, Any] | None:
+    """A model message's content part rebuilt from known fields, or None when enforce must not pass it.
+
+    The one allowlist for message parts, shared by whole answers and streams (issue #578): output_text and refusal.
+    Anything else, a function_call-shaped part included, withholds the message.
+    """
+    if not isinstance(part, dict):
+        return None
+    if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+        return {"type": "output_text", "text": part["text"], "annotations": []}
+    if part.get("type") == "refusal" and isinstance(part.get("refusal"), str):
+        return {"type": "refusal", "refusal": part["refusal"]}
+    return None
+
+
+def unsupported_message_part(item: dict[str, Any]) -> str | None:
+    """The type of the first part of a model message outside the allowlist, or None when every part passes."""
+    content = item.get("content")
+    if not isinstance(content, list):
+        return "non_list_value"
+    for part in content:
+        if message_part(part) is None:
+            kind = part.get("type") if isinstance(part, dict) else None
+            return kind if isinstance(kind, str) else type(part).__name__
+    return None
+
+
+def rebuilt_message(item: Any) -> dict[str, Any] | None:
+    """A model message rebuilt from known fields, or None when it isn't a message with an id whose every part passes
+    the allowlist."""
+    if (not isinstance(item, dict) or item.get("type") != "message" or not isinstance(item.get("id"), str)
+            or unsupported_message_part(item) is not None):
+        return None
+    status = item.get("status") if isinstance(item.get("status"), str) else "completed"
+    return {"type": "message", "id": item["id"], "role": "assistant", "status": status,
+            "content": [message_part(part) for part in item["content"]]}
+
+
 def neutral_message() -> dict[str, Any]:
     """An assistant message carrying the neutral line, with an id shaped like the upstream's own."""
     return {"type": "message", "id": f"msg_{secrets.token_hex(24)}", "role": "assistant", "status": "completed",

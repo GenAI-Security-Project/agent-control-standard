@@ -23,7 +23,7 @@ from typing import Any
 
 from starlette.responses import StreamingResponse
 
-from acs_gateway.apply import NEUTRAL_LINE, item_type, neutral_message
+from acs_gateway.apply import NEUTRAL_LINE, item_type, message_part, neutral_message, rebuilt_message
 from acs_gateway.strict import loads_recording
 
 _LIFECYCLE = frozenset({"response.created", "response.in_progress", "response.queued"})
@@ -31,13 +31,13 @@ _TERMINAL = frozenset({"response.completed", "response.incomplete", "response.fa
 _ADDED, _DONE = "response.output_item.added", "response.output_item.done"
 # The only events of a message the client gets, each rebuilt from the fields named here.
 _MESSAGE_EVENTS = frozenset({_ADDED, "response.content_part.added", "response.output_text.delta",
-                             "response.output_text.done", "response.content_part.done", _DONE})
-# The Response fields a rebuilt lifecycle or final event carries. output is always the gateway's own.
-_RESPONSE_FIELDS = frozenset({
-    "id", "object", "created_at", "status", "error", "incomplete_details", "instructions", "max_output_tokens",
-    "model", "parallel_tool_calls", "previous_response_id", "reasoning", "store", "temperature", "text",
-    "tool_choice", "tools", "top_p", "truncation", "usage", "user", "metadata", "background", "service_tier",
-    "max_tool_calls", "top_logprobs", "prompt_cache_key", "safety_identifier"})
+                             "response.output_text.done", "response.refusal.delta", "response.refusal.done",
+                             "response.content_part.done", _DONE})
+# Which announced part type each text event writes to.
+_PART_OF = {"response.output_text.delta": "output_text", "response.output_text.done": "output_text",
+            "response.refusal.delta": "refusal", "response.refusal.done": "refusal"}
+# How long shadow keeps relaying after the final event, for trailing bytes such as data: [DONE] in a later chunk.
+_SHADOW_TAIL_S = 1.0
 _BOUNDARY = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 _LINES = re.compile(r"\r\n|\r|\n")
 UNREADABLE = "The model service returned an unreadable response."
@@ -104,18 +104,44 @@ def _text(value: Any, detail: str) -> str:
 
 
 def _message(item: Any) -> dict[str, Any]:
-    """A message item rebuilt from known keys, holding output_text parts only."""
-    if not isinstance(item, dict) or item.get("type") != "message" or not isinstance(item.get("content"), list):
+    """A message item rebuilt through the shared message-part allowlist (apply.message_part)."""
+    if not isinstance(item, dict) or item.get("type") != "message":
         raise _refuse("item_type_mismatch")
-    parts = []
-    for part in item["content"]:
-        if not isinstance(part, dict) or part.get("type") != "output_text":
-            raise _refuse("message_part_outside_allowlist")
-        parts.append({"type": "output_text", "text": _text(part.get("text"), "message_part_without_text"),
-                      "annotations": []})
-    status = item.get("status") if isinstance(item.get("status"), str) else "completed"
-    return {"type": "message", "id": _text(item.get("id"), "item_without_id"), "role": "assistant",
-            "status": status, "content": parts}
+    rebuilt = rebuilt_message(item)
+    if rebuilt is None:
+        raise _refuse("message_part_outside_allowlist")
+    return rebuilt
+
+
+def _usage(value: Any) -> dict[str, Any] | None:
+    """Token counts only, so nothing but numbers rides in usage."""
+    if not isinstance(value, dict):
+        return None
+    usage: dict[str, Any] = {k: value[k] for k in ("input_tokens", "output_tokens", "total_tokens")
+                             if _int(value.get(k)) is not None}
+    for details, key in (("input_tokens_details", "cached_tokens"), ("output_tokens_details", "reasoning_tokens")):
+        if isinstance(value.get(details), dict) and _int(value[details].get(key)) is not None:
+            usage[details] = {key: value[details][key]}
+    return usage
+
+
+def _envelope(response: dict[str, Any], output: list[dict[str, Any]]) -> dict[str, Any]:
+    """The Response a rebuilt lifecycle or final event carries: only what a client needs, each field checked, and the
+    gateway's own output. tools, metadata, instructions, text and reasoning never come back from the upstream."""
+    rebuilt: dict[str, Any] = {k: response[k] for k in ("id", "object", "status", "model")
+                               if isinstance(response.get(k), str)}
+    if isinstance(response.get("created_at"), (int, float)) and not isinstance(response["created_at"], bool):
+        rebuilt["created_at"] = response["created_at"]
+    usage = _usage(response.get("usage"))
+    if usage is not None:
+        rebuilt["usage"] = usage
+    if "error" in response:
+        error = response["error"]
+        rebuilt["error"] = ({"code": error.get("code") if isinstance(error.get("code"), str) else None,
+                             "message": error.get("message") if isinstance(error.get("message"), str) else UNREADABLE}
+                            if isinstance(error, dict) else None)
+    rebuilt["output"] = output
+    return rebuilt
 
 
 def _call(item: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +199,8 @@ class _Item:
     # A streamed message's dense output_index, and its rebuilt done item.
     client: int | None = None
     final: dict[str, Any] | None = None
+    # A streamed message's announced parts, by content_index, and their types.
+    parts: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -305,7 +333,9 @@ class StreamEditor:
             yield chunk
 
     async def _relay(self, source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-        """Shadow: every byte as it came, decisions queued, and a stop after the chunk holding the final event."""
+        """Shadow: every byte as it came, whatever the chunking, decisions queued. After the final event it keeps
+        relaying until the upstream closes or stays silent for _SHADOW_TAIL_S, so a trailing data: [DONE] in a later
+        chunk still goes out and an upstream that never closes doesn't hold the session lock."""
         frames, reading = _Frames(), True
         try:
             async for chunk in source:
@@ -328,10 +358,20 @@ class StreamEditor:
                                     **self._fields)
                         reading = False
                 if final:
+                    async for chunk in self._tail(source):
+                        yield chunk
                     return
         except _UpstreamFailed as e:
             # Nothing is injected. The relay ends where the upstream did.
             self._audit("upstream_error", cause=e.cause, mode="shadow", stream=True, **self._fields)
+
+    @staticmethod
+    async def _tail(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        while True:
+            try:
+                yield await asyncio.wait_for(source.__anext__(), _SHADOW_TAIL_S)
+            except (StopAsyncIteration, asyncio.TimeoutError, _UpstreamFailed):
+                return
 
     def _record(self, item: dict[str, Any]) -> None:
         if self.decide is None:
@@ -450,29 +490,42 @@ class StreamEditor:
             entry.done, entry.final = True, final
             self._emitted[entry.client] = final
             return self._emit({"type": _DONE, **where, "item": final})
-        if data.get("item_id") != entry.item_id or _int(data.get("content_index")) is None:
+        index = _int(data.get("content_index"))
+        if data.get("item_id") != entry.item_id or index is None:
             raise _refuse("event_outside_allowlist")
-        where = {"item_id": entry.item_id, **where, "content_index": data["content_index"]}
-        if kind in ("response.content_part.added", "response.content_part.done"):
+        where = {"item_id": entry.item_id, **where, "content_index": index}
+        if kind == "response.content_part.added":
+            # A part's text starts empty, so the allowlist sees it with its text field filled in.
             part = data.get("part")
-            if not isinstance(part, dict) or part.get("type") != "output_text":
+            kind_of = part.get("type") if isinstance(part, dict) else None
+            rebuilt = message_part({"text": "", "refusal": "", **part} if isinstance(part, dict) else part)
+            if rebuilt is None or index in entry.parts:
                 raise _refuse("message_part_outside_allowlist")
-            text = _text(part.get("text", ""), "message_part_without_text")
-            return self._emit({"type": kind, **where,
-                               "part": {"type": "output_text", "text": text, "annotations": []}})
-        if kind == "response.output_text.delta":
+            entry.parts[index] = kind_of
+            return self._emit({"type": kind, **where, "part": rebuilt})
+        announced = entry.parts.get(index)
+        if kind == "response.content_part.done":
+            rebuilt = message_part(data.get("part"))
+            if rebuilt is None or rebuilt["type"] != announced:
+                raise _refuse("event_outside_allowlist")
+            return self._emit({"type": kind, **where, "part": rebuilt})
+        # A text event writes to a part the client already has, of the same type, or the stream ends.
+        if announced != _PART_OF[kind]:
+            raise _refuse("event_outside_allowlist")
+        if kind.endswith(".delta"):
+            extra = {"logprobs": []} if announced == "output_text" else {}
             return self._emit({"type": kind, **where, "delta": _text(data.get("delta"), "delta_without_text"),
+                               **extra})
+        if announced == "output_text":
+            return self._emit({"type": kind, **where, "text": _text(data.get("text"), "done_without_text"),
                                "logprobs": []})
-        return self._emit({"type": kind, **where, "text": _text(data.get("text"), "done_without_text"),
-                           "logprobs": []})
+        return self._emit({"type": kind, **where, "refusal": _text(data.get("refusal"), "done_without_text")})
 
     def _response(self, data: dict[str, Any], *, terminal: bool) -> dict[str, Any]:
         response = data.get("response")
         if not isinstance(response, dict):
             raise _refuse("final_event_without_response" if terminal else "lifecycle_without_response")
-        rebuilt = {k: v for k, v in response.items() if k in _RESPONSE_FIELDS}
-        rebuilt["output"] = [item for item in self._emitted if item]
-        return rebuilt
+        return _envelope(response, [item for item in self._emitted if item])
 
     async def _terminal(self, data: dict[str, Any]) -> AsyncIterator[bytes]:
         """The upstream's final event: gate and build every item that isn't streamed text, then rebuild the event
@@ -532,10 +585,18 @@ class StreamEditor:
                               "item": {**item, "status": "in_progress", "content": []}})
             for position, part in enumerate(item["content"]):
                 at = {**where, "content_index": position}
-                yield self._emit({"type": "response.content_part.added", **at,
-                                  "part": {"type": "output_text", "text": "", "annotations": []}})
-                yield self._emit({"type": "response.output_text.delta", **at, "delta": part["text"], "logprobs": []})
-                yield self._emit({"type": "response.output_text.done", **at, "text": part["text"], "logprobs": []})
+                if part["type"] == "refusal":
+                    yield self._emit({"type": "response.content_part.added", **at,
+                                      "part": {"type": "refusal", "refusal": ""}})
+                    yield self._emit({"type": "response.refusal.delta", **at, "delta": part["refusal"]})
+                    yield self._emit({"type": "response.refusal.done", **at, "refusal": part["refusal"]})
+                else:
+                    yield self._emit({"type": "response.content_part.added", **at,
+                                      "part": {"type": "output_text", "text": "", "annotations": []}})
+                    yield self._emit({"type": "response.output_text.delta", **at, "delta": part["text"],
+                                      "logprobs": []})
+                    yield self._emit({"type": "response.output_text.done", **at, "text": part["text"],
+                                      "logprobs": []})
                 yield self._emit({"type": "response.content_part.done", **at, "part": part})
         else:
             yield self._emit({"type": _ADDED, "output_index": index, "item": {**item, "summary": []}})

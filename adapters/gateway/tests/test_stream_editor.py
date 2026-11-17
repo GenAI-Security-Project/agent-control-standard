@@ -524,3 +524,81 @@ def test_abort_stops_the_recorder_even_when_drain_is_cancelled():
         return editor.recording
 
     assert asyncio.run(asyncio.wait_for(main(), 2)) is False
+
+
+# Fix round 4: one message-part allowlist, a minimal envelope, announced parts, and bytes after the final event.
+
+def refusal_stream(text="I can't help with that."):
+    item = {"type": "message", "id": "msg_r", "role": "assistant", "status": "completed",
+            "content": [{"type": "refusal", "refusal": text}]}
+    where = {"item_id": "msg_r", "output_index": 0, "content_index": 0}
+    events = [{"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}},
+              {"type": "response.output_item.added", "output_index": 0, "item": {**item, "content": []}},
+              {"type": "response.content_part.added", **where, "part": {"type": "refusal", "refusal": ""}},
+              {"type": "response.refusal.delta", **where, "delta": text},
+              {"type": "response.refusal.done", **where, "refusal": text},
+              {"type": "response.content_part.done", **where, "part": {"type": "refusal", "refusal": text}},
+              {"type": "response.output_item.done", "output_index": 0, "item": item},
+              {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": [item]}}]
+    return item, [{**e, "sequence_number": n} for n, e in enumerate(events)]
+
+
+def test_a_streamed_refusal_reaches_the_client_and_audits_clean():
+    item, stream = refusal_stream()
+    out, audits, _ = run(encode(stream))
+    events = decode(out)
+    assert_consistent(events)
+    assert audits == []
+    assert rebuilt_output(events) == [item]
+    assert [e["delta"] for e in events if e["type"] == "response.refusal.delta"] == ["I can't help with that."]
+
+
+def test_a_function_call_shaped_part_withholds_the_message_streamed():
+    shape = {"type": "function_call", "id": "fc_x", "call_id": "call_x", "name": "bash",
+             "arguments": '{"command": "rm -rf /"}'}
+    item = message_item("hi")
+    stream = stream_events(item)
+    for event in stream:
+        if event["type"] == "response.output_item.done":
+            event["item"] = {**item, "content": [shape]}
+    out, _, _ = run(encode(stream))
+    assert decode(out)[-1]["type"] == "error" and b"rm -rf" not in out
+
+
+def test_the_envelope_carries_only_what_the_client_needs():
+    stream = stream_events(message_item("hi"))
+    for event in (stream[0], stream[-1]):
+        event["response"].update({"tools": [{"type": "function", "name": "bash", "description": "rm -rf /"}],
+                                  "metadata": {"x": "rm -rf /"}, "instructions": "rm -rf /",
+                                  "text": {"format": {"type": "text", "x": "rm -rf /"}},
+                                  "reasoning": {"summary": "rm -rf /"},
+                                  "error": {"code": "x", "message": "m", "extra": "rm -rf /"},
+                                  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3,
+                                            "x": "rm -rf /"}})
+    out, _, _ = run(encode(stream))
+    assert b"rm -rf" not in out
+    final = decode(out)[-1]["response"]
+    assert set(final) <= {"id", "object", "created_at", "status", "model", "usage", "output", "error"}
+    assert final["usage"] == {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+    assert final["error"] == {"code": "x", "message": "m"}
+
+
+def test_a_delta_for_an_unannounced_part_ends_the_stream():
+    stream = [e for e in stream_events(message_item("hi")) if e["type"] != "response.content_part.added"]
+    out, audits, _ = run(encode(stream))
+    assert decode(out)[-1]["type"] == "error" and audits[0]["detail"] == "event_outside_allowlist"
+
+
+def test_shadow_relays_bytes_after_the_final_event_in_a_later_chunk():
+    chunks = [*encode(stream_events(message_item("hi"))), b"data: [DONE]\n\n"]
+    assert run(chunks, enforce=False)[0] == b"".join(chunks)
+
+
+def test_enforce_relays_nothing_after_the_final_event_whatever_the_chunking():
+    raw = encode(stream_events(message_item("hi")))
+    trailing = encode([{"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
+                        "content_index": 0, "delta": "rm -rf /", "logprobs": []}])[0] + b"data: [DONE]\n\n"
+    for chunks in ([*raw, trailing], [b"".join(raw) + trailing], [*raw[:-1], raw[-1] + trailing[:9], trailing[9:]]):
+        out, _, _ = run(chunks)
+        assert b"rm -rf" not in out and b"[DONE]" not in out
+        assert decode(out)[-1]["type"] == "response.completed"

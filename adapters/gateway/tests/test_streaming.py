@@ -268,3 +268,14 @@ def test_a_stream_past_its_deadline_ends_and_frees_the_session(gateway, guardian
     assert "upstream_deadline" in [e.get("cause") for e in events(audit, "upstream_error")]
     session = client.app.state.gateway.sessions.peek(conversation_key(finbot_request()))
     assert session.active == 0 and not session.lock.locked()
+
+
+def test_enforce_streams_a_refusal_and_audits_clean(gateway, guardian, upstream, audit):
+    from test_stream_editor import refusal_stream
+
+    item, upstream_events = refusal_stream()
+    upstream.reply(SSE(encode(upstream_events)))
+    _, _, received, _ = streamed(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian))
+    assert [e["delta"] for e in received if e["type"] == "response.refusal.delta"] == ["I can't help with that."]
+    assert received[-1]["type"] == "response.completed" and received[-1]["response"]["output"] == [item]
+    assert events(audit, "upstream_error") == []
