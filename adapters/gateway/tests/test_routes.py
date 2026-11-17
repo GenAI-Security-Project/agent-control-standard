@@ -41,11 +41,17 @@ def test_upstream_error_status_passes_through_and_is_audited(gateway, upstream, 
 @pytest.mark.parametrize("mode", ["shadow", "enforce"])
 @pytest.mark.parametrize("field,value", [("previous_response_id", "resp_123"), ("conversation", "conv_1"),
                                          ("conversation", {"id": "conv_1"})])
-def test_server_side_state_is_refused_when_governed(gateway, guardian, upstream, audit, mode, field, value):
+def test_server_side_state_is_refused_in_enforce_and_recorded_in_shadow(gateway, guardian, upstream, audit, mode,
+                                                                         field, value):
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json={**finbot_request(), field: value})
-    assert response.status_code == 501
-    assert upstream.received == []
+    if mode == "enforce":
+        assert response.status_code == 501
+        assert upstream.received == []
+    else:
+        assert response.status_code == 200
+        assert upstream.received[0].json()[field] == value
+    assert [e["field"] for e in audit() if e["acs_audit_event"] == "unsupported_field"] == [field]
 
 
 def test_off_forwards_server_side_state(gateway, upstream):
