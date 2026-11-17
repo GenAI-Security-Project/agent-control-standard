@@ -5,7 +5,6 @@
     "python": "3.12.2",
     "cryptography": "50.0.2",
     "openssl": "OpenSSL 4.0.3 29 Sep 2026",
-    "describe": "v0.1.2-188-gc272da5-dirty",
     "source_sha256": "94f12b2a80c588ec85dea3248ee9b2c730e98b03b28bd577c6f00b58c9593a37",
     "acs_adapters": "0.2.0",
     "date": "2026-11-17",
@@ -18,33 +17,33 @@
       "signature_bytes": 32,
       "public_key_bytes": 32,
       "envelope_bytes": 366,
-      "sign_median_us": 9.708,
-      "sign_p95_us": 12.333,
-      "verify_median_us": 9.875,
-      "verify_p95_us": 12.375
+      "sign_median_us": 9.833,
+      "sign_p95_us": 10.833,
+      "verify_median_us": 10.0,
+      "verify_p95_us": 10.541
     },
     {
       "algorithm": "ML-DSA-65",
       "signature_bytes": 3309,
       "public_key_bytes": 1952,
       "envelope_bytes": 4732,
-      "sign_median_us": 378.083,
-      "sign_p95_us": 1146.334,
-      "verify_median_us": 108.083,
-      "verify_p95_us": 131.583
+      "sign_median_us": 386.5,
+      "sign_p95_us": 1155.417,
+      "verify_median_us": 108.0,
+      "verify_p95_us": 126.917
     },
     {
       "algorithm": "ECDSA-P256",
       "signature_bytes": 64,
       "public_key_bytes": 65,
       "envelope_bytes": 409,
-      "sign_median_us": 26.084,
-      "sign_p95_us": 29.875,
-      "verify_median_us": 60.792,
-      "verify_p95_us": 67.667
+      "sign_median_us": 25.959,
+      "sign_p95_us": 29.75,
+      "verify_median_us": 60.709,
+      "verify_p95_us": 66.834
     }
   ],
   "not_measured": {
-    "hybrid": "acs.core has no hybrid signing on this branch (PR #564 would settle it)"
+    "hybrid": "acs.core has no hybrid signature yet (PR #564 would settle its form)"
   }
 }
