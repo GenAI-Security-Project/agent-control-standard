@@ -61,17 +61,6 @@ class CachedOutcome:
     canonical_arguments: Any = None
 
 
-def canonical(value: Any) -> Any:
-    """A JSON string in RFC 8785 form, so key order and whitespace don't change what it says. Any other value, and a
-    string that isn't JSON, repeats a key, or that RFC 8785 can't encode, stays as it is."""
-    if not isinstance(value, str):
-        return value
-    try:
-        return jcs_canonicalize(loads_strict(value)).decode("utf-8")
-    except Exception:  # noqa: BLE001
-        return value
-
-
 def canonical_value(value: Any, raw: Any) -> Any:
     """The RFC 8785 form of an already parsed JSON value, so a caller that parsed it doesn't parse it again. raw
     stands in when RFC 8785 can't encode the value."""
@@ -79,6 +68,18 @@ def canonical_value(value: Any, raw: Any) -> Any:
         return jcs_canonicalize(value).decode("utf-8")
     except Exception:  # noqa: BLE001
         return raw
+
+
+def canonical(value: Any) -> Any:
+    """A JSON string in RFC 8785 form, so key order and whitespace don't change what it says. Any other value, and a
+    string that isn't JSON, repeats a key, or that RFC 8785 can't encode, stays as it is."""
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = loads_strict(value)
+    except Exception:  # noqa: BLE001
+        return value
+    return canonical_value(parsed, value)
 
 
 def content(item: dict[str, Any]) -> Any:
