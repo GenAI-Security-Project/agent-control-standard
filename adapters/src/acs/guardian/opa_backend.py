@@ -65,7 +65,7 @@ def redact_url(url: str) -> str:
 
 def _log(reason_code: str, detail: str) -> None:
     # The detail can name a path or a value from the request or the verdict, so it goes through log_value.
-    sys.stderr.write(f"[guardian] OPA {reason_code}: {log_value(detail, 300)}\n")
+    sys.stderr.write(f"[guardian] OPA {reason_code}: {log_value(detail, 1000)}\n")
     sys.stderr.flush()
 
 

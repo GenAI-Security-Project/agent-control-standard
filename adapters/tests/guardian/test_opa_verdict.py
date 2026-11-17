@@ -454,3 +454,17 @@ def test_an_opa_failure_detail_cannot_put_a_control_byte_in_the_log(monkeypatch,
     err = capsys.readouterr().err
     assert "\x1b" not in err
     assert not any(line.startswith("[guardian] -> allow") for line in err.splitlines()), err
+
+
+def test_log_value_escapes_control_characters_once():
+    from acs.guardian._logging import log_value
+    assert log_value("a\nb\x1bc", 20) == "a\\x0ab\\x1bc"
+    # A detail that already carries an escaped value, as a !r in a message does, is not escaped a second time.
+    assert log_value("redaction path '/a\\nb'", 100) == "redaction path '/a\\nb'"
+    assert log_value(7) == "<int>"
+
+
+def test_an_opa_detail_is_logged_up_to_1000_characters(capsys):
+    detail = "d" * 990 + "END"
+    opa_backend._log("opa_http_error", detail)
+    assert "END" in capsys.readouterr().err

@@ -974,7 +974,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         decision = result.get("decision")
         if decision:
             # The reasoning can embed a tool name, a path, or a method from the request, so it is escaped too.
-            tail = f" {log_value(result.get('reasoning', ''), 80)}" if decision == "deny" else ""
+            tail = f" {log_value(result.get('reasoning', ''), 200)}" if decision == "deny" else ""
             sys.stderr.write(f"[guardian] -> {log_value(decision, 16)}{tail}\n")
             sys.stderr.flush()
         # Both floors answer alike: a floor envelope from _handle gets the same 500 as do_POST's own floor.

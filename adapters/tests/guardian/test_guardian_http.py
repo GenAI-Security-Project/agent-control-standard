@@ -511,3 +511,9 @@ def test_both_floors_answer_500_and_log(served, monkeypatch, capsys):
     assert (status_signing, status_escape) == (500, 500)
     assert answer_signing["error"]["code"] == answer_escape["error"]["code"] == -32603
     assert "[guardian] internal error" in signing_log and "[guardian] internal error" in escape_log
+
+
+def test_a_deny_reason_is_logged_up_to_200_characters(served, capsys):
+    path = "/etc/" + "p" * 150 + "END"
+    post(served, _signed("steps/toolCallRequest", {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": path}}}))
+    assert "END" in capsys.readouterr().err
