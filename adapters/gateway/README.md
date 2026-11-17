@@ -115,8 +115,8 @@ Each request line is written before the request is sent, so the file holds the c
 | `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
 | `call_id_invalid` | A call or output without a non-empty string call_id, with `item_type` and `direction`. On the input side enforce answers 400. On the output side, a call from the model, enforce removes it and gives the neutral line if nothing else is left. Shadow records both |
-| `duplicate_json_key` | A request repeated a JSON key, with `key` and `where` |
-| `upstream_rejected` | An upstream answer the gateway won't gate, with `cause` (`duplicate_json_key`) and `mode` |
+| `duplicate_json_key` | A request repeated a JSON key, with `key`, `where` (`body`, `function_call.arguments` or `function_call_output.output`), `mode`, and `conversation` or `session_id` when known. A repeated key in an upstream answer is `upstream_rejected` instead |
+| `upstream_rejected` | An upstream answer the gateway won't gate, with `cause` (`duplicate_json_key`), `key` (the first repeated key) and `mode` |
 | `unsupported_field` | A request field outside the allowlist, with `field` |
 | `unsupported_item_type` | An input or output item outside the allowlist, with `item_type` and `direction` |
 | `unsupported_content_part` | A part outside the allowlist in a message's content, a reasoning item's summary or content, or a function_call_output's array output, with `part_type`. A value that is neither a string nor a list reports `part_type: non_list_value` |
