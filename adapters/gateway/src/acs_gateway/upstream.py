@@ -210,19 +210,6 @@ def _governed_items(body: Any) -> list[dict[str, Any]]:
             and isinstance(i.get("call_id"), str) and i["call_id"]] if isinstance(items, list) else []
 
 
-def override_model(raw: bytes, model: str) -> bytes:
-    """The body with its model field set to ACS_UPSTREAM_MODEL. A body that isn't a readable JSON object, such as a
-    compressed one, goes on unchanged, since nothing in it can be set."""
-    try:
-        body = json.loads(raw)
-    except (ValueError, UnicodeDecodeError, RecursionError):
-        return raw
-    if not isinstance(body, dict):
-        return raw
-    body["model"] = model
-    return json.dumps(body).encode("utf-8")
-
-
 def off_branch(body: Any) -> str:
     """Off governs nothing, so every call and output in the request is delivered: one a for each (A.8)."""
     return ",".join("a" for _ in _governed_items(body))

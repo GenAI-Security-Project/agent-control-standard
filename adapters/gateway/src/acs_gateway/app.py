@@ -69,7 +69,6 @@ from acs_gateway.upstream import (
     UpstreamSource,
     note_reply_calls,
     off_branch,
-    override_model,
     reply_call_ids,
     session_branch,
 )
@@ -199,13 +198,14 @@ class Gateway:
             return await self.not_found(request)
         headers = forward_headers(request.headers)
         if not self.governed:
-            # Off is a pure passthrough, with no size limit on either leg.
+            # Off is a pure passthrough, with no size limit on either leg, apart from the documented
+            # ACS_UPSTREAM_MODEL override. The body is parsed at most once, and only when something reads it.
             raw = await request.body()
-            if self.upstream_source.model is not None:
-                raw = override_model(raw, self.upstream_source.model)
-            if self.upstream_source.records_branch:
-                headers[BRANCH_HEADER] = off_branch(_parse(raw))
-            return await self._relay_verbatim(raw, headers)
+            needs_body = (self.model_inputs.enabled or self.upstream_source.model is not None
+                          or self.upstream_source.records_branch)
+            body = _parse(raw) if needs_body else None
+            raw = self._to_upstream(raw, body, headers)
+            return await self._relay_verbatim(raw, headers, logged=body, parsed=needs_body)
         raw = await self._read_body(request)
         if raw is None:
             _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
@@ -218,6 +218,7 @@ class Gateway:
             if self.enforce:
                 return openai_error(415, "Compressed request bodies are not supported by this endpoint.",
                                     "invalid_request_error", "unsupported_content_encoding")
+            raw = self._to_upstream(raw, None, headers)
             return await self._relay_verbatim(raw, headers, logged={"compressed": encoding, "bytes": len(raw)})
         body, repeated = _parse_governed(raw)
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
@@ -343,14 +344,9 @@ class Gateway:
             failed = self._gating_failed(session, "input", e)
             if failed is not None:
                 return failed
-        if self.upstream_source.records_branch:
-            # Capture and replay key on what the gateway did, read from its own records (A.8).
-            headers[BRANCH_HEADER] = (session_branch(session, body) if self.enforce and session is not None
-                                      else off_branch(body))
-        if self.upstream_source.model is not None:
-            # ACS_UPSTREAM_MODEL picks the model live and capture call. The model input log then shows what was sent.
-            body["model"] = self.upstream_source.model
-            raw = json.dumps(body).encode("utf-8")
+        # Capture and replay key on what the gateway did, read from its own records (A.8).
+        branch = session_branch(session, body) if self.enforce and session is not None else None
+        raw = self._to_upstream(raw, body, headers, branch)
         if is_stream(body):
             self.model_inputs.append(body)
             sent = await self._send(raw, headers)
@@ -584,11 +580,31 @@ class Gateway:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
         return UpstreamAnswer(upstream.status_code, upstream.headers, b"".join(chunks))
 
-    async def _relay_verbatim(self, raw: bytes, headers: dict[str, str], logged: Any = None) -> Response:
+    def _to_upstream(self, raw: bytes, body: Any, headers: dict[str, str], branch: str | None = None) -> bytes:
+        """The one place every relay path applies ACS_UPSTREAM_MODEL and hands capture or replay its branch tokens
+        (issue #579, fix round 3, CR3-6). body is the request already parsed, or None when it can't be read.
+
+        A body the gateway can't read, a compressed one, goes on unchanged, so its model can't be set, and that is
+        audited as model_override_skipped. branch is enforce's tokens from the session, and anything else gets
+        off's."""
+        source = self.upstream_source
+        if source.model is not None:
+            if isinstance(body, dict):
+                body["model"] = source.model
+                raw = json.dumps(body).encode("utf-8")
+            else:
+                _audit("model_override_skipped", cause="unreadable_request", mode=self.config.mode)
+        if source.records_branch:
+            headers[BRANCH_HEADER] = branch if branch is not None else off_branch(body)
+        return raw
+
+    async def _relay_verbatim(self, raw: bytes, headers: dict[str, str], logged: Any = None,
+                              parsed: bool = False) -> Response:
         """Relay the answer, streamed or not, as it arrives, encoding and headers included. logged replaces the body
-        in the model input log, for a body that can't be read as text."""
+        in the model input log, for a body that can't be read as text. parsed says logged is already the parse of
+        raw, None included, so the body isn't parsed again."""
         if self.model_inputs.enabled:
-            body = logged if logged is not None else _parse(raw)
+            body = logged if logged is not None or parsed else _parse(raw)
             self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
         upstream = await self._send(raw, headers)
         if isinstance(upstream, Response):

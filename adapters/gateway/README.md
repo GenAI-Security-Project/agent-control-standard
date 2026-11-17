@@ -114,7 +114,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 | `ids` | Every placeholder in the request, in document order, as `kind:n`. It is part of the lookup, so an id that moved or an extra one never fills a value into the wrong place. When some line fits everything but `ids`, the miss says `placeholder_mismatch` |
 | `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
 
-Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch`, `stream` and `ids`. `ACS_REPLAY_SCENARIO` limits replay to `<ACS_RECORDINGS_DIR>/<scenario>.jsonl`, so two scenarios that share a key never collide. Capture never writes a line the loader would reject. It audits `capture_skipped` with cause `invalid_line` instead. A byte-identical retry gets the same answer as the first attempt, a miss included, because an answer depends only on the request bytes and the gateway's branch tokens, and a retry carries both unchanged. A line whose `branch` has fewer tokens than its `step` could never match, so it stops startup with its file and line number. So does any other malformed line, and the gateway exits with code 2 and a one-line message naming the file, as it does for a bad key file.
+Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch`, `stream` and `ids`. `ACS_REPLAY_SCENARIO` limits replay to `<ACS_RECORDINGS_DIR>/<scenario>.jsonl`, so two scenarios that share a key never collide. Capture never writes a line the loader would reject. It audits `capture_skipped` with cause `invalid_line` instead. A byte-identical retry gets the same answer as the first attempt, a miss included, while the gateway's session for the conversation survives, because an answer depends only on the request bytes and the gateway's branch tokens. An epoch bump or an eviction between attempts starts the branch over, so the retry may get another line or a miss. A retry that got a different reply in capture counts only the reply the client kept: an earlier attempt's removed calls drop out of the branch. A line whose `branch` has fewer tokens than its `step` could never match, so it stops startup with its file and line number. So does any other malformed line, and the gateway exits with code 2 and a one-line message naming the file, as it does for a bad key file.
 
 Recordings come from the repository, so `match` is trusted input: the gateway runs it as written, with no time limit, and a recording from anywhere else deserves the review any other code would get.
 
@@ -239,6 +239,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `epoch_bumped` | The epoch moved |
 | `replay_miss` | Replay answered with the miss response. `cause` is `no_recording`, `placeholder_mismatch`, `placeholder_unfilled` or `unreadable_request`, with `step`, `branch` and `stream`, and `scenario` when a line matched but couldn't be filled |
 | `capture_skipped` | Capture wrote no line for a successful exchange. `cause` is `unreadable_request`, `unreadable_response`, `unmapped_id` (the answer would still carry a user id or namespace), or `invalid_line` (the loader would reject the line) |
+| `model_override_skipped` | `ACS_UPSTREAM_MODEL` is set but the body couldn't be read, such as a compressed one, so it went upstream with the client's model. `cause` is `unreadable_request`, with `mode` |
 | `capture_failed` | Capture couldn't write its line (`cause` `write_error`). The client still got its answer |
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.
@@ -255,7 +256,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
 | `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64. Empty means the default, and only capture checks it |
 | `ACS_REPLAY_SCENARIO` | None | In replay, load only `<ACS_RECORDINGS_DIR>/<scenario>.jsonl`, which must exist. Same name rules as the capture scenario. Other modes ignore it |
-| `ACS_UPSTREAM_MODEL` | None | In live and capture, the model name sent upstream in place of the client's. The model input log shows the name sent. Replay ignores it |
+| `ACS_UPSTREAM_MODEL` | None | In live and capture, the model name sent upstream in place of the client's, on every relay path, off included. The model input log shows the name sent. A compressed body can't be read, so it goes on unchanged and `model_override_skipped` is audited. Replay ignores it |
 | `ACS_GUARDIAN_URL` | `http://127.0.0.1:8787/` | Guardian endpoint |
 | `ACS_HMAC_SECRET_FILE` or `ACS_HMAC_SECRET` | None | Request signing secret, at least 32 bytes. The file must be 0600 or 0400 |
 | `ACS_HMAC_KEY_ID` | None | The label that names the secret |
