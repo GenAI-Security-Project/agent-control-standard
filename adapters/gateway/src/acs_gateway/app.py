@@ -231,7 +231,7 @@ class Gateway:
             key = conversation_key(body)
         except RecursionError:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
-        refused = self._refuse_input(self.sessions.peek(key), body)
+        refused, deferred = self._refuse_input(key, self.sessions.peek(key), body)
         if refused is not None:
             return refused
         try:
@@ -243,7 +243,7 @@ class Gateway:
         pins = [pinned]
         pinned.active += 1
         try:
-            return await self._governed(key, raw, body, headers, pins)
+            return await self._governed(key, raw, body, headers, pins, deferred)
         except SessionsBusy:
             # An epoch bump mid-request needed a new session and every slot was busy.
             return self._busy()
@@ -256,14 +256,16 @@ class Gateway:
         return openai_error(503, "The service is busy. Try again shortly.", "server_error", "busy")
 
     async def _governed(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str],
-                        pins: list[Session]) -> Response:
+                        pins: list[Session], deferred: set[str]) -> Response:
         session = None
         try:
             async with self._current(key) as session:
                 _pin(session, pins)
                 await self._ensure_open(session)
-                if await self._gate_input(session, body):
+                if await self._gate_input(session, body, deferred):
                     raw = json.dumps(body).encode("utf-8")
+        except RequestRefused as e:
+            return e.response
         except SessionsBusy:
             raise
         except Exception as e:  # noqa: BLE001
@@ -405,12 +407,22 @@ class Gateway:
                                  headers=_client_headers(upstream.headers, decoded=False),
                                  background=BackgroundTask(upstream.aclose))
 
-    async def _gate_input(self, session: Session, body: dict[str, Any]) -> bool:
+    async def _gate_input(self, session: Session, body: dict[str, Any], deferred: set[str] = frozenset()) -> bool:
         """Gate each new function_call_output before it reaches the model, and reapply cached outcomes on resends."""
         items = body.get("input")
         if not isinstance(items, list):
             return False
         names = {i.get("call_id"): i.get("name") for i in items if isinstance(i, dict) and i.get("type") == "function_call"}
+        # The lock-free pre-pass skipped the calls its peeked session knew (deferred). Under the lock that session may
+        # have been retired, evicted or bumped, so each deferred call this session doesn't know is checked here,
+        # still before anything is gated.
+        for item in items:
+            call_id = item.get("call_id") if isinstance(item, dict) else None
+            if (item_type(item) == "function_call" and call_id in deferred
+                    and call_id not in session.calls):
+                refused = self._refuse_repeated_arguments(item, self._where(None, session))
+                if refused is not None:
+                    raise RequestRefused(refused)
         changed, kept = False, []
         for item in items:
             call_id = item.get("call_id") if isinstance(item, dict) else None
@@ -463,9 +475,13 @@ class Gateway:
             body["input"] = kept
         return changed
 
-    def _refuse_input(self, session: Session | None, body: dict[str, Any]) -> Response | None:
-        """Every refusal the input needs, decided over the whole input before a session is taken or opened, so a
-        refused request gates nothing, caches nothing and opens nothing. Shadow records each one and goes on."""
+    def _refuse_input(self, key: str, session: Session | None,
+                      body: dict[str, Any]) -> tuple[Response | None, set[str]]:
+        """Every refusal the input needs that doesn't hang on session state, decided over the whole input before a
+        session is taken or opened, so a refused request gates nothing, caches nothing and opens nothing. Shadow
+        records each one and goes on. Calls a session might know are checked again under its lock in _gate_input."""
+        where = self._where(key, session)
+        deferred: set[str] = set()
         items = body.get("input")
         for item in items if isinstance(items, list) else []:
             kind = item_type(item)
@@ -474,23 +490,44 @@ class Gateway:
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 # With no call_id the item has no cache key and no call to match, so it can't be gated.
-                _audit("call_id_invalid", item_type=kind, mode=self.config.mode)
+                _audit("call_id_invalid", item_type=kind, mode=self.config.mode, **where)
                 if self.enforce:
                     return openai_error(400, "Every function call and function call output needs a call_id.",
-                                        "invalid_request_error", "call_id_invalid")
+                                        "invalid_request_error", "call_id_invalid"), deferred
                 continue
-            delivered = session is not None and call_id in session.calls
-            if kind == "function_call" and not delivered:
-                repeated = repeated_key(item.get("arguments"))
-                if repeated is not None:
-                    # A call the gateway never delivered, with no copy to restore, whose arguments the model could
-                    # read either way. Only a forged history carries one.
-                    _audit("duplicate_json_key", key=repeated, where="function_call.arguments",
-                           mode=self.config.mode)
-                    if self.enforce:
-                        return openai_error(400, "The request body repeats a JSON key.", "invalid_request_error",
-                                            "duplicate_json_key")
-        return None
+            known = session.calls.get(call_id) if session is not None else None
+            if kind == "function_call" and known is not None and known.item is not None:
+                # Delivered under the peeked session, so it's restored there. Its arguments are checked under the
+                # lock only if that session no longer holds it.
+                deferred.add(call_id)
+            if kind == "function_call" and (known is None or known.item is None):
+                # A call the gateway never delivered, or one it removed, has no copy to restore, and the model could
+                # read its arguments either way. Only a forged history carries one. A removed call is dropped later
+                # whatever its arguments, so for it this only writes the audit line.
+                refused = self._refuse_repeated_arguments(item, where)
+                if refused is not None and known is None:
+                    return refused, deferred
+        return None, deferred
+
+    def _refuse_repeated_arguments(self, item: dict[str, Any], where: dict[str, Any]) -> Response | None:
+        """Audit a call whose arguments repeat a key, and the 400 enforce answers for it, or None."""
+        repeated = repeated_key(item.get("arguments"))
+        if repeated is None:
+            return None
+        _audit("duplicate_json_key", key=repeated, where="function_call.arguments", mode=self.config.mode, **where)
+        if not self.enforce:
+            return None
+        return openai_error(400, "The request body repeats a JSON key.", "invalid_request_error", "duplicate_json_key")
+
+    @staticmethod
+    def _where(key: str | None, session: Session | None) -> dict[str, Any]:
+        """Which conversation an audit line belongs to, and its session when there is one."""
+        fields: dict[str, Any] = {}
+        if key is not None:
+            fields["conversation"] = key
+        if session is not None:
+            fields["session_id"] = session.session_id
+        return fields
 
     async def _gate_result(self, session: Session, item: dict[str, Any], name: str,
                            call: CachedOutcome | None) -> CachedOutcome:
@@ -660,6 +697,14 @@ def _pin(session: Session, pins: list[Session]) -> None:
     if not any(pinned is session for pinned in pins):
         pins.append(session)
         session.active += 1
+
+
+class RequestRefused(Exception):
+    """Gating found the request itself unacceptable in enforce, and this is the answer to send."""
+
+    def __init__(self, response: Response) -> None:
+        super().__init__("request refused")
+        self.response = response
 
 
 async def _continue(first: deque[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
