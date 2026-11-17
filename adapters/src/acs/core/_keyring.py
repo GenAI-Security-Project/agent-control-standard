@@ -61,6 +61,11 @@ class VerificationKey:
                              f"got {len(self.public_key)}")
         object.__setattr__(self, "_parsed", _parse_public_key(self.public_key))
 
+    def __reduce__(self) -> tuple:
+        # The parsed backend key can't be pickled or copied, so a copy rebuilds from the raw
+        # bytes and re-runs every check, which also re-parses the key.
+        return (type(self), (self.key_id, self.algorithm, self.public_key))
+
     @property
     def fingerprint(self) -> str:
         return "sha256:" + hashlib.sha256(self.public_key).hexdigest()

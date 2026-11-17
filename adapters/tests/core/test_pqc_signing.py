@@ -164,6 +164,27 @@ class KeysAreParsedOnce(unittest.TestCase):
                 self.assertIn("pqc", proc.stderr)
 
 
+class KeysSurviveCopyAndPickle(unittest.TestCase):
+    """Re-review finding R-M2: a key holding a parsed backend object still copies and pickles."""
+
+    def test_pickle_and_deepcopy_round_trip_and_still_verify(self) -> None:
+        import pickle
+        signer = _signer()
+        key = signer.verification_key()
+        envelope = sign_with_signing_key(_decision(), signer)
+        for name, clone in (("pickle", lambda k: pickle.loads(pickle.dumps(k))), ("deepcopy", copy.deepcopy),
+                            ("copy", copy.copy)):
+            with self.subTest(name):
+                copied = clone(key)
+                self.assertEqual(copied, key)
+                self.assertTrue(verify_with_keyring(envelope, Keyring([copied]), expected_key_id=KEY_ID,
+                                                    expected_session_id=SESSION_ID))
+
+    def test_a_keyring_deepcopies(self) -> None:
+        keyring = _keyring()
+        self.assertEqual(copy.deepcopy(keyring).key_ids, keyring.key_ids)
+
+
 class SignatureLengthIsCheckedFirst(unittest.TestCase):
     """Review finding F-M1: any length but 3,309 bytes fails before cryptography sees it."""
 
