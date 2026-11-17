@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import errno
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 import hashlib
 import http.server
 import json
@@ -43,7 +47,7 @@ try:
         _spec_dir = Path("<no bundled or in-repo schemas>")
     _envelope_schema_path = _spec_dir / "request-envelope.json"
     if _envelope_schema_path.exists():
-        with open(_envelope_schema_path) as _f:
+        with open(_envelope_schema_path, encoding="utf-8") as _f:
             _schema_obj = json.load(_f)
         _REQUEST_ENVELOPE_VALIDATOR = Draft202012Validator(
             _schema_obj,
@@ -63,6 +67,21 @@ except ImportError:
     _spec_validation_unavailable_reason = (
         "jsonschema is not installed (pip install jsonschema)"
     )
+
+
+def _flock(fd: int, how: str) -> None:
+    """flock(2) on POSIX, msvcrt byte-range locks on Windows (the idiom client/_store.py uses).
+
+    On Windows "sh" is really an exclusive lock: msvcrt's LK_RLCK behaves like LK_LOCK, and
+    msvcrt gives up after about 10 seconds of retries. Safe for the Guardian state file,
+    just stronger than the shared-lock name suggests.
+    """
+    if fcntl is not None:
+        fcntl.flock(fd, {"sh": fcntl.LOCK_SH, "ex": fcntl.LOCK_EX, "un": fcntl.LOCK_UN}[how])
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    msvcrt.locking(fd, {"sh": msvcrt.LK_RLCK, "ex": msvcrt.LK_LOCK, "un": msvcrt.LK_UNLCK}[how], 1)
+
 
 if not _SPEC_VALIDATION_AVAILABLE:
     # Without validation, malformed envelopes reach policy unchecked.
@@ -127,16 +146,16 @@ class SessionState:
             return
         try:
             # Shared flock: never read a file mid-write by another instance.
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    _flock(f.fileno(), "sh")
                 except OSError:
                     pass
                 try:
                     data = json.load(f)
                 finally:
                     try:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        _flock(f.fileno(), "un")
                     except OSError:
                         pass
             self.previous_hash = data.get("previous_hash")
@@ -162,7 +181,7 @@ class SessionState:
             lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
             try:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                    _flock(lock_fd, "ex")
                 except OSError as e:
                     if e.errno != errno.ENOLCK:
                         raise
@@ -172,7 +191,7 @@ class SessionState:
                 merged_prev = self.previous_hash
                 if path.exists():
                     try:
-                        with open(path) as rf:
+                        with open(path, encoding="utf-8") as rf:
                             disk = json.load(rf)
                         disk_seen = disk.get("seen_request_ids") or {}
                         if isinstance(disk_seen, list):
@@ -215,7 +234,7 @@ class SessionState:
                 os.replace(tmp, path)
             finally:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    _flock(lock_fd, "un")
                 except OSError:
                     pass
                 os.close(lock_fd)
