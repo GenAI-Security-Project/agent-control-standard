@@ -681,6 +681,10 @@ class RequestFields(NamedTuple):
     session_id: str
 
 
+def _absent_if_null(value: Any, empty: Any) -> Any:
+    return empty if value is None else value
+
+
 def _valid_id(value: Any) -> bool:
     """A JSON-RPC id: a string, a finite number that isn't a bool, or null. The rule LAB-01's client uses too."""
     if value is None or isinstance(value, str):
@@ -705,14 +709,15 @@ def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
     method = request.get("method", "")
     if not isinstance(method, str):
         return None, "method must be a string", answer_id
-    params = request.get("params", {})
+    # Null reads as absent for these four, as it always has.
+    params = _absent_if_null(request.get("params"), {})
     if not isinstance(params, dict):
         return None, "params must be an object", answer_id
-    metadata = params.get("metadata", {})
+    metadata = _absent_if_null(params.get("metadata"), {})
     if not isinstance(metadata, dict):
         return None, "params.metadata must be an object", answer_id
-    request_id = params.get("request_id", "")
-    session_id = metadata.get("session_id", "")
+    request_id = _absent_if_null(params.get("request_id"), "")
+    session_id = _absent_if_null(metadata.get("session_id"), "")
     for name, value in (("params.request_id", request_id), ("params.metadata.session_id", session_id)):
         if not isinstance(value, str):
             return None, f"{name} must be a string", answer_id

@@ -97,3 +97,26 @@ def test_an_id_that_is_a_bool_a_non_finite_number_or_a_container_is_refused_with
     body = b'{"jsonrpc": "2.0", "id": ' + raw_id + b', "method": "system/ping", "params": {"payload": {}}}'
     status, answer = post(served, body)
     assert (answer["id"], answer["error"]["code"]) == (None, -32600)
+
+
+@pytest.mark.parametrize("params", [None, {"metadata": None, "payload": {}}, {"request_id": None, "payload": {}},
+                                    {"metadata": {"session_id": None}, "payload": {}}])
+def test_null_params_metadata_request_id_and_session_id_read_as_absent_on_ping(served, params):
+    body = json.dumps({"jsonrpc": "2.0", "id": "p", "method": "system/ping", "params": params}).encode()
+    status, answer = post(served, body)
+    assert (status, answer["result"]["decision"]) == (200, "allow")
+
+
+@pytest.mark.parametrize("field,read_as", [("metadata", ("metadata", {})), ("request_id", ("request_id", "")),
+                                           ("session_id", ("session_id", ""))])
+def test_null_fields_read_as_absent_on_a_step(field, read_as):
+    params = {"metadata": {"session_id": "s"}, "request_id": "r", "payload": {}}
+    if field == "session_id":
+        params["metadata"]["session_id"] = None
+    else:
+        params[field] = None
+    fields, problem, _ = example_guardian.read_request(
+        {"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": params})
+    assert problem is None
+    name, value = read_as
+    assert getattr(fields, name) == value
