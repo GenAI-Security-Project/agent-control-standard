@@ -35,6 +35,7 @@ def no_backend(monkeypatch):
     for name in ("ACS_POLICY_BACKEND", "ACS_OPA_URL", "ACS_OPA_TIMEOUT_MS", "ACS_ALLOW_SUBAGENT"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(example_guardian, "OPA_CONFIG", None)
+    monkeypatch.setattr(example_guardian, "POLICY_BACKEND_NAME", "")
     return monkeypatch
 
 
@@ -51,7 +52,7 @@ def opa_on(no_backend):
 def test_one_function_decides_whether_a_policy_backend_is_requested(value, requested):
     # main() and every step use this one rule. An unknown name counts as requested, so it fails closed.
     env = {} if value is None else {"ACS_POLICY_BACKEND": value}
-    assert example_guardian.policy_backend_requested(env) is requested
+    assert bool(example_guardian.policy_backend_name(env)) is requested
 
 
 def test_without_a_backend_a_tool_result_is_informational_and_opa_is_never_called(no_backend):
@@ -144,6 +145,8 @@ def _run_main(monkeypatch) -> list[int]:
 def test_the_guardian_refuses_to_start_with_a_misconfigured_backend(no_backend, capsys, env):
     for name, value in env.items():
         no_backend.setenv(name, value)
+    # The backend name is read once, at import. The test stands in for a Guardian imported with this environment.
+    no_backend.setattr(example_guardian, "POLICY_BACKEND_NAME", env["ACS_POLICY_BACKEND"])
     assert _run_main(no_backend) == [1], "the Guardian started with a misconfigured policy backend"
     assert "REFUSING TO START" in capsys.readouterr().err
     assert example_guardian.OPA_CONFIG is None
@@ -405,3 +408,24 @@ def test_a_present_falsy_tool_or_arguments_denies(no_backend, field, value):
 
 def test_absent_tool_and_arguments_keep_todays_answer(no_backend):
     assert _step("steps/toolCallRequest", {})["decision"] == "allow"
+
+
+
+@pytest.mark.parametrize("name", ["opa", "rego"])
+def test_a_backend_named_at_import_without_a_loaded_config_denies(no_backend, name):
+    # A Guardian served without main() must not fail open when the environment asked for a policy backend.
+    no_backend.setattr(example_guardian, "POLICY_BACKEND_NAME", name)
+    for method, payload in (("steps/toolCallRequest", LISTING), ("steps/toolCallResult", RESULT)):
+        result = _step(method, payload)
+        assert (result["decision"], result["reason_codes"]) == ("deny", ["policy_backend_misconfigured"])
+
+
+def test_the_backend_name_is_read_once_at_import():
+    code = ("import os; os.environ['ACS_POLICY_BACKEND'] = 'opa'; "
+            "from acs.guardian import example_guardian as g; "
+            "del os.environ['ACS_POLICY_BACKEND']; "
+            "p = {'request_id': 'r', 'metadata': {}, 'payload': {'tool': {'name': 'ls'}, 'arguments': {}}}; "
+            "print(g.evaluate_step('steps/toolCallRequest', p, 'r', 'c' * 64)['reason_codes'])")
+    env = {"PATH": "", "ACS_GUARDIAN_STATE_DIR": ""}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=True)
+    assert out.stdout.strip() == "['policy_backend_misconfigured']"

@@ -117,17 +117,25 @@ POLICY_BACKEND_ENV = "ACS_POLICY_BACKEND"
 OPA_CONFIG: Any = None
 
 
-def policy_backend_requested(env: Mapping[str, str] = os.environ) -> bool:
-    """The one rule for whether a policy backend was asked for. main() reads it once, at startup.
+def policy_backend_name(env: Mapping[str, str] = os.environ) -> str:
+    """The one rule for which policy backend was asked for. Any non-empty name counts, an unknown one included."""
+    return env.get(POLICY_BACKEND_ENV, "").strip()
 
-    Any non-empty name counts, an unknown one included, so a typo stops startup instead of falling back.
-    Steps never read the environment: they follow OPA_CONFIG, which only main() sets.
-    """
-    return bool(env.get(POLICY_BACKEND_ENV, "").strip())
+
+# Read once, at import, and never again: a later change to the environment can't switch a running Guardian's
+# policy backend on or off. main() loads the settings for this name into OPA_CONFIG, or refuses to start.
+POLICY_BACKEND_NAME = policy_backend_name()
+
+
+def _policy_backend_named() -> bool:
+    return OPA_CONFIG is not None or bool(POLICY_BACKEND_NAME)
 
 
 def _policy_backend_decision(method: str, params: dict, base: dict) -> dict:
     from acs.guardian import opa_backend
+    if OPA_CONFIG is None:
+        # Named at import, but main() never loaded it, as when a caller serves handle_request on its own.
+        return opa_backend.misconfigured(base)
     return opa_backend.evaluate(method, params, base, OPA_CONFIG)
 
 
@@ -580,7 +588,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
         # The hard denies hold under every backend. A policy backend decides only what they allow, and a modify
         # that rewrites the arguments is checked again, so a policy cannot turn ls into rm -rf /.
-        if OPA_CONFIG is not None:
+        if _policy_backend_named():
             result = _policy_backend_decision(method, params, base)
             if result.get("decision") == "modify":
                 return _recheck_rewritten_call(base, tool_name, payload, result)
@@ -603,7 +611,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                     "reason_codes": [code]}
         return {**base, "decision": "allow"}
 
-    if method == "steps/toolCallResult" and OPA_CONFIG is not None:
+    if method == "steps/toolCallResult" and _policy_backend_named():
         # Under a policy backend a tool result is judged, so it can be denied or redacted.
         return _policy_backend_decision(method, params, base)
 
@@ -793,9 +801,9 @@ def main() -> int:
         return 1
 
     global OPA_CONFIG
-    if policy_backend_requested():
+    if POLICY_BACKEND_NAME:
         from acs.guardian import opa_backend
-        backend_problem = opa_backend.backend_problem()
+        backend_problem = opa_backend.backend_problem({**os.environ, POLICY_BACKEND_ENV: POLICY_BACKEND_NAME})
         if backend_problem:
             sys.stderr.write(f"[guardian] REFUSING TO START: {backend_problem}\n")
             return 1

@@ -238,7 +238,7 @@ def test_an_invalid_verdict_keeps_the_problem_out_of_the_signed_reasoning(capsys
 def test_every_failure_message_fits_200_characters():
     assert set(opa_backend.FAILURE_REASONING) == {
         "opa_unreachable", "opa_timeout", "opa_http_error", "opa_response_malformed", "opa_result_missing",
-        "opa_verdict_invalid"}
+        "opa_verdict_invalid", "policy_backend_misconfigured"}
     assert all(0 < len(text) <= 200 for text in opa_backend.FAILURE_REASONING.values())
 
 
