@@ -233,3 +233,13 @@ def test_a_signature_that_does_not_verify_gets_a_signed_minus_32004_and_no_state
 def test_an_unknown_key_id_gets_an_unsigned_minus_32004(served):
     status, answer = post(served, _envelope_text(session_id=SIG_SESSION, key_id="someone-else"))
     _assert_unsigned_and_stateless(answer, -32004, SIG_SESSION)
+
+
+# Round 10 items below.
+
+
+def test_a_400_digit_integer_id_is_answered_never_500(served):
+    # Any int that isn't a bool is a valid id. math.isfinite overflowed on one this long.
+    big = int("9" * 400)
+    status, answer = post(served, _ping(big))
+    assert status != 500 and answer["id"] == big

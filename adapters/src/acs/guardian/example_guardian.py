@@ -697,9 +697,11 @@ def _valid_id(value: Any) -> bool:
     """A JSON-RPC id: a string, a finite number that isn't a bool, or null. The rule LAB-01's client uses too."""
     if value is None or isinstance(value, str):
         return True
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
         return False
-    return math.isfinite(value)
+    if isinstance(value, int):
+        return True  # any int: math.isfinite would overflow on a very long one
+    return isinstance(value, float) and math.isfinite(value)
 
 
 class ReadResult(NamedTuple):
