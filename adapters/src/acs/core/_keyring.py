@@ -25,6 +25,13 @@ WIRE_ALGORITHMS = frozenset({ML_DSA_65})
 PUBLIC_KEY_SIZES = {ML_DSA_65: 1952}
 
 
+def check_key_id(key_id: object) -> str:
+    """The one key_id rule for signing and verifying keys: a non-empty string, used as given."""
+    if not isinstance(key_id, str) or not key_id:
+        raise ValueError("key_id must be a non-empty string")
+    return key_id
+
+
 @dataclass(frozen=True)
 class VerificationKey:
     """One public key, the algorithm it verifies, and the key_id that names it."""
@@ -34,8 +41,7 @@ class VerificationKey:
     public_key: bytes
 
     def __post_init__(self) -> None:
-        if not isinstance(self.key_id, str) or not self.key_id:
-            raise ValueError("key_id must be a non-empty string")
+        check_key_id(self.key_id)
         if self.algorithm not in WIRE_ALGORITHMS:
             raise ValueError(f"algorithm {self.algorithm!r} is not accepted on the wire. "
                              f"Accepted: {sorted(WIRE_ALGORITHMS)}")

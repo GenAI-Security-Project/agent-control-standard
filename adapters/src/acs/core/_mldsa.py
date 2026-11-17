@@ -27,8 +27,8 @@ except ImportError as exc:
         "pip install 'acs-adapters[pqc]' or uv sync --extra pqc. The pqc and nat extras "
         "can't be installed together (see adapters/README.md).") from exc
 
-from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey
-from acs.core._signing import container_key, signing_input
+from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
+from acs.core._signing import _attach_signature, container_key, signing_input
 
 ML_DSA_MODE = "pure"
 ML_DSA_CONTEXT = b""
@@ -51,12 +51,6 @@ def _check_backend() -> None:
 _check_backend()
 
 
-def _check_key_id(key_id: object) -> str:
-    if not isinstance(key_id, str) or not key_id:
-        raise ValueError("key_id must be a non-empty string")
-    return key_id
-
-
 class MLDSA65SigningKey:
     """An ML-DSA-65 private key and the opaque key_id its signatures carry (D-026)."""
 
@@ -65,7 +59,7 @@ class MLDSA65SigningKey:
     def __init__(self, private: mldsa.MLDSA65PrivateKey, key_id: str) -> None:
         if not isinstance(private, mldsa.MLDSA65PrivateKey):
             raise ValueError("private must be an MLDSA65PrivateKey")
-        self._key_id = _check_key_id(key_id)
+        self._key_id = check_key_id(key_id)
         self._private = private
 
     @classmethod
@@ -105,16 +99,9 @@ def sign_with_signing_key(envelope: dict, signing_key: MLDSA65SigningKey) -> dic
     """Sign in place over JCS(envelope without its signature), replacing any earlier signature."""
     if not isinstance(signing_key, MLDSA65SigningKey):
         raise ValueError("signing_key must be an MLDSA65SigningKey")
-    ckey = container_key(envelope)
-    container = envelope.get(ckey, {})
     signature = signing_key.sign(signing_input(envelope))
-    container["signature"] = {
-        "algorithm": signing_key.algorithm,
-        "value": base64.b64encode(signature).decode("ascii"),
-        "key_id": signing_key.key_id,
-    }
-    envelope[ckey] = container
-    return envelope
+    return _attach_signature(envelope, algorithm=signing_key.algorithm, signature=signature,
+                             key_id=signing_key.key_id)
 
 
 def _verify_ml_dsa_65(public_key: bytes, signature: bytes, message: bytes) -> bool:

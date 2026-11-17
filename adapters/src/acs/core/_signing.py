@@ -37,18 +37,23 @@ def signing_input(envelope: dict) -> bytes:
     return jcs_canonicalize({**envelope, ckey: unsigned_container})
 
 
-def sign_with_key(envelope: dict, key: bytes, *, key_id: str) -> dict:
-    """Sign in place with HMAC-SHA256 over JCS(envelope without its signature), labelled key_id (§10)."""
+def _attach_signature(envelope: dict, *, algorithm: str, signature: bytes, key_id: str) -> dict:
+    """Set the container's signature object in place, replacing any earlier one (§10)."""
     ckey = container_key(envelope)
     container = envelope.get(ckey, {})
-    sig_bytes = hmac.new(key, signing_input(envelope), hashlib.sha256).digest()
     container["signature"] = {
-        "algorithm": "HMAC-SHA256",
-        "value": base64.b64encode(sig_bytes).decode("ascii"),
+        "algorithm": algorithm,
+        "value": base64.b64encode(signature).decode("ascii"),
         "key_id": key_id,
     }
     envelope[ckey] = container
     return envelope
+
+
+def sign_with_key(envelope: dict, key: bytes, *, key_id: str) -> dict:
+    """Sign in place with HMAC-SHA256 over JCS(envelope without its signature), labelled key_id (§10)."""
+    sig_bytes = hmac.new(key, signing_input(envelope), hashlib.sha256).digest()
+    return _attach_signature(envelope, algorithm="HMAC-SHA256", signature=sig_bytes, key_id=key_id)
 
 
 def verify_with_key(envelope: dict, key: bytes) -> bool:
