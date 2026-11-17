@@ -547,9 +547,17 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
     if tool_name in WRITE_CAPABLE_TOOLS:
         # Each tool on the list meets the same path denies, on every path argument it carries.
         for name in PATH_ARGUMENTS:
-            value = args.get(name, "")
-            # None reads as absent. A list is checked item by item, and an item that isn't a string denies.
-            for path in value if isinstance(value, list) else ["" if value is None else value]:
+            value = args.get(name)
+            if value is None:
+                continue  # absent, or null, which reads as absent
+            # Only paths takes a list, and a non-empty one. Every other path argument is a single string.
+            if name == "paths":
+                if not isinstance(value, list) or not value:
+                    return _argument_type_deny(base, tool_name, name, value)
+                values = value
+            else:
+                values = [value]
+            for path in values:
                 denied = _path_deny(base, tool_name, name, path)
                 if denied is not None:
                     return denied

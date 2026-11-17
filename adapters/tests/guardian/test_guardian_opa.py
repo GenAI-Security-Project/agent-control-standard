@@ -640,3 +640,14 @@ def test_a_path_list_with_a_non_string_item_denies(no_backend, paths):
 def test_every_path_name_counts_on_every_file_tool(no_backend, payload):
     result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
+
+
+@pytest.mark.parametrize("arguments", [{"file_path": []}, {"file_path": ["/tmp/a"]}, {"paths": []},
+                                       {"paths": "/tmp/a"}, {"target": ["/tmp/a"]}])
+def test_only_paths_takes_a_list_and_it_must_not_be_empty(no_backend, arguments):
+    result = _step("steps/toolCallRequest", _file_call("Delete", **arguments))
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
+
+def test_a_paths_list_of_ordinary_files_still_deletes(no_backend):
+    assert _step("steps/toolCallRequest", _file_call("Delete", paths=["/tmp/a", "/tmp/b"]))["decision"] == "allow"
