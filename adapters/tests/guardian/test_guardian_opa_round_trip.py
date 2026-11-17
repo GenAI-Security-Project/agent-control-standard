@@ -143,12 +143,13 @@ def test_a_signed_request_under_the_depth_bound_gets_a_decision_over_http(guardi
     assert status == 200 and body["result"]["decision"] == "deny"  # OPA is down in this fixture, so it denies
 
 
-def test_a_signed_request_past_the_depth_bound_gets_an_unsigned_invalid_request_over_http(guardian):
-    # The bound runs before the signature check, so the answer is unsigned (fix round 9, ruling 1).
+def test_a_signed_request_past_the_depth_bound_gets_a_signed_invalid_request_over_http(guardian):
+    # Signed per spec section 10 (fix round 10, which reverses round 9's unsigned answer).
+    from acs.client import verify_signature
     from acs.guardian.example_guardian import MAX_REQUEST_DEPTH
     status, body = _post_raw(guardian(closed_port_url()), _signed_nested(MAX_REQUEST_DEPTH + 50))
     assert body["error"]["code"] == -32600
-    assert "signature" not in body["error"]
+    assert verify_signature(body, session_id=SESSION)
 
 
 

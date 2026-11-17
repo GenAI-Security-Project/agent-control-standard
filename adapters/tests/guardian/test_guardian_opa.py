@@ -506,13 +506,14 @@ def _nested_request(depth: int, monkeypatch) -> dict:
 
 def test_a_signed_request_past_the_depth_bound_is_refused_before_any_state_changes(no_backend):
     # The client signs 900 levels, well past the bound, so this request is genuine and only the bound refuses it.
-    # The bound runs before the signature check, so the answer is unsigned (fix round 9, ruling 1).
+    # Errors are signed per spec section 10 (fix round 10, which reverses round 9's unsigned answer).
+    from acs.client import verify_signature
     request = _nested_request(example_guardian.MAX_REQUEST_DEPTH + 50, no_backend)
     session_id = request["params"]["metadata"]["session_id"]
     response = example_guardian.handle_request(request)
     assert response["error"]["code"] == -32600
     assert "deeper than" in response["error"]["message"]
-    assert "signature" not in response["error"]
+    assert verify_signature(response, session_id=session_id)
     state = example_guardian.STATE.get(session_id)
     assert (state.previous_hash, state.seen_request_ids, state.seen_nonces) == (None, {}, {})
 
@@ -534,13 +535,14 @@ def test_the_last_resort_guard_names_the_cause_accurately(no_backend, monkeypatc
     assert (word in message) if word else ("recursion" not in message)
 
 
-def test_the_last_resort_guard_answers_unsigned(no_backend, monkeypatch):
-    # The failing step is unknown, so the last resort signs nothing (fix round 9, ruling 1).
+def test_the_last_resort_guard_answers_signed(no_backend, monkeypatch):
+    # Signed per spec section 10 (fix round 10). If even this error couldn't be signed, do_POST's floor answers.
+    from acs.client import verify_signature
     request = _nested_request(3, no_backend)
     monkeypatch.setattr(example_guardian, "jcs_canonicalize", lambda value: (_ for _ in ()).throw(RecursionError()))
     response = example_guardian.handle_request(request)
-    assert response["error"]["code"] == -32600 and "signature" not in response["error"]
-    assert response["id"] == request["id"]
+    assert response["error"]["code"] == -32600 and response["id"] == request["id"]
+    assert verify_signature(response, session_id=request["params"]["metadata"]["session_id"])
 
 
 

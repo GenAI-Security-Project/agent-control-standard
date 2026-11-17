@@ -117,7 +117,7 @@ def test_null_fields_read_as_absent_on_a_step(field, read_as):
         params["metadata"]["session_id"] = None
     else:
         params[field] = None
-    fields, problem, _ = example_guardian.read_request(
+    fields, problem, _, _ = example_guardian.read_request(
         {"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": params})
     assert problem is None
     name, value = read_as
@@ -132,6 +132,13 @@ def test_a_payload_that_is_not_an_object_is_refused_on_ping_and_hello(served, me
     status, answer = post(served, body)
     assert answer["error"]["code"] == -32600
 
+
+# UUIDs, so the envelope passes the schema and only the step under test can refuse it.
+SCHEMA_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SIG_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+DEEP_SESSION = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+STRUCT_SESSION = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+FLOOR_SESSION = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 
 
 def _envelope_text(session_id: str = "ok-session", key_id: str = "test-key", depth: int = 0,
@@ -155,35 +162,62 @@ def _assert_unsigned_and_stateless(answer: dict, code: int, session_id: str) -> 
     assert session_id not in example_guardian.STATE.sessions, "an unverified request changed Guardian state"
 
 
-@pytest.mark.parametrize("variant", ["big integer id", "lone surrogate session_id", "foreign key_id"])
-def test_a_deep_request_from_an_unverified_sender_gets_an_unsigned_answer(served, variant):
+def _classify(body: bytes, answer: dict, session_id: str):
+    """How acs.client reads this answer to this request, with the same secret the served Guardian uses."""
+    from acs.client import classify_response
+    return classify_response(json.loads(body), answer, session_id=session_id)
+
+
+def _assert_signed_malformed(body: bytes, answer: dict, session_id: str) -> None:
+    # Signed per spec section 10, so the client classifies it as the malformed envelope it is, not as a forgery.
+    assert answer["error"]["code"] == -32600
+    assert "signature" in answer["error"]
+    assert _classify(body, answer, session_id).cause == "malformed_envelope_response"
+    assert session_id not in example_guardian.STATE.sessions, "a refused request changed Guardian state"
+
+
+def test_a_too_deep_body_gets_a_signed_error(served):
+    body = _envelope_text(session_id=DEEP_SESSION, depth=example_guardian.MAX_REQUEST_DEPTH + 50)
+    status, answer = post(served, body)
+    _assert_signed_malformed(body, answer, DEEP_SESSION)
+
+
+def test_a_too_deep_body_under_a_foreign_key_id_still_gets_the_signed_depth_error(served):
+    # Depth comes before the key_id check in the order, so this is the depth error, signed under this Guardian's key.
+    body = _envelope_text(session_id=DEEP_SESSION, key_id="someone-else", depth=example_guardian.MAX_REQUEST_DEPTH + 50)
+    status, answer = post(served, body)
+    _assert_signed_malformed(body, answer, DEEP_SESSION)
+
+
+def test_a_non_uuid_session_id_gets_a_signed_schema_error(served):
+    body = _envelope_text(session_id="not-a-uuid")
+    status, answer = post(served, body)
+    _assert_signed_malformed(body, answer, "not-a-uuid")
+
+
+def test_a_structure_error_with_a_readable_session_is_signed(served):
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart",
+                       "params": {"metadata": {"session_id": STRUCT_SESSION}, "request_id": 5}}).encode()
+    status, answer = post(served, body)
+    _assert_signed_malformed(body, answer, STRUCT_SESSION)
+
+
+@pytest.mark.parametrize("variant", ["big integer id", "lone surrogate session_id"])
+def test_an_error_that_cannot_be_signed_gets_the_unsigned_floor_never_a_drop(served, variant):
     depth = example_guardian.MAX_REQUEST_DEPTH + 50
     if variant == "big integer id":
-        body, session = _envelope_text(depth=depth, request_id=2**60, session_id="deep-1"), "deep-1"
-    elif variant == "lone surrogate session_id":
+        body, session = _envelope_text(depth=depth, request_id=2**60, session_id=FLOOR_SESSION), FLOOR_SESSION
+    else:
         body = _envelope_text(depth=depth, session_id="SURROGATE").replace(b'"SURROGATE"', b'"\\ud800"')
         session = "\ud800"
-    else:
-        body, session = _envelope_text(depth=depth, key_id="someone-else", session_id="deep-3"), "deep-3"
     status, answer = post(served, body)
-    _assert_unsigned_and_stateless(answer, -32600, session)
+    _assert_unsigned_and_stateless(answer, -32603, session)
 
 
-def test_a_structure_error_is_unsigned(served):
-    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart",
-                       "params": {"metadata": {"session_id": "struct-1"}, "request_id": 5}}).encode()
+def test_a_schema_error_is_signed(served):
+    body = _envelope_text(session_id=SCHEMA_SESSION, acs_request_id="not-a-uuid")
     status, answer = post(served, body)
-    _assert_unsigned_and_stateless(answer, -32600, "struct-1")
-
-
-# UUIDs, so the envelope passes the schema and only the step under test can refuse it.
-SCHEMA_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-SIG_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-
-
-def test_a_schema_error_is_unsigned(served):
-    status, answer = post(served, _envelope_text(session_id=SCHEMA_SESSION, acs_request_id="not-a-uuid"))
-    _assert_unsigned_and_stateless(answer, -32600, SCHEMA_SESSION)
+    _assert_signed_malformed(body, answer, SCHEMA_SESSION)
 
 
 def test_a_signature_that_does_not_verify_gets_a_signed_minus_32004_and_no_state_change(served):

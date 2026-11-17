@@ -702,61 +702,73 @@ def _valid_id(value: Any) -> bool:
     return math.isfinite(value)
 
 
-def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
-    """(fields, None, id) for a readable request, or (None, problem, id) for one whose structure is wrong.
+class ReadResult(NamedTuple):
+    """read_request's answer: the fields, or the problem with the id and session an error answer can use."""
+    fields: RequestFields | None
+    problem: str | None
+    id: Any
+    session_id: str
 
-    The id in either case is one an answer can carry: the request's own when it has a valid type, else None.
+
+def read_request(request: Any) -> ReadResult:
+    """The request's fields, each checked for type once, or the structural problem that stops the request.
+
+    The id is one an answer can carry: the request's own when it has a valid type, else None. The session_id is
+    the request's own when it was readable before the problem, else "", so an error is signed whenever it can be.
     """
     if not isinstance(request, dict):
         kind = "batch" if isinstance(request, list) else type(request).__name__
-        return None, f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)", None
+        return ReadResult(None, f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)", None, "")
     raw_id = request.get("id")
     if not _valid_id(raw_id):
-        return None, "id must be a string, a finite number, or null", None
-    answer_id = raw_id
+        return ReadResult(None, "id must be a string, a finite number, or null", None, "")
+    # Null reads as absent for params, metadata, request_id, and session_id, as it always has.
+    params = _absent_if_null(request.get("params"), {})
+    metadata = _absent_if_null(params.get("metadata"), {}) if isinstance(params, dict) else None
+    session_id = _absent_if_null(metadata.get("session_id"), "") if isinstance(metadata, dict) else ""
+    signing_session = session_id if isinstance(session_id, str) else ""
+
+    def refuse(problem: str) -> ReadResult:
+        return ReadResult(None, problem, raw_id, signing_session)
+
     method = request.get("method", "")
     if not isinstance(method, str):
-        return None, "method must be a string", answer_id
-    # Null reads as absent for these four, as it always has.
-    params = _absent_if_null(request.get("params"), {})
+        return refuse("method must be a string")
     if not isinstance(params, dict):
-        return None, "params must be an object", answer_id
-    metadata = _absent_if_null(params.get("metadata"), {})
+        return refuse("params must be an object")
     if not isinstance(metadata, dict):
-        return None, "params.metadata must be an object", answer_id
+        return refuse("params.metadata must be an object")
     # Every method reads its payload as an object, ping and handshake included, so any other value is refused here.
     if "payload" in params and not isinstance(params["payload"], dict):
-        return None, "params.payload must be an object", answer_id
+        return refuse("params.payload must be an object")
     request_id = _absent_if_null(params.get("request_id"), "")
-    session_id = _absent_if_null(metadata.get("session_id"), "")
     for name, value in (("params.request_id", request_id), ("params.metadata.session_id", session_id)):
         if not isinstance(value, str):
-            return None, f"{name} must be a string", answer_id
-    return RequestFields(method, raw_id, params, metadata, request_id, session_id), None, answer_id
+            return refuse(f"{name} must be a string")
+    return ReadResult(RequestFields(method, raw_id, params, metadata, request_id, session_id), None, raw_id,
+                      session_id)
 
 
 def handle_request(request: dict) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
-    # The order is parse (in do_POST), structure, depth, signature, replay, then the step. Nothing before the
-    # signature verifies is signed: signing for a session_id the sender chose, before verifying the sender, is an
-    # oracle, and signing a value JCS can't encode is also what would raise and drop the connection.
-    fields, problem, answer_id = read_request(request)
-    if problem:
-        return _unsigned_error(answer_id, -32600, f"Invalid Request: {problem}")
+    # Errors are signed whenever the session key is derivable, as spec section 10 requires. The two unsigned
+    # answers are the -32004 for an unknown key_id (the section 10 exemption) and do_POST's floor, which answers
+    # when signing itself fails. Signing an error before the sender is verified gives that sender an HMAC under a
+    # session key it chose, over an error envelope with an id it chose. A client accepts a response only for its
+    # own UUID request ids, so it can't use one.
+    read = read_request(request)
+    if read.problem:
+        return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}")
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
-        return _unsigned_error(answer_id, -32600,
+        return _error_envelope(read.id, read.session_id, -32600,
                                f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
     try:
-        return _handle_request(request, fields)
+        return _handle_request(request, read.fields)
     except CANONICALIZATION_ERRORS as e:
-        # Last resort, after the depth bound. The failing step is unknown, so the answer is unsigned.
+        # Last resort, after the depth bound. If even this error can't be signed, do_POST's floor answers.
         cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
-        return _unsigned_error(answer_id, -32600, f"Invalid Request: the envelope could not be canonicalized{cause}")
-
-
-def _unsigned_error(request_id: Any, code: int, message: str) -> dict:
-    """An error for a sender not yet verified. The id is the request's own when it has a valid type, else null."""
-    return _error_envelope(request_id, "", code, message, signed=False)
+        return _error_envelope(read.id, read.session_id, -32600,
+                               f"Invalid Request: the envelope could not be canonicalized{cause}")
 
 
 def _handle_request(request: dict, fields: RequestFields) -> dict:
@@ -785,8 +797,7 @@ def _handle_request(request: dict, fields: RequestFields) -> dict:
                 f"{'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
                 for e in errors[:5]
             )
-            # Before the signature check, so unsigned (§10, ruling 1 of LAB-02 fix round 9).
-            return _unsigned_error(request_id, -32600, f"Invalid Request: envelope failed schema: {paths}")
+            return _error_envelope(request_id, session_id, -32600, f"Invalid Request: envelope failed schema: {paths}")
 
     if method == "handshake/hello":
         # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
@@ -890,7 +901,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
 
         # One extraction for the log line too. A request whose structure is wrong logs as invalid, and
         # handle_request answers it.
-        fields, _, _ = read_request(request)
+        fields = read_request(request).fields
         if fields is None:
             sys.stderr.write("[guardian] invalid request\n")
         else:
