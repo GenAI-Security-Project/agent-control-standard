@@ -37,7 +37,7 @@ ML-DSA-65 signing and keyring verification (issue #574) live behind the `pqc` ex
 uv sync --locked --extra pqc --group test
 ```
 
-**Lab convention:** `pqc` and `nat` can't be installed together. `nvidia-nat-core` pins `cryptography` below 47, and ML-DSA-65 needs a newer release, so `pyproject.toml` declares the two extras as conflicting. Issue #543 (NeMo Relay migration) replaces the NAT dependency and would remove the conflict. Until then a NAT deployment signs with HMAC-SHA256 only.
+The `pqc` and `nat` extras can't be installed together, and that is a lab convention. `nvidia-nat-core` pins `cryptography` below 47, and ML-DSA-65 needs a newer release, so `pyproject.toml` declares the two extras as conflicting. Issue #543 (NeMo Relay migration) replaces the NAT dependency and would remove the conflict. Until then a NAT deployment signs with HMAC-SHA256 only. CI tests the extra in its own `tests-pqc` job.
 
 ## ACS v0.1.0 emission-conformance check
 
@@ -64,7 +64,7 @@ uv run python run_conformance.py claude cursor nat
 
 `claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client` and `package` checks run once for every command, regardless of the platform selection.
 
-It prints every skip by name + reason and fails on any failure **or any _unexpected_ skip** — a skip not on the exact allowlist. The allowlist tolerates only the manual Cursor GUI procedure, the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`, and the two ML-DSA test modules, which skip whole without the `pqc` extra and so always skip in the nat environment; a dependency-gated test (NAT when `nvidia-nat-core` is installed) that silently skips is a failure, never green. `--strict` additionally fails on the allowlisted skips too, for a fully-provisioned gate.
+It prints every skip by name and reason. It fails on any failure and on any skip that isn't on the exact allowlist. The allowlist names three kinds of skip. The first is the manual Cursor GUI procedure. The second is the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`. The third is the two ML-DSA test modules. Each skips as a whole without the `pqc` extra, so both always skip in the nat environment. A dependency-gated test that skips anywhere else is a failure, never a pass. NAT is the example: with `nvidia-nat-core` installed, a skipped NAT test fails the run. `--strict` also fails on the allowlisted skips, for a fully provisioned gate.
 
 Under the hood it drives two complementary layers:
 

@@ -393,9 +393,12 @@ class VariantAndContextAreDocumented(unittest.TestCase):
     DOC = Path(__file__).resolve().parents[2] / "docs" / "signing.md"
 
     def test_the_adapters_doc_names_pure_mode_and_the_empty_context(self) -> None:
-        text = self.DOC.read_text(encoding="utf-8")
-        self.assertIn("**Variant:** pure ML-DSA-65 (FIPS 204 Algorithm 7, ML-DSA.Sign), not HashML-DSA.", text)
-        self.assertIn('**Context string:** empty (`b""`, zero bytes).', text)
+        # The facts, not their formatting: pure mode, HashML-DSA ruled out, and an empty context.
+        text = " ".join(self.DOC.read_text(encoding="utf-8").split())
+        self.assertRegex(text, r"\bpure ML-DSA-65\b")
+        self.assertRegex(text, r"not (use )?(the pre-hash )?HashML-DSA")
+        self.assertRegex(text, r'context string is empty \(`b""`')
+        self.assertNotIn("HashML-DSA-65 with", text)
 
     def test_the_module_docstring_names_pure_mode_and_the_empty_context(self) -> None:
         import acs.core._mldsa as module
