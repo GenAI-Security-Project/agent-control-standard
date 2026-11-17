@@ -38,3 +38,20 @@ def test_the_session_map_evicts_the_least_recently_used_session():
     sessions.get("c")
     assert evicted == [b]
     assert sessions.get("a") is a
+
+
+def test_a_busy_session_is_never_evicted():
+    import pytest
+
+    from acs_gateway.sessions import SessionsBusy
+
+    evicted = []
+    sessions = SessionMap(max_sessions=1, on_evict=evicted.append)
+    a = sessions.get("a")
+    a.active = 1
+    with pytest.raises(SessionsBusy):
+        sessions.get("b")
+    assert sessions.get("a") is a and evicted == []
+    a.active = 0
+    sessions.get("b")
+    assert evicted == [a]

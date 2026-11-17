@@ -42,7 +42,7 @@ from acs_gateway.apply import (
 )
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
 from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult, StepToken
-from acs_gateway.sessions import CachedOutcome, Session, SessionMap, conversation_key, fingerprint
+from acs_gateway.sessions import CachedOutcome, Session, SessionMap, SessionsBusy, conversation_key, fingerprint
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -182,12 +182,33 @@ class Gateway:
             key = conversation_key(body)
         except RecursionError:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
+        try:
+            pinned = self.sessions.get(key)
+        except SessionsBusy:
+            return self._busy()
+        # Pinned from the input phase through the output phase, so eviction never splits one turn over two sessions.
+        pinned.active += 1
+        try:
+            return await self._governed(key, raw, body, headers)
+        except SessionsBusy:
+            # An epoch bump mid-request needed a new session and every slot was busy.
+            return self._busy()
+        finally:
+            pinned.active -= 1
+
+    def _busy(self) -> Response:
+        _audit("sessions_full", max_sessions=self.config.max_sessions)
+        return openai_error(503, "The service is busy. Try again shortly.", "server_error", "busy")
+
+    async def _governed(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str]) -> Response:
         session = None
         try:
             async with self._current(key) as session:
                 await self._ensure_open(session)
                 if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
+        except SessionsBusy:
+            raise
         except Exception as e:  # noqa: BLE001
             failed = self._gating_failed(session, "input", e)
             if failed is not None:
@@ -209,6 +230,8 @@ class Gateway:
                 if session.handshake is None:
                     await self._ensure_open(session)
                 changed = await self._gate_output(session, reply)
+        except SessionsBusy:
+            raise
         except Exception as e:  # noqa: BLE001
             failed = self._gating_failed(session, "output", e)
             if failed is not None:

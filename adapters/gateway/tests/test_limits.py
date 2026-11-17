@@ -27,3 +27,14 @@ def test_evicting_a_session_is_audited(gateway, guardian, upstream, audit):
     client.post("/v1/responses", json=finbot_request(user="second run"))
     opened = [e["session_id"] for e in events(audit, "session_opened")]
     assert [e["session_id"] for e in events(audit, "session_evicted")] == opened[:1]
+
+
+def test_a_new_conversation_gets_503_when_every_session_is_busy(gateway, guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_SESSIONS="1")
+    client.post("/v1/responses", json=finbot_request(user="first run"))
+    held = next(iter(client.app.state.gateway.sessions._sessions.values()))
+    held.active = 1
+    response = client.post("/v1/responses", json=finbot_request(user="second run"))
+    assert response.status_code == 503
+    assert events(audit, "session_evicted") == []
+    assert len(events(audit, "sessions_full")) == 1

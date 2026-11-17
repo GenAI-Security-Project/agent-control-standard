@@ -74,6 +74,16 @@ class Session:
     # Keyed on call_id within this session, so the cache key is (session_id, call_id) (PREMORTEM P3).
     calls: dict[str, CachedOutcome] = field(default_factory=dict)
     results: dict[str, CachedOutcome] = field(default_factory=dict)
+    # Requests between their input and output phases. A session with any, or with its lock held, is never evicted.
+    active: int = 0
+
+    @property
+    def busy(self) -> bool:
+        return self.active > 0 or self.lock.locked()
+
+
+class SessionsBusy(Exception):
+    """Every session is busy, so a new conversation can't get one without evicting a turn in progress."""
 
 
 class SessionMap:
@@ -87,16 +97,19 @@ class SessionMap:
 
     def get(self, key: str) -> Session:
         session = self._sessions.get(key)
-        if session is None:
-            session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch)
-            self._sessions[key] = session
-            while len(self._sessions) > self._max:
-                # The least recently used run is the one most likely over. Its next resend opens a new session.
-                _, evicted = self._sessions.popitem(last=False)
-                if self._on_evict is not None:
-                    self._on_evict(evicted)
-        else:
+        if session is not None:
             self._sessions.move_to_end(key)
+            return session
+        while len(self._sessions) >= self._max:
+            # The least recently used idle run is the one most likely over. Its next resend opens a new session.
+            idle = next((k for k, s in self._sessions.items() if not s.busy), None)
+            if idle is None:
+                raise SessionsBusy()
+            evicted = self._sessions.pop(idle)
+            if self._on_evict is not None:
+                self._on_evict(evicted)
+        session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch)
+        self._sessions[key] = session
         return session
 
     def bump_epoch(self) -> int:

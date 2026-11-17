@@ -111,6 +111,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `unsupported_tool_type` | A tool declaration that isn't a function tool |
 | `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |
 | `session_retried` | A failed handshake or sessionStart was retried under a new session_id |
+| `sessions_full` | Every session was busy, so a new conversation got 503 |
 | `session_evicted` | The session cap evicted the least recently used session |
 | `epoch_bumped` | The epoch moved |
 
@@ -132,7 +133,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_TRANSCRIPT_DIR` | `<state dir>/transcripts` | Where transcripts go |
 | `ACS_AUDIT_FILE` | None | Where audit lines go, besides stderr |
 | `ACS_MODEL_INPUT_LOG` | None | Where the model input log goes |
-| `ACS_GATEWAY_MAX_SESSIONS` | `256` | Sessions held at once. The least recently used one is evicted and audited as `session_evicted` |
+| `ACS_GATEWAY_MAX_SESSIONS` | `256` | Sessions held at once. The least recently used idle one is evicted and audited as `session_evicted`. A session with a request in progress is never evicted, and a new conversation gets 503 (`sessions_full`) when every session is busy |
 | `ACS_GATEWAY_MAX_BODY_BYTES` | `8388608` (8 MiB) | Largest request body (413 above it) and, in shadow and enforce, largest upstream answer (502 above it) |
 | `ACS_GATEWAY_WORKERS` | `16` | Worker threads for Guardian calls. Time a step waits for a worker counts against its decision timeout |
 | `ACS_AGENT_ID` | `openai-responses-gateway` | `agent_id` in every envelope |
