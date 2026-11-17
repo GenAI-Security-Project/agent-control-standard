@@ -80,9 +80,35 @@ replayed = verify_with_keyring(response, keyring, expected_key_id="lab-guardian-
 assert verified and not replayed
 ```
 
-Verification takes two required arguments besides the keyring. `expected_key_id` names the key that must answer. A keyring can hold several keys, so a response signed by any other key fails before any crypto runs. `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key, but one ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another. The response must carry the request's JSON-RPC `id` and, when its result carries a `request_id`, the request's `request_id`. A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. The binding protects against replay only as far as the ids are unique, and core doesn't check that. It compares the ids it is given. `acs.core.request_envelope`, which `acs.client` and the adapters use, gives every request a fresh UUID4 as its JSON-RPC `id`. `params.request_id` is fresh only as far as its source is. An adapter may derive it from the host's event id, as the Cursor adapter does. A caller that reuses ids weakens replay protection. `acs.core.response_matches_request` holds this one rule, and the keyring path and the client's step exchange both call it. The client's HMAC handshake compares only the id, with the same `acs.core.same_json_rpc_id`, and its ServerHello checks already treat a result carrying `request_id` as no answer, so it never negotiates. A request envelope answers nothing, so it fails keyring verification.
+### Pinning the key
 
-A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello. So when the request is the handshake (`acs.core.HANDSHAKE_METHOD`, `handshake/hello`), the JSON-RPC `id` binds the response, and a result must carry no `request_id`, so a step decision never answers a ClientHello. Every other request must carry a string `params.request_id`. On the keyring path a request without one is a caller error (ValueError), and a result must carry the same `request_id`. The rule follows the request, never the response's shape, so a ServerHello or a result without `request_id` never answers a step request. JSON-RPC ids compare as JSON values. A boolean never equals a number, so `true` and `1` are different ids, while `1` and `1.0` are the same number in JSON and JCS, so they match. That is a known limit: a ServerHello is tied to one ClientHello, not to the traffic that follows it. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) tracks closing it.
+Verification takes two required arguments besides the keyring. `expected_key_id` names the key that must answer. A keyring can hold several keys, so a response signed by any other key fails before any crypto runs.
+
+### Binding the response to its request
+
+`request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key. One ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another.
+
+The response must carry the request's JSON-RPC `id`. An error is bound by the id alone, and an id with neither a result nor an error answers nothing. For any request but the handshake, the request must carry a string `params.request_id`, and the result must carry the same `request_id`. A request envelope answers nothing.
+
+`acs.core.response_matches_request` holds this rule, and the keyring path and the client's step exchange both call it. A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. On the keyring path, a request that can't bind anything, with no id or no `request_id`, is a caller error and raises ValueError.
+
+### Comparing ids
+
+Ids compare as values. A boolean never equals a number, so `true` and `1` are different ids. Numbers compare as Python values, so `1` and `1.0` match, and integers past 2**53 compare exactly. A missing or null id matches nothing. Ids should be strings.
+
+### Replay depends on unique ids
+
+The binding protects against replay only as far as the ids are unique, and core doesn't check that. `acs.core.request_envelope`, which `acs.client` and the adapters use, gives every request a fresh UUID4 as its JSON-RPC `id`. `params.request_id` is only as fresh as its source. An adapter may derive it from the host's event id, as the Cursor adapter does. A caller that reuses ids weakens replay protection.
+
+### The handshake
+
+A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello. So when the request is the handshake (`acs.core.HANDSHAKE_METHOD`, `handshake/hello`), the JSON-RPC `id` binds the response, and its result must carry no `request_id`. A step decision therefore never answers a ClientHello, and a ServerHello never answers a step request.
+
+The client's HMAC handshake compares the id with the same `acs.core.same_json_rpc_id`. It treats a signed ServerHello that carries `request_id` as no answer, so the fail posture applies and it never negotiates.
+
+The id is a known limit. It ties a ServerHello to one ClientHello, not to the traffic that follows it. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) tracks closing it.
+
+### On the adapter side
 
 On the adapter side, `acs.client.verify_signature(response, keyring=keyring, expected_key_id="lab-guardian-1", request=request)` verifies a response by keyring, and core enforces the key pin and the request binding. Without `keyring`, `verify_signature` applies the HMAC rules exactly as before.
 
