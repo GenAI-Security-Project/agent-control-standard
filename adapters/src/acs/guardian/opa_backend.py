@@ -369,17 +369,18 @@ def _resolve_pointer(document: Any, pointer: Any) -> bool:
 
 
 def replace_at(document: Any, pointer: str, value: Any) -> None:
-    """Replace the value the pointer names inside document. The caller has checked that it resolves."""
+    """Replace the value the pointer names inside document, raising PointerError when it names nothing."""
     *parents, leaf = decode_pointer(pointer)
     node = document
     for token in parents:
         found, node = _step(node, token)
         if not found:
             raise PointerError(f"{pointer!r} does not resolve")
+    # The leaf has to exist too, in an object as in an array, so a replacement never adds a key.
+    found, _ = _step(node, leaf)
+    if not found:
+        raise PointerError(f"{pointer!r} does not resolve")
     if isinstance(node, list):
-        found, _ = _step(node, leaf)
-        if not found:
-            raise PointerError(f"{pointer!r} does not resolve")
         node[int(leaf)] = value
     else:
         node[leaf] = value

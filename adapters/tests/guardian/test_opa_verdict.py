@@ -433,3 +433,11 @@ def test_an_array_index_is_ascii_digits_only(token):
 def test_the_coverage_walk_treats_an_unresolved_path_as_a_problem():
     # verdict_problem checks existence first, so this calls the walk directly: an unresolved path is never covered.
     assert opa_backend._coverage_problem(["/outputs/0/value/missing"], RESULT)
+
+
+@pytest.mark.parametrize("document,pointer", [({"a": {}}, "/a/b"), ({"a": [1]}, "/a/1"), ({"a": 1}, "/a/b")])
+def test_replace_at_never_adds_what_the_pointer_does_not_name(document, pointer):
+    before = copy.deepcopy(document)
+    with pytest.raises(opa_backend.PointerError):
+        opa_backend.replace_at(document, pointer, "x")
+    assert document == before
