@@ -167,14 +167,20 @@ class Gateway:
         if raw is None:
             _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
             return openai_error(413, "The request body is too large.", "invalid_request_error", "request_too_large")
+        encoding = request.headers.get("content-encoding", "identity").strip().lower()
+        if encoding != "identity":
+            # The gateway can't read a compressed body, so it can't gate it. Enforce refuses it, and shadow, which
+            # only observes, forwards it unchanged with nothing gated.
+            _audit("compressed_request", content_encoding=encoding, mode=self.config.mode)
+            if self.enforce:
+                return openai_error(415, "Compressed request bodies are not supported by this endpoint.",
+                                    "invalid_request_error", "unsupported_content_encoding")
+            return await self._relay_verbatim(raw, headers)
         body, repeated = _parse_governed(raw)
         if is_stream(body):
             # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
             return openai_error(501, "Streaming responses are not supported by this endpoint.",
                                 "invalid_request_error", "unsupported_parameter")
-        if request.headers.get("content-encoding", "identity").strip().lower() != "identity":
-            return openai_error(415, "Compressed request bodies are not supported by this endpoint.",
-                                "invalid_request_error", "unsupported_content_encoding")
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
@@ -266,13 +272,19 @@ class Gateway:
             return upstream
         if not 200 <= upstream.status_code < 300:
             return _relay(upstream, None)
-        reply = _parse(upstream.content)
-        if self.enforce and repeated_key(upstream.content) is not None:
+        reply, repeated = _parse_governed(upstream.content)
+        if repeated is not None:
             # The client might read the other copy of a repeated key, one the gateway never gated.
-            reply = None
+            _audit("duplicate_json_key", key=repeated, where="upstream_answer", mode=self.config.mode)
+            if self.enforce:
+                return openai_error(502, "The model service returned an unreadable response.", "server_error",
+                                    "upstream_unreadable")
         if not isinstance(reply, dict) or not isinstance(reply.get("output"), list):
-            # A success the gateway can't read could carry calls it never gated, so it never reaches the client.
+            # A success the gateway can't read could carry calls it never gated, so enforce never relays it.
+            # Shadow only observes, so it relays the answer as it came.
             _audit("upstream_error", cause="upstream_unparseable", http_status=upstream.status_code)
+            if not self.enforce:
+                return _relay(upstream, None)
             return openai_error(502, "The model service returned an unreadable response.", "server_error",
                                 "upstream_unreadable")
         try:
@@ -337,18 +349,27 @@ class Gateway:
             upstream = await self.http.send(
                 self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
                                         headers=headers), stream=True)
+            chunks, size, stream = [], 0, upstream.aiter_bytes()
             try:
-                chunks, size = [], 0
-                async for chunk in upstream.aiter_bytes():
+                async for chunk in stream:
                     size += len(chunk)
+                    chunks.append(chunk)
                     if size > self.config.max_body_bytes:
                         _audit("upstream_error", cause="upstream_too_large",
                                max_body_bytes=self.config.max_body_bytes)
+                        if not self.enforce:
+                            # Shadow relays the answer whole, streaming the rest rather than holding it.
+                            relay = _continue(chunks, stream)
+                            return StreamingResponse(relay, status_code=upstream.status_code,
+                                                     headers=_client_headers(upstream.headers, decoded=True),
+                                                     background=BackgroundTask(upstream.aclose))
+                        await upstream.aclose()
                         return openai_error(502, "The model service returned a response that is too large.",
                                             "server_error", "upstream_too_large")
-                    chunks.append(chunk)
-            finally:
+            except BaseException:
                 await upstream.aclose()
+                raise
+            await upstream.aclose()
         except httpx.HTTPError as e:
             _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
             return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
@@ -618,6 +639,13 @@ def _pin(session: Session, pins: list[Session]) -> None:
     if not any(pinned is session for pinned in pins):
         pins.append(session)
         session.active += 1
+
+
+async def _continue(first: list[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    for chunk in first:
+        yield chunk
+    async for chunk in rest:
+        yield chunk
 
 
 def _parse_governed(raw: bytes) -> tuple[Any, str | None]:

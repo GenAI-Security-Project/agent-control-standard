@@ -13,11 +13,34 @@ def events(audit, name):
 
 @pytest.mark.parametrize("mode", ["shadow", "enforce"])
 @pytest.mark.parametrize("reply", [b"not json", b"[1, 2]", json.dumps({"id": "resp_1"}).encode()])
-def test_a_2xx_answer_that_is_not_a_response_object_gets_502(gateway, guardian, upstream, audit, mode, reply):
+def test_a_2xx_answer_that_is_not_a_response_object_gets_502_in_enforce_and_relays_in_shadow(
+        gateway, guardian, upstream, audit, mode, reply):
     upstream.reply(reply)
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
-    assert response.status_code == 502
+    if mode == "enforce":
+        assert response.status_code == 502
+    else:
+        assert response.status_code == 200 and response.content == reply
     assert events(audit, "upstream_error")[0]["cause"] == "upstream_unparseable"
+
+
+def test_shadow_relays_an_oversized_upstream_answer_whole(gateway, guardian, upstream, audit):
+    reply = response_body(message_item("y" * 5000))
+    upstream.reply(reply)
+    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_BODY_BYTES="2000").post(
+        "/v1/responses", json=finbot_request())
+    assert response.status_code == 200 and response.json() == reply
+    assert events(audit, "upstream_error")[0]["cause"] == "upstream_too_large"
+
+
+def test_shadow_forwards_a_compressed_request_unchanged(gateway, guardian, upstream, audit):
+    body = gzip.compress(json.dumps(finbot_request()).encode())
+    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", content=body, headers={"Content-Encoding": "gzip", "Content-Type": "application/json"})
+    assert response.status_code == 200
+    assert upstream.received[0].body == body
+    assert upstream.received[0].headers["content-encoding"] == "gzip"
+    assert len(events(audit, "compressed_request")) == 1
 
 
 @pytest.mark.parametrize("stream", ["true", 1, "yes", 0, ""])

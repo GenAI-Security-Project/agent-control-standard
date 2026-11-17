@@ -58,12 +58,19 @@ def test_enforce_denies_a_call_whose_arguments_repeat_a_key(gateway, guardian, u
     assert events(audit, "decision_applied")[0]["cause"] == "duplicate_json_key"
 
 
-def test_enforce_refuses_an_upstream_answer_that_repeats_a_key(gateway, guardian, upstream, audit):
-    upstream.reply(b'{"id": "r", "object": "response", "output": [{"type": "function_call", "call_id": "c", '
+REPEATED_ANSWER = (b'{"id": "r", "object": "response", "output": [{"type": "function_call", "call_id": "c", '
                    b'"name": "bash", "arguments": "{}"}], "output": []}')
-    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
-    assert response.status_code == 502
-    assert events(audit, "upstream_error")[0]["cause"] == "upstream_unparseable"
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_an_upstream_answer_that_repeats_a_key_is_audited_in_both_modes(gateway, guardian, upstream, audit, mode):
+    upstream.reply(REPEATED_ANSWER)
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    if mode == "enforce":
+        assert response.status_code == 502
+    else:
+        assert response.status_code == 200 and response.content == REPEATED_ANSWER
+    assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["upstream_answer"]
 
 
 DUPLICATED_OUTPUT = '{"bank_account_number": "12345678", "bank_account_number": "x"}'
