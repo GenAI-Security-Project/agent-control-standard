@@ -301,3 +301,10 @@ def test_a_request_is_read_once(served, monkeypatch):
     monkeypatch.setattr(example_guardian, "read_request", counting)
     post(served, _ping("once"))
     assert len(calls) == 1
+
+
+def test_an_invalid_request_logs_its_problem_and_method(served, capsys):
+    body = b'{"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": [1]}'
+    post(served, body)
+    err = capsys.readouterr().err
+    assert "params must be an object" in err and "steps/se" in err

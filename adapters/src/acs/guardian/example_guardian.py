@@ -912,7 +912,8 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         self._answer_id = read.id
         fields = read.fields
         if fields is None:
-            sys.stderr.write("[guardian] invalid request\n")
+            method = request.get("method") if isinstance(request, dict) else None
+            sys.stderr.write(f"[guardian] invalid request {_log_value(method, 40)}: {read.problem}\n")
         else:
             sys.stderr.write(f"[guardian] {_log_value(fields.method, 40)} session={_log_value(fields.session_id)} "
                              f"req={_log_value(fields.request_id)}\n")
