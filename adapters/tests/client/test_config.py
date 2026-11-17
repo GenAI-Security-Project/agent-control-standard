@@ -119,6 +119,7 @@ class FailureClasses(unittest.TestCase):
             "adapter_exception": "observed_agent_error", "adapter_build_failed": "observed_agent_error",
             "adapter_translate_exception": "observed_agent_error", "request_exceeds_max_payload": "observed_agent_error",
             "guardian_url_rejected": "observed_agent_error", "invalid_stdin_json": "observed_agent_error",
+            "request_envelope_invalid": "observed_agent_error",
             "something_new": "other",
         }
         for cause, expected in table.items():
