@@ -112,6 +112,14 @@ The binding protects against replay only as far as the ids are unique, and core 
 
 Error binding rests on the JSON-RPC `id` alone, on both paths, as D-029 sets. A caller that picks predictable ids could accept a signed error captured from another session. A caller must use the UUIDs `acs.client` generates, or ids just as unique.
 
+### Known limit: relaying a Guardian's answer between sessions
+
+One ML-DSA key signs every session, and a response names no session, so keyring verification binds a response only by its JSON-RPC `id` and `result.request_id`. An attacker who sits on the path to the Guardian and is also an authenticated client of the same Guardian can copy a victim's ids into its own request. It can then relay the Guardian's signed answer to the victim, and that answer verifies.
+
+HMAC prevents this, because each session's key is derived from its `session_id`, so an answer signed for one session fails in another. A single ML-DSA key gives no such separation. Closing the gap needs the signed response to carry the session, or a hash of the request it answers. Specification section 10 says a response carries no `session_id`, so that is a wire change for the specification, not a library fix.
+
+Until then, the connection to the Guardian must use TLS, which keeps an attacker off the path.
+
 ### The handshake
 
 A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello. When the request is the handshake (`acs.core.HANDSHAKE_METHOD`, `handshake/hello`), the JSON-RPC `id` binds the response, and its result must carry no `request_id`. A step decision therefore never answers a ClientHello, and a ServerHello never answers a step request.
