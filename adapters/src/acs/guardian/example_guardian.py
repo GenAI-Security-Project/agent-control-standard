@@ -644,6 +644,25 @@ def _error_envelope(request_id, session_id: str, code: int, message: str, *, sig
 
 
 def handle_request(request: dict) -> dict:
+    """Answer one JSON-RPC request. A request the Guardian can't canonicalize, at any step, gets an error answer."""
+    try:
+        return _handle_request(request)
+    except CANONICALIZATION_ERRORS:
+        # Schema validation, the request hash, and the chain all walk the request, and a nested one can exhaust
+        # the recursion limit in any of them. Answer instead of dropping the connection, which a proceed posture
+        # would run as a decision failure.
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+        session_id = meta.get("session_id") if isinstance(meta.get("session_id"), str) else ""
+        request_id = request.get("id") if isinstance(request.get("id"), (str, int)) else None
+        message = "Invalid Request: the envelope is nested too deeply to canonicalize"
+        try:
+            return _error_envelope(request_id, session_id, -32600, message)
+        except CANONICALIZATION_ERRORS:
+            return _error_envelope(None, "", -32600, message, signed=False)
+
+
+def _handle_request(request: dict) -> dict:
     method = request.get("method", "")
     request_id = request.get("id")
     params = request.get("params") or {}
@@ -745,7 +764,8 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8")
         try:
             request = json.loads(body)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
+            # RecursionError: a body nested past the parser's limit is a parse error too, never a dropped connection.
             self._respond(400, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32700, "message": "Parse error"}})
             return

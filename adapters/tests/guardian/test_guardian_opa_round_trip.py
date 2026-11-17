@@ -105,3 +105,32 @@ def test_an_unsignable_number_is_a_signed_deny(guardian, body):
         _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
     assert result["decision"] == "deny"
     assert result["reason_codes"][0] in ("opa_response_malformed", "response_not_signable")
+
+
+
+def _post_raw(url: str, body: bytes) -> tuple[int, dict]:
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_a_request_nested_past_the_parser_limit_gets_a_parse_error(guardian):
+    url = guardian(closed_port_url())
+    status, body = _post_raw(url, b"[" * 100_000 + b"]" * 100_000)
+    assert (status, body["error"]["code"]) == (400, -32700)
+
+
+def test_a_request_nested_just_under_the_parser_limit_gets_an_answer(guardian):
+    import json
+    from acs.testing.harness import make_envelope
+    url = guardian(closed_port_url())
+    text = json.dumps(make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {}}))
+    text = text.replace('"arguments": {}', '"arguments": {"deep": {"value": ' + "[" * 990 + "]" * 990 + "}}")
+    status, body = _post_raw(url, text.encode())
+    assert "error" in body or "result" in body

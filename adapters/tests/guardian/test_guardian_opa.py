@@ -488,3 +488,23 @@ def test_the_guardian_refuses_to_start_when_the_backend_changed_after_import(no_
         no_backend.setenv("ACS_POLICY_BACKEND", live)
     assert _run_main(no_backend) == [1], "the Guardian started with a backend that changed after import"
     assert "changed after import" in capsys.readouterr().err
+
+
+
+def test_a_request_too_deep_to_canonicalize_gets_a_signed_invalid_request(no_backend, monkeypatch):
+    # The request-side canonicalization (the chain's request hash) recurses. It must answer, not drop the connection.
+    from acs.client import verify_signature
+    from acs.testing.harness import make_envelope
+    monkeypatch.setenv("ACS_HMAC_SECRET", "guardian-opa-test-secret-32-bytes-long")
+    monkeypatch.setenv("ACS_HMAC_KEY_ID", "test-key")
+    monkeypatch.delenv("ACS_HMAC_SECRET_FILE", raising=False)
+    for name in ("check_signature", "check_skew", "check_replay", "check_nonce"):
+        monkeypatch.setattr(example_guardian, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(example_guardian, "_SPEC_VALIDATION_AVAILABLE", False)
+    deep: list = []
+    for _ in range(sys.getrecursionlimit() + 100):
+        deep = [deep]
+    request = make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {"x": {"value": deep}}})
+    response = example_guardian.handle_request(request)
+    assert response["error"]["code"] == -32600
+    assert verify_signature(response, session_id=request["params"]["metadata"]["session_id"])
