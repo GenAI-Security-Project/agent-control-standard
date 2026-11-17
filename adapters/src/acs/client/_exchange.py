@@ -8,6 +8,7 @@ import socket
 import threading
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -17,12 +18,14 @@ from acs.client._outcome import Decided, Outcome, Refused, Undecided
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._urls import validate_guardian_url
 from acs.core import (
+    BINDING_SHAPE,
     MAX_REQUEST_BODY_BYTES,
     guardian_error_cause,
     is_guardian_refusal,
     modify_composition_violation,
     normalize_decision,
-    response_matches_request,
+    request_envelope_problem,
+    response_binding_problem,
     schemas_dir,
 )
 
@@ -366,12 +369,19 @@ def key_id_rejected(error: Any) -> bool:
 
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
     """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
-    params = request.get("params") or {}
+    # The same caller check the keyring path makes, before anything here reads the request.
+    if request_envelope_problem(request) is not None:
+        return Refused("response_binding_mismatch", {}, "request is not an envelope a response could answer")
+    params = request.get("params")
+    params = params if isinstance(params, Mapping) else {}
     method, request_id = request.get("method"), params.get("request_id")
-    if not is_jsonrpc_response(response):
+    # The one binding rule decides, and each reason keeps the outcome this path always gave it.
+    binding = response_binding_problem(request, response)
+    if binding == BINDING_SHAPE:
         return Undecided("malformed_response", {"request_id": request_id, "method": method},
-                         "Guardian response is not a JSON-RPC 2.0 response with an object result or error")
-    if not response_matches_request(request, response):
+                         "Guardian response is not a JSON-RPC 2.0 response with exactly one object result or "
+                         "error and no method")
+    if binding is not None:
         claimed = response["error"].get("code") if "error" in response else None
         return Refused("response_binding_mismatch",
                        {"claimed_error_code": claimed} if claimed is not None else {},
