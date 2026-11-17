@@ -139,7 +139,7 @@ It prints `ACS_GUARDIAN_LISTENING port=<port>` on stdout once bound, and logs ea
 ```
 [guardian] listening on 127.0.0.1:8787 (case-insensitive-tool-policy)
 [guardian] steps/toolCallRequest session=3f2a9c1e req=8d41b7a0
-[guardian] → allow
+[guardian] -> allow
 ```
 
 ## How to extend
