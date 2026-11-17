@@ -111,7 +111,8 @@ class GatewayConfig:
                 raise ValueError("ACS_GATEWAY_APPROVER_PORT needs ACS_GATEWAY_APPROVER_TOKEN_FILE")
             if approver_port == listen_port:
                 raise ValueError(f"ACS_GATEWAY_APPROVER_PORT must differ from ACS_GATEWAY_PORT, got {approver_port}")
-            if admin_port and admin_port == str(approver_port):
+            # Compared as numbers, so 08090 and 8090 count as the same port.
+            if admin_port.isascii() and admin_port.isdigit() and int(admin_port) == approver_port:
                 raise ValueError(f"ACS_GATEWAY_APPROVER_PORT must differ from ACS_GATEWAY_ADMIN_PORT, "
                                  f"got {approver_port}")
         decision_timeout_s = _positive_number(env, "ACS_DECISION_TIMEOUT_MS", DEFAULT_DECISION_TIMEOUT_MS) / 1000.0

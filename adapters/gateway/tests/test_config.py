@@ -132,7 +132,9 @@ def test_an_approver_port_outside_1_to_65535_is_refused(tmp_path, raw):
         GatewayConfig.from_env(_approver_env(tmp_path, ACS_GATEWAY_APPROVER_PORT=raw))
 
 
-@pytest.mark.parametrize("other", [{"ACS_GATEWAY_PORT": "8090"}, {"ACS_GATEWAY_ADMIN_PORT": "8090"}])
+@pytest.mark.parametrize("other", [{"ACS_GATEWAY_PORT": "8090"}, {"ACS_GATEWAY_ADMIN_PORT": "8090"},
+                                   {"ACS_GATEWAY_PORT": "08090"}, {"ACS_GATEWAY_ADMIN_PORT": "08090"},
+                                   {"ACS_GATEWAY_ADMIN_PORT": " 8090"}])
 def test_the_approver_port_must_differ_from_the_model_and_admin_ports(tmp_path, other):
     with pytest.raises(ValueError, match="ACS_GATEWAY_APPROVER_PORT"):
         GatewayConfig.from_env(_approver_env(tmp_path, **other))
