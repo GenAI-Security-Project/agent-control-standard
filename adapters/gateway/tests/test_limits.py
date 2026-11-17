@@ -47,3 +47,25 @@ def test_a_new_conversation_gets_503_when_every_session_is_busy(gateway, guardia
     assert response.status_code == 503
     assert events(audit, "session_evicted") == []
     assert len(events(audit, "sessions_full")) == 1
+
+
+def test_the_shadow_relay_releases_each_held_chunk_once_sent():
+    import asyncio
+
+    from acs_gateway.app import _continue
+
+    held = [b"a", b"b", b"c"]
+
+    async def rest():
+        yield b"d"
+
+    async def drain():
+        seen, sizes = [], []
+        async for chunk in _continue(held, rest()):
+            seen.append(chunk)
+            sizes.append(len(held))
+        return seen, sizes
+
+    seen, sizes = asyncio.run(drain())
+    assert seen == [b"a", b"b", b"c", b"d"]
+    assert sizes == [2, 1, 0, 0]

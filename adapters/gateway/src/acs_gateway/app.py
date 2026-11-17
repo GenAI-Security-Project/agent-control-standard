@@ -648,8 +648,10 @@ def _pin(session: Session, pins: list[Session]) -> None:
 
 
 async def _continue(first: list[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    for chunk in first:
-        yield chunk
+    """Send the chunks already read, then the rest. Each held chunk is dropped once sent, so a long relay doesn't
+    keep the first part of the answer in memory."""
+    while first:
+        yield first.pop(0)
     async for chunk in rest:
         yield chunk
 
