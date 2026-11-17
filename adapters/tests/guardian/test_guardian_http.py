@@ -183,11 +183,16 @@ def test_a_too_deep_body_gets_a_signed_error(served):
     _assert_signed_malformed(body, answer, DEEP_SESSION)
 
 
-def test_a_too_deep_body_under_a_foreign_key_id_still_gets_the_signed_depth_error(served):
-    # Depth comes before the key_id check in the order, so this is the depth error, signed under this Guardian's key.
-    body = _envelope_text(session_id=DEEP_SESSION, key_id="someone-else", depth=example_guardian.MAX_REQUEST_DEPTH + 50)
-    status, answer = post(served, body)
-    _assert_signed_malformed(body, answer, DEEP_SESSION)
+def test_a_foreign_key_id_gets_the_unsigned_minus_32004_before_depth_or_structure(served):
+    # The key_id is checked first whenever the signature object is readable, so key_id_rejected is never hidden
+    # behind an error signed with this Guardian's key.
+    deep = _envelope_text(session_id=DEEP_SESSION, key_id="someone-else", depth=example_guardian.MAX_REQUEST_DEPTH + 50)
+    bad_structure = json.loads(_envelope_text(session_id=STRUCT_SESSION, key_id="someone-else"))
+    bad_structure["params"]["request_id"] = 5
+    for body, session in ((deep, DEEP_SESSION), (json.dumps(bad_structure).encode(), STRUCT_SESSION)):
+        status, answer = post(served, body)
+        _assert_unsigned_and_stateless(answer, -32004, session)
+        assert _classify(body, answer, session).cause == "key_id_rejected"
 
 
 def test_a_non_uuid_session_id_gets_a_signed_schema_error(served):
@@ -304,10 +309,6 @@ def test_a_client_that_never_finishes_its_body_is_cut_off(served, monkeypatch):
     assert data == b"" or b"HTTP/1." in data
 
 
-def test_the_handler_times_out_a_silent_client_after_30_seconds():
-    assert example_guardian.GuardianHandler.timeout == 30
-
-
 def test_a_request_is_read_once(served, monkeypatch):
     calls = []
     real = example_guardian.read_request
@@ -353,3 +354,7 @@ def test_handle_request_never_raises_for_a_direct_caller(served, envelope):
     if answer["error"]["code"] == -32603:
         assert answer["error"]["message"] == example_guardian.INTERNAL_ERROR_MESSAGE
         assert "signature" not in answer["error"]
+
+
+def test_the_handler_times_out_a_silent_client_after_30_seconds():
+    assert example_guardian.GuardianHandler.timeout == 30

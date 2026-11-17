@@ -773,12 +773,26 @@ def handle_request(request: dict, read: "ReadResult | None" = None) -> dict:
         return internal_error_envelope(read.id)
 
 
+def _foreign_key_id(request: Any) -> bool:
+    """Whether a non-ping request carries a readable signature object under a key_id this Guardian doesn't hold."""
+    if not isinstance(request, dict) or request.get("method") == "system/ping":
+        return False
+    params = request.get("params")
+    signature = params.get("signature") if isinstance(params, dict) else None
+    return isinstance(signature, dict) and signature.get("key_id") != load_key_id()
+
+
 def internal_error_envelope(request_id: Any) -> dict:
     """The unsigned -32603 floor: a fixed message, and the id only when it passed the id rule."""
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": INTERNAL_ERROR_MESSAGE}}
 
 
 def _answer(request: dict, read: "ReadResult") -> dict:
+    # §10: a key_id this Guardian holds no secret for gets an unsigned -32004 before any other check, whenever the
+    # signature object is readable, so key_id_rejected is never hidden behind an error signed with this Guardian's
+    # key. system/ping is exempt: it is unsigned and answers whatever it carries (§13).
+    if _foreign_key_id(request):
+        return _error_envelope(read.id, "", -32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
     if read.problem:
         return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}")
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
@@ -804,11 +818,6 @@ def _handle_request(request: dict, fields: RequestFields) -> dict:
         envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
         return envelope
 
-    # §10: a request under a key_id this Guardian holds no secret for gets an unsigned
-    # SIGNATURE_INVALID before any other check, since no response to it can be signed.
-    signature = params.get("signature")
-    if isinstance(signature, dict) and signature.get("key_id") != load_key_id():
-        return _error_envelope(request_id, session_id, -32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
 
     # Validated before policy; ping and handshake have their own payload shapes.
     if (_SPEC_VALIDATION_AVAILABLE
