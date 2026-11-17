@@ -29,6 +29,18 @@ icacls $env:ACS_HMAC_SECRET_FILE /inheritance:r /grant:r "${env:USERNAME}:R"
 
 Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every process that starts with the opt-in set prints a warning to stderr; the refusal stays the default.
 
+## Secret and trusted files
+
+`acs.client.read_trusted_file` is the one reader for every secret or trusted file: `ACS_HMAC_SECRET_FILE`, the example Guardian's ML-DSA-65 seed (`ACS_GUARDIAN_SIGNING_KEY_FILE`), and its key document (`ACS_GUARDIAN_KEYS`). It opens the file once, without following a symlink and without blocking on a FIFO, and checks the open descriptor, never the path a second time.
+
+- It must be a regular file.
+- Its owner must be the user the process runs as, or root.
+- Its directory must not be writable by group or other, unless the directory is sticky, as `/tmp` is.
+- A secret must be owner-only (0600 or 0400). A key document may be readable by anyone, but no group or other may write it.
+- The HMAC secret is read up to 64 KiB, the seed up to 65 bytes, and the key document up to 1 MiB. A larger file is refused.
+
+Windows has no owner, group, or other bits, so only the symlink and regular-file checks run there, and a secret also needs the opt-in below.
+
 ## ML-DSA-65 signing: the `pqc` extra
 
 ML-DSA-65 signing and keyring verification (issue #574) live behind the `pqc` extra, which installs `cryptography` 50. Nothing installs or imports it by default, so an install without the extra signs and verifies HMAC-SHA256 exactly as before. [`docs/signing.md`](docs/signing.md) covers the API, the ML-DSA variant, and the context string.
