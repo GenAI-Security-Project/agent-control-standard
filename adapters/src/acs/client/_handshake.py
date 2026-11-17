@@ -25,6 +25,7 @@ from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
 from acs.core import (
     ACS_VERSION,
+    HANDSHAKE_METHOD,
     MAX_REQUEST_BODY_BYTES,
     derive_session_key,
     guardian_error_cause,
@@ -33,6 +34,7 @@ from acs.core import (
     iso8601_now,
     jcs_canonicalize,
     normalize_decision,
+    response_matches_request,
     server_hello_problem,
 )
 
@@ -248,7 +250,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     client_hello = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),
-        "method": "handshake/hello",
+        "method": HANDSHAKE_METHOD,
         "params": {
             "acs_version": ACS_VERSION,
             "request_id": str(uuid.uuid4()),
@@ -298,7 +300,8 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
         return NoAnswer("malformed_response")
     error = response.get("error")
     code = error.get("code") if error is not None else None
-    if response.get("id") != client_hello["id"]:
+    # Core's one binding rule: the ClientHello's id, and a result carrying no request_id.
+    if not response_matches_request(dict(client_hello), response):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
     verified = verify_signature(response, session_id=session_id)
