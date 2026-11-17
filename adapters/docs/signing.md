@@ -88,11 +88,11 @@ Verification takes two required arguments besides the keyring. `expected_key_id`
 
 `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key. One ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another.
 
-The response must carry the request's JSON-RPC `id`. An error object is bound by the id alone, whatever the request's `request_id`, and an id with neither a result nor an error object answers nothing. For a result and any request but the handshake, the request must carry a string `params.request_id`, and the result must carry the same `request_id`. A request envelope answers nothing.
+`acs.core.response_matches_request` holds the one rule, and the keyring path and the client's step exchange both call it. The response must carry the request's JSON-RPC `id`, and a response must not be a request envelope. An error object binds by the id alone, whatever the request's `request_id`, and an id with neither a result nor an error object answers nothing. A result binds only when the request is the handshake, or when the request carries a string `params.request_id` that the result repeats.
 
-`acs.core.response_matches_request` holds this rule, and the keyring path and the client's step exchange both call it. A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature.
+A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. A request with no usable `request_id` binds no result, the same answer on both paths.
 
-On the keyring path, a request that can't bind anything is a caller error and raises ValueError with the text `acs.core._envelope.request_binding_problem` gives. That covers a request that isn't a mapping, an id that isn't a string or a number (a missing or null id, a boolean, an object, or an array), and `params` present but not a mapping. It also covers a request other than the handshake without a non-empty string `params.request_id`.
+On the keyring path, only a request that is no envelope at all is a caller error. It raises ValueError with the text `acs.core.request_envelope_problem` gives. That covers a request that isn't a mapping and an id that isn't a string or a finite number: a missing or null id, a boolean, an object, an array, NaN, or an infinity.
 
 ### Comparing ids
 

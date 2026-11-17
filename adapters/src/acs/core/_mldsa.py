@@ -156,12 +156,13 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     request's request_id. A mismatch fails before any crypto, and a binding rewritten after
     signing fails the signature. This stops replay only as far as the caller's ids are unique,
     which this function doesn't check. request_envelope gives every request a fresh UUID4
-    JSON-RPC id. A request envelope answers nothing and fails. The algorithm comes from the
+    JSON-RPC id. A response must not be a request envelope. The algorithm comes from the
     resolved key, never from the envelope (RFC 8725 section 3.1, issue #308). An unknown
     key_id, an envelope algorithm that disagrees with the key's, an unsigned or malformed
     envelope, and a bad signature all return False (D-026). A missing expected_key_id, or a
-    request that fails acs.core._envelope.request_binding_problem, is a caller error and
-    raises ValueError with that problem's text.
+    request that fails acs.core.request_envelope_problem (no Mapping, or no string or finite
+    numeric id), is a caller error and raises ValueError with that problem's text. Any other
+    request goes to response_matches_request, so an error binds by id here as on the HMAC path.
     """
     check_key_id(expected_key_id)
     # Only a request that is no envelope with a usable id is the caller's mistake. Everything
