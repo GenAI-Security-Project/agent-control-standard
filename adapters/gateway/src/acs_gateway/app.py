@@ -36,9 +36,11 @@ from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianCl
 from acs_gateway.sessions import CachedOutcome, Session, SessionMap, conversation_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 
-# Headers that describe one hop, or that httpx recomputes, never cross the gateway.
+# Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
 _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
-                          "transfer-encoding", "upgrade", "host", "content-length", "content-encoding"})
+                          "transfer-encoding", "upgrade", "host", "content-length"})
+# Governed modes edit bodies, so they ask only for encodings httpx decodes and relay the decoded body.
+_GOVERNED_ACCEPT_ENCODING = "gzip, deflate"
 
 
 def _audit(event: str, **fields: Any) -> None:
@@ -59,8 +61,15 @@ def forward_headers(headers: Any) -> dict[str, str]:
             if k.lower() not in _HOP_HEADERS and not k.lower().startswith("x-acs-")}
 
 
-def _client_headers(headers: httpx.Headers) -> dict[str, str]:
-    return {k: v for k, v in headers.items() if k.lower() not in _HOP_HEADERS}
+def _client_headers(headers: httpx.Headers, *, decoded: bool) -> dict[str, str]:
+    """The upstream's headers for the client. A decoded body drops content-encoding to match."""
+    return {k: v for k, v in headers.items()
+            if k.lower() not in _HOP_HEADERS and not (decoded and k.lower() == "content-encoding")}
+
+
+def is_stream(body: Any) -> bool:
+    """Any stream value but an absent one or false asks for a stream, so a truthy oddity can't slip past the 501."""
+    return isinstance(body, dict) and "stream" in body and body["stream"] is not False
 
 
 class Gateway:
@@ -101,15 +110,16 @@ class Gateway:
         raw = await request.body()
         body = _parse(raw)
         headers = forward_headers(request.headers)
-        if isinstance(body, dict) and body.get("stream") is True:
-            if not self.governed:
-                return await self._stream_upstream(raw, body, headers)
+        if not self.governed:
+            return await self._relay_verbatim(raw, body, headers)
+        if is_stream(body):
             # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
             return openai_error(501, "Streaming responses are not supported by this endpoint.",
                                 "invalid_request_error", "unsupported_parameter")
-        if not self.governed:
-            upstream = await self._upstream(raw, body, headers)
-            return upstream if isinstance(upstream, Response) else _relay(upstream, None)
+        if request.headers.get("content-encoding", "identity").strip().lower() != "identity":
+            return openai_error(415, "Compressed request bodies are not supported by this endpoint.",
+                                "invalid_request_error", "unsupported_content_encoding")
+        headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
         unsupported = unsupported_tool(body)
@@ -128,9 +138,14 @@ class Gateway:
         upstream = await self._upstream(raw, body, headers)
         if isinstance(upstream, Response):
             return upstream
-        reply = _parse(upstream.content) if 200 <= upstream.status_code < 300 else None
-        if not isinstance(reply, dict) or not isinstance(reply.get("output"), list):
+        if not 200 <= upstream.status_code < 300:
             return _relay(upstream, None)
+        reply = _parse(upstream.content)
+        if not isinstance(reply, dict) or not isinstance(reply.get("output"), list):
+            # A success the gateway can't read could carry calls it never gated, so it never reaches the client.
+            _audit("upstream_error", cause="upstream_unparseable", http_status=upstream.status_code)
+            return openai_error(502, "The model service returned an unreadable response.", "server_error",
+                                "upstream_unreadable")
         async with session.lock:
             changed = await self._gate_output(session, reply)
         return _relay(upstream, reply if changed else None)
@@ -147,9 +162,9 @@ class Gateway:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
         return upstream
 
-    async def _stream_upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> Response:
-        """Off mode relays a streamed answer as it arrives, so an ungoverned chat streams exactly as it would direct."""
-        self.model_inputs.append(body)
+    async def _relay_verbatim(self, raw: bytes, body: Any, headers: dict[str, str]) -> Response:
+        """Off mode relays the answer, streamed or not, as it arrives, encoding and headers included."""
+        self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
         assert self.http is not None
         try:
             upstream = await self.http.send(
@@ -160,9 +175,8 @@ class Gateway:
             return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
         if not 200 <= upstream.status_code < 300:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
-        # httpx decodes any content encoding, and _client_headers drops that header to match.
-        return StreamingResponse(upstream.aiter_bytes(), status_code=upstream.status_code,
-                                 headers=_client_headers(upstream.headers),
+        return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code,
+                                 headers=_client_headers(upstream.headers, decoded=False),
                                  background=BackgroundTask(upstream.aclose))
 
     async def _gate_input(self, session: Session, body: dict[str, Any]) -> bool:
@@ -293,7 +307,7 @@ class Gateway:
 
 def _relay(upstream: httpx.Response, edited: dict[str, Any] | None) -> Response:
     content = upstream.content if edited is None else json.dumps(edited).encode("utf-8")
-    return Response(content, status_code=upstream.status_code, headers=_client_headers(upstream.headers))
+    return Response(content, status_code=upstream.status_code, headers=_client_headers(upstream.headers, decoded=True))
 
 
 def _parse(raw: bytes) -> Any:

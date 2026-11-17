@@ -94,10 +94,10 @@ class Received:
 class FakeUpstream:
     url: str
     received: list[Received] = field(default_factory=list)
-    replies: list[tuple[int, Any]] = field(default_factory=list)
+    replies: list[tuple[int, Any, dict[str, str]]] = field(default_factory=list)
 
-    def reply(self, body: Any, status: int = 200) -> None:
-        self.replies.append((status, body))
+    def reply(self, body: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self.replies.append((status, body, headers or {}))
 
 
 @pytest.fixture
@@ -108,7 +108,7 @@ def upstream() -> Iterator[FakeUpstream]:
         def do_POST(self) -> None:  # noqa: N802
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             state.received.append(Received(self.path, {k.lower(): v for k, v in self.headers.items()}, body))
-            status, reply = state.replies.pop(0) if state.replies else (200, response_body(message_item("ok")))
+            status, reply, extra = state.replies.pop(0) if state.replies else (200, response_body(message_item("ok")), {})
             if isinstance(reply, SSE):
                 self.send_response(status)
                 self.send_header("Content-Type", "text/event-stream")
@@ -124,6 +124,8 @@ def upstream() -> Iterator[FakeUpstream]:
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("x-request-id", "req_upstream_1")
+            for name, value in extra.items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(raw)
 

@@ -16,6 +16,9 @@ The gateway forwards `POST /v1/responses` to a model upstream. In shadow and enf
 
 Shadow and enforce gate function tools only. A request whose `tools` declares any other type (custom, shell, apply_patch, computer use, or a hosted tool such as mcp, code_interpreter, web_search or file_search, which runs upstream where no hook reaches it) answers 501. As a backstop, enforce removes any other `*_call` or `mcp_approval_request` item from a model response, replaces the output of any non-function `*_call_output` item with the neutral line, and turns an `mcp_approval_response` into a refusal. Each case writes an `unsupported_tool_type` audit line. Off forwards every tool type.
 
+
+In shadow and enforce, any `stream` value other than an absent field or `false` counts as a stream request. A compressed request body answers 415, the gateway asks the upstream for gzip or deflate only, and a 2xx answer that isn't a JSON object with an `output` list answers 502, since it could carry calls the gateway never gated. Off relays requests and answers verbatim, encodings and headers included.
+
 Every other path answers 404. Off mode relays a streamed request (`"stream": true`) as the upstream sends it. Shadow and enforce answer a streamed request with 501 until issue #578 adds governed streaming.
 
 ## Run it
@@ -91,7 +94,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `shadow_decision` | Shadow mode recorded a step, with the same fields |
 | `verification_failed` | A Guardian response failed its signature check |
 | `guardian_http_error` | The Guardian answered with a non-2xx status |
-| `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), or a non-2xx model answer (`upstream_status`) |
+| `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), or a 2xx answer the gateway can't read (`upstream_unparseable`) |
 | `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
 | `epoch_bumped` | The epoch moved |
 
