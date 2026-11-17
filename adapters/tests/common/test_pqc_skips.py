@@ -12,10 +12,13 @@ from pathlib import Path
 from unittest import mock
 
 ADAPTERS = Path(__file__).resolve().parents[2]
+# run_conformance.py sits beside tests/, not in the package. The path goes back after import.
 sys.path.insert(0, str(ADAPTERS))
-
-import run_conformance as rc  # noqa: E402
-from tests import pqc_extra  # noqa: E402
+try:
+    import run_conformance as rc
+    from tests import pqc_extra
+finally:
+    sys.path.remove(str(ADAPTERS))
 
 PQC_MODULES = {"core": "tests.core.test_pqc_signing", "client": "tests.client.test_pqc_verification"}
 
@@ -34,6 +37,9 @@ class PqcSkipsAreAllowlisted(unittest.TestCase):
 
     def test_a_missing_extra_skips_the_module_under_the_allowlisted_id(self) -> None:
         # Discover a stand-in module the way run_conformance does, with ML-DSA reported absent.
+        # discover() puts the top-level directory on sys.path, so the original list comes back after.
+        saved_path = list(sys.path)
+        self.addCleanup(sys.path.__setitem__, slice(None), saved_path)
         with tempfile.TemporaryDirectory() as root, \
                 mock.patch.object(pqc_extra, "pqc_installed", return_value=False):
             package = Path(root) / "probe"
