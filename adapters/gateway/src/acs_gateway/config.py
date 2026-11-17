@@ -24,6 +24,8 @@ DEFAULT_STREAM_DEADLINE_S = 600.0
 # The longest an ASK may hold a model response. FinBot waits LLM_TIMEOUT (360 s in the lab) for its model call, so
 # 240 s leaves room for the call itself (A.3, PREMORTEM P26).
 MAX_ASK_S = 240.0
+# The event loop waits this long past a decision timeout for a worker stuck outside acs.client's own bound.
+STEP_GRACE_S = 1.0
 
 
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
@@ -52,6 +54,16 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     return int(raw)
 
 
+def _port(env: Mapping[str, str], name: str) -> int | None:
+    """A TCP port from 1 to 65535, or None when unset. Plain ASCII digits only, as for the integer settings."""
+    raw = env.get(name, "").strip()
+    if not raw:
+        return None
+    if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= 65535:
+        raise ValueError(f"{name} must be a port from 1 to 65535 in plain ASCII digits, got {raw!r}")
+    return int(raw)
+
+
 @dataclass(frozen=True)
 class GatewayConfig:
     mode: str
@@ -76,6 +88,7 @@ class GatewayConfig:
     # The approver page (LAB-08, issue #581). Off unless a port is set, so an ASK denies as before.
     approver_host: str = "127.0.0.1"
     approver_port: int | None = None
+    approver_token_file: Path | None = None
     ask_max_s: float = MAX_ASK_S
 
     @classmethod
@@ -89,15 +102,31 @@ class GatewayConfig:
         model_log = env.get("ACS_MODEL_INPUT_LOG", "").strip()
         admin_port = env.get("ACS_GATEWAY_ADMIN_PORT", "").strip()
         token_file = env.get("ACS_GATEWAY_ADMIN_TOKEN_FILE", "").strip()
-        approver_port = env.get("ACS_GATEWAY_APPROVER_PORT", "").strip()
+        listen_port = int(env.get("ACS_GATEWAY_PORT", "").strip() or "8080")
+        approver_port = _port(env, "ACS_GATEWAY_APPROVER_PORT")
+        approver_token = env.get("ACS_GATEWAY_APPROVER_TOKEN_FILE", "").strip()
+        if approver_port is not None:
+            if not approver_token:
+                # The page releases held tool calls, so it never runs without a secret, on any host.
+                raise ValueError("ACS_GATEWAY_APPROVER_PORT needs ACS_GATEWAY_APPROVER_TOKEN_FILE")
+            if approver_port == listen_port:
+                raise ValueError(f"ACS_GATEWAY_APPROVER_PORT must differ from ACS_GATEWAY_PORT, got {approver_port}")
+            if admin_port and admin_port == str(approver_port):
+                raise ValueError(f"ACS_GATEWAY_APPROVER_PORT must differ from ACS_GATEWAY_ADMIN_PORT, "
+                                 f"got {approver_port}")
+        decision_timeout_s = _positive_number(env, "ACS_DECISION_TIMEOUT_MS", DEFAULT_DECISION_TIMEOUT_MS) / 1000.0
         ask_max_s = _positive_number(env, "ACS_GATEWAY_ASK_MAX_S", MAX_ASK_S)
         if ask_max_s > MAX_ASK_S:
             raise ValueError(f"ACS_GATEWAY_ASK_MAX_S must be at most {MAX_ASK_S:g}, got {ask_max_s:g}")
+        if ask_max_s <= decision_timeout_s + STEP_GRACE_S:
+            # The budget covers the hold and the resend that follows an approval, so it must outlast one decision.
+            raise ValueError(f"ACS_GATEWAY_ASK_MAX_S must be more than the decision timeout plus "
+                             f"{STEP_GRACE_S:g} s ({decision_timeout_s + STEP_GRACE_S:g}), got {ask_max_s:g}")
         return cls(
             mode=mode,
             upstream_url=(env.get("ACS_UPSTREAM_URL", "").strip() or DEFAULT_UPSTREAM_URL).rstrip("/"),
             guardian_url=env.get("ACS_GUARDIAN_URL", "").strip() or DEFAULT_GUARDIAN_URL,
-            decision_timeout_s=_positive_number(env, "ACS_DECISION_TIMEOUT_MS", DEFAULT_DECISION_TIMEOUT_MS) / 1000.0,
+            decision_timeout_s=decision_timeout_s,
             ready_timeout_s=_positive_number(env, "ACS_GUARDIAN_READY_TIMEOUT_S", DEFAULT_READY_TIMEOUT_S),
             state_dir=state_dir,
             transcript_dir=Path(transcript_dir) if transcript_dir else state_dir / "transcripts",
@@ -107,7 +136,7 @@ class GatewayConfig:
             admin_port=int(admin_port) if admin_port else None,
             admin_token_file=Path(token_file) if token_file else None,
             listen_host=env.get("ACS_GATEWAY_HOST", "").strip() or "127.0.0.1",
-            listen_port=int(env.get("ACS_GATEWAY_PORT", "").strip() or "8080"),
+            listen_port=listen_port,
             max_sessions=_positive_int(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
             max_body_bytes=_positive_int(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
             workers=_positive_int(env, "ACS_GATEWAY_WORKERS", DEFAULT_WORKERS),
@@ -115,7 +144,8 @@ class GatewayConfig:
                                                    DEFAULT_STREAM_IDLE_TIMEOUT_S),
             stream_deadline_s=_positive_number(env, "ACS_GATEWAY_STREAM_DEADLINE_S", DEFAULT_STREAM_DEADLINE_S),
             approver_host=env.get("ACS_GATEWAY_APPROVER_HOST", "").strip() or "127.0.0.1",
-            approver_port=int(approver_port) if approver_port else None,
+            approver_port=approver_port,
+            approver_token_file=Path(approver_token) if approver_token else None,
             ask_max_s=ask_max_s,
         )
 
