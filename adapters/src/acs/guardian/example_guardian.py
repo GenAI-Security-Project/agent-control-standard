@@ -716,6 +716,9 @@ def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
     metadata = _absent_if_null(params.get("metadata"), {})
     if not isinstance(metadata, dict):
         return None, "params.metadata must be an object", answer_id
+    # Every method reads its payload as an object, ping and handshake included, so any other value is refused here.
+    if "payload" in params and not isinstance(params["payload"], dict):
+        return None, "params.payload must be an object", answer_id
     request_id = _absent_if_null(params.get("request_id"), "")
     session_id = _absent_if_null(metadata.get("session_id"), "")
     for name, value in (("params.request_id", request_id), ("params.metadata.session_id", session_id)):

@@ -120,3 +120,12 @@ def test_null_fields_read_as_absent_on_a_step(field, read_as):
     assert problem is None
     name, value = read_as
     assert getattr(fields, name) == value
+
+
+@pytest.mark.parametrize("method", ["system/ping", "handshake/hello"])
+@pytest.mark.parametrize("payload", ["x", [1], 5, None])
+def test_a_payload_that_is_not_an_object_is_refused_on_ping_and_hello(served, method, payload):
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": method,
+                       "params": {"metadata": {"session_id": "s"}, "payload": payload}}).encode()
+    status, answer = post(served, body)
+    assert answer["error"]["code"] == -32600
