@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import threading
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -413,6 +414,98 @@ class LiveTransport(httpx.AsyncBaseTransport):
         await self._client.aclose()
 
 
+def parse_events(text: str) -> list[dict[str, Any]] | None:
+    """Server-sent events as [{"event", "data"}], or None when any event's data isn't a JSON object."""
+    events = []
+    for block in text.replace("\r\n", "\n").split("\n\n"):
+        if not block.strip():
+            continue
+        name, data = "message", []
+        for row in block.split("\n"):
+            if row.startswith("event:"):
+                name = row[6:].strip()
+            elif row.startswith("data:"):
+                data.append(row[5:].removeprefix(" "))
+        try:
+            value = json.loads("\n".join(data))
+        except ValueError:
+            return None
+        if not isinstance(value, dict):
+            return None
+        events.append({"event": name, "data": value})
+    return events
+
+
+class CaptureTransport(httpx.AsyncBaseTransport):
+    """Live, plus one recording line per successful exchange in <ACS_RECORDINGS_DIR>/<scenario>.jsonl (A.8).
+
+    The line holds placeholders for FinBot's generated values, taken from the request, so it replays into another
+    FinBot (PREMORTEM P2). It records the body the gateway forwarded, after gating, so the key it writes is the key
+    replay computes for the same run. A streamed answer reaches the client only once the whole stream has arrived,
+    since the line needs all of it. Headers, the key among them, are never written. A failed write is audited and
+    the client still gets its answer.
+    """
+
+    def __init__(self, live: LiveTransport, path: Path, scenario: str) -> None:
+        self._live = live
+        self._path = path
+        self._scenario = scenario
+        self._lock = threading.Lock()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raw_request = await request.aread()
+        upstream = await self._live.handle_async_request(request)
+        try:
+            raw = b"".join([chunk async for chunk in upstream.aiter_raw()])
+        finally:
+            await upstream.aclose()
+        if 200 <= upstream.status_code < 300:
+            self._record(raw_request, upstream.headers, raw)
+        return httpx.Response(upstream.status_code, headers=upstream.headers, stream=httpx.ByteStream(raw))
+
+    def _record(self, raw_request: bytes, headers: httpx.Headers, raw: bytes) -> None:
+        try:
+            body = json.loads(raw_request)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            body = None
+        if not isinstance(body, dict):
+            _audit("capture_skipped", cause="unreadable_request", scenario=self._scenario)
+            return
+        try:
+            decoded = httpx.Response(200, headers=headers, content=raw).content
+        except httpx.DecodingError:
+            _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
+            return
+        stream = _is_stream(body)
+        response: Any
+        if stream:
+            response = parse_events(decoded.decode("utf-8", "replace"))
+        else:
+            try:
+                response = json.loads(decoded)
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                response = None
+            if not isinstance(response, dict) or not isinstance(response.get("output"), list):
+                response = None
+        if response is None:
+            _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
+            return
+        mapping = placeholder_map(body)
+        first_user, step, branch = replay_key(body, mapping)
+        line = {"scenario": self._scenario, "match": re.escape(first_user), "step": step, "branch": branch,
+                "stream": stream, "response": to_placeholders(response, mapping)}
+        try:
+            with self._lock:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                with self._path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except OSError as e:
+            _audit("capture_failed", cause="write_error", scenario=self._scenario, error=type(e).__name__)
+
+    async def aclose(self) -> None:
+        await self._live.aclose()
+
+
 class UpstreamSource:
     """The configured upstream mode, checked at construction so a bad key file or recording stops startup."""
 
@@ -420,6 +513,11 @@ class UpstreamSource:
         self.mode = config.upstream_mode
         self._key = read_key_file(config.upstream_key_file) if config.upstream_key_file is not None else None
         self._store = None
+        self._capture_path = None
+        if self.mode == "capture":
+            assert config.recordings_dir is not None
+            self._capture_path = config.recordings_dir / f"{config.capture_scenario}.jsonl"
+            self._scenario = config.capture_scenario
         if self.mode == "replay":
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir)
@@ -434,6 +532,8 @@ class UpstreamSource:
         if self.mode == "replay":
             assert self._store is not None
             return ReplayTransport(self._store)
+        if self._capture_path is not None:
+            return CaptureTransport(LiveTransport(self._key), self._capture_path, self._scenario)
         if self._key is not None:
             return LiveTransport(self._key)
         return None
