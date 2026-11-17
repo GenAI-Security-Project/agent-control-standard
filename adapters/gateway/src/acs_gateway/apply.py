@@ -82,31 +82,29 @@ def unsupported_tool_choice(body: dict[str, Any]) -> str | None:
     return json.dumps(choice, sort_keys=True, default=str)[:200]
 
 
-# Content parts FinBot's history can hold: it sends string content only, and a model's own messages and reasoning
-# carry these. input_file, input_image and input_audio can pull stored content in by file_id, out of the gate's sight.
-ALLOWED_CONTENT_PARTS = frozenset({"input_text", "output_text", "refusal", "summary_text"})
-
-
-def _part_lists(item: dict[str, Any]) -> list[Any]:
-    """The part lists of an input item: a message's content, a reasoning item's summary, and a function_call_output's
-    output when it is an array of parts rather than a string."""
-    if item.get("type") == "function_call_output":
-        fields = ("output",)
-    else:
-        fields = ("content", "summary")
-    return [item.get(field) for field in fields if isinstance(item.get(field), list)]
+# Content parts FinBot's history can hold, by where they sit. FinBot sends string content only, and the model's own
+# messages and reasoning carry the rest. input_file, input_image and input_audio can pull stored content in by
+# file_id, out of the gate's sight, so they appear nowhere.
+_MESSAGE_PARTS = frozenset({"input_text", "output_text", "refusal"})
+_OUTPUT_PARTS = frozenset({"input_text", "output_text"})
+ALLOWED_CONTENT_PARTS = {
+    "message": {"content": _MESSAGE_PARTS},
+    "reasoning": {"summary": frozenset({"summary_text"}), "content": frozenset({"reasoning_text"})},
+    "function_call_output": {"output": _OUTPUT_PARTS},
+}
 
 
 def unsupported_content_part(body: dict[str, Any]) -> str | None:
-    """The type of the first part of an input item outside ALLOWED_CONTENT_PARTS, or None."""
+    """The type of the first part of an input item outside the allowlist for where it sits, or None."""
     items = body.get("input")
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
-        for parts in _part_lists(item):
-            for part in parts:
+        for field, allowed in ALLOWED_CONTENT_PARTS.get(item_type(item), {}).items():
+            parts = item.get(field)
+            for part in parts if isinstance(parts, list) else []:
                 kind = part.get("type") if isinstance(part, dict) else None
-                if kind not in ALLOWED_CONTENT_PARTS:
+                if kind not in allowed:
                     return kind if isinstance(kind, str) else type(part).__name__
     return None
 
