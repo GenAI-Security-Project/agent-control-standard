@@ -197,3 +197,19 @@ def test_a_failed_handshake_is_retried_on_the_next_request(gateway, harness_guar
     opened = events(audit, "session_opened")
     assert [e["handshake"] for e in opened] == ["NoAnswer", "Negotiated"]
     assert opened[0]["session_id"] != opened[1]["session_id"]
+
+
+def test_time_queued_for_a_worker_counts_against_the_decision_timeout(gateway, guardian, upstream, audit, tmp_path):
+    import time
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="500",
+                     ACS_GATEWAY_WORKERS="1")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    client.app.state.gateway.executor.submit(time.sleep, 1.5)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert events(audit, "decision_applied")[0]["cause"] == "decision_timeout"
+    assert not [line for line in transcript_lines(tmp_path) if line["envelope"]
+                and line["envelope"].get("method") == "steps/toolCallRequest"]

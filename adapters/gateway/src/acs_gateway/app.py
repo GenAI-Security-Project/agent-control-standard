@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import hmac
 import json
 import os
 import stat
+import time
 import uuid
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,6 +49,7 @@ _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "pro
                           "transfer-encoding", "upgrade", "host", "content-length"})
 # Governed modes edit bodies, so they ask only for encodings httpx decodes and relay the decoded body.
 _GOVERNED_ACCEPT_ENCODING = "gzip, deflate"
+_STEP_GRACE_S = 1.0
 
 
 def _audit(event: str, **fields: Any) -> None:
@@ -89,17 +93,22 @@ class Gateway:
         self.enforce = config.mode == "enforce"
         self.sessions = SessionMap(config.max_sessions, on_evict=self._evicted)
         self.guardian = GuardianClient(config, Transcript(config.transcript_dir)) if self.governed else None
+        # acs.client blocks on sockets, so Guardian calls run here, on workers of their own, never the default pool.
+        self.executor = ThreadPoolExecutor(max_workers=config.workers, thread_name_prefix="acs-gateway")
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
         if self.guardian is not None:
             check_client_state_dirs(os.environ)
-            await asyncio.to_thread(self.guardian.wait_ready)
+            await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.wait_ready)
         # The model may think for minutes, so only connecting is bounded here and the client's own timeout governs.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0)) as http:
-            self.http = http
-            yield
-        self.http = None
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0)) as http:
+                self.http = http
+                yield
+        finally:
+            self.http = None
+            self.executor.shutdown(wait=False, cancel_futures=True)
 
     def _evicted(self, session: Session) -> None:
         _audit("session_evicted", session_id=session.session_id, epoch=session.epoch,
@@ -224,7 +233,7 @@ class Gateway:
             _audit("session_retried", previous_session_id=session.session_id,
                    cause=getattr(session.handshake, "cause", None) or "session_start_failed")
             session.session_id = str(uuid.uuid4())
-        await asyncio.to_thread(self.guardian.open, session)
+        await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.open, session)
 
     def _gating_failed(self, session: Session | None, phase: str, error: Exception) -> Response | None:
         """A fault in the gateway's own gating code: shadow forwards unchanged (None), enforce fails closed."""
@@ -334,7 +343,7 @@ class Gateway:
     async def _gate_result(self, session: Session, item: dict[str, Any], name: str,
                            call: CachedOutcome | None) -> CachedOutcome:
         payload, parsed = result_payload(name, item.get("output"), call.request_id if call else None)
-        result = await asyncio.to_thread(self.guardian.step, session, TOOL_CALL_RESULT, payload)
+        result = await self._step(session, TOOL_CALL_RESULT, payload)
         applied = apply_result(item, payload, parsed, result)
         self._record(session, result, applied, name, item.get("call_id"))
         first = fingerprint(item)
@@ -404,8 +413,7 @@ class Gateway:
             result = StepResult(TOOL_CALL_REQUEST, None, cause="arguments_not_an_object",
                                 failure_class="observed_agent_error")
         else:
-            result = await asyncio.to_thread(self.guardian.step, session, TOOL_CALL_REQUEST,
-                                             call_payload(name, arguments))
+            result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
         first = fingerprint(item)
@@ -414,6 +422,18 @@ class Gateway:
         if applied.item is None:
             return CachedOutcome("removed", name, None, result.request_id, first)
         return CachedOutcome("rewritten", name, applied.item, result.request_id, first)
+
+    async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
+        """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
+        timeout = session.posture.timeout_for(method) if session.posture else self.config.decision_timeout_s
+        deadline = time.monotonic() + timeout
+        future = asyncio.get_running_loop().run_in_executor(
+            self.executor, functools.partial(self.guardian.step, session, method, payload, deadline))
+        try:
+            # acs.client bounds the exchange itself. The grace covers a worker stuck outside it, such as a slow disk.
+            return await asyncio.wait_for(future, timeout + _STEP_GRACE_S)
+        except asyncio.TimeoutError:
+            return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
 
     def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:
         """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since

@@ -131,22 +131,33 @@ class GuardianClient:
                     handshake=type(handshake).__name__, cause=getattr(handshake, "cause", None),
                     guardian_url=self.config.guardian_url)
 
-    def step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
-        """Never raises: anything that goes wrong on the gateway's side settles the step as a deny."""
+    def step(self, session: Session, method: str, payload: dict[str, Any],
+             deadline: float | None = None) -> StepResult:
+        """Never raises: anything that goes wrong on the gateway's side settles the step as a deny.
+
+        deadline is a time.monotonic() value set when the step was queued, so time spent waiting for a worker
+        counts against the decision timeout.
+        """
         try:
-            return self._step(session, method, payload)
+            return self._step(session, method, payload, deadline)
         except Exception as e:  # noqa: BLE001
             audit_event("gateway_step_error", session_id=session.session_id, method=method, error=str(e))
             return StepResult(method, None, cause="adapter_exception", failure_class="observed_agent_error")
 
-    def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
+    def _step(self, session: Session, method: str, payload: dict[str, Any], deadline: float | None) -> StepResult:
         gated = self.acs_config.gate(session.handshake, method)
         if gated is not None:
             return StepResult(method, None, cause=gated.cause, failure_class=gated.fields.get("failure_class"))
         hello = session.handshake.server_hello
         if not method_evaluated(dict(hello), method):
             return StepResult(method, None, evaluated=False)
-        outcome, request_id = self._send(session.session_id, method, payload, session.posture)
+        posture = session.posture
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
+            posture = replace(posture, timeout_s=min(posture.timeout_for(method), remaining), per_method_timeout_s={})
+        outcome, request_id = self._send(session.session_id, method, payload, posture)
         if isinstance(outcome, Resolution):
             return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"))
         result = outcome.response.get("result") or {}

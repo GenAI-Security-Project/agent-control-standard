@@ -127,6 +127,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_MODEL_INPUT_LOG` | None | Where the model input log goes |
 | `ACS_GATEWAY_MAX_SESSIONS` | `256` | Sessions held at once. The least recently used one is evicted and audited as `session_evicted` |
 | `ACS_GATEWAY_MAX_BODY_BYTES` | `8388608` (8 MiB) | Largest request body (413 above it) and, in shadow and enforce, largest upstream answer (502 above it) |
+| `ACS_GATEWAY_WORKERS` | `16` | Worker threads for Guardian calls. Time a step waits for a worker counts against its decision timeout |
 | `ACS_AGENT_ID` | `openai-responses-gateway` | `agent_id` in every envelope |
 | `ACS_GATEWAY_HOST`, `ACS_GATEWAY_PORT` | `127.0.0.1`, `8080` | The model port |
 | `ACS_GATEWAY_ADMIN_HOST`, `ACS_GATEWAY_ADMIN_PORT` | `127.0.0.1`, unset | The admin port, off unless set |

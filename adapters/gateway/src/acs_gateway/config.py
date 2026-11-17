@@ -15,6 +15,7 @@ DEFAULT_UPSTREAM_URL = "https://api.openai.com/v1"
 DEFAULT_DECISION_TIMEOUT_MS = 5000
 DEFAULT_READY_TIMEOUT_S = 60.0
 DEFAULT_MAX_SESSIONS = 256
+DEFAULT_WORKERS = 16
 DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
@@ -49,6 +50,7 @@ class GatewayConfig:
     listen_port: int
     max_sessions: int = DEFAULT_MAX_SESSIONS
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
+    workers: int = DEFAULT_WORKERS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -78,6 +80,7 @@ class GatewayConfig:
             listen_port=int(env.get("ACS_GATEWAY_PORT", "").strip() or "8080"),
             max_sessions=int(_positive_number(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS)),
             max_body_bytes=int(_positive_number(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)),
+            workers=int(_positive_number(env, "ACS_GATEWAY_WORKERS", DEFAULT_WORKERS)),
         )
 
 
