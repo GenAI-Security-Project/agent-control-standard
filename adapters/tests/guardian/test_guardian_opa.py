@@ -429,3 +429,20 @@ def test_the_backend_name_is_read_once_at_import():
     env = {"PATH": "", "ACS_GUARDIAN_STATE_DIR": ""}
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=True)
     assert out.stdout.strip() == "['policy_backend_misconfigured']"
+
+
+
+def test_a_signing_failure_other_than_canonicalization_is_not_relabeled(no_backend, monkeypatch):
+    # Only an encoding failure becomes response_not_signable. Anything else is a bug and propagates as before.
+    calls = []
+    real_sign = example_guardian.sign_envelope
+
+    def first_call_breaks(envelope, **kwargs):
+        # The first call fails with a non-encoding error, and a retry would succeed, so a relabel would show.
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyError("signing key")
+        return real_sign(envelope, **kwargs)
+    monkeypatch.setattr(example_guardian, "sign_envelope", first_call_breaks)
+    with pytest.raises(KeyError):
+        _handle(no_backend, LISTING)

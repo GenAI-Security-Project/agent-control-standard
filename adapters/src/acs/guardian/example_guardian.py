@@ -37,6 +37,8 @@ from acs.core import (
 
 import datetime
 
+import rfc8785
+
 # With jsonschema available, every incoming envelope is validated against request-envelope.json before policy runs.
 _SPEC_VALIDATION_AVAILABLE = False
 _REQUEST_ENVELOPE_VALIDATOR = None
@@ -695,7 +697,8 @@ def handle_request(request: dict) -> dict:
     return _signed_step_response(request_id, session_id, result)
 
 
-# Fixed ASCII, so the fallback itself always signs.
+# Fixed ASCII. The fallback holds only this, constants, and the request_id and chain_hash the Guardian already
+# canonicalized for the request, so JCS can encode it. A missing signing key would still fail it, and propagate.
 UNSIGNABLE_REASONING = "The Guardian could not sign its decision for this step, so the step is denied."
 
 
@@ -706,7 +709,8 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
     try:
         sign_envelope(envelope, session_id=session_id)
         return envelope
-    except Exception:  # noqa: BLE001
+    except (rfc8785.CanonicalizationError, UnicodeEncodeError):
+        # Only an encoding failure is relabeled. Any other error is a bug and propagates as before.
         fallback = {key: result[key] for key in ("type", "acs_version", "request_id", "chain_hash") if key in result}
         envelope = {"jsonrpc": "2.0", "id": request_id,
                     "result": {**fallback, "decision": "deny", "reasoning": UNSIGNABLE_REASONING,
