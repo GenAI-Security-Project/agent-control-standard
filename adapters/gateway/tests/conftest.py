@@ -136,7 +136,7 @@ def guardian(tmp_path) -> Iterator[str]:
 
 @pytest.fixture
 def harness_guardian(tmp_path) -> Iterator[Callable[..., str]]:
-    """The example Guardian with test-only policy hooks (tests/guardian_harness.py); call with env overrides."""
+    """The example Guardian with test-only policy hooks (tests/guardian_harness.py). Call it with env overrides."""
     procs: list[subprocess.Popen] = []
 
     def start(**env: str) -> str:
@@ -166,7 +166,7 @@ def audit(tmp_path, monkeypatch) -> Callable[[], list[dict[str, Any]]]:
 
 @pytest.fixture
 def gateway(tmp_path, upstream) -> Iterator[Callable[..., Any]]:
-    """Build a gateway over the fake upstream; returns a started Starlette TestClient."""
+    """Build a gateway over the fake upstream and return a started Starlette TestClient."""
     from starlette.testclient import TestClient
 
     from acs_gateway.app import create_app

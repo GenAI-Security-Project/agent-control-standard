@@ -90,7 +90,7 @@ def _unescape(token: str) -> str:
 
 
 def _redact(document: Any, path: str, replacement: str) -> bool:
-    """Replace the value at an RFC 6901 pointer that already exists; False when the pointer doesn't resolve."""
+    """Replace the value at an RFC 6901 pointer that already exists. False when the pointer doesn't resolve."""
     if not path.startswith("/"):
         return False
     tokens = [_unescape(t) for t in path[1:].split("/")]
