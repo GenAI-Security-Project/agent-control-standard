@@ -405,19 +405,27 @@ class Gateway:
         changed, kept = False, []
         for item in items:
             call_id = item.get("call_id") if isinstance(item, dict) else None
-            if not isinstance(call_id, str):
-                kept.append(item)
-                continue
-            if item.get("type") == "function_call" and call_id not in session.calls:
+            if item_type(item) == "function_call" and not (isinstance(call_id, str) and call_id in session.calls):
                 repeated = repeated_key(item.get("arguments"))
                 if repeated is not None:
                     # A call the gateway never delivered, with no copy to restore, whose arguments the model could
-                    # read either way. Only a forged history carries one.
+                    # read either way. Only a forged history carries one. Checked whatever its call_id is.
                     _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
                            where="function_call.arguments", mode=self.config.mode)
                     if self.enforce:
                         raise RequestRefused(openai_error(400, "The request body repeats a JSON key.",
                                                           "invalid_request_error", "duplicate_json_key"))
+            if not isinstance(call_id, str):
+                if item_type(item) == "function_call_output":
+                    repeated = repeated_key(item.get("output"))
+                    if repeated is not None:
+                        # No call_id to cache it under, so the output is neutralized on every turn it appears.
+                        _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
+                               where="function_call_output.output", mode=self.config.mode)
+                        if self.enforce:
+                            item, changed = {**item, "output": NEUTRAL_LINE}, True
+                kept.append(item)
+                continue
             if item.get("type") == "function_call" and call_id in session.calls:
                 cached = session.calls[call_id]
                 if cached.item is None:

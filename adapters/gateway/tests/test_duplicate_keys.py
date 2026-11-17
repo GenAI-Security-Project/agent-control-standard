@@ -95,3 +95,22 @@ def test_a_tool_output_that_repeats_a_key_denies_only_that_result(gateway, guard
     name = "decision_applied" if mode == "enforce" else "shadow_decision"
     results = [e for e in events(audit, name) if e["method"] == "steps/toolCallResult"]
     assert [(e["decision"], e["cause"]) for e in results] == [("deny", "duplicate_json_key")]
+
+
+def test_a_call_with_an_integer_call_id_and_repeated_arguments_is_refused(gateway, guardian, upstream, audit):
+    item = {"type": "function_call", "call_id": 7, "name": "send", "arguments": '{"to": "a", "to": "b"}'}
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(item))
+    assert response.status_code == 400
+    assert upstream.received == []
+    assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["function_call.arguments"]
+
+
+def test_an_output_with_an_integer_call_id_and_a_repeated_key_is_neutralized(gateway, guardian, upstream, audit):
+    item = {"type": "function_call_output", "call_id": 7, "output": DUPLICATED_OUTPUT}
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(item))
+    assert response.status_code == 200
+    sent = [i for i in upstream.received[-1].json()["input"] if i.get("type") == "function_call_output"][0]
+    assert sent["output"] == NEUTRAL
+    assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["function_call_output.output"]
