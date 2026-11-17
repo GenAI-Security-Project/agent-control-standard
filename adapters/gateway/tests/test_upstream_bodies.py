@@ -55,3 +55,12 @@ def test_off_relays_encodings_and_headers_verbatim(gateway, upstream):
     assert upstream.received[0].headers["accept-encoding"] == "br, gzip"
     assert response.headers["content-encoding"] == "gzip"
     assert response.json() == response_body(message_item("hi"))
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_lab_headers_from_the_upstream_never_reach_the_client(gateway, guardian, upstream, mode):
+    upstream.reply(response_body(message_item("hi")), headers={"X-ACS-Lab-Branch": "a,d"})
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200
+    assert not [h for h in response.headers if h.lower().startswith("x-acs-")]
+    assert response.headers["x-request-id"] == "req_upstream_1"

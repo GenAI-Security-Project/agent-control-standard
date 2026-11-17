@@ -62,9 +62,10 @@ def forward_headers(headers: Any) -> dict[str, str]:
 
 
 def _client_headers(headers: httpx.Headers, *, decoded: bool) -> dict[str, str]:
-    """The upstream's headers for the client. A decoded body drops content-encoding to match."""
+    """The upstream's headers for the client, minus any x-acs-* lab header. A decoded body drops content-encoding."""
     return {k: v for k, v in headers.items()
-            if k.lower() not in _HOP_HEADERS and not (decoded and k.lower() == "content-encoding")}
+            if k.lower() not in _HOP_HEADERS and not k.lower().startswith("x-acs-")
+            and not (decoded and k.lower() == "content-encoding")}
 
 
 def is_stream(body: Any) -> bool:
