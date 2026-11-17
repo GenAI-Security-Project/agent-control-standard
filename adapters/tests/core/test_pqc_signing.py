@@ -624,8 +624,13 @@ class VariantAndContextAreDocumented(unittest.TestCase):
         # Review finding CR6-7: the runnable example is marked, so other Python blocks may exist.
         blocks = re.findall(r"<!-- runnable -->\n```python\n(.*?)```", text, flags=re.DOTALL)
         self.assertEqual(len(blocks), 1, "signing.md marks exactly one example <!-- runnable -->")
+        # Review finding CR6-8: the example generates the key and persists it through seed().
+        self.assertIn("MLDSA65SigningKey.generate(", blocks[0])
+        self.assertIn("signer.seed()", blocks[0])
+        self.assertNotIn("from_seed(secrets", blocks[0])
         namespace: dict = {}
         exec(compile(blocks[0], str(self.DOC), "exec"), namespace)  # noqa: S102
+        self.assertEqual(len(namespace["seed"]), 32)
         self.assertTrue(namespace["verified"])
         self.assertFalse(namespace["replayed"])
 

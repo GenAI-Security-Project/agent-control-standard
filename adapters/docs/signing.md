@@ -48,13 +48,16 @@ A keyring admits ML-DSA-65 keys only. Each key is parsed once, when it is built,
 
 <!-- runnable -->
 ```python
-import secrets
 import uuid
 
 from acs.core import Keyring, MLDSA65SigningKey, sign_with_signing_key, verify_with_keyring
 
-# The Guardian keeps the 32 byte FIPS 204 seed in its key file. The verifier needs only the public key.
-signer = MLDSA65SigningKey.from_seed(secrets.token_bytes(32), "lab-guardian-1")
+# The Guardian generates its key once. signer.seed() returns the 32 byte FIPS 204 seed, which is
+# what it writes to its key file, and MLDSA65SigningKey.from_seed(seed, key_id) reloads it later.
+signer = MLDSA65SigningKey.generate("lab-guardian-1")
+seed = signer.seed()
+
+# A verifier needs only the public key, under the same key_id.
 keyring = Keyring([signer.verification_key()])
 
 # The request the Observed Agent sent. Its ids must not repeat, since the binding relies on that.
