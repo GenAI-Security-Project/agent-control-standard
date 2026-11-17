@@ -197,4 +197,4 @@ def test_content_that_is_neither_a_string_nor_a_list_is_unsupported(gateway, gua
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request(item))
     assert response.status_code == (501 if mode == "enforce" else 200)
-    assert len(events(audit, "unsupported_content_part")) == 1
+    assert [e["part_type"] for e in events(audit, "unsupported_content_part")] == ["non_list_value"]

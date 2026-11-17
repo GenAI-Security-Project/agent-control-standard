@@ -106,7 +106,7 @@ def unsupported_content_part(body: dict[str, Any]) -> str | None:
                 continue
             if not isinstance(parts, list):
                 # Content is a string or a list of parts. Anything else is a shape the gateway can't read.
-                return type(parts).__name__
+                return "non_list_value"
             for part in parts:
                 kind = part.get("type") if isinstance(part, dict) else None
                 if kind not in allowed:

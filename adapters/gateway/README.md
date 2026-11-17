@@ -119,7 +119,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `upstream_rejected` | An upstream answer the gateway won't gate, with `cause` (`duplicate_json_key`) and `mode` |
 | `unsupported_field` | A request field outside the allowlist, with `field` |
 | `unsupported_item_type` | An input or output item outside the allowlist, with `item_type` and `direction` |
-| `unsupported_content_part` | A message or reasoning part outside the allowlist, with `part_type` |
+| `unsupported_content_part` | A part outside the allowlist in a message's content, a reasoning item's summary or content, or a function_call_output's array output, with `part_type`. A value that is neither a string nor a list reports `part_type: non_list_value` |
 | `unsupported_tool_choice` | A tool_choice outside the allowlist |
 | `unsupported_tool_type` | A tool declaration that isn't a function tool |
 | `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |
