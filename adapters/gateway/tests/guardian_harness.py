@@ -30,10 +30,17 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
             return {**base, "decision": "modify", "reasoning": "recipient rewritten",
                     "reason_codes": ["external_recipient"],
                     "modifications": {"parameter_overrides": {"to": "ops@ns1.finbot"}}}
-        if tool == "ask_tool":
+        if tool in ("ask_tool", "ask_deny_tool"):
+            # The gateway's lab answer field (LAB-08, until issue #175). ask_tool follows the approver, and
+            # ask_deny_tool denies whatever the approver said, so a test can tell the Guardian decided.
+            answer = (params.get("payload") or {}).get("x_acs_lab_ask_answer")
+            if isinstance(answer, dict):
+                if tool == "ask_tool" and answer.get("answer") == "approve":
+                    return {**base, "decision": "allow", "reasoning": "approved", "reason_codes": ["approver_approved"]}
+                return {**base, "decision": "deny", "reasoning": "not approved", "reason_codes": ["approver_rejected"]}
             return {**base, "decision": "ask", "reasoning": "needs approval", "reason_codes": ["payment_over_threshold"],
-                    "ask_details": {"approver": {"type": "human", "id": "lab-approver"},
-                                    "question": "Approve?", "timeout_seconds": 60}}
+                    "ask_details": {"approver": {"type": "human", "id": "lab-approver"}, "question": "Approve?",
+                                    "timeout_seconds": int(os.environ.get("HARNESS_ASK_TIMEOUT_S", "60"))}}
         if tool == "defer_tool":
             return {**base, "decision": "defer", "reasoning": "later", "reason_codes": ["deferred"],
                     "defer_details": {"reason": "low_confidence", "resolution_method": "timeout",
