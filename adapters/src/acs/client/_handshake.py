@@ -306,7 +306,8 @@ def _is_client_hello(request: Mapping[str, Any]) -> bool:
 
 def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
     """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
-    # The one binding rule decides. Each reason keeps the outcome the handshake always gave it.
+    # The one binding rule decides. A malformed response is no answer, so the fail posture
+    # applies, as for a transport failure. A request or id problem refuses the session.
     binding = response_binding_problem(client_hello, response)
     if binding == BINDING_SHAPE:
         return NoAnswer("malformed_response")

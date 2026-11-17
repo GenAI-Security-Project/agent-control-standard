@@ -88,11 +88,15 @@ Verification takes two required arguments besides the keyring. `expected_key_id`
 
 `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key. One ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another.
 
-`acs.core.response_binding_problem` holds the one rule and names why a response doesn't bind, and `acs.core.response_matches_request` is that check finding no reason. The keyring path, the client's step exchange, and the client's handshake all decide through it. The response must be a JSON-RPC 2.0 object with exactly one of a result or an error, which is an object, and must carry no `method`, so a request envelope never counts as an answer. It must also carry the request's JSON-RPC `id`.
+`acs.core.response_binding_problem` holds the one rule, and `acs.core.response_matches_request` is that check finding no reason. The keyring path, the client's step exchange, and the client's handshake all decide through it. It checks the request first, then the response, and names the first reason it finds.
+
+`BINDING_REQUEST` means the request fails `acs.core.request_envelope_problem`. `BINDING_SHAPE` means the response isn't a JSON-RPC 2.0 object with exactly one object result or error, or it carries a `method`, so a request envelope never counts as an answer. `acs.core.response_shape_problem` is that shape check on its own, and the client judges an HTTP error body by it too. `BINDING_ID` means the response doesn't carry the request's JSON-RPC `id`, and `BINDING_RESULT` means a result doesn't bind, as below.
 
 An error object binds by the id alone, whatever the request's `request_id`. A result binds only when the request is the handshake and the result carries no `request_id`, or when the request carries a string `params.request_id` that the result repeats. `acs.core.request_binding_problem` is the exported check for whether a request can bind a result at all.
 
 A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. A request with no usable `request_id` binds no result, the same answer on both paths.
+
+On the HMAC path a malformed response is no decision, so the fail posture applies, as for a transport failure. Anyone who can tamper with a response in transit can also drop the connection, so transport integrity is TLS's job, and the default posture denies (D-036).
 
 On the keyring path, only a request that is no envelope at all is a caller error. It raises ValueError with the text `acs.core.request_envelope_problem` gives. That covers a request that isn't a mapping and an id that isn't a string or a finite number: a missing or null id, a boolean, an object, an array, NaN, or an infinity.
 
@@ -110,7 +114,7 @@ Error binding rests on the JSON-RPC `id` alone, on both paths, as D-029 sets. A 
 
 A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello. When the request is the handshake (`acs.core.HANDSHAKE_METHOD`, `handshake/hello`), the JSON-RPC `id` binds the response, and its result must carry no `request_id`. A step decision therefore never answers a ClientHello, and a ServerHello never answers a step request.
 
-The client's HMAC handshake compares the id with the same `acs.core.same_json_rpc_id`. `acs.core.server_hello_problem` refuses a ServerHello that carries `request_id`, so every consumer treats it as no answer. On the HMAC handshake the fail posture applies and it never negotiates.
+The client's HMAC handshake decides through `response_binding_problem` as well. A malformed reply is no answer, and a request or id problem refuses the session. A result goes on to its signature and ServerHello checks only when the request is a real ClientHello, a `handshake/hello` request whose params and payload are objects. `acs.core.server_hello_problem` refuses a ServerHello that carries `request_id`, so every consumer treats it as no answer, and on the HMAC handshake it never negotiates.
 
 Binding by id is a known limit. It ties a ServerHello to one ClientHello, not to the traffic that follows it. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) tracks closing it.
 
