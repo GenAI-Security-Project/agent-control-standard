@@ -132,16 +132,20 @@ def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, mess
 
 _VERIFIERS = {ML_DSA_65: _verify_ml_dsa_65}
 
+# The ClientHello's method, as handshake.json and request-envelope.json name it.
+HANDSHAKE_METHOD = "handshake/hello"
+
+
 def _answers(response: dict, request: dict) -> bool:
     """Whether the response answers this request (D-029), from fields the signature covers.
 
-    A result that carries request_id goes through response_matches_request, the check the
-    client already applies to every step. A ServerHello carries no request_id under the
-    current schema, so its JSON-RPC id is the whole binding. Issue #13 tracks binding the
-    handshake to the traffic after it.
+    The rule follows the request this caller sent, never the shape of the response. For the
+    handshake, the ServerHello echoes nothing from the ClientHello but its JSON-RPC id, so
+    the id is the whole binding, a limit issue #13 tracks. Every other request goes through
+    response_matches_request, which requires the same id and, for a result, the same
+    request_id, so a ServerHello or a result without request_id never answers a step.
     """
-    result = response.get("result")
-    if isinstance(result, dict) and "request_id" not in result:
+    if request.get("method") == HANDSHAKE_METHOD:
         return response.get("id") == request.get("id")
     return response_matches_request(request, response)
 

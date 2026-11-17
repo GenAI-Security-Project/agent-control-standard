@@ -408,6 +408,23 @@ class RequestBinding(unittest.TestCase):
         self.assertTrue(self._verify(server_hello, hello))
         self.assertFalse(self._verify(server_hello, {**hello, "id": "hello-2"}))
 
+    def test_a_step_result_without_request_id_fails(self) -> None:
+        # Review finding R5-I1: only the handshake binds on the id alone. A step result must carry
+        # request_id, as the default path's classify_response already requires.
+        bare = _decision()
+        del bare["result"]["request_id"]
+        sign_with_signing_key(bare, _signer())
+        self.assertFalse(self._verify(bare, _request()))
+
+    def test_a_server_hello_replayed_onto_a_step_request_fails(self) -> None:
+        # Review finding CR5-1: a signed ServerHello whose JSON-RPC id matches a step request
+        # must not verify as that step's answer.
+        server_hello = {"jsonrpc": "2.0", "id": DECISION_ID,
+                        "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
+                                   "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
+        sign_with_signing_key(server_hello, _signer())
+        self.assertFalse(self._verify(server_hello, _request()))
+
     def test_the_session_field_convention_is_gone(self) -> None:
         # Round 4 reverses round 3: a session named in result.metadata neither helps nor hurts.
         named = _decision()
