@@ -255,8 +255,9 @@ adapters/
 │   ├── guardian/example_guardian.py  # the example Guardian: wire handling, replay, skew and the session chain
 │   ├── examples/destructive_bash.py  # the example Guardian's toy policy
 │   └── testing/                    # CaptureGuardian and the shared test harness
-├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/
+├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/, interop/ (Go ML-DSA check)
 ├── docs/<framework>/               # README, mapping.md, example config, example payloads
+├── docs/signing.md                 # ML-DSA-65 signing, the keyring, the variant and the context
 └── scripts/check_wheel.py          # installs a built wheel outside the repo and checks it
 ```
 

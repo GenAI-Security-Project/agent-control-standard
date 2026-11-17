@@ -238,6 +238,81 @@ class Rejections(unittest.TestCase):
         self.assertFalse(verify_with_keyring(envelope, self.keyring))
 
 
+class VariantAndContextAreDocumented(unittest.TestCase):
+    """Issue #574 done_when: the documentation names the ML-DSA variant and the context, and a test pins both."""
+
+    DOC = Path(__file__).resolve().parents[2] / "docs" / "signing.md"
+
+    def test_the_adapters_doc_names_pure_mode_and_the_empty_context(self) -> None:
+        text = self.DOC.read_text(encoding="utf-8")
+        self.assertIn("**Variant:** pure ML-DSA-65 (FIPS 204 Algorithm 7, ML-DSA.Sign), not HashML-DSA.", text)
+        self.assertIn('**Context string:** empty (`b""`, zero bytes).', text)
+
+    def test_the_module_docstring_names_pure_mode_and_the_empty_context(self) -> None:
+        import acs.core._mldsa as module
+        self.assertIn("Variant: pure ML-DSA, not the pre-hash HashML-DSA.", module.__doc__)
+        self.assertIn('Context string: empty (b"").', module.__doc__)
+
+
+# RFC 6979 Appendix A.2.5: ECDSA over P-256 with SHA-256. Values are written as the RFC prints them.
+RFC6979_UX = "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6"
+RFC6979_UY = "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299"
+RFC6979_SIGNATURES = {
+    b"sample": ("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716",
+                "F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8"),
+    b"test": ("F1ABB023518351CD71D881567B1EA663ED3EFCF6C5132B354F28D3B0B7D38367",
+              "019F4113742A2B14BD25926B49C649155F267E60D3814B4C0CC84250E46F0083"),
+}
+
+
+class EcdsaP256BenchmarkPrimitive(unittest.TestCase):
+    """ECDSA-P256 exists for the LAB-10 benchmark only. It isn't a wire algorithm (PREMORTEM P7)."""
+
+    PUBLIC = b"\x04" + bytes.fromhex(RFC6979_UX) + bytes.fromhex(RFC6979_UY)
+
+    def test_rfc_6979_vectors_verify(self) -> None:
+        from acs.core._ecdsa import ecdsa_p256_verify
+        for message, (r, s) in RFC6979_SIGNATURES.items():
+            with self.subTest(message=message):
+                self.assertTrue(ecdsa_p256_verify(self.PUBLIC, message, bytes.fromhex(r + s)))
+
+    def test_a_changed_message_or_signature_fails(self) -> None:
+        from acs.core._ecdsa import ecdsa_p256_verify
+        r, s = RFC6979_SIGNATURES[b"sample"]
+        good = bytes.fromhex(r + s)
+        flipped = bytes([good[0] ^ 1]) + good[1:]
+        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"samplf", good))
+        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"sample", flipped))
+
+    def test_malformed_inputs_fail_without_raising(self) -> None:
+        from acs.core._ecdsa import ecdsa_p256_verify
+        r, s = RFC6979_SIGNATURES[b"sample"]
+        good = bytes.fromhex(r + s)
+        for public, signature in ((self.PUBLIC, good[:-1]), (self.PUBLIC, good + b"\x00"), (self.PUBLIC, b""),
+                                  (self.PUBLIC[:-1], good), (b"\x04" + bytes(64), good), (b"", good)):
+            with self.subTest(public=len(public), signature=len(signature)):
+                self.assertFalse(ecdsa_p256_verify(public, b"sample", signature))
+
+    def test_round_trip_with_a_fixed_width_signature(self) -> None:
+        from acs.core._ecdsa import (
+            ecdsa_p256_generate,
+            ecdsa_p256_public_bytes,
+            ecdsa_p256_sign,
+            ecdsa_p256_verify,
+        )
+        private = ecdsa_p256_generate()
+        public = ecdsa_p256_public_bytes(private)
+        self.assertEqual((len(public), public[0]), (65, 4))
+        for _ in range(20):  # r or s with leading zero bytes still encode to 32 bytes each
+            signature = ecdsa_p256_sign(private, b"envelope bytes")
+            self.assertEqual(len(signature), 64)
+            self.assertTrue(ecdsa_p256_verify(public, b"envelope bytes", signature))
+
+    def test_not_exported_as_a_wire_algorithm(self) -> None:
+        import acs.core
+        self.assertFalse({n for n in acs.core.__all__ if "ecdsa" in n.lower() and n != "ECDSA_P256"})
+
+
 class ImportTimeChecks(unittest.TestCase):
     """The module fails loudly at import when ML-DSA is unavailable, instead of at the first signature."""
 
