@@ -28,6 +28,7 @@ except ImportError as exc:
         "or uv sync --extra pqc") from exc
 
 _SCALAR_BYTES = 32
+_POINT_BYTES = 1 + 2 * _SCALAR_BYTES
 # The order n of the P-256 group (SEC 2, secp256r1).
 _ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 
@@ -48,6 +49,10 @@ def ecdsa_p256_sign(private_key: ec.EllipticCurvePrivateKey, message: bytes) -> 
 
 def ecdsa_p256_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
     if not all(isinstance(v, bytes) for v in (public_key, message, signature)):
+        return False
+    # Uncompressed SEC1 only: from_encoded_point would also take a compressed point, which
+    # gives one key two encodings and contradicts the documented form.
+    if len(public_key) != _POINT_BYTES or public_key[0] != 0x04:
         return False
     if len(signature) != 2 * _SCALAR_BYTES:
         return False

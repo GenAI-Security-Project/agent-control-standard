@@ -538,6 +538,19 @@ class EcdsaP256BenchmarkPrimitive(unittest.TestCase):
         self.assertGreater(int(s, 16), P256_ORDER // 2, "the RFC prints this vector with a high s")
         self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"sample", bytes.fromhex(r + s)))
 
+    def test_only_a_65_byte_uncompressed_point_is_accepted(self) -> None:
+        # Review finding CR3-9: the docstring promises uncompressed SEC1, so a compressed key fails.
+        from acs.core._ecdsa import ecdsa_p256_verify
+        r, s = RFC6979_SIGNATURES[b"test"]
+        good = bytes.fromhex(r + s)
+        y_parity = 0x03 if int(RFC6979_UY, 16) & 1 else 0x02
+        compressed = bytes([y_parity]) + bytes.fromhex(RFC6979_UX)
+        hybrid_form = bytes([0x06 | (y_parity & 1)]) + self.PUBLIC[1:]
+        self.assertTrue(ecdsa_p256_verify(self.PUBLIC, b"test", good))
+        for public in (compressed, hybrid_form, self.PUBLIC + b"\x00"):
+            with self.subTest(length=len(public), prefix=public[0]):
+                self.assertFalse(ecdsa_p256_verify(public, b"test", good))
+
     def test_non_bytes_inputs_return_false(self) -> None:
         from acs.core._ecdsa import ecdsa_p256_verify
         r, s = RFC6979_SIGNATURES[b"test"]
