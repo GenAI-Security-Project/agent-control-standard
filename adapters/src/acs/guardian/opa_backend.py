@@ -414,8 +414,21 @@ class _Shape:
         self.path: str | None = None  # set where a redaction path ends
 
 
-def _decode(path: str) -> list[str]:
+def decode_pointer(path: str) -> list[str]:
+    """The RFC 6901 reference tokens of a JSON Pointer that starts with /."""
     return [token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")]
+
+
+def replace_at(document: Any, tokens: list[str], value: Any) -> None:
+    """Replace the value the tokens name inside document. The caller has checked that they resolve."""
+    *parents, leaf = tokens
+    node = document
+    for token in parents:
+        node = node[int(token)] if isinstance(node, list) else node[token]
+    if isinstance(node, list):
+        node[int(leaf)] = value
+    else:
+        node[leaf] = value
 
 
 def _encode(token: str) -> str:
@@ -433,7 +446,7 @@ def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | Non
     root = _Shape()
     redacted: set[str] = set()
     for path in paths:
-        tokens = _decode(path)
+        tokens = decode_pointer(path)
         node, shape = payload, root
         for token in tokens:
             if isinstance(node, list):
