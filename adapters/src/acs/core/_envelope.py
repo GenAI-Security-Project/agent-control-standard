@@ -36,12 +36,18 @@ def turn_start_envelope(metadata: Mapping[str, Any], turn_id: str) -> dict[str, 
 
 
 def same_json_rpc_id(a: object, b: object) -> bool:
-    """Whether two JSON-RPC ids are the same id: equal and of one type.
+    """Whether two ids are the same JSON value: strings, numbers, booleans or null, compared as JSON does.
 
-    Python's == treats True, 1 and 1.0 as equal, and JSON doesn't, so a response whose id
-    differs only in type answers a different request.
+    Python's == treats True as 1, and JSON doesn't, so a bool never equals a number. JSON and
+    JCS treat 1 and 1.0 as one number, so a re-serialized numeric id still matches.
     """
-    return type(a) is type(b) and a == b
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, str) and isinstance(b, str):
+        return a == b
+    return a is None and b is None
 
 
 def response_matches_request(request: dict, response: dict) -> bool:
@@ -51,7 +57,7 @@ def response_matches_request(request: dict, response: dict) -> bool:
     result = response.get("result")
     if result is not None:
         want = (request.get("params") or {}).get("request_id")
-        if result.get("request_id") != want:
+        if not same_json_rpc_id(result.get("request_id"), want):
             return False
     return True
 
