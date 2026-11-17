@@ -191,6 +191,8 @@ class GuardianClient:
                              session_id=session_id, gate=True)
         if request["params"].get("signature") != signature:
             audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
+        if isinstance(outcome, Resolution):
+            self.transcript.append(session_id, "resp", None, cause=outcome.cause)
         if isinstance(outcome, Decided):
             if not self.verifier(outcome.response, session_id):
                 return posture.resolve(Refused("response_signature_invalid", {"request_id": request_id},

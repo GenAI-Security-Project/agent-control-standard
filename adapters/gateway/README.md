@@ -83,7 +83,7 @@ An epoch bump forgets every session and every cached outcome, so a call_id seen 
 {"dir": "resp", "envelope": {"jsonrpc": "2.0", "result": {"decision": "deny", "...": "..."}}}
 ```
 
-Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. The handshake isn't in the file, since acs.client sends it internally.
+Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. When a request gets no usable answer (a timeout, an HTTP error, a refusal, a malformed or tampered answer), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. acs.client doesn't hand back the rejected answer itself, so the line can't carry it until LAB-03 (issue #576) adds that hook. The handshake isn't in the file, since acs.client sends it internally.
 
 **Audit.** The gateway writes audit lines through acs.client `audit_event`, as `ACS_AUDIT {json}` on stderr and in `ACS_AUDIT_FILE`. The `acs_audit_event` field names the event:
 

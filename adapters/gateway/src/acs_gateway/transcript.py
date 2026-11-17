@@ -26,14 +26,25 @@ class Transcript:
         self._directory = directory
         self._lock = threading.Lock()
 
-    def append(self, session_id: str, direction: str, envelope: dict[str, Any]) -> None:
+    def append(self, session_id: str, direction: str, envelope: dict[str, Any] | None, *,
+               cause: str | None = None) -> None:
+        """envelope None with a cause marks a request that got no usable answer, so the gap is explicit.
+
+        acs.client doesn't hand back a refused, malformed or tampered answer, so the line can't carry it yet.
+        LAB-03 (issue #576) adds that hook (PREMORTEM P6).
+        """
         if direction not in DIRECTIONS:
             raise ValueError(f"direction must be one of {DIRECTIONS}, got {direction!r}")
+        if envelope is None and (direction != "resp" or not cause):
+            raise ValueError("only a response line may omit its envelope, and it must name the cause")
         # The session_id names the file, so only the gateway's own UUIDs are accepted.
         name = str(uuid.UUID(session_id))
+        record: dict[str, Any] = {"dir": direction, "envelope": envelope}
+        if envelope is None:
+            record["cause"] = cause
         with self._lock:
             self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            _append_line(self._directory / f"{name}.jsonl", {"dir": direction, "envelope": envelope})
+            _append_line(self._directory / f"{name}.jsonl", record)
 
 
 class ModelInputLog:

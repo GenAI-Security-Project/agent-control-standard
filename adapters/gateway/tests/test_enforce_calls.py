@@ -152,3 +152,15 @@ def test_a_step_whose_transcript_line_fails_denies(gateway, guardian, upstream, 
     assert response.status_code == 200
     assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
     assert events(audit, "decision_applied")[0]["cause"] == "adapter_exception"
+
+
+@pytest.mark.parametrize("tool,cause", [("slow_tool", "decision_timeout"), ("rate_limited_tool", "http_429_error"),
+                                        ("tampered_tool", "response_signature_invalid")])
+def test_a_step_without_a_usable_answer_leaves_an_explicit_gap_in_the_transcript(gateway, harness_guardian, upstream,
+                                                                                  tmp_path, tool, cause):
+    upstream.reply(response_body(call_item(tool, {}, "call_1")))
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(), ACS_DECISION_TIMEOUT_MS="500").post(
+        "/v1/responses", json=finbot_request())
+    lines = transcript_lines(tmp_path)
+    assert lines[2]["dir"] == "req" and lines[2]["envelope"]["method"] == "steps/toolCallRequest"
+    assert lines[3] == {"dir": "resp", "envelope": None, "cause": cause}

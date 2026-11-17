@@ -38,3 +38,15 @@ def test_model_input_log_appends_each_body(tmp_path):
 def test_model_input_log_without_a_path_writes_nothing(tmp_path):
     ModelInputLog(None).append({"input": "a"})
     assert list(tmp_path.iterdir()) == []
+
+
+def test_transcript_records_a_missing_response_with_its_cause(tmp_path):
+    session_id = str(uuid.uuid4())
+    Transcript(tmp_path).append(session_id, "resp", None, cause="decision_timeout")
+    line = json.loads((tmp_path / f"{session_id}.jsonl").read_text())
+    assert line == {"dir": "resp", "envelope": None, "cause": "decision_timeout"}
+
+
+def test_transcript_refuses_a_missing_envelope_without_a_cause(tmp_path):
+    with pytest.raises(ValueError):
+        Transcript(tmp_path).append(str(uuid.uuid4()), "resp", None)
