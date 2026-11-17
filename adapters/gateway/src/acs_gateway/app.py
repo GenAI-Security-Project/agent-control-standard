@@ -861,8 +861,9 @@ class Gateway:
                    request_id=None, guardian_decision=None, decision="deny", cause="client_disconnected")
             raise
         if ended == "approve":
-            # An approval that raced a bump or a retirement still has no session to resend on.
-            ended = stale() or ended
+            # An approval that raced a bump, a retirement or a disconnect has nowhere to go, so it sends nothing. The
+            # disconnect poll runs every 0.2 s, so a click just after the client left lands here (R-I1).
+            ended = (await stop()) or ended
         fields.update(outcome=_ASK_OUTCOMES.get(ended, "abandoned"), waited_s=round(time.monotonic() - started, 3))
         if ended != "approve":
             cause = {"reject": "ask_rejected", TIMEOUT: "ask_timeout"}.get(ended, ended)

@@ -43,7 +43,8 @@ def token_file(tmp_path) -> str:
 
 
 def enforce(gateway, harness_guardian, tmp_path, **env: str) -> Any:
-    guardian_env = {k: v for k, v in env.items() if k.startswith("HARNESS_")}
+    # A short ASK timeout bounds any test that stalls, such as an approver thread whose assert failed (T1).
+    guardian_env = {"HARNESS_ASK_TIMEOUT_S": "10", **{k: v for k, v in env.items() if k.startswith("HARNESS_")}}
     gateway_env = {k: v for k, v in env.items() if not k.startswith("HARNESS_")}
     mode = gateway_env.pop("ACS_LAB_MODE", "enforce")
     return gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=harness_guardian(**guardian_env),
@@ -332,6 +333,40 @@ def _live_gateway(harness_guardian, upstream, tmp_path) -> Any:
         "ACS_LAB_MODE": "enforce", "ACS_GUARDIAN_URL": harness_guardian(), "ACS_UPSTREAM_URL": upstream.url,
         "ACS_TRANSCRIPT_DIR": str(tmp_path / "transcripts"), "ACS_GATEWAY_STATE_DIR": os.environ["ACS_GATEWAY_STATE_DIR"],
         "ACS_GATEWAY_APPROVER_PORT": "8090", "ACS_GATEWAY_APPROVER_TOKEN_FILE": token_file(tmp_path)}))
+
+
+@pytest.mark.parametrize("delay_s", [0.0, 0.05, 0.15, 0.4])
+def test_an_approval_just_after_a_disconnect_sends_no_resend(harness_guardian, upstream, audit, tmp_path, delay_s):
+    """The client closes, then the approver clicks approve delay_s later, inside one disconnect poll (R-I1)."""
+    import json
+    import socket
+
+    upstream.reply(response_body(call_item("ask_tool", {}, "call_1")))
+    app = _live_gateway(harness_guardian, upstream, tmp_path)
+    approvals = app.state.gateway.approvals
+    server, thread, port = _serve(app)
+    try:
+        raw = json.dumps(finbot_request()).encode()
+        sock = socket.create_connection(("127.0.0.1", port))
+        sock.sendall(b"POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                     + f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw)
+        end = time.monotonic() + 10
+        while not approvals.pending() and time.monotonic() < end:
+            time.sleep(0.01)
+        ask_id = approvals.pending()[0].ask_id
+        sock.shutdown(socket.SHUT_RDWR)
+        sock.close()
+        time.sleep(delay_s)
+        approvals.answer(ask_id, "approve")
+        end = time.monotonic() + 5
+        while not events(audit, "ask_resolved") and time.monotonic() < end:
+            time.sleep(0.05)
+    finally:
+        server.should_exit = True
+        thread.join(10)
+    resolved = [(r["outcome"], r["cause"], r["decision"]) for r in events(audit, "ask_resolved")]
+    assert len(tool_requests(tmp_path)) == 1, resolved
+    assert resolved == [("abandoned", "client_disconnected", "deny")]
 
 
 @pytest.mark.parametrize("stream", [False, True])
