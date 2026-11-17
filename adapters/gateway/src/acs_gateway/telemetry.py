@@ -9,10 +9,13 @@ exporting because the gateway does.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -22,6 +25,23 @@ if TYPE_CHECKING:
 
 SERVICE_NAME = "acs-gateway"
 TRACES_PATH = "/v1/traces"
+# Names from specification/v0.1.0/trace/otel-mapping.json on integration, verbatim. PR #557 would rename the tool spans
+# to execute_tool, and these follow it only once it merges (issue #582).
+SESSION_SPAN = "acs.session"
+STEP_SPANS = {"steps/toolCallRequest": "gen_ai.tool.call", "steps/toolCallResult": "gen_ai.tool.result"}
+DECISION_EVENT = "acs.decision"
+FAILURE_EVENT = "acs.decision.failure"
+# acs.failure.class values the mapping enumerates. Any other cause is "other" with the cause as acs.failure.detail.
+FAILURE_CLASSES = frozenset({"timeout", "unreachable", "malformed_response", "guardian_error", "observed_agent_error",
+                             "signature_invalid", "handshake_failure", "other"})
+# The OpenTelemetry GenAI operation names, so a GenAI backend keeps every span (issue #520). The mapping names none for
+# a session or a model call, so the session span is the agent's invocation and the model call is a chat.
+SESSION_OPERATION = "invoke_agent"
+TOOL_OPERATION = "execute_tool"
+MODEL_OPERATION = "chat"
+PROVIDER_NAME = "openai"
+# The model call span in progress, so a replay miss inside the upstream transport finds it without importing anything.
+_MODEL_SPAN: ContextVar[Any] = ContextVar("acs_gateway_model_span", default=None)
 
 
 def traces_url(endpoint: str) -> str:
@@ -77,15 +97,177 @@ class Tracing:
         if self.provider is not None:
             self.provider.shutdown()
 
+    def _parent(self, session_id: str | None) -> Any:
+        """The context whose parent is the session's acs.session span, or None for a span of no session."""
+        if session_id is None:
+            return None
+        from opentelemetry import trace
+
+        root = trace.SpanContext(session_trace_id(session_id), session_root_span_id(session_id), is_remote=False,
+                                 trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED))
+        return trace.set_span_in_context(trace.NonRecordingSpan(root))
+
+    def session(self, session_id: str, epoch: int, request_id: str | None, handshake: Any, started: int) -> None:
+        """The acs.session span for one opening: the handshake and steps/sessionStart, rooting the session's trace.
+
+        Recorded once the opening ends, with its real start time, so its ids can be the session's own.
+        """
+        if self._tracer is None:
+            return
+        from opentelemetry.context import Context
+
+        attributes: dict[str, Any] = {"acs.session.id": session_id, "gen_ai.operation.name": SESSION_OPERATION,
+                                      "acs.lab.mode": self.mode, "acs.lab.epoch": epoch,
+                                      "acs.lab.handshake": type(handshake).__name__}
+        if request_id is not None:
+            attributes["acs.request_id"] = request_id
+        ids = self.provider.id_generator
+        ids.force(session_trace_id(session_id), session_root_span_id(session_id))
+        try:
+            # An empty context, so the span is a root whatever the caller's context holds.
+            span = self._tracer.start_span(SESSION_SPAN, context=Context(), start_time=started or None,
+                                           attributes=attributes)
+        finally:
+            ids.clear()
+        _session_outcome(span, request_id, handshake)
+        span.end()
+
+    def step(self, session_id: str, method: str, payload: dict[str, Any], result: Any, started: int,
+             shadow: bool) -> None:
+        """The step span for one Guardian request, with its decision or its decision failure as an event.
+
+        Recorded once the step settles, with its real start time. A step that never claimed a request_id never reached
+        the Guardian, so it has no span (the mapping keys every step span on acs.request_id). Only the tool's name and
+        version, the result's exit status and its request_id_ref come from the payload, never arguments or output.
+        """
+        name = STEP_SPANS.get(method)
+        if self._tracer is None or name is None or result.request_id is None:
+            return
+        tool = payload.get("tool") if isinstance(payload.get("tool"), dict) else {}
+        attributes: dict[str, Any] = {"acs.session.id": session_id, "acs.request_id": result.request_id,
+                                      "gen_ai.operation.name": TOOL_OPERATION, "acs.lab.mode": self.mode,
+                                      "gen_ai.tool.name": tool.get("name") if isinstance(tool.get("name"), str) else ""}
+        if isinstance(tool.get("version"), str):
+            attributes["acs.tool.version"] = tool["version"]
+        if method == "steps/toolCallResult":
+            exit_status = payload.get("exit_status")
+            attributes["acs.exit_status"] = exit_status if isinstance(exit_status, str) else ""
+            if isinstance(payload.get("request_id_ref"), str) and payload["request_id_ref"]:
+                attributes["acs.request_id_ref"] = payload["request_id_ref"]
+        decided = result.decision.disposition if result.cause is None and result.decision is not None else ""
+        if decided:
+            # Mirrored onto the span for readers that keep attributes and drop events (issue #520).
+            attributes["acs.decision"] = decided
+            if shadow:
+                attributes["acs.lab.shadow_decision"] = decided
+        span = self._tracer.start_span(name, context=self._parent(session_id), start_time=started or None,
+                                       attributes=attributes)
+        if decided:
+            event: dict[str, Any] = {"acs.decision": decided}
+            if result.reason_codes:
+                event["acs.reason_codes"] = list(result.reason_codes)
+            span.add_event(DECISION_EVENT, event)
+        else:
+            _failure_event(span, result.failure_class, result.cause)
+        span.end()
+
+    @contextlib.contextmanager
+    def model_call(self, session_id: str | None, body: Any, stream: bool) -> Iterator[ModelCall]:
+        """A span for one call to the model upstream, from the send until the answer's headers arrive.
+
+        A streamed answer's tool calls are gated after this span ends, and their step spans sit beside it in the trace.
+        """
+        if self._tracer is None:
+            yield _OFF_CALL
+            return
+        model = body.get("model") if isinstance(body, dict) else None
+        attributes: dict[str, Any] = {"gen_ai.operation.name": MODEL_OPERATION, "gen_ai.provider.name": PROVIDER_NAME,
+                                      "acs.lab.mode": self.mode, "acs.lab.stream": stream}
+        if isinstance(model, str) and model:
+            attributes["gen_ai.request.model"] = model
+            attributes["acs.lab.model"] = model
+        if session_id is not None:
+            attributes["acs.session.id"] = session_id
+        name = f"{MODEL_OPERATION} {model}" if isinstance(model, str) and model else MODEL_OPERATION
+        span = self._tracer.start_span(name, context=self._parent(session_id), attributes=attributes)
+        token = _MODEL_SPAN.set(span)
+        try:
+            yield ModelCall(span)
+        except BaseException as e:
+            from opentelemetry.trace import Status, StatusCode
+
+            # The error's type only. Its message can quote a URL or a body, which never goes on a span.
+            span.set_attribute("error.type", type(e).__name__)
+            span.set_status(Status(StatusCode.ERROR))
+            raise
+        finally:
+            _MODEL_SPAN.reset(token)
+            span.end()
+
+
+class ModelCall:
+    """The model call span a caller marks with the upstream's status."""
+
+    def __init__(self, span: Any) -> None:
+        self._span = span
+
+    def status(self, code: int) -> None:
+        if self._span is not None:
+            self._span.set_attribute("http.response.status_code", code)
+
+
+_OFF_CALL = ModelCall(None)
+
+
+def _failure_event(span: Any, failure_class: str | None, detail: str | None) -> None:
+    """An acs.decision.failure event. The gateway always fails closed (D-045), and reports its own conduct."""
+    attributes = {"acs.failure.posture": "fail_closed", "acs.failure.reported_by": "observed_agent"}
+    if failure_class in FAILURE_CLASSES and failure_class != "other":
+        attributes["acs.failure.class"] = failure_class
+    else:
+        # Text the gateway composes from its own cause token, never bytes from a request or response.
+        attributes["acs.failure.class"] = "other"
+        attributes["acs.failure.detail"] = f"gateway cause {detail or failure_class or 'unknown'}"
+    span.add_event(FAILURE_EVENT, attributes)
+
+
+def _session_outcome(span: Any, request_id: str | None, handshake: Any) -> None:
+    """How the opening ended, read from acs.client's handshake outcome by shape, so this module imports no ACS code.
+
+    A session that opened needs no event. A Guardian that denied sessionStart decided, so that is a decision event.
+    Anything else that kept the session from opening is a decision failure on this span, as the mapping asks.
+    """
+    cause = getattr(handshake, "cause", None)
+    if hasattr(handshake, "server_hello"):
+        failure = getattr(handshake, "start_failure", None)
+        if failure is None:
+            return
+        fields = failure.get("fields") or {}
+        _failure_event(span, fields.get("failure_class"), failure.get("cause"))
+        return
+    fields = getattr(handshake, "fields", None) or {}
+    if request_id is not None and cause == "session_start_denied" and isinstance(fields.get("decision"), str):
+        span.add_event(DECISION_EVENT, {"acs.decision": fields["decision"]})
+    elif request_id is not None and cause == "session_start_refused":
+        _failure_event(span, "guardian_error", cause)
+    else:
+        _failure_event(span, "handshake_failure", cause)
+
+
+def new_provider() -> TracerProvider:
+    """A tracer provider whose id generator can give a session's root span the session's own ids."""
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+
+    return TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}), id_generator=_session_ids())
+
 
 def build_provider(endpoint: str) -> TracerProvider:
     """A provider that batches spans to endpoint's /v1/traces. Imported here, so off never loads the SDK."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}), id_generator=_session_ids())
+    provider = new_provider()
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_url(endpoint))))
     return provider
 

@@ -373,9 +373,10 @@ class Gateway:
         # Capture and replay key on what the gateway did, read from its own records (A.8).
         branch = session_branch(session, body) if self.enforce and session is not None else None
         raw = self._to_upstream(raw, body, headers, branch)
+        traced = session.session_id if session is not None else None
         if is_stream(body):
             self.model_inputs.append(body)
-            sent = await self._send(raw, headers, arrival)
+            sent = await self._send(raw, headers, body, traced, stream=True, arrival=arrival)
             if isinstance(sent, Response):
                 return sent
             media = sent.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -384,7 +385,7 @@ class Gateway:
             # An error status, or an upstream that answered a stream request whole, takes the whole-answer path.
             upstream = await self._read_answer(sent)
         else:
-            upstream = await self._upstream(raw, body, headers, arrival)
+            upstream = await self._upstream(raw, body, headers, traced, arrival)
         if isinstance(upstream, Response):
             return upstream
         if not 200 <= upstream.status_code < 300:
@@ -559,7 +560,9 @@ class Gateway:
             _audit("session_retried", previous_session_id=session.session_id,
                    cause=getattr(session.handshake, "cause", None) or "session_start_failed")
             session.session_id = str(uuid.uuid4())
-        await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.open, session)
+        started = self.tracing.now()
+        request_id = await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.open, session)
+        self.tracing.session(session.session_id, session.epoch, request_id, session.handshake, started)
         session.open_failed_at = None if _opened(session.handshake) else time.monotonic()
 
     def _gating_failed(self, session: Session | None, phase: str, error: Exception) -> Response | None:
@@ -570,24 +573,30 @@ class Gateway:
             return None
         return openai_error(500, "The request could not be completed.", "server_error", "internal_error")
 
-    async def _send(self, raw: bytes, headers: dict[str, str], arrival: Arrival | None = None) -> httpx.Response | Response:
+    async def _send(self, raw: bytes, headers: dict[str, str], body: Any = None, session_id: str | None = None,
+                    stream: bool | None = None, arrival: Arrival | None = None) -> httpx.Response | Response:
         """POST upstream and return the response unread, or the 502 an unreachable upstream gets. The one place every
-        path sends from. Capture and replay get the request's arrival as an extension, never a header (round 2, R5)."""
+        path sends from, inside a model call span that ends when the answer's headers arrive (LAB-09). stream None
+        asks the body, for the verbatim relay that never parsed it. Capture and replay get the request's arrival as an
+        extension, never a header (round 2, R5)."""
         assert self.http is not None
         extensions = {ARRIVAL_EXTENSION: arrival} if arrival is not None and self.upstream_source.records_branch else None
         try:
-            return await self.http.send(
-                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
-                                        headers=headers, extensions=extensions), stream=True)
+            with self.tracing.model_call(session_id, body, is_stream(body) if stream is None else stream) as call:
+                upstream = await self.http.send(
+                    self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
+                                            headers=headers, extensions=extensions), stream=True)
+                call.status(upstream.status_code)
+                return upstream
         except httpx.HTTPError as e:
             _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
             return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
 
     async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str],
-                        arrival: Arrival | None = None) -> UpstreamAnswer | Response:
+                        traced: str | None = None, arrival: Arrival | None = None) -> UpstreamAnswer | Response:
         """POST upstream and read the whole answer, up to the size limit, so the gateway can gate it."""
         self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        upstream = await self._send(raw, headers, arrival)
+        upstream = await self._send(raw, headers, body, traced, stream=False, arrival=arrival)
         if isinstance(upstream, Response):
             return upstream
         return await self._read_answer(upstream)
@@ -650,7 +659,9 @@ class Gateway:
         if self.model_inputs.enabled:
             body = logged if logged is not None or parsed else _parse(raw)
             self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        upstream = await self._send(raw, headers, arrival)
+        # Off parses the body only to name the model on a span, and only when tracing is on.
+        traced_body = _parse(raw) if self.tracing.enabled else None
+        upstream = await self._send(raw, headers, traced_body, None, stream=None, arrival=arrival)
         if isinstance(upstream, Response):
             return upstream
         if not 200 <= upstream.status_code < 300:
@@ -996,6 +1007,13 @@ class Gateway:
         return timeout + _STEP_GRACE_S
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
+        """One Guardian step, recorded as a step span once it settles (LAB-09)."""
+        started = self.tracing.now()
+        result = await self._guardian_step(session, method, payload)
+        self.tracing.step(session.session_id, method, payload, result, started, shadow=self.config.mode == "shadow")
+        return result
+
+    async def _guardian_step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
         if session.retired:
             # A step of this request hung and retired the session, so its remaining steps deny without sending.

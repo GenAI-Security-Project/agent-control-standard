@@ -204,12 +204,19 @@ class GuardianClient:
         return replace(negotiated, timeout_s=min(negotiated.timeout_s, local),
                        per_method_timeout_s={m: min(s, local) for m, s in negotiated.per_method_timeout_s.items()})
 
-    def open(self, session: Session) -> None:
-        """Handshake, then sessionStart, so the session's chain roots there (A.4)."""
+    def open(self, session: Session) -> str | None:
+        """Handshake, then sessionStart, so the session's chain roots there (A.4).
+
+        Returns the sessionStart request_id, or None when none was sent, for the session's span (LAB-09).
+        """
+        sent: list[str] = []
+
         def start(negotiated: Negotiated) -> Decided | Resolution | None:
             if not method_evaluated(dict(negotiated.server_hello), SESSION_START):
                 return None
-            outcome, _ = self._send(session.session_id, SESSION_START, {}, self.posture(negotiated.server_hello))
+            outcome, request_id = self._send(session.session_id, SESSION_START, {},
+                                             self.posture(negotiated.server_hello))
+            sent.append(request_id)
             return outcome
 
         handshake = open_session(config=self.acs_config, session_id=session.session_id, agent_id=self.config.agent_id,
@@ -220,6 +227,7 @@ class GuardianClient:
         audit_event("session_opened", session_id=session.session_id, epoch=session.epoch,
                     handshake=type(handshake).__name__, cause=getattr(handshake, "cause", None),
                     guardian_url=self.config.guardian_url)
+        return sent[0] if sent else None
 
     def step(self, session: Session, method: str, payload: dict[str, Any],
              token: StepToken | None = None) -> StepResult:
