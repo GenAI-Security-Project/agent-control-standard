@@ -41,7 +41,7 @@ from acs_gateway.apply import (
     unsupported_tool,
 )
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
-from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult
+from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult, StepToken
 from acs_gateway.sessions import CachedOutcome, Session, SessionMap, conversation_key, fingerprint
 from acs_gateway.transcript import ModelInputLog, Transcript
 
@@ -428,13 +428,17 @@ class Gateway:
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
         timeout = session.posture.timeout_for(method) if session.posture else self.config.decision_timeout_s
-        deadline = time.monotonic() + timeout
+        token = StepToken(time.monotonic() + timeout)
         future = asyncio.get_running_loop().run_in_executor(
-            self.executor, functools.partial(self.guardian.step, session, method, payload, deadline))
+            self.executor, functools.partial(self.guardian.step, session, method, payload, token))
         try:
             # acs.client bounds the exchange itself. The grace covers a worker stuck outside it, such as a slow disk.
-            return await asyncio.wait_for(future, timeout + _STEP_GRACE_S)
+            return await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
         except asyncio.TimeoutError:
+            if not token.cancel():
+                # The worker claimed the step before the deadline, so its transcript lines are on the way. The lock
+                # stays held until they land, which keeps the chain in send order. Its decision is late and ignored.
+                await future
             return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
 
     def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:

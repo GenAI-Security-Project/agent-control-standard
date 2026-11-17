@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, replace
@@ -83,6 +84,36 @@ def jcs_problem(value: Any, depth: int = 0) -> str | None:
     return f"unsupported type {type(value).__name__}"
 
 
+class StepToken:
+    """Settles the race between a step's worker and the deadline the event loop enforces (PREMORTEM P20).
+
+    The worker claims the token before it writes the transcript line and sends. The loop cancels it at the deadline.
+    Exactly one wins: a cancelled step writes and sends nothing, and a claimed one runs to the end, bounded by the
+    decision timeout, while the loop waits for it before releasing the session lock.
+    """
+
+    def __init__(self, deadline: float) -> None:
+        self.deadline = deadline
+        self._lock = threading.Lock()
+        self._state = "pending"
+
+    def claim(self) -> bool:
+        with self._lock:
+            if self._state == "cancelled" or time.monotonic() >= self.deadline:
+                self._state = "cancelled"
+                return False
+            self._state = "claimed"
+            return True
+
+    def cancel(self) -> bool:
+        """True when the worker will write and send nothing, False when it already claimed the step."""
+        with self._lock:
+            if self._state == "claimed":
+                return False
+            self._state = "cancelled"
+            return True
+
+
 class GuardianClient:
     def __init__(self, config: GatewayConfig, transcript: Transcript) -> None:
         self.config = config
@@ -130,19 +161,19 @@ class GuardianClient:
                     guardian_url=self.config.guardian_url)
 
     def step(self, session: Session, method: str, payload: dict[str, Any],
-             deadline: float | None = None) -> StepResult:
+             token: StepToken | None = None) -> StepResult:
         """Never raises: anything that goes wrong on the gateway's side settles the step as a deny.
 
-        deadline is a time.monotonic() value set when the step was queued, so time spent waiting for a worker
-        counts against the decision timeout.
+        token carries a deadline set when the step was queued, so time spent waiting for a worker counts against the
+        decision timeout, and a step the loop already gave up on writes and sends nothing.
         """
         try:
-            return self._step(session, method, payload, deadline)
+            return self._step(session, method, payload, token)
         except Exception as e:  # noqa: BLE001
             audit_event("gateway_step_error", session_id=session.session_id, method=method, error=str(e))
             return StepResult(method, None, cause="adapter_exception", failure_class="observed_agent_error")
 
-    def _step(self, session: Session, method: str, payload: dict[str, Any], deadline: float | None) -> StepResult:
+    def _step(self, session: Session, method: str, payload: dict[str, Any], token: StepToken | None) -> StepResult:
         gated = self.acs_config.gate(session.handshake, method)
         if gated is not None:
             return StepResult(method, None, cause=gated.cause, failure_class=gated.fields.get("failure_class"))
@@ -153,12 +184,14 @@ class GuardianClient:
             audit_event("method_not_evaluated", session_id=session.session_id, method=method)
             return StepResult(method, None, cause="method_not_evaluated", failure_class="guardian_error")
         posture = session.posture
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
+        if token is not None:
+            remaining = token.deadline - time.monotonic()
             if remaining <= 0:
                 return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
             posture = replace(posture, timeout_s=min(posture.timeout_for(method), remaining), per_method_timeout_s={})
-        outcome, request_id = self._send(session.session_id, method, payload, posture)
+        outcome, request_id = self._send(session.session_id, method, payload, posture, token)
+        if outcome is None:
+            return StepResult(method, request_id, cause="decision_timeout", failure_class="timeout")
         if isinstance(outcome, Resolution):
             return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"))
         result = outcome.response.get("result") or {}
@@ -166,8 +199,9 @@ class GuardianClient:
         return StepResult(method, request_id, decision=normalize_decision(result),
                           reason_codes=[c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [])
 
-    def _send(self, session_id: str, method: str, payload: dict[str, Any],
-              posture: FailPosture) -> tuple[Decided | Resolution, str]:
+    def _send(self, session_id: str, method: str, payload: dict[str, Any], posture: FailPosture,
+              token: StepToken | None = None) -> tuple[Decided | Resolution | None, str]:
+        """None as the outcome means the token was cancelled first, so nothing was written or sent."""
         request_id = str(uuid.uuid4())
         request = request_envelope(method, request_id=request_id,
                                    metadata={"agent_id": self.config.agent_id, "session_id": session_id,
@@ -183,6 +217,8 @@ class GuardianClient:
             return posture.closed().resolve(Undecided("envelope_not_signable", {"error": str(e)},
                                                       f"envelope not signable: {e}")), request_id
         signature = dict(request["params"]["signature"])
+        if token is not None and not token.claim():
+            return None, request_id
         # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
         self.transcript.append(session_id, "req", request)
         outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,

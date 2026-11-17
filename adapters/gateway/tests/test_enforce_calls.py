@@ -246,3 +246,36 @@ def test_reasoning_stays_when_a_later_call_of_its_turn_is_kept(gateway, guardian
     output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request()).json()["output"]
     assert [(i["type"], i.get("call_id")) for i in output] == [("reasoning", None), ("function_call", "call_2")]
+
+
+class SlowTranscript:
+    """Wraps the real transcript and stalls on the toolCallRequest line, the window a stale worker would write in."""
+
+    def __init__(self, inner, delay):
+        self.inner, self.delay = inner, delay
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        import time
+
+        if direction == "req" and envelope and envelope.get("method") == "steps/toolCallRequest":
+            time.sleep(self.delay)
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def test_a_timed_out_step_writes_nothing_after_the_request_returns(gateway, guardian, upstream, audit, tmp_path):
+    import time
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="500")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 2.0)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert events(audit, "decision_applied")[0]["cause"] == "decision_timeout"
+    at_return = transcript_lines(tmp_path)
+    time.sleep(2.5)
+    assert transcript_lines(tmp_path) == at_return
+    methods = [(line["dir"], (line["envelope"] or {}).get("method")) for line in at_return]
+    assert methods[-2:] == [("req", "steps/toolCallRequest"), ("resp", None)]
