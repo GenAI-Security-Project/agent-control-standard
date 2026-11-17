@@ -154,6 +154,8 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Read by acs.client: handshake timeout |
 | `NO_PROXY` | None | acs.client honors proxy variables on every call, so list the Guardian here when a proxy is set |
 
+Integer settings (`ACS_GATEWAY_WORKERS`, `ACS_GATEWAY_MAX_SESSIONS`, `ACS_GATEWAY_MAX_BODY_BYTES`) take plain ASCII digits only, at least 1. A fraction, a sign, scientific notation such as `8e6`, or digits from another script stop startup with an error naming the setting.
+
 The gateway ignores `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE` and `ACS_DISABLED`, which the hook adapters read. Its posture is always fail closed, and the mode is its off switch.
 
 ## Lab conventions

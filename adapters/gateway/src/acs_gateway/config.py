@@ -37,7 +37,10 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     raw = env.get(name, "").strip()
     if not raw:
         return default
-    if not raw.isdigit() or int(raw) < 1:
+    # str.isdigit also accepts digits from other scripts, which int() then reads, so only ASCII 0-9 count.
+    if not (raw.isascii() and raw.isdigit()):
+        raise ValueError(f"{name} must be plain ASCII digits, a whole number of at least 1, got {raw!r}")
+    if int(raw) < 1:
         raise ValueError(f"{name} must be a whole number of at least 1, got {raw!r}")
     return int(raw)
 

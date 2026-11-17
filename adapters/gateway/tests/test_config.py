@@ -58,3 +58,9 @@ def test_integer_settings_read_whole_numbers(tmp_path):
     config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_WORKERS": "3",
                                      "ACS_GATEWAY_MAX_SESSIONS": "7", "ACS_GATEWAY_MAX_BODY_BYTES": "1024"})
     assert (config.workers, config.max_sessions, config.max_body_bytes) == (3, 7, 1024)
+
+
+@pytest.mark.parametrize("value", ["١٢", "８", "8e6"])
+def test_integer_settings_take_plain_ascii_digits_only(tmp_path, value):
+    with pytest.raises(ValueError, match="ACS_GATEWAY_WORKERS must be plain ASCII digits"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_WORKERS": value})
