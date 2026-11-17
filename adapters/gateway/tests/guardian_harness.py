@@ -70,6 +70,10 @@ def handle_request(request: dict) -> dict:
     if request.get("method") == "handshake/hello" and _failed_hellos < int(os.environ.get("HARNESS_FAIL_HELLOS", "0")):
         _failed_hellos += 1
         return {"__harness_status__": 503}
+    count_file = os.environ.get("HARNESS_COUNT_FILE")
+    if count_file:
+        with open(count_file, "a", encoding="utf-8") as f:
+            f.write(f"{request.get('method')}\n")
     tool = _tool(request.get("params") or {})
     if tool == "rate_limited_tool":
         return {"__harness_status__": 429}

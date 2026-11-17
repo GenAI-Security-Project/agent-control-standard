@@ -213,3 +213,16 @@ def test_time_queued_for_a_worker_counts_against_the_decision_timeout(gateway, g
     assert events(audit, "decision_applied")[0]["cause"] == "decision_timeout"
     assert not [line for line in transcript_lines(tmp_path) if line["envelope"]
                 and line["envelope"].get("method") == "steps/toolCallRequest"]
+
+
+def test_a_request_whose_transcript_line_fails_never_reaches_the_guardian(gateway, harness_guardian, upstream,
+                                                                          tmp_path):
+    received = tmp_path / "guardian-received.txt"
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_COUNT_FILE=str(received)))
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    client.app.state.gateway.guardian.transcript = FailingTranscript()
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    assert "steps/toolCallRequest" not in received.read_text().split()
+    assert "steps/sessionStart" in received.read_text().split()
