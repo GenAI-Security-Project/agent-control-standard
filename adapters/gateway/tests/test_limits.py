@@ -104,8 +104,10 @@ def test_a_request_waiting_for_the_lock_keeps_its_session_at_capacity(gateway, g
     async def scenario():
         await s1.lock.acquire()
 
+        pins = []
+
         async def waiter():
-            async with gw._current(key) as session:
+            async with gw._current(key, pins) as session:
                 return session
 
         task = asyncio.create_task(waiter())
@@ -117,5 +119,93 @@ def test_a_request_waiting_for_the_lock_keeps_its_session_at_capacity(gateway, g
         except Exception:  # noqa: BLE001
             pass
         return await task
+
+    assert client.portal.call(scenario) is s1
+
+
+
+def test_current_requires_the_caller_to_hold_the_pins():
+    import inspect
+
+    from acs_gateway.app import Gateway
+
+    pins = inspect.signature(Gateway._current).parameters["pins"]
+    assert pins.default is inspect.Parameter.empty
+
+
+def test_every_pin_is_released_after_refusals_and_faults(gateway, guardian, upstream):
+    from conftest import call_item, response_body
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    gw = client.app.state.gateway
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client.post("/v1/responses", json=finbot_request())
+    # A refusal under the lock: a call this session never delivered, with a repeated key.
+    forged = {"type": "function_call", "call_id": "c9", "name": "send", "arguments": '{"a": 1, "a": 2}'}
+    assert client.post("/v1/responses", json=finbot_request(call, forged)).status_code == 400
+    # A fault inside gating.
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("gating bug")
+
+    gw._gate_input = boom
+    assert client.post("/v1/responses", json=finbot_request()).status_code == 500
+    assert [s.active for s in gw.sessions._sessions.values()] == [0]
+
+
+def test_moving_off_a_session_releases_its_pin(gateway, guardian, upstream):
+    import asyncio
+
+    from acs_gateway.sessions import conversation_key
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request(user="conversation A"))
+    gw = client.app.state.gateway
+    key = conversation_key(finbot_request(user="conversation A"))
+    s1 = gw.sessions.peek(key)
+
+    async def scenario():
+        await s1.lock.acquire()
+        pins = []
+
+        async def waiter():
+            async with gw._current(key, pins) as session:
+                return session, s1.active, list(pins)
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+        # An epoch bump while the request waits moves it to the key's new session.
+        gw.sessions.bump_epoch()
+        s1.lock.release()
+        return await task
+
+    session, s1_active, pins = client.portal.call(scenario)
+    assert session is not s1
+    assert s1_active == 0 and pins == [session]
+
+
+def test_a_held_pin_keeps_a_session_once_its_lock_is_free(gateway, guardian, upstream):
+    import asyncio
+
+    import pytest as _pytest
+
+    from acs_gateway.sessions import SessionsBusy, conversation_key
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_SESSIONS="1")
+    client.post("/v1/responses", json=finbot_request(user="conversation A"))
+    gw = client.app.state.gateway
+    key = conversation_key(finbot_request(user="conversation A"))
+    s1 = gw.sessions.peek(key)
+
+    async def scenario():
+        pins = []
+        async with gw._current(key, pins) as session:
+            assert session is s1
+        # The lock is free again but the request still holds its pin, as between its input and output phases.
+        assert not s1.lock.locked() and s1.active == 1
+        with _pytest.raises(SessionsBusy):
+            gw.sessions.get("another conversation")
+        return gw.sessions.peek(key)
 
     assert client.portal.call(scenario) is s1

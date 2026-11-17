@@ -345,7 +345,7 @@ class Gateway:
         return _relay(upstream, reply if changed else None)
 
     @contextlib.asynccontextmanager
-    async def _current(self, key: str, pins: list[Session] | None = None,
+    async def _current(self, key: str, pins: list[Session],
                        recheck: Callable[[Session | None, bool], None] | None = None) -> AsyncIterator[Session]:
         """The key's session for the current epoch, locked. sessions.get touches its LRU entry, and the session is
         pinned before the request waits for its lock, so it can't be evicted from under a queued request. A bump, an
@@ -354,7 +354,6 @@ class Gateway:
 
         recheck runs before any session is created (with None) and, under the lock, against an existing session the
         request moved to. It may refuse the request by raising, and then nothing has been created or evicted."""
-        pins = pins if pins is not None else []
         first = True
         while True:
             created = self.sessions.peek(key) is None
@@ -367,6 +366,8 @@ class Gateway:
                     and self.sessions.peek(key) is session):
                 break
             session.lock.release()
+            # The request leaves this session for good, so it stops holding it against eviction.
+            _unpin(session, pins)
             first = False
         try:
             if recheck is not None and not created:
@@ -773,6 +774,15 @@ async def _continue(first: deque[bytes], rest: AsyncIterator[bytes]) -> AsyncIte
         yield first.popleft()
     async for chunk in rest:
         yield chunk
+
+
+def _unpin(session: Session, pins: list[Session]) -> None:
+    """Release a pin the request took, once."""
+    for index, pinned in enumerate(pins):
+        if pinned is session:
+            del pins[index]
+            session.active -= 1
+            return
 
 
 def _parse_governed(raw: bytes) -> tuple[Any, str | None]:

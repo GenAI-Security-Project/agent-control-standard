@@ -317,3 +317,4 @@ def test_shadow_dedup_keeps_two_different_findings_on_one_call_id(gateway, guard
         "/v1/responses", json=finbot_request(first, second))
     assert response.status_code == 200
     assert sorted(e["key"] for e in events(audit, "duplicate_json_key")) == ["a", "b"]
+
