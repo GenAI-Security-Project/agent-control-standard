@@ -64,7 +64,7 @@ A decision failure is an error, any non-2xx status (429 included), a timeout, a 
 
 When removing calls leaves a response with no message and no call, the gateway adds one assistant message: `I couldn't complete that action.` That line is the one artifact of governance the client or the model ever sees. No session id, request id, reason code, signature or lab header reaches either side.
 
-The gateway's own configuration always denies on a decision failure. A ServerHello that declares `proceed`, or names no posture at all, can't loosen it (D-045).
+The gateway's own configuration always denies on a decision failure. A ServerHello that leaves `steps/toolCallRequest` or `steps/toolCallResult` out of `methods_evaluated` doesn't switch gating off: those steps deny, audited as `method_not_evaluated`. A ServerHello that declares `proceed`, or names no posture at all, can't loosen it (D-045).
 
 ## Sessions and resends
 

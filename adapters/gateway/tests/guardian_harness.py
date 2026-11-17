@@ -59,6 +59,9 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
     hello = _evaluate_handshake(params, request_id)
     if os.environ.get("HARNESS_OMIT_POSTURE") == "1":
         hello.pop("on_decision_failure", None)
+    omit = os.environ.get("HARNESS_OMIT_METHOD")
+    if omit:
+        hello["methods_evaluated"] = [m for m in hello["methods_evaluated"] if m != omit]
     return hello
 
 

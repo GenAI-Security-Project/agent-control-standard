@@ -449,8 +449,7 @@ class Gateway:
         fields = {"session_id": session.session_id, "epoch": session.epoch, "method": result.method, "tool": name,
                   "call_id": call_id, "request_id": result.request_id, "decision": applied.decision,
                   "guardian_decision": result.decision.disposition if result.decision else None,
-                  "reason_codes": result.reason_codes, "cause": cause, "failure_class": result.failure_class,
-                  "evaluated": result.evaluated}
+                  "reason_codes": result.reason_codes, "cause": cause, "failure_class": result.failure_class}
         _audit("decision_applied" if self.enforce else "shadow_decision", **fields)
         if result.failure_class == "signature_invalid":
             _audit("verification_failed", **fields)

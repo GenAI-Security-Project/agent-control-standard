@@ -103,8 +103,6 @@ def _decided(result: StepResult) -> str | None:
     """The Guardian's disposition when the gateway may follow it, or None when the step must deny."""
     if result.cause is not None:
         return None
-    if not result.evaluated:
-        return "allow"
     return result.decision.disposition if result.decision is not None else None
 
 

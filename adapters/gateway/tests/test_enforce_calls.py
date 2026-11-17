@@ -226,3 +226,15 @@ def test_a_request_whose_transcript_line_fails_never_reaches_the_guardian(gatewa
     client.post("/v1/responses", json=finbot_request())
     assert "steps/toolCallRequest" not in received.read_text().split()
     assert "steps/sessionStart" in received.read_text().split()
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_a_server_hello_that_skips_tool_calls_denies_them(gateway, harness_guardian, upstream, audit, mode):
+    url = harness_guardian(HARNESS_OMIT_METHOD="steps/toolCallRequest")
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=url).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    name = "decision_applied" if mode == "enforce" else "shadow_decision"
+    assert [(e["decision"], e["cause"]) for e in events(audit, name)] == [("deny", "method_not_evaluated")]
+    if mode == "enforce":
+        assert output[0]["content"][0]["text"] == NEUTRAL

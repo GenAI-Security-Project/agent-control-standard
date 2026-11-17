@@ -46,8 +46,6 @@ class StepResult:
     # Set when no usable decision arrived. Every such step denies, whatever any ServerHello says.
     cause: str | None = None
     failure_class: str | None = None
-    # False when the Guardian's ServerHello leaves the method out of methods_evaluated (allow by default).
-    evaluated: bool = True
 
 
 _MAX_SAFE_INTEGER = 2**53 - 1
@@ -150,7 +148,10 @@ class GuardianClient:
             return StepResult(method, None, cause=gated.cause, failure_class=gated.fields.get("failure_class"))
         hello = session.handshake.server_hello
         if not method_evaluated(dict(hello), method):
-            return StepResult(method, None, evaluated=False)
+            # handshake.json makes a method left out of methods_evaluated allow by default. The gateway gates tool
+            # calls and results on its own authority (D-045), so a Guardian can't switch gating off this way.
+            audit_event("method_not_evaluated", session_id=session.session_id, method=method)
+            return StepResult(method, None, cause="method_not_evaluated", failure_class="guardian_error")
         posture = session.posture
         if deadline is not None:
             remaining = deadline - time.monotonic()
