@@ -36,7 +36,7 @@ ML-DSA-65 signs the same bytes HMAC-SHA256 signs: the RFC 8785 (JCS) form of the
 {"algorithm": "ML-DSA-65", "value": "<standard base64 of the 3,309 byte signature>", "key_id": "lab-guardian-1"}
 ```
 
-Only the canonical base64 spelling of a 3,309 byte signature verifies, so one signature has one encoding.
+Only the canonical base64 spelling of a 3,309 byte signature verifies, so one signature has one encoding. HMAC-SHA256 verification follows the same rule. A spelling with surplus padding or set unused trailing bits fails, which no compliant signer produces.
 
 ## Keys and the keyring
 

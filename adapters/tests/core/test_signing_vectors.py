@@ -62,5 +62,40 @@ class HmacSha256KnownAnswer(unittest.TestCase):
         self.assertTrue(verify_with_key(signed, KEY))
 
 
+_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _flip_unused_bits(value: str) -> str:
+    """Another spelling of the same bytes: set the unused low bits of the last data character."""
+    data = value.rstrip("=")
+    padding = len(value) - len(data)
+    last = _B64.index(data[-1]) | ((1 << (2 * padding)) - 1)
+    return data[:-1] + _B64[last] + "=" * padding
+
+
+class CanonicalBase64(unittest.TestCase):
+    """Review finding CR3-2: one signature has one spelling, for HMAC as for ML-DSA."""
+
+    def test_decode_signature_value_takes_only_the_canonical_spelling(self) -> None:
+        from acs.core._signing import decode_signature_value
+        self.assertEqual(decode_signature_value(HMAC_VALUE), base64.b64decode(HMAC_VALUE))
+        alias = _flip_unused_bits(HMAC_VALUE)
+        self.assertNotEqual(alias, HMAC_VALUE)
+        self.assertEqual(base64.b64decode(alias, validate=True), base64.b64decode(HMAC_VALUE))
+        for value in (alias, HMAC_VALUE + "=", HMAC_VALUE.rstrip("="), "", "not base64!", None, 7, b"x",
+                      HMAC_VALUE[:5] + "-" + HMAC_VALUE[6:]):
+            with self.subTest(value=value):
+                self.assertIsNone(decode_signature_value(value))
+
+    def test_hmac_rejects_a_non_canonical_spelling(self) -> None:
+        signed = sign_with_key(_request(), KEY, key_id="lab")
+        for value in (_flip_unused_bits(HMAC_VALUE), HMAC_VALUE + "="):
+            envelope = sign_with_key(_request(), KEY, key_id="lab")
+            envelope["params"]["signature"]["value"] = value
+            with self.subTest(value=value):
+                self.assertFalse(verify_with_key(envelope, KEY))
+        self.assertTrue(verify_with_key(signed, KEY))
+
+
 if __name__ == "__main__":
     unittest.main()

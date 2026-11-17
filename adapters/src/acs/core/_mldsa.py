@@ -14,8 +14,6 @@ and it fails at import, not at the first signature, when ML-DSA is unavailable.
 """
 from __future__ import annotations
 
-import base64
-import binascii
 
 try:
     import cryptography
@@ -28,7 +26,7 @@ except ImportError as exc:
         "can't be installed together (see adapters/README.md).") from exc
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
-from acs.core._signing import _attach_signature, container_key, signing_input
+from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
 
 ML_DSA_MODE = "pure"
 ML_DSA_CONTEXT = b""
@@ -170,16 +168,8 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     if sig.get("algorithm") != key.algorithm:
         return False
     verify = _VERIFIERS.get(key.algorithm)
-    value = sig.get("value")
-    if verify is None or not isinstance(value, str) or not value:
-        return False
-    try:
-        signature = base64.b64decode(value, validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    # b64decode accepts surplus trailing padding, so one signature would have many spellings.
-    # Only the canonical encoding verifies, which keeps a signed envelope's bytes unique.
-    if base64.b64encode(signature).decode("ascii") != value:
+    signature = decode_signature_value(sig.get("value"))
+    if verify is None or signature is None:
         return False
     # Any other length is malformed, so it never reaches the library.
     if len(signature) != SIGNATURE_BYTES:

@@ -37,6 +37,24 @@ def signing_input(envelope: dict) -> bytes:
     return jcs_canonicalize({**envelope, ckey: unsigned_container})
 
 
+def decode_signature_value(value: object) -> bytes | None:
+    """The bytes a signature value encodes, or None unless it is the one canonical spelling.
+
+    b64decode also accepts surplus padding and set unused trailing bits, so one signature
+    would have several spellings. Compliant signers always emit the canonical form, so
+    refusing the others costs a conformant peer nothing and keeps signed bytes unique.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if base64.b64encode(decoded).decode("ascii") != value:
+        return None
+    return decoded
+
+
 def _attach_signature(envelope: dict, *, algorithm: str, signature: bytes, key_id: str) -> dict:
     """Set the container's signature object in place, replacing any earlier one (§10)."""
     ckey = container_key(envelope)
@@ -64,8 +82,8 @@ def verify_with_key(envelope: dict, key: bytes) -> bool:
     sig = container.get("signature")
     if not isinstance(sig, dict) or sig.get("algorithm") != "HMAC-SHA256":
         return False
-    expected_b64 = sig.get("value")
-    if not expected_b64:
+    provided_bytes = decode_signature_value(sig.get("value"))
+    if provided_bytes is None:
         return False
     try:
         canonical = signing_input(envelope)
@@ -73,9 +91,4 @@ def verify_with_key(envelope: dict, key: bytes) -> bool:
         # RFC 8785 has no form for this envelope (an integer beyond 2**53, NaN, deep nesting), so no signature covers it.
         return False
     expected_bytes = hmac.new(key, canonical, hashlib.sha256).digest()
-    # Malformed base64 is a failed verification, not an exception.
-    try:
-        provided_bytes = base64.b64decode(expected_b64, validate=True)
-    except (binascii.Error, ValueError, TypeError):
-        return False
     return hmac.compare_digest(expected_bytes, provided_bytes)
