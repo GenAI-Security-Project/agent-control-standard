@@ -190,15 +190,24 @@ def test_shadow_keeps_the_repeated_key_audit_when_the_request_ends_busy(gateway,
 
 
 def test_a_fault_in_the_locked_check_in_shadow_still_gates_the_input(gateway, guardian, upstream, audit):
-    from conftest import call_item
+    from conftest import call_item, response_body
 
-    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("locked check bug")
-
-    client.app.state.gateway._refuse_before_create = boom
     call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    gw = client.app.state.gateway
+    client.post("/v1/responses", json=finbot_request())
+    # The peeked session goes away, so the locked check has to run, and on that run it faults.
+    retire_on_peek(gw, call)
+    original, calls = gw._refuse_unrestorable, []
+
+    def faulting(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("locked check bug")
+        return original(*args, **kwargs)
+
+    gw._refuse_unrestorable = faulting
     output = {"type": "function_call_output", "call_id": "call_1", "output": "{}"}
     response = client.post("/v1/responses", json=finbot_request(call, output))
     assert response.status_code == 200
@@ -247,3 +256,64 @@ def test_a_pre_pass_fault_in_shadow_still_runs_the_locked_check(gateway, guardia
     response = client.post("/v1/responses", json=finbot_request(forged))
     assert response.status_code == 200
     assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["function_call.arguments"]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_a_replacement_session_another_request_created_still_gets_the_check(gateway, guardian, upstream, audit,
+                                                                            mode):
+    from conftest import call_item, response_body
+
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian)
+    gw = client.app.state.gateway
+    client.post("/v1/responses", json=finbot_request())
+    original_peek, peeks = gw.sessions.peek, []
+
+    def peek(key):
+        session = original_peek(key)
+        peeks.append(key)
+        if len(peeks) == 1:
+            # The pre-pass sees the session that delivered call_1. Then another request replaces it with a session
+            # of its own, which has never seen call_1 (the probe's shape, review R11-I1).
+            gw.sessions.retire(session)
+            gw.sessions.get(key)
+        return session
+
+    gw.sessions.peek = peek
+    forged = {**call, "arguments": '{"a": 1, "a": 2}'}
+    response = client.post("/v1/responses", json=finbot_request(forged))
+    if mode == "enforce":
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "duplicate_json_key"
+    else:
+        assert response.status_code == 200
+    assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["function_call.arguments"]
+
+
+def test_a_new_conversation_parses_each_call_once(gateway, guardian, upstream, monkeypatch):
+    import acs_gateway.strict as strict_module
+
+    arguments = '{"vendor_id": 7, "note": "only once"}'
+    parsed, original = [], strict_module.json.loads
+
+    def counting(text, *args, **kwargs):
+        if text == arguments:
+            parsed.append(text)
+        return original(text, *args, **kwargs)
+
+    monkeypatch.setattr(strict_module.json, "loads", counting)
+    call = {"type": "function_call", "call_id": "c1", "name": "get_vendor_details", "arguments": arguments}
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(call, user="brand new conversation"))
+    assert response.status_code == 200
+    assert len(parsed) == 1
+
+
+def test_shadow_dedup_keeps_two_different_findings_on_one_call_id(gateway, guardian, upstream, audit):
+    first = {"type": "function_call", "call_id": "c1", "name": "send", "arguments": '{"a": 1, "a": 2}'}
+    second = {**first, "arguments": '{"b": 1, "b": 2}'}
+    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(first, second))
+    assert response.status_code == 200
+    assert sorted(e["key"] for e in events(audit, "duplicate_json_key")) == ["a", "b"]

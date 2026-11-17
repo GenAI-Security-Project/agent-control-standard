@@ -72,3 +72,50 @@ def test_the_shadow_relay_releases_each_held_chunk_once_sent():
     seen, sizes = asyncio.run(drain())
     assert seen == [b"a", b"b", b"c", b"d"]
     assert sizes == [2, 1, 0, 0]
+
+
+def test_eviction_follows_use_not_creation_order(gateway, guardian, upstream, audit):
+    from acs_gateway.sessions import conversation_key
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_SESSIONS="2")
+    gw = client.app.state.gateway
+    client.post("/v1/responses", json=finbot_request(user="conversation A"))
+    client.post("/v1/responses", json=finbot_request(user="conversation B"))
+    a = gw.sessions.peek(conversation_key(finbot_request(user="conversation A")))
+    b = gw.sessions.peek(conversation_key(finbot_request(user="conversation B")))
+    # A is used again, so B is now the least recently used.
+    client.post("/v1/responses", json=finbot_request(user="conversation A"))
+    client.post("/v1/responses", json=finbot_request(user="conversation C"))
+    assert [e["session_id"] for e in events(audit, "session_evicted")] == [b.session_id]
+    assert a in gw.sessions._sessions.values()
+
+
+def test_a_request_waiting_for_the_lock_keeps_its_session_at_capacity(gateway, guardian, upstream):
+    import asyncio
+
+    from acs_gateway.sessions import conversation_key
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_SESSIONS="1")
+    client.post("/v1/responses", json=finbot_request(user="conversation A"))
+    gw = client.app.state.gateway
+    key = conversation_key(finbot_request(user="conversation A"))
+    s1 = gw.sessions.peek(key)
+
+    async def scenario():
+        await s1.lock.acquire()
+
+        async def waiter():
+            async with gw._current(key) as session:
+                return session
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+        # The holder lets go, and before the queued request wakes, another conversation arrives at capacity.
+        s1.lock.release()
+        try:
+            gw.sessions.get("another conversation")
+        except Exception:  # noqa: BLE001
+            pass
+        return await task
+
+    assert client.portal.call(scenario) is s1
