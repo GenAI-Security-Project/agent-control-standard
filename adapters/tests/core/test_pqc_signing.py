@@ -24,6 +24,7 @@ from cryptography.exceptions import InvalidSignature  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import mldsa  # noqa: E402
 
 from acs.core import (  # noqa: E402
+    response_matches_request,
     ML_DSA_65,
     WIRE_ALGORITHMS,
     ML_DSA_CONTEXT,
@@ -496,6 +497,26 @@ class RequestBinding(unittest.TestCase):
             with self.subTest(params=params):
                 self.assertTrue(self._verify(error, request))
         self.assertFalse(self._verify(error, {**_request(), "id": "another-call"}))
+
+    def test_a_signed_refusal_against_a_client_hello_with_odd_params_binds(self) -> None:
+        # Review finding CR10-1: the same verdict response_matches_request and _classify_hello give.
+        hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello", "params": "not an object"}
+        refusal = {"jsonrpc": "2.0", "id": "hello-1", "error": {"code": -32000, "message": "refused"}}
+        sign_with_signing_key(refusal, _signer())
+        self.assertTrue(response_matches_request(hello, refusal))
+        self.assertTrue(self._verify(refusal, hello))
+
+    def test_a_non_finite_request_id_is_a_caller_error(self) -> None:
+        # Review finding CR10-7, through verify_with_keyring.
+        for json_rpc_id in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(id=json_rpc_id), self.assertRaises(ValueError):
+                self._verify(self.signed, {**_request(), "id": json_rpc_id})
+
+    def test_a_signed_response_carrying_method_binds_nothing(self) -> None:
+        # CR10-3: the shared rule refuses it, with no separate check on this path.
+        shaped = {**_decision(), "method": "steps/toolCallRequest"}
+        sign_with_signing_key(shaped, _signer())
+        self.assertFalse(self._verify(shaped, _request()))
 
     def test_the_caller_error_is_the_envelope_precondition(self) -> None:
         # CR9-1: only a request that isn't an envelope with an id is the caller's mistake.

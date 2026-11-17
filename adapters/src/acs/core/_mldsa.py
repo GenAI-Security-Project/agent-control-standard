@@ -170,7 +170,9 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     problem = request_envelope_problem(request)
     if problem is not None:
         raise ValueError(problem)
-    if not isinstance(envelope, dict) or "method" in envelope:
+    # The one binding rule, before any crypto. It also refuses a response that isn't a JSON-RPC
+    # 2.0 object, carries "method", or carries both or neither of result and error.
+    if not response_matches_request(request, envelope):
         return False
     container = envelope.get(container_key(envelope))
     if not isinstance(container, dict):
@@ -179,8 +181,6 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     if not isinstance(sig, dict):
         return False
     if sig.get("key_id") != expected_key_id:
-        return False
-    if not response_matches_request(request, envelope):
         return False
     key = keyring.resolve(expected_key_id)
     if key is None:
