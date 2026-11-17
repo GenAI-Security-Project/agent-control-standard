@@ -576,8 +576,11 @@ class _Inflater:
             out += self._d.decompress(self._d.unconsumed_tail, room + 1 - len(out))
         return out
 
-    def finish(self, room: int) -> bytes:
-        return self._d.flush(room + 1) if self._d is not None else b""
+    def finish(self) -> bytes:
+        """What the decoder still holds. flush takes no output cap (its argument only sizes the first buffer), and
+        none is needed: feed always drains unconsumed_tail while under the limit, so only the decoder's small
+        internal buffer is left here, and the caller checks the total (fix round 4, M-1)."""
+        return self._d.flush() if self._d is not None else b""
 
 
 class CaptureTransport(httpx.AsyncBaseTransport):
@@ -623,7 +626,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
                     return self._too_large()
             if decoded is not None:
                 try:
-                    tail = inflater.finish(self._max_bytes - inflated)
+                    tail = inflater.finish()
                 except zlib.error:
                     decoded = None
                 else:
@@ -678,6 +681,14 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             # The request named no such user, so the line would carry this FinBot's namespace into another one.
             _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario)
             return
+        if stream:
+            # An id split across deltas escapes both checks piece by piece and rejoins on replay, so the deltas are
+            # checked again joined with no separator (fix round 4, I-2).
+            joined = "".join(e["data"]["delta"] for e in normalized
+                             if isinstance(e.get("data"), dict) and isinstance(e["data"].get("delta"), str))
+            if unmapped_user_id(joined) or holds_mapped_user(joined, mapping):
+                _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario, where="stream_deltas")
+                return
         line = {"scenario": self._scenario, "match": re.escape(first_user), "turn": turn, "step": step, "branch": branch,
                 "stream": stream, "ids": id_skeleton(body, mapping), "response": normalized}
         encoded = json.dumps(line, ensure_ascii=False)

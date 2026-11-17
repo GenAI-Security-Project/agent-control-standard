@@ -174,6 +174,38 @@ def test_capture_refuses_any_form_of_a_mapped_user_id(gateway, upstream, tmp_pat
     assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
 
 
+def split_stream(*pieces):
+    """A streamed answer whose text arrives only as deltas, split where the caller says."""
+    events = [("response.created", {"type": "response.created", "sequence_number": 0,
+                                    "response": {**response_body(), "status": "in_progress", "output": []}})]
+    events += [("response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": i + 1,
+                                               "item_id": "msg_1", "output_index": 0, "content_index": 0,
+                                               "delta": piece, "logprobs": []}) for i, piece in enumerate(pieces)]
+    events.append(("response.completed", {"type": "response.completed", "sequence_number": len(pieces) + 1,
+                                          "response": {**response_body(), "output": []}}))
+    return SSE([f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events])
+
+
+@pytest.mark.parametrize("pieces", [
+    (f"Mail admin@{NS_A[:10]}", f"{NS_A[10:]}.finbot"),
+    (f"Mail admin@{NS_A[:6]}", NS_A[6:15], f"{NS_A[15:]}.finbot"),
+])
+def test_capture_refuses_an_id_split_across_streamed_deltas(gateway, upstream, tmp_path, audit, pieces):
+    """Fix round 4, I-2: no single delta holds the namespace, but the deltas rejoin into it on replay."""
+    upstream.reply(split_stream(*pieces))
+    response = capture(gateway, tmp_path).post("/v1/responses", json={
+        **finbot_request(system=f"User ID: {USER_A}"), "stream": True})
+    assert response.status_code == 200
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
+def test_split_deltas_without_an_id_are_captured(gateway, upstream, tmp_path):
+    upstream.reply(split_stream("Hello ", "there"))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(), "stream": True})
+    assert [e["data"]["delta"] for e in recorded(tmp_path)[0]["response"][1:3]] == ["Hello ", "there"]
+
+
 def test_an_output_with_no_call_id_takes_no_step_and_the_line_loads(gateway, upstream, tmp_path):
     """Fix round 3, CR3-5: step counts only outputs the gateway governs, the same ones the branch counts."""
     upstream.reply(response_body(message_item("ok")))
