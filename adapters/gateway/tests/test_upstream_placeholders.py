@@ -27,7 +27,7 @@ def test_two_namespaces_normalize_to_the_same_text():
     assert to_placeholders(a, placeholder_map(a)) == to_placeholders(b, placeholder_map(b))
     normalized = to_placeholders(a, placeholder_map(a))["input"][0]["content"]
     assert NS_A not in normalized and USER_A not in normalized
-    assert "admin@{{acs:ns:1}}.finbot" in normalized and "User ID: {{acs:user:1}}" in normalized
+    assert "admin@ns_{{acs:user:1}}.finbot" in normalized and "User ID: {{acs:user:1}}" in normalized
 
 
 def test_fill_restores_the_live_namespace():
@@ -61,7 +61,7 @@ def test_a_longer_token_is_not_split():
     # A namespace holds a user id, and an id-shaped run inside a longer word is not an id.
     mapping = placeholder_map(body(USER_A, NS_A))
     assert to_placeholders(f"x{USER_A}", mapping) == f"x{USER_A}"
-    assert to_placeholders(NS_A, mapping) == "{{acs:ns:1}}"
+    assert to_placeholders(NS_A, mapping) == "ns_{{acs:user:1}}"
 
 
 def test_the_key_takes_the_step_from_outputs_whatever_they_say():
@@ -73,7 +73,7 @@ def test_the_key_takes_the_step_from_outputs_whatever_they_say():
                 {"type": "function_call", "call_id": "call_3", "name": "c", "arguments": "{}"},
                 output("call_3", '{"bank_account_number": "[REDACTED]"}'),
                 first_user=f"Mail admin@{NS_A}.finbot")
-    assert replay_key(live, placeholder_map(live)) == ("Mail admin@{{acs:ns:1}}.finbot", 3)
+    assert replay_key(live, placeholder_map(live)) == ("Mail admin@ns_{{acs:user:1}}.finbot", 3)
 
 
 def test_a_first_user_message_in_parts_is_joined():

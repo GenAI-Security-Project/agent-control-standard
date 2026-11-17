@@ -100,7 +100,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 **Recordings.** Each line is one JSON object (A.8):
 
 ```json
-{"scenario": "s1", "match": "Pay\\ vendor\\ 7", "step": 1, "branch": "a", "stream": false, "response": {"id": "resp_...", "output": ["..."]}}
+{"scenario": "s1", "match": "Pay\\ vendor\\ 7", "step": 1, "branch": "a,a", "stream": false, "ids": ["user:1", "time:1"], "response": {"id": "resp_...", "output": ["..."]}}
 ```
 
 | Field | Meaning |
@@ -110,6 +110,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 | `step` | How many `function_call_output` items the request held. A retry, from FinBot's SDK or its agent runner, lands on the same step |
 | `branch` | One token per governed item, comma separated, from the session's own outcome records, never from text in the request: `a` delivered, `d` removed or replaced by the neutral line, `m` rewritten (a MODIFY of a call or an output). Calls and outputs take their tokens in the order the request holds them. A removed call never comes back from the client, so its `d` sits where the request that produced it ended. Off and shadow change nothing, so they give `a` for every call and output |
 | `stream` | Whether the request asked for a stream |
+| `ids` | Every placeholder in the request, in document order, as `kind:n`. Replay fills only a request with the same list, so an id that moved or an extra one is a miss (`placeholder_mismatch`) instead of a value in the wrong place |
 | `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
 
 Replay serves the first line, in file name and line order, that fits all of `match`, `step`, `branch` and `stream`. A byte-identical request gets the bytes it got before, from a cache of the last 1,024 requests keyed on the request's SHA-256.
@@ -118,14 +119,13 @@ Replay serves the first line, in file name and line order, that fits all of `mat
 
 | Kind | FinBot value at 1450fc4 |
 |---|---|
-| `ns` | The namespace, `ns_user_` and 16 characters, as in `admin@<namespace>.finbot` |
-| `user` | The user id, `user_` and 16 characters |
+| `user` | The user id, `user_` and 16 characters, alone or inside the namespace `ns_<user id>`, so `admin@<namespace>.finbot` records as `admin@ns_{{acs:user:1}}.finbot` |
 | `wf` | Workflow ids, `wf_`, `wf_chat_` or `wf_review_` and 16 characters |
 | `tr` | Transfer ids, `tr_` and 24 hex digits |
 | `uuid` | A UUID |
 | `time` | An ISO 8601 date and time, such as the current time in each agent's system prompt |
 
-A value the request never held, one the model made up, stays as the model wrote it.
+A value the request never held, one the model made up, stays as the model wrote it, except a user id or namespace: capture refuses that answer, writes no line and audits `capture_skipped` with cause `unmapped_id`, since the line would carry this FinBot's namespace into another one.
 
 **A miss.** When no line fits, or a line holds a placeholder the live request can't fill, replay never guesses. It answers with a fixed response, `resp_replay_miss`, holding one assistant message, `msg_replay_miss`, that carries the neutral line (as server-sent events when the request asked for a stream), and audits `replay_miss`.
 
@@ -234,8 +234,8 @@ Each request line is written before the request is sent, so the file holds the c
 | `sessions_full` | Every session was busy, so a new conversation got 503 |
 | `session_evicted` | The session cap evicted the least recently used session |
 | `epoch_bumped` | The epoch moved |
-| `replay_miss` | Replay answered with the miss response. `cause` is `no_recording`, `placeholder_unfilled` or `unreadable_request`, with `step`, `branch` and `stream`, and `scenario` when a line matched but couldn't be filled |
-| `capture_skipped` | Capture wrote no line for a successful exchange it couldn't read. `cause` is `unreadable_request` or `unreadable_response` |
+| `replay_miss` | Replay answered with the miss response. `cause` is `no_recording`, `placeholder_mismatch`, `placeholder_unfilled` or `unreadable_request`, with `step`, `branch` and `stream`, and `scenario` when a line matched but couldn't be filled |
+| `capture_skipped` | Capture wrote no line for a successful exchange. `cause` is `unreadable_request`, `unreadable_response`, or `unmapped_id` (the answer would still carry a user id or namespace) |
 | `capture_failed` | Capture couldn't write its line (`cause` `write_error`). The client still got its answer |
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.

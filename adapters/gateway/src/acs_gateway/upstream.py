@@ -33,17 +33,21 @@ BRANCH_HEADER = "x-acs-lab-branch"
 # (PREMORTEM P2): the namespace ns_<user id> (session.py:233-240, routing.py:23), the user id user_<token_urlsafe(12)>,
 # workflow ids wf_, wf_chat_ and wf_review_ (runner.py:38, chat.py:105, api.py:330), transfer ids tr_<token_hex(12)>
 # (finstripe server.py:30), uuid4 interaction ids, and the current time in every agent's GLOBAL_CONTEXT (base.py:320).
-# Order matters: a namespace holds a user id, so it is tried first. An id-shaped run inside a longer token isn't one.
+# A namespace is ns_ and the user id, so the user id inside it is matched as its own value: a recording then can't
+# carry an old namespace past a request that names the user only by id, or the other way round (fix round 2, R2).
+# An id-shaped run inside any other longer token isn't an id.
+_EDGE = r"(?<![A-Za-z0-9_-])"
+_USER = r"(?:(?<=" + _EDGE + r"ns_)|" + _EDGE + r")user_[A-Za-z0-9_-]{16}(?![A-Za-z0-9_-])"
 _ID = re.compile(
-    r"(?<![A-Za-z0-9_-])(?:"
-    r"(?P<ns>ns_user_[A-Za-z0-9_-]{16})"
-    r"|(?P<user>user_[A-Za-z0-9_-]{16})"
-    r"|(?P<wf>wf_(?:chat_|review_)?[A-Za-z0-9_-]{16})"
+    r"(?P<user>" + _USER + r")|" + _EDGE + r"(?:"
+    r"(?P<wf>wf_(?:chat_|review_)?[A-Za-z0-9_-]{16})"
     r"|(?P<tr>tr_[0-9a-f]{24})"
     r"|(?P<uuid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
     r"|(?P<time>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
     r")(?![A-Za-z0-9_-])")
-_PLACEHOLDER = re.compile(r"\{\{acs:(?:ns|user|wf|tr|uuid|time):\d+\}\}")
+_PLACEHOLDER = re.compile(r"\{\{acs:(?:user|wf|tr|uuid|time):\d+\}\}")
+_USER_VALUE = re.compile(_USER)
+_SKELETON_ENTRY = re.compile(r"(?:user|wf|tr|uuid|time):[1-9][0-9]*")
 
 
 def _inside_git_work_tree(path: Path) -> bool:
@@ -139,6 +143,18 @@ def placeholder_map(body: Any) -> dict[str, str]:
                 counts[kind] = counts.get(kind, 0) + 1
                 mapping[value] = f"{{{{acs:{kind}:{counts[kind]}}}}}"
     return mapping
+
+
+def id_skeleton(body: Any, mapping: dict[str, str]) -> list[str]:
+    """Every mapped id in the request, in document order, as kind:n. A recording stores it, and replay fills only a
+    request with the same skeleton, so an id that moved or an extra one never shifts which value a placeholder takes
+    (fix round 2, R3)."""
+    return [mapping[m.group(0)][6:-2] for text in _strings(body) for m in _ID.finditer(text) if m.group(0) in mapping]
+
+
+def unmapped_user_id(value: Any) -> bool:
+    """Whether a value with placeholders still holds a user id or namespace, which would leak into another FinBot."""
+    return any(_USER_VALUE.search(text) for text in _strings(value))
 
 
 def to_placeholders(value: Any, mapping: dict[str, str]) -> Any:
@@ -251,12 +267,12 @@ def _audit(event: str, **fields: Any) -> None:
 
 
 _BRANCH = re.compile(r"(?:[adm](?:,[adm])*)?")
-_RECORDING_FIELDS = ("scenario", "match", "step", "branch", "stream", "response")
+_RECORDING_FIELDS = ("scenario", "match", "step", "branch", "stream", "ids", "response")
 
 
 @dataclass(frozen=True)
 class Recording:
-    """One recording line (A.8): {"scenario", "match", "step", "branch", "stream", "response"}.
+    """One recording line (A.8, plus ids): {"scenario", "match", "step", "branch", "stream", "ids", "response"}.
 
     match is a regular expression for the first user message with placeholders, matched in full. A non-streamed
     response is the Responses API body. A streamed one is the list of {"event", "data"} server-sent events.
@@ -266,6 +282,7 @@ class Recording:
     step: int
     branch: str
     stream: bool
+    ids: list[str]
     response: Any
 
 
@@ -290,6 +307,9 @@ def _recording(raw: str) -> Recording:
         raise ValueError("branch is a comma-separated list of a, d and m tokens")
     if not isinstance(line["stream"], bool):
         raise ValueError("stream is true or false")
+    if not isinstance(line["ids"], list) or not all(isinstance(i, str) and _SKELETON_ENTRY.fullmatch(i)
+                                                    for i in line["ids"]):
+        raise ValueError("ids is a list of kind:n entries")
     response = line["response"]
     if line["stream"]:
         if not isinstance(response, list) or not all(
@@ -298,7 +318,7 @@ def _recording(raw: str) -> Recording:
             raise ValueError("a streamed response is a list of {event, data} objects")
     elif not isinstance(response, dict) or not isinstance(response.get("output"), list):
         raise ValueError("a response is a Responses API object with an output list")
-    return Recording(line["scenario"], match, step, line["branch"], line["stream"], response)
+    return Recording(line["scenario"], match, step, line["branch"], line["stream"], line["ids"], response)
 
 
 class RecordingStore:
@@ -431,6 +451,9 @@ class ReplayTransport(httpx.AsyncBaseTransport):
         recording = self.store.find(first_user, step, branch, stream)
         if recording is None:
             return self._miss(body.get("model"), "no_recording", step, branch, stream)
+        if id_skeleton(body, mapping) != recording.ids:
+            return self._miss(body.get("model"), "placeholder_mismatch", step, branch, stream,
+                              scenario=recording.scenario)
         response, complete = fill(recording.response, mapping)
         if not complete:
             return self._miss(body.get("model"), "placeholder_unfilled", step, branch, stream,
@@ -547,8 +570,13 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         first_user, step = replay_key(body, mapping)
         if branch is None:
             branch = off_branch(body)
+        normalized = to_placeholders(response, mapping)
+        if unmapped_user_id(normalized):
+            # The request named no such user, so the line would carry this FinBot's namespace into another one.
+            _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario)
+            return
         line = {"scenario": self._scenario, "match": re.escape(first_user), "step": step, "branch": branch,
-                "stream": stream, "response": to_placeholders(response, mapping)}
+                "stream": stream, "ids": id_skeleton(body, mapping), "response": normalized}
         try:
             with self._lock:
                 self._path.parent.mkdir(parents=True, exist_ok=True)

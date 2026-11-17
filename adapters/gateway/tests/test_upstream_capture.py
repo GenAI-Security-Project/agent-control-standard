@@ -41,7 +41,7 @@ def test_capture_writes_one_placeholder_line_per_exchange(gateway, upstream, tmp
     [line] = recorded(tmp_path)
     assert {k: line[k] for k in ("scenario", "match", "step", "branch", "stream")} == {
         "scenario": "s1", "match": "Pay\\ vendor\\ 7", "step": 0, "branch": "", "stream": False}
-    assert json.loads(line["response"]["output"][0]["arguments"]) == {"to": "admin@{{acs:ns:1}}.finbot"}
+    assert json.loads(line["response"]["output"][0]["arguments"]) == {"to": "admin@ns_{{acs:user:1}}.finbot"}
     assert NS_A not in (tmp_path / "rec" / "s1.jsonl").read_text()
 
 
@@ -79,7 +79,7 @@ def test_a_streamed_exchange_is_captured_as_events(gateway, upstream, tmp_path):
     assert line["stream"] is True
     assert [e["event"] for e in line["response"]] == ["response.created", "response.output_text.delta",
                                                       "response.output_item.done", "response.completed"]
-    assert line["response"][1]["data"]["delta"] == "hello admin@{{acs:ns:1}}.finbot"
+    assert line["response"][1]["data"]["delta"] == "hello admin@ns_{{acs:user:1}}.finbot"
 
 
 def test_the_key_reaches_only_the_upstream_header(gateway, upstream, tmp_path, audit, capfd):

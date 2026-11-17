@@ -25,8 +25,10 @@ def history(n: int) -> list[dict]:
     return items
 
 
-def line(step: int, response, *, branch: str = "", stream: bool = False, match: str = "Pay vendor 7") -> dict:
-    return {"scenario": "s1", "match": match, "step": step, "branch": branch, "stream": stream, "response": response}
+def line(step: int, response, *, branch: str = "", stream: bool = False, match: str = "Pay vendor 7",
+         ids: tuple = ()) -> dict:
+    return {"scenario": "s1", "match": match, "step": step, "branch": branch, "stream": stream, "ids": list(ids),
+            "response": response}
 
 
 def write(directory, *lines, name="s1.jsonl"):
@@ -54,7 +56,7 @@ def miss_events(audit):
 
 
 def test_a_recording_replays_into_a_new_namespace_with_no_network(gateway, upstream, tmp_path, no_network):
-    write(tmp_path / "rec", line(0, response_body(message_item("Mailed admin@{{acs:ns:1}}.finbot"))))
+    write(tmp_path / "rec", line(0, response_body(message_item("Mailed admin@ns_{{acs:user:1}}.finbot")), ids=["user:1"]))
     client = replay(gateway, tmp_path)
     response = client.post("/v1/responses", json=finbot_request(system=system(NS_B)))
     assert response.status_code == 200
@@ -112,11 +114,11 @@ def test_an_unfillable_placeholder_is_a_miss(gateway, tmp_path, audit, no_networ
 
 @pytest.mark.parametrize("bad", [
     "not json",
-    json.dumps({"scenario": "s1", "match": "(", "step": 0, "branch": "", "stream": False, "response": {"output": []}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": -1, "branch": "", "stream": False, "response": {"output": []}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "q", "stream": False, "response": {"output": []}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "", "stream": False, "response": {}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "", "stream": True, "response": [{"event": 1}]}),
+    json.dumps({"scenario": "s1", "match": "(", "step": 0, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
+    json.dumps({"scenario": "s1", "match": "x", "step": -1, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
+    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "q", "stream": False, "ids": [], "response": {"output": []}}),
+    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "", "stream": False, "ids": [], "response": {}}),
+    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "", "stream": True, "ids": [], "response": [{"event": 1}]}),
 ])
 def test_a_malformed_recording_stops_startup(gateway, tmp_path, bad):
     (tmp_path / "rec").mkdir()
@@ -131,11 +133,11 @@ def test_a_missing_recordings_dir_stops_startup(gateway, tmp_path):
 
 
 def test_a_streamed_request_replays_its_events_in_off_mode(gateway, tmp_path, no_network):
-    item = message_item("streamed for {{acs:ns:1}}")
+    item = message_item("streamed for ns_{{acs:user:1}}")
     events = [{"event": "response.output_text.delta", "data": {"type": "response.output_text.delta",
-                                                               "delta": "streamed for {{acs:ns:1}}"}},
+                                                               "delta": "streamed for ns_{{acs:user:1}}"}},
               {"event": "response.output_item.done", "data": {"type": "response.output_item.done", "item": item}}]
-    write(tmp_path / "rec", line(0, events, stream=True))
+    write(tmp_path / "rec", line(0, events, stream=True, ids=["user:1"]))
     response = replay(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_B)),
                                                                      "stream": True})
     assert response.headers["content-type"].startswith("text/event-stream")
