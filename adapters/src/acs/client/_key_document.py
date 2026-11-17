@@ -47,6 +47,11 @@ ML_DSA_65 = "ML-DSA-65"
 RESPONSE_SIGNING_OFF_VALUES = frozenset({"", "HMAC-SHA256"})
 
 
+def utcnow() -> datetime.datetime:
+    """The one clock key validity is read against, on the client and in the Guardian. Tests replace it."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 class KeyDocumentError(ValueError):
     """The key document is malformed, or holds no single live key this client may trust."""
 
@@ -194,7 +199,7 @@ def load_response_keys(path: str | os.PathLike, *, key_id: str | None = None,
         document = json.loads(data.decode("utf-8"))
     except (ValueError, RecursionError) as exc:
         raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {name!r} can't be read as JSON: {exc}") from exc
-    moment = now if now is not None else datetime.datetime.now(datetime.timezone.utc)
+    moment = now if now is not None else utcnow()
     return parse_key_document(document, key_id=key_id, now=moment, fingerprint=fingerprint)
 
 

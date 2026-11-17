@@ -31,7 +31,7 @@ from acs.client import (  # noqa: E402
     round_trip,
     sign_envelope,
 )
-from acs.client import _exchange, _handshake  # noqa: E402
+from acs.client import _exchange, _handshake, _key_document  # noqa: E402
 from acs.core import (  # noqa: E402
     ACS_VERSION,
     Keyring,
@@ -329,7 +329,8 @@ class KeyValidity(_ResponseKeysBase):
     """The key's window and revocation are checked on every response, not only at load (review R-I1)."""
 
     def at(self, moment: datetime.datetime) -> None:
-        patcher = mock.patch.object(_exchange, "_utcnow", return_value=moment)
+        # The one clock the client and the Guardian both read (review CR3-8).
+        patcher = mock.patch.object(_key_document, "utcnow", return_value=moment)
         patcher.start()
         self.addCleanup(patcher.stop)
 

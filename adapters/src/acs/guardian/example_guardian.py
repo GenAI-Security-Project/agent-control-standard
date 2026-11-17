@@ -34,6 +34,7 @@ from acs.guardian._response_signing import (
     response_signing_name,
     response_signing_problem,
 )
+from acs.client import _key_document
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.client._exchange import _MAX_SAFE_INTEGER
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
@@ -158,11 +159,6 @@ class SigningUnavailable(RuntimeError):
     """ML-DSA-65 is on but the decision key can't sign now. handle_request answers the -32603 floor for it."""
 
 
-def _utcnow() -> datetime.datetime:
-    """The clock the decision key's validity is checked against. Tests replace it."""
-    return datetime.datetime.now(datetime.timezone.utc)
-
-
 def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict:
     """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
 
@@ -177,7 +173,7 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
             # Named at import but never loaded, as when a caller serves handle_request without main(). Falling back
             # to HMAC would hand clients a signature their key document can't verify, so the floor answers.
             raise SigningUnavailable("ACS_RESPONSE_SIGNING=ML-DSA-65 but no decision key was loaded")
-        if not DECISION_SIGNER.keys.is_live(_utcnow()):
+        if not DECISION_SIGNER.keys.is_live(_key_document.utcnow()):
             # Past not_after, before not_before, or revoked since startup (review R-I1). A signature no client
             # accepts would read as tampering, so the floor answers and the log says why.
             sys.stderr.write(f"[guardian] decision key {DECISION_SIGNER.keys.key_id} is not live "

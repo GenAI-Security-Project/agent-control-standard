@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import datetime
 import http.client
 import json
 import math
@@ -14,6 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from acs.client import _key_document
 from acs.client._audit import audit_event
 from acs.client._config import FailPosture, Resolution
 from acs.client._outcome import Decided, Outcome, Refused, Undecided
@@ -58,11 +58,6 @@ def report_on_wire(on_wire: OnWire | None, direction: str, envelope: Any, method
     return None
 
 
-def _utcnow() -> datetime.datetime:
-    """The clock the key's validity is checked against. Tests replace it."""
-    return datetime.datetime.now(datetime.timezone.utc)
-
-
 def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: ResponseKeys) -> bool:
     """Whether the answer verifies under the key document's pinned key, as the answer to request.
 
@@ -74,7 +69,8 @@ def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: R
     The key must be live now, so one that expires or is revoked while the process runs stops
     verifying then.
     """
-    if not response_keys.is_live(_utcnow()):
+    # Read through the module so a test that replaces the one clock reaches it here too.
+    if not response_keys.is_live(_key_document.utcnow()):
         return False
     # The lazy public export loads cryptography only on this path.
     import acs.core

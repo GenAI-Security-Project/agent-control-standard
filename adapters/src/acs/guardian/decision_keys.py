@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from acs.client import KeyDocumentError, ResponseKeys, load_response_keys, owner_only, read_trusted_file
-from acs.client._key_document import KEY_DOCUMENT_ENV, KEY_ID_ENV, SIGNING_KEY_FILE_ENV
+from acs.client._key_document import KEY_DOCUMENT_ENV, KEY_ID_ENV, SIGNING_KEY_FILE_ENV, utcnow
 from acs.core import MLDSA65SigningKey
 
 DEFAULT_VALIDITY_DAYS = 90
@@ -89,7 +89,7 @@ def write_key_files(directory: Path, *, key_id: str, guardian_id: str, now: date
     key_path, doc_path = directory / KEY_FILE_NAME, directory / KEY_DOCUMENT_NAME
     if key_path.exists() or doc_path.exists():
         raise FileExistsError(f"{key_path if key_path.exists() else doc_path} already exists")
-    start = (now or datetime.datetime.now(datetime.timezone.utc)).replace(microsecond=0)
+    start = (now or utcnow()).replace(microsecond=0)
     signing_key = MLDSA65SigningKey.generate(key_id)
     document = key_document(signing_key, guardian_id=guardian_id, not_before=start,
                             not_after=start + datetime.timedelta(days=days))

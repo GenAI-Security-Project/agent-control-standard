@@ -172,7 +172,8 @@ def test_a_key_outside_its_window_never_signs(signer, monkeypatch, capsys, momen
         now = revoked_at
     else:
         now = keys.not_after if moment == "not_after" else keys.not_before - datetime.timedelta(seconds=1)
-    monkeypatch.setattr(example_guardian, "_utcnow", lambda: now)
+    from acs.client import _key_document
+    monkeypatch.setattr(_key_document, "utcnow", lambda: now)
     request = signed_step("steps/toolCallRequest", ALLOWED)
     assert_floor(example_guardian.handle_request(request), request)
     err = capsys.readouterr().err
