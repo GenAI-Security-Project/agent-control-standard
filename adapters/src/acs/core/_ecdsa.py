@@ -9,6 +9,9 @@ can measure the classical algorithm next to ML-DSA-65.
 Signatures are the 64 byte fixed-width r || s form (IEEE P1363, as JOSE and COSE use), not
 DER. Public keys are 65 byte uncompressed SEC1 points. Signing is randomized.
 
+Only low-s signatures verify, and signing always produces one. (r, s) and (r, n - s) both
+satisfy ECDSA, so accepting both would give one signature two encodings.
+
 Nothing on the default path imports this module. It needs the pqc extra.
 """
 from __future__ import annotations
@@ -25,6 +28,8 @@ except ImportError as exc:
         "or uv sync --extra pqc") from exc
 
 _SCALAR_BYTES = 32
+# The order n of the P-256 group (SEC 2, secp256r1).
+_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 
 
 def ecdsa_p256_generate() -> ec.EllipticCurvePrivateKey:
@@ -37,17 +42,22 @@ def ecdsa_p256_public_bytes(private_key: ec.EllipticCurvePrivateKey) -> bytes:
 
 def ecdsa_p256_sign(private_key: ec.EllipticCurvePrivateKey, message: bytes) -> bytes:
     r, s = decode_dss_signature(private_key.sign(message, ec.ECDSA(hashes.SHA256())))
+    s = min(s, _ORDER - s)
     return r.to_bytes(_SCALAR_BYTES, "big") + s.to_bytes(_SCALAR_BYTES, "big")
 
 
 def ecdsa_p256_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    if not all(isinstance(v, bytes) for v in (public_key, message, signature)):
+        return False
     if len(signature) != 2 * _SCALAR_BYTES:
+        return False
+    r = int.from_bytes(signature[:_SCALAR_BYTES], "big")
+    s = int.from_bytes(signature[_SCALAR_BYTES:], "big")
+    if s > _ORDER // 2:
         return False
     try:
         point = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), public_key)
-        der = encode_dss_signature(int.from_bytes(signature[:_SCALAR_BYTES], "big"),
-                                   int.from_bytes(signature[_SCALAR_BYTES:], "big"))
-        point.verify(der, message, ec.ECDSA(hashes.SHA256()))
-    except (InvalidSignature, ValueError):
+        point.verify(encode_dss_signature(r, s), message, ec.ECDSA(hashes.SHA256()))
+    except (InvalidSignature, ValueError, TypeError):
         return False
     return True

@@ -373,6 +373,7 @@ class VariantAndContextAreDocumented(unittest.TestCase):
 # RFC 6979 Appendix A.2.5: ECDSA over P-256 with SHA-256. Values are written as the RFC prints them.
 RFC6979_UX = "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6"
 RFC6979_UY = "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299"
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551  # SEC 2, secp256r1 n
 RFC6979_SIGNATURES = {
     b"sample": ("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716",
                 "F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8"),
@@ -386,28 +387,48 @@ class EcdsaP256BenchmarkPrimitive(unittest.TestCase):
 
     PUBLIC = b"\x04" + bytes.fromhex(RFC6979_UX) + bytes.fromhex(RFC6979_UY)
 
-    def test_rfc_6979_vectors_verify(self) -> None:
+    def test_rfc_6979_vectors_verify_in_low_s_form(self) -> None:
         from acs.core._ecdsa import ecdsa_p256_verify
         for message, (r, s) in RFC6979_SIGNATURES.items():
+            low_s = min(int(s, 16), P256_ORDER - int(s, 16))
             with self.subTest(message=message):
-                self.assertTrue(ecdsa_p256_verify(self.PUBLIC, message, bytes.fromhex(r + s)))
+                self.assertTrue(ecdsa_p256_verify(self.PUBLIC, message, bytes.fromhex(r) + low_s.to_bytes(32, "big")))
+
+    def test_a_high_s_signature_is_rejected(self) -> None:
+        # Review finding CR6: (r, s) and (r, n - s) both satisfy ECDSA, so only low s is accepted.
+        from acs.core._ecdsa import ecdsa_p256_verify
+        r, s = RFC6979_SIGNATURES[b"sample"]
+        self.assertGreater(int(s, 16), P256_ORDER // 2, "the RFC prints this vector with a high s")
+        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"sample", bytes.fromhex(r + s)))
+
+    def test_non_bytes_inputs_return_false(self) -> None:
+        from acs.core._ecdsa import ecdsa_p256_verify
+        r, s = RFC6979_SIGNATURES[b"test"]
+        good = bytes.fromhex(r + s)
+        for public, message, signature in ((self.PUBLIC.hex(), b"test", good), (None, b"test", good),
+                                           (self.PUBLIC, b"test", good.hex()), (self.PUBLIC, b"test", None),
+                                           (self.PUBLIC, "test", good), (self.PUBLIC, None, good)):
+            with self.subTest(public=type(public).__name__, message=type(message).__name__,
+                              signature=type(signature).__name__):
+                self.assertFalse(ecdsa_p256_verify(public, message, signature))  # type: ignore[arg-type]
 
     def test_a_changed_message_or_signature_fails(self) -> None:
         from acs.core._ecdsa import ecdsa_p256_verify
-        r, s = RFC6979_SIGNATURES[b"sample"]
+        r, s = RFC6979_SIGNATURES[b"test"]
         good = bytes.fromhex(r + s)
         flipped = bytes([good[0] ^ 1]) + good[1:]
-        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"samplf", good))
-        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"sample", flipped))
+        self.assertTrue(ecdsa_p256_verify(self.PUBLIC, b"test", good))
+        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"tesu", good))
+        self.assertFalse(ecdsa_p256_verify(self.PUBLIC, b"test", flipped))
 
     def test_malformed_inputs_fail_without_raising(self) -> None:
         from acs.core._ecdsa import ecdsa_p256_verify
-        r, s = RFC6979_SIGNATURES[b"sample"]
+        r, s = RFC6979_SIGNATURES[b"test"]
         good = bytes.fromhex(r + s)
         for public, signature in ((self.PUBLIC, good[:-1]), (self.PUBLIC, good + b"\x00"), (self.PUBLIC, b""),
                                   (self.PUBLIC[:-1], good), (b"\x04" + bytes(64), good), (b"", good)):
             with self.subTest(public=len(public), signature=len(signature)):
-                self.assertFalse(ecdsa_p256_verify(public, b"sample", signature))
+                self.assertFalse(ecdsa_p256_verify(public, b"test", signature))
 
     def test_round_trip_with_a_fixed_width_signature(self) -> None:
         from acs.core._ecdsa import (
@@ -422,6 +443,7 @@ class EcdsaP256BenchmarkPrimitive(unittest.TestCase):
         for _ in range(20):  # r or s with leading zero bytes still encode to 32 bytes each
             signature = ecdsa_p256_sign(private, b"envelope bytes")
             self.assertEqual(len(signature), 64)
+            self.assertLessEqual(int.from_bytes(signature[32:], "big"), P256_ORDER // 2)
             self.assertTrue(ecdsa_p256_verify(public, b"envelope bytes", signature))
 
     def test_not_exported_as_a_wire_algorithm(self) -> None:
