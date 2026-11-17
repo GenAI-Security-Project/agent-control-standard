@@ -377,20 +377,21 @@ def key_id_rejected(error: Any) -> bool:
 
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
     """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
-    # The same caller check the keyring path makes, before anything here reads the request.
-    if request_envelope_problem(request) is not None:
-        return Refused("response_binding_mismatch", {}, "request is not an envelope a response could answer")
-    params = request.get("params")
+    # Read defensively: the one binding rule decides about a request that isn't an envelope.
+    params = request.get("params") if isinstance(request, Mapping) else None
     params = params if isinstance(params, Mapping) else {}
-    method, request_id = request.get("method"), params.get("request_id")
-    # The one binding rule decides, and each reason keeps the outcome this path always gave it.
+    method = request.get("method") if isinstance(request, Mapping) else None
+    request_id = params.get("request_id")
+    # The one binding rule decides. A malformed response is undecided, so the fail posture
+    # applies, as for a transport failure. Any other reason refuses the step.
     binding = response_binding_problem(request, response)
     if binding == BINDING_SHAPE:
         return Undecided("malformed_response", {"request_id": request_id, "method": method},
                          "Guardian response is not a JSON-RPC 2.0 response with exactly one object result or "
                          "error and no method")
     if binding is not None:
-        claimed = response["error"].get("code") if "error" in response else None
+        error = response.get("error") if isinstance(response, Mapping) else None
+        claimed = error.get("code") if isinstance(error, Mapping) else None
         return Refused("response_binding_mismatch",
                        {"claimed_error_code": claimed} if claimed is not None else {},
                        "response not bound to request")

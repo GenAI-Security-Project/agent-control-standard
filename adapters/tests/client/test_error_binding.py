@@ -59,6 +59,13 @@ class TheStepExchangeUsesTheOneRule(unittest.TestCase):
                 self.assertIsInstance(outcome, Refused)
                 self.assertEqual(outcome.cause, "response_binding_mismatch")
 
+    def test_a_non_mapping_request_with_a_non_mapping_response_is_refused(self) -> None:
+        # CR11-5: BINDING_REQUEST decides, and nothing reads the response before it does.
+        for response in ("response", None, ["response"]):
+            with self.subTest(response=response):
+                outcome = _exchange.classify_response("request", response, session_id=SESSION)  # type: ignore[arg-type]
+                self.assertEqual(outcome.cause, "response_binding_mismatch")
+
     def test_a_response_carrying_method_is_malformed(self) -> None:
         response = {**_signed_error(-32000), "method": "steps/toolCallRequest"}
         outcome = _exchange.classify_response(_request({"request_id": "req-1"}), response, session_id=SESSION)
