@@ -65,5 +65,32 @@ class TheStepExchangeUsesTheOneRule(unittest.TestCase):
         self.assertEqual(outcome.cause, "malformed_response")
 
 
+class ExchangeNeverRaises(unittest.TestCase):
+    """Review finding CR11-3: exchange() refuses a request it can't bind, before any I/O, and never raises."""
+
+    def test_a_request_that_is_no_envelope_is_refused_before_any_io(self) -> None:
+        from acs.client import exchange
+        from acs.client._config import failure_class
+        bad_requests = ("request", None, ["request"],
+                        {"jsonrpc": "2.0", "id": True, "method": "steps/toolCallRequest", "params": {}},
+                        {"jsonrpc": "2.0", "id": "rpc-1", "method": "steps/toolCallRequest", "params": "odd"},
+                        {"jsonrpc": "2.0", "id": "rpc-1", "method": "steps/toolCallRequest", "params": ["odd"]})
+        for request in bad_requests:
+            with self.subTest(request=request), mock.patch.object(_exchange, "_open") as network:
+                outcome = exchange(request, guardian_url="http://127.0.0.1:8787/acs",  # type: ignore[arg-type]
+                                   timeout_s=1.0, session_id=SESSION)
+                self.assertIsInstance(outcome, Refused)
+                self.assertEqual(outcome.cause, "request_envelope_invalid")
+                self.assertEqual(failure_class(outcome.cause), "observed_agent_error")
+                network.assert_not_called()
+
+    def test_null_params_are_not_a_caller_error(self) -> None:
+        from acs.client import exchange
+        request = {"jsonrpc": "2.0", "id": "rpc-1", "method": "steps/toolCallRequest", "params": None}
+        with mock.patch.object(_exchange, "_open", side_effect=OSError("no network in this test")):
+            outcome = exchange(request, guardian_url="http://127.0.0.1:8787/acs", timeout_s=1.0, session_id=SESSION)
+        self.assertNotEqual(getattr(outcome, "cause", None), "request_envelope_invalid")
+
+
 if __name__ == "__main__":
     unittest.main()

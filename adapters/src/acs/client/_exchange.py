@@ -320,6 +320,14 @@ def result_problem(result: Any) -> str | None:
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
              session_id: str | None) -> Outcome:
     """POST one request and classify the answer; never raises."""
+    # A request no answer could bind is the adapter's own error. It is refused here, before any
+    # I/O and before anything below reads it, so exchange() never raises on it.
+    problem = request_envelope_problem(request)
+    if problem is None and not isinstance(request.get("params") or {}, Mapping):
+        problem = "request params must be an object when present"
+    if problem is not None:
+        return Refused("request_envelope_invalid", {"error": problem},
+                       f"request can't bind a Guardian answer: {problem}")
     params = request.get("params") or {}
     method, request_id = request.get("method"), params.get("request_id")
     try:
