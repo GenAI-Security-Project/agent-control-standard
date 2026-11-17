@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import os
+import stat
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -244,3 +247,35 @@ def create_app(config: GatewayConfig) -> Starlette:
     app = Starlette(routes=routes, lifespan=gateway.lifespan)
     app.state.gateway = gateway
     return app
+
+
+MIN_ADMIN_TOKEN_BYTES = 32
+
+
+def load_admin_token(path: Path) -> str:
+    """The admin listener's bearer token: owner-only, no symlink, at least 32 bytes, like the HMAC secret."""
+    if path.is_symlink():
+        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is a symlink")
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must be mode 0600 or 0400")
+    token = path.read_text(encoding="utf-8").strip()
+    if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
+        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
+    return token
+
+
+def create_admin_app(gateway: Gateway, token: str) -> Starlette:
+    """POST /epoch bumps the epoch, which `lab sign` and a policy reload call (A.4, PREMORTEM P3).
+
+    Lab convention, waiting on LAB-15 (issue #588), which wires the CLI to it. It listens on its own port, never
+    the model port, so the client FinBot can't reach it through POST /v1/responses.
+    """
+    expected = f"Bearer {token}".encode("utf-8")
+
+    async def epoch(request: Request) -> Response:
+        given = request.headers.get("authorization", "").encode("utf-8")
+        if not hmac.compare_digest(given, expected):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse({"epoch": gateway.bump_epoch()})
+
+    return Starlette(routes=[Route("/epoch", epoch, methods=["POST"])])
