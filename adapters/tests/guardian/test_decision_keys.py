@@ -157,3 +157,22 @@ def test_main_writes_both_files_and_prints_the_fingerprint(tmp_path, capsys):
     assert str(tmp_path / "guardian-keys.json") in out
     assert decision_keys.main(["--out-dir", str(tmp_path), "--key-id", KEY_ID,
                                "--guardian-id", "lab-guardian"]) == 1
+
+
+@pytest.mark.parametrize("kwargs", [{"guardian_id": ""}, {"guardian_id": "   "}, {"days": 0}, {"days": -1},
+                                    {"days": 3651}, {"days": 10**12}],
+                         ids=["empty guardian id", "blank guardian id", "zero days", "negative days",
+                              "past the cap", "overflow"])
+def test_write_key_files_validates_before_writing(tmp_path, kwargs):
+    # Review CR7: refused with ValueError and nothing written, never an empty id or an OverflowError traceback.
+    with pytest.raises(ValueError):
+        write_key_files(tmp_path, **{"key_id": KEY_ID, "guardian_id": "lab-guardian", **kwargs})
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("args", [["--guardian-id", ""], ["--guardian-id", "g", "--days", "99999999999"],
+                                  ["--guardian-id", "g", "--days", "0"]])
+def test_main_refuses_bad_arguments_without_writing(tmp_path, capsys, args):
+    assert decision_keys.main(["--out-dir", str(tmp_path), "--key-id", KEY_ID, *args]) == 1
+    assert list(tmp_path.iterdir()) == []
+    assert "decision_keys:" in capsys.readouterr().err

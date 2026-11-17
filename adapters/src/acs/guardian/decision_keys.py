@@ -30,6 +30,8 @@ SIGNING_KEY_FILE_ENV = "ACS_GUARDIAN_SIGNING_KEY_FILE"
 KEY_ID_ENV = "ACS_GUARDIAN_KEY_ID"
 KEY_DOCUMENT_ENV = "ACS_GUARDIAN_KEYS"
 DEFAULT_VALIDITY_DAYS = 90
+# Ten years. A lab key lives 90 days, and the cap keeps not_after far inside what datetime can represent.
+MAX_VALIDITY_DAYS = 3650
 KEY_FILE_NAME = "guardian.key"
 KEY_DOCUMENT_NAME = "guardian-keys.json"
 _SEED_HEX = re.compile(r"[0-9a-f]{64}\n?")
@@ -77,7 +79,14 @@ def _write_new(path: Path, data: bytes, mode: int) -> None:
 
 def write_key_files(directory: Path, *, key_id: str, guardian_id: str, now: datetime.datetime | None = None,
                     days: int = DEFAULT_VALIDITY_DAYS) -> tuple[Path, Path]:
-    """Generate a key and write its seed (0600) and its key document (0644). Raises FileExistsError for either."""
+    """Generate a key and write its seed (0600) and its key document (0644). Raises FileExistsError for either.
+
+    Every argument is checked before anything is written, so a bad one leaves no file behind (review CR7).
+    """
+    if not isinstance(guardian_id, str) or not guardian_id.strip():
+        raise ValueError("guardian_id must be a non-empty string")
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_VALIDITY_DAYS:
+        raise ValueError(f"days must be a whole number from 1 to {MAX_VALIDITY_DAYS}, got {days!r}")
     directory = Path(directory)
     key_path, doc_path = directory / KEY_FILE_NAME, directory / KEY_DOCUMENT_NAME
     if key_path.exists() or doc_path.exists():
@@ -141,8 +150,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--guardian-id", required=True)
     parser.add_argument("--days", type=int, default=DEFAULT_VALIDITY_DAYS)
     args = parser.parse_args(argv)
-    if args.days <= 0:
-        parser.error("--days must be positive")
     try:
         key_path, doc_path = write_key_files(args.out_dir, key_id=args.key_id, guardian_id=args.guardian_id,
                                              days=args.days)
