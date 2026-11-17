@@ -123,6 +123,12 @@ class Gateway:
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
+        stateful = [f for f in ("previous_response_id", "conversation") if body.get(f) is not None]
+        if stateful:
+            # Server-side history hides earlier items from the gateway, so session keying and the result cache
+            # can't see them. Lab convention: FinBot never sends either field (verified at 1450fc4).
+            return openai_error(501, f"The {stateful[0]} parameter is not supported by this endpoint.",
+                                "invalid_request_error", "unsupported_parameter")
         unsupported = unsupported_tool(body)
         if unsupported is not None:
             # Function tools only. Any other tool type runs where the gateway can't gate it: a hosted tool runs

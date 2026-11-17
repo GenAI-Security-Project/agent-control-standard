@@ -36,3 +36,17 @@ def test_upstream_error_status_passes_through_and_is_audited(gateway, upstream, 
     assert response.json()["error"]["message"] == "bad key"
     events = [e for e in audit() if e["acs_audit_event"] == "upstream_error"]
     assert events[0]["cause"] == "upstream_status" and events[0]["http_status"] == 401
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+@pytest.mark.parametrize("field,value", [("previous_response_id", "resp_123"), ("conversation", "conv_1"),
+                                         ("conversation", {"id": "conv_1"})])
+def test_server_side_state_is_refused_when_governed(gateway, guardian, upstream, audit, mode, field, value):
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json={**finbot_request(), field: value})
+    assert response.status_code == 501
+    assert upstream.received == []
+
+
+def test_off_forwards_server_side_state(gateway, upstream):
+    assert gateway().post("/v1/responses", json={**finbot_request(), "previous_response_id": "r"}).status_code == 200
