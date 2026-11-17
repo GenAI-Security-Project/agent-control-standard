@@ -348,6 +348,8 @@ def test_an_ordinary_path_still_writes(no_backend, path):
 WRITE_CAPABLE = [
     ("Write", "file_path"), ("Edit", "file_path"), ("MultiEdit", "file_path"),
     ("NotebookEdit", "notebook_path"), ("edit", "file_path"), ("write", "file_path"),
+    ("Delete", "file_path"), ("delete", "path"), ("Remove", "path"), ("Move", "target_file"),
+    ("Rename", "path"), ("Write", "path"), ("Edit", "target_file"),
 ]
 
 
@@ -467,3 +469,4 @@ def test_the_canonicalization_errors_cover_every_jcs_failure():
     for value in (2**53 + 1, float("nan"), "x\ud800"):
         with pytest.raises(CANONICALIZATION_ERRORS):
             jcs_canonicalize({"v": value})
+

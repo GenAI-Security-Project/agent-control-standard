@@ -110,9 +110,10 @@ DATA_VOLUME_PREFIX = "/system/volumes/data/"
 # macOS links /etc to /private/etc, so that spelling is compared as /etc. /var and /tmp have the same links but
 # aren't protected, so they need none.
 PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"),)
-# Case-folded tool names that write a file, and the arguments that name the file.
-WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit"})
-PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path")
+# Case-folded tool names that change a file, and the argument names that can name the file. This is a fixed list:
+# a tool under any other name, an MCP file tool included, meets no path deny here, and a policy has to cover it.
+WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit", "delete", "remove", "move", "rename"})
+PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file")
 
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
@@ -522,8 +523,7 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                     "reason_codes": ["destructive_command"]}
 
     if tool_name in WRITE_CAPABLE_TOOLS:
-        # Every tool that writes a file meets the same path denies: Write, Edit, MultiEdit and NotebookEdit in
-        # Claude Code, Write and Edit in Cursor.
+        # Each tool on the list meets the same path denies, on every path argument it carries.
         for name in PATH_ARGUMENTS:
             path = args.get(name, "")
             path = "" if path is None else path
