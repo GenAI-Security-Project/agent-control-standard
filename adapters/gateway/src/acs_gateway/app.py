@@ -434,7 +434,8 @@ class Gateway:
         for item in items:
             call_id = item.get("call_id") if isinstance(item, dict) else None
             if not isinstance(call_id, str) or not call_id:
-                # Only shadow gets here, since enforce refused the request in the pre-pass.
+                # Messages and reasoning items carry no call_id and pass through here in every mode. A call or
+                # output without a usable call_id reaches this branch only in shadow, since enforce refused it.
                 kept.append(item)
                 continue
             if item.get("type") == "function_call" and call_id in session.calls:
