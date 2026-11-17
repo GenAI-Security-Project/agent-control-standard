@@ -83,6 +83,8 @@ A call_id that comes back with different content (another tool name, other argum
 
 An epoch bump forgets every session and every cached outcome, so a call_id seen before is gated afresh under a new session. Send `POST /epoch` with `Authorization: Bearer <token>` to the admin port.
 
+One gap remains by design. When an epoch bump lands between a turn's calls and the client's resend of their outputs, the new session never gated those calls. It gates each output afresh, takes the tool name from the client's resent history, and audits `result_name_from_client`. The bump is a lab operator's action (`lab sign`, `lab mode`, a policy reload), so the lab driver runs it between scenarios, never inside one.
+
 ## Records
 
 **Transcript.** In shadow and enforce modes the gateway appends every signed request envelope and every response envelope to `ACS_TRANSCRIPT_DIR/<session_id>.jsonl`, one JSON object per line:
