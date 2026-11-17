@@ -63,13 +63,11 @@
 # whether its tool calls run. Bar Kaduri owns them. The other two project leads are
 # listed too, because GitHub does not let an author approve her own pull request, and
 # with Bar as the only owner every change she makes here would need an admin bypass.
-/adapters/  @bar-capsule @rocklambros @afogel
-
-# The gateway is a new subproject for the FinBot guided lab (issue #577). It gets a
-# wider owner set so its pull requests do not wait on two reviewers. Every handle
-# here holds write access, because GitHub silently ignores one that does not.
-# This line follows /adapters/ because the last matching pattern wins.
-/adapters/gateway/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc
+# The FinBot guided lab (issues #574 to #591) lands a run of adapter pull requests,
+# so the Reference Implementation lead and a second maintainer are owners as well,
+# and those pull requests do not all wait on the same two reviewers. Every handle here
+# holds write access, because GitHub silently ignores one that does not.
+/adapters/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead
