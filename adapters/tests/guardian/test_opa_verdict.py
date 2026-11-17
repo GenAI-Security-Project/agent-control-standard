@@ -190,3 +190,10 @@ def test_a_redaction_beside_a_parameter_override_is_valid():
                "modifications": {"redactions": [{"path": "/arguments/amount/value"}],
                                  "parameter_overrides": {"to": "acct-2"}}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE) is None
+
+
+def test_modified_content_on_a_tool_call_is_invalid():
+    # A call's arguments are structured, so a rewrite goes through parameter_overrides, as a result's goes
+    # through redactions or modified_content.
+    verdict = {"decision": "modify", "reasoning": "r", "modifications": {"modified_content": "rm -rf /"}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)

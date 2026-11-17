@@ -300,6 +300,9 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
     violation = modify_composition_violation(dict(modifications))
     if violation:
         return violation
+    if "modified_content" in modifications and method == "steps/toolCallRequest":
+        # The adapters and the gateway apply parameter_overrides to a call, never an opaque replacement.
+        return "modified_content has no meaning on steps/toolCallRequest (use parameter_overrides)"
     if "redactions" in modifications and not modifications["redactions"]:
         # An empty list changes nothing, so a modify that carries only it would deliver the step unchanged.
         return "redactions is empty, so the modify changes nothing"
