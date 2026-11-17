@@ -159,6 +159,23 @@ class SigningUnavailable(RuntimeError):
     """ML-DSA-65 is on but the decision key can't sign now. handle_request answers the -32603 floor for it."""
 
 
+class RefusalLatch:
+    """Counts refusals and says whether this one is the first, so a dead key logs one line, not one per request."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.count = 0
+
+    def record(self) -> bool:
+        with self._lock:
+            self.count += 1
+            return self.count == 1
+
+
+# Unauthenticated requests reach signing too, so a log line per refusal would let anyone flood the log (CR3-5).
+DEAD_KEY_REFUSALS = RefusalLatch()
+
+
 def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict:
     """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
 
@@ -175,10 +192,12 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
             raise SigningUnavailable("ACS_RESPONSE_SIGNING=ML-DSA-65 but no decision key was loaded")
         if not DECISION_SIGNER.keys.is_live(_key_document.utcnow()):
             # Past not_after, before not_before, or revoked since startup (review R-I1). A signature no client
-            # accepts would read as tampering, so the floor answers and the log says why.
-            sys.stderr.write(f"[guardian] decision key {DECISION_SIGNER.keys.key_id} is not live "
-                             "(outside its validity window or revoked), refusing to sign\n")
-            sys.stderr.flush()
+            # accepts would read as tampering, so the floor answers and the log says why, once.
+            if DEAD_KEY_REFUSALS.record():
+                sys.stderr.write(f"[guardian] decision key {DECISION_SIGNER.keys.key_id} is not live "
+                                 "(outside its validity window or revoked). Refusing to sign every response "
+                                 "until the Guardian restarts with a live key\n")
+                sys.stderr.flush()
             raise SigningUnavailable("the decision key is not live")
         if not isinstance(request, dict):
             raise SigningUnavailable("an ML-DSA-65 answer needs the request it answers")

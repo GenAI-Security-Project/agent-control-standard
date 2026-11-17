@@ -265,3 +265,14 @@ def test_a_non_object_metadata_still_gets_a_signed_answer(signer):
     response = example_guardian.handle_request(request)
     assert response["error"]["code"] == -32600
     assert_ml_dsa(response, request, signer)
+
+
+def test_a_dead_key_is_logged_once_and_then_counted(signer, monkeypatch, capsys):
+    # Review CR3-5: every unauthenticated request would otherwise add a log line.
+    from acs.client import _key_document
+    monkeypatch.setattr(_key_document, "utcnow", lambda: signer.keys.not_after)
+    for _ in range(3):
+        request = signed_step("steps/toolCallRequest", ALLOWED)
+        assert_floor(example_guardian.handle_request(request), request)
+    assert capsys.readouterr().err.count("is not live") == 1
+    assert example_guardian.DEAD_KEY_REFUSALS.count == 3

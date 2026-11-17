@@ -53,6 +53,8 @@ def configure_in_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any
     signer = load_decision_signer(env)
     monkeypatch.setattr(example_guardian, "RESPONSE_SIGNING_NAME", "ML-DSA-65")
     monkeypatch.setattr(example_guardian, "DECISION_SIGNER", signer)
+    # A fresh latch, so each test sees the dead-key log line on its own first refusal.
+    monkeypatch.setattr(example_guardian, "DEAD_KEY_REFUSALS", example_guardian.RefusalLatch())
     monkeypatch.setattr(example_guardian, "OPA_CONFIG", None)
     monkeypatch.setattr(example_guardian, "POLICY_BACKEND_NAME", "")
     monkeypatch.setattr(example_guardian, "PERSIST_ENABLED", False)
