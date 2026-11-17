@@ -72,3 +72,25 @@ def test_a_symlinked_admin_token_file_is_refused(token_file, tmp_path):
     link.symlink_to(token_file)
     with pytest.raises(ValueError, match="symlink"):
         load_admin_token(link)
+
+
+def test_a_request_that_races_an_epoch_bump_moves_to_the_new_session(gateway, guardian, upstream, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    gw = client.app.state.gateway
+    original, stale = gw.sessions.get, []
+
+    def get(key):
+        session = original(key)
+        if not stale:
+            # The bump lands after the request picked its session and before it took the lock.
+            stale.append(session)
+            gw.sessions.bump_epoch()
+        return session
+
+    gw.sessions.get = get
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    used = {line["envelope"]["params"]["metadata"]["session_id"] for line in transcript_lines(tmp_path)
+            if line["dir"] == "req"}
+    assert stale[0].handshake is None
+    assert stale[0].session_id not in used and len(used) == 1

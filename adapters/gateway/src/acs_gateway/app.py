@@ -166,9 +166,9 @@ class Gateway:
             key = conversation_key(body)
         except RecursionError:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
-        session = self.sessions.get(key)
+        session = None
         try:
-            async with session.lock:
+            async with self._current(key) as session:
                 await self._ensure_open(session)
                 if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
@@ -188,7 +188,10 @@ class Gateway:
             return openai_error(502, "The model service returned an unreadable response.", "server_error",
                                 "upstream_unreadable")
         try:
-            async with session.lock:
+            async with self._current(key) as session:
+                # The input phase already made this request's one attempt, so only a new epoch's session opens here.
+                if session.handshake is None:
+                    await self._ensure_open(session)
                 changed = await self._gate_output(session, reply)
         except Exception as e:  # noqa: BLE001
             failed = self._gating_failed(session, "output", e)
@@ -196,6 +199,21 @@ class Gateway:
                 return failed
             return _relay(upstream, None)
         return _relay(upstream, reply if changed else None)
+
+    @contextlib.asynccontextmanager
+    async def _current(self, key: str) -> AsyncIterator[Session]:
+        """The key's session for the current epoch, locked. A bump that lands while this waits for the lock moves
+        the request to the new epoch's session, so nothing finishes on a forgotten one."""
+        while True:
+            session = self.sessions.get(key)
+            await session.lock.acquire()
+            if session.epoch == self.sessions.epoch:
+                break
+            session.lock.release()
+        try:
+            yield session
+        finally:
+            session.lock.release()
 
     async def _ensure_open(self, session: Session) -> None:
         if _opened(session.handshake):
@@ -208,9 +226,9 @@ class Gateway:
             session.session_id = str(uuid.uuid4())
         await asyncio.to_thread(self.guardian.open, session)
 
-    def _gating_failed(self, session: Session, phase: str, error: Exception) -> Response | None:
+    def _gating_failed(self, session: Session | None, phase: str, error: Exception) -> Response | None:
         """A fault in the gateway's own gating code: shadow forwards unchanged (None), enforce fails closed."""
-        _audit("gateway_step_error", session_id=session.session_id, phase=phase, mode=self.config.mode,
+        _audit("gateway_step_error", session_id=session.session_id if session else None, phase=phase, mode=self.config.mode,
                error=f"{type(error).__name__}: {error}")
         if not self.enforce:
             return None
