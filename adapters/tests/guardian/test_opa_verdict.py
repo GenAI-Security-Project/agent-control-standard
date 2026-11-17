@@ -197,3 +197,46 @@ def test_modified_content_on_a_tool_call_is_invalid():
     # through redactions or modified_content.
     verdict = {"decision": "modify", "reasoning": "r", "modifications": {"modified_content": "rm -rf /"}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
+
+
+
+def _assert_generic(result: dict, code: str, leaked: list[str]) -> None:
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+    assert result["reasoning"] == opa_backend.FAILURE_REASONING[code]
+    assert len(result["reasoning"]) <= 200
+    for text in leaked:
+        assert text not in result["reasoning"]
+
+
+@pytest.mark.parametrize("stub_kwargs,code", [
+    ({"status": 503}, "opa_http_error"),
+    ({"body": b"<html>internal-opa-17.corp</html>"}, "opa_response_malformed"),
+    ({"body": b"{}"}, "opa_result_missing"),
+    ({"delay_s": 1.0}, "opa_timeout"),
+])
+def test_signed_reasoning_is_generic_and_the_details_go_to_the_log(capsys, stub_kwargs, code):
+    with StubOpa({"decision": "allow"}, **stub_kwargs) as opa:
+        result = _evaluate("steps/toolCallRequest", CALL, opa.url)
+    _assert_generic(result, code, ["127.0.0.1", "503", "internal-opa-17", "Error"])
+    assert code in capsys.readouterr().err
+
+
+def test_an_unreachable_opa_names_no_host_in_the_signed_reasoning(capsys):
+    url = closed_port_url()
+    result = _evaluate("steps/toolCallRequest", CALL, url)
+    _assert_generic(result, "opa_unreachable", ["127.0.0.1", "Errno", "refused"])
+    assert "opa_unreachable" in capsys.readouterr().err
+
+
+def test_an_invalid_verdict_keeps_the_problem_out_of_the_signed_reasoning(capsys):
+    with StubOpa({"decision": "allow", "request_id": "99999999-9999-4999-8999-999999999999"}) as opa:
+        result = _evaluate("steps/toolCallRequest", CALL, opa.url)
+    _assert_generic(result, "opa_verdict_invalid", ["request_id", "99999999"])
+    assert "request_id" in capsys.readouterr().err
+
+
+def test_every_failure_message_fits_200_characters():
+    assert set(opa_backend.FAILURE_REASONING) == {
+        "opa_unreachable", "opa_timeout", "opa_http_error", "opa_response_malformed", "opa_result_missing",
+        "opa_verdict_invalid", "policy_backend_misconfigured"}
+    assert all(0 < len(text) <= 200 for text in opa_backend.FAILURE_REASONING.values())

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -30,6 +31,39 @@ DEFAULT_TIMEOUT_MS = 2000
 MAX_TIMEOUT_MS = 4000
 # A verdict is a few hundred bytes. The cap keeps a broken or hostile policy server from filling memory.
 MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+# The signed reasoning for each failure. It reaches the agent, so it names no host, status, or policy detail.
+# The details go to the Guardian's stderr log instead.
+FAILURE_REASONING = {
+    "opa_unreachable": "The policy service could not be reached, so the step is denied.",
+    "opa_timeout": "The policy service did not answer in time, so the step is denied.",
+    "opa_http_error": "The policy service returned an error, so the step is denied.",
+    "opa_response_malformed": "The policy service returned an unreadable answer, so the step is denied.",
+    "opa_result_missing": "The policy returned no decision for this step, so the step is denied.",
+    "opa_verdict_invalid": "The policy returned a decision the Guardian cannot accept, so the step is denied.",
+    "policy_backend_misconfigured": "The Guardian's policy backend is misconfigured, so the step is denied.",
+}
+
+
+def redact_url(url: str) -> str:
+    """The URL without its userinfo, for logs and error messages."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        if parts.username is None and parts.password is None:
+            return url
+        host = parts.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        netloc = f"{host}:{parts.port}" if parts.port else host
+        return urllib.parse.urlunsplit(parts._replace(netloc=netloc))
+    except ValueError:
+        return "<unparseable URL>"
+
+
+def _log(reason_code: str, detail: str) -> None:
+    sys.stderr.write(f"[guardian] OPA {reason_code}: {detail}\n")
+    sys.stderr.flush()
 
 
 class OpaConfigError(ValueError):
@@ -60,7 +94,7 @@ def load_config(env: Mapping[str, str] = os.environ) -> OpaConfig:
     parts = urllib.parse.urlsplit(url)
     # Only http(s) to a named host: urllib would otherwise open file: and ftp: URLs from the environment.
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise OpaConfigError(f"{URL_ENV} must be an http or https URL to the OPA data API, got {url!r}")
+        raise OpaConfigError(f"{URL_ENV} must be an http or https URL to the OPA data API, got {redact_url(url)!r}")
     raw_timeout = env.get(TIMEOUT_ENV, "").strip() or str(DEFAULT_TIMEOUT_MS)
     try:
         timeout_ms = int(raw_timeout)
@@ -383,14 +417,15 @@ def verdict_problem(verdict: Any, method: str, payload: Mapping[str, Any], base:
     return None
 
 
-def _deny(base: Mapping[str, Any], reason_code: str, reasoning: str) -> dict:
-    return {**base, "decision": "deny", "reasoning": reasoning, "reason_codes": [reason_code]}
+def _deny(base: Mapping[str, Any], reason_code: str, detail: str) -> dict:
+    _log(reason_code, detail)
+    return {**base, "decision": "deny", "reasoning": FAILURE_REASONING[reason_code], "reason_codes": [reason_code]}
 
 
 def misconfigured(base: Mapping[str, Any]) -> dict:
     """The deny for a backend that is named but was never loaded, which main() would have refused to start with."""
     return _deny(base, "policy_backend_misconfigured",
-                 f"policy backend misconfigured: {BACKEND_ENV} is set but no OPA settings were loaded at startup")
+                 f"{BACKEND_ENV} is set but no OPA settings were loaded at startup")
 
 
 def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], config: OpaConfig) -> dict:

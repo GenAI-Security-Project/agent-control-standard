@@ -698,7 +698,8 @@ def main() -> int:
         sys.stdout.flush()
         sys.stderr.write(f"[guardian] listening on {args.host}:{port} (case-insensitive-tool-policy)\n")
         if OPA_CONFIG is not None:
-            sys.stderr.write(f"[guardian] tool calls and tool results go to OPA at {OPA_CONFIG.url} "
+            opa_url = opa_backend.redact_url(OPA_CONFIG.url)
+            sys.stderr.write(f"[guardian] tool calls and tool results go to OPA at {opa_url} "
                              "(lab convention, issue #531)\n")
         sys.stderr.flush()
         try:

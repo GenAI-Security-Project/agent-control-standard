@@ -139,3 +139,15 @@ def test_a_deeply_nested_opa_answer_is_a_signed_deny(guardian, body):
         _, result = _send(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
     assert result["decision"] == "deny"
     assert result["reason_codes"][0] in ("opa_response_malformed", "opa_verdict_invalid")
+
+
+
+def test_the_startup_log_never_prints_url_userinfo(tmp_path, monkeypatch):
+    env = {**os.environ, **signing_env(), "ACS_GUARDIAN_STATE_DIR": str(tmp_path / "state"),
+           "ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "http://lab:secret-pw@127.0.0.1:1/v1/data/lab/verdict"}
+    env.pop("ACS_HMAC_SECRET_FILE", None)
+    process, _ = launch_guardian(env=env)
+    process.terminate()
+    _, stderr = process.communicate(timeout=5)
+    assert "127.0.0.1:1/v1/data/lab/verdict" in stderr
+    assert "secret-pw" not in stderr
