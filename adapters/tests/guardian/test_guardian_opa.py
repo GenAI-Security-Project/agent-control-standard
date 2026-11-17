@@ -299,3 +299,41 @@ def test_the_recheck_copies_only_the_arguments(opa_on, monkeypatch):
         opa_on(opa)
         assert _step("steps/toolCallRequest", payload)["decision"] == "modify"
     assert copied == [LISTING["arguments"]]
+
+
+
+def _write(path: str) -> dict:
+    return {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": path}}}
+
+
+SPELLINGS = [("/tmp/../etc/passwd", "protected_path"), ("//etc/passwd", "protected_path"),
+             ("///etc/passwd", "protected_path"), ("/etc/./passwd", "protected_path"),
+             ("/usr//bin/x", "protected_path"), ("../../etc/passwd", "path_traversal"), ("..", "path_traversal")]
+
+
+@pytest.mark.parametrize("path,code", SPELLINGS)
+def test_a_protected_path_is_caught_in_every_spelling_without_a_backend(no_backend, path, code):
+    result = _step("steps/toolCallRequest", _write(path))
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+
+
+@pytest.mark.parametrize("path,code", SPELLINGS)
+def test_a_protected_path_is_caught_in_every_spelling_under_opa(opa_on, path, code):
+    with StubOpa(ALLOW) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", _write(path))
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+    assert opa.inputs == []
+
+
+@pytest.mark.parametrize("path,code", SPELLINGS)
+def test_a_rewrite_to_a_protected_path_is_caught_in_every_spelling(opa_on, path, code):
+    with StubOpa(_modify(parameter_overrides={"file_path": path})) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", WRITE_TMP)
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+
+
+@pytest.mark.parametrize("path", ["/tmp/notes.txt", "notes/../todo.txt", "./notes.txt", "/tmp/etc/passwd"])
+def test_an_ordinary_path_still_writes(no_backend, path):
+    assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"

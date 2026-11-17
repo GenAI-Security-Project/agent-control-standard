@@ -14,6 +14,7 @@ import hashlib
 import http.server
 import json
 import os
+import posixpath
 import socketserver
 import sys
 import threading
@@ -454,6 +455,14 @@ def _argument_type_deny(base: dict, tool_name: str, name: str, value: Any) -> di
             "reason_codes": ["argument_type_invalid"]}
 
 
+def _normalize_path(path: str) -> str:
+    """POSIX normalization, with the leading // that normpath keeps collapsed to /, since Linux treats both alike."""
+    if not path:
+        return path
+    normalized = posixpath.normpath(path)
+    return "/" + normalized.lstrip("/") if normalized.startswith("//") else normalized
+
+
 def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
     """The built-in denies for a tool call, or None. They hold under every policy backend."""
     if tool_name == "task" and not ALLOW_SUBAGENT:
@@ -484,7 +493,13 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
         path = "" if path is None else path
         if not isinstance(path, str):
             return _argument_type_deny(base, tool_name, "file_path", path)
-        if any(path.startswith(p) for p in PROTECTED_PATH_PREFIXES):
+        # Compared after normalizing, so /tmp/../etc/passwd and //etc/passwd can't step around the prefixes.
+        normalized = _normalize_path(path)
+        if normalized == ".." or normalized.startswith("../"):
+            return {**base, "decision": "deny",
+                    "reasoning": f"relative path leaves its starting directory: {path}",
+                    "reason_codes": ["path_traversal"]}
+        if any((normalized + "/").startswith(p) for p in PROTECTED_PATH_PREFIXES):
             return {**base, "decision": "deny",
                     "reasoning": f"write to protected system path: {path}",
                     "reason_codes": ["protected_path"]}
