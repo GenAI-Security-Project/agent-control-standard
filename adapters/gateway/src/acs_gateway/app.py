@@ -7,7 +7,6 @@ import functools
 import hmac
 import json
 import os
-import stat
 import time
 import uuid
 from collections import deque
@@ -26,6 +25,7 @@ from starlette.routing import Route
 
 from acs.client import Negotiated
 
+from acs_gateway import secretfile
 from acs_gateway.apply import (
     Applied,
     apply_call,
@@ -58,6 +58,7 @@ from acs_gateway.sessions import (
     content,
     conversation_key,
     fingerprint,
+    is_stream,
     same_content,
 )
 from acs_gateway.stream import GovernedStream, StreamEditor
@@ -111,11 +112,6 @@ def _client_headers(headers: httpx.Headers, *, decoded: bool) -> dict[str, str]:
     return {k: v for k, v in headers.items()
             if k.lower() not in _HOP_HEADERS and not k.lower().startswith("x-acs-")
             and not (decoded and k.lower() == "content-encoding")}
-
-
-def is_stream(body: Any) -> bool:
-    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the gate."""
-    return isinstance(body, dict) and body.get("stream") is not None and body["stream"] is not False
 
 
 class Gateway:
@@ -1214,26 +1210,9 @@ def load_secret_file(path: Path, name: str) -> str:
     """A listener's secret, held to acs.client's HMAC secret rules: no symlink, a regular file, mode 0600 or 0400,
     owned by the gateway's own uid, and at least 32 bytes. name is the setting that pointed here, for the error.
 
-    The checks and the read use one descriptor opened with O_NOFOLLOW, so the file can't be swapped between them, and
-    O_NONBLOCK keeps a FIFO from stalling startup.
+    The checks and the read are secretfile.load_secret_file's, shared with the model key file.
     """
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    except OSError as e:
-        if path.is_symlink():
-            raise ValueError(f"{name} {path} is a symlink") from e
-        raise ValueError(f"{name} {path} can't be opened: {e}") from e
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode):
-        os.close(fd)
-        raise ValueError(f"{name} {path} is not a regular file")
-    with os.fdopen(fd, "rb") as f:
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            raise ValueError(f"{name} {path} must be mode 0600 or 0400")
-        if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
-            raise ValueError(f"{name} {path} is owned by uid {info.st_uid}, "
-                             f"not the gateway's uid {os.geteuid()}")
-        token = f.read().decode("utf-8").strip()
+    token = secretfile.load_secret_file(path, name)
     if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
         raise ValueError(f"{name} {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
     return token

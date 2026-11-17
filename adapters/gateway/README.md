@@ -114,7 +114,9 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 | `ids` | Every placeholder in the request, in document order, as `kind:n`. Replay fills only a request with the same list, so an id that moved or an extra one is a miss (`placeholder_mismatch`) instead of a value in the wrong place |
 | `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
 
-Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch` and `stream`. A byte-identical retry gets the same answer as the first attempt, a miss included, because an answer depends only on the request bytes and the gateway's branch tokens, and a retry carries both unchanged. A line whose `branch` has fewer tokens than its `step` could never match, so it stops startup with its file and line number.
+Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch` and `stream`. A byte-identical retry gets the same answer as the first attempt, a miss included, because an answer depends only on the request bytes and the gateway's branch tokens, and a retry carries both unchanged. A line whose `branch` has fewer tokens than its `step` could never match, so it stops startup with its file and line number. So does any other malformed line, and the gateway exits with code 2 and a one-line message naming the file, as it does for a bad key file.
+
+Recordings come from the repository, so `match` is trusted input: the gateway runs it as written, with no time limit, and a recording from anywhere else deserves the review any other code would get.
 
 **Placeholders.** FinBot mints a namespace and ids for every visitor, so a recording made in one FinBot would point the replayed model at another FinBot's addresses. Capture swaps each value below for `{{acs:<kind>:<n>}}`, where `n` counts distinct values of that kind in the order they appear in the request, the system text first. Replay fills each placeholder from the live request, so a recording replays into a fresh FinBot with a different namespace.
 

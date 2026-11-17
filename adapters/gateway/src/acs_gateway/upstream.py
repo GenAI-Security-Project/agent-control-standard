@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -17,7 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from acs_gateway import secretfile
 from acs_gateway.apply import NEUTRAL_LINE
+from acs_gateway.sessions import conversation_parts, is_stream
 
 if TYPE_CHECKING:
     from acs_gateway.config import GatewayConfig
@@ -59,32 +60,12 @@ def _inside_git_work_tree(path: Path) -> bool:
 def read_key_file(path: Path) -> str:
     """The model key, from a file the lab writes outside the repository. No message ever carries the key itself.
 
-    Held to the gateway's other secret files: not a symlink, a regular file, mode 0600 or 0400, owned by the gateway's
-    uid. The checks and the read share one descriptor opened with O_NOFOLLOW, so the file can't be swapped between
-    them, and O_NONBLOCK keeps a FIFO from stalling startup.
+    Held to the gateway's other secret files by load_secret_file, and refused inside a git work tree (PREMORTEM P24).
     """
     name = "ACS_UPSTREAM_KEY_FILE"
     if _inside_git_work_tree(path):
         raise ValueError(f"{name} {path} is inside a git work tree, and the key must live outside the repository")
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    except OSError as e:
-        if path.is_symlink():
-            raise ValueError(f"{name} {path} is a symlink") from None
-        raise ValueError(f"{name} {path} can't be opened: {e.strerror}") from None
-    info = os.fstat(fd)
-    with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f"{name} {path} is not a regular file")
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            raise ValueError(f"{name} {path} must be mode 0600 or 0400")
-        if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
-            raise ValueError(f"{name} {path} is owned by uid {info.st_uid}, not the gateway's uid {os.geteuid()}")
-        raw = f.read()
-    try:
-        key = raw.decode("utf-8").strip()
-    except UnicodeDecodeError:
-        raise ValueError(f"{name} {path} is not UTF-8 text") from None
+    key = secretfile.load_secret_file(path, name)
     if not key:
         raise ValueError(f"{name} {path} is empty")
     if any(c.isspace() or not c.isprintable() for c in key):
@@ -105,24 +86,6 @@ def _strings(value: Any) -> Iterator[str]:
             yield from _strings(item)
 
 
-def _system_text(body: dict[str, Any]) -> str:
-    """The instructions field, or the first system or developer message, where FinBot puts its namespace."""
-    if isinstance(body.get("instructions"), str):
-        return body["instructions"]
-    for item in body.get("input") if isinstance(body.get("input"), list) else []:
-        if isinstance(item, dict) and item.get("role") in ("system", "developer"):
-            return _text(item.get("content"))
-    return ""
-
-
-def _text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str))
-    return ""
-
-
 def placeholder_map(body: Any) -> dict[str, str]:
     """Each FinBot-generated value in a request mapped to its placeholder, {{acs:<kind>:<n>}}.
 
@@ -132,7 +95,7 @@ def placeholder_map(body: Any) -> dict[str, str]:
     """
     mapping: dict[str, str] = {}
     counts: dict[str, int] = {}
-    sources = [_system_text(body)] if isinstance(body, dict) else []
+    sources = [conversation_parts(body)[0]] if isinstance(body, dict) else []
     for text in [*sources, *_strings(body)]:
         for match in _ID.finditer(text):
             value = match.group(0)
@@ -200,14 +163,15 @@ def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int,
     The turn is the number of user messages, so each turn of one chat has its own answer (fix round 2, CR1). The
     step is the number of function_call_output items, so an SDK retry or an agent rerun lands on the same step.
     """
+    # The first user message is read by the same rule that groups requests into sessions (fix round 2, CR10).
+    first_user = conversation_parts(body)[1]
     items = body.get("input")
     if isinstance(items, str):
-        return to_placeholders(items, mapping), 1, 0
+        return to_placeholders(first_user, mapping), 1, 0
     items = items if isinstance(items, list) else []
-    users = [i for i in items if isinstance(i, dict) and i.get("role") == "user" and i.get("type", "message") == "message"]
-    first_user = _text(users[0].get("content")) if users else ""
+    turn = sum(1 for i in items if isinstance(i, dict) and i.get("role") == "user")
     step = sum(1 for i in items if isinstance(i, dict) and i.get("type") == "function_call_output")
-    return to_placeholders(first_user, mapping), len(users), step
+    return to_placeholders(first_user, mapping), turn, step
 
 
 def _governed_items(body: Any) -> list[dict[str, Any]]:
@@ -357,7 +321,7 @@ class RecordingStore:
                 try:
                     recordings.append(_recording(raw))
                 except ValueError as e:
-                    raise ValueError(f"{path.name}:{number}: {e}") from None
+                    raise ValueError(f"{path}:{number}: {e}") from None
         return cls(recordings)
 
     def find(self, first_user: str, turn: int, step: int, branch: str, stream: bool) -> Recording | None:
@@ -403,11 +367,6 @@ def encode_events(events: list[dict[str, Any]]) -> bytes:
     return "".join(f"event: {e['event']}\ndata: {json.dumps(e['data'])}\n\n" for e in events).encode("utf-8")
 
 
-def _is_stream(body: dict[str, Any]) -> bool:
-    # The gateway's own rule (app.is_stream): any stream value but an absent one, null or false asks for a stream.
-    return body.get("stream") is not None and body["stream"] is not False
-
-
 @dataclass(frozen=True)
 class _Answer:
     content: bytes
@@ -448,7 +407,7 @@ class ReplayTransport(httpx.AsyncBaseTransport):
             body = None
         if not isinstance(body, dict):
             return self._miss(None, "unreadable_request", None, "", False)
-        stream = _is_stream(body)
+        stream = is_stream(body)
         mapping = placeholder_map(body)
         first_user, turn, step = replay_key(body, mapping)
         if branch is None:
@@ -570,7 +529,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         except httpx.DecodingError:
             _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
             return
-        stream = _is_stream(body)
+        stream = is_stream(body)
         response: Any
         if stream:
             response = parse_events(decoded.decode("utf-8", "replace"))

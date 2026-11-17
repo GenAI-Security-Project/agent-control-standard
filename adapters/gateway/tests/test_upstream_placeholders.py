@@ -76,7 +76,9 @@ def test_the_key_takes_the_step_from_outputs_whatever_they_say():
     assert replay_key(live, placeholder_map(live)) == ("Mail admin@ns_{{acs:user:1}}.finbot", 1, 3)
 
 
-def test_a_first_user_message_in_parts_is_joined():
+def test_a_first_user_message_in_parts_reads_as_the_session_reads_it():
+    # Sessions key on the parts' canonical JSON, and replay keys on the same text (fix round 2, CR10).
     live = {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Pay "},
                                                    {"type": "input_text", "text": "vendor 7"}]}]}
-    assert replay_key(live, placeholder_map(live)) == ("Pay vendor 7", 1, 0)
+    assert replay_key(live, placeholder_map(live)) == (
+        '[{"text":"Pay ","type":"input_text"},{"text":"vendor 7","type":"input_text"}]', 1, 0)

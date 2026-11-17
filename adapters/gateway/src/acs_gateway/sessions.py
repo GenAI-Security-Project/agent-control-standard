@@ -21,8 +21,23 @@ def _text(content: Any) -> str:
     return json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def is_stream(body: Any) -> bool:
+    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the 501.
+
+    Gating and replay both read it here, so they never disagree on what a request asked for."""
+    return isinstance(body, dict) and body.get("stream") is not None and body["stream"] is not False
+
+
 def conversation_key(body: dict[str, Any]) -> str:
-    """SHA-256 of the system text and the first user message, which every resend of one agent run repeats.
+    """SHA-256 of the system text and the first user message, which every resend of one agent run repeats."""
+    system, user = conversation_parts(body)
+    joined = json.dumps([system, user], separators=(",", ":"))
+    return hashlib.sha256(joined.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def conversation_parts(body: dict[str, Any]) -> tuple[str, str]:
+    """(system text, first user message), the parts that name one agent run. Sessions and replay keys both read them
+    here, so the two never group requests differently.
 
     The system text is the instructions field when present, otherwise the first system or developer item.
     """
@@ -40,8 +55,7 @@ def conversation_key(body: dict[str, Any]) -> str:
             system = _text(item.get("content"))
         elif user is None and role == "user":
             user = _text(item.get("content"))
-    joined = json.dumps([system or "", user or ""], separators=(",", ":"))
-    return hashlib.sha256(joined.encode("utf-8", "surrogatepass")).hexdigest()
+    return system or "", user or ""
 
 
 @dataclass

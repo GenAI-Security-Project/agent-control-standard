@@ -33,7 +33,12 @@ def main() -> int:
 
     from acs_gateway.app import create_admin_app, create_app, load_admin_token, load_secret_file
 
-    app = create_app(config)
+    try:
+        app = create_app(config)
+    except (ValueError, OSError) as e:
+        # A bad key file or recording is an operator's setting, so it gets the same one-line message as the rest.
+        sys.stderr.write(f"acs-gateway: {e}\n")
+        return 2
     servers = [uvicorn.Server(uvicorn.Config(app, host=config.listen_host, port=config.listen_port,
                                              lifespan="on", log_level="info"))]
     if config.admin_port is not None:
