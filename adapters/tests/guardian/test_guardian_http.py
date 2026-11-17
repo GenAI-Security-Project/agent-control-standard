@@ -58,9 +58,9 @@ def post(address: tuple[str, int], body: bytes) -> tuple[int, dict]:
 
 
 def test_an_unexpected_error_is_answered_with_an_unsigned_internal_error(served, monkeypatch):
-    def broken(request, read=None):
+    def broken(request, read):
         raise RuntimeError("anything at all")
-    monkeypatch.setattr(example_guardian, "handle_request", broken)
+    monkeypatch.setattr(example_guardian, "_handle", broken)
     status, body = post(served, b'{"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": {}}')
     assert body["error"]["code"] == -32603
     assert "anything at all" not in body["error"]["message"]
@@ -118,11 +118,11 @@ def test_null_fields_read_as_absent_on_a_step(field, read_as):
         params["metadata"]["session_id"] = None
     else:
         params[field] = None
-    fields, problem, _, _ = example_guardian.read_request(
+    read = example_guardian.read_request(
         {"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": params})
-    assert problem is None
+    assert read.problem is None
     name, value = read_as
-    assert getattr(fields, name) == value
+    assert getattr(read, name) == value
 
 
 @pytest.mark.parametrize("method", ["system/ping", "handshake/hello"])
@@ -269,9 +269,9 @@ def test_an_id_at_the_edge_of_2_53_is_echoed(served, request_id):
 
 
 def test_the_floor_echoes_an_id_that_parsed(served, monkeypatch):
-    def broken(request, read=None):
+    def broken(request, read):
         raise RuntimeError("boom")
-    monkeypatch.setattr(example_guardian, "handle_request", broken)
+    monkeypatch.setattr(example_guardian, "_handle", broken)
     status, answer = post(served, _ping("keep-me"))
     assert (answer["error"]["code"], answer["id"]) == (-32603, "keep-me")
 

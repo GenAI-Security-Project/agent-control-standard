@@ -681,13 +681,18 @@ def _log_value(value: Any, width: int = 8) -> str:
     return repr(value[:width]) if isinstance(value, str) else f"<{type(value).__name__}>"
 
 
-class RequestFields(NamedTuple):
-    """The request fields every later step reads, each one checked for type once, here."""
+class RequestRead(NamedTuple):
+    """One read of a request: the fields every later step uses, each checked for type once, or the problem.
+
+    When problem is set, only id and session_id are meaningful: the id an error answer can carry (the request's own
+    when it passed the id rule, else None) and the session it can be signed for ("" when none was readable).
+    """
     method: str
     id: Any
     params: dict
     request_id: str
     session_id: str
+    problem: str | None
 
 
 MAX_SAFE_ID = 2**53 - 1
@@ -705,15 +710,7 @@ def _valid_id(value: Any) -> bool:
     return isinstance(value, float) and math.isfinite(value)
 
 
-class ReadResult(NamedTuple):
-    """read_request's answer: the fields, or the problem with the id and session an error answer can use."""
-    fields: RequestFields | None
-    problem: str | None
-    id: Any
-    session_id: str
-
-
-def read_request(request: Any) -> ReadResult:
+def read_request(request: Any) -> RequestRead:
     """The request's fields, each checked for type once, or the structural problem that stops the request.
 
     The id is one an answer can carry: the request's own when it has a valid type, else None. The session_id is
@@ -721,7 +718,7 @@ def read_request(request: Any) -> ReadResult:
     """
     if not isinstance(request, dict):
         kind = "batch" if isinstance(request, list) else type(request).__name__
-        return ReadResult(None, f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)", None, "")
+        return RequestRead("", None, {}, "", "", f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)")
     # Null reads as absent for params, metadata, request_id, and session_id, as it always has.
     params = request.get("params")
     params = {} if params is None else params
@@ -734,11 +731,11 @@ def read_request(request: Any) -> ReadResult:
     raw_id = request.get("id")
     if not _valid_id(raw_id):
         # Read after the session, so this refusal is signed whenever the session is readable, with id null.
-        return ReadResult(None, "id must be a string, an int within 2^53 - 1, a finite float, or null", None,
-                          signing_session)
+        return RequestRead("", None, {}, "", signing_session,
+                           "id must be a string, an int within 2^53 - 1, a finite float, or null")
 
-    def refuse(problem: str) -> ReadResult:
-        return ReadResult(None, problem, raw_id, signing_session)
+    def refuse(problem: str) -> RequestRead:
+        return RequestRead("", raw_id, {}, "", signing_session, problem)
 
     method = request.get("method", "")
     if not isinstance(method, str):
@@ -754,18 +751,21 @@ def read_request(request: Any) -> ReadResult:
     for name, value in (("params.request_id", request_id), ("params.metadata.session_id", session_id)):
         if not isinstance(value, str):
             return refuse(f"{name} must be a string")
-    return ReadResult(RequestFields(method, raw_id, params, request_id, session_id), None, raw_id, session_id)
+    return RequestRead(method, raw_id, params, request_id, session_id, None)
 
 
-def handle_request(request: dict, read: "ReadResult | None" = None) -> dict:
+def handle_request(request: dict) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
     # Errors are signed whenever the session key is derivable, as spec section 10 requires. The two unsigned
     # answers are the -32004 for an unknown key_id (the section 10 exemption) and do_POST's floor, which answers
     # when signing itself fails. Signing an error before the sender is verified gives that sender an HMAC under a
     # session key it chose, over an error envelope with an id it chose. A client accepts a response only for its
     # own UUID request ids, so it can't use one.
-    # do_POST reads the request once and passes the result in. Other callers let it be read here.
-    read = read if read is not None else read_request(request)
+    return _handle(request, read_request(request))
+
+
+def _handle(request: Any, read: RequestRead) -> dict:
+    """The one path every request takes after its single read. do_POST calls it with the read it already logged."""
     try:
         return _answer(request, read)
     except CANONICALIZATION_ERRORS:
@@ -788,7 +788,7 @@ def internal_error_envelope(request_id: Any) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": INTERNAL_ERROR_MESSAGE}}
 
 
-def _answer(request: dict, read: "ReadResult") -> dict:
+def _answer(request: dict, read: RequestRead) -> dict:
     # §10: a key_id this Guardian holds no secret for gets an unsigned -32004 before any other check, whenever the
     # signature object is readable, so key_id_rejected is never hidden behind an error signed with this Guardian's
     # key. system/ping is exempt: it is unsigned and answers whatever it carries (§13).
@@ -800,7 +800,7 @@ def _answer(request: dict, read: "ReadResult") -> dict:
         return _error_envelope(read.id, read.session_id, -32600,
                                f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
     try:
-        return _handle_request(request, read.fields)
+        return _handle_request(request, read)
     except CANONICALIZATION_ERRORS as e:
         # Last resort, after the depth bound. If even this error can't be signed, do_POST's floor answers.
         cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
@@ -808,9 +808,9 @@ def _answer(request: dict, read: "ReadResult") -> dict:
                                f"Invalid Request: the envelope could not be canonicalized{cause}")
 
 
-def _handle_request(request: dict, fields: RequestFields) -> dict:
-    method, request_id, params = fields.method, fields.id, fields.params
-    session_id, acs_request_id = fields.session_id, fields.request_id
+def _handle_request(request: dict, read: RequestRead) -> dict:
+    method, request_id, params = read.method, read.id, read.params
+    session_id, acs_request_id = read.session_id, read.request_id
     timestamp = params.get("timestamp", "")
 
     # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
@@ -949,16 +949,15 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         # handle_request answers it.
         read = read_request(request)
         self._answer_id = read.id
-        fields = read.fields
-        if fields is None:
+        if read.problem:
             method = request.get("method") if isinstance(request, dict) else None
             sys.stderr.write(f"[guardian] invalid request {_log_value(method, 40)}: {read.problem}\n")
         else:
-            sys.stderr.write(f"[guardian] {_log_value(fields.method, 40)} session={_log_value(fields.session_id)} "
-                             f"req={_log_value(fields.request_id)}\n")
+            sys.stderr.write(f"[guardian] {_log_value(read.method, 40)} session={_log_value(read.session_id)} "
+                             f"req={_log_value(read.request_id)}\n")
         sys.stderr.flush()
 
-        response = handle_request(request, read)
+        response = _handle(request, read)
         result = (response or {}).get("result") or {}
         decision = result.get("decision")
         if decision:
