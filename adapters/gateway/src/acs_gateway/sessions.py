@@ -12,6 +12,8 @@ from typing import Any
 
 from acs.core import jcs_canonicalize
 
+from acs_gateway.strict import loads_strict
+
 
 def _text(content: Any) -> str:
     if isinstance(content, str):
@@ -51,19 +53,35 @@ class CachedOutcome:
     # The item as delivered (rewritten arguments or output included), or None when it was removed.
     item: dict[str, Any] | None
     request_id: str | None = None
-    # What the gated item first said, so a reused call_id carrying something else is caught, never served from here.
+    # What the gated item first said, raw and as a canonical fingerprint, so a reused call_id carrying something else
+    # is caught. The raw form is compared first, so an unchanged resend never pays for canonicalization.
     fingerprint: str = ""
+    raw: Any = None
+    # The delivered call's arguments in canonical form, computed once.
+    canonical_arguments: Any = None
 
 
 def canonical(value: Any) -> Any:
     """A JSON string in RFC 8785 form, so key order and whitespace don't change what it says. Any other value, and a
-    string that isn't JSON or that RFC 8785 can't encode, stays as it is."""
+    string that isn't JSON, repeats a key, or that RFC 8785 can't encode, stays as it is."""
     if not isinstance(value, str):
         return value
     try:
-        return jcs_canonicalize(json.loads(value)).decode("utf-8")
+        return jcs_canonicalize(loads_strict(value)).decode("utf-8")
     except Exception:  # noqa: BLE001
         return value
+
+
+def content(item: dict[str, Any]) -> Any:
+    """What a function_call asks for (name, arguments) or what an output says (output), as sent."""
+    if item.get("type") == "function_call":
+        return [item.get("name"), item.get("arguments")]
+    return item.get("output")
+
+
+def same_content(item: dict[str, Any], cached: CachedOutcome) -> bool:
+    """Whether a resent item says what the cached one first said: raw equality first, canonical only on a mismatch."""
+    return content(item) == cached.raw or fingerprint(item) == cached.fingerprint
 
 
 def fingerprint(item: dict[str, Any]) -> str:

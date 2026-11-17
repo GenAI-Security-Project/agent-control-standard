@@ -48,8 +48,10 @@ from acs_gateway.sessions import (
     SessionMap,
     SessionsBusy,
     canonical,
+    content,
     conversation_key,
     fingerprint,
+    same_content,
 )
 from acs_gateway.strict import repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
@@ -377,15 +379,21 @@ class Gateway:
                     if self.enforce:
                         changed = True
                         continue
-                elif any(canonical(item.get(f)) != canonical(cached.item.get(f)) for f in _CALL_FIELDS):
-                    self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
+                elif any(item.get(f) != cached.item.get(f) for f in _CALL_FIELDS):
+                    # Only the arguments are JSON, so only they are compared canonically. type, name and call_id are
+                    # exact strings, so "1e2" never matches "100".
+                    if (any(item.get(f) != cached.item.get(f) for f in ("type", "name", "call_id"))
+                            or canonical(item.get("arguments")) != cached.canonical_arguments):
+                        self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id,
+                                     decision="modify" if self.enforce else "deny")
                     if self.enforce:
-                        # The whole call goes back as delivered, so the model never sees a renamed or edited call.
+                        # Any byte difference sends the call back as delivered, so the model reads exactly the call
+                        # the Guardian judged, never the client's re-serialization of it.
                         item = {**item, **{f: cached.item.get(f) for f in _CALL_FIELDS}}
                         changed = True
             elif item.get("type") == "function_call_output":
                 cached = session.results.get(call_id)
-                if cached is not None and cached.fingerprint != fingerprint(item):
+                if cached is not None and not same_content(item, cached):
                     self._reused(session, TOOL_CALL_RESULT, cached.name, call_id)
                     if self.enforce:
                         item, changed = {**item, "output": NEUTRAL_LINE}, True
@@ -415,10 +423,10 @@ class Gateway:
         result = await self._step(session, TOOL_CALL_RESULT, payload)
         applied = apply_result(item, payload, parsed, result)
         self._record(session, result, applied, name, item.get("call_id"))
-        first = fingerprint(item)
+        first, raw = fingerprint(item), content(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id, first)
-        return CachedOutcome("rewritten", name, applied.item, result.request_id, first)
+            return CachedOutcome("delivered", name, item, result.request_id, first, raw)
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw)
 
     async def _gate_output(self, session: Session, reply: dict[str, Any]) -> bool:
         """Gate each new function_call before the client sees it (A.4)."""
@@ -449,7 +457,7 @@ class Gateway:
                     kept.append(item)
                 continue
             cached = session.calls.get(call_id)
-            if cached is not None and cached.fingerprint != fingerprint(item):
+            if cached is not None and not same_content(item, cached):
                 self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
                 if self.enforce:
                     changed = removed = True
@@ -487,12 +495,14 @@ class Gateway:
             result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
-        first = fingerprint(item)
+        first, raw = fingerprint(item), content(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id, first)
+            return CachedOutcome("delivered", name, item, result.request_id, first, raw,
+                                 canonical(item.get("arguments")))
         if applied.item is None:
-            return CachedOutcome("removed", name, None, result.request_id, first)
-        return CachedOutcome("rewritten", name, applied.item, result.request_id, first)
+            return CachedOutcome("removed", name, None, result.request_id, first, raw)
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw,
+                             canonical(applied.item.get("arguments")))
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
@@ -529,13 +539,13 @@ class Gateway:
             _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung",
                    request_id=token.request_id)
 
-    def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:
+    def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny") -> None:
         """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since
         the model or the client is the only party that could have reused it."""
         _audit("call_id_reused", session_id=session.session_id, epoch=session.epoch, method=method, tool=name,
                call_id=call_id, mode=self.config.mode)
         result = StepResult(method, None, cause="call_id_reused", failure_class="observed_agent_error")
-        self._record(session, result, Applied("deny", None, "call_id_reused"), name, call_id)
+        self._record(session, result, Applied(decision, None, "call_id_reused"), name, call_id)
 
     def _record(self, session: Session, result: StepResult, applied: Applied, name: str, call_id: Any) -> None:
         """One audit line per governed step: decision_applied in enforce, shadow_decision in shadow (A.7)."""
