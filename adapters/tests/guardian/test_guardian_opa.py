@@ -604,3 +604,37 @@ def test_known_limit_a_symlink_or_firmlink_spelling_passes_the_lexical_check(no_
     # The Guardian may not share the agent's filesystem, so it can't resolve links, and a policy is the control.
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
 
+
+
+def _file_call(tool: str, **arguments) -> dict:
+    return {"tool": {"name": tool}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
+
+
+@pytest.mark.parametrize("payload", [
+    _file_call("Move", source="/etc/passwd", destination="/tmp/x"),
+    _file_call("Rename", **{"from": "/etc/hosts", "to": "/tmp/h"}),
+    _file_call("rename", old_path="/usr/bin/ls", new_path="/tmp/ls"),
+    _file_call("Move", src="/etc/shadow", target="/tmp/s"),
+    _file_call("Delete", paths=["/tmp/a", "/etc/passwd"]),
+    _file_call("Remove", paths=["/proc/1/mem"]),
+])
+def test_a_move_out_of_or_a_list_naming_a_protected_path_denies(no_backend, payload):
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
+
+
+@pytest.mark.parametrize("paths", [["/tmp/a", 3], [None], ["/tmp/a", ["/etc/passwd"]]])
+def test_a_path_list_with_a_non_string_item_denies(no_backend, paths):
+    result = _step("steps/toolCallRequest", _file_call("Delete", paths=paths))
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
+
+@pytest.mark.parametrize("payload", [
+    _file_call("Edit", file_path="/tmp/notes.txt", target="/etc/passwd is the file I mean"),
+    _file_call("Edit", file_path="/tmp/notes.txt", to="/etc/hosts", source="/etc/hosts"),
+    _file_call("Write", file_path="/tmp/notes.txt", destination="/usr/bin"),
+    _file_call("Delete", paths=["/tmp/a", "/tmp/b"]),
+])
+def test_move_and_rename_names_are_read_only_for_move_and_rename(no_backend, payload):
+    # target, to, source, and the rest are path arguments only for move and rename. On Edit they can be text.
+    assert _step("steps/toolCallRequest", payload)["decision"] == "allow"

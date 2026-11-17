@@ -114,9 +114,13 @@ PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"),)
 # Case-folded tool names that change a file, and the argument names that can name the file. This is a fixed list:
 # a tool under any other name, an MCP file tool included, meets no path deny here, and a policy has to cover it.
 WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit", "delete", "remove", "move", "rename"})
-# Every one present is checked, so a move or rename can't carry its destination under a name the check skips.
-PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file",
-                                   "destination", "new_path", "target", "to")
+# Path arguments read for every file tool. paths may hold a list, and each string in it is checked.
+PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file", "paths")
+# Read only for move and rename, where they name the source or the destination. On another tool, such as Edit,
+# target or to can be ordinary text, so reading them there would over-deny.
+MOVE_TOOLS = frozenset({"move", "rename"})
+MOVE_PATH_ARGUMENTS: tuple[str, ...] = ("destination", "new_path", "target", "to",
+                                        "source", "from", "old_path", "src")
 
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
@@ -494,6 +498,24 @@ def _comparable_path(normalized: str) -> str:
     return folded
 
 
+def _path_deny(base: dict, tool_name: str, name: str, path: Any) -> dict | None:
+    """The type, traversal, and protected-path denies for one path argument value, or None."""
+    if not isinstance(path, str):
+        return _argument_type_deny(base, tool_name, name, path)
+    # Compared after normalizing, so /tmp/../etc/passwd and //etc/passwd can't step around the prefixes.
+    normalized = _normalize_path(path)
+    if normalized == ".." or normalized.startswith("../"):
+        return {**base, "decision": "deny",
+                "reasoning": f"relative path leaves its starting directory: {path}",
+                "reason_codes": ["path_traversal"]}
+    comparable = _comparable_path(normalized)
+    if any(comparable.startswith(p) for p in PROTECTED_PATH_PREFIXES):
+        return {**base, "decision": "deny",
+                "reasoning": f"write to protected system path: {path}",
+                "reason_codes": ["protected_path"]}
+    return None
+
+
 def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
     """The built-in denies for a tool call, or None. They hold under every policy backend."""
     if tool_name == "task" and not ALLOW_SUBAGENT:
@@ -520,23 +542,16 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                     "reason_codes": ["destructive_command"]}
 
     if tool_name in WRITE_CAPABLE_TOOLS:
-        # Each tool on the list meets the same path denies, on every path argument it carries.
-        for name in PATH_ARGUMENTS:
-            path = args.get(name, "")
-            path = "" if path is None else path
-            if not isinstance(path, str):
-                return _argument_type_deny(base, tool_name, name, path)
-            # Compared after normalizing, so /tmp/../etc/passwd and //etc/passwd can't step around the prefixes.
-            normalized = _normalize_path(path)
-            if normalized == ".." or normalized.startswith("../"):
-                return {**base, "decision": "deny",
-                        "reasoning": f"relative path leaves its starting directory: {path}",
-                        "reason_codes": ["path_traversal"]}
-            comparable = _comparable_path(normalized)
-            if any(comparable.startswith(p) for p in PROTECTED_PATH_PREFIXES):
-                return {**base, "decision": "deny",
-                        "reasoning": f"write to protected system path: {path}",
-                        "reason_codes": ["protected_path"]}
+        # Each tool on the list meets the same path denies, on every path argument it carries, and a move or
+        # rename on its source and destination too.
+        names = PATH_ARGUMENTS + (MOVE_PATH_ARGUMENTS if tool_name in MOVE_TOOLS else ())
+        for name in names:
+            value = args.get(name, "")
+            # None reads as absent. A list is checked item by item, and an item that isn't a string denies.
+            for path in value if isinstance(value, list) else ["" if value is None else value]:
+                denied = _path_deny(base, tool_name, name, path)
+                if denied is not None:
+                    return denied
     return None
 
 
