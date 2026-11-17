@@ -3,7 +3,7 @@ module github.com/GenAI-Security-Project/agent-control-standard/reference-implem
 go 1.27.4
 
 require (
-	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
+	github.com/go-json-experiment/json v1.27.2
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/env/v2 v2.0.1

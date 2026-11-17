@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go v0.0.0
-	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
+	github.com/go-json-experiment/json v1.27.2
 )
 
 require (
