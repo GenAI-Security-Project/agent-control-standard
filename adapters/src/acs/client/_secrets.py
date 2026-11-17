@@ -32,11 +32,16 @@ _IS_WINDOWS = os.name == "nt"
 _ALLOW_UNCHECKED_ENV = "ACS_ALLOW_UNCHECKED_KEY_PERMS"
 
 
-def _check_secret_file_perms(path: str) -> None:
+def check_secret_file_perms(path: str, *, setting: str = "ACS_HMAC_SECRET_FILE") -> None:
+    """Refuse a secret file that is a symlink, readable by group or other, or owned by another user.
+
+    setting names the configuration the message blames, so the Guardian's ML-DSA-65 key file
+    meets the same rule under its own name (issue #576).
+    """
     # A symlink is refused: its target can change behind the visible path.
     if os.path.islink(path):
         raise SecretFilePermissionsError(
-            f"ACS_HMAC_SECRET_FILE {path!r} is a symlink; refusing to follow")
+            f"{setting} {path!r} is a symlink; refusing to follow")
     st = os.stat(path)
     mode = stat.S_IMODE(st.st_mode)
     if _IS_WINDOWS:
@@ -45,7 +50,7 @@ def _check_secret_file_perms(path: str) -> None:
         # Guardian's operator looks.
         if os.environ.get(_ALLOW_UNCHECKED_ENV) != "1":
             raise SecretFilePermissionsError(
-                f"ACS_HMAC_SECRET_FILE {path!r}: Windows has no owner/group/other mode bits "
+                f"{setting} {path!r}: Windows has no owner/group/other mode bits "
                 f"(stat reports {oct(mode)} for every file), so the 0600 check cannot run. "
                 f"Restrict the file first:  cmd.exe:  icacls \"{path}\" /inheritance:r "
                 f"/grant:r \"%USERNAME%:R\"   PowerShell:  icacls \"{path}\" /inheritance:r "
@@ -58,13 +63,17 @@ def _check_secret_file_perms(path: str) -> None:
         )
     elif mode & 0o077:
         raise SecretFilePermissionsError(
-            f"ACS_HMAC_SECRET_FILE {path!r} mode {oct(mode)} is too permissive; "
+            f"{setting} {path!r} mode {oct(mode)} is too permissive; "
             f"must be 0600 or 0400 (no group/other access). "
             f"Fix: chmod 600 {path}")
     if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
         raise SecretFilePermissionsError(
-            f"ACS_HMAC_SECRET_FILE {path!r} owned by uid {st.st_uid}, "
+            f"{setting} {path!r} owned by uid {st.st_uid}, "
             f"adapter is running as uid {os.geteuid()}; refusing")
+
+
+def _check_secret_file_perms(path: str) -> None:
+    check_secret_file_perms(path)
 
 
 def load_hmac_secret() -> bytes:

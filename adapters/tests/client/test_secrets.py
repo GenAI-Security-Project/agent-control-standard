@@ -67,3 +67,18 @@ def test_symlink_is_refused(monkeypatch, key_file):
     with pytest.raises(SecretFilePermissionsError) as err:
         _secrets._check_secret_file_perms(key_file)
     assert "symlink" in str(err.value)
+
+
+def test_the_setting_name_appears_in_the_message(monkeypatch, key_file):
+    # The Guardian checks its ML-DSA-65 key file with the same rule, under its own setting name (issue #576).
+    from acs.client import check_secret_file_perms
+    monkeypatch.setattr(_secrets, "_IS_WINDOWS", False)
+    monkeypatch.setattr(_secrets.os.path, "islink", lambda _p: False)
+    monkeypatch.setattr(_secrets.os, "stat", _fake_stat(0o100644))
+    with pytest.raises(SecretFilePermissionsError) as named:
+        check_secret_file_perms(key_file, setting="ACS_GUARDIAN_SIGNING_KEY_FILE")
+    assert str(named.value).startswith(f"ACS_GUARDIAN_SIGNING_KEY_FILE {key_file!r} mode 0o644")
+    with pytest.raises(SecretFilePermissionsError) as default:
+        _secrets._check_secret_file_perms(key_file)
+    assert str(default.value) == (f"ACS_HMAC_SECRET_FILE {key_file!r} mode 0o644 is too permissive; "
+                                  f"must be 0600 or 0400 (no group/other access). Fix: chmod 600 {key_file}")
