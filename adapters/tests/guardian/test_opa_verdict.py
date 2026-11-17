@@ -377,3 +377,25 @@ def test_the_overlap_check_still_finds_a_deep_prefix_or_duplicate(extra):
 def test_an_invalid_pointer_escape_is_an_overlap_problem(paths):
     # RFC 6901 allows only ~0 and ~1. Without that rule, /arguments/a~ and /arguments/a~0 both name key a~.
     assert opa_backend._overlap_problem(paths)
+
+
+
+def _deep_result(depth: int) -> tuple[dict, str]:
+    value: dict = {"ssn": "1"}
+    for _ in range(depth - 4):
+        value = {"n": value}
+    path = "/outputs/0/value" + "/n" * (depth - 4) + "/ssn"
+    return {**RESULT, "outputs": [{"value": value}]}, path
+
+
+def test_a_redaction_path_deeper_than_64_tokens_is_invalid():
+    payload, path = _deep_result(65)
+    verdict = {"decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": path}]}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) == (
+        "redaction path depth 65 is more than 64")
+
+
+def test_a_redaction_path_64_tokens_deep_passes():
+    payload, path = _deep_result(64)
+    verdict = {"decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": path}]}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) is None

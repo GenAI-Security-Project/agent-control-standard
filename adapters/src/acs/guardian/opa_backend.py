@@ -313,6 +313,8 @@ MAX_REDACTIONS = 2000
 # The one subtree of each payload a modify may change.
 MODIFY_ROOTS = {"steps/toolCallRequest": "/arguments", "steps/toolCallResult": "/outputs"}
 MAX_REDACTED_OUTPUTS = 1000
+# Matches MAX_VERDICT_DEPTH. It bounds the per-path cost of the existence and coverage checks.
+MAX_REDACTION_PATH_DEPTH = 64
 
 
 def _depth_exceeds(value: Any, limit: int) -> bool:
@@ -490,6 +492,11 @@ def _size_problem(verdict: Mapping[str, Any], payload: Mapping[str, Any]) -> str
         return None
     if len(redactions) > MAX_REDACTIONS:
         return f"the modify carries {len(redactions)} redactions, more than {MAX_REDACTIONS}"
+    for redaction in redactions:
+        path = redaction.get("path") if isinstance(redaction, dict) else None
+        # Each token of a path costs a step in the existence and coverage checks, so depth is capped too.
+        if isinstance(path, str) and path.count("/") > MAX_REDACTION_PATH_DEPTH:
+            return f"redaction path depth {path.count('/')} is more than {MAX_REDACTION_PATH_DEPTH}"
     outputs = payload.get("outputs")
     if isinstance(outputs, list) and len(outputs) > MAX_REDACTED_OUTPUTS:
         return f"a redacting modify on {len(outputs)} outputs, more than {MAX_REDACTED_OUTPUTS}"
