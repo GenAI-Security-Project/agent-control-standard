@@ -75,7 +75,7 @@ The gateway's own configuration always denies on a decision failure. A ServerHel
 
 Each agent run is one ACS session, keyed on the SHA-256 of the system text (the `instructions` field, or the first system or developer item) and the first user message. The gateway opens it with the handshake and then `steps/sessionStart`, so the session's chain roots there. One lock per session keeps its steps in order.
 
-A session whose handshake or sessionStart failed denies every step, and the next request for it retries once under a fresh session_id, audited as `session_retried`.
+A session whose handshake or sessionStart failed denies every step, and the next request for it, at least a second after the failure, retries once under a fresh session_id, audited as `session_retried`.
 
 FinBot's agents resend their whole history every turn. The gateway caches each gated item's outcome on (session_id, call_id) and reapplies it on every resend, so a redacted value never reappears and no item is governed twice.
 

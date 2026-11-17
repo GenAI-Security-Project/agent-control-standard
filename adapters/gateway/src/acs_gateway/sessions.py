@@ -92,6 +92,8 @@ class Session:
     results: dict[str, CachedOutcome] = field(default_factory=dict)
     # Requests between their input and output phases. A session with any, or with its lock held, is never evicted.
     active: int = 0
+    # time.monotonic() when opening last failed, so a retry waits out the backoff.
+    open_failed_at: float | None = None
 
     @property
     def busy(self) -> bool:

@@ -59,6 +59,7 @@ _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "pro
 # Governed modes edit bodies, so they ask only for encodings httpx decodes and relay the decoded body.
 _GOVERNED_ACCEPT_ENCODING = "gzip, deflate"
 _STEP_GRACE_S = 1.0
+_OPEN_RETRY_BACKOFF_S = 1.0
 # What makes a function_call the call it is. A client rebuilding history may drop id and status, so those don't count.
 _CALL_FIELDS = ("type", "name", "call_id", "arguments")
 
@@ -270,6 +271,9 @@ class Gateway:
     async def _ensure_open(self, session: Session) -> None:
         if _opened(session.handshake):
             return
+        if session.open_failed_at is not None and time.monotonic() - session.open_failed_at < _OPEN_RETRY_BACKOFF_S:
+            # A Guardian that just failed gets a moment before the next attempt. The stored failure keeps denying.
+            return
         if session.handshake is not None:
             # acs.client stores a session's handshake first-wins, so a retry needs a fresh session_id.
             # One attempt per request, and every step denies until one succeeds.
@@ -277,6 +281,7 @@ class Gateway:
                    cause=getattr(session.handshake, "cause", None) or "session_start_failed")
             session.session_id = str(uuid.uuid4())
         await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.open, session)
+        session.open_failed_at = None if _opened(session.handshake) else time.monotonic()
 
     def _gating_failed(self, session: Session | None, phase: str, error: Exception) -> Response | None:
         """A fault in the gateway's own gating code: shadow forwards unchanged (None), enforce fails closed."""
