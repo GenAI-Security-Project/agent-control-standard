@@ -571,24 +571,32 @@ _REMOVED = object()
 
 
 def _without_orphaned_reasoning(marked: list[Any]) -> list[Any]:
-    """Drop each reasoning item that no kept non-reasoning item follows before the next reasoning item.
+    """Drop each run of consecutive reasoning items when every item of its turn was removed.
 
-    A reasoning model rejects a resent reasoning item whose turn is gone, and it also rejects a call resent without
-    its reasoning, so [R, removed, kept call] keeps R and [R, removed] drops it.
+    A run of reasoning belongs to the non-reasoning items after it, up to the next reasoning run, which is how a
+    model emits one reasoning step before several parallel calls. A reasoning model rejects resent reasoning whose
+    turn is gone, and also a call resent without its reasoning. So [R, removed, kept] keeps R, [R, removed] drops it,
+    and [R1, R2, kept, R3, removed] keeps R1 and R2 and drops R3. A run with nothing after it stays.
     """
     kept: list[Any] = []
-    for index, item in enumerate(marked):
-        if item is _REMOVED:
-            continue
+    run: list[Any] = []
+    turn: list[Any] = []
+
+    def close() -> None:
+        survivors = [item for item in turn if item is not _REMOVED]
+        if survivors or not turn:
+            kept.extend(run)
+        kept.extend(survivors)
+
+    for item in marked:
         if isinstance(item, dict) and item.get("type") == "reasoning":
-            following = []
-            for later in marked[index + 1:]:
-                if isinstance(later, dict) and later.get("type") == "reasoning":
-                    break
-                following.append(later)
-            if not any(later is not _REMOVED for later in following):
-                continue
-        kept.append(item)
+            if turn:
+                close()
+                run, turn = [], []
+            run.append(item)
+        else:
+            turn.append(item)
+    close()
     return kept
 
 

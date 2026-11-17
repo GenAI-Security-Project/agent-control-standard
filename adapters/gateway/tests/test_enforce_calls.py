@@ -371,3 +371,12 @@ def test_a_cancelled_request_leaves_no_later_transcript_line(gateway, guardian, 
     time.sleep(1.5)
     assert not [line for line in transcript_lines(tmp_path) if line["envelope"]
                 and line["envelope"].get("method") == "steps/toolCallRequest"]
+
+
+def test_a_run_of_reasoning_belongs_to_the_item_after_it(gateway, guardian, upstream):
+    upstream.reply(response_body(reasoning("rs_1"), reasoning("rs_2"),
+                                 call_item("get_vendor_details", {"vendor_id": 7}, "call_1"),
+                                 reasoning("rs_3"), call_item("bash", {"command": "rm -rf /"}, "call_2")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert [i.get("id") for i in output] == ["rs_1", "rs_2", "fc_call_1"]
