@@ -98,33 +98,56 @@ def request_binding_problem(request: object) -> str | None:
     return None
 
 
-def response_matches_request(request: Mapping, response: dict) -> bool:
-    """Whether the response answers this request (D-029), so a signed response can't be replayed.
+# Why response_binding_problem says a response doesn't answer a request. Callers map each reason
+# to their own outcome, and none of them re-checks any part of the rule.
+BINDING_SHAPE = "shape"
+BINDING_REQUEST = "request"
+BINDING_ID = "id"
+BINDING_RESULT = "result"
 
-    This is the one binding rule, and the keyring path and the client's step exchange both call
-    it. The rule follows the request, never the response's shape. Every response needs the
-    request's JSON-RPC id. An error object binds by the id alone, whatever the request's
-    request_id, and an id with neither a result nor an error object answers nothing. A result
-    binds only a request that passes request_binding_problem, and it must be an object. For the
-    handshake, a ServerHello echoes nothing else from the ClientHello, so its result must carry
-    no request_id, which keeps a step decision from answering a ClientHello. Issue #13 tracks
-    binding the handshake to the traffic after it. For every other request, a result must carry
-    the request's request_id.
+
+def response_binding_problem(request: object, response: object) -> str | None:
+    """Why the response doesn't answer this request (D-029), as one BINDING_* reason, or None.
+
+    This is the one binding rule. response_matches_request, verify_with_keyring, the client's
+    step exchange and its handshake all decide through it. The rule follows the request, never
+    the response's shape, and it checks in this order:
+
+    BINDING_SHAPE: the response is a JSON-RPC 2.0 object, carries no "method", and carries
+    exactly one of result or error, which is an object. BINDING_REQUEST: the request passes
+    request_envelope_problem. BINDING_ID: the response carries the request's JSON-RPC id. An
+    error then binds by that id alone, whatever the request's request_id. BINDING_RESULT: a
+    result binds only a request that passes request_binding_problem. For the handshake, a
+    ServerHello echoes nothing else from the ClientHello, so its result binds by the id and must
+    carry no request_id, which keeps a step decision from answering a ClientHello. Issue #13
+    tracks binding the handshake to the traffic after it. For any other request, the result
+    must carry the request's request_id.
     """
+    if (not isinstance(response, Mapping) or response.get("jsonrpc") != "2.0"
+            or "method" in response or ("result" in response) == ("error" in response)):
+        return BINDING_SHAPE
+    answer = response["result"] if "result" in response else response["error"]
+    if not isinstance(answer, Mapping):
+        return BINDING_SHAPE
     if request_envelope_problem(request) is not None:
-        return False
+        return BINDING_REQUEST
     if not same_json_rpc_id(response.get("id"), request.get("id")):
-        return False
-    result = response.get("result")
-    if result is None:
-        # An error object answers by id alone. Anything else without a result answers nothing.
-        return isinstance(response.get("error"), dict)
-    if request_binding_problem(request) is not None or not isinstance(result, dict):
-        return False
+        return BINDING_ID
+    if "error" in response:
+        return None
+    if request_binding_problem(request) is not None:
+        return BINDING_RESULT
     if request.get("method") == HANDSHAKE_METHOD:
-        return "request_id" not in result
+        return BINDING_RESULT if "request_id" in answer else None
     # request_binding_problem already required a non-empty string request_id here.
-    return same_json_rpc_id(result.get("request_id"), request["params"]["request_id"])
+    if not same_json_rpc_id(answer.get("request_id"), request["params"]["request_id"]):
+        return BINDING_RESULT
+    return None
+
+
+def response_matches_request(request: object, response: object) -> bool:
+    """Whether the response answers this request: response_binding_problem finds no reason."""
+    return response_binding_problem(request, response) is None
 
 
 def iso8601_now() -> str:

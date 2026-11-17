@@ -126,6 +126,60 @@ class OneHandshakeAwareRule(unittest.TestCase):
                                                                   "result": dict(SERVER_HELLO)}))
 
 
+class TheRuleOwnsTheResponseShape(unittest.TestCase):
+    """Review findings CR10-3, R10-M3: the shape gate is part of the one rule, so every path gets it."""
+
+    def test_a_response_carrying_method_binds_nothing(self) -> None:
+        # A request envelope is not an answer, even one whose id and request_id match.
+        self.assertFalse(response_matches_request(_request("1"), {**_response("1"), "method": "steps/toolCallRequest"}))
+
+    def test_a_response_without_jsonrpc_2_0_binds_nothing(self) -> None:
+        for jsonrpc in (None, "1.0", 2.0):
+            response = _response("1")
+            if jsonrpc is None:
+                del response["jsonrpc"]
+            else:
+                response["jsonrpc"] = jsonrpc
+            with self.subTest(jsonrpc=jsonrpc):
+                self.assertFalse(response_matches_request(_request("1"), response))
+
+    def test_a_response_with_both_result_and_error_binds_nothing(self) -> None:
+        both = {**_response("1"), "error": {"code": -32000, "message": "refused"}}
+        self.assertFalse(response_matches_request(_request("1"), both))
+
+    def test_a_response_that_is_not_a_mapping_binds_nothing(self) -> None:
+        for response in ("response", [], None):
+            with self.subTest(response=response):
+                self.assertFalse(response_matches_request(_request("1"), response))  # type: ignore[arg-type]
+
+    def test_each_reason_has_one_name(self) -> None:
+        from acs.core import (
+            BINDING_ID,
+            BINDING_REQUEST,
+            BINDING_RESULT,
+            BINDING_SHAPE,
+            response_binding_problem,
+        )
+        error = {"jsonrpc": "2.0", "id": "1", "error": {"code": -32000, "message": "refused"}}
+        self.assertIsNone(response_binding_problem(_request("1"), _response("1")))
+        self.assertIsNone(response_binding_problem(_request("1"), error))
+        self.assertEqual(response_binding_problem(_request("1"), {"jsonrpc": "2.0", "id": "1"}), BINDING_SHAPE)
+        self.assertEqual(response_binding_problem(_request(True), _response(True)), BINDING_REQUEST)
+        self.assertEqual(response_binding_problem(_request("1"), _response("2")), BINDING_ID)
+        self.assertEqual(response_binding_problem(_request("1"), _response("1", request_id="r-2")), BINDING_RESULT)
+
+
+class NonFiniteIdsBindNothing(unittest.TestCase):
+    """Review finding CR10-7: a NaN or infinite id binds nothing through the rule, not only the precondition."""
+
+    def test_a_non_finite_request_id_binds_no_result_and_no_error(self) -> None:
+        error = {"jsonrpc": "2.0", "error": {"code": -32000, "message": "refused"}}
+        for json_rpc_id in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(id=json_rpc_id):
+                self.assertFalse(response_matches_request(_request(json_rpc_id), _response(json_rpc_id)))
+                self.assertFalse(response_matches_request(_request(json_rpc_id), {**error, "id": json_rpc_id}))
+
+
 class OneRequestPrecondition(unittest.TestCase):
     """Review finding CR7-6: request_binding_problem states the precondition once, for both paths."""
 

@@ -5,6 +5,10 @@ from typing import Any
 # Exports load on first use, so stdlib-only modules import without rfc8785.
 _EXPORTS = {
     "ACS_VERSION": "_envelope",
+    "BINDING_ID": "_envelope",
+    "BINDING_REQUEST": "_envelope",
+    "BINDING_RESULT": "_envelope",
+    "BINDING_SHAPE": "_envelope",
     "DEFAULT_SKEW_WINDOW_MS": "_envelope",
     "Decision": "_decision",
     "GUARDIAN_ERROR_CAUSE": "_errors",
@@ -29,6 +33,7 @@ _EXPORTS = {
     "request_binding_problem": "_envelope",
     "request_envelope_problem": "_envelope",
     "response_matches_request": "_envelope",
+    "response_binding_problem": "_envelope",
     "same_json_rpc_id": "_envelope",
     "schemas_dir": "_schemas",
     "server_hello_problem": "_handshake",
