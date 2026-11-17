@@ -749,14 +749,15 @@ def read_request(request: Any) -> ReadResult:
                       session_id)
 
 
-def handle_request(request: dict) -> dict:
+def handle_request(request: dict, read: "ReadResult | None" = None) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
     # Errors are signed whenever the session key is derivable, as spec section 10 requires. The two unsigned
     # answers are the -32004 for an unknown key_id (the section 10 exemption) and do_POST's floor, which answers
     # when signing itself fails. Signing an error before the sender is verified gives that sender an HMAC under a
     # session key it chose, over an error envelope with an id it chose. A client accepts a response only for its
     # own UUID request ids, so it can't use one.
-    read = read_request(request)
+    # do_POST reads the request once and passes the result in. Other callers let it be read here.
+    read = read if read is not None else read_request(request)
     if read.problem:
         return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}")
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
@@ -917,7 +918,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                              f"req={_log_value(fields.request_id)}\n")
         sys.stderr.flush()
 
-        response = handle_request(request)
+        response = handle_request(request, read)
         result = (response or {}).get("result") or {}
         decision = result.get("decision")
         if decision:

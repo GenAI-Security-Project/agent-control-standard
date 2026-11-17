@@ -58,7 +58,7 @@ def post(address: tuple[str, int], body: bytes) -> tuple[int, dict]:
 
 
 def test_an_unexpected_error_is_answered_with_an_unsigned_internal_error(served, monkeypatch):
-    def broken(request):
+    def broken(request, read=None):
         raise RuntimeError("anything at all")
     monkeypatch.setattr(example_guardian, "handle_request", broken)
     status, body = post(served, b'{"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": {}}')
@@ -289,3 +289,15 @@ def test_a_client_that_never_finishes_its_body_is_cut_off(served, monkeypatch):
 
 def test_the_handler_times_out_a_silent_client_after_30_seconds():
     assert example_guardian.GuardianHandler.timeout == 30
+
+
+def test_a_request_is_read_once(served, monkeypatch):
+    calls = []
+    real = example_guardian.read_request
+
+    def counting(request):
+        calls.append(1)
+        return real(request)
+    monkeypatch.setattr(example_guardian, "read_request", counting)
+    post(served, _ping("once"))
+    assert len(calls) == 1
