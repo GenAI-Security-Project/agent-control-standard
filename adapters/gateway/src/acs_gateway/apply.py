@@ -87,16 +87,23 @@ def unsupported_tool_choice(body: dict[str, Any]) -> str | None:
 ALLOWED_CONTENT_PARTS = frozenset({"input_text", "output_text", "refusal", "summary_text"})
 
 
+def _part_lists(item: dict[str, Any]) -> list[Any]:
+    """The part lists of an input item: a message's content, a reasoning item's summary, and a function_call_output's
+    output when it is an array of parts rather than a string."""
+    if item.get("type") == "function_call_output":
+        fields = ("output",)
+    else:
+        fields = ("content", "summary")
+    return [item.get(field) for field in fields if isinstance(item.get(field), list)]
+
+
 def unsupported_content_part(body: dict[str, Any]) -> str | None:
-    """The type of the first content or summary part of an input item outside ALLOWED_CONTENT_PARTS, or None."""
+    """The type of the first part of an input item outside ALLOWED_CONTENT_PARTS, or None."""
     items = body.get("input")
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
-        for field in ("content", "summary"):
-            parts = item.get(field)
-            if not isinstance(parts, list):
-                continue
+        for parts in _part_lists(item):
             for part in parts:
                 kind = part.get("type") if isinstance(part, dict) else None
                 if kind not in ALLOWED_CONTENT_PARTS:
