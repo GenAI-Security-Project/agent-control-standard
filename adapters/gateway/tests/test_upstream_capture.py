@@ -137,6 +137,43 @@ def test_capture_stops_buffering_past_the_body_limit(gateway, upstream, tmp_path
     assert "upstream_too_large" in [e["cause"] for e in audit() if e["acs_audit_event"] == "upstream_error"]
 
 
+def test_capture_bounds_the_decompressed_answer(gateway, upstream, tmp_path, audit):
+    """Fix round 3, CR3-4: a small gzip body that inflates past the limit stops as upstream_too_large."""
+    import gzip
+
+    bomb = gzip.compress(b'{"output": [], "pad": "' + b"0" * 4_000_000 + b'"}')
+    assert len(bomb) < 100_000
+    upstream.reply(bomb, headers={"Content-Encoding": "gzip"})
+    response = capture(gateway, tmp_path, ACS_GATEWAY_MAX_BODY_BYTES="100000").post("/v1/responses",
+                                                                                     json=finbot_request())
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "upstream_too_large"
+    assert recorded(tmp_path) == []
+
+
+def test_capture_records_a_gzip_answer_under_the_limit(gateway, upstream, tmp_path):
+    import gzip
+
+    body = response_body(message_item("compressed ok"))
+    upstream.reply(gzip.compress(json.dumps(body).encode()), headers={"Content-Encoding": "gzip"})
+    response = capture(gateway, tmp_path).post("/v1/responses", json=finbot_request())
+    assert response.json() == body
+    assert recorded(tmp_path)[0]["response"]["output"][0]["content"][0]["text"] == "compressed ok"
+
+
+@pytest.mark.parametrize("leak", [
+    "admin@NS_USER_ABCDEFGH-_123456.finbot",
+    f"admin@{NS_A}x.finbot",
+    f"{USER_A}7",
+])
+def test_capture_refuses_any_form_of_a_mapped_user_id(gateway, upstream, tmp_path, audit, leak):
+    """Fix round 3, R-M2: an uppercase namespace, a suffixed one, or the id with one more character still leaks."""
+    upstream.reply(response_body(message_item(f"Mail {leak}")))
+    capture(gateway, tmp_path).post("/v1/responses", json=finbot_request(system=f"User ID: {USER_A}"))
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
 def test_an_output_with_no_call_id_takes_no_step_and_the_line_loads(gateway, upstream, tmp_path):
     """Fix round 3, CR3-5: step counts only outputs the gateway governs, the same ones the branch counts."""
     upstream.reply(response_body(message_item("ok")))

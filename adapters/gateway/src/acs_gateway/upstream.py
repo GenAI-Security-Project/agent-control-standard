@@ -9,6 +9,7 @@ import json
 import os
 import re
 import threading
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,6 +117,16 @@ def id_skeleton(body: Any, mapping: dict[str, str]) -> list[str]:
 def unmapped_user_id(value: Any) -> bool:
     """Whether a value with placeholders still holds a user id or namespace, which would leak into another FinBot."""
     return any(_USER_VALUE.search(text) for text in _strings(value))
+
+
+def holds_mapped_user(value: Any, mapping: dict[str, str]) -> bool:
+    """Whether a value with placeholders still holds a mapped user id in any form the id pattern missed: another case,
+    a longer token around it, or the bare 16 characters (fix round 3, R-M2). Compared case-insensitively."""
+    users = [real.lower() for real, placeholder in mapping.items() if placeholder.startswith("{{acs:user:")]
+    if not users:
+        return False
+    text = "\n".join(_strings(value)).lower()
+    return any(user in text or user.removeprefix("user_") in text for user in users)
 
 
 def to_placeholders(value: Any, mapping: dict[str, str]) -> Any:
@@ -538,6 +549,42 @@ def parse_events(text: str) -> list[dict[str, Any]] | None:
     return events
 
 
+class _Inflater:
+    """Decodes an identity, gzip or deflate body as its chunks arrive, never producing more than the caller allows,
+    so a small compressed answer can't inflate past the body limit in memory (fix round 3, CR3-4). Any other
+    encoding, brotli or a list of encodings among them, can't be measured or read, so supported is False."""
+
+    def __init__(self, encoding: str) -> None:
+        name = encoding.strip().lower()
+        self.supported = name in ("", "identity", "gzip", "x-gzip", "deflate")
+        self._deflate = name == "deflate"
+        self._d: Any = None
+        if name in ("gzip", "x-gzip"):
+            self._d = zlib.decompressobj(zlib.MAX_WBITS | 16)
+        elif self._deflate:
+            self._d = zlib.decompressobj()
+
+    def feed(self, chunk: bytes, room: int) -> bytes:
+        """Up to room + 1 decoded bytes from chunk, so a result longer than room means the limit was passed."""
+        if self._d is None:
+            return chunk
+        try:
+            out = self._d.decompress(chunk, room + 1)
+        except zlib.error:
+            if not self._deflate:
+                raise
+            # Some servers send raw deflate with no zlib header, which httpx also accepts.
+            self._deflate = False
+            self._d = zlib.decompressobj(-zlib.MAX_WBITS)
+            out = self._d.decompress(chunk, room + 1)
+        while len(out) <= room and self._d.unconsumed_tail:
+            out += self._d.decompress(self._d.unconsumed_tail, room + 1 - len(out))
+        return out
+
+    def finish(self, room: int) -> bytes:
+        return self._d.flush(room + 1) if self._d is not None else b""
+
+
 class CaptureTransport(httpx.AsyncBaseTransport):
     """Live, plus one recording line per successful exchange in <ACS_RECORDINGS_DIR>/<scenario>.jsonl (A.8).
 
@@ -559,27 +606,50 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         raw_request = await request.aread()
         branch = request.headers.get(BRANCH_HEADER)
         upstream = await self._live.handle_async_request(request)
-        chunks, size = [], 0
+        # Capture holds the whole answer to write its line, so the gateway's body limit bounds it in every mode, off
+        # included (fix round 2, CR3), on the raw bytes and on the decoded bytes as they stream (fix round 3, CR3-4).
+        inflater = _Inflater(upstream.headers.get("content-encoding", ""))
+        chunks: list[bytes] = []
+        decoded: list[bytes] | None = [] if inflater.supported else None
+        size = inflated = 0
         try:
             async for chunk in upstream.aiter_raw():
                 size += len(chunk)
-                if size > self._max_bytes:
-                    # Capture holds the whole answer to write its line, so the gateway's body limit bounds it in every
-                    # mode, off included (fix round 2, CR3).
-                    _audit("upstream_error", cause="upstream_too_large", max_body_bytes=self._max_bytes,
-                           scenario=self._scenario)
-                    error = {"error": {"message": "The model service returned a response that is too large.",
-                                       "type": "server_error", "param": None, "code": "upstream_too_large"}}
-                    return _response(502, json.dumps(error).encode("utf-8"), "application/json")
                 chunks.append(chunk)
+                if decoded is not None:
+                    try:
+                        piece = inflater.feed(chunk, self._max_bytes - inflated)
+                    except zlib.error:
+                        decoded = None
+                    else:
+                        inflated += len(piece)
+                        decoded.append(piece)
+                if size > self._max_bytes or inflated > self._max_bytes:
+                    return self._too_large()
+            if decoded is not None:
+                try:
+                    tail = inflater.finish(self._max_bytes - inflated)
+                except zlib.error:
+                    decoded = None
+                else:
+                    inflated += len(tail)
+                    decoded.append(tail)
+                    if inflated > self._max_bytes:
+                        return self._too_large()
         finally:
             await upstream.aclose()
         raw = b"".join(chunks)
         if 200 <= upstream.status_code < 300:
-            self._record(raw_request, branch, upstream.headers, raw)
+            self._record(raw_request, branch, b"".join(decoded) if decoded is not None else None)
         return httpx.Response(upstream.status_code, headers=upstream.headers, stream=httpx.ByteStream(raw))
 
-    def _record(self, raw_request: bytes, branch: str | None, headers: httpx.Headers, raw: bytes) -> None:
+    def _too_large(self) -> httpx.Response:
+        _audit("upstream_error", cause="upstream_too_large", max_body_bytes=self._max_bytes, scenario=self._scenario)
+        error = {"error": {"message": "The model service returned a response that is too large.",
+                           "type": "server_error", "param": None, "code": "upstream_too_large"}}
+        return _response(502, json.dumps(error).encode("utf-8"), "application/json")
+
+    def _record(self, raw_request: bytes, branch: str | None, decoded: bytes | None) -> None:
         try:
             body = json.loads(raw_request)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -587,9 +657,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         if not isinstance(body, dict):
             _audit("capture_skipped", cause="unreadable_request", scenario=self._scenario)
             return
-        try:
-            decoded = httpx.Response(200, headers=headers, content=raw).content
-        except httpx.DecodingError:
+        if decoded is None:
             _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
             return
         stream = is_stream(body)
@@ -611,7 +679,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         if branch is None:
             branch = off_branch(body)
         normalized = to_placeholders(response, mapping)
-        if unmapped_user_id(normalized):
+        if unmapped_user_id(normalized) or holds_mapped_user(normalized, mapping):
             # The request named no such user, so the line would carry this FinBot's namespace into another one.
             _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario)
             return
