@@ -1,0 +1,29 @@
+"""Size limits on both legs and the session cap (review I7, CR9)."""
+from conftest import finbot_request, message_item, response_body
+
+
+def events(audit, name):
+    return [e for e in audit() if e["acs_audit_event"] == name]
+
+
+def test_an_oversized_request_gets_413(gateway, upstream):
+    client = gateway(ACS_GATEWAY_MAX_BODY_BYTES="1000")
+    response = client.post("/v1/responses", json=finbot_request(user="x" * 2000))
+    assert response.status_code == 413
+    assert upstream.received == []
+
+
+def test_an_oversized_upstream_answer_gets_502(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(message_item("y" * 5000)))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_BODY_BYTES="2000")
+    response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == 502
+    assert events(audit, "upstream_error")[0]["cause"] == "upstream_too_large"
+
+
+def test_evicting_a_session_is_audited(gateway, guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_SESSIONS="1")
+    client.post("/v1/responses", json=finbot_request(user="first run"))
+    client.post("/v1/responses", json=finbot_request(user="second run"))
+    opened = [e["session_id"] for e in events(audit, "session_opened")]
+    assert [e["session_id"] for e in events(audit, "session_evicted")] == opened[:1]

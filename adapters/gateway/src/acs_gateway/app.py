@@ -8,6 +8,7 @@ import json
 import os
 import stat
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,7 @@ class Gateway:
         self.http: httpx.AsyncClient | None = None
         self.governed = config.mode != "off"
         self.enforce = config.mode == "enforce"
-        self.sessions = SessionMap()
+        self.sessions = SessionMap(config.max_sessions, on_evict=self._evicted)
         self.guardian = GuardianClient(config, Transcript(config.transcript_dir)) if self.governed else None
 
     @contextlib.asynccontextmanager
@@ -97,6 +98,24 @@ class Gateway:
             yield
         self.http = None
 
+    def _evicted(self, session: Session) -> None:
+        _audit("session_evicted", session_id=session.session_id, epoch=session.epoch,
+               max_sessions=self.config.max_sessions)
+
+    async def _read_body(self, request: Request) -> bytes | None:
+        """The request body, or None once it passes the size limit."""
+        limit = self.config.max_body_bytes
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > limit:
+            return None
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit:
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     def bump_epoch(self) -> int:
         epoch = self.sessions.bump_epoch()
         _audit("epoch_bumped", epoch=epoch)
@@ -109,7 +128,10 @@ class Gateway:
     async def responses(self, request: Request) -> Response:
         if request.method != "POST":
             return await self.not_found(request)
-        raw = await request.body()
+        raw = await self._read_body(request)
+        if raw is None:
+            _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
+            return openai_error(413, "The request body is too large.", "invalid_request_error", "request_too_large")
         body = _parse(raw)
         headers = forward_headers(request.headers)
         if not self.governed:
@@ -158,17 +180,32 @@ class Gateway:
             changed = await self._gate_output(session, reply)
         return _relay(upstream, reply if changed else None)
 
-    async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> httpx.Response | Response:
+    async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> UpstreamAnswer | Response:
+        """POST upstream and read the whole answer, up to the size limit, so the gateway can gate it."""
         self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
         assert self.http is not None
         try:
-            upstream = await self.http.post(f"{self.config.upstream_url}/responses", content=raw, headers=headers)
+            upstream = await self.http.send(
+                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
+                                        headers=headers), stream=True)
+            try:
+                chunks, size = [], 0
+                async for chunk in upstream.aiter_bytes():
+                    size += len(chunk)
+                    if size > self.config.max_body_bytes:
+                        _audit("upstream_error", cause="upstream_too_large",
+                               max_body_bytes=self.config.max_body_bytes)
+                        return openai_error(502, "The model service returned a response that is too large.",
+                                            "server_error", "upstream_too_large")
+                    chunks.append(chunk)
+            finally:
+                await upstream.aclose()
         except httpx.HTTPError as e:
             _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
             return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
         if not 200 <= upstream.status_code < 300:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
-        return upstream
+        return UpstreamAnswer(upstream.status_code, upstream.headers, b"".join(chunks))
 
     async def _relay_verbatim(self, raw: bytes, body: Any, headers: dict[str, str]) -> Response:
         """Off mode relays the answer, streamed or not, as it arrives, encoding and headers included."""
@@ -336,7 +373,15 @@ class Gateway:
             _audit("guardian_http_error", **fields)
 
 
-def _relay(upstream: httpx.Response, edited: dict[str, Any] | None) -> Response:
+@dataclass(frozen=True)
+class UpstreamAnswer:
+    """A whole upstream answer, its body already decoded."""
+    status_code: int
+    headers: httpx.Headers
+    content: bytes
+
+
+def _relay(upstream: UpstreamAnswer, edited: dict[str, Any] | None) -> Response:
     content = upstream.content if edited is None else json.dumps(edited).encode("utf-8")
     return Response(content, status_code=upstream.status_code, headers=_client_headers(upstream.headers, decoded=True))
 

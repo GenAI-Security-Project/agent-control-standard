@@ -96,9 +96,10 @@ Each request line is written before the request is sent, so the file holds the c
 | `shadow_decision` | Shadow mode recorded a step, with the same fields |
 | `verification_failed` | A Guardian response failed its signature check |
 | `guardian_http_error` | The Guardian answered with a non-2xx status |
-| `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), or a 2xx answer the gateway can't read (`upstream_unparseable`) |
+| `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`) |
 | `call_id_reused` | A cached call_id came back with different content |
 | `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
+| `session_evicted` | The session cap evicted the least recently used session |
 | `epoch_bumped` | The epoch moved |
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.
@@ -119,6 +120,8 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_TRANSCRIPT_DIR` | `<state dir>/transcripts` | Where transcripts go |
 | `ACS_AUDIT_FILE` | None | Where audit lines go, besides stderr |
 | `ACS_MODEL_INPUT_LOG` | None | Where the model input log goes |
+| `ACS_GATEWAY_MAX_SESSIONS` | `256` | Sessions held at once. The least recently used one is evicted and audited as `session_evicted` |
+| `ACS_GATEWAY_MAX_BODY_BYTES` | `8388608` (8 MiB) | Largest request body (413 above it) and, in shadow and enforce, largest upstream answer (502 above it) |
 | `ACS_AGENT_ID` | `openai-responses-gateway` | `agent_id` in every envelope |
 | `ACS_GATEWAY_HOST`, `ACS_GATEWAY_PORT` | `127.0.0.1`, `8080` | The model port |
 | `ACS_GATEWAY_ADMIN_HOST`, `ACS_GATEWAY_ADMIN_PORT` | `127.0.0.1`, unset | The admin port, off unless set |

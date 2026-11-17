@@ -5,6 +5,8 @@ import asyncio
 import hashlib
 import json
 import uuid
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -75,21 +77,30 @@ class Session:
 
 
 class SessionMap:
-    """Conversation key to ACS session, for the current epoch only."""
+    """Conversation key to ACS session, for the current epoch only, holding at most max_sessions."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_sessions: int = 256, on_evict: Callable[[Session], None] | None = None) -> None:
         self.epoch = 0
-        self._sessions: dict[str, Session] = {}
+        self._max = max_sessions
+        self._on_evict = on_evict
+        self._sessions: OrderedDict[str, Session] = OrderedDict()
 
     def get(self, key: str) -> Session:
         session = self._sessions.get(key)
         if session is None:
             session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch)
             self._sessions[key] = session
+            while len(self._sessions) > self._max:
+                # The least recently used run is the one most likely over. Its next resend opens a new session.
+                _, evicted = self._sessions.popitem(last=False)
+                if self._on_evict is not None:
+                    self._on_evict(evicted)
+        else:
+            self._sessions.move_to_end(key)
         return session
 
     def bump_epoch(self) -> int:
         """Forget every session and cached outcome, so a call_id seen before is gated afresh under a new session."""
         self.epoch += 1
-        self._sessions = {}
+        self._sessions = OrderedDict()
         return self.epoch

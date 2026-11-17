@@ -27,3 +27,14 @@ def test_session_map_keeps_one_session_per_key_until_the_epoch_moves():
     assert second.session_id != first.session_id
     assert second.calls == {}
     assert isinstance(second.lock, asyncio.Lock)
+
+
+def test_the_session_map_evicts_the_least_recently_used_session():
+    evicted = []
+    sessions = SessionMap(max_sessions=2, on_evict=evicted.append)
+    a = sessions.get("a")
+    b = sessions.get("b")
+    sessions.get("a")
+    sessions.get("c")
+    assert evicted == [b]
+    assert sessions.get("a") is a

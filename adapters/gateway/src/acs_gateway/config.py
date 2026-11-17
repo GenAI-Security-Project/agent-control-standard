@@ -14,6 +14,8 @@ DEFAULT_GUARDIAN_URL = "http://127.0.0.1:8787/"
 DEFAULT_UPSTREAM_URL = "https://api.openai.com/v1"
 DEFAULT_DECISION_TIMEOUT_MS = 5000
 DEFAULT_READY_TIMEOUT_S = 60.0
+DEFAULT_MAX_SESSIONS = 256
+DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
@@ -45,6 +47,8 @@ class GatewayConfig:
     admin_token_file: Path | None
     listen_host: str
     listen_port: int
+    max_sessions: int = DEFAULT_MAX_SESSIONS
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -72,6 +76,8 @@ class GatewayConfig:
             admin_token_file=Path(token_file) if token_file else None,
             listen_host=env.get("ACS_GATEWAY_HOST", "").strip() or "127.0.0.1",
             listen_port=int(env.get("ACS_GATEWAY_PORT", "").strip() or "8080"),
+            max_sessions=int(_positive_number(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS)),
+            max_body_bytes=int(_positive_number(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)),
         )
 
 
