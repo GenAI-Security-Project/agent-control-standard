@@ -115,6 +115,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `unsupported_item_type` | An input or output item outside the allowlist, with `item_type` and `direction` |
 | `unsupported_tool_type` | A tool declaration that isn't a function tool |
 | `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |
+| `session_retired` | A step whose worker claimed it hung past one more decision timeout. The session leaves the map, its remaining steps deny, and the next request for the conversation opens a fresh session |
 | `session_retried` | A failed handshake or sessionStart was retried under a new session_id |
 | `sessions_full` | Every session was busy, so a new conversation got 503 |
 | `session_evicted` | The session cap evicted the least recently used session |

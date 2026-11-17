@@ -94,6 +94,8 @@ class Session:
     active: int = 0
     # time.monotonic() when opening last failed, so a retry waits out the backoff.
     open_failed_at: float | None = None
+    # A step of this session hung past its bounded wait, so the session left the map and takes no more steps.
+    retired: bool = False
 
     @property
     def busy(self) -> bool:
@@ -129,6 +131,12 @@ class SessionMap:
         session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch)
         self._sessions[key] = session
         return session
+
+    def retire(self, session: Session) -> None:
+        """Take a session out of the map, so the next request for its conversation opens a fresh one."""
+        session.retired = True
+        for key in [k for k, s in self._sessions.items() if s is session]:
+            del self._sessions[key]
 
     def bump_epoch(self) -> int:
         """Forget every session and cached outcome, so a call_id seen before is gated afresh under a new session."""

@@ -96,6 +96,15 @@ class StepToken:
         self.deadline = deadline
         self._lock = threading.Lock()
         self._state = "pending"
+        # Set when the loop stopped waiting for a claimed step. The worker then writes and sends nothing more.
+        self._retired = threading.Event()
+
+    def retire(self) -> None:
+        self._retired.set()
+
+    @property
+    def retired(self) -> bool:
+        return self._retired.is_set()
 
     def claim(self) -> bool:
         with self._lock:
@@ -221,10 +230,15 @@ class GuardianClient:
             return None, request_id
         # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
         self.transcript.append(session_id, "req", request)
+        if token is not None and token.retired:
+            # The loop gave up on this step and retired its session while the line was being written.
+            return None, request_id
         outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,
                              session_id=session_id, gate=True)
         if request["params"].get("signature") != signature:
             audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
+        if token is not None and token.retired:
+            return None, request_id
         if isinstance(outcome, Resolution):
             self.transcript.append(session_id, "resp", None, cause=outcome.cause)
         if isinstance(outcome, Decided):

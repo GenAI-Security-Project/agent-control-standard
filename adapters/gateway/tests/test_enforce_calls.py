@@ -276,7 +276,8 @@ def test_a_timed_out_step_writes_nothing_after_the_request_returns(gateway, guar
     upstream.reply(response_body(message_item("hello")))
     client.post("/v1/responses", json=finbot_request())
     gw = client.app.state.gateway
-    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 2.0)
+    # Past the outer deadline (1.5 s) but inside the bounded wait that follows it (0.5 s more).
+    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 1.7)
     upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     assert output[0]["content"][0]["text"] == NEUTRAL
@@ -297,3 +298,47 @@ def test_one_gateway_can_start_twice(gateway, guardian, upstream):
         upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
         assert again.post("/v1/responses", json=finbot_request()).json()["output"][0]["call_id"] == "call_1"
     client.__enter__()
+
+
+
+class HungTranscript:
+    """Never finishes the toolCallRequest line until the test lets it, like a write to a stalled disk."""
+
+    def __init__(self, inner):
+        import threading
+
+        self.inner, self.release = inner, threading.Event()
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if direction == "req" and envelope and envelope.get("method") == "steps/toolCallRequest":
+            self.release.wait(30)
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def test_a_hung_claimed_step_is_bounded_and_retires_its_session(gateway, harness_guardian, upstream, audit, tmp_path):
+    import time
+
+    received = tmp_path / "guardian-received.txt"
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_COUNT_FILE=str(received)),
+                     ACS_DECISION_TIMEOUT_MS="500")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    hung = HungTranscript(gw.guardian.transcript)
+    gw.guardian.transcript = hung
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    started = time.monotonic()
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert time.monotonic() - started < 5
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    applied = events(audit, "decision_applied")[0]
+    assert applied["cause"] == "decision_timeout"
+    assert len(events(audit, "session_retired")) == 1
+    hung.release.set()
+    time.sleep(1.0)
+    assert "steps/toolCallRequest" not in received.read_text().split()
+    assert not [line for line in transcript_lines(tmp_path) if line["dir"] == "resp" and line["envelope"] is None]
+    gw.guardian.transcript = hung.inner
+    upstream.reply(response_body(message_item("again")))
+    client.post("/v1/responses", json=finbot_request())
+    assert len(events(audit, "session_opened")) == 2

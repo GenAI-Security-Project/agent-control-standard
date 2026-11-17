@@ -275,7 +275,7 @@ class Gateway:
         while True:
             session = self.sessions.get(key)
             await session.lock.acquire()
-            if session.epoch == self.sessions.epoch:
+            if session.epoch == self.sessions.epoch and not session.retired:
                 break
             session.lock.release()
         try:
@@ -490,6 +490,9 @@ class Gateway:
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
+        if session.retired:
+            # A step of this request hung and retired the session, so its remaining steps deny without sending.
+            return StepResult(method, None, cause="session_retired", failure_class="observed_agent_error")
         timeout = session.posture.timeout_for(method) if session.posture else self.config.decision_timeout_s
         token = StepToken(time.monotonic() + timeout)
         future = asyncio.get_running_loop().run_in_executor(
@@ -500,8 +503,15 @@ class Gateway:
         except asyncio.TimeoutError:
             if not token.cancel():
                 # The worker claimed the step before the deadline, so its transcript lines are on the way. The lock
-                # stays held until they land, which keeps the chain in send order. Its decision is late and ignored.
-                await future
+                # stays held while they land, which keeps the chain in send order, but only for one more timeout.
+                try:
+                    await asyncio.wait_for(asyncio.shield(future), timeout)
+                except asyncio.TimeoutError:
+                    # Something below acs.client hung, such as a stalled disk. The session can no longer promise
+                    # chain order, so it retires and the worker writes and sends nothing more.
+                    token.retire()
+                    self.sessions.retire(session)
+                    _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung")
             return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
 
     def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:
