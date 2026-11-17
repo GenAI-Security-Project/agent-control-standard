@@ -1,4 +1,9 @@
-"""server_hello_problem refuses a ServerHello carrying request_id, for every consumer (review finding CR8-2)."""
+"""server_hello_problem ignores an extra request_id but still refuses a step answer (PR #600 review).
+
+Specification section 4 says unknown fields MUST be ignored, and handshake.json doesn't forbid
+request_id on a ServerHello, so a Guardian that echoes it must still negotiate. The required
+ServerHello fields are what keep a step answer from passing as a ServerHello.
+"""
 from __future__ import annotations
 
 import unittest
@@ -11,16 +16,18 @@ VALID = {"negotiated_version": "0.1.0", "methods_evaluated": ["steps/toolCallReq
          "selected_transport": "http", "timeout_config": {"default_ms": 5000}}
 
 
-class ServerHelloCarriesNoRequestId(unittest.TestCase):
+class AnExtraRequestIdIsIgnored(unittest.TestCase):
     def test_a_valid_server_hello_has_no_problem(self) -> None:
         self.assertIsNone(server_hello_problem(VALID, OFFERED))
 
-    def test_a_server_hello_carrying_request_id_is_a_problem(self) -> None:
-        # A ServerHello echoes nothing from the ClientHello. A result with request_id is a step answer.
+    def test_a_server_hello_carrying_request_id_has_no_problem(self) -> None:
         for request_id in ("hello-request-1", None, ""):
             with self.subTest(request_id=request_id):
-                self.assertEqual(server_hello_problem({**VALID, "request_id": request_id}, OFFERED),
-                                 "a ServerHello carries no request_id")
+                self.assertIsNone(server_hello_problem({**VALID, "request_id": request_id}, OFFERED))
+
+    def test_a_step_answer_offered_as_a_server_hello_is_still_a_problem(self) -> None:
+        step_answer = {"type": "final", "acs_version": "0.1.0", "request_id": "r-1", "decision": "allow"}
+        self.assertIsNotNone(server_hello_problem(step_answer, OFFERED))
 
 
 if __name__ == "__main__":

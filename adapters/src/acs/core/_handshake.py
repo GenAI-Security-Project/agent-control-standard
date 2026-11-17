@@ -30,10 +30,8 @@ def _strings(value: object) -> bool:
 
 def server_hello_problem(server_hello: Mapping[str, Any], offered: Mapping[str, Any]) -> str | None:
     """Why the ServerHello does not answer the ClientHello `offered`, or None."""
-    # A ServerHello echoes nothing from the ClientHello. A result carrying request_id is a step
-    # answer, which the keyring path refuses too, so no consumer may negotiate on it.
-    if "request_id" in server_hello:
-        return "a ServerHello carries no request_id"
+    # An extra field, request_id included, is ignored, as spec section 4 requires. The required
+    # fields below are what keep a step answer from passing as a ServerHello.
     version = server_hello.get("negotiated_version")
     if not isinstance(version, str) or not _SEMVER.fullmatch(version):
         return "negotiated_version is not a semantic version"

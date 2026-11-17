@@ -436,11 +436,18 @@ class RequestBinding(unittest.TestCase):
                 self.assertFalse(response_matches_request(hello, server_hello))
                 self.assertFalse(self._verify(server_hello, hello))
 
-    def test_a_step_decision_against_a_handshake_request_fails(self) -> None:
-        # Review finding R6-M1: a matching id isn't enough when the result carries request_id.
+    def test_a_handshake_result_binds_by_id_alone(self) -> None:
+        # PR #600 review: a ServerHello that echoes request_id verifies, since unknown fields are
+        # ignored (spec section 4). A step decision with a colliding id binds too, and the required
+        # ServerHello fields, checked by server_hello_problem, are what refuse it as a ServerHello.
         hello = {"jsonrpc": "2.0", "id": DECISION_ID, "method": "handshake/hello",
-                 "params": {"acs_version": "0.1.0", "request_id": DECISION_ID}}
-        self.assertFalse(self._verify(self.signed, hello))
+                 "params": {"acs_version": "0.1.0", "request_id": DECISION_ID, "payload": {}}}
+        echoed = {"jsonrpc": "2.0", "id": DECISION_ID,
+                  "result": {"negotiated_version": "0.1.0", "methods_evaluated": [], "selected_transport": "http",
+                             "timeout_config": {"default_ms": 5000}, "request_id": DECISION_ID}}
+        sign_with_signing_key(echoed, _signer())
+        self.assertTrue(self._verify(echoed, hello))
+        self.assertTrue(self._verify(self.signed, hello))
 
     def test_an_error_that_also_carries_a_string_result_returns_false(self) -> None:
         # Review findings R6-M4, CR6-1: False, never an exception.

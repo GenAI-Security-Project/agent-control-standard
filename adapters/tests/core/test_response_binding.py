@@ -101,11 +101,15 @@ class OneHandshakeAwareRule(unittest.TestCase):
         error = {"jsonrpc": "2.0", "id": "hello-1", "error": {"code": -32000, "message": "refused"}}
         self.assertTrue(response_matches_request(_client_hello(), error))
 
-    def test_a_step_decision_never_answers_a_client_hello(self) -> None:
-        # R6-M1: a result carrying request_id is a step answer, even with a matching id.
+    def test_a_client_hello_result_binds_by_id_alone(self) -> None:
+        # PR #600 review: unknown fields are ignored (spec section 4), so a ServerHello that echoes
+        # request_id binds. What the result is, ServerHello or step answer, is server_hello_problem's
+        # call, through the required ServerHello fields.
+        echoed = {"jsonrpc": "2.0", "id": "hello-1", "result": {**SERVER_HELLO, "request_id": "hello-request-1"}}
+        self.assertTrue(response_matches_request(_client_hello(), echoed))
         decision = {"jsonrpc": "2.0", "id": "hello-1",
                     "result": {"request_id": "hello-request-1", "decision": "allow"}}
-        self.assertFalse(response_matches_request(_client_hello(), decision))
+        self.assertTrue(response_matches_request(_client_hello(), decision))
 
     def test_a_result_that_is_not_an_object_answers_nothing(self) -> None:
         # R6-M4, CR6-1: False, never an AttributeError.

@@ -135,10 +135,11 @@ def response_binding_problem(request: object, response: object) -> str | None:
     which is an object. BINDING_ID: the response carries the request's JSON-RPC id. An error
     then binds by that id alone, whatever the request's request_id. BINDING_RESULT: a
     result binds only a request that passes request_binding_problem. For the handshake, a
-    ServerHello echoes nothing else from the ClientHello, so its result binds by the id and must
-    carry no request_id, which keeps a step decision from answering a ClientHello. Issue #13
-    tracks binding the handshake to the traffic after it. For any other request, the result
-    must carry the request's request_id.
+    ServerHello echoes nothing else from the ClientHello, so its result binds by the id alone.
+    An extra field such as request_id is ignored (spec section 4), and server_hello_problem's
+    required fields decide whether the result is a ServerHello. Issue #13 tracks binding the
+    handshake to the traffic after it. For any other request, the result must carry the
+    request's request_id.
     """
     if request_envelope_problem(request) is not None:
         return BINDING_REQUEST
@@ -152,7 +153,7 @@ def response_binding_problem(request: object, response: object) -> str | None:
     if request_binding_problem(request) is not None:
         return BINDING_RESULT
     if request.get("method") == HANDSHAKE_METHOD:
-        return BINDING_RESULT if "request_id" in answer else None
+        return None
     # request_binding_problem already required a non-empty string request_id here.
     if not same_json_rpc_id(answer.get("request_id"), request["params"]["request_id"]):
         return BINDING_RESULT

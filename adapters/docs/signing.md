@@ -92,7 +92,7 @@ Verification takes two required arguments besides the keyring. `expected_key_id`
 
 `BINDING_REQUEST` means the request fails `acs.core.request_envelope_problem`. `BINDING_SHAPE` means the response isn't a JSON-RPC 2.0 object with exactly one object result or error, or it carries a `method`, so a request envelope never counts as an answer. `acs.core.response_shape_problem` is that shape check on its own, and the client judges an HTTP error body by it too. `BINDING_ID` means the response doesn't carry the request's JSON-RPC `id`, and `BINDING_RESULT` means a result doesn't bind, as below.
 
-An error object binds by the id alone, whatever the request's `request_id`. A result binds only when the request is the handshake and the result carries no `request_id`, or when the request carries a string `params.request_id` that the result repeats. `acs.core.request_binding_problem` is the exported check for whether a request can bind a result at all.
+An error object binds by the id alone, whatever the request's `request_id`. A result binds when the request is a real ClientHello, by the id alone, or when the request carries a string `params.request_id` that the result repeats. `acs.core.request_binding_problem` is the exported check for whether a request can bind a result at all.
 
 A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. A request with no usable `request_id` binds no result, the same answer on both paths.
 
@@ -122,9 +122,9 @@ Until then, the connection to the Guardian must use TLS, which keeps an attacker
 
 ### The handshake
 
-A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello. When the request is the handshake (`acs.core.HANDSHAKE_METHOD`, `handshake/hello`), the JSON-RPC `id` binds the response, and its result must carry no `request_id`. A step decision therefore never answers a ClientHello, and a ServerHello never answers a step request.
+A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello. When the request is the handshake (`acs.core.HANDSHAKE_METHOD`, `handshake/hello`), the JSON-RPC `id` alone binds the response. An extra field such as an echoed `request_id` is ignored, as specification section 4 requires, and a ServerHello never answers a step request, since that needs the request's `request_id`.
 
-The client's HMAC handshake decides through `response_binding_problem` as well. A reply that isn't a JSON-RPC 2.0 answer is no answer, a JSON-RPC 2.0 answer with a `method` or both members refuses the session as `response_shape_invalid`, an id problem refuses the session, and a request problem refuses it as `request_envelope_invalid`. `request_binding_problem` requires a `handshake/hello` request to carry object params with an object payload, so a ServerHello binds only a real ClientHello on every path. `acs.core.server_hello_problem` refuses a ServerHello that carries `request_id`, so every consumer treats it as no answer, and on the HMAC handshake it never negotiates.
+The client's HMAC handshake decides through `response_binding_problem` as well. A reply that isn't a JSON-RPC 2.0 answer is no answer, a JSON-RPC 2.0 answer with a `method` or both members refuses the session as `response_shape_invalid`, an id problem refuses the session, and a request problem refuses it as `request_envelope_invalid`. `request_binding_problem` requires a `handshake/hello` request to carry object params with an object payload, so a ServerHello binds only a real ClientHello on every path. `acs.core.server_hello_problem` then checks the required ServerHello fields, which keep a step answer from passing as a ServerHello, so on the HMAC handshake such a result is no answer and never negotiates.
 
 Binding by id is a known limit. It ties a ServerHello to one ClientHello, not to the traffic that follows it. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) tracks closing it.
 

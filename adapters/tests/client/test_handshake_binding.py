@@ -56,11 +56,18 @@ class SignedServerHellos(_SessionTest):
         decision, _ = self._open(_answer(lambda h: _result(h, HELLO)), session_id="hello-ok")
         self.assertIsInstance(decision, Negotiated)
 
-    def test_a_signed_server_hello_carrying_request_id_is_no_answer(self) -> None:
-        # A ServerHello carries no request_id. One that does is a step answer in disguise, so it
-        # gets the fail posture, as the keyring path refuses it, instead of negotiating.
+    def test_a_signed_server_hello_carrying_request_id_negotiates(self) -> None:
+        # PR #600 review: unknown fields are ignored (spec section 4), so a Guardian that echoes
+        # request_id must not get every session refused.
         build = _answer(lambda h: _result(h, {**HELLO, "request_id": h["params"]["request_id"]}))
         decision, _ = self._open(build, session_id="hello-with-request-id")
+        self.assertIsInstance(decision, Negotiated)
+
+    def test_a_signed_step_result_offered_as_a_server_hello_is_no_answer(self) -> None:
+        # The required ServerHello fields still keep a step answer from passing as a ServerHello.
+        step = {"type": "final", "acs_version": "0.1.0", "decision": "allow"}
+        build = _answer(lambda h: _result(h, {**step, "request_id": h["params"]["request_id"]}))
+        decision, _ = self._open(build, session_id="hello-step-answer")
         self.assertIsInstance(decision, NoAnswer)
         self.assertEqual(decision.cause, "invalid_server_hello")
 

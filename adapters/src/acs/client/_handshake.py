@@ -320,9 +320,8 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
                               {"claimed_error_code": code} if code is not None else {})
     # A request that isn't a real ClientHello is the caller's error. For a handshake/hello request,
     # request_binding_problem says whether its params and payload are objects, as the checks below
-    # need. Only then does BINDING_RESULT mean the result carries request_id: its signature is
-    # still checked, and server_hello_problem then makes it no answer, as the legacy-wrapper
-    # contract asks.
+    # need. A real ClientHello's result then binds by id alone, and server_hello_problem's
+    # required fields decide whether it is a ServerHello, as the legacy-wrapper contract asks.
     if "result" in response and (client_hello.get("method") != HANDSHAKE_METHOD
                                  or request_binding_problem(client_hello) is not None):
         return SessionRefused("request_envelope_invalid")
