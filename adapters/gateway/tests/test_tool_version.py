@@ -201,8 +201,6 @@ def test_shadow_sends_the_digest_too(gateway, guardian, upstream, tmp_path):
     assert sent_versions(tmp_path) == [PINNED_DIGEST]
 
 
-# The model input log writes the request body, and it can't write a lone surrogate, so these runs switch it off to
-# reach the digest path.
 SURROGATE_KEY = ('{"model": "gpt-5-nano", "input": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],'
                  ' "tools": [{"type": "function", "name": "pinned_tool", "description": "d",'
                  ' "parameters": {"type": "object", "properties": {"\\ud800": {"type": "string"}}}}]}')
@@ -211,7 +209,7 @@ SURROGATE_KEY = ('{"model": "gpt-5-nano", "input": [{"role": "system", "content"
 def test_a_lone_surrogate_key_in_enforce_is_audited_and_the_call_still_gated(gateway, guardian, upstream, audit,
                                                                              tmp_path):
     upstream.reply(CALL)
-    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_MODEL_INPUT_LOG="").post(
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", content=SURROGATE_KEY, headers={"content-type": "application/json"})
     assert response.status_code == 200
     assert [e["tool"] for e in events(audit, "tool_digest_skipped")] == ["pinned_tool"]
@@ -220,7 +218,7 @@ def test_a_lone_surrogate_key_in_enforce_is_audited_and_the_call_still_gated(gat
 
 def test_a_lone_surrogate_key_in_shadow_is_audited_and_gating_goes_on(gateway, guardian, upstream, audit, tmp_path):
     upstream.reply(CALL)
-    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian, ACS_MODEL_INPUT_LOG="").post(
+    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", content=SURROGATE_KEY, headers={"content-type": "application/json"})
     assert response.json() == CALL
     assert [e["tool"] for e in events(audit, "tool_digest_skipped")] == ["pinned_tool"]
