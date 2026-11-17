@@ -10,6 +10,7 @@ import os
 import stat
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -355,7 +356,8 @@ class Gateway:
             upstream = await self.http.send(
                 self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
                                         headers=headers), stream=True)
-            chunks, size, stream = [], 0, upstream.aiter_bytes()
+            chunks: deque[bytes] = deque()
+            size, stream = 0, upstream.aiter_bytes()
             try:
                 async for chunk in stream:
                     size += len(chunk)
@@ -660,11 +662,11 @@ def _pin(session: Session, pins: list[Session]) -> None:
         session.active += 1
 
 
-async def _continue(first: list[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+async def _continue(first: deque[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     """Send the chunks already read, then the rest. Each held chunk is dropped once sent, so a long relay doesn't
     keep the first part of the answer in memory."""
     while first:
-        yield first.pop(0)
+        yield first.popleft()
     async for chunk in rest:
         yield chunk
 

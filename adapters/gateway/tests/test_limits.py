@@ -54,7 +54,10 @@ def test_the_shadow_relay_releases_each_held_chunk_once_sent():
 
     from acs_gateway.app import _continue
 
-    held = [b"a", b"b", b"c"]
+    from collections import deque
+
+    # A deque, so each held chunk leaves in constant time (review CR7-8).
+    held = deque([b"a", b"b", b"c"])
 
     async def rest():
         yield b"d"
