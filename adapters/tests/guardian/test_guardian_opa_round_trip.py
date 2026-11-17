@@ -120,3 +120,14 @@ def test_allow_and_deny_pass_through(guardian, verdict, decision):
 def test_opa_down_is_a_signed_deny(guardian):
     _, result = _send(guardian(closed_port_url()), "steps/toolCallResult", VENDOR_RESULT)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_unreachable"])
+
+
+@pytest.mark.parametrize("body", [
+    b'{"result": ' + b"[" * 100_000 + b"]" * 100_000 + b"}",
+    b'{"result": {"decision": "allow", "policy_data": ' + b'{"n": ' * 900 + b"{}" + b"}" * 900 + b"}}",
+])
+def test_a_deeply_nested_opa_answer_is_a_signed_deny(guardian, body):
+    with StubOpa(body=body) as opa:
+        _, result = _send(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
+    assert result["decision"] == "deny"
+    assert result["reason_codes"][0] in ("opa_response_malformed", "opa_verdict_invalid")

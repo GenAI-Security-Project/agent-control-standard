@@ -135,3 +135,31 @@ def test_evaluate_denies_each_opa_failure_with_its_code(stub_kwargs, code):
 def test_evaluate_denies_when_opa_is_down():
     result = _evaluate("steps/toolCallRequest", CALL, closed_port_url())
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_unreachable"])
+
+
+def _nested(depth: int) -> dict:
+    node: dict = {}
+    for _ in range(depth):
+        node = {"n": node}
+    return node
+
+
+def test_a_verdict_nested_deeper_than_the_guardian_can_sign_is_invalid():
+    verdict = {"decision": "allow", "policy_data": _nested(500)}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
+
+
+def test_evaluate_denies_a_body_nested_past_the_parser_limit():
+    deep = b'{"result": ' + b"[" * 100_000 + b"]" * 100_000 + b"}"
+    with StubOpa(body=deep) as opa:
+        result = _evaluate("steps/toolCallRequest", CALL, opa.url)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_response_malformed"])
+
+
+def test_evaluate_denies_when_validation_itself_fails(monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("validator exploded")
+    monkeypatch.setattr(opa_backend, "verdict_problem", broken)
+    with StubOpa({"decision": "allow"}) as opa:
+        result = _evaluate("steps/toolCallRequest", CALL, opa.url)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])

@@ -71,6 +71,12 @@ def test_a_body_that_is_not_a_bounded_json_object_is_malformed(body):
         assert _failure(_config(opa.url)).reason_code == "opa_response_malformed"
 
 
+def test_a_body_nested_past_the_parser_limit_is_malformed():
+    deep = b'{"result": ' + b"[" * 100_000 + b"]" * 100_000 + b"}"
+    with StubOpa(body=deep) as opa:
+        assert _failure(_config(opa.url)).reason_code == "opa_response_malformed"
+
+
 def test_an_undefined_rule_is_a_missing_result():
     # OPA answers {} when the rule is undefined. Reading that as allow is the issue #469 failure.
     with StubOpa(body=b"{}") as opa:

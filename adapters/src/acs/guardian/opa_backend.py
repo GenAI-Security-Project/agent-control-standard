@@ -146,8 +146,9 @@ def query(config: OpaConfig, document: Mapping[str, Any]) -> Any:
         raise OpaFailure("opa_unreachable", f"OPA query failed: {error}")
     try:
         answer = json.loads(box["data"].decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise OpaFailure("opa_response_malformed", f"OPA response is not JSON: {e}") from None
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        # RecursionError: a body nested past the parser's limit is malformed too, never an unhandled crash.
+        raise OpaFailure("opa_response_malformed", f"OPA response is not usable JSON: {type(e).__name__}") from None
     if not isinstance(answer, dict):
         raise OpaFailure("opa_response_malformed", "OPA response is not a JSON object")
     if "result" not in answer:
@@ -162,6 +163,8 @@ VERDICT_KEYS = frozenset({"decision", "reasoning", "reason_codes", "modification
                           "policy_references", "policy_data"})
 # DEFER is left out: the lab gateway denies it anyway (BUILD_PLAN A.4), so a policy that defers is a policy bug.
 VERDICT_DECISIONS = frozenset({"allow", "deny", "modify", "ask"})
+# The Guardian canonicalizes and signs the result recursively, so a verdict nests no deeper than this.
+MAX_VERDICT_DEPTH = 64
 
 _validator_lock = threading.Lock()
 _validator: Any = None
@@ -195,6 +198,18 @@ def _result_validator() -> Any:
             except Exception as e:  # noqa: BLE001
                 _validator_error = f"the decision schemas could not be loaded ({e})"
         return _validator
+
+
+def _depth_exceeds(value: Any, limit: int) -> bool:
+    """Whether value nests deeper than limit, checked without recursion."""
+    stack = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, (dict, list)):
+            if depth > limit:
+                return True
+            stack.extend((child, depth + 1) for child in (node.values() if isinstance(node, dict) else node))
+    return False
 
 
 def _resolve_pointer(document: Any, pointer: str) -> bool:
@@ -241,6 +256,8 @@ def verdict_problem(verdict: Any, method: str, payload: Mapping[str, Any], base:
     """Why the verdict cannot become this step's decision, or None when it can."""
     if not isinstance(verdict, dict):
         return f"the verdict is a {type(verdict).__name__}, not an object"
+    if _depth_exceeds(verdict, MAX_VERDICT_DEPTH):
+        return f"the verdict nests deeper than {MAX_VERDICT_DEPTH} levels"
     extra = sorted(set(verdict) - VERDICT_KEYS)
     if extra:
         return f"the verdict carries fields a policy may not set: {extra}"
@@ -283,7 +300,13 @@ def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], co
         verdict = query(config, build_input(method, params))
     except OpaFailure as e:
         return _deny(base, e.reason_code, f"OPA policy evaluation failed: {e.message}")
-    problem = verdict_problem(verdict, method, params.get("payload") or {}, base)
+    except Exception as e:  # noqa: BLE001
+        # Anything unexpected still ends in a signed deny, never in a dropped connection.
+        return _deny(base, "opa_verdict_invalid", f"OPA policy evaluation failed: {type(e).__name__}")
+    try:
+        problem = verdict_problem(verdict, method, params.get("payload") or {}, base)
+    except Exception as e:  # noqa: BLE001
+        problem = f"verdict validation failed: {type(e).__name__}"
     if problem:
         return _deny(base, "opa_verdict_invalid", f"OPA verdict rejected: {problem}")
     return {**base, **verdict}
