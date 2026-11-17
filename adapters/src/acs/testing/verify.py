@@ -282,7 +282,10 @@ class _KeyDocument:
             raise UsageError("the key document holds no keys list")
         self.key_ids = {k.get("key_id") for k in keys if isinstance(k, Mapping) and isinstance(k.get("key_id"), str)}
         # parse_key_document checks every entry whatever the time, so one parse at a key's own not_before proves
-        # the document well formed. A document none of whose keys is ever live can verify nothing.
+        # the keys well formed. Revocations are left out of this load check, so a revoked key fails the entries
+        # it signed (exit 1) instead of making the document unreadable (exit 2). The revoked list is checked
+        # again, in full, when each entry is verified.
+        unrevoked = {**document, "revoked": []}
         problem: str = "no key entry names a key_id and a not_before"
         self.fingerprint_by_id: dict[str, str] = {}
         for entry in keys:
@@ -290,7 +293,7 @@ class _KeyDocument:
                 continue
             try:
                 moment = datetime.datetime.fromisoformat(entry["not_before"].replace("Z", "+00:00"))
-                parsed = parse_key_document(document, key_id=entry.get("key_id"), now=moment)
+                parsed = parse_key_document(unrevoked, key_id=entry.get("key_id"), now=moment)
             except (KeyDocumentError, ValueError, TypeError) as exc:
                 problem = str(exc)
                 continue
