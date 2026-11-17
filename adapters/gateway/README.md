@@ -14,6 +14,8 @@ The gateway forwards `POST /v1/responses` to a model upstream. In shadow and enf
 - Before a request reaches the model, each new `function_call_output` in it goes to the Guardian as `steps/toolCallResult`.
 - In enforce mode the gateway applies each decision. In shadow mode it records each decision and changes nothing.
 
+Shadow and enforce gate function tools only. A request whose `tools` declares any other type (custom, shell, apply_patch, computer use, or a hosted tool such as mcp, code_interpreter, web_search or file_search, which runs upstream where no hook reaches it) answers 501. As a backstop, enforce removes any other `*_call` or `mcp_approval_request` item from a model response, replaces the output of any non-function `*_call_output` item with the neutral line, and turns an `mcp_approval_response` into a refusal. Each case writes an `unsupported_tool_type` audit line. Off forwards every tool type.
+
 Every other path answers 404. Off mode relays a streamed request (`"stream": true`) as the upstream sends it. Shadow and enforce answer a streamed request with 501 until issue #578 adds governed streaming.
 
 ## Run it
@@ -90,6 +92,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `verification_failed` | A Guardian response failed its signature check |
 | `guardian_http_error` | The Guardian answered with a non-2xx status |
 | `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), or a non-2xx model answer (`upstream_status`) |
+| `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
 | `epoch_bumped` | The epoch moved |
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.

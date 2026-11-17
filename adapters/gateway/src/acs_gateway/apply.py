@@ -22,6 +22,45 @@ def neutral_message() -> dict[str, Any]:
             "content": [{"type": "output_text", "text": NEUTRAL_LINE, "annotations": []}]}
 
 
+def unsupported_tool(body: dict[str, Any]) -> str | None:
+    """The first declared tool that isn't a function tool, named by its type, or None.
+
+    The gateway gates function tools only. Hosted tools (mcp, code_interpreter, web_search, file_search) run
+    upstream where no hook can reach them, and client-run ones (custom, shell, computer use) have no gate yet.
+    """
+    tools = body.get("tools")
+    if tools is None:
+        return None
+    if not isinstance(tools, list):
+        return type(tools).__name__
+    for tool in tools:
+        kind = tool.get("type") if isinstance(tool, dict) else None
+        if kind != "function":
+            return kind if isinstance(kind, str) else type(tool).__name__
+    return None
+
+
+def is_foreign_call(item: dict[str, Any]) -> bool:
+    """An output item asking for a tool run the gateway can't gate: any *_call but function_call, or an MCP approval."""
+    kind = item.get("type")
+    return isinstance(kind, str) and kind != "function_call" and (
+        kind.endswith("_call") or kind == "mcp_approval_request")
+
+
+def is_foreign_output(item: dict[str, Any]) -> bool:
+    """An input item carrying a non-function tool's result, or an MCP approval, to the model."""
+    kind = item.get("type")
+    return isinstance(kind, str) and kind != "function_call_output" and (
+        kind.endswith("_call_output") or kind == "mcp_approval_response")
+
+
+def neutralize_foreign_output(item: dict[str, Any]) -> dict[str, Any]:
+    """An MCP approval becomes a refusal, and any other foreign output carries only the neutral line."""
+    if item.get("type") == "mcp_approval_response":
+        return {**item, "approve": False}
+    return {**item, "output": NEUTRAL_LINE}
+
+
 @dataclass(frozen=True)
 class Applied:
     # "allow", "deny" or "modify": what the gateway did, which a failure or an unusable MODIFY turns into deny.

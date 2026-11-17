@@ -18,7 +18,19 @@ from starlette.background import BackgroundTask
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from acs_gateway.apply import Applied, apply_call, apply_result, call_payload, neutral_message, parse_arguments, result_payload
+from acs_gateway.apply import (
+    Applied,
+    apply_call,
+    apply_result,
+    call_payload,
+    is_foreign_call,
+    is_foreign_output,
+    neutral_message,
+    neutralize_foreign_output,
+    parse_arguments,
+    result_payload,
+    unsupported_tool,
+)
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
 from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult
 from acs_gateway.sessions import CachedOutcome, Session, SessionMap, conversation_key
@@ -100,6 +112,13 @@ class Gateway:
             return upstream if isinstance(upstream, Response) else _relay(upstream, None)
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
+        unsupported = unsupported_tool(body)
+        if unsupported is not None:
+            # Function tools only. Any other tool type runs where the gateway can't gate it: a hosted tool runs
+            # upstream, and a client-run one has no toolCallRequest mapping yet.
+            _audit("unsupported_tool_type", item_type=unsupported, direction="request_tools", mode=self.config.mode)
+            return openai_error(501, "Only function tools are supported by this endpoint.",
+                                "invalid_request_error", "unsupported_tool_type")
         session = self.sessions.get(conversation_key(body))
         async with session.lock:
             if session.handshake is None:
@@ -154,6 +173,13 @@ class Gateway:
         names = {i.get("call_id"): i.get("name") for i in items if isinstance(i, dict) and i.get("type") == "function_call"}
         changed, kept = False, []
         for item in items:
+            if isinstance(item, dict) and is_foreign_output(item):
+                _audit("unsupported_tool_type", session_id=session.session_id, item_type=item.get("type"),
+                       direction="input", mode=self.config.mode)
+                if self.enforce:
+                    item, changed = neutralize_foreign_output(item), True
+                kept.append(item)
+                continue
             call_id = item.get("call_id") if isinstance(item, dict) else None
             if not isinstance(call_id, str):
                 kept.append(item)
@@ -194,6 +220,14 @@ class Gateway:
         changed, removed, kept = False, False, []
         for item in reply["output"]:
             call_id = item.get("call_id") if isinstance(item, dict) else None
+            if isinstance(item, dict) and is_foreign_call(item):
+                _audit("unsupported_tool_type", session_id=session.session_id, item_type=item.get("type"),
+                       direction="output", mode=self.config.mode)
+                if self.enforce:
+                    changed = removed = True
+                else:
+                    kept.append(item)
+                continue
             if not isinstance(item, dict) or item.get("type") != "function_call":
                 kept.append(item)
                 continue
