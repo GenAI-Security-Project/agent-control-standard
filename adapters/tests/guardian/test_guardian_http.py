@@ -451,8 +451,11 @@ def test_a_method_cannot_forge_a_log_line_valid_or_invalid(served, capsys):
 
 
 def test_a_session_id_cannot_forge_a_log_line(served, capsys):
-    post(served, _signed("steps/sessionStart", {}, session_id=FORGED))
-    _assert_log_clean(capsys.readouterr().err)
+    # The session_id is logged 8 characters wide, so the newline and ESC sit inside those 8.
+    post(served, _signed("steps/sessionStart", {}, session_id="a\n\x1b[31mb"))
+    err = capsys.readouterr().err
+    _assert_log_clean(err)
+    assert not any(line.startswith("\x1b") or line == "b" for line in err.splitlines()), err
 
 
 def test_a_tool_name_echoed_by_the_policy_cannot_forge_a_log_line(served, monkeypatch, capsys):
