@@ -138,7 +138,6 @@ def test_backend_problem_names_what_is_wrong():
     assert "rego" in opa_backend.backend_problem({"ACS_POLICY_BACKEND": "rego"})
 
 
-
 @pytest.mark.parametrize("url,shown", [
     ("http://lab:secret-pw@opa:8181/v1/data/lab/verdict", "http://opa:8181/v1/data/lab/verdict"),
     ("https://token@opa/x", "https://opa/x"),
@@ -166,7 +165,6 @@ def test_queries_reuse_the_opener_built_with_the_config(monkeypatch):
             assert opa_backend.query(config, {"input": {}}) == DENY
     assert config.opener is opener
     assert config == same and config.opener is not same.opener, "the opener takes no part in equality"
-
 
 
 @pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])

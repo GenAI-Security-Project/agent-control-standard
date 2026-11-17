@@ -311,6 +311,7 @@ MAX_VERDICT_DEPTH = 64
 MAX_REDACTIONS = 2000
 MAX_REDACTED_OUTPUTS = 1000
 
+
 def _depth_exceeds(value: Any, limit: int) -> bool:
     """Whether value nests deeper than limit, checked without recursion."""
     stack = [(value, 1)]

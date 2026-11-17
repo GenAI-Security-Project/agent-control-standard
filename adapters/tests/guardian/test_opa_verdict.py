@@ -200,7 +200,6 @@ def test_modified_content_on_a_tool_call_is_invalid():
     assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
 
 
-
 def _assert_generic(result: dict, code: str, leaked: list[str]) -> None:
     assert (result["decision"], result["reason_codes"]) == ("deny", [code])
     assert result["reasoning"] == opa_backend.FAILURE_REASONING[code]
@@ -241,7 +240,6 @@ def test_every_failure_message_fits_200_characters():
         "opa_unreachable", "opa_timeout", "opa_http_error", "opa_response_malformed", "opa_result_missing",
         "opa_verdict_invalid", "policy_backend_misconfigured"}
     assert all(0 < len(text) <= 200 for text in opa_backend.FAILURE_REASONING.values())
-
 
 
 @pytest.mark.parametrize("number", [b"9007199254740993", b"-9007199254740993", b"1e400"])
