@@ -1,0 +1,116 @@
+import json
+
+import pytest
+
+from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body, transcript_lines
+
+
+def events(audit, name):
+    return [e for e in audit() if e["acs_audit_event"] == name]
+
+
+def test_startup_waits_for_the_guardian_and_fails_when_it_never_answers(gateway):
+    with pytest.raises(RuntimeError, match="system/ping"):
+        gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL="http://127.0.0.1:9/", ACS_GUARDIAN_READY_TIMEOUT_S="1")
+
+
+def test_an_allowed_call_is_returned_unchanged(gateway, guardian, upstream, audit, tmp_path):
+    reply = response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1"))
+    upstream.reply(reply)
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200
+    assert response.json() == reply
+    lines = transcript_lines(tmp_path)
+    methods = [(line["dir"], line["envelope"].get("method")) for line in lines]
+    assert methods == [("req", "steps/sessionStart"), ("resp", None),
+                       ("req", "steps/toolCallRequest"), ("resp", None)]
+    request = lines[2]["envelope"]["params"]
+    assert request["payload"] == {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+    assert lines[3]["envelope"]["result"]["request_id"] == request["request_id"]
+    assert len(events(audit, "session_opened")) == 1
+    applied = events(audit, "decision_applied")
+    assert [(e["method"], e["decision"]) for e in applied] == [("steps/toolCallRequest", "allow")]
+
+
+def test_a_denied_call_is_removed_and_replaced_by_the_neutral_line(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_1")))
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    output = response.json()["output"]
+    assert [item["type"] for item in output] == ["message"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    applied = events(audit, "decision_applied")[0]
+    assert applied["decision"] == "deny" and applied["guardian_decision"] == "deny"
+
+
+def test_a_denied_call_beside_a_message_leaves_the_message_alone(gateway, guardian, upstream):
+    upstream.reply(response_body(message_item("Working on it"), call_item("bash", {"command": "rm -rf /"}, "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert [item["content"][0]["text"] for item in output] == ["Working on it"]
+
+
+def test_a_call_with_unsignable_arguments_is_denied(gateway, guardian, upstream, audit, tmp_path):
+    upstream.reply(response_body(call_item("get_vendor_details", '{"amount": NaN}', "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert events(audit, "decision_applied")[0]["cause"] == "envelope_not_signable"
+    assert [line["envelope"].get("method") for line in transcript_lines(tmp_path) if line["dir"] == "req"] == [
+        "steps/sessionStart"]
+
+
+def test_a_repeated_call_id_reapplies_the_cached_outcome(gateway, guardian, upstream, audit, tmp_path):
+    reply = response_body(call_item("bash", {"command": "rm -rf /"}, "call_1"))
+    upstream.reply(reply)
+    upstream.reply(reply)
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    first = client.post("/v1/responses", json=finbot_request()).json()
+    second = client.post("/v1/responses", json=finbot_request()).json()
+    assert first["output"][0]["content"][0]["text"] == second["output"][0]["content"][0]["text"] == NEUTRAL
+    requests = [line for line in transcript_lines(tmp_path) if line["envelope"].get("method") == "steps/toolCallRequest"]
+    assert len(requests) == 1
+
+
+def test_parameter_overrides_rewrite_the_arguments(gateway, harness_guardian, upstream):
+    upstream.reply(response_body(call_item("override_tool", {"to": "x@evil.example", "body": "hi"}, "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian()).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert json.loads(output[0]["arguments"]) == {"to": "ops@ns1.finbot", "body": "hi"}
+    assert output[0]["call_id"] == "call_1"
+
+
+@pytest.mark.parametrize("tool,cause,extra_event", [
+    ("slow_tool", "decision_timeout", None),
+    ("rate_limited_tool", "http_429_error", "guardian_http_error"),
+    ("tampered_tool", "response_signature_invalid", "verification_failed"),
+])
+def test_a_decision_failure_denies_and_says_why(gateway, harness_guardian, upstream, audit, tool, cause, extra_event):
+    upstream.reply(response_body(call_item(tool, {}, "call_1")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(), ACS_DECISION_TIMEOUT_MS="500")
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    applied = events(audit, "decision_applied")[0]
+    assert applied["decision"] == "deny" and applied["cause"] == cause
+    if extra_event:
+        assert events(audit, extra_event)[0]["cause"] == cause
+
+
+@pytest.mark.parametrize("tool", ["ask_tool", "defer_tool"])
+def test_ask_and_defer_deny(gateway, harness_guardian, upstream, audit, tool):
+    upstream.reply(response_body(call_item(tool, {}, "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian()).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    applied = events(audit, "decision_applied")[0]
+    assert applied["decision"] == "deny" and applied["guardian_decision"] == tool.split("_")[0]
+
+
+@pytest.mark.parametrize("guardian_env", [{"ACS_ON_DECISION_FAILURE": "proceed"}, {"HARNESS_OMIT_POSTURE": "1"}])
+def test_the_server_hello_never_loosens_the_fail_closed_posture(gateway, harness_guardian, upstream, audit,
+                                                                 guardian_env):
+    upstream.reply(response_body(call_item("slow_tool", {}, "call_1")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(**guardian_env),
+                     ACS_DECISION_TIMEOUT_MS="500")
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert events(audit, "decision_applied")[0]["cause"] == "decision_timeout"
