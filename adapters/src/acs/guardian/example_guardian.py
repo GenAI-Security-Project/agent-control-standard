@@ -644,8 +644,50 @@ def _error_envelope(request_id, session_id: str, code: int, message: str, *, sig
     return envelope
 
 
+def _log_value(value: Any, width: int = 8) -> str:
+    """A field for the log line: a string as is, anything else as its repr, cut to width."""
+    text = value if isinstance(value, str) else repr(value)
+    return text[:width]
+
+
+def _structure_problem(request: Any) -> str | None:
+    """Why the request's JSON-RPC and ACS structure can't be read, or None. Checked before any state changes."""
+    if not isinstance(request, dict):
+        return f"expected a JSON-RPC object, got {type(request).__name__}"
+    if not isinstance(request.get("method", ""), str):
+        return "method must be a string"
+    if "id" in request and request["id"] is not None and not isinstance(request["id"], (str, int)):
+        return "id must be a string, a number, or null"
+    params = request.get("params", {})
+    if not isinstance(params, dict):
+        return "params must be an object"
+    metadata = params.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return "params.metadata must be an object"
+    for name, value in (("params.request_id", params.get("request_id", "")),
+                        ("params.metadata.session_id", metadata.get("session_id", ""))):
+        if not isinstance(value, str):
+            return f"{name} must be a string"
+    return None
+
+
+def _safe_ids(request: Any) -> tuple[Any, str]:
+    """The JSON-RPC id and session_id an error answer can use: each one only when it has a usable type."""
+    if not isinstance(request, dict):
+        return None, ""
+    request_id = request.get("id") if isinstance(request.get("id"), (str, int)) else None
+    params = request.get("params") if isinstance(request.get("params"), dict) else {}
+    meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+    session_id = meta.get("session_id") if isinstance(meta.get("session_id"), str) else ""
+    return request_id, session_id
+
+
 def handle_request(request: dict) -> dict:
-    """Answer one JSON-RPC request. A request the Guardian can't canonicalize, at any step, gets an error answer."""
+    """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
+    problem = _structure_problem(request)
+    if problem:
+        request_id, session_id = _safe_ids(request)
+        return _error_envelope(request_id, session_id, -32600, f"Invalid Request: {problem}")
     try:
         return _handle_request(request)
     except CANONICALIZATION_ERRORS:
@@ -764,11 +806,12 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                                 "error": {"code": -32600,
                                           "message": f"Request body {length} bytes exceeds {MAX_REQUEST_BODY_BYTES} cap"}})
             return
-        body = self.rfile.read(length).decode("utf-8")
+        body = self.rfile.read(length)
         try:
-            request = json.loads(body)
-        except (json.JSONDecodeError, RecursionError):
-            # RecursionError: a body nested past the parser's limit is a parse error too, never a dropped connection.
+            request = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            # A body that isn't UTF-8, or is nested past the parser's limit, is a parse error too, never a dropped
+            # connection, which a proceed posture would run ungoverned.
             self._respond(400, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32700, "message": "Parse error"}})
             return
@@ -782,12 +825,12 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                                                      f"object, got {kind} (batches unsupported in v0.1)"}})
             return
 
-        method = request.get("method", "")
-        params = request.get("params") or {}
-        meta = params.get("metadata") or {}
+        # Logged from whatever arrived, before any check, so no field's type can crash the line.
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
         sys.stderr.write(
-            f"[guardian] {method} session={meta.get('session_id', '?')[:8]} "
-            f"req={params.get('request_id', '?')[:8]}\n"
+            f"[guardian] {_log_value(request.get('method', ''), 40)} session={_log_value(meta.get('session_id', '?'))} "
+            f"req={_log_value(params.get('request_id', '?'))}\n"
         )
         sys.stderr.flush()
 

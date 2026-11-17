@@ -134,3 +134,17 @@ def test_a_request_nested_just_under_the_parser_limit_gets_an_answer(guardian):
     text = text.replace('"arguments": {}', '"arguments": {"deep": {"value": ' + "[" * 990 + "]" * 990 + "}}")
     status, body = _post_raw(url, text.encode())
     assert "error" in body or "result" in body
+
+
+@pytest.mark.parametrize("body,code", [
+    (b'{"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", "params": [1, 2]}', -32600),
+    (b'{"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", "params": "x"}', -32600),
+    (b'{"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", '
+     b'"params": {"request_id": 5, "metadata": {"session_id": 7}, "payload": {}}}', -32600),
+    (b'{"jsonrpc": "2.0", "id": "1", "method": 9, "params": {}}', -32600),
+    (b"\xff\xfe{}", -32700),
+])
+def test_a_malformed_request_gets_a_json_rpc_answer(guardian, body, code):
+    # A dropped connection reads as transport_failure, which a proceed posture runs ungoverned.
+    status, answer = _post_raw(guardian(closed_port_url()), body)
+    assert answer["error"]["code"] == code
