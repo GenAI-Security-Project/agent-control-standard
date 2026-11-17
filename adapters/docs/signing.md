@@ -56,7 +56,7 @@ from acs.core import Keyring, MLDSA65SigningKey, sign_with_signing_key, verify_w
 signer = MLDSA65SigningKey.from_seed(secrets.token_bytes(32), "lab-guardian-1")
 keyring = Keyring([signer.verification_key()])
 
-# The request the Observed Agent sent, with a fresh UUID4 as both ids, as acs.client does.
+# The request the Observed Agent sent. Its ids must not repeat, since the binding relies on that.
 request_id = str(uuid.uuid4())
 request = {"jsonrpc": "2.0", "id": request_id, "method": "steps/toolCallRequest",
            "params": {"acs_version": "0.1.0", "request_id": request_id}}
@@ -76,7 +76,7 @@ replayed = verify_with_keyring(response, keyring, expected_key_id="lab-guardian-
 assert verified and not replayed
 ```
 
-Verification takes two required arguments besides the keyring. `expected_key_id` names the key that must answer. A keyring can hold several keys, so a response signed by any other key fails before any crypto runs. `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key, but one ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another. The response must carry the request's JSON-RPC `id` and, when its result carries a `request_id`, the request's `request_id`. Request ids are fresh UUID4s that are never resent, so a mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. This is the same check `acs.core.response_matches_request` applies to every step response today. A request envelope answers nothing, so it fails keyring verification.
+Verification takes two required arguments besides the keyring. `expected_key_id` names the key that must answer. A keyring can hold several keys, so a response signed by any other key fails before any crypto runs. `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key, but one ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another. The response must carry the request's JSON-RPC `id` and, when its result carries a `request_id`, the request's `request_id`. A mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. The binding protects against replay only as far as the ids are unique, and core doesn't check that. It compares the ids it is given. `acs.core.request_envelope`, which `acs.client` and the adapters use, gives every request a fresh UUID4 as its JSON-RPC `id`. `params.request_id` is fresh only as far as its source is. An adapter may derive it from the host's event id, as the Cursor adapter does. A caller that reuses ids weakens replay protection. This is the same check `acs.core.response_matches_request` applies to every step response today. A request envelope answers nothing, so it fails keyring verification.
 
 A ServerHello carries no `request_id` under the current schema, and nothing else in it echoes the ClientHello, so its JSON-RPC `id` is the whole binding. That is a known limit: a ServerHello is tied to one ClientHello, not to the traffic that follows it. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) tracks closing it.
 

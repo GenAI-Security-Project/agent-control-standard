@@ -162,9 +162,10 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     signature naming any other key_id fails before any crypto runs. One key signs every
     session, so the key alone can't stop a response from one exchange being replayed onto
     another. The response must answer request (D-029): the same JSON-RPC id and, when the
-    result carries one, the same request_id. Request ids are fresh UUID4s never resent, so a
-    mismatch fails before any crypto, and a binding rewritten after signing fails the
-    signature. A request envelope answers nothing and fails. The algorithm comes from the
+    result carries one, the same request_id. A mismatch fails before any crypto, and a binding
+    rewritten after signing fails the signature. This stops replay only as far as the caller's
+    ids are unique, which this function doesn't check. request_envelope gives every request a
+    fresh UUID4 JSON-RPC id. A request envelope answers nothing and fails. The algorithm comes from the
     resolved key, never from the envelope (RFC 8725 section 3.1, issue #308). An unknown
     key_id, an envelope algorithm that disagrees with the key's, an unsigned or malformed
     envelope, and a bad signature all return False (D-026). A missing expected_key_id, a
