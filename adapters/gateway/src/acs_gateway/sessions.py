@@ -72,6 +72,15 @@ def canonical(value: Any) -> Any:
         return value
 
 
+def canonical_value(value: Any, raw: Any) -> Any:
+    """The RFC 8785 form of an already parsed JSON value, so a caller that parsed it doesn't parse it again. raw
+    stands in when RFC 8785 can't encode the value."""
+    try:
+        return jcs_canonicalize(value).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return raw
+
+
 def content(item: dict[str, Any]) -> Any:
     """What a function_call asks for (name, arguments) or what an output says (output), as sent."""
     if item.get("type") == "function_call":

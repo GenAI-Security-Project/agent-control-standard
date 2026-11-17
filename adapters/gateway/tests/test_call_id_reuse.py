@@ -167,14 +167,47 @@ def test_gating_a_new_call_canonicalizes_its_arguments_once(gateway, guardian, u
     import acs_gateway.sessions as sessions_module
 
     calls = []
-    original = sessions_module.canonical
+    original, original_value = sessions_module.canonical, sessions_module.canonical_value
 
     def counting(value):
         calls.append(value)
         return original(value)
 
+    def counting_value(value, raw):
+        calls.append(raw)
+        return original_value(value, raw)
+
     monkeypatch.setattr(app_module, "canonical", counting)
     monkeypatch.setattr(sessions_module, "canonical", counting)
+    monkeypatch.setattr(app_module, "canonical_value", counting_value)
     upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
     gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
     assert len(calls) == 1
+
+
+def test_gating_a_new_call_parses_its_arguments_once(gateway, guardian, upstream, monkeypatch):
+    import acs_gateway.strict as strict_module
+
+    arguments = '{"vendor_id": 7}'
+    parsed = []
+    original = strict_module.json.loads
+
+    def counting(text, *args, **kwargs):
+        if text == arguments:
+            parsed.append(text)
+        return original(text, *args, **kwargs)
+
+    monkeypatch.setattr(strict_module.json, "loads", counting)
+    upstream.reply(response_body(call_item("get_vendor_details", arguments, "call_1")))
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    assert len(parsed) == 1
+
+
+def test_strict_loading_is_built_on_the_recording_parser():
+    import pytest
+
+    from acs_gateway.strict import DuplicateKey, loads_strict
+
+    assert loads_strict('{"a": 1}') == {"a": 1}
+    with pytest.raises(DuplicateKey):
+        loads_strict('{"a": 1, "a": 2}')

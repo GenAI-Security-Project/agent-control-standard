@@ -50,6 +50,7 @@ from acs_gateway.sessions import (
     SessionMap,
     SessionsBusy,
     canonical,
+    canonical_value,
     content,
     conversation_key,
     fingerprint,
@@ -566,16 +567,19 @@ class Gateway:
 
     async def _gate_call(self, session: Session, item: dict[str, Any]) -> CachedOutcome:
         name = item.get("name") if isinstance(item.get("name"), str) else ""
-        arguments = parse_arguments(item.get("arguments"))
+        raw_arguments = item.get("arguments")
+        arguments, repeated = parse_arguments(raw_arguments)
         if arguments is None:
             # Arguments that aren't one unambiguous JSON object leave the Guardian nothing it could judge safely.
-            cause = "duplicate_json_key" if repeated_key(item.get("arguments")) else "arguments_not_an_object"
+            cause = "duplicate_json_key" if repeated is not None else "arguments_not_an_object"
             result = StepResult(TOOL_CALL_REQUEST, None, cause=cause, failure_class="observed_agent_error")
         else:
             result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
-        first_arguments = canonical(item.get("arguments"))
+        # The one parse above gives the canonical form too. Unparseable arguments stand as they are, which is what
+        # canonical() would return for them.
+        first_arguments = canonical_value(arguments, raw_arguments) if arguments is not None else raw_arguments
         first, raw = fingerprint(item, first_arguments), content(item)
         if not self.enforce or applied.decision == "allow":
             return CachedOutcome("delivered", name, item, result.request_id, first, raw, first_arguments)

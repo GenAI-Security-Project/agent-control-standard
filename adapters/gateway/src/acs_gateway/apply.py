@@ -10,7 +10,7 @@ from typing import Any
 from acs.core import modify_composition_violation
 
 from acs_gateway.guardian import StepResult
-from acs_gateway.strict import loads_recording, loads_strict
+from acs_gateway.strict import loads_recording
 
 # The one artifact of governance the client and the model may see.
 NEUTRAL_LINE = "I couldn't complete that action."
@@ -132,14 +132,19 @@ class Applied:
     cause: str | None = None
 
 
-def parse_arguments(raw: Any) -> dict[str, Any] | None:
-    """A function_call's arguments as an object, or None when they aren't a JSON object or repeat a key, since the
-    client and the Guardian could then read different values."""
+def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """A function_call's arguments as an object, and the first key they repeat, from one parse. The object is None
+    when they aren't a JSON object or repeat a key, since the client and the Guardian could then read different
+    values."""
+    if not isinstance(raw, str):
+        return None, None
     try:
-        value = loads_strict(raw) if isinstance(raw, str) else None
+        value, repeated = loads_recording(raw)
     except (ValueError, RecursionError):
-        return None
-    return value if isinstance(value, dict) else None
+        return None, None
+    if repeated is not None or not isinstance(value, dict):
+        return None, repeated
+    return value, None
 
 
 def call_payload(name: str, arguments: dict[str, Any]) -> dict[str, Any]:

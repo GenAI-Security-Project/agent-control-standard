@@ -15,15 +15,6 @@ class DuplicateKey(ValueError):
         self.key = key
 
 
-def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    seen: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in seen:
-            raise DuplicateKey(key)
-        seen[key] = value
-    return seen
-
-
 def loads_recording(text: str | bytes) -> tuple[Any, str | None]:
     """json.loads in one pass that also returns the first repeated key, or None. When a key repeats, the last copy is
     kept, as Python reads it. Raises ValueError for text that isn't JSON."""
@@ -42,8 +33,12 @@ def loads_recording(text: str | bytes) -> tuple[Any, str | None]:
 
 
 def loads_strict(text: str | bytes) -> Any:
-    """json.loads, raising DuplicateKey on a repeated key anywhere in the document."""
-    return json.loads(text, object_pairs_hook=_pairs)
+    """json.loads, raising DuplicateKey on a repeated key anywhere in the document. Built on loads_recording, so the
+    gateway has one duplicate-tracking parser."""
+    value, repeated = loads_recording(text)
+    if repeated is not None:
+        raise DuplicateKey(repeated)
+    return value
 
 
 def repeated_key(text: Any) -> str | None:
