@@ -441,6 +441,15 @@ class RequestBinding(unittest.TestCase):
         with self.assertRaises(TypeError):
             verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID)  # type: ignore[call-arg]
 
+    def test_a_request_whose_params_is_not_an_object_is_a_caller_error(self) -> None:
+        # Review findings R5-M1, CR5-2: ValueError, not an AttributeError from deep inside.
+        for params in ("params", ["request_id"], 7, True):
+            request = {**_request(), "params": params}
+            with self.subTest(params=params), self.assertRaises(ValueError):
+                self._verify(self.signed, request)
+        without = {k: v for k, v in _request().items() if k != "params"}
+        self.assertFalse(self._verify(self.signed, without))
+
 
 class Rejections(unittest.TestCase):
     """Algorithm from the key, never from the envelope (RFC 8725 section 3.1, #308), and D-026 per key_id."""

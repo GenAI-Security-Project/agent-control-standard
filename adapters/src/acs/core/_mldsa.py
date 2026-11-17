@@ -162,12 +162,15 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     signature. A request envelope answers nothing and fails. The algorithm comes from the
     resolved key, never from the envelope (RFC 8725 section 3.1, issue #308). An unknown
     key_id, an envelope algorithm that disagrees with the key's, an unsigned or malformed
-    envelope, and a bad signature all return False (D-026). A missing expected_key_id, or a
-    request that isn't an envelope with a JSON-RPC id, is a caller error and raises ValueError.
+    envelope, and a bad signature all return False (D-026). A missing expected_key_id, a
+    request that isn't an envelope with a JSON-RPC id, or a request whose params is present
+    but not an object, is a caller error and raises ValueError.
     """
     check_key_id(expected_key_id)
     if not isinstance(request, dict) or request.get("id") is None:
         raise ValueError("request must be the request envelope this response answers, with its JSON-RPC id")
+    if not isinstance(request.get("params", {}), (dict, type(None))):
+        raise ValueError("request params must be an object when present")
     if not isinstance(envelope, dict) or "method" in envelope:
         return False
     container = envelope.get(container_key(envelope))
