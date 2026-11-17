@@ -251,3 +251,47 @@ def test_invisible_and_bidi_characters_in_labels_are_shown_as_escapes(page):
         assert char not in html
     assert "pay\\u202evendor\\u200b" in html and "Pay?\\u2066" in html and "lab\\u200d" in html
     assert "ok\\u202e" in html
+
+
+@pytest.mark.parametrize("char", ["\u3164", "\ufe0f", "\u115f", "\u180e", "\u2060", "\U000e0041"])
+def test_default_ignorable_characters_are_shown_as_escapes(page, char):
+    approvals, client = page
+    held = Held(approvals, seconds=0.5, tool=f"pay{char}vendor")
+    html = client.get("/").text
+    held.join()
+    assert char not in html
+    assert f"pay\\u{ord(char):04x}vendor" in html or f"pay\\U{ord(char):08x}vendor" in html
+
+
+def _login(browser: TestClient) -> str:
+    response = browser.post("/login", data={"secret": SECRET}, headers={"Origin": ORIGIN}, follow_redirects=False)
+    assert response.status_code == 303
+    return response.cookies["acs_approver"]
+
+
+def test_each_login_issues_a_fresh_session_id_that_isnt_the_secret(page):
+    approvals, _ = page
+    browser = TestClient(create_approver_app(approvals, SECRET), base_url=ORIGIN)
+    first, second = _login(browser), _login(browser)
+    assert first != second and SECRET not in (first, second)
+    assert "max-age=" in browser.post("/login", data={"secret": SECRET}, headers={"Origin": ORIGIN},
+                                      follow_redirects=False).headers["set-cookie"].lower()
+
+
+def test_a_captured_cookie_stops_working_after_a_new_login(page):
+    approvals, _ = page
+    browser = TestClient(create_approver_app(approvals, SECRET), base_url=ORIGIN)
+    captured = _login(browser)
+    _login(browser)
+    replay = TestClient(browser.app, base_url=ORIGIN, cookies={"acs_approver": captured})
+    assert replay.get("/").status_code == 401
+
+
+def test_a_captured_cookie_stops_working_after_it_expires(page):
+    approvals, _ = page
+    browser = TestClient(create_approver_app(approvals, SECRET, session_ttl_s=0.3), base_url=ORIGIN)
+    captured = _login(browser)
+    replay = TestClient(browser.app, base_url=ORIGIN, cookies={"acs_approver": captured})
+    assert replay.get("/").status_code == 200
+    time.sleep(0.4)
+    assert replay.get("/").status_code == 401

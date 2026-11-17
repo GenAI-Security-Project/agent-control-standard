@@ -17,7 +17,6 @@ bidirectional characters show as \\uXXXX escapes, and the page runs no script.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import hmac
 import html
 import json
@@ -54,6 +53,15 @@ _STOP_POLL_S = 0.2
 # Characters with no visible glyph of their own, or that reorder text, by Unicode category: controls, format
 # characters (bidi overrides, zero-width joiners), private use, surrogates, unassigned, and line or paragraph breaks.
 _HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Cn", "Zl", "Zp"})
+# Unicode's Default_Ignorable_Code_Point ranges (DerivedCoreProperties.txt). Some, such as the Hangul fillers and the
+# variation selectors, are letters or marks by category yet draw nothing, so a category check alone misses them.
+_DEFAULT_IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
+                      (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164),
+                      (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
+                      (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+# How long one sign-in lasts. Long enough to keep the page open through a demo, short enough that a cookie another
+# loopback listener captured soon stops working. Browsers don't separate cookies by port.
+SESSION_TTL_S = 900.0
 _HEADERS = {
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
                                 "frame-ancestors 'none'; base-uri 'none'"),
@@ -187,14 +195,21 @@ class Approvals:
             self._tokens.popitem(last=False)
 
 
+def _hidden(ch: str) -> bool:
+    """True for a character that draws nothing of its own or reorders text: a hidden category, a space other than
+    U+0020, or a default-ignorable code point."""
+    category = unicodedata.category(ch)
+    if category in _HIDDEN_CATEGORIES or (category == "Zs" and ch != " "):
+        return True
+    point = ord(ch)
+    return any(low <= point <= high for low, high in _DEFAULT_IGNORABLE)
+
+
 def visible(text: str) -> str:
     """text with every invisible or reordering character written as a \\uXXXX escape, then HTML-escaped, so a label
     can't hide characters or reverse what the approver reads."""
-    shown = "".join(
-        (f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}")
-        if unicodedata.category(ch) in _HIDDEN_CATEGORIES or (unicodedata.category(ch) == "Zs" and ch != " ")
-        else ch
-        for ch in text)
+    shown = "".join((f"\\u{ord(ch):04x}" if ord(ch) <= 0xFFFF else f"\\U{ord(ch):08x}") if _hidden(ch) else ch
+                    for ch in text)
     return html.escape(shown)
 
 
@@ -252,7 +267,8 @@ def _login_page(message: str = "") -> str:
                      "<button>Open</button></form>", refresh=False)
 
 
-def create_approver_app(approvals: Approvals, secret: str, bind_host: str = "127.0.0.1") -> Starlette:
+def create_approver_app(approvals: Approvals, secret: str, bind_host: str = "127.0.0.1",
+                        session_ttl_s: float = SESSION_TTL_S) -> Starlette:
     """GET / lists the pending calls, POST /answer takes one choice, POST /login trades the secret for a cookie.
 
     Lab convention until issue #175 defines how an approver's answer reaches the Guardian.
@@ -261,8 +277,18 @@ def create_approver_app(approvals: Approvals, secret: str, bind_host: str = "127
     if bind_host.strip().lower() not in _WILDCARDS:
         allowed_hosts.add(_hostname(bind_host))
     bearer = f"Bearer {secret}".encode("utf-8")
-    # The cookie carries a value derived from the secret, never the secret itself, and changes when the secret does.
-    session_value = hmac.new(secret.encode("utf-8"), b"acs-approver-cookie", hashlib.sha256).hexdigest()
+    # One sign-in at a time: a random id, unrelated to the secret, valid until it expires or the next sign-in
+    # replaces it. So a captured cookie dies with its session (C1).
+    session: dict[str, float] = {}
+    session_lock = threading.Lock()
+
+    def live_session(value: str) -> bool:
+        with session_lock:
+            now = time.monotonic()
+            for known, expiry in list(session.items()):
+                if expiry <= now:
+                    del session[known]
+            return any(hmac.compare_digest(value.encode("utf-8"), known.encode("utf-8")) for known in session)
 
     def refuse(status: int, message: str) -> Response:
         return HTMLResponse(_document(f"<p>{html.escape(message)}</p>", refresh=False), status_code=status,
@@ -273,8 +299,7 @@ def create_approver_app(approvals: Approvals, secret: str, bind_host: str = "127
 
     def authenticated(request: Request) -> bool:
         given = request.headers.get("authorization", "").encode("utf-8")
-        cookie = request.cookies.get(COOKIE, "").encode("utf-8")
-        return hmac.compare_digest(given, bearer) or hmac.compare_digest(cookie, session_value.encode())
+        return hmac.compare_digest(given, bearer) or live_session(request.cookies.get(COOKIE, ""))
 
     def same_origin(request: Request) -> bool:
         if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
@@ -312,8 +337,13 @@ def create_approver_app(approvals: Approvals, secret: str, bind_host: str = "127
             return fields
         if not hmac.compare_digest(fields.get("secret", "").encode("utf-8"), secret.encode("utf-8")):
             return HTMLResponse(_login_page("That secret is wrong."), status_code=401, headers=_HEADERS)
+        value = secrets.token_urlsafe(32)
+        with session_lock:
+            session.clear()
+            session[value] = time.monotonic() + session_ttl_s
         response = RedirectResponse("/", status_code=303, headers=_HEADERS)
-        response.set_cookie(COOKIE, session_value, httponly=True, samesite="strict", path="/")
+        response.set_cookie(COOKIE, value, max_age=max(1, int(session_ttl_s)), httponly=True, samesite="strict",
+                            path="/")
         return response
 
     async def answer(request: Request) -> Response:
