@@ -169,6 +169,11 @@ TYPE_ERRORS = [
     {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": 42}}},
     {"tool": {"name": "Bash"}, "arguments": {"command": {"value": 0}}},
     {"tool": {"name": "Bash"}, "arguments": {"command": {"value": False}}},
+    {"tool": {"name": 42}, "arguments": {}},
+    {"tool": {"name": ["Bash"]}, "arguments": {}},
+    {"tool": "Bash", "arguments": {}},
+    {"tool": {"name": "Bash"}, "arguments": ["rm", "-rf", "/"]},
+    {"tool": {"name": "Bash"}, "arguments": "rm -rf /"},
 ]
 
 

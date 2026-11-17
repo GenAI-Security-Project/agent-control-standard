@@ -450,7 +450,7 @@ def evaluate_ping(params: dict, request_id: str) -> dict:
 
 def _argument_type_deny(base: dict, tool_name: str, name: str, value: Any) -> dict:
     return {**base, "decision": "deny",
-            "reasoning": f"{tool_name} argument {name} must be a string, got {type(value).__name__}",
+            "reasoning": f"{tool_name} {name} has the wrong type ({type(value).__name__})",
             "reason_codes": ["argument_type_invalid"]}
 
 
@@ -525,10 +525,16 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
     if method == "steps/toolCallRequest":
         tool = payload.get("tool") or {}
+        wrapped = payload.get("arguments") or {}
+        # The checks below read a string name and an argument object. Any other shape denies before they run,
+        # instead of crashing the request handler.
+        if not isinstance(tool, dict) or not isinstance(tool.get("name", ""), str):
+            return _argument_type_deny(base, "tool", "name", tool.get("name") if isinstance(tool, dict) else tool)
+        if not isinstance(wrapped, dict):
+            return _argument_type_deny(base, str(tool.get("name", "")), "arguments", wrapped)
         # Case-folded, so Claude Code's Bash, Cursor's Shell and NAT's shell meet one policy.
-        tool_name_raw = tool.get("name", "")
-        tool_name = tool_name_raw.lower()
-        args = _unwrap_arguments(payload.get("arguments") or {})
+        tool_name = tool.get("name", "").lower()
+        args = _unwrap_arguments(wrapped)
 
         hard_deny = _hard_deny(base, tool_name, args)
         if hard_deny is not None:
