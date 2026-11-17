@@ -55,6 +55,11 @@ def _backend_problem() -> str | None:
     return None
 
 
+def ml_dsa_available() -> bool:
+    """Whether this process's OpenSSL backend can do ML-DSA-65. Probes once and keeps the answer."""
+    return _backend_problem() is None
+
+
 def _require_backend() -> None:
     problem = _backend_problem()
     if problem is not None:

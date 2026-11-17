@@ -726,6 +726,15 @@ class BackendChecks(unittest.TestCase):
         self.assertIn("ML-DSA-65", proc.stderr)
         self.assertIn("OpenSSL", proc.stderr)
 
+    def test_ml_dsa_available_reports_the_backend_probe(self) -> None:
+        # Review finding CR5-3: hasattr only says the extra is installed. This says ML-DSA works.
+        import acs.core
+        import acs.core._mldsa as module
+        self.assertTrue(acs.core.ml_dsa_available())
+        with mock.patch.object(module, "_backend_problem", return_value="no ML-DSA in this OpenSSL"):
+            self.assertFalse(acs.core.ml_dsa_available())
+            self.assertTrue(hasattr(acs.core, "Keyring"), "the names still resolve on such a backend")
+
     def test_missing_cryptography_names_the_pqc_extra(self) -> None:
         proc = self._run("import sys\nsys.modules['cryptography'] = None\nimport acs.core._mldsa\n")
         self.assertNotEqual(proc.returncode, 0)

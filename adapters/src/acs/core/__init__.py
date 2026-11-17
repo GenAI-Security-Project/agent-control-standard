@@ -37,8 +37,10 @@ _EXPORTS = {
 # ML-DSA-65 needs the pqc extra (issue #574). These names resolve on access but stay out of
 # __all__ and __dir__, so `from acs.core import *` and tab completion never load cryptography.
 # Without the extra, access raises AttributeError, so hasattr() answers False instead of raising.
-# The keyring names live in a standard-library module but share the gate, since no key can be
-# built without the extra.
+# hasattr() says only that the extra is installed. On an OpenSSL without ML-DSA every name still
+# resolves and the first key raises MLDSAUnavailableError, so ml_dsa_available() is the check
+# that the backend works. The keyring names live in a standard-library module but share the
+# gate, since no key can be built without the extra.
 _PQC_EXPORTS = {
     "Keyring": "_keyring",
     "ML_DSA_65": "_keyring",
@@ -49,6 +51,7 @@ _PQC_EXPORTS = {
     "MLDSA65SigningKey": "_mldsa",
     "sign_with_signing_key": "_mldsa",
     "verify_with_keyring": "_mldsa",
+    "ml_dsa_available": "_mldsa",
 }
 
 __all__ = sorted(_EXPORTS)
