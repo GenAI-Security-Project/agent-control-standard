@@ -915,7 +915,9 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         # read wait for EOF, and a missing one gives nothing to bound the read with.
         raw_length = self.headers.get("Content-Length")
         # 1*DIGIT in ASCII only (RFC 9110). int() would also take +10, " 10 ", 1_0, and non-ASCII digits.
-        length = int(raw_length) if raw_length is not None and _CONTENT_LENGTH.fullmatch(raw_length) else -1
+        # More digits than the body cap has is refused before int(), which raises past 4,300 digits.
+        length = (int(raw_length) if raw_length is not None and _CONTENT_LENGTH.fullmatch(raw_length)
+                  and len(raw_length) <= len(str(MAX_REQUEST_BODY_BYTES)) else -1)
         if length < 0:
             self._respond(400, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32600, "message": "Invalid Request: missing or invalid Content-Length"}})

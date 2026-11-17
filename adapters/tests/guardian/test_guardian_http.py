@@ -354,3 +354,9 @@ def test_handle_request_never_raises_for_a_direct_caller(served, envelope):
     if answer["error"]["code"] == -32603:
         assert answer["error"]["message"] == example_guardian.INTERNAL_ERROR_MESSAGE
         assert "signature" not in answer["error"]
+
+
+def test_a_content_length_of_5000_digits_is_refused_without_int(served):
+    head = "POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Type: application/json\r\nContent-Length: " + "9" * 5000
+    status, answer = send_raw(served, head, b'{"jsonrpc": "2.0"}')
+    assert (status, answer["error"]["code"]) == (400, -32600)
