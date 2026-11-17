@@ -2,10 +2,12 @@
   "environment": {
     "machine": "Apple M3 Max (arm64, 16 logical CPUs)",
     "os": "Darwin 25.5.0",
-    "python": "3.13.7",
+    "python": "3.12.2",
     "cryptography": "50.0.2",
     "openssl": "OpenSSL 4.0.3 29 Sep 2026",
-    "commit": "76f09396b6b86c2da1fd58ff51000697245b27cb",
+    "describe": "v0.1.2-188-gc272da5-dirty",
+    "source_sha256": "94f12b2a80c588ec85dea3248ee9b2c730e98b03b28bd577c6f00b58c9593a37",
+    "acs_adapters": "0.2.0",
     "date": "2026-11-17",
     "iterations": 1000,
     "warmup": 100
@@ -16,30 +18,30 @@
       "signature_bytes": 32,
       "public_key_bytes": 32,
       "envelope_bytes": 366,
-      "sign_median_us": 8.583,
-      "sign_p95_us": 9.0,
-      "verify_median_us": 8.625,
-      "verify_p95_us": 9.083
+      "sign_median_us": 9.708,
+      "sign_p95_us": 12.333,
+      "verify_median_us": 9.875,
+      "verify_p95_us": 12.375
     },
     {
       "algorithm": "ML-DSA-65",
       "signature_bytes": 3309,
       "public_key_bytes": 1952,
       "envelope_bytes": 4732,
-      "sign_median_us": 369.333,
-      "sign_p95_us": 1120.666,
-      "verify_median_us": 104.708,
-      "verify_p95_us": 119.791
+      "sign_median_us": 378.083,
+      "sign_p95_us": 1146.334,
+      "verify_median_us": 108.083,
+      "verify_p95_us": 131.583
     },
     {
       "algorithm": "ECDSA-P256",
       "signature_bytes": 64,
       "public_key_bytes": 65,
       "envelope_bytes": 409,
-      "sign_median_us": 24.416,
-      "sign_p95_us": 28.334,
-      "verify_median_us": 59.875,
-      "verify_p95_us": 69.833
+      "sign_median_us": 26.084,
+      "sign_p95_us": 29.875,
+      "verify_median_us": 60.792,
+      "verify_p95_us": 67.667
     }
   ],
   "not_measured": {

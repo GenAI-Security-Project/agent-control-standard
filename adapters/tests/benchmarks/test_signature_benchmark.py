@@ -41,9 +41,12 @@ class SignatureBenchmarkTest(unittest.TestCase):
             self.assertEqual(code, 0)
             data = json.loads((Path(tmp) / "results.json").read_text())
             table = (Path(tmp) / "results.md").read_text()
+            env = (Path(tmp) / "environment.md").read_text()
         self.assertEqual(len(data["rows"]), 3)
         for name in ALGORITHMS:
             self.assertIn(name, table)
+        self.assertIn(data["environment"]["source_sha256"], env)
+        self.assertIn(data["environment"]["cryptography"], env)
 
     def test_ecdsa_envelope_helpers_round_trip_and_reject_tampering(self) -> None:
         from acs.core._ecdsa import ecdsa_p256_generate, ecdsa_p256_public_bytes

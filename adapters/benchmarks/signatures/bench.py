@@ -259,6 +259,21 @@ def to_markdown(result: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+_ENVIRONMENT_LABELS = (
+    ("machine", "Machine"), ("os", "OS"), ("python", "Python"), ("cryptography", "cryptography"),
+    ("openssl", "OpenSSL"), ("acs_adapters", "acs-adapters"),
+    ("source_sha256", "SHA-256 of the acs.core source"), ("describe", "git describe"),
+    ("date", "Date"), ("warmup", "Warm-up calls"), ("iterations", "Timed calls"),
+)
+
+
+def environment_markdown(result: dict) -> str:
+    env = result["environment"]
+    lines = ["| Item | Value |", "|---|---|"]
+    lines += [f"| {label} | {env[key]} |" for key, label in _ENVIRONMENT_LABELS]
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="benchmarks.signatures", description=__doc__.split("\n")[0])
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
@@ -277,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / "results.json").write_text(json.dumps(result, indent=2) + "\n")
     table = to_markdown(result)
     (out_dir / "results.md").write_text(table)
+    (out_dir / "environment.md").write_text(environment_markdown(result))
     print(table)
-    print(f"Wrote results.json and results.md to {out_dir}")
+    print(f"Wrote results.json, results.md and environment.md to {out_dir}")
     return 0

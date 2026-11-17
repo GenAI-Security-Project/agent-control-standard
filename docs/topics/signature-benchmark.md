@@ -1,38 +1,28 @@
 # Signature Benchmark
 
-ML-DSA-65 signatures are about 100 times larger than HMAC-SHA256 tags and take far longer to produce. They still cost well under a millisecond on a laptop. This page gives the numbers and says what they do not tell you.
+ML-DSA-65 signatures are about 100 times larger than HMAC-SHA256 tags, and signing takes about 40 times longer at the median. On a laptop that is still roughly a third of a millisecond at the median and about a millisecond at the 95th percentile. This page gives the numbers and says what they do not tell you.
 
 ## Results
 
 One run on the machine below. Times are microseconds per call.
 
-| Algorithm | Signature (bytes) | Public key (bytes) | Signed envelope (bytes) | Sign median | Sign p95 | Verify median | Verify p95 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| HMAC-SHA256 | 32 | 32 | 366 | 8.6 | 9.0 | 8.6 | 9.1 |
-| ML-DSA-65 | 3,309 | 1,952 | 4,732 | 369.3 | 1,120.7 | 104.7 | 119.8 |
-| ECDSA-P256 | 64 | 65 | 409 | 24.4 | 28.3 | 59.9 | 69.8 |
+--8<-- "adapters/benchmarks/signatures/results/results.md"
 
-The hybrid is missing. The reference library has no hybrid signing on this branch, and the composite ML-DSA work in PR #564 would settle its form. A hybrid would cost roughly the sum of its two parts plus a longer signature, but that is an estimate, not a measurement.
+acs.core has no hybrid signature yet, so the table has no hybrid row. The composite ML-DSA proposal in PR #564 and issue #532 would settle its form. A hybrid would cost roughly the sum of its two parts plus a longer signature, but that is an estimate, not a measurement.
 
 HMAC-SHA256 has no public key. Its "public key" column is the 32 byte shared secret, which both sides must hold.
 
 ## Machine and versions
 
-| Item | Value |
-|---|---|
-| Machine | Apple M3 Max (arm64, 16 logical CPUs) |
-| OS | Darwin 25.5.0 |
-| Python | 3.13.7 |
-| cryptography | 50.0.2 |
-| OpenSSL | OpenSSL 4.0.3 29 Sep 2026 |
-| Commit | 76f09396b6b86c2da1fd58ff51000697245b27cb |
-| Date | 2026-11-17 |
+The commit of a branch does not survive a squash merge, so the content hash below identifies the code that was measured. It covers every `.py` file in `acs.core` at the time of the run.
+
+--8<-- "adapters/benchmarks/signatures/results/environment.md"
 
 ## Method
 
 The benchmark signs a Guardian decision response to a `steps/toolCallRequest` step. The request carries a payment tool call with a few arguments, and the response is an `allow` decision with reason codes. The envelope is canonicalized with RFC 8785 (JCS) on every call, as an adapter does.
 
-Each algorithm runs through the library calls an adapter uses. HMAC-SHA256 uses `sign_with_key` and `verify_with_key`. ML-DSA-65 uses `sign_with_signing_key` and `verify_with_keyring`. ECDSA-P256 is a benchmark primitive that no envelope function signs with, so its timed region adds `signing_input` to match the canonicalization the other two do inside their calls.
+Each algorithm runs through the library calls an adapter uses. HMAC-SHA256 uses `sign_with_key` and `verify_with_key`. ML-DSA-65 uses `sign_with_signing_key` and `verify_with_keyring`. ECDSA-P256 is a benchmark primitive that no envelope function signs with, so the benchmark wraps it in the same envelope work: canonicalize, encode in base64 and attach on sign, then read, decode and check on verify. All three timed regions cover the same steps.
 
 Each run makes 100 warm-up calls and then times 1,000 calls with `time.perf_counter_ns`. The table reports the median and the 95th percentile. A signing call gets a fresh copy of the envelope, made before the clock starts.
 
