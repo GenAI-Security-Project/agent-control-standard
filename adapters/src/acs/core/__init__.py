@@ -7,16 +7,12 @@ _EXPORTS = {
     "ACS_VERSION": "_envelope",
     "DEFAULT_SKEW_WINDOW_MS": "_envelope",
     "Decision": "_decision",
-    "ECDSA_P256": "_keyring",
     "GUARDIAN_ERROR_CAUSE": "_errors",
     "GUARDIAN_REFUSAL_CODES": "_errors",
     "KNOWN_DECISIONS": "_decision",
     "Keyring": "_keyring",
     "MAX_REQUEST_BODY_BYTES": "_envelope",
     "ML_DSA_65": "_keyring",
-    "ML_DSA_CONTEXT": "_mldsa",
-    "ML_DSA_MODE": "_mldsa",
-    "MLDSA65SigningKey": "_mldsa",
     "SESSION_REFUSAL_CODES": "_errors",
     "coerce_uuid": "_envelope",
     "container_key": "_signing",
@@ -35,13 +31,22 @@ _EXPORTS = {
     "schemas_dir": "_schemas",
     "server_hello_problem": "_handshake",
     "sign_with_key": "_signing",
-    "sign_with_signing_key": "_mldsa",
     "signing_input": "_signing",
     "turn_start_envelope": "_envelope",
     "VerificationKey": "_keyring",
     "verify_with_key": "_signing",
-    "verify_with_keyring": "_mldsa",
     "WIRE_ALGORITHMS": "_keyring",
+}
+
+# ML-DSA-65 needs the pqc extra (issue #574). These names resolve on access but stay out of
+# __all__ and __dir__, so `from acs.core import *` and tab completion never load cryptography.
+# Without the extra, access raises AttributeError, so hasattr() answers False instead of raising.
+_PQC_EXPORTS = {
+    "ML_DSA_CONTEXT": "_mldsa",
+    "ML_DSA_MODE": "_mldsa",
+    "MLDSA65SigningKey": "_mldsa",
+    "sign_with_signing_key": "_mldsa",
+    "verify_with_keyring": "_mldsa",
 }
 
 __all__ = sorted(_EXPORTS)
@@ -50,7 +55,13 @@ __all__ = sorted(_EXPORTS)
 def __getattr__(name: str) -> Any:
     module = _EXPORTS.get(name)
     if module is None:
-        raise AttributeError(f"module 'acs.core' has no attribute {name!r}")
+        module = _PQC_EXPORTS.get(name)
+        if module is None:
+            raise AttributeError(f"module 'acs.core' has no attribute {name!r}")
+        try:
+            import_module(f"acs.core.{module}")
+        except ImportError as exc:
+            raise AttributeError(f"acs.core.{name} needs the pqc extra: {exc}") from exc
     value = getattr(import_module(f"acs.core.{module}"), name)
     globals()[name] = value
     return value

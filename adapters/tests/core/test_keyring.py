@@ -4,7 +4,8 @@ from __future__ import annotations
 import hashlib
 import unittest
 
-from acs.core import ECDSA_P256, ML_DSA_65, WIRE_ALGORITHMS, Keyring, VerificationKey
+from acs.core import ML_DSA_65, WIRE_ALGORITHMS, Keyring, VerificationKey
+from acs.core._keyring import ECDSA_P256
 
 PUBLIC = bytes(range(256)) * 7 + bytes(160)  # 1,952 bytes, the FIPS 204 ML-DSA-65 public key size
 
