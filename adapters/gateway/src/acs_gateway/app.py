@@ -446,7 +446,7 @@ class Gateway:
             return False
         # Only string call_ids, so an unhashable one (a list) can't break gating for every other item.
         names = {i["call_id"]: i.get("name") for i in items
-                 if isinstance(i, dict) and i.get("type") == "function_call" and isinstance(i.get("call_id"), str)}
+                 if item_type(i) == "function_call" and isinstance(i.get("call_id"), str)}
         changed, kept = False, []
         for item in items:
             call_id = item.get("call_id") if isinstance(item, dict) else None
