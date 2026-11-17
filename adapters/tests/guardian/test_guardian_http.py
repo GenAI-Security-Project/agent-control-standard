@@ -63,3 +63,10 @@ def test_an_unexpected_error_is_answered_with_an_unsigned_internal_error(served,
     assert body["error"]["code"] == -32603
     assert "anything at all" not in body["error"]["message"]
     assert "signature" not in body["error"] and body["id"] is None
+
+
+def test_an_integer_too_long_to_parse_is_a_parse_error(served):
+    # Python refuses to parse an integer of more than 4,300 digits with a plain ValueError.
+    body = b'{"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": {"x": ' + b"9" * 5000 + b"}}"
+    status, answer = post(served, body)
+    assert (status, answer["error"]["code"]) == (400, -32700)

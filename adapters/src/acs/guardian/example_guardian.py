@@ -853,9 +853,9 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         try:
             request = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
-            # A body that isn't UTF-8, or is nested past the parser's limit, is a parse error too, never a dropped
-            # connection, which a proceed posture would run ungoverned.
+        except (ValueError, RecursionError):
+            # ValueError covers a body that isn't UTF-8 or JSON and an integer too long to parse. RecursionError is a
+            # body nested past the parser's limit. Each is a parse error, never a dropped connection.
             self._respond(400, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32700, "message": "Parse error"}})
             return
