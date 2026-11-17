@@ -191,10 +191,12 @@ def load_response_keys(path: str | os.PathLike, *, key_id: str | None = None,
     """Read the key document at path and pin one key, as parse_key_document does."""
     name = os.fspath(path)
     # The document decides which key verifies every decision, so whoever can rewrite it can forge them. It goes
-    # through the one reader for trusted files: no symlink, no FIFO, a regular file owned by this user or root, in a
-    # directory no group or other can write, with no group or other write on the file (reviews CR2, CR3-3).
+    # through the one reader for trusted files: no symlink, no FIFO, a regular file with no group or other write, in a
+    # directory that isn't world-writable unless sticky. It is public and the Guardian owns it, so a client running
+    # as another user must still read it, and no owner is checked. The fingerprint pin covers an owner swap
+    # (reviews CR2, CR3-3, round 4 CR2).
     data = read_trusted_file(name, setting=KEY_DOCUMENT_ENV, max_bytes=MAX_DOCUMENT_BYTES,
-                             mode_rule=not_writable_by_others, refused=KeyDocumentError)
+                             mode_rule=not_writable_by_others, refused=KeyDocumentError, require_owner=False)
     try:
         document = json.loads(data.decode("utf-8"))
     except (ValueError, RecursionError) as exc:

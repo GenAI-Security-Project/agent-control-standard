@@ -244,6 +244,23 @@ class Pinning(unittest.TestCase):
         with self.assertRaisesRegex(KeyDocumentError, "regular file"):
             load_response_keys(self.dir)
 
+    def test_a_document_another_user_owns_loads(self) -> None:
+        # Review round 4 CR2: the Guardian owns its 0644 document, and the client runs as someone else. The fingerprint
+        # pin, not the owner, is what stops a swapped key.
+        from types import SimpleNamespace
+        from unittest import mock
+        from acs.client import _secrets
+        path = self.write()
+        real_fstat = os.fstat
+
+        def fstat(fd):
+            st = real_fstat(fd)
+            return SimpleNamespace(st_mode=st.st_mode, st_uid=os.geteuid() + 1, st_size=st.st_size)
+
+        with mock.patch.object(_secrets.os, "fstat", side_effect=fstat):
+            keys = load_response_keys(path, fingerprint=self.fingerprint)
+        self.assertEqual(keys.key_id, KEY_ID)
+
     def test_a_fifo_is_refused_without_blocking(self) -> None:
         # Review CR3-2. The reader opens with O_NONBLOCK, so this returns at once instead of waiting for a writer.
         fifo = os.path.join(self.dir, "keys.fifo")
