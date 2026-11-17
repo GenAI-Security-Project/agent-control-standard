@@ -67,7 +67,7 @@ ACS_LAB_MODE=enforce ACS_GUARDIAN_URL=http://127.0.0.1:8787/ \
   ACS_UPSTREAM_URL=https://api.openai.com/v1 uv run acs-gateway
 ```
 
-Then point the client at `http://127.0.0.1:8080/v1`. The client's own `Authorization` header goes upstream unchanged.
+Then point the client at `http://127.0.0.1:8080/v1`. The client's own `Authorization` header goes upstream unchanged, unless `ACS_UPSTREAM_KEY_FILE` names a key file (see [Upstream modes](#upstream-modes)).
 
 Run the tests with `uv run pytest -v`. They start the example Guardian and a fake model upstream on free localhost ports.
 
@@ -82,6 +82,54 @@ Run the tests with `uv run pytest -v`. They start the example Guardian and a fak
 | `enforce` | Every one | Yes | Each decision applied, as below |
 
 Shadow mode isn't decision honoring under specification section 6.4. It shows what enforce would have done.
+
+## Upstream modes
+
+`ACS_UPSTREAM` picks where model answers come from. It is separate from `ACS_LAB_MODE`, so any upstream mode runs under off, shadow or enforce. **Unset means live with no key file**, which forwards exactly as the gateway did before upstream modes existed.
+
+| Mode | What answers | Network | Writes |
+|---|---|---|---|
+| `live` | The model at `ACS_UPSTREAM_URL`. `openai` is accepted as another name for it | Yes | Nothing new |
+| `capture` | The same model, as in live | Yes | One recording line per successful exchange in `<ACS_RECORDINGS_DIR>/<ACS_CAPTURE_SCENARIO>.jsonl` |
+| `replay` | The recordings in `ACS_RECORDINGS_DIR` | None, and no credentials | Nothing new |
+
+`ACS_CAPTURE=1` turns live into capture, the spelling the lab bundle uses. Each mode sits under the gateway's one upstream client, so gating, the transcript and the audit log work the same whichever mode answered.
+
+**The model key.** In live and capture, `ACS_UPSTREAM_KEY_FILE` names a file holding the real model key. The gateway replaces the client's `Authorization` header with `Bearer <key>` on the upstream request only, so the client (FinBot sends `lab-dummy`) never holds the key. The file must be a regular file, not a symlink, mode 0600 or 0400, owned by the gateway's uid, one key on one line, and outside any git work tree. The key never reaches a recording, the model input log, an audit line or an error message. Replay refuses a key file.
+
+**Recordings.** Each line is one JSON object (A.8):
+
+```json
+{"scenario": "s1", "match": "Pay\\ vendor\\ 7", "step": 1, "branch": "a", "stream": false, "response": {"id": "resp_...", "output": ["..."]}}
+```
+
+| Field | Meaning |
+|---|---|
+| `scenario` | The capture's scenario name |
+| `match` | A regular expression the request's first user message, with placeholders, must match in full. Capture writes the escaped message, and a curator may loosen it by hand |
+| `step` | How many `function_call_output` items the request held. A retry, from FinBot's SDK or its agent runner, lands on the same step |
+| `branch` | One token per `function_call_output`, comma separated: `d` when the output is the neutral line, `m` when it holds `[REDACTED]`, `a` otherwise |
+| `stream` | Whether the request asked for a stream |
+| `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
+
+Replay serves the first line, in file name and line order, that fits all of `match`, `step`, `branch` and `stream`. A byte-identical request gets the bytes it got before, from a cache of the last 1,024 requests keyed on the request's SHA-256.
+
+**Placeholders.** FinBot mints a namespace and ids for every visitor, so a recording made in one FinBot would point the replayed model at another FinBot's addresses. Capture swaps each value below for `{{acs:<kind>:<n>}}`, where `n` counts distinct values of that kind in the order they appear in the request, the system text first. Replay fills each placeholder from the live request, so a recording replays into a fresh FinBot with a different namespace.
+
+| Kind | FinBot value at 1450fc4 |
+|---|---|
+| `ns` | The namespace, `ns_user_` and 16 characters, as in `admin@<namespace>.finbot` |
+| `user` | The user id, `user_` and 16 characters |
+| `wf` | Workflow ids, `wf_`, `wf_chat_` or `wf_review_` and 16 characters |
+| `tr` | Transfer ids, `tr_` and 24 hex digits |
+| `uuid` | A UUID |
+| `time` | An ISO 8601 date and time, such as the current time in each agent's system prompt |
+
+A value the request never held, one the model made up, stays as the model wrote it.
+
+**A miss.** When no line fits, or a line holds a placeholder the live request can't fill, replay never guesses. It answers with a fixed response, `resp_replay_miss`, holding one assistant message, `msg_replay_miss`, that carries the neutral line (as server-sent events when the request asked for a stream), and audits `replay_miss`.
+
+Capture waits for a whole streamed answer before passing it on, since the line needs all of it. Capture records the body the gateway forwarded, after gating, so the key it writes is the key replay computes for the same run. A failed write is audited as `capture_failed` and the client still gets its answer.
 
 ## How enforce applies a decision
 
@@ -186,6 +234,9 @@ Each request line is written before the request is sent, so the file holds the c
 | `sessions_full` | Every session was busy, so a new conversation got 503 |
 | `session_evicted` | The session cap evicted the least recently used session |
 | `epoch_bumped` | The epoch moved |
+| `replay_miss` | Replay answered with the miss response. `cause` is `no_recording`, `placeholder_unfilled` or `unreadable_request`, with `step`, `branch` and `stream`, and `scenario` when a line matched but couldn't be filled |
+| `capture_skipped` | Capture wrote no line for a successful exchange it couldn't read. `cause` is `unreadable_request` or `unreadable_response` |
+| `capture_failed` | Capture couldn't write its line (`cause` `write_error`). The client still got its answer |
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.
 
@@ -195,6 +246,11 @@ Each request line is written before the request is sent, so the file holds the c
 |---|---|---|
 | `ACS_LAB_MODE` | `off` | `off`, `shadow` or `enforce` |
 | `ACS_UPSTREAM_URL` | `https://api.openai.com/v1` | Model base URL. The gateway posts to `<base>/responses` |
+| `ACS_UPSTREAM` | `live` | `live` (or `openai`), `capture` or `replay` |
+| `ACS_CAPTURE` | `0` | `1` turns live into capture. Refused with replay |
+| `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only |
+| `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
+| `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64 |
 | `ACS_GUARDIAN_URL` | `http://127.0.0.1:8787/` | Guardian endpoint |
 | `ACS_HMAC_SECRET_FILE` or `ACS_HMAC_SECRET` | None | Request signing secret, at least 32 bytes. The file must be 0600 or 0400 |
 | `ACS_HMAC_KEY_ID` | None | The label that names the secret |
@@ -247,8 +303,10 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The request field, input item and output item allowlists. FinBot sends only fields and items on them | Issue #577 |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
 | `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
+| Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, the branch tokens read from the request, and the miss response | Issue #579 |
+| Replay runs inside the gateway, so no lab header goes to a separate replay server | Issue #579 |
 
-Replay and capture (LAB-06, issue #579) and spans (LAB-09, issue #582) build on this gateway as separate modules.
+Spans (LAB-09, issue #582) build on this gateway as a separate module.
 
 ## Issues this README names
 
