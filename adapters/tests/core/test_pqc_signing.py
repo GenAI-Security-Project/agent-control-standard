@@ -584,8 +584,11 @@ class EcdsaP256BenchmarkPrimitive(unittest.TestCase):
             self.assertTrue(ecdsa_p256_verify(public, b"envelope bytes", signature))
 
     def test_not_exported_as_a_wire_algorithm(self) -> None:
+        # Review finding CR3-8: no exclusion by name, so ECDSA_P256 itself entering any export fails.
         import acs.core
-        self.assertFalse({n for n in acs.core.__all__ if "ecdsa" in n.lower() and n != "ECDSA_P256"})
+        exported = set(acs.core.__all__) | set(acs.core._EXPORTS) | set(acs.core._PQC_EXPORTS)
+        self.assertEqual({n for n in exported if "ecdsa" in n.lower()}, set())
+        self.assertFalse(hasattr(acs.core, "ECDSA_P256"))
 
 
 class BackendChecks(unittest.TestCase):
