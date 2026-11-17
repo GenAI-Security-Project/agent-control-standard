@@ -3,10 +3,12 @@ request's way."""
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
 import uuid
+from typing import Any
 
 import pytest
 
@@ -76,3 +78,57 @@ def test_a_session_trace_id_is_its_session_id():
     assert session_trace_id(session_id) == uuid.UUID(session_id).int
     assert session_root_span_id(session_id) == session_root_span_id(session_id) != 0
     assert session_root_span_id(session_id) != session_root_span_id(str(uuid.uuid4()))
+
+
+def test_a_failing_exporter_never_touches_a_request_and_logs_once(gateway, upstream, caplog, monkeypatch):
+    from conftest import finbot_request, message_item, response_body
+
+    # Nothing listens on port 9, so every export fails. A short timeout keeps the flush quick.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
+    client = gateway(OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:9")
+    tracing = client.app.state.gateway.tracing
+    assert tracing.enabled
+    try:
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(2):
+                for _ in range(3):
+                    response = client.post("/v1/responses", json=finbot_request())
+                    assert response.status_code == 200
+                    assert response.json() == response_body(message_item("ok"))
+                assert tracing.provider.force_flush(10_000)
+    finally:
+        tracing.shutdown()
+    failing = [r for r in caplog.records if r.name == "acs_gateway.telemetry"]
+    assert [r.getMessage() for r in failing] == [
+        "acs-gateway: span export to http://127.0.0.1:9/v1/traces is failing, so spans are dropped until it recovers"]
+    assert not [r for r in caplog.records if r.name.startswith("opentelemetry") and r.levelno >= logging.WARNING]
+
+
+def test_export_failures_log_once_per_window_and_never_raise(caplog):
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    from acs_gateway.telemetry import quiet_exporter
+
+    results: list[Any] = [SpanExportResult.FAILURE, RuntimeError("boom"), SpanExportResult.SUCCESS,
+                          RuntimeError("boom"), SpanExportResult.FAILURE]
+
+    class Flaky:
+        def export(self, spans):
+            result = results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        def shutdown(self):
+            return None
+
+        def force_flush(self, timeout_millis=30000):
+            return True
+
+    exporter = quiet_exporter(Flaky(), "http://jaeger:4318/v1/traces")
+    with caplog.at_level(logging.DEBUG, logger="acs_gateway.telemetry"):
+        outcomes = [exporter.export([]) for _ in range(5)]
+    assert outcomes == [SpanExportResult.FAILURE, SpanExportResult.FAILURE, SpanExportResult.SUCCESS,
+                        SpanExportResult.FAILURE, SpanExportResult.FAILURE]
+    assert len([r for r in caplog.records if r.name == "acs_gateway.telemetry"]) == 2
+    assert "boom" not in caplog.text

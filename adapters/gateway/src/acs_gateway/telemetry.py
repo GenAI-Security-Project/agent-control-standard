@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import threading
 import time
 import uuid
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 
     from acs_gateway.config import GatewayConfig
 
+_LOG = logging.getLogger("acs_gateway.telemetry")
 SERVICE_NAME = "acs-gateway"
 TRACES_PATH = "/v1/traces"
 # Names from specification/v0.1.0/trace/otel-mapping.json on integration, verbatim. PR #557 would rename the tool spans
@@ -306,13 +308,60 @@ def new_provider() -> TracerProvider:
 
 
 def build_provider(endpoint: str) -> TracerProvider:
-    """A provider that batches spans to endpoint's /v1/traces. Imported here, so off never loads the SDK."""
+    """A provider that batches spans to endpoint's /v1/traces. Imported here, so off never loads the SDK.
+
+    The batch processor only queues a span on the request's path. Exports run on its own thread, so a slow or absent
+    Jaeger never delays a request, and a full queue drops spans rather than waiting.
+    """
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+    # The exporter logs every failed batch. quiet_exporter logs once per failure window instead.
+    logging.getLogger("opentelemetry.exporter.otlp.proto.http").setLevel(logging.CRITICAL + 1)
+    url = traces_url(endpoint)
     provider = new_provider()
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_url(endpoint))))
+    provider.add_span_processor(BatchSpanProcessor(quiet_exporter(OTLPSpanExporter(endpoint=url), url)))
     return provider
+
+
+def quiet_exporter(inner: Any, url: str) -> Any:
+    """Wrap a span exporter so a failure, raised or returned, is one log line per failure window and never raises.
+
+    A window opens on the first failure after a success, or at startup, and closes on the next success. The error
+    text stays out of the log, since an exporter's message can quote a response body.
+    """
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
+    class QuietExporter(SpanExporter):
+        def __init__(self) -> None:
+            self._failing = False
+
+        def export(self, spans: Any) -> SpanExportResult:
+            try:
+                result = inner.export(spans)
+            except Exception:  # noqa: BLE001
+                result = SpanExportResult.FAILURE
+            if result is SpanExportResult.SUCCESS:
+                self._failing = False
+                return result
+            if not self._failing:
+                self._failing = True
+                _LOG.warning("acs-gateway: span export to %s is failing, so spans are dropped until it recovers", url)
+            return SpanExportResult.FAILURE
+
+        def shutdown(self) -> None:
+            try:
+                inner.shutdown()
+            except Exception:  # noqa: BLE001
+                return
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            try:
+                return bool(inner.force_flush(timeout_millis))
+            except Exception:  # noqa: BLE001
+                return False
+
+    return QuietExporter()
 
 
 def _session_ids() -> Any:
