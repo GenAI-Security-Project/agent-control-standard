@@ -24,11 +24,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from acs.client import KeyDocumentError, ResponseKeys, load_response_keys, read_secret_file
+from acs.client._key_document import KEY_DOCUMENT_ENV, KEY_ID_ENV, SIGNING_KEY_FILE_ENV
 from acs.core import MLDSA65SigningKey
 
-SIGNING_KEY_FILE_ENV = "ACS_GUARDIAN_SIGNING_KEY_FILE"
-KEY_ID_ENV = "ACS_GUARDIAN_KEY_ID"
-KEY_DOCUMENT_ENV = "ACS_GUARDIAN_KEYS"
 DEFAULT_VALIDITY_DAYS = 90
 # Ten years. A lab key lives 90 days, and the cap keeps not_after far inside what datetime can represent.
 MAX_VALIDITY_DAYS = 3650

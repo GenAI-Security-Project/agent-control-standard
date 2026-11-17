@@ -26,8 +26,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+# The one home for the decision signing names (review CR9). The Guardian's modules import them from here, which
+# loads no cryptography.
 KEY_DOCUMENT_FORMAT = "acs-lab-keys/1"
+# The client's setting: which algorithm it requires on Guardian responses.
 RESPONSE_ALGORITHMS_ENV = "ACS_RESPONSE_ALGORITHMS"
+# The Guardian's setting: which algorithm it signs responses with.
+RESPONSE_SIGNING_ENV = "ACS_RESPONSE_SIGNING"
+# The Guardian's seed file. Only the Guardian reads it.
+SIGNING_KEY_FILE_ENV = "ACS_GUARDIAN_SIGNING_KEY_FILE"
 KEY_DOCUMENT_ENV = "ACS_GUARDIAN_KEYS"
 KEY_ID_ENV = "ACS_GUARDIAN_KEY_ID"
 # Optional. When set, the pinned key's fingerprint must equal it, so a rewritten document can't swap the key.
@@ -35,8 +42,8 @@ KEY_FINGERPRINT_ENV = "ACS_GUARDIAN_KEY_FINGERPRINT"
 # A key document holds a handful of keys, so anything past this is not one.
 MAX_DOCUMENT_BYTES = 1 << 20
 ML_DSA_65 = "ML-DSA-65"
-# Unset, blank, and the HMAC name all mean today's path: responses verified under the HMAC secret.
-_OFF_VALUES = frozenset({"", "HMAC-SHA256"})
+# Unset, blank, and the HMAC name all mean today's path on both sides: responses signed and verified with HMAC.
+RESPONSE_SIGNING_OFF_VALUES = frozenset({"", "HMAC-SHA256"})
 
 
 class KeyDocumentError(ValueError):
@@ -227,7 +234,7 @@ def response_keys_from_env(env: Mapping[str, str]) -> ResponseKeys | None:
     Config.from_env never reads these settings, so the three adapters are unchanged.
     """
     name = env.get(RESPONSE_ALGORITHMS_ENV, "").strip()
-    if name in _OFF_VALUES:
+    if name in RESPONSE_SIGNING_OFF_VALUES:
         return None
     if name != ML_DSA_65:
         raise ValueError(f"{RESPONSE_ALGORITHMS_ENV} must be unset, HMAC-SHA256, or {ML_DSA_65}, got {name!r}. "
