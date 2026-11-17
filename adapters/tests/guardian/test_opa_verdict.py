@@ -341,3 +341,21 @@ def test_a_modify_touches_only_arguments_on_a_call_and_outputs_on_a_result(metho
                "modifications": {"redactions": [{"path": path, "replacement": "Bash"}]}}
     problem = opa_backend.verdict_problem(verdict, method, payload, BASE)
     assert problem
+
+
+
+def _deep_paths(count: int, depth: int) -> list[str]:
+    stem = "/outputs/0/value" + "/a" * (depth - 4)
+    return [f"{stem}/k{i}" for i in range(count)]
+
+
+def test_the_overlap_check_is_linear_in_path_depth():
+    paths = _deep_paths(2000, 900)
+    started = time.monotonic()
+    assert opa_backend._overlap_problem(paths) is None
+    assert time.monotonic() - started < 0.2
+
+
+@pytest.mark.parametrize("extra", ["/outputs/0/value/a", "/outputs/0/value" + "/a" * 896 + "/k7"])
+def test_the_overlap_check_still_finds_a_deep_prefix_or_duplicate(extra):
+    assert opa_backend._overlap_problem(_deep_paths(2000, 900) + [extra])

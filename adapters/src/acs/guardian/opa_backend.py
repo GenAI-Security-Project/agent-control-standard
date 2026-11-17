@@ -388,18 +388,17 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
 
 
 def _overlap_problem(paths: list[str]) -> str | None:
-    """Section 6.3 wants disjoint targets, so no redaction path repeats or sits inside another. Linear in path length."""
-    seen: set[str] = set()
-    for path in paths:
-        if path in seen:
+    """Section 6.3 wants disjoint targets, so no redaction path repeats or sits inside another.
+
+    Paths sort as token tuples, where every path that starts with P follows P directly, so comparing each path
+    with the next finds every repeat and every nesting. The cost is the sort plus one pass over the tokens.
+    """
+    ordered = sorted((tuple(path.split("/")), path) for path in paths)
+    for (tokens, path), (next_tokens, next_path) in zip(ordered, ordered[1:]):
+        if tokens == next_tokens:
             return f"redaction path {path!r} appears more than once"
-        seen.add(path)
-    for path in paths:
-        tokens = path.split("/")
-        for end in range(2, len(tokens)):
-            prefix = "/".join(tokens[:end])
-            if prefix in seen:
-                return f"redaction path {path!r} sits inside redaction path {prefix!r}"
+        if next_tokens[:len(tokens)] == tokens:
+            return f"redaction path {next_path!r} sits inside redaction path {path!r}"
     return None
 
 
