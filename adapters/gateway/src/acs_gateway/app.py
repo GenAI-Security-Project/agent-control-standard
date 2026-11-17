@@ -51,6 +51,8 @@ _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "pro
 # Governed modes edit bodies, so they ask only for encodings httpx decodes and relay the decoded body.
 _GOVERNED_ACCEPT_ENCODING = "gzip, deflate"
 _STEP_GRACE_S = 1.0
+# What makes a function_call the call it is. A client rebuilding history may drop id and status, so those don't count.
+_CALL_FIELDS = ("type", "name", "call_id", "arguments")
 
 
 def _audit(event: str, **fields: Any) -> None:
@@ -330,13 +332,19 @@ class Gateway:
             if not isinstance(call_id, str):
                 kept.append(item)
                 continue
-            if item.get("type") == "function_call" and call_id in session.calls and self.enforce:
+            if item.get("type") == "function_call" and call_id in session.calls:
                 cached = session.calls[call_id]
                 if cached.item is None:
-                    changed = True
-                    continue
-                if item.get("arguments") != cached.item.get("arguments"):
-                    item, changed = {**item, "arguments": cached.item.get("arguments")}, True
+                    # Never delivered, so only a forged history carries it.
+                    if self.enforce:
+                        changed = True
+                        continue
+                elif any(item.get(f) != cached.item.get(f) for f in _CALL_FIELDS):
+                    self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
+                    if self.enforce:
+                        # The whole call goes back as delivered, so the model never sees a renamed or edited call.
+                        item = {**item, **{f: cached.item.get(f) for f in _CALL_FIELDS}}
+                        changed = True
             elif item.get("type") == "function_call_output":
                 cached = session.results.get(call_id)
                 if cached is not None and cached.fingerprint != fingerprint(item):
