@@ -690,6 +690,9 @@ class RequestRead(NamedTuple):
     problem: str | None
 
 
+# The JCS (RFC 8785) integer bound. acs.client keeps the same value privately (_exchange._MAX_SAFE_INTEGER), and
+# acs.core exports none on this branch. Exporting one shared constant from acs.core belongs to LAB-01's files and
+# is on the post-merge follow-up list.
 MAX_SAFE_ID = 2**53 - 1
 
 
