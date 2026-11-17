@@ -176,3 +176,21 @@ def test_main_refuses_bad_arguments_without_writing(tmp_path, capsys, args):
     assert decision_keys.main(["--out-dir", str(tmp_path), "--key-id", KEY_ID, *args]) == 1
     assert list(tmp_path.iterdir()) == []
     assert "decision_keys:" in capsys.readouterr().err
+
+
+def test_a_fifo_at_the_key_path_is_refused_without_blocking(tmp_path):
+    # Review CR3-2: the seed goes through the one reader, which opens with O_NONBLOCK.
+    fifo = tmp_path / "guardian.key"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(DecisionKeyError, match="regular file"):
+        load_signing_key(str(fifo), KEY_ID)
+
+
+def test_a_key_in_a_directory_others_can_write_is_refused(files):
+    key_path, _ = files
+    os.chmod(key_path.parent, 0o770)
+    try:
+        with pytest.raises(DecisionKeyError, match="writable by group or other"):
+            load_signing_key(str(key_path), KEY_ID)
+    finally:
+        os.chmod(key_path.parent, 0o700)

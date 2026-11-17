@@ -244,6 +244,23 @@ class Pinning(unittest.TestCase):
         with self.assertRaisesRegex(KeyDocumentError, "regular file"):
             load_response_keys(self.dir)
 
+    def test_a_fifo_is_refused_without_blocking(self) -> None:
+        # Review CR3-2. The reader opens with O_NONBLOCK, so this returns at once instead of waiting for a writer.
+        fifo = os.path.join(self.dir, "keys.fifo")
+        os.mkfifo(fifo, 0o644)
+        with self.assertRaisesRegex(KeyDocumentError, "regular file"):
+            load_response_keys(fifo)
+
+    def test_a_directory_others_can_write_is_refused(self) -> None:
+        # Review CR3-3: whoever can write the directory can swap the document.
+        path = self.write()
+        os.chmod(self.dir, 0o777)
+        try:
+            with self.assertRaisesRegex(KeyDocumentError, "writable by group or other"):
+                load_response_keys(path)
+        finally:
+            os.chmod(self.dir, 0o700)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import sys
+from collections.abc import Callable
 
 from acs.client._audit import audit_event
 
@@ -32,98 +34,124 @@ _IS_WINDOWS = os.name == "nt"
 _ALLOW_UNCHECKED_ENV = "ACS_ALLOW_UNCHECKED_KEY_PERMS"
 
 
-def _check_secret_file_perms(path: str) -> None:
-    # A symlink is refused: its target can change behind the visible path.
-    if os.path.islink(path):
-        raise SecretFilePermissionsError(
-            f"ACS_HMAC_SECRET_FILE {path!r} is a symlink; refusing to follow")
-    st = os.stat(path)
-    _refuse_loose_secret(path, st.st_mode, st.st_uid, "ACS_HMAC_SECRET_FILE")
+# A mode rule takes (setting, path, mode) and returns why the file can't be trusted, or None.
+ModeRule = Callable[[str, str, int], "str | None"]
 
 
-def _refuse_loose_secret(path: str, st_mode: int, st_uid: int, setting: str) -> None:
-    """The owner-only rule for a secret file, given its mode and owner, with setting naming it in every message."""
-    mode = stat.S_IMODE(st_mode)
-    if _IS_WINDOWS:
-        # Refuse by default: an unchecked secret is an unknown quantity, not a permitted one.
-        # Starting anyway takes an explicit opt-in and says so on stderr, which is where the
-        # Guardian's operator looks.
-        if os.environ.get(_ALLOW_UNCHECKED_ENV) != "1":
-            raise SecretFilePermissionsError(
-                f"{setting} {path!r}: Windows has no owner/group/other mode bits "
-                f"(stat reports {oct(mode)} for every file), so the 0600 check cannot run. "
-                f"Restrict the file first:  cmd.exe:  icacls \"{path}\" /inheritance:r "
-                f"/grant:r \"%USERNAME%:R\"   PowerShell:  icacls \"{path}\" /inheritance:r "
-                f"/grant:r \"${{env:USERNAME}}:R\"   then set {_ALLOW_UNCHECKED_ENV}=1 to confirm that "
-                f"this check is skipped on Windows.")
-        print(
-            f"[acs] WARNING: {_ALLOW_UNCHECKED_ENV}=1 — {path} was not checked for group/other "
-            f"access; verify its ACL yourself",
-            file=sys.stderr,
-        )
-    elif mode & 0o077:
-        raise SecretFilePermissionsError(
-            f"{setting} {path!r} mode {oct(mode)} is too permissive; "
-            f"must be 0600 or 0400 (no group/other access). "
-            f"Fix: chmod 600 {path}")
-    if hasattr(os, "geteuid") and st_uid != os.geteuid():
-        raise SecretFilePermissionsError(
-            f"{setting} {path!r} owned by uid {st_uid}, "
-            f"adapter is running as uid {os.geteuid()}; refusing")
+def owner_only(setting: str, path: str, mode: int) -> str | None:
+    """The rule for a secret: no group or other access at all, 0600 or 0400.
 
-
-def read_secret_file(path: str, *, setting: str, max_bytes: int) -> bytes:
-    """An owner-only secret file's bytes, checked through the descriptor that reads them (issue #576, review R-M2).
-
-    The file is opened without following a symlink, and fstat on that descriptor decides, so nothing can swap the
-    file between the check and the read. The rules are the ones ACS_HMAC_SECRET_FILE meets, named by setting.
-    Raises SecretFilePermissionsError for a symlink, a non-regular file, loose permissions, another owner, or more
-    than max_bytes, and OSError when the file can't be opened.
+    Windows reports 0o666 for every file, so the rule can't run there. It refuses unless the operator sets
+    ACS_ALLOW_UNCHECKED_KEY_PERMS=1, and then it says on stderr that the file went unchecked.
     """
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    symlink = SecretFilePermissionsError(f"{setting} {path!r} is a symlink; refusing to follow")
-    if not nofollow and os.path.islink(path):
-        raise symlink
+    if _IS_WINDOWS:
+        if os.environ.get(_ALLOW_UNCHECKED_ENV) != "1":
+            return (f"{setting} {path!r}: Windows has no owner/group/other mode bits "
+                    f"(stat reports {oct(mode)} for every file), so the 0600 check cannot run. "
+                    f"Restrict the file first:  cmd.exe:  icacls \"{path}\" /inheritance:r "
+                    f"/grant:r \"%USERNAME%:R\"   PowerShell:  icacls \"{path}\" /inheritance:r "
+                    f"/grant:r \"${{env:USERNAME}}:R\"   then set {_ALLOW_UNCHECKED_ENV}=1 to confirm that "
+                    f"this check is skipped on Windows.")
+        print(f"[acs] WARNING: {_ALLOW_UNCHECKED_ENV}=1, so {path} was not checked for group/other "
+              f"access. Verify its ACL yourself.", file=sys.stderr)
+        return None
+    if mode & 0o077:
+        return (f"{setting} {path!r} mode {oct(mode)} is too permissive. It must be 0600 or 0400, "
+                f"with no group or other access. Fix: chmod 600 {path}")
+    return None
+
+
+def not_writable_by_others(setting: str, path: str, mode: int) -> str | None:
+    """The rule for a public but trusted file, such as a key document: anyone may read it, only its owner may write.
+
+    Windows has no group or other bits, so nothing is checked there.
+    """
+    if not _IS_WINDOWS and mode & 0o022:
+        return f"{setting} {path!r} mode {oct(mode)} is writable by group or other. Fix: chmod 644 {path}"
+    return None
+
+
+def _directory_problem(setting: str, path: str) -> str | None:
+    # Whoever can write the directory can replace the file. A sticky directory such as /tmp lets nobody but the
+    # owner rename or remove it, so it is allowed.
+    directory = os.path.dirname(os.path.abspath(path))
+    mode = os.stat(directory).st_mode
+    if mode & 0o022 and not mode & stat.S_ISVTX:
+        return (f"{setting} {path!r} sits in directory {directory!r}, which is writable by group or other "
+                f"(mode {oct(stat.S_IMODE(mode))}). Move the file or chmod go-w {directory}")
+    return None
+
+
+def read_trusted_file(path: str, *, setting: str, max_bytes: int, mode_rule: ModeRule,
+                      refused: type[Exception], unreadable: type[Exception] | None = None) -> bytes:
+    """The bytes of a secret or trusted file, read once and checked through the descriptor that reads them.
+
+    The one reader for the HMAC secret, the Guardian's ML-DSA-65 seed, and the key document (issue #576). It opens
+    with O_NOFOLLOW so a symlink is refused, O_NONBLOCK so a FIFO can't hang it, and O_BINARY where defined, and it
+    never checks a path and then opens it again. On the open descriptor it requires a regular file, an owner that
+    is this user or root, a directory no group or other can write unless it is sticky, and the caller's mode rule.
+    It reads at most max_bytes. A problem with the file raises refused, and any OSError raises unreadable, which
+    defaults to refused, each with a message that names setting.
+    """
+    unreadable = unreadable or refused
+    if not hasattr(os, "O_NOFOLLOW") and os.path.islink(path):
+        raise refused(f"{setting} {path!r} is a symlink. Refusing to follow it")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow)
-    except OSError:
-        if os.path.islink(path):
-            raise symlink from None
-        raise
+        fd = os.open(path, flags)
+    except OSError as e:
+        if e.errno == errno.ELOOP or os.path.islink(path):
+            raise refused(f"{setting} {path!r} is a symlink. Refusing to follow it") from None
+        raise unreadable(f"{setting} {path!r} is configured but cannot be read ({e})") from e
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            raise SecretFilePermissionsError(f"{setting} {path!r} is not a regular file")
-        _refuse_loose_secret(path, st.st_mode, st.st_uid, setting)
-        with os.fdopen(fd, "rb", closefd=False) as f:
-            data = f.read(max_bytes + 1)
+            raise refused(f"{setting} {path!r} is not a regular file")
+        if hasattr(os, "geteuid") and st.st_uid not in (os.geteuid(), 0):
+            raise refused(f"{setting} {path!r} is owned by uid {st.st_uid}, but this process runs as uid "
+                          f"{os.geteuid()}. Refusing it")
+        problem = (_directory_problem(setting, path) if not _IS_WINDOWS else None) \
+            or mode_rule(setting, path, stat.S_IMODE(st.st_mode))
+        if problem:
+            raise refused(problem)
+        chunks, remaining = [], max_bytes + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError as e:
+        raise unreadable(f"{setting} {path!r} is configured but cannot be read ({e})") from e
     finally:
         os.close(fd)
+    data = b"".join(chunks)
     if len(data) > max_bytes:
-        raise SecretFilePermissionsError(f"{setting} {path!r} is larger than {max_bytes} bytes")
+        raise refused(f"{setting} {path!r} is larger than {max_bytes} bytes")
     return data
 
 
+# Far more than any secret needs, and small enough that a wrong path can't fill memory.
+MAX_SECRET_FILE_BYTES = 64 * 1024
+
+
 def load_hmac_secret() -> bytes:
-    """The input keying material from ACS_HMAC_SECRET_FILE (owner-only, no symlink) or ACS_HMAC_SECRET; b"" when neither is set."""
+    """The input keying material from ACS_HMAC_SECRET_FILE (owner-only, no symlink) or ACS_HMAC_SECRET. b"" when neither is set."""
     path = os.environ.get("ACS_HMAC_SECRET_FILE", "").strip()
     if path:
         try:
-            _check_secret_file_perms(path)
-            with open(path, "rb") as f:
-                secret = f.read().rstrip(b"\r\n\t ")
+            raw = read_trusted_file(path, setting="ACS_HMAC_SECRET_FILE", max_bytes=MAX_SECRET_FILE_BYTES,
+                                    mode_rule=owner_only, refused=SecretFilePermissionsError,
+                                    unreadable=SecretFileUnreadableError)
+            secret = raw.rstrip(b"\r\n\t ")
             if not secret:
-                raise OSError(f"{path} is empty")
+                raise SecretFileUnreadableError(f"ACS_HMAC_SECRET_FILE {path!r} is configured but cannot be read "
+                                                "(it is empty)")
             return secret
-        except SecretFilePermissionsError:
-            raise
-        except OSError as e:
+        except SecretFileUnreadableError as e:
             # Configured-but-unreadable is an incident, not a missing secret.
             audit_event("hmac_secret_file_unreadable", path=path, error=str(e))
-            raise SecretFileUnreadableError(
-                f"ACS_HMAC_SECRET_FILE {path!r} is configured but cannot "
-                f"be read ({e})"
-            ) from e
+            raise
     env_val = os.environ.get("ACS_HMAC_SECRET", "")
     return env_val.encode("utf-8") if env_val else b""
 

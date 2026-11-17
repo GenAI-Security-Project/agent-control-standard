@@ -21,10 +21,11 @@ import binascii
 import datetime
 import json
 import os
-import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+from acs.client._secrets import not_writable_by_others, read_trusted_file
 
 # The one home for the decision signing names (review CR9). The Guardian's modules import them from here, which
 # loads no cryptography.
@@ -180,44 +181,15 @@ def parse_key_document(document: object, *, key_id: str | None, now: datetime.da
                         not_before=not_before, not_after=not_after, revoked_at=revoked_at)
 
 
-def _read_document(path: str) -> bytes:
-    """The document's bytes, read only from a regular file that is no symlink and that no group or other can write.
-
-    The document decides which key verifies every decision, so whoever can rewrite it can forge them. The file is
-    opened without following a symlink and checked through the open descriptor, so it can't change between the
-    check and the read (review CR2). Windows has no group and other bits, so only the symlink and regular-file
-    checks run there.
-    """
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    if not nofollow and os.path.islink(path):
-        raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {path!r} is a symlink, refusing to follow")
-    try:
-        fd = os.open(path, os.O_RDONLY | nofollow)
-    except OSError as exc:
-        if os.path.islink(path):
-            raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {path!r} is a symlink, refusing to follow") from exc
-        raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {path!r} can't be opened: {exc}") from exc
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {path!r} is not a regular file")
-        if os.name != "nt" and info.st_mode & 0o022:
-            raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {path!r} mode {oct(stat.S_IMODE(info.st_mode))} is writable "
-                                   f"by group or other. Fix: chmod 644 {path}")
-        with os.fdopen(fd, "rb", closefd=False) as f:
-            data = f.read(MAX_DOCUMENT_BYTES + 1)
-    finally:
-        os.close(fd)
-    if len(data) > MAX_DOCUMENT_BYTES:
-        raise KeyDocumentError(f"{KEY_DOCUMENT_ENV} {path!r} is larger than {MAX_DOCUMENT_BYTES} bytes")
-    return data
-
-
 def load_response_keys(path: str | os.PathLike, *, key_id: str | None = None,
                        now: datetime.datetime | None = None, fingerprint: str | None = None) -> ResponseKeys:
     """Read the key document at path and pin one key, as parse_key_document does."""
     name = os.fspath(path)
-    data = _read_document(name)
+    # The document decides which key verifies every decision, so whoever can rewrite it can forge them. It goes
+    # through the one reader for trusted files: no symlink, no FIFO, a regular file owned by this user or root, in a
+    # directory no group or other can write, with no group or other write on the file (reviews CR2, CR3-3).
+    data = read_trusted_file(name, setting=KEY_DOCUMENT_ENV, max_bytes=MAX_DOCUMENT_BYTES,
+                             mode_rule=not_writable_by_others, refused=KeyDocumentError)
     try:
         document = json.loads(data.decode("utf-8"))
     except (ValueError, RecursionError) as exc:
