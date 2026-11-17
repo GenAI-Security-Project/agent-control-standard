@@ -517,3 +517,14 @@ def test_a_deny_reason_is_logged_up_to_200_characters(served, capsys):
     path = "/etc/" + "p" * 150 + "END"
     post(served, _signed("steps/toolCallRequest", {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": path}}}))
     assert "END" in capsys.readouterr().err
+
+
+def test_only_the_floor_answers_500(served, monkeypatch):
+    # A -32603 that isn't the floor, such as a future signed internal error, goes out as 200 like any answer.
+    def signed_internal_error(request, read):
+        return {"jsonrpc": "2.0", "id": read.id,
+                "error": {"code": -32603, "message": "a policy error",
+                          "signature": {"algorithm": "HMAC-SHA256", "value": "AAAA", "key_id": "test-key"}}}
+    monkeypatch.setattr(example_guardian, "_answer", signed_internal_error)
+    status, answer = post(served, _ping("n"))
+    assert (status, answer["error"]["code"]) == (200, -32603)
