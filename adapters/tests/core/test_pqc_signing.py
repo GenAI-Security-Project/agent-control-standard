@@ -19,6 +19,7 @@ from tests.pqc_extra import require_pqc
 
 require_pqc()
 
+from cryptography.exceptions import InvalidSignature  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import mldsa  # noqa: E402
 
 from acs.core import (  # noqa: E402
@@ -222,6 +223,38 @@ class KeygenFromSeedKnownAnswer(unittest.TestCase):
                 self.assertIn(KEY_ID, text)
                 for leak in (SEED.hex(), base64.b64encode(SEED).decode(), repr(SEED)):
                     self.assertNotIn(leak, text)
+
+
+ACVP = json.loads((Path(__file__).parent / "vectors" / "acvp_ml_dsa_65.json").read_text(encoding="utf-8"))
+
+
+class NistAcvpKnownAnswers(unittest.TestCase):
+    """Review finding F-M2: vectors from NIST's ACVP-Server, cited by file, commit and test case in the JSON."""
+
+    def test_keygen_from_the_acvp_seed_gives_the_acvp_public_key(self) -> None:
+        case = ACVP["keyGen"]
+        signer = MLDSA65SigningKey.from_seed(bytes.fromhex(case["seed"]), "acvp")
+        self.assertEqual(signer.verification_key().public_key, bytes.fromhex(case["pk"]))
+
+    def test_sigver_cases_give_the_acvp_verdict(self) -> None:
+        for case in ACVP["sigVer"]:
+            key = VerificationKey("acvp", ML_DSA_65, bytes.fromhex(case["pk"]))
+            signature, message = bytes.fromhex(case["signature"]), bytes.fromhex(case["message"])
+            with self.subTest(tcId=case["tcId"]):
+                try:
+                    key._parsed.verify(signature, message, bytes.fromhex(case["context"]))
+                    verdict = True
+                except InvalidSignature:
+                    verdict = False
+                self.assertEqual(verdict, case["testPassed"])
+
+    def test_the_library_context_rejects_a_valid_acvp_signature_made_under_another_context(self) -> None:
+        import acs.core._mldsa as module
+        (valid,) = [c for c in ACVP["sigVer"] if c["testPassed"]]
+        self.assertNotEqual(valid["context"], "")
+        key = VerificationKey("acvp", ML_DSA_65, bytes.fromhex(valid["pk"]))
+        self.assertFalse(module._verify_ml_dsa_65(key._parsed, bytes.fromhex(valid["signature"]),
+                                                  bytes.fromhex(valid["message"])))
 
 
 class VerifySideKnownAnswer(unittest.TestCase):
