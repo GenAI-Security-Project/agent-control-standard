@@ -17,8 +17,15 @@ from typing import TYPE_CHECKING, Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import (GuardianHTTPError, OnWire, claims_json_rpc_answer, key_id_rejected, post,
-                                  report_on_wire)
+from acs.client._exchange import (
+    GuardianHTTPError,
+    OnWire,
+    claims_json_rpc_answer,
+    key_id_rejected,
+    post,
+    keyring_verified,
+    report_on_wire,
+)
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
@@ -288,6 +295,10 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
             },
         },
     }
+    if response_keys is not None:
+        # Lab convention until issue #316: the algorithm the Guardian signs responses with. Requests stay
+        # on HMAC, so signature_algorithms_supported, which governs requests, is unchanged.
+        client_hello["params"]["payload"]["x_acs_lab_response_algorithms"] = [response_keys.algorithm]
     try:
         validate_guardian_url(guardian_url)
         sign_envelope(client_hello, session_id=session_id)
@@ -322,12 +333,13 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
         if failed is not None:
             return SessionRefused("on_wire_failed", {"dir": "resp", "error": failed["error"]})
     try:
-        return _classify_hello(client_hello, response, session_id)
+        return _classify_hello(client_hello, response, session_id, response_keys)
     except Exception as e:  # noqa: BLE001
         return SessionRefused("response_unverifiable", {"error": str(e)})
 
 
-def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
+def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str,
+                    response_keys: ResponseKeys | None = None) -> Handshake:
     """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
     # The one binding rule decides. A malformed response is no answer, so the fail posture
     # applies, as for a transport failure. A request or id problem refuses the session.
@@ -353,7 +365,7 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     if "result" in response and (client_hello.get("method") != HANDSHAKE_METHOD
                                  or request_binding_problem(client_hello) is not None):
         return SessionRefused("request_envelope_invalid")
-    verified = verify_signature(response, session_id=session_id)
+    verified = _hello_verified(response, client_hello, session_id, response_keys)
     if error is not None:
         if not verified:
             if key_id_rejected(error):
@@ -361,6 +373,10 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
             return SessionRefused("error_signature_invalid",
                                   {"claimed_error_code": code, "claimed_cause": guardian_error_cause(code)})
         fields = {"error_code": code, "error_message": error.get("message")}
+        reason = error.get("data", {}).get("reason") if isinstance(error.get("data"), Mapping) else None
+        if response_keys is not None and isinstance(reason, str):
+            # Verified under the key document, so the Guardian's stated reason is trusted (issue #316).
+            fields["reason"] = reason
         # §4.1 names three session refusals; the step-level refusal codes are refused too.
         if is_session_refusal(code) or is_guardian_refusal(code):
             return SessionRefused(guardian_error_cause(code), fields)
@@ -373,7 +389,22 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     problem = server_hello_problem(server_hello, client_hello["params"]["payload"])
     if problem is not None:
         return NoAnswer("invalid_server_hello", {"problem": problem})
+    if response_keys is not None:
+        # Lab convention until issue #316. A Guardian that verified but didn't select the offered algorithm
+        # would sign this session's decisions some other way, so the session is refused before any step.
+        selected = server_hello.get("x_acs_lab_response_algorithm")
+        if selected != response_keys.algorithm:
+            return SessionRefused("response_algorithm_not_negotiated",
+                                  {"offered": [response_keys.algorithm], "selected": selected})
     return Negotiated(server_hello)
+
+
+def _hello_verified(response: Any, client_hello: Mapping[str, Any], session_id: str,
+                    response_keys: ResponseKeys | None) -> bool:
+    """The handshake's one signature check: the key document's pinned key with response_keys, else HMAC."""
+    if response_keys is None:
+        return verify_signature(response, session_id=session_id)
+    return keyring_verified(response, client_hello, response_keys)
 
 
 def _audit_start(decision: Handshake, config: Config, session_id: str, claimed: list[str]) -> None:

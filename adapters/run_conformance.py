@@ -71,6 +71,10 @@ EXPECTED_SKIPS = frozenset({
      "unittest.loader.ModuleSkipped.tests.client.test_key_document",
      "the pqc extra is not installed: ML-DSA-65 needs cryptography 50 (uv sync --extra pqc), "
      "which can't share an environment with the nat extra"),
+    ("client",
+     "unittest.loader.ModuleSkipped.tests.client.test_response_keys",
+     "the pqc extra is not installed: ML-DSA-65 needs cryptography 50 (uv sync --extra pqc), "
+     "which can't share an environment with the nat extra"),
 })
 
 

@@ -55,6 +55,25 @@ def report_on_wire(on_wire: OnWire | None, direction: str, envelope: Any, method
     return None
 
 
+def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: ResponseKeys) -> bool:
+    """Whether the answer verifies under the key document's pinned key, as the answer to request.
+
+    The key comes from the document by key_id (issue #308, RFC 8725 section 3.1). The envelope's
+    algorithm never selects it, and D-026 applies per key_id: an exact match, no fallback. The
+    answer must also answer request (D-029), and an HMAC signature never passes.
+    """
+    return verify_signature(response, keyring=response_keys.keyring, expected_key_id=response_keys.key_id,
+                            request=request)
+
+
+def _response_verified(response: dict[str, Any], request: Mapping[str, Any], session_id: str | None,
+                       response_keys: ResponseKeys | None) -> bool:
+    """The step exchange's one signature check: the key document's pinned key with response_keys, else HMAC."""
+    if response_keys is None:
+        return verify_signature(response, session_id=session_id)
+    return keyring_verified(response, request, response_keys)
+
+
 def _on_wire_refusal(fields: dict[str, Any]) -> Refused:
     return Refused("on_wire_failed", fields, f"on_wire callback failed on {fields['dir']}: {fields['error']}")
 
@@ -406,7 +425,7 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
         if failed is not None:
             return _on_wire_refusal(failed)
     try:
-        outcome = classify_response(request, response, session_id=session_id)
+        outcome = classify_response(request, response, session_id=session_id, response_keys=response_keys)
     except Exception as e:  # noqa: BLE001
         outcome = Refused("response_unverifiable", {"request_id": request_id, "method": method, "error": str(e)},
                           f"Guardian response could not be verified: {e}")
@@ -428,8 +447,12 @@ def claims_json_rpc_answer(body: Any) -> bool:
     return bool(members) and all(isinstance(m, Mapping) for m in members)
 
 
-def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
-    """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
+def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None,
+                      response_keys: ResponseKeys | None = None) -> Outcome:
+    """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed.
+
+    With response_keys, every signature is checked under the key document's pinned key instead of HMAC.
+    """
     # The one binding rule decides. A request it can't accept is the caller's error, so nothing
     # here reads the request until the rule has.
     binding = response_binding_problem(request, response)
@@ -460,7 +483,7 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         err = response["error"]
         code = err.get("code")
         # Errors are signed too; an unverifiable error under fail-open would be an allow.
-        if not verify_signature(response, session_id=session_id):
+        if not _response_verified(response, request, session_id, response_keys):
             if key_id_rejected(err):
                 return Refused("key_id_rejected", {"claimed_error_code": code},
                                "Guardian answered an unsigned SIGNATURE_INVALID, how it reports a key_id it does not "
@@ -475,6 +498,6 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         if is_guardian_refusal(code):
             return Refused(cause, fields, message)
         return Undecided(cause, fields, message)
-    if not verify_signature(response, session_id=session_id):
+    if not _response_verified(response, request, session_id, response_keys):
         return Refused("response_signature_invalid", {}, "response signature invalid")
     return Decided(response)

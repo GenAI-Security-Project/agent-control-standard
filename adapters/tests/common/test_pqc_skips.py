@@ -23,7 +23,8 @@ finally:
 # (suite, module) pairs, since one suite can hold several ML-DSA modules.
 PQC_MODULES = (("core", "tests.core.test_pqc_signing"),
                ("client", "tests.client.test_pqc_verification"),
-               ("client", "tests.client.test_key_document"))
+               ("client", "tests.client.test_key_document"),
+               ("client", "tests.client.test_response_keys"))
 
 
 class PqcSkipsAreAllowlisted(unittest.TestCase):
