@@ -476,7 +476,10 @@ def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | Non
         node, shape = payload, root
         for token in tokens:
             is_array = isinstance(node, list)
-            _, node = _step(node, token)  # every path here already resolved
+            found, node = _step(node, token)
+            if not found:
+                # Never counted as covered: a path that names nothing redacts nothing.
+                return f"redaction path {path!r} does not name a value in the payload"
             if is_array:
                 shape.items = shape.items or _Shape()
                 shape = shape.items

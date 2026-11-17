@@ -427,3 +427,9 @@ def test_an_array_index_is_ascii_digits_only(token):
     verdict = {"decision": "modify", "reasoning": "r",
                "modifications": {"redactions": [{"path": f"/outputs/{token}/value"}]}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", RESULT, BASE)
+
+
+
+def test_the_coverage_walk_treats_an_unresolved_path_as_a_problem():
+    # verdict_problem checks existence first, so this calls the walk directly: an unresolved path is never covered.
+    assert opa_backend._coverage_problem(["/outputs/0/value/missing"], RESULT)
