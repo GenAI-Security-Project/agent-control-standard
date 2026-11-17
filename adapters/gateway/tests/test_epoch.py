@@ -58,3 +58,17 @@ def test_a_short_admin_token_is_refused(tmp_path):
     path.chmod(0o600)
     with pytest.raises(ValueError, match="32"):
         load_admin_token(path)
+
+
+def test_an_admin_token_file_owned_by_another_user_is_refused(token_file, monkeypatch):
+    real = token_file.stat().st_uid
+    monkeypatch.setattr("os.geteuid", lambda: real + 1)
+    with pytest.raises(ValueError, match="owned by uid"):
+        load_admin_token(token_file)
+
+
+def test_a_symlinked_admin_token_file_is_refused(token_file, tmp_path):
+    link = tmp_path / "link.token"
+    link.symlink_to(token_file)
+    with pytest.raises(ValueError, match="symlink"):
+        load_admin_token(link)

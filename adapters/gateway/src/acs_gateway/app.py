@@ -445,11 +445,16 @@ MIN_ADMIN_TOKEN_BYTES = 32
 
 
 def load_admin_token(path: Path) -> str:
-    """The admin listener's bearer token: owner-only, no symlink, at least 32 bytes, like the HMAC secret."""
+    """The admin listener's bearer token, held to acs.client's HMAC secret rules: no symlink, mode 0600 or 0400,
+    owned by the gateway's own uid, and at least 32 bytes."""
     if path.is_symlink():
         raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is a symlink")
-    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+    info = path.stat()
+    if stat.S_IMODE(info.st_mode) & 0o077:
         raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must be mode 0600 or 0400")
+    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
+        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is owned by uid {info.st_uid}, "
+                         f"not the gateway's uid {os.geteuid()}")
     token = path.read_text(encoding="utf-8").strip()
     if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
         raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
