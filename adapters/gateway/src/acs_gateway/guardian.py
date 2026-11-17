@@ -102,12 +102,26 @@ class StepToken:
         # Set when the loop stopped waiting for a claimed step. The worker then starts no write and no send.
         self._retired = False
         self._writing = 0
+        self._sending = False
 
     def retire(self) -> bool:
-        """Retire the step. True when a write had already started, which can still land but nothing new will."""
+        """Retire the step. True when a write or the send had already started, which can still land but nothing new
+        will."""
         with self._lock:
             self._retired = True
-            return self._writing > 0
+            return self._writing > 0 or self._sending
+
+    def begin_send(self) -> bool:
+        """Start the send unless the step is retired, decided under the lock as one step with retirement."""
+        with self._lock:
+            if self._retired:
+                return False
+            self._sending = True
+            return True
+
+    def end_send(self) -> None:
+        with self._lock:
+            self._sending = False
 
     @property
     def retired(self) -> bool:
@@ -267,11 +281,15 @@ class GuardianClient:
         # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
         if not write_line(token, lambda: self.transcript.append(session_id, "req", request)):
             return None, request_id
-        if token is not None and token.retired:
-            # The loop gave up on this step and retired its session while the line was being written.
+        if token is not None and not token.begin_send():
+            # The loop gave up on this step and retired its session before the send could start.
             return None, request_id
-        outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,
-                             session_id=session_id, gate=True)
+        try:
+            outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,
+                                 session_id=session_id, gate=True)
+        finally:
+            if token is not None:
+                token.end_send()
         if request["params"].get("signature") != signature:
             audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
         if isinstance(outcome, Resolution):
