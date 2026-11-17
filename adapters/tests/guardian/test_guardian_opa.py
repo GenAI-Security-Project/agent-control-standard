@@ -392,3 +392,16 @@ def test_a_protected_path_is_caught_under_its_aliases_under_opa(opa_on, path):
 @pytest.mark.parametrize("path", ["/private/var/tmp/x", "/private/tmp/notes.txt", "/var/tmp/x", "/processes.txt"])
 def test_an_alias_of_an_unprotected_directory_still_writes(no_backend, path):
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
+
+
+
+@pytest.mark.parametrize("field", ["tool", "arguments"])
+@pytest.mark.parametrize("value", [[], "", 0, False, None])
+def test_a_present_falsy_tool_or_arguments_denies(no_backend, field, value):
+    payload = {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls"}}, field: value}
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
+
+def test_absent_tool_and_arguments_keep_todays_answer(no_backend):
+    assert _step("steps/toolCallRequest", {})["decision"] == "allow"

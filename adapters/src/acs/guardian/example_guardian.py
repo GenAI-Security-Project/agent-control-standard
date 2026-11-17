@@ -561,8 +561,9 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
     }
 
     if method == "steps/toolCallRequest":
-        tool = payload.get("tool") or {}
-        wrapped = payload.get("arguments") or {}
+        # Absent means empty. A present value is checked as it is, so [], "", 0, false, and null can't pass as {}.
+        tool = payload.get("tool", {})
+        wrapped = payload.get("arguments", {})
         # The checks below read a string name and an argument object. Any other shape denies before they run,
         # instead of crashing the request handler.
         if not isinstance(tool, dict) or not isinstance(tool.get("name", ""), str):
