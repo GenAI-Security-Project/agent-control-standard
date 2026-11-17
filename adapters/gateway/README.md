@@ -244,6 +244,34 @@ Each request line is written before the request is sent, so the file holds the c
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.
 
+## Traces
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the gateway sends OpenTelemetry spans over OTLP HTTP to `<endpoint>/v1/traces`. Unset, tracing is off: no exporter, no network call, and no OpenTelemetry module loads. Spans go straight to Jaeger's OTLP port with no collector between them, because a collector on the lab's pass path was one more thing to fail (PREMORTEM P22). That replaces the collector configuration issue #582 first asked for.
+
+Each ACS session is one trace, and its trace id is the session_id with the dashes removed, so the `session_id` in an audit line or a transcript file name finds the trace in Jaeger. Every span carries `gen_ai.operation.name`, which GenAI backends key on (issue #520):
+
+| Span | `gen_ai.operation.name` | What it covers |
+|---|---|---|
+| `acs.session` | `invoke_agent` | The handshake and `steps/sessionStart`. The root of the session's trace, with `acs.session.id`, `acs.request_id` (sessionStart's), and an `acs.decision.failure` event when the session didn't open |
+| `chat <model>` | `chat` | One model call, from the send until the answer's headers arrive, with `gen_ai.request.model` and `http.response.status_code`. A streamed answer's calls are gated after it ends, and their step spans sit beside it |
+| `gen_ai.tool.call`, `gen_ai.tool.result` | `execute_tool` | One Guardian request for `steps/toolCallRequest` or `steps/toolCallResult`, named by `specification/v0.1.0/trace/otel-mapping.json`, with `acs.session.id`, `acs.request_id`, `gen_ai.tool.name`, and on results `acs.exit_status` and `acs.request_id_ref` |
+| `acs.lab.ask` | `execute_tool` | One ASK's hold, from the ASK to its answer or timeout, with an `acs.lab.ask_resolved` event carrying the outcome, the approver's id, both request ids, and what the gateway did |
+
+A step span carries the Guardian's verdict as an `acs.decision` event with `acs.reason_codes`, mirrored onto the span as `acs.decision` for readers that keep attributes and drop events. A step with no usable decision (a timeout, an HTTP error, a failed signature) carries an `acs.decision.failure` event instead, with `acs.failure.class`, `acs.failure.posture` (always `fail_closed`) and `acs.failure.reported_by` (`observed_agent`), following D-023. Shadow adds `acs.lab.shadow_decision`. A step that never reached the Guardian has no span, since the mapping keys every step span on its request_id, and the audit log still records it. A replay miss is an `acs.lab.replay_miss` event on the model call span.
+
+Off mode spans each model call too, as a trace of its own, since off has no ACS session.
+
+Spans never carry a request or response body, a tool's arguments or output, the Guardian's reasoning, an ASK's question, the API key, the HMAC secret, or a signature. Tool names and call_ids are the only values taken from the traffic.
+
+An export never touches a request. Spans queue on the request's path and export on a thread of their own, a full queue drops spans, and a failing export logs one line until it succeeds again. To run Jaeger for the gateway:
+
+```bash
+docker run --rm -p 127.0.0.1:4318:4318 -p 127.0.0.1:16686:16686 jaegertracing/jaeger:2.23.0
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 acs-gateway
+```
+
+Then open `http://127.0.0.1:16686` and pick the `acs-gateway` service, or paste a session_id without its dashes as the trace id. `ACS_TEST_JAEGER_OTLP=http://127.0.0.1:4318 uv run pytest tests/test_jaeger.py` checks that a session lands in that Jaeger as one trace. Without the variable the test skips.
+
 ## Environment
 
 | Variable | Default | Meaning |
@@ -282,6 +310,8 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_GATEWAY_ASK_MAX_S` | `240` | One request's ASK budget, from its arrival. Above 240, or no more than one decision timeout plus a second, stops startup |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | None | Read by acs.client: Guardian hosts it may contact |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Read by acs.client: handshake timeout |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | None | OTLP HTTP base URL for spans, such as `http://jaeger:4318`. Unset, tracing is off. A value that isn't an http or https URL stops startup |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | `10` | Read by the OpenTelemetry exporter: seconds one export may take, on the exporter's own thread |
 | `NO_PROXY` | None | acs.client honors proxy variables on every call, so list the Guardian here when a proxy is set |
 
 Integer settings (`ACS_GATEWAY_WORKERS`, `ACS_GATEWAY_MAX_SESSIONS`, `ACS_GATEWAY_MAX_BODY_BYTES`) take plain ASCII digits only, at least 1. A fraction, a sign, scientific notation such as `8e6`, or digits from another script stop startup with an error naming the setting.
@@ -313,8 +343,11 @@ Each of these is the gateway's own choice where the specification is silent or a
 | Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | Issue #579 |
 | `ACS_UPSTREAM_KEY_SHARED=1` lets a key file serve a model port off loopback, off by default | LAB-15, issue #588, sets it for the bundle's live mode |
 | Replay runs inside the gateway rather than as a separate replay server, so the branch tokens travel on an internal `x-acs-lab-branch` header that the gateway sets after stripping the client's `x-acs-*` headers and removes before any request leaves for a real upstream | Issue #579 |
-
-Spans (LAB-09, issue #582) build on this gateway as a separate module.
+| A session's trace id is its session_id, and its root span is `acs.session` | Issue #503 |
+| The session span is `invoke_agent` and the model call `chat <model>`, since the mapping names neither | Issue #503 and issue #520 |
+| Tool step spans keep the mapping's names and add `gen_ai.operation.name=execute_tool` and the mirrored `acs.decision` | Pull request #557, for issue #520 |
+| The decision event leaves out `acs.reasoning`, which the mapping asks for whenever the response carries it, because a Guardian's reasoning can quote tool arguments | Issue #322 |
+| The `acs.lab.ask` span, the `acs.lab.ask_resolved` and `acs.lab.replay_miss` events, and the `acs.lab.*` attributes | Issue #322 |
 
 ## Issues this README names
 
@@ -324,7 +357,10 @@ Spans (LAB-09, issue #582) build on this gateway as a separate module.
 | #175 | Bug | ASK has no way to deliver the approver's answer to the Guardian |
 | #32 | Bug | §6.4 conflates Guardian refusal with decision failure; refusals are attacker-reachable and should fail closed |
 | #38 | Bug | Tool declarations have no integrity binding, so a same-version redefinition is invisible to Inspect-Dynamic |
+| #322 | RefImpl | Span every step the reference deployment supports, toward an ACS-Trace claim |
 | #435 | Conformance | §6.4 does not say what a host does with a decision that arrives after the timeout |
+| #503 | Bug | Trace mapping leaves the session and message attributes underspecified |
+| #520 | Conformance | Tool-call trace spans are dropped by a GenAI backend: no gen_ai.operation.name, span name is not execute_tool |
 | #460 | Bug | An asymmetric key_id has no defined binding to an identity, no publication, and no revocation |
 | #576 | RefImpl | Example Guardian: sign decisions with ML-DSA-65, publish a key document, and refuse an HMAC fallback |
 | #577 | RefImpl | An OpenAI Responses API gateway that makes an unmodified client an Observed Agent, with off, shadow, and enforce modes |
