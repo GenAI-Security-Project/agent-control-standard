@@ -10,6 +10,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -388,13 +389,20 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
     return _overlap_problem(paths) or _coverage_problem(paths, payload)
 
 
+_INVALID_ESCAPE = re.compile(r"~(?![01])")
+
+
 def _overlap_problem(paths: list[str]) -> str | None:
     """Section 6.3 wants disjoint targets, so no redaction path repeats or sits inside another.
 
     Paths sort as token tuples, where every path that starts with P follows P directly, so comparing each path
     with the next finds every repeat and every nesting. The cost is the sort plus one pass over the tokens.
     """
-    ordered = sorted((tuple(path.split("/")), path) for path in paths)
+    for path in paths:
+        if _INVALID_ESCAPE.search(path):
+            return f"redaction path {path!r} has an escape RFC 6901 does not allow (only ~0 and ~1)"
+    # Decoded tokens, so two spellings of one key compare equal.
+    ordered = sorted((tuple(decode_pointer(path)), path) for path in paths)
     for (tokens, path), (next_tokens, next_path) in zip(ordered, ordered[1:]):
         if tokens == next_tokens:
             return f"redaction path {path!r} appears more than once"

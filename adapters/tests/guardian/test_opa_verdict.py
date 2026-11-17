@@ -366,3 +366,14 @@ def test_the_overlap_check_is_linear_in_path_depth():
 @pytest.mark.parametrize("extra", ["/outputs/0/value/a", "/outputs/0/value" + "/a" * 896 + "/k7"])
 def test_the_overlap_check_still_finds_a_deep_prefix_or_duplicate(extra):
     assert opa_backend._overlap_problem(_deep_paths(2000, 900) + [extra])
+
+
+
+@pytest.mark.parametrize("paths", [
+    ["/arguments/a~", "/arguments/a~0"],
+    ["/arguments/a~2"],
+    ["/outputs/0/value/~x"],
+])
+def test_an_invalid_pointer_escape_is_an_overlap_problem(paths):
+    # RFC 6901 allows only ~0 and ~1. Without that rule, /arguments/a~ and /arguments/a~0 both name key a~.
+    assert opa_backend._overlap_problem(paths)
