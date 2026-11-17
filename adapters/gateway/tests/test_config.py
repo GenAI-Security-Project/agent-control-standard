@@ -79,3 +79,23 @@ def test_the_stream_deadline_defaults_to_600_seconds(tmp_path):
     assert GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)}).stream_deadline_s == 600.0
     config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_STREAM_DEADLINE_S": "30"})
     assert config.stream_deadline_s == 30.0
+
+
+def test_approver_is_off_by_default_and_binds_loopback(tmp_path):
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)})
+    assert config.approver_port is None
+    assert config.approver_host == "127.0.0.1"
+    assert config.ask_max_s == 240.0
+
+
+def test_approver_port_and_ask_cap_are_read(tmp_path):
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_APPROVER_PORT": "8090",
+                                     "ACS_GATEWAY_ASK_MAX_S": "0.5"})
+    assert config.approver_port == 8090
+    assert config.ask_max_s == 0.5
+
+
+def test_ask_cap_above_240_seconds_is_refused(tmp_path):
+    # FinBot's LLM_TIMEOUT is 360 s, so a hold longer than 240 s would outlive the client's own wait (A.3).
+    with pytest.raises(ValueError, match="ACS_GATEWAY_ASK_MAX_S"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_ASK_MAX_S": "241"})

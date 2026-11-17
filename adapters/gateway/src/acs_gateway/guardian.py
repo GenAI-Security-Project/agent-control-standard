@@ -48,6 +48,8 @@ class StepResult:
     # Set when no usable decision arrived. Every such step denies, whatever any ServerHello says.
     cause: str | None = None
     failure_class: str | None = None
+    # The Guardian's ask_details when it answered ask, as sent, for the approver page (LAB-08).
+    ask_details: dict[str, Any] | None = None
 
 
 _MAX_SAFE_INTEGER = 2**53 - 1
@@ -255,8 +257,10 @@ class GuardianClient:
             return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"))
         result = outcome.response.get("result") or {}
         codes = result.get("reason_codes")
+        details = result.get("ask_details")
         return StepResult(method, request_id, decision=normalize_decision(result),
-                          reason_codes=[c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [])
+                          reason_codes=[c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [],
+                          ask_details=details if isinstance(details, dict) else None)
 
     def _send(self, session_id: str, method: str, payload: dict[str, Any], posture: FailPosture,
               token: StepToken | None = None) -> tuple[Decided | Resolution | None, str]:

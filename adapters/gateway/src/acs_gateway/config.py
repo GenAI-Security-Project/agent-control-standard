@@ -21,6 +21,9 @@ DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
 DEFAULT_STREAM_IDLE_TIMEOUT_S = 60.0
 # The longest a whole governed stream may run in enforce, however steadily the upstream sends.
 DEFAULT_STREAM_DEADLINE_S = 600.0
+# The longest an ASK may hold a model response. FinBot waits LLM_TIMEOUT (360 s in the lab) for its model call, so
+# 240 s leaves room for the call itself (A.3, PREMORTEM P26).
+MAX_ASK_S = 240.0
 
 
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
@@ -70,6 +73,10 @@ class GatewayConfig:
     workers: int = DEFAULT_WORKERS
     stream_idle_timeout_s: float = DEFAULT_STREAM_IDLE_TIMEOUT_S
     stream_deadline_s: float = DEFAULT_STREAM_DEADLINE_S
+    # The approver page (LAB-08, issue #581). Off unless a port is set, so an ASK denies as before.
+    approver_host: str = "127.0.0.1"
+    approver_port: int | None = None
+    ask_max_s: float = MAX_ASK_S
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -82,6 +89,10 @@ class GatewayConfig:
         model_log = env.get("ACS_MODEL_INPUT_LOG", "").strip()
         admin_port = env.get("ACS_GATEWAY_ADMIN_PORT", "").strip()
         token_file = env.get("ACS_GATEWAY_ADMIN_TOKEN_FILE", "").strip()
+        approver_port = env.get("ACS_GATEWAY_APPROVER_PORT", "").strip()
+        ask_max_s = _positive_number(env, "ACS_GATEWAY_ASK_MAX_S", MAX_ASK_S)
+        if ask_max_s > MAX_ASK_S:
+            raise ValueError(f"ACS_GATEWAY_ASK_MAX_S must be at most {MAX_ASK_S:g}, got {ask_max_s:g}")
         return cls(
             mode=mode,
             upstream_url=(env.get("ACS_UPSTREAM_URL", "").strip() or DEFAULT_UPSTREAM_URL).rstrip("/"),
@@ -103,6 +114,9 @@ class GatewayConfig:
             stream_idle_timeout_s=_positive_number(env, "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S",
                                                    DEFAULT_STREAM_IDLE_TIMEOUT_S),
             stream_deadline_s=_positive_number(env, "ACS_GATEWAY_STREAM_DEADLINE_S", DEFAULT_STREAM_DEADLINE_S),
+            approver_host=env.get("ACS_GATEWAY_APPROVER_HOST", "").strip() or "127.0.0.1",
+            approver_port=int(approver_port) if approver_port else None,
+            ask_max_s=ask_max_s,
         )
 
 
