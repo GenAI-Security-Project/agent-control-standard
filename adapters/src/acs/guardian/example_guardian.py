@@ -822,7 +822,7 @@ def main() -> int:
         return 1
     if POLICY_BACKEND_NAME:
         from acs.guardian import opa_backend
-        backend_problem = opa_backend.backend_problem({**os.environ, POLICY_BACKEND_ENV: POLICY_BACKEND_NAME})
+        backend_problem = opa_backend.backend_problem(POLICY_BACKEND_NAME)
         if backend_problem:
             sys.stderr.write(f"[guardian] REFUSING TO START: {backend_problem}\n")
             return 1

@@ -21,7 +21,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-BACKEND_ENV = "ACS_POLICY_BACKEND"
 URL_ENV = "ACS_OPA_URL"
 TIMEOUT_ENV = "ACS_OPA_TIMEOUT_MS"
 DEFAULT_TIMEOUT_MS = 2000
@@ -111,13 +110,16 @@ def load_config(env: Mapping[str, str] = os.environ) -> OpaConfig:
     return OpaConfig(url=url, timeout_s=timeout_ms / 1000.0)
 
 
-def backend_problem(env: Mapping[str, str] = os.environ) -> str | None:
-    """Why the configured policy backend cannot run, or None when it can (or none is configured)."""
-    name = env.get(BACKEND_ENV, "").strip().lower()
+def backend_problem(name: str, env: Mapping[str, str] = os.environ) -> str | None:
+    """Why the named policy backend can't run, or None when it can or none is named.
+
+    The example Guardian parses the name, once, and passes it in. env supplies only the OPA URL and timeout.
+    """
+    name = name.strip().lower()
     if not name:
         return None
     if name != "opa":
-        return f"{BACKEND_ENV}={name!r} is not a known policy backend (the only one is opa)"
+        return f"ACS_POLICY_BACKEND={name!r} is not a known policy backend (the only one is opa)"
     try:
         load_config(env)
     except OpaConfigError as e:
@@ -544,7 +546,7 @@ def _deny(base: Mapping[str, Any], reason_code: str, detail: str) -> dict:
 def misconfigured(base: Mapping[str, Any]) -> dict:
     """The deny for a backend named when the Guardian was imported but never loaded by main()."""
     return _deny(base, "policy_backend_misconfigured",
-                 f"{BACKEND_ENV} named a policy backend at import, but no OPA settings were loaded")
+                 "ACS_POLICY_BACKEND named a policy backend at import, but no OPA settings were loaded")
 
 
 def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], config: OpaConfig) -> dict:

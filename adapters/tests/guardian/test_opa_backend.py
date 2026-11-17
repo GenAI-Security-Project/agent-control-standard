@@ -132,10 +132,10 @@ def test_load_config_rejects_a_bad_setting(env):
 
 
 def test_backend_problem_names_what_is_wrong():
-    assert opa_backend.backend_problem({}) is None
-    assert opa_backend.backend_problem({"ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "http://opa/x"}) is None
-    assert "ACS_OPA_URL" in opa_backend.backend_problem({"ACS_POLICY_BACKEND": "opa"})
-    assert "rego" in opa_backend.backend_problem({"ACS_POLICY_BACKEND": "rego"})
+    assert opa_backend.backend_problem("", {}) is None
+    assert opa_backend.backend_problem("opa", {"ACS_OPA_URL": "http://opa/x"}) is None
+    assert "ACS_OPA_URL" in opa_backend.backend_problem("opa", {})
+    assert "rego" in opa_backend.backend_problem("rego", {})
 
 
 @pytest.mark.parametrize("url,shown", [
@@ -148,7 +148,7 @@ def test_redact_url_strips_userinfo(url, shown):
 
 
 def test_a_config_error_never_repeats_userinfo():
-    problem = opa_backend.backend_problem({"ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "ftp://lab:secret-pw@opa/x"})
+    problem = opa_backend.backend_problem("opa", {"ACS_OPA_URL": "ftp://lab:secret-pw@opa/x"})
     assert problem and "secret-pw" not in problem
 
 
