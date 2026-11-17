@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from acs.guardian._limits import depth_exceeds
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
@@ -666,54 +666,61 @@ MAX_REQUEST_DEPTH = 128
 
 
 def _log_value(value: Any, width: int = 8) -> str:
-    """A field for the log line: a string as is, anything else as its repr, cut to width."""
-    text = value if isinstance(value, str) else repr(value)
-    return text[:width]
+    """A field for the log line: a string cut to width, anything else only its type name, never a full repr."""
+    return value[:width] if isinstance(value, str) else f"<{type(value).__name__}>"
 
 
-def _structure_problem(request: Any) -> str | None:
-    """Why the request's JSON-RPC and ACS structure can't be read, or None. Checked before any state changes."""
+class RequestFields(NamedTuple):
+    """The request fields every later step reads, each one checked for type once, here."""
+    method: str
+    id: Any
+    params: dict
+    metadata: dict
+    request_id: str
+    session_id: str
+
+
+def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
+    """(fields, None, id) for a readable request, or (None, problem, id) for one whose structure is wrong.
+
+    The id in either case is one an answer can carry: the request's own when it has a valid type, else None.
+    """
     if not isinstance(request, dict):
-        return f"expected a JSON-RPC object, got {type(request).__name__}"
-    if not isinstance(request.get("method", ""), str):
-        return "method must be a string"
-    if "id" in request and request["id"] is not None and not isinstance(request["id"], (str, int)):
-        return "id must be a string, a number, or null"
+        kind = "batch" if isinstance(request, list) else type(request).__name__
+        return None, f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)", None
+    raw_id = request.get("id")
+    answer_id = raw_id if isinstance(raw_id, (str, int)) else None
+    if "id" in request and raw_id is not None and not isinstance(raw_id, (str, int)):
+        return None, "id must be a string, a number, or null", None
+    method = request.get("method", "")
+    if not isinstance(method, str):
+        return None, "method must be a string", answer_id
     params = request.get("params", {})
     if not isinstance(params, dict):
-        return "params must be an object"
+        return None, "params must be an object", answer_id
     metadata = params.get("metadata", {})
     if not isinstance(metadata, dict):
-        return "params.metadata must be an object"
-    for name, value in (("params.request_id", params.get("request_id", "")),
-                        ("params.metadata.session_id", metadata.get("session_id", ""))):
+        return None, "params.metadata must be an object", answer_id
+    request_id = params.get("request_id", "")
+    session_id = metadata.get("session_id", "")
+    for name, value in (("params.request_id", request_id), ("params.metadata.session_id", session_id)):
         if not isinstance(value, str):
-            return f"{name} must be a string"
-    return None
-
-
-def _safe_ids(request: Any) -> tuple[Any, str]:
-    """The JSON-RPC id and session_id an error answer can use: each one only when it has a usable type."""
-    if not isinstance(request, dict):
-        return None, ""
-    request_id = request.get("id") if isinstance(request.get("id"), (str, int)) else None
-    params = request.get("params") if isinstance(request.get("params"), dict) else {}
-    meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
-    session_id = meta.get("session_id") if isinstance(meta.get("session_id"), str) else ""
-    return request_id, session_id
+            return None, f"{name} must be a string", answer_id
+    return RequestFields(method, raw_id, params, metadata, request_id, session_id), None, answer_id
 
 
 def handle_request(request: dict) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
-    request_id, session_id = _safe_ids(request)
-    problem = _structure_problem(request)
+    fields, problem, answer_id = read_request(request)
+    session_id = fields.session_id if fields else ""
     if problem:
-        return _error_envelope(request_id, session_id, -32600, f"Invalid Request: {problem}")
+        return _error_envelope(answer_id, session_id, -32600, f"Invalid Request: {problem}")
+    request_id = answer_id
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
         return _error_envelope(request_id, session_id, -32600,
                                f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
     try:
-        return _handle_request(request)
+        return _handle_request(request, fields)
     except CANONICALIZATION_ERRORS as e:
         # Last resort, after the depth bound: anything else the Guardian can't canonicalize still gets an answer,
         # never a dropped connection, which a proceed posture would run as a decision failure.
@@ -732,13 +739,9 @@ def _last_resort_error(request_id: Any, session_id: str, message: str) -> dict:
     return _error_envelope(None, "", -32600, message, signed=False)
 
 
-def _handle_request(request: dict) -> dict:
-    method = request.get("method", "")
-    request_id = request.get("id")
-    params = request.get("params") or {}
-    meta = params.get("metadata") or {}
-    session_id = meta.get("session_id") or ""
-    acs_request_id = params.get("request_id", "")
+def _handle_request(request: dict, fields: RequestFields) -> dict:
+    method, request_id, params = fields.method, fields.id, fields.params
+    session_id, acs_request_id = fields.session_id, fields.request_id
     timestamp = params.get("timestamp", "")
 
     # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
@@ -865,22 +868,14 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                                 "error": {"code": -32700, "message": "Parse error"}})
             return
 
-        # A non-object, or a batch array, is not a v0.1 request: -32600.
-        if not isinstance(request, dict):
-            kind = "batch" if isinstance(request, list) else type(request).__name__
-            self._respond(400, {"jsonrpc": "2.0", "id": None,
-                                "error": {"code": -32600,
-                                          "message": f"Invalid Request: expected a JSON-RPC "
-                                                     f"object, got {kind} (batches unsupported in v0.1)"}})
-            return
-
-        # Logged from whatever arrived, before any check, so no field's type can crash the line.
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
-        meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
-        sys.stderr.write(
-            f"[guardian] {_log_value(request.get('method', ''), 40)} session={_log_value(meta.get('session_id', '?'))} "
-            f"req={_log_value(params.get('request_id', '?'))}\n"
-        )
+        # One extraction for the log line too. A request whose structure is wrong logs as invalid, and
+        # handle_request answers it.
+        fields, _, _ = read_request(request)
+        if fields is None:
+            sys.stderr.write("[guardian] invalid request\n")
+        else:
+            sys.stderr.write(f"[guardian] {_log_value(fields.method, 40)} session={_log_value(fields.session_id)} "
+                             f"req={_log_value(fields.request_id)}\n")
         sys.stderr.flush()
 
         response = handle_request(request)
