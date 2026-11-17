@@ -765,6 +765,20 @@ def handle_request(request: dict, read: "ReadResult | None" = None) -> dict:
     # own UUID request ids, so it can't use one.
     # do_POST reads the request once and passes the result in. Other callers let it be read here.
     read = read if read is not None else read_request(request)
+    try:
+        return _answer(request, read)
+    except CANONICALIZATION_ERRORS:
+        # Signing itself failed, as for a session_id JCS can't encode. A direct caller gets the same unsigned floor
+        # envelope do_POST sends, so handle_request never raises for one.
+        return internal_error_envelope(read.id)
+
+
+def internal_error_envelope(request_id: Any) -> dict:
+    """The unsigned -32603 floor: a fixed message, and the id only when it passed the id rule."""
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": INTERNAL_ERROR_MESSAGE}}
+
+
+def _answer(request: dict, read: "ReadResult") -> dict:
     if read.problem:
         return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}")
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
@@ -884,8 +898,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             sys.stderr.flush()
             if not self._answered:
                 # The request's own id when it parsed and passed the id rule, else null.
-                self._respond(500, {"jsonrpc": "2.0", "id": self._answer_id,
-                                    "error": {"code": -32603, "message": INTERNAL_ERROR_MESSAGE}})
+                self._respond(500, internal_error_envelope(self._answer_id))
 
     def _serve(self) -> None:
         # Oversized requests are rejected before the body is read.

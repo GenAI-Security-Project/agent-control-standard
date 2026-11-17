@@ -325,3 +325,31 @@ def test_an_invalid_request_logs_its_problem_and_method(served, capsys):
     post(served, body)
     err = capsys.readouterr().err
     assert "params must be an object" in err and "steps/se" in err
+
+
+SURROGATE_SESSION = "\ud800"
+
+
+def _nested_list(depth: int) -> list:
+    value: list = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+@pytest.mark.parametrize("envelope", [
+    # An id beyond 2^53 with a structure error: refused as an invalid id, signed with id null.
+    {"jsonrpc": "2.0", "id": 2**60, "method": "steps/sessionStart", "params": [1]},
+    # A session_id JCS can't encode, on the structure path.
+    {"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart",
+     "params": {"metadata": {"session_id": SURROGATE_SESSION}, "request_id": 5}},
+    # The same session_id on the depth path.
+    {"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart",
+     "params": {"metadata": {"session_id": SURROGATE_SESSION}, "payload": {"deep": _nested_list(200)}}},
+])
+def test_handle_request_never_raises_for_a_direct_caller(served, envelope):
+    answer = example_guardian.handle_request(envelope)
+    assert "error" in answer
+    if answer["error"]["code"] == -32603:
+        assert answer["error"]["message"] == example_guardian.INTERNAL_ERROR_MESSAGE
+        assert "signature" not in answer["error"]
