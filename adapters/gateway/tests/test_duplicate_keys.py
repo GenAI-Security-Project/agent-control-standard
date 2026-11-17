@@ -70,7 +70,10 @@ def test_an_upstream_answer_that_repeats_a_key_is_audited_in_both_modes(gateway,
         assert response.status_code == 502
     else:
         assert response.status_code == 200 and response.content == REPEATED_ANSWER
-    assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["upstream_answer"]
+    rejected = events(audit, "upstream_rejected")
+    assert [(e["cause"], e["mode"]) for e in rejected] == [("duplicate_json_key", mode)]
+    assert "tool" not in rejected[0] and "method" not in rejected[0]
+    assert events(audit, "shadow_decision") == [] and events(audit, "decision_applied") == []
 
 
 DUPLICATED_OUTPUT = '{"bank_account_number": "12345678", "bank_account_number": "x"}'
@@ -130,11 +133,3 @@ def test_the_strict_loader_parses_once_and_keeps_the_last_copy():
     value, repeated = loads_recording('{"a": 1, "b": {"c": 2, "c": 3}, "a": 4}')
     assert value == {"a": 4, "b": {"c": 3}} and repeated == "c"
     assert loads_recording('{"a": 1}') == ({"a": 1}, None)
-
-
-def test_shadow_records_the_deny_enforce_would_make_for_a_repeated_upstream_key(gateway, guardian, upstream, audit):
-    upstream.reply(REPEATED_ANSWER)
-    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
-    assert response.content == REPEATED_ANSWER
-    recorded = events(audit, "shadow_decision")
-    assert [(e["decision"], e["cause"]) for e in recorded] == [("deny", "duplicate_json_key")]

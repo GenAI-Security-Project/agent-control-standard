@@ -276,17 +276,13 @@ class Gateway:
         reply, repeated = _parse_governed(upstream.content)
         if repeated is not None:
             # The client might read the other copy of a repeated key, one the gateway never gated.
-            _audit("duplicate_json_key", key=repeated, where="upstream_answer", mode=self.config.mode)
+            # One line in both modes, for the whole answer, since no single step was judged. Shadow relays without
+            # gating the last-wins copy, because a client reading the first copy runs calls that copy never shows.
+            # Nothing here touches a session, so no gating fault can arise to route.
+            _audit("upstream_rejected", cause="duplicate_json_key", key=repeated, mode=self.config.mode)
             if self.enforce:
                 return openai_error(502, "The model service returned an unreadable response.", "server_error",
                                     "upstream_unreadable")
-            # Shadow records the deny enforce makes for the whole answer, rather than gating the last-wins copy,
-            # since a client that reads the first copy runs calls that copy never shows.
-            async with self._current(key) as session:
-                _pin(session, pins)
-                result = StepResult(TOOL_CALL_REQUEST, None, cause="duplicate_json_key",
-                                    failure_class="malformed_response")
-                self._record(session, result, Applied("deny", None, "duplicate_json_key"), "", None)
             return _relay(upstream, None)
         if not isinstance(reply, dict) or not isinstance(reply.get("output"), list):
             # A success the gateway can't read could carry calls it never gated, so enforce never relays it.
