@@ -16,19 +16,19 @@ Tool names compare case-insensitively, so `Bash` (Claude Code), `Shell` (Cursor)
 |---|---|
 | `steps/toolCallRequest`, tool `bash` or `shell`, command matching a destructive pattern (`rm -rf` on `/`, `~` or `$HOME`, `rm --no-preserve-root`, `mkfs`, `dd of=/dev/`, a fork bomb, `> /dev/sd*`, `find` on `/` or home with `-delete` or `-exec rm`, `chmod 777` on `/etc`, `/usr`, `/bin` or `/sbin`) | `deny`, `destructive_command` |
 | `steps/toolCallRequest`, tool `bash` or `shell`, command longer than 8 KiB | `deny`, `input_too_large` |
-| `steps/toolCallRequest` whose `tool` isn't an object, whose `tool.name` isn't a string, or whose `arguments` isn't an object | `deny`, `argument_type_invalid` |
-| `steps/toolCallRequest`, tool `bash` or `shell` with a `command` that isn't a string, or tool `write` with a `file_path` that isn't a string. Falsy values such as `0`, `false`, `[]`, and `{}` deny too. Only `null` reads as absent, the same as a missing argument | `deny`, `argument_type_invalid` |
-| `steps/toolCallRequest`, tool `write`, `file_path` under `/etc/`, `/usr/`, `/bin/`, `/sbin/` or `/boot/` after POSIX normalization, so `/tmp/../etc/passwd` and `//etc/passwd` count | `deny`, `protected_path` |
-| `steps/toolCallRequest`, tool `write`, a relative `file_path` that normalizes outside its starting directory, such as `../../etc/passwd` | `deny`, `path_traversal` |
+| `steps/toolCallRequest` with a `tool` that's present but isn't an object, a `tool.name` that isn't a string, or an `arguments` that's present but isn't an object. A present `[]`, `""`, `0`, `false`, or `null` denies too. Only an absent field reads as empty | `deny`, `argument_type_invalid` |
+| `steps/toolCallRequest`, tool `bash` or `shell` with a `command` that isn't a string, or a write-capable tool (below) with a `file_path` or `notebook_path` that isn't a string. Falsy values such as `0`, `false`, `[]`, and `{}` deny too. Only `null` reads as absent, the same as a missing argument | `deny`, `argument_type_invalid` |
+| `steps/toolCallRequest`, a write-capable tool (`write`, `edit`, `multiedit`, or `notebookedit`, case-folded, which covers Claude Code's four writers and Cursor's Write and Edit), `file_path` or `notebook_path` under `/etc/`, `/usr/`, `/bin/`, `/sbin/`, `/boot/`, or `/proc/`. The path is POSIX-normalized and case-folded, `/private/etc`, `/private/var`, and `/private/tmp` count as the directories they reach on macOS, so `/tmp/../etc/passwd`, `//etc/passwd`, `/ETC/passwd`, `/private/etc/passwd`, and `/proc/self/root/etc/passwd` all count | `deny`, `protected_path` |
+| `steps/toolCallRequest`, a write-capable tool, a relative `file_path` or `notebook_path` that normalizes outside its starting directory, such as `../../etc/passwd` | `deny`, `path_traversal` |
 | `steps/toolCallRequest`, tool `task` | `deny`, `subagent_gated`; `allow` with `ACS_ALLOW_SUBAGENT=1` |
 | Any other `steps/toolCallRequest` | `allow` |
 | `steps/subagentStart` | `deny`, `subagent_gated` (`subagent_fresh_intent_gated` when `intent_derivation` is `fresh`); `allow` with `ACS_ALLOW_SUBAGENT=1` |
 | `steps/sessionStart`, `steps/sessionEnd`, `steps/turnStart`, `steps/turnEnd`, `steps/userMessage`, `steps/agentResponse`, `steps/agentTrigger`, `steps/toolCallResult`, `steps/preCompact`, `steps/postCompact`, `steps/subagentStop`, `steps/knowledgeRetrieval`, `steps/memoryStore`, `steps/memoryContextRetrieval` | `allow` |
 | `handshake/hello` | a ServerHello (§4) declaring `on_decision_failure: deny`, or `proceed` with `ACS_ON_DECISION_FAILURE=proceed` |
 | `system/ping` | `allow` with `{status, echo, server_timestamp}` (§13); unsigned and outside the chain |
+| Any other method | `deny`, `unknown_method` |
 
 When a decision can't be signed, because JCS (RFC 8785) can't encode something in it, the Guardian answers with a signed `deny` instead, with reason code `response_not_signable` and a fixed reasoning. A lone surrogate in a reasoning that echoes the request, an integer beyond 2^53, NaN, and infinity are the cases JCS refuses.
-| Any other method | `deny`, `unknown_method` |
 
 Every step response carries `chain_hash`, the head of the session's rolling SHA-256 audit chain (§8.2, `entry_hash = sha256(JCS(entry) || previous_hash)`). The chain head and the seen `request_id`s persist per session under `ACS_GUARDIAN_STATE_DIR` (default `~/.cache/acs-guardian-state/`), so a restart keeps replay protection; `ACS_GUARDIAN_STATE_DIR=""` keeps them in memory, for development.
 
@@ -38,11 +38,11 @@ The Guardian can hand its tool decisions to [Open Policy Agent](https://www.open
 
 | Setting | Meaning |
 |---|---|
-| `ACS_POLICY_BACKEND` | `opa` turns the backend on. Unset, empty, or only spaces keeps the built-in rules. Any other value stops the Guardian at startup. |
+| `ACS_POLICY_BACKEND` | `opa` turns the backend on. Unset, empty, or only spaces keeps the built-in rules. Any other value stops the Guardian at startup. The Guardian reads this once, when its module is imported. |
 | `ACS_OPA_URL` | The OPA data API URL of the rule that returns the verdict, for example `http://opa:8181/v1/data/finbot/verdict`. Required with `opa`. Only `http` and `https` are accepted, and a malformed host or port stops the Guardian at startup. Name an IP address, or a host the Guardian resolves locally (a container name on its network, or an `/etc/hosts` entry). The name lookup runs before the Guardian can abort a slow query, so a slow DNS server can hold a query's worker thread past `ACS_OPA_TIMEOUT_MS`, although the step itself still denies on time. |
 | `ACS_OPA_TIMEOUT_MS` | How long the Guardian waits for OPA, from 1 to 4000. Default 2000. The cap leaves the Guardian a second of the 5000 ms the ServerHello advertises to validate, sign, and answer. A value outside the range stops the Guardian at startup. |
 
-The Guardian reads these settings once, at startup, and refuses to start when the backend is named but its settings can't be used. Steps follow what startup loaded, never the live environment, so changing `ACS_POLICY_BACKEND` while the Guardian runs changes nothing.
+The Guardian reads these settings once, at startup, and refuses to start when the backend is named but its settings can't be used. Steps follow the backend name read at import and the settings startup loaded, never the live environment, so changing `ACS_POLICY_BACKEND` while the Guardian runs changes nothing. A Guardian served without its `main()`, whose name was set at import but whose settings were never loaded, denies both tool methods with `policy_backend_misconfigured` instead of falling back to the built-in rules.
 
 The OPA host is not restricted. The operator sets `ACS_OPA_URL`, the Guardian ignores proxy variables for the policy call, and it never follows a redirect, so the request goes only where the setting points. Logs print the URL without its userinfo.
 
@@ -83,9 +83,9 @@ A verdict may carry `decision`, `reasoning`, `reason_codes`, `modifications`, `a
 - A modify follows the section 6.3 composition rules, with each `parameter_overrides` key compared as `/arguments/<key>` against the redaction paths, which are rooted at the payload.
 - On a tool call, a modify uses `parameter_overrides`, and each key names an argument the call carries. `modified_content` isn't accepted on a tool call.
 - On a tool result, a modify uses `redactions` or `modified_content`. `parameter_overrides` isn't accepted on a tool result.
-- `redactions` and `parameter_overrides`, when present, aren't empty. Every redaction path names a value in the payload, so a typo can't leave the value in place. No path repeats, and none sits inside another.
+- `redactions` and `parameter_overrides`, when present, aren't empty. Every redaction path names a value in the payload, so a typo can't leave the value in place. A path uses only the `~0` and `~1` escapes RFC 6901 allows. No path repeats, and none sits inside another, compared after decoding.
 - A redaction covers every array index that holds the same field. For each array index in a redaction path, whether the index of an output or of an array inside a value, the same path at every other index must also be redacted wherever it names a value. Redacting `/outputs/0` needs every output redacted, and redacting `/outputs/0/value/rows/0/ssn` needs `ssn` redacted in every row of every output that has one. This closes the gap in issue #469 (The reference Guardian allows a call whose policy-target argument is not a string, and redacts only the first output of a result). There, redacting only the first output let the rest through.
-- A redacting modify carries at most 2,000 redactions, on a result of at most 1,000 outputs, which keeps validation inside the decision timeout.
+- A redacting modify carries at most 2,000 redactions, each path at most 64 tokens deep, on a result of at most 1,000 outputs, which keeps validation inside the decision timeout.
 - An ask leaves `timeout_disposition` unset or sets it to `deny`. Under [D-043 (Treat ASK as a soft deny)](../../../docs/decisions/index.md#d-043-treat-ask-as-a-soft-deny) the Guardian owns the ASK timeout, and nothing in the Guardian turns an ask into an allow.
 
 The Guardian never reads an OPA failure as allow. Each failure becomes a signed `deny` whose reason code says which. Its `reasoning` is one short fixed sentence per code, because it reaches the agent. The details, such as the HTTP status or the check a verdict failed, go to the Guardian's stderr log. This follows [D-036 (Default the failure posture to deny)](../../../docs/decisions/index.md#d-036-default-the-failure-posture-to-deny) and [D-040 (Split decision failures from refusals)](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals):
@@ -98,6 +98,7 @@ The Guardian never reads an OPA failure as allow. Each failure becomes a signed 
 | `opa_response_malformed` | The body isn't a JSON object, nests past the JSON parser's limit, or is larger than 1 MiB |
 | `opa_result_missing` | The body has no `result`, which is how OPA reports an undefined rule |
 | `opa_verdict_invalid` | The verdict fails a check above, or validating it fails unexpectedly |
+| `policy_backend_misconfigured` | `ACS_POLICY_BACKEND` named a backend at import, but `main()` never loaded its settings |
 
 `tests/guardian/policy/lab_test.rego` is a minimal policy for the tests, with its entry point at `data.lab.verdict`. `tests/guardian/test_guardian_real_opa.py` runs it against a real `opa` 1.x binary when one is on `PATH`, and skips otherwise, so adapter CI skips it. The lab's policy pack replaces this policy.
 
