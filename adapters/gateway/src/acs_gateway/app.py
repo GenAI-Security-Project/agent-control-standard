@@ -132,10 +132,10 @@ class Gateway:
         if raw is None:
             _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
             return openai_error(413, "The request body is too large.", "invalid_request_error", "request_too_large")
-        body = _parse(raw)
         headers = forward_headers(request.headers)
         if not self.governed:
-            return await self._relay_verbatim(raw, body, headers)
+            return await self._relay_verbatim(raw, headers)
+        body = _parse(raw)
         if is_stream(body):
             # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.
             return openai_error(501, "Streaming responses are not supported by this endpoint.",
@@ -159,7 +159,11 @@ class Gateway:
             _audit("unsupported_tool_type", item_type=unsupported, direction="request_tools", mode=self.config.mode)
             return openai_error(501, "Only function tools are supported by this endpoint.",
                                 "invalid_request_error", "unsupported_tool_type")
-        session = self.sessions.get(conversation_key(body))
+        try:
+            key = conversation_key(body)
+        except RecursionError:
+            return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
+        session = self.sessions.get(key)
         async with session.lock:
             if session.handshake is None:
                 await asyncio.to_thread(self.guardian.open, session)
@@ -207,8 +211,9 @@ class Gateway:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
         return UpstreamAnswer(upstream.status_code, upstream.headers, b"".join(chunks))
 
-    async def _relay_verbatim(self, raw: bytes, body: Any, headers: dict[str, str]) -> Response:
+    async def _relay_verbatim(self, raw: bytes, headers: dict[str, str]) -> Response:
         """Off mode relays the answer, streamed or not, as it arrives, encoding and headers included."""
+        body = _parse(raw) if self.model_inputs.enabled else None
         self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
         assert self.http is not None
         try:
@@ -387,9 +392,10 @@ def _relay(upstream: UpstreamAnswer, edited: dict[str, Any] | None) -> Response:
 
 
 def _parse(raw: bytes) -> Any:
+    """The decoded JSON, or None. Nesting past the parser's recursion limit counts as unparseable."""
     try:
         return json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return None
 
 

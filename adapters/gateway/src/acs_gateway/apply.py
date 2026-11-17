@@ -75,7 +75,7 @@ def parse_arguments(raw: Any) -> dict[str, Any] | None:
     """A function_call's arguments as an object, or None when they aren't a JSON object."""
     try:
         value = json.loads(raw) if isinstance(raw, str) else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -91,7 +91,7 @@ def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[
     if isinstance(output, str):
         try:
             value, parsed = json.loads(output), True
-        except ValueError:
+        except (ValueError, RecursionError):
             value = output
     payload: dict[str, Any] = {"tool": {"name": name}, "exit_status": "success", "outputs": [{"value": value}]}
     if request_id_ref:

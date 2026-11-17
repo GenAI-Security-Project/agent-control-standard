@@ -54,6 +54,10 @@ class ModelInputLog:
         self._path = path
         self._lock = threading.Lock()
 
+    @property
+    def enabled(self) -> bool:
+        return self._path is not None
+
     def append(self, body: Any) -> None:
         if self._path is None:
             return
