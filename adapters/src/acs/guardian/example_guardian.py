@@ -25,6 +25,7 @@ from typing import Any
 
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
+from acs.core._canonical import CANONICALIZATION_ERRORS
 from acs.core import (
     ACS_VERSION,
     DEFAULT_SKEW_WINDOW_MS,
@@ -36,8 +37,6 @@ from acs.core import (
 )
 
 import datetime
-
-import rfc8785
 
 # With jsonschema available, every incoming envelope is validated against request-envelope.json before policy runs.
 _SPEC_VALIDATION_AVAILABLE = False
@@ -709,7 +708,7 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
     try:
         sign_envelope(envelope, session_id=session_id)
         return envelope
-    except (rfc8785.CanonicalizationError, UnicodeEncodeError):
+    except CANONICALIZATION_ERRORS:
         # Only an encoding failure is relabeled. Any other error is a bug and propagates as before.
         fallback = {key: result[key] for key in ("type", "acs_version", "request_id", "chain_hash") if key in result}
         envelope = {"jsonrpc": "2.0", "id": request_id,

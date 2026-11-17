@@ -448,3 +448,26 @@ def test_a_signing_failure_other_than_canonicalization_is_not_relabeled(no_backe
     monkeypatch.setattr(example_guardian, "sign_envelope", first_call_breaks)
     with pytest.raises(KeyError):
         _handle(no_backend, LISTING)
+
+
+
+def test_a_result_nested_past_the_recursion_limit_is_a_signed_deny(no_backend, monkeypatch):
+    # JCS recurses, so a result this deep raises RecursionError at signing. It must not drop the connection.
+    deep: dict = {}
+    for _ in range(sys.getrecursionlimit() + 100):
+        deep = {"n": deep}
+
+    def nested_allow(method, params, request_id, chain_hash):
+        return {"type": "final", "acs_version": example_guardian.ACS_VERSION, "request_id": request_id,
+                "chain_hash": chain_hash, "decision": "allow", "policy_data": deep}
+    monkeypatch.setattr(example_guardian, "evaluate_step", nested_allow)
+    _assert_signed_unsignable_deny(*_handle(no_backend, LISTING))
+
+
+def test_the_canonicalization_errors_cover_every_jcs_failure():
+    from acs.core import jcs_canonicalize
+    from acs.core._canonical import CANONICALIZATION_ERRORS
+    assert RecursionError in CANONICALIZATION_ERRORS and UnicodeEncodeError in CANONICALIZATION_ERRORS
+    for value in (2**53 + 1, float("nan"), "x\ud800"):
+        with pytest.raises(CANONICALIZATION_ERRORS):
+            jcs_canonicalize({"v": value})
