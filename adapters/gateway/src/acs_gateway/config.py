@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Mapping, MutableMapping
@@ -26,6 +27,12 @@ DEFAULT_STREAM_DEADLINE_S = 600.0
 MAX_ASK_S = 240.0
 # The event loop waits this long past a decision timeout for a worker stuck outside acs.client's own bound.
 STEP_GRACE_S = 1.0
+# Upstream modes (issue #579). openai is the A.3 spelling of live.
+UPSTREAM_MODES = ("live", "capture", "replay")
+_UPSTREAM_ALIASES = {"openai": "live"}
+DEFAULT_CAPTURE_SCENARIO = "capture"
+# The scenario names a file under ACS_RECORDINGS_DIR, so only a plain name with no path in it is accepted.
+_SCENARIO = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
@@ -90,6 +97,10 @@ class GatewayConfig:
     approver_port: int | None = None
     approver_token_file: Path | None = None
     ask_max_s: float = MAX_ASK_S
+    upstream_mode: str = "live"
+    upstream_key_file: Path | None = None
+    recordings_dir: Path | None = None
+    capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -123,6 +134,7 @@ class GatewayConfig:
             # The budget covers the hold and the resend that follows an approval, so it must outlast one decision.
             raise ValueError(f"ACS_GATEWAY_ASK_MAX_S must be more than the decision timeout plus "
                              f"{STEP_GRACE_S:g} s ({decision_timeout_s + STEP_GRACE_S:g}), got {ask_max_s:g}")
+        upstream_mode, key_file, recordings, scenario = _upstream_settings(env)
         return cls(
             mode=mode,
             upstream_url=(env.get("ACS_UPSTREAM_URL", "").strip() or DEFAULT_UPSTREAM_URL).rstrip("/"),
@@ -148,7 +160,41 @@ class GatewayConfig:
             approver_port=approver_port,
             approver_token_file=Path(approver_token) if approver_token else None,
             ask_max_s=ask_max_s,
+            upstream_mode=upstream_mode,
+            upstream_key_file=key_file,
+            recordings_dir=recordings,
+            capture_scenario=scenario,
         )
+
+
+def _upstream_settings(env: Mapping[str, str]) -> tuple[str, Path | None, Path | None, str]:
+    """ACS_UPSTREAM, ACS_CAPTURE, ACS_UPSTREAM_KEY_FILE, ACS_RECORDINGS_DIR and ACS_CAPTURE_SCENARIO (issue #579).
+
+    Unset means live with no key file, which forwards exactly as the gateway did before upstream modes existed.
+    """
+    raw = env.get("ACS_UPSTREAM", "").strip().lower() or "live"
+    mode = _UPSTREAM_ALIASES.get(raw, raw)
+    if mode not in UPSTREAM_MODES:
+        raise ValueError(f"ACS_UPSTREAM must be one of {', '.join(UPSTREAM_MODES)} (or openai), got {raw!r}")
+    capture_flag = env.get("ACS_CAPTURE", "").strip()
+    if capture_flag not in ("", "0", "1"):
+        raise ValueError(f"ACS_CAPTURE must be 0 or 1, got {capture_flag!r}")
+    key = env.get("ACS_UPSTREAM_KEY_FILE", "").strip()
+    if mode == "replay":
+        # Replay answers with no network and no credentials, so a setting that implies either is a mistake.
+        if capture_flag == "1":
+            raise ValueError("ACS_CAPTURE=1 can't be combined with ACS_UPSTREAM=replay")
+        if key:
+            raise ValueError("ACS_UPSTREAM_KEY_FILE can't be set with ACS_UPSTREAM=replay, which uses no credentials")
+    elif capture_flag == "1":
+        mode = "capture"
+    recordings = env.get("ACS_RECORDINGS_DIR", "").strip()
+    if mode != "live" and not recordings:
+        raise ValueError(f"ACS_RECORDINGS_DIR is required with ACS_UPSTREAM={mode}")
+    scenario = env.get("ACS_CAPTURE_SCENARIO", DEFAULT_CAPTURE_SCENARIO).strip()
+    if not _SCENARIO.fullmatch(scenario):
+        raise ValueError(f"ACS_CAPTURE_SCENARIO must be a plain name of letters, digits, _ and -, got {scenario!r}")
+    return mode, Path(key) if key else None, Path(recordings) if recordings else None, scenario
 
 
 def _under_home(path: Path) -> bool:
