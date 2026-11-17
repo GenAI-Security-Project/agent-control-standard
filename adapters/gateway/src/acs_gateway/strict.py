@@ -6,7 +6,10 @@ upstream or the client read the other would gate the wrong thing, so governed mo
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+_SURROGATE_ESCAPE = re.compile(r"\\u[dD][89a-fA-F][0-9a-fA-F]{2}")
 
 
 class DuplicateKey(ValueError):
@@ -89,7 +92,10 @@ def request_has_lone_surrogate(body: dict[str, Any]) -> bool:
             continue
         if has_lone_surrogate(item):
             return True
-        if isinstance(item, dict) and item.get("type") == "function_call" and isinstance(item.get("arguments"), str):
+        arguments = item.get("arguments") if isinstance(item, dict) and item.get("type") == "function_call" else None
+        # Parsed only when the text holds a surrogate escape (\uD800 to \uDFFF), the one way a lone surrogate can
+        # hide in JSON text past the string walk above, so ordinary arguments are still parsed once per request.
+        if isinstance(arguments, str) and _SURROGATE_ESCAPE.search(arguments):
             try:
                 if has_lone_surrogate(loads_recording(item["arguments"])[0]):
                     return True
