@@ -73,12 +73,13 @@ SESSION_END = "steps/sessionEnd"
 # A request whose answer carries no chain_hash may or may not have advanced the chain (PREMORTEM P6). The next
 # checkpoint settles it by trying each such request in and out, 2**n candidates, so n is bounded.
 MAX_UNSETTLED = 12
-# Causes acs.client gives a request that got no answer because nothing was received from a Guardian: a refused or
-# failed connection, a URL it refused to use, a body over the cap, an envelope it couldn't sign, and an on_wire
-# refusal before the send. Such a request is listed but not held for the chain. If one did reach the Guardian after
-# all, the next checkpoint fails, so dropping it can only fail a transcript, never pass a wrong one.
-NEVER_REACHED_CAUSES = frozenset({"transport_failure", "guardian_url_rejected", "request_exceeds_max_payload",
-                                  "envelope_not_signable", "on_wire_failed"})
+# Causes acs.client gives only when a request failed before post(), so it never left the client: a Guardian URL it
+# refused, an envelope it couldn't sign, a request that can't bind an answer, and a body over the cap. Such a
+# request is listed but not held for the chain. Every other cause is held, because it can follow a send the Guardian
+# chained: transport_failure covers a reply lost after the answer was written, adapter_exception can come from either
+# side of the send, and on_wire_failed names a callback failure on "req" or on "resp" alike (fix round 3, F1).
+NEVER_SENT_CAUSES = frozenset({"guardian_url_rejected", "envelope_not_signable", "request_envelope_invalid",
+                               "request_exceeds_max_payload"})
 # Section 10 asks for at least 32 bytes of secret, the bound acs.client applies.
 MIN_SECRET_BYTES = 32
 # A secret file is a few dozen bytes. The bound keeps a wrong path, such as a log, from being read whole.
@@ -398,6 +399,8 @@ class _Verifier:
                              chain_checked=not keys_only)
         self.head: str | None = None
         self.held: list[_Held] = []
+        # Lines left out of the chain since the last checkpoint because their cause shows they were never sent.
+        self.dropped: list[int] = []
         self.session_key: bytes | None = None
         self.request_ids: set[str] = set()
         self.content: dict[int, bytes | None] = {}
@@ -523,7 +526,10 @@ class _Verifier:
         """A request no signed decision covers. A chained method is held until the next checkpoint settles it."""
         method = request.get("method")
         self.report.unsigned_lines.append(req_line)
-        if not self.report.chain_checked or not chains_method(method) or cause in NEVER_REACHED_CAUSES:
+        if not self.report.chain_checked or not chains_method(method):
+            return
+        if cause in NEVER_SENT_CAUSES:
+            self.dropped.append(req_line)
             return
         self.held.append(_Held(req_line, self.content.get(req_line)))
 
@@ -546,13 +552,18 @@ class _Verifier:
                     self._settle(resp_line, request, chain_hash)
                     return
         unsettled = f" with {len(self.held)} unsettled requests before it tried in and out" if self.held else ""
+        dropped = (f" Request line {_ranges(self.dropped)} was left out because its cause says it was never sent."
+                   if len(self.dropped) == 1 else
+                   f" Request lines {_ranges(self.dropped)} were left out because their causes say they were never "
+                   "sent." if self.dropped else "")
         raise _Fail(req_line, "chain_mismatch", f"the chain_hash signed at line {resp_line} is not the head the "
                                                 f"transcript builds here{unsettled}. An entry was edited, removed, "
-                                                "inserted or moved at or before this line")
+                                                f"inserted or moved at or before this line.{dropped}")
 
     def _settle(self, resp_line: int, request: dict, chain_hash: str) -> None:
         self.head = chain_hash
         self.held.clear()
+        self.dropped.clear()
         self.report.chain_heads.append(chain_hash)
         self.report.checkpoint_line = resp_line
         self.report.checkpoint_method = request.get("method")

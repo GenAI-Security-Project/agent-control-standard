@@ -466,21 +466,114 @@ def test_the_guardians_predicate_matches_what_it_chained(mldsa_run):
         assert chained == chains_method(request["envelope"]["method"]), request["envelope"]["method"]
 
 
-def test_thirteen_refused_connections_do_not_fail_a_genuine_transcript(mldsa_run):
+def refused_session(run, count):
     from acs_verify_helpers import ALLOWED, record_custom, unreachable_url
     dead = unreachable_url()
 
     def refused(session):
-        for _ in range(13):
+        for _ in range(count):
             session.step("steps/toolCallRequest", ALLOWED, url=dead)
 
-    lines = record_custom(mldsa_run, [refused])
+    lines = record_custom(run, [refused])
     causes = [r.get("cause") for r in records(lines) if r["dir"] == "resp" and r["envelope"] is None]
-    assert causes == ["transport_failure"] * 13
+    assert causes == ["transport_failure"] * count
+    return lines
+
+
+def test_refused_connections_up_to_the_cap_pass_as_not_complete(mldsa_run):
+    # transport_failure can also follow a send whose reply was lost, so each is held, not dropped (fix round 3).
+    report = mldsa_verify(mldsa_run, refused_session(mldsa_run, 12))
+    assert report.ok, report.to_text()
+    assert len(report.unsigned_lines) == 12
+    assert not report.complete
+
+
+def test_more_unanswered_requests_than_the_cap_fail_as_unsettled(mldsa_run):
+    report = mldsa_verify(mldsa_run, refused_session(mldsa_run, 13))
+    assert report.failure.code == "chain_unsettled", report.to_text()
+
+
+def dropping_relay(guardian_url: str) -> str:
+    """A one-shot relay that forwards the request to the Guardian, reads its signed answer, and closes the client
+    connection without replying, so the Guardian chained a step whose reply never arrived."""
+    import socket
+    import threading
+    import urllib.request
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def serve() -> None:
+        conn, _ = server.accept()
+        data = b""
+        while b"\r\n\r\n" not in data:
+            data += conn.recv(65536)
+        head, body = data.split(b"\r\n\r\n", 1)
+        length = next(int(line.split(b":")[1]) for line in head.split(b"\r\n")
+                      if line.lower().startswith(b"content-length"))
+        while len(body) < length:
+            body += conn.recv(65536)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        forwarded = urllib.request.Request(guardian_url, data=body, headers={"Content-Type": "application/json"})
+        with opener.open(forwarded, timeout=5) as answer:
+            answer.read()
+        conn.close()
+        server.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return f"http://127.0.0.1:{port}/acs"
+
+
+def lost_reply_session(run):
+    from acs_verify_helpers import ALLOWED, record_custom
+    lines = record_custom(run, [lambda session: session.step("steps/toolCallRequest", ALLOWED,
+                                                             url=dropping_relay(run.url))])
+    lost = [n for n, r in enumerate(records(lines), start=1) if r["dir"] == "resp" and r["envelope"] is None]
+    assert len(lost) == 1 and json.loads(lines[lost[0] - 1])["cause"] == "transport_failure"
+    return lines, lost[0] - 1
+
+
+def test_a_reply_lost_after_the_guardian_chained_the_step_passes_as_not_complete(mldsa_run):
+    # The re-reviewer's probe (fix round 3, F1): a genuine transcript must not fail as chain_mismatch.
+    lines, request_line = lost_reply_session(mldsa_run)
     report = mldsa_verify(mldsa_run, lines)
     assert report.ok, report.to_text()
-    assert len(report.unsigned_lines) == 13
     assert not report.complete
+    assert report.unsigned_lines == [request_line]
+
+
+def test_deleting_the_lost_reply_step_still_fails(mldsa_run):
+    lines, request_line = lost_reply_session(mldsa_run)
+    deleted = lines[:request_line - 1] + lines[request_line + 1:]
+    report = mldsa_verify(mldsa_run, deleted)
+    assert report.failure.code == "chain_mismatch", report.to_text()
+
+
+def test_an_on_wire_failure_is_held_not_dropped(mldsa_run):
+    # on_wire_failed names a callback failure on either side of the send, so it proves nothing about the Guardian.
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run)
+    deny_req = tool_request_line(lines, "rm -rf /")
+    nulled = list(lines)
+    nulled[deny_req] = transcript_line("resp", None, "on_wire_failed")
+    report = mldsa_verify(mldsa_run, nulled)
+    assert report.ok and not report.complete, report.to_text()
+    assert deny_req in report.unsigned_lines
+
+
+def test_a_chain_mismatch_names_the_lines_left_out_as_never_sent(mldsa_run):
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run)
+    deny_req = tool_request_line(lines, "rm -rf /")
+    # The deny is relabelled as never sent, so it is left out, and the next chain_hash can't be reached.
+    out = list(lines)
+    out[deny_req] = transcript_line("resp", None, "envelope_not_signable")
+    report = mldsa_verify(mldsa_run, out)
+    assert report.failure.code == "chain_mismatch", report.to_text()
+    assert f"line {deny_req}" in report.failure.reason
+    assert "never sent" in report.failure.reason
 
 
 def test_a_revoked_key_that_signed_an_entry_warns_about_backdating(mldsa_run):
