@@ -292,17 +292,20 @@ def test_a_replacement_session_another_request_created_still_gets_the_check(gate
 
 
 def test_a_new_conversation_parses_each_call_once(gateway, guardian, upstream, monkeypatch):
+    import acs_gateway.apply as apply_module
     import acs_gateway.strict as strict_module
 
     arguments = '{"vendor_id": 7, "note": "only once"}'
-    parsed, original = [], strict_module.json.loads
+    parsed, original = [], strict_module.loads_recording
 
-    def counting(text, *args, **kwargs):
+    def counting(text):
         if text == arguments:
             parsed.append(text)
-        return original(text, *args, **kwargs)
+        return original(text)
 
-    monkeypatch.setattr(strict_module.json, "loads", counting)
+    # The gateway's one parser, patched where each module reads it, rather than the stdlib json.loads.
+    monkeypatch.setattr(strict_module, "loads_recording", counting)
+    monkeypatch.setattr(apply_module, "loads_recording", counting)
     call = {"type": "function_call", "call_id": "c1", "name": "get_vendor_details", "arguments": arguments}
     response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request(call, user="brand new conversation"))

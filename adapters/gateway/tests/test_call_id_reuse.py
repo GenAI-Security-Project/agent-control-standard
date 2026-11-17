@@ -186,18 +186,21 @@ def test_gating_a_new_call_canonicalizes_its_arguments_once(gateway, guardian, u
 
 
 def test_gating_a_new_call_parses_its_arguments_once(gateway, guardian, upstream, monkeypatch):
+    import acs_gateway.apply as apply_module
     import acs_gateway.strict as strict_module
 
     arguments = '{"vendor_id": 7}'
     parsed = []
-    original = strict_module.json.loads
+    original = strict_module.loads_recording
 
-    def counting(text, *args, **kwargs):
+    def counting(text):
         if text == arguments:
             parsed.append(text)
-        return original(text, *args, **kwargs)
+        return original(text)
 
-    monkeypatch.setattr(strict_module.json, "loads", counting)
+    # The gateway's one parser, patched where each module reads it, rather than the stdlib json.loads.
+    monkeypatch.setattr(strict_module, "loads_recording", counting)
+    monkeypatch.setattr(apply_module, "loads_recording", counting)
     upstream.reply(response_body(call_item("get_vendor_details", arguments, "call_1")))
     gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
     assert len(parsed) == 1
@@ -225,18 +228,20 @@ def test_reserialized_non_object_arguments_are_not_flagged(gateway, guardian, up
 def test_a_modified_call_is_not_parsed_again_after_its_rewrite(gateway, harness_guardian, upstream, monkeypatch):
     import json as json_module
 
+    import acs_gateway.apply as apply_module
     import acs_gateway.strict as strict_module
 
     rewritten = json_module.dumps({"to": "ops@ns1.finbot", "body": "hi"})
     parsed = []
-    original = strict_module.json.loads
+    original = strict_module.loads_recording
 
-    def counting(text, *args, **kwargs):
+    def counting(text):
         if text == rewritten:
             parsed.append(text)
-        return original(text, *args, **kwargs)
+        return original(text)
 
-    monkeypatch.setattr(strict_module.json, "loads", counting)
+    monkeypatch.setattr(strict_module, "loads_recording", counting)
+    monkeypatch.setattr(apply_module, "loads_recording", counting)
     upstream.reply(response_body(call_item("override_tool", {"to": "x@evil.example", "body": "hi"}, "call_1")))
     output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian()).post(
         "/v1/responses", json=finbot_request()).json()["output"]
