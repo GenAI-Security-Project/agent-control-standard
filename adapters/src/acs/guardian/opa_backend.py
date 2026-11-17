@@ -354,6 +354,8 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
     if "redactions" in modifications and not modifications["redactions"]:
         # An empty list changes nothing, so a modify that carries only it would deliver the step unchanged.
         return "redactions is empty, so the modify changes nothing"
+    if "parameter_overrides" in modifications and not modifications["parameter_overrides"]:
+        return "parameter_overrides is empty, so the modify changes nothing"
     overrides = modifications.get("parameter_overrides")
     if overrides is not None:
         if method != "steps/toolCallRequest":

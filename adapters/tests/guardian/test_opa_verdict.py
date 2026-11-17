@@ -325,3 +325,8 @@ def test_ten_thousand_outputs_each_redacted_denies_within_a_second():
 def test_more_than_two_thousand_redactions_is_invalid():
     problem, _ = _timed_problem(*_many(700, fields=3))
     assert problem and "2000" in problem
+
+
+def test_an_empty_parameter_overrides_object_is_invalid():
+    verdict = {"decision": "modify", "reasoning": "r", "modifications": {"parameter_overrides": {}}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
