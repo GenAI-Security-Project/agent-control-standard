@@ -496,3 +496,41 @@ def test_an_opa_detail_is_logged_up_to_1000_characters(capsys):
     detail = "d" * 990 + "END"
     opa_backend._log("opa_http_error", detail)
     assert "END" in capsys.readouterr().err
+
+
+def _wide_call(overrides: int, redactions: int) -> tuple[dict, dict]:
+    arguments = {f"o{i}": {"value": i} for i in range(overrides)}
+    arguments.update({f"r{i}": {"value": i} for i in range(redactions)})
+    modifications = {"parameter_overrides": {f"o{i}": 0 for i in range(overrides)},
+                     "redactions": [{"path": f"/arguments/r{i}/value"} for i in range(redactions)]}
+    return {**CALL, "arguments": arguments}, modifications
+
+
+def test_the_override_overlap_check_is_linear():
+    # Bar's sizes: comparing every override with every redaction took 16 s, past the 5 s decision timeout.
+    payload, modifications = _wide_call(40_000, 2000)
+    started = time.monotonic()
+    assert opa_backend._modification_problem(modifications, "steps/toolCallRequest", payload) is None
+    assert time.monotonic() - started < 1.0
+
+
+def test_the_linear_override_check_still_finds_an_overlap_among_many():
+    payload, modifications = _wide_call(40_000, 2000)
+    modifications["redactions"].append({"path": "/arguments/o39999/value"})
+    assert opa_backend._modification_problem(modifications, "steps/toolCallRequest", payload) == (
+        "redaction path '/arguments/o39999/value' overlaps parameter_override 'o39999' (section 6.3)")
+
+
+@pytest.mark.parametrize("overrides,paths", [
+    ({"a": 1, "b": 2}, ["/b", ""]),
+    ({"a": 1, "b": 2}, ["", "/b"]),
+    ({"a": 1, "arguments": 2}, ["/arguments/a"]),
+    ({"a": 1, "b/c": 2}, ["/x", "/b~1c/d"]),
+    ({"a": 1, "b": 2}, ["/arguments/a/value", "/arguments/b"]),
+    ({"a": 1, "b": 2}, ["/c", "/d/a"]),
+])
+def test_dropping_overrides_that_cannot_overlap_keeps_the_acs_core_verdict(overrides, paths):
+    from acs.core._decision import modify_composition_violation
+    modifications = {"parameter_overrides": overrides, "redactions": [{"path": p} for p in paths]}
+    assert modify_composition_violation(opa_backend._overlap_candidates(modifications)) == (
+        modify_composition_violation(modifications))

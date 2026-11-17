@@ -388,9 +388,32 @@ def replace_at(document: Any, pointer: str, value: Any) -> None:
         node[leaf] = value
 
 
+def _overlap_candidates(modifications: Mapping[str, Any]) -> dict[str, Any]:
+    """The modifications with only the overrides acs.core's section 6.3 check could find overlapping.
+
+    acs.core compares every redaction with every override, which took 34 s at 40,000 overrides and 2,000
+    redactions, past the decision timeout. It compares a redaction path P with /<key>, which overlaps only when
+    /<key> is P or one of P's prefixes, or when P is empty. Dropping every other override first leaves its
+    verdict and its message unchanged, because the overrides it would report stay, in their original order.
+    """
+    candidates = dict(modifications)
+    overrides = modifications.get("parameter_overrides")
+    redactions = modifications.get("redactions")
+    if not isinstance(overrides, dict) or not isinstance(redactions, list):
+        return candidates
+    paths = [r.get("path") for r in redactions if isinstance(r, dict) and isinstance(r.get("path"), str)]
+    prefixes = {prefix for path in paths for prefix in [path, *_slash_prefixes(path)]}
+    # An empty path overlaps every override, and acs.core reports the first one for it.
+    keep_first = "" in paths
+    candidates["parameter_overrides"] = {key: value for index, (key, value) in enumerate(overrides.items())
+                                         if (keep_first and index == 0)
+                                         or not isinstance(key, str) or "/" + _encode(key) in prefixes}
+    return candidates
+
+
 def _modification_problem(modifications: Mapping[str, Any], method: str, payload: Mapping[str, Any]) -> str | None:
     from acs.core._decision import modify_composition_violation
-    violation = modify_composition_violation(dict(modifications))
+    violation = modify_composition_violation(_overlap_candidates(modifications))
     if violation:
         return violation
     if "modified_content" in modifications and method == "steps/toolCallRequest":
@@ -408,14 +431,9 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
         unknown = sorted(set(overrides) - set(payload.get("arguments") or {}))
         if unknown:
             return f"parameter_overrides names arguments the call does not carry: {unknown}"
-        # acs.core compares overrides as /<key>, but a redaction path is rooted at the payload, where the same
-        # argument lives at /arguments/<key>. Compare them there, so two edits to one argument cannot both pass.
-        for key in overrides:
-            target = "/arguments/" + key.replace("~", "~0").replace("/", "~1")
-            for redaction in modifications.get("redactions") or []:
-                path = redaction.get("path") or ""
-                if path == target or path.startswith(target + "/") or target.startswith(path + "/"):
-                    return f"redaction path {path!r} overlaps parameter_override {key!r} (section 6.3)"
+        overlap = _override_overlap(list(overrides), modifications.get("redactions") or [])
+        if overlap:
+            return overlap
     paths = [redaction.get("path") for redaction in modifications.get("redactions") or []]
     # The allowlist the gateway applies too: a modify changes a call's arguments or a result's outputs and nothing
     # else, so it can never rename the tool after the hard denies judged the original name.
@@ -428,6 +446,51 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
         if not path or not _resolve_pointer(payload, path):
             return f"redaction path {path!r} does not name a value in the payload"
     return _overlap_problem(paths) or _coverage_problem(paths, payload)
+
+
+def _encode(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def _slash_prefixes(pointer: str) -> list[str]:
+    """Every proper prefix of pointer that ends just before a /, the empty pointer included."""
+    return [pointer[:cut] for cut, char in enumerate(pointer) if char == "/"]
+
+
+def _override_overlap(keys: list[str], redactions: list[Any]) -> str | None:
+    """Section 6.3: no redaction path may equal, sit inside, or contain a parameter_override target.
+
+    acs.core compares overrides as /<key>, but a redaction path is rooted at the payload, where the same argument
+    lives at /arguments/<key>. Compare them there, so two edits to one argument cannot both pass. The targets and
+    their prefixes go into lookups once and each redaction checks only its own prefixes, so the cost is linear
+    where comparing every pair took 16 s at 40,000 overrides and 2,000 redactions. The problem reported is the
+    pair the pairwise loop found first: the earliest override, then the earliest redaction.
+    """
+    if not redactions:
+        return None
+    targets: dict[str, int] = {}
+    contains: dict[str, int] = {}
+    for index, key in enumerate(keys):
+        target = "/arguments/" + _encode(key)
+        targets.setdefault(target, index)
+        for prefix in _slash_prefixes(target):
+            contains.setdefault(prefix, index)
+    first: tuple[int, int] | None = None
+    for position, redaction in enumerate(redactions):
+        path = (redaction.get("path") if isinstance(redaction, dict) else None) or ""
+        if not isinstance(path, str):
+            # The allowlist check after this one rejects a path that is not a string.
+            continue
+        hits = [targets[p] for p in [path, *_slash_prefixes(path)] if p in targets]
+        if path in contains:
+            hits.append(contains[path])
+        if hits and (first is None or (min(hits), position) < first):
+            first = (min(hits), position)
+    if first is None:
+        return None
+    key_index, position = first
+    path = redactions[position].get("path") or ""
+    return f"redaction path {path!r} overlaps parameter_override {keys[key_index]!r} (section 6.3)"
 
 
 def _overlap_problem(paths: list[str]) -> str | None:
@@ -457,10 +520,6 @@ class _Shape:
     def __init__(self) -> None:
         self.keys: dict[str, _Shape] = {}
         self.path: str | None = None  # set where a redaction's field path ends
-
-
-def _encode(token: str) -> str:
-    return token.replace("~", "~0").replace("/", "~1")
 
 
 def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | None:
