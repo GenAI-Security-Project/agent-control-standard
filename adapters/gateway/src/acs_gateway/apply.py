@@ -10,7 +10,7 @@ from typing import Any
 from acs.core import modify_composition_violation
 
 from acs_gateway.guardian import StepResult
-from acs_gateway.strict import loads_strict
+from acs_gateway.strict import loads_recording, loads_strict
 
 # The one artifact of governance the client and the model may see.
 NEUTRAL_LINE = "I couldn't complete that action."
@@ -142,18 +142,20 @@ def call_payload(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return {"tool": {"name": name}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
 
 
-def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[dict[str, Any], bool]:
-    """The toolCallResult payload, and whether outputs[0].value is parsed JSON a redaction can point into."""
-    value, parsed = output, False
+def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[dict[str, Any], bool, str | None]:
+    """The toolCallResult payload, whether outputs[0].value is parsed JSON a redaction can point into, and the first
+    key the output repeats, or None. Parsed once, strictly."""
+    value, parsed, repeated = output, False, None
     if isinstance(output, str):
         try:
-            value, parsed = json.loads(output), True
+            value, repeated = loads_recording(output)
+            parsed = True
         except (ValueError, RecursionError):
             value = output
     payload: dict[str, Any] = {"tool": {"name": name}, "exit_status": "success", "outputs": [{"value": value}]}
     if request_id_ref:
         payload["request_id_ref"] = request_id_ref
-    return payload, parsed
+    return payload, parsed, repeated
 
 
 def _decided(result: StepResult) -> str | None:

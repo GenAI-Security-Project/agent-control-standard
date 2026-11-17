@@ -55,7 +55,7 @@ from acs_gateway.sessions import (
     fingerprint,
     same_content,
 )
-from acs_gateway.strict import DuplicateKey, loads_strict, repeated_key
+from acs_gateway.strict import loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -455,15 +455,7 @@ class Gateway:
                         resent = names.get(call_id)
                         name = resent if isinstance(resent, str) else ""
                         _audit("result_name_from_client", session_id=session.session_id, call_id=call_id, tool=name)
-                    repeated = repeated_key(item.get("output"))
-                    if repeated is not None:
-                        # Tool output is third-party data. A repeated key in it denies only this result, so the run
-                        # goes on, and the cached outcome reapplies on every resend without parsing it again.
-                        _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
-                               where="function_call_output.output", mode=self.config.mode)
-                        cached = self._refuse_result(session, item, name, known, "duplicate_json_key")
-                    else:
-                        cached = await self._gate_result(session, item, name, known)
+                    cached = await self._gate_result(session, item, name, known)
                     session.results[call_id] = cached
                 if self.enforce and cached.item is not None and item.get("output") != cached.item.get("output"):
                     item, changed = {**item, "output": cached.item.get("output")}, True
@@ -487,21 +479,18 @@ class Gateway:
                         raise RequestRefused(openai_error(400, "The request body repeats a JSON key.",
                                                           "invalid_request_error", "duplicate_json_key"))
 
-    def _refuse_result(self, session: Session, item: dict[str, Any], name: str, call: CachedOutcome | None,
-                       cause: str) -> CachedOutcome:
-        """Deny a result without asking the Guardian, as the normal path would: the neutral line in enforce."""
-        result = StepResult(TOOL_CALL_RESULT, None, cause=cause, failure_class="observed_agent_error")
-        applied = Applied("deny", {**item, "output": NEUTRAL_LINE}, cause)
-        self._record(session, result, applied, name, item.get("call_id"))
-        first, raw = fingerprint(item), content(item)
-        if not self.enforce:
-            return CachedOutcome("delivered", name, item, call.request_id if call else None, first, raw)
-        return CachedOutcome("rewritten", name, applied.item, call.request_id if call else None, first, raw)
-
     async def _gate_result(self, session: Session, item: dict[str, Any], name: str,
                            call: CachedOutcome | None) -> CachedOutcome:
-        payload, parsed = result_payload(name, item.get("output"), call.request_id if call else None)
-        result = await self._step(session, TOOL_CALL_RESULT, payload)
+        payload, parsed, repeated = result_payload(name, item.get("output"), call.request_id if call else None)
+        if repeated is not None:
+            # Tool output is third-party data. A repeated key in it denies only this result, through the normal
+            # path, so the run goes on and the cached outcome reapplies on every resend without parsing it again.
+            _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
+                   where="function_call_output.output", mode=self.config.mode)
+            result = StepResult(TOOL_CALL_RESULT, None, cause="duplicate_json_key",
+                                failure_class="observed_agent_error")
+        else:
+            result = await self._step(session, TOOL_CALL_RESULT, payload)
         applied = apply_result(item, payload, parsed, result)
         self._record(session, result, applied, name, item.get("call_id"))
         first, raw = fingerprint(item), content(item)
@@ -665,12 +654,10 @@ async def _continue(first: list[bytes], rest: AsyncIterator[bytes]) -> AsyncIter
 
 
 def _parse_governed(raw: bytes) -> tuple[Any, str | None]:
-    """Parse a governed body once, strictly. Returns the body (last copy wins when a key repeats, as Python reads
-    it) and the first repeated key, or None. A body that isn't JSON parses to None."""
+    """Parse a governed body in one pass. Returns the body (last copy wins when a key repeats, as Python reads it)
+    and the first repeated key, or None. A body that isn't JSON parses to None."""
     try:
-        return loads_strict(raw), None
-    except DuplicateKey as e:
-        return _parse(raw), e.key
+        return loads_recording(raw)
     except (ValueError, UnicodeDecodeError, RecursionError):
         return None, None
 

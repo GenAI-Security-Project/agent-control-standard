@@ -129,3 +129,23 @@ def test_a_refused_request_gates_nothing_first(gateway, harness_guardian, upstre
     assert "steps/toolCallResult" not in received.read_text().split()
     session = next(iter(client.app.state.gateway.sessions._sessions.values()))
     assert session.results == {}
+
+
+def test_a_refused_result_caches_no_foreign_request_id(gateway, guardian, upstream):
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    output = {"type": "function_call_output", "call_id": "call_1", "output": DUPLICATED_OUTPUT}
+    client.post("/v1/responses", json=finbot_request(call, output))
+    session = next(iter(client.app.state.gateway.sessions._sessions.values()))
+    assert session.calls["call_1"].request_id is not None
+    assert session.results["call_1"].request_id is None
+
+
+def test_the_strict_loader_parses_once_and_keeps_the_last_copy():
+    from acs_gateway.strict import loads_recording
+
+    value, repeated = loads_recording('{"a": 1, "b": {"c": 2, "c": 3}, "a": 4}')
+    assert value == {"a": 4, "b": {"c": 3}} and repeated == "c"
+    assert loads_recording('{"a": 1}') == ({"a": 1}, None)

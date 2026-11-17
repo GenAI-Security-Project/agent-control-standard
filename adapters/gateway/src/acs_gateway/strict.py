@@ -24,6 +24,23 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return seen
 
 
+def loads_recording(text: str | bytes) -> tuple[Any, str | None]:
+    """json.loads in one pass that also returns the first repeated key, or None. When a key repeats, the last copy is
+    kept, as Python reads it. Raises ValueError for text that isn't JSON."""
+    first: list[str] = []
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        seen: dict[str, Any] = {}
+        for key, value in items:
+            if key in seen and not first:
+                first.append(key)
+            seen[key] = value
+        return seen
+
+    value = json.loads(text, object_pairs_hook=pairs)
+    return value, first[0] if first else None
+
+
 def loads_strict(text: str | bytes) -> Any:
     """json.loads, raising DuplicateKey on a repeated key anywhere in the document."""
     return json.loads(text, object_pairs_hook=_pairs)
@@ -34,9 +51,6 @@ def repeated_key(text: Any) -> str | None:
     if not isinstance(text, (str, bytes)):
         return None
     try:
-        loads_strict(text)
-    except DuplicateKey as e:
-        return e.key
+        return loads_recording(text)[1]
     except (ValueError, RecursionError):
         return None
-    return None
