@@ -819,8 +819,25 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
         return envelope
 
 
+# The one answer for anything that escapes every specific check. Fixed text, so nothing internal reaches the agent.
+INTERNAL_ERROR_MESSAGE = "Internal error: the Guardian could not process this request"
+
+
 class GuardianHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
+        """Answer every request. The specific checks give specific codes. This guard is the floor beneath them."""
+        self._answered = False
+        try:
+            self._serve()
+        except Exception as e:  # noqa: BLE001
+            # A dropped connection reads as transport_failure, which a proceed posture runs ungoverned.
+            sys.stderr.write(f"[guardian] internal error: {type(e).__name__}\n")
+            sys.stderr.flush()
+            if not self._answered:
+                self._respond(500, {"jsonrpc": "2.0", "id": None,
+                                    "error": {"code": -32603, "message": INTERNAL_ERROR_MESSAGE}})
+
+    def _serve(self) -> None:
         # Oversized requests are rejected before the body is read.
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -876,6 +893,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
 
     def _respond(self, status: int, body: dict) -> None:
         payload = json.dumps(body).encode("utf-8")
+        self._answered = True
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
