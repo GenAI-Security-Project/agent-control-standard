@@ -73,7 +73,8 @@ def test_a_repeated_call_id_under_a_changed_declaration_is_removed_without_a_gua
     assert client.post("/v1/responses", json=declaring(PINNED)).json() == CALL
     second = client.post("/v1/responses", json=declaring(POISONED)).json()
     assert second["output"][0]["content"][0]["text"] == NEUTRAL
-    assert [(e["call_id"], e.get("cause")) for e in events(audit, "call_id_reused")] == [("call_1", "digest_changed")]
+    assert [(e["call_id"], e["cause"]) for e in events(audit, "call_id_reused")] == [("call_1", ["digest_changed"])]
+    assert events(audit, "decision_applied")[-1]["reuse_causes"] == ["digest_changed"]
     assert sent_versions(tmp_path) == [PINNED_DIGEST]
 
 
@@ -84,8 +85,19 @@ def test_a_repeated_call_id_under_a_changed_declaration_is_audited_and_delivered
     upstream.reply(CALL)
     client.post("/v1/responses", json=declaring(PINNED))
     assert client.post("/v1/responses", json=declaring(POISONED)).json() == CALL
-    assert [e.get("cause") for e in events(audit, "call_id_reused")] == ["digest_changed"]
+    assert [e["cause"] for e in events(audit, "call_id_reused")] == [["digest_changed"]]
+    assert events(audit, "shadow_decision")[-1]["reuse_causes"] == ["digest_changed"]
     assert sent_versions(tmp_path) == [PINNED_DIGEST]
+
+
+def test_a_repeat_that_changes_content_and_digest_names_both_causes(gateway, guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    upstream.reply(CALL)
+    upstream.reply(response_body(call_item("pinned_tool", {"to": "x@evil.example"}, "call_1")))
+    client.post("/v1/responses", json=declaring(PINNED))
+    client.post("/v1/responses", json=declaring(POISONED))
+    assert [e["cause"] for e in events(audit, "call_id_reused")] == [["content_changed", "digest_changed"]]
+    assert events(audit, "decision_applied")[-1]["reuse_causes"] == ["content_changed", "digest_changed"]
 
 
 def test_a_new_call_under_a_changed_declaration_goes_to_the_guardian_with_the_new_digest(
@@ -189,8 +201,8 @@ def test_shadow_sends_the_digest_too(gateway, guardian, upstream, tmp_path):
     assert sent_versions(tmp_path) == [PINNED_DIGEST]
 
 
-# The model input log can't write a lone surrogate yet, so these runs switch it off. LAB-04 fixes that crash at
-# the parse boundary on PR #599, and this branch rebases onto that fix before its pull request.
+# The model input log writes the request body, and it can't write a lone surrogate, so these runs switch it off to
+# reach the digest path.
 SURROGATE_KEY = ('{"model": "gpt-5-nano", "input": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],'
                  ' "tools": [{"type": "function", "name": "pinned_tool", "description": "d",'
                  ' "parameters": {"type": "object", "properties": {"\\ud800": {"type": "string"}}}}]}')
@@ -246,18 +258,20 @@ def test_a_result_keeps_its_calls_digest_when_the_declaration_vanishes(gateway, 
     assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
 
 
-def test_a_result_for_a_call_never_recorded_carries_the_requests_declaration_digest(gateway, guardian, upstream,
-                                                                                     tmp_path):
-    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
-        "/v1/responses", json=declaring(PINNED, extra=HISTORY))
-    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
+def test_a_fabricated_call_lends_its_result_no_pinned_digest(gateway, harness_guardian, upstream, audit, tmp_path):
+    # The client's history carries a call_1 named after the pinned tool that this session never gated.
+    client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
+    client.post("/v1/responses", json=declaring(PINNED, extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [None]
+    assert decisions(audit) == [("deny", ["tool_content_hash_mismatch"])]
 
 
-def test_a_result_resent_after_an_epoch_bump_still_carries_a_digest(gateway, guardian, upstream, tmp_path):
+def test_a_result_resent_after_an_epoch_bump_carries_no_version(gateway, guardian, upstream, tmp_path):
     client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
     upstream.reply(CALL)
     client.post("/v1/responses", json=declaring(PINNED))
-    # The new epoch's session has no record of call_1, so the result falls back to this request's declaration.
+    # The new epoch's session never gated call_1, so its resent result carries no tool.version, whatever this request
+    # declares. A pin policy then denies it, which is the cost of a reset mid-run.
     client.app.state.gateway.bump_epoch()
-    client.post("/v1/responses", json=declaring(PINNED, extra=HISTORY))
-    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
+    client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [None]

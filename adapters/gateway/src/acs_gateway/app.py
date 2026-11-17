@@ -356,7 +356,7 @@ class Gateway:
         try:
             async with self._current(key, pins, recheck) as session:
                 await self._ensure_open(session)
-                if await self._gate_input(session, body, digests):
+                if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
                 arrival = note_arrival(session, body)
         except RequestRefused as e:
@@ -654,7 +654,7 @@ class Gateway:
                                  headers=_client_headers(upstream.headers, decoded=False),
                                  background=BackgroundTask(upstream.aclose))
 
-    async def _gate_input(self, session: Session, body: dict[str, Any], digests: ToolDigests) -> bool:
+    async def _gate_input(self, session: Session, body: dict[str, Any]) -> bool:
         """Gate each new function_call_output before it reaches the model, and reapply cached outcomes on resends."""
         items = body.get("input")
         if not isinstance(items, list):
@@ -706,10 +706,9 @@ class Gateway:
                         resent = names.get(call_id)
                         name = resent if isinstance(resent, str) else ""
                         _audit("result_name_from_client", session_id=session.session_id, call_id=call_id, tool=name)
-                    # A result carries its call's recorded digest. With no record of the call (an epoch bump, eviction
-                    # or retirement), it carries this request's declaration digest, so a pin on results holds (A.10).
-                    digest = known.digest if known is not None else digests.get(name)
-                    cached = await self._gate_result(session, item, name, known, digest)
+                    # A result carries a digest only from the recorded call it answers (A.10), so a call the session
+                    # never gated, fabricated or from before a reset, can't borrow a pinned tool's digest.
+                    cached = await self._gate_result(session, item, name, known, known.digest if known else None)
                     session.results[call_id] = cached
                 if self.enforce and cached.item is not None and item.get("output") != cached.item.get("output"):
                     item, changed = {**item, "output": cached.item.get("output")}, True
@@ -853,11 +852,12 @@ class Gateway:
             return None if self.enforce else item
         cached = session.calls.get(call_id)
         digest = digests.get(item.get("name")) if digests is not None else None
-        if cached is not None and (not same_content(item, cached) or cached.digest != digest):
+        causes = [] if cached is None else [cause for cause, hit in (
+            ("content_changed", not same_content(item, cached)), ("digest_changed", cached.digest != digest)) if hit]
+        if causes:
             # A call_id has one life. A repeat under another declaration digest (A.10) is withheld like one that
             # says something else, with no Guardian step, so a cached allow never covers a changed declaration.
-            self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id,
-                         cause=None if cached.digest == digest else "digest_changed")
+            self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id, causes=causes)
             return None if self.enforce else item
         if cached is None:
             cached = await self._gate_call(session, item, asks, digest)
@@ -1037,23 +1037,24 @@ class Gateway:
                request_id=token.request_id, in_flight=in_flight)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny",
-                cause: str | None = None) -> None:
-        """A call_id already gated came back with other content, or under another declaration digest (cause
-        digest_changed). Enforce withholds it rather than re-gating, since the model or the client is the only party
-        that could have reused it."""
-        extra = {"cause": cause} if cause else {}
+                causes: list[str] | None = None) -> None:
+        """A call_id already gated came back with other content (content_changed), or under another declaration
+        digest (digest_changed). Enforce withholds it rather than re-gating, since the model or the client is the only
+        party that could have reused it. causes names every reason, on this line and on the decision line."""
+        causes = causes or ["content_changed"]
         _audit("call_id_reused", session_id=session.session_id, epoch=session.epoch, method=method, tool=name,
-               call_id=call_id, mode=self.config.mode, **extra)
+               call_id=call_id, mode=self.config.mode, cause=causes)
         result = StepResult(method, None, cause="call_id_reused", failure_class="observed_agent_error")
-        self._record(session, result, Applied(decision, None, "call_id_reused"), name, call_id)
+        self._record(session, result, Applied(decision, None, "call_id_reused"), name, call_id, reuse_causes=causes)
 
-    def _record(self, session: Session, result: StepResult, applied: Applied, name: str, call_id: Any) -> None:
+    def _record(self, session: Session, result: StepResult, applied: Applied, name: str, call_id: Any,
+                **extra: Any) -> None:
         """One audit line per governed step: decision_applied in enforce, shadow_decision in shadow (A.7)."""
         cause = applied.cause or result.cause
         fields = {"session_id": session.session_id, "epoch": session.epoch, "method": result.method, "tool": name,
                   "call_id": call_id, "request_id": result.request_id, "decision": applied.decision,
                   "guardian_decision": result.decision.disposition if result.decision else None,
-                  "reason_codes": result.reason_codes, "cause": cause, "failure_class": result.failure_class}
+                  "reason_codes": result.reason_codes, "cause": cause, "failure_class": result.failure_class, **extra}
         _audit("decision_applied" if self.enforce else "shadow_decision", **fields)
         if result.failure_class == "signature_invalid":
             _audit("verification_failed", **fields)
