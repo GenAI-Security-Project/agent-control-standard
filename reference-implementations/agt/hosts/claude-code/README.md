@@ -15,7 +15,7 @@ cp hosts/claude-code/settings.json .claude/settings.json
 
 The shipped `settings.json` names the hook as `bun run "$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts"`. That resolves when the project is this tree. From any other project, replace `$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts` with this file's absolute path.
 
-It registers two events. `PreToolUse` fires for `Bash` and `WebFetch`, before the tool runs. `PostToolUse` fires for `Bash`, after the tool has run. Both matchers are anchored, so no other tool is intercepted.
+It registers two events. `PreToolUse` fires for `Bash`, `WebFetch` and `Read`, before the tool runs. `PostToolUse` fires for `Bash` and `Read`, after the tool has run. Both matchers are anchored, so no other tool is intercepted.
 
 3. Start `claude` and ask it to run `echo rm -rf /`. The hook sends the call to the Guardian, AGT's stock pattern rule denies it, and Claude Code shows the reason in the transcript. `ls -la` in the same session runs.
 
