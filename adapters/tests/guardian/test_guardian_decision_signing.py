@@ -159,25 +159,44 @@ def test_served_without_main_answers_the_floor(signer, monkeypatch, capsys):
     assert "[guardian] internal error: SigningUnavailable" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("moment", ["not_after", "before", "revoked"])
+@pytest.mark.parametrize("moment", ["not_after", "before"])
 def test_a_key_outside_its_window_never_signs(signer, monkeypatch, capsys, moment):
-    # The window and revocation are checked at every signature, not only at startup (review R-I1).
-    import dataclasses
+    # The window is checked at every signature, not only at startup (review R-I1).
     import datetime
     keys = signer.keys
-    if moment == "revoked":
-        revoked_at = keys.not_before + datetime.timedelta(seconds=1)
-        monkeypatch.setattr(example_guardian, "DECISION_SIGNER",
-                            dataclasses.replace(signer, keys=dataclasses.replace(keys, revoked_at=revoked_at)))
-        now = revoked_at
-    else:
-        now = keys.not_after if moment == "not_after" else keys.not_before - datetime.timedelta(seconds=1)
+    now = keys.not_after if moment == "not_after" else keys.not_before - datetime.timedelta(seconds=1)
     from acs.client import _key_document
     monkeypatch.setattr(_key_document, "utcnow", lambda: now)
     request = signed_step("steps/toolCallRequest", ALLOWED)
     assert_floor(example_guardian.handle_request(request), request)
     err = capsys.readouterr().err
     assert f"[guardian] decision key {KEY_ID} is not live" in err
+
+
+def test_a_revocation_in_the_loaded_document_stops_signing(signer, monkeypatch, capsys):
+    # Review R3-M2: the revocation comes through the key document parser, as in a real Guardian, not a hand-built
+    # ResponseKeys. The document names a revoked_at after startup, so the key loads live and dies at that moment.
+    import datetime
+    import os
+    from acs.client import _key_document
+    from acs.guardian.decision_keys import load_decision_signer
+    path = os.environ["ACS_GUARDIAN_KEYS"]
+    with open(path, encoding="utf-8") as f:
+        document = json.load(f)
+    revoked_at = _key_document.utcnow().replace(microsecond=0) + datetime.timedelta(hours=1)
+    document["revoked"] = [{"key_id": KEY_ID, "revoked_at": revoked_at.isoformat().replace("+00:00", "Z")}]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(document, f)
+    revoking = load_decision_signer(os.environ)
+    assert revoking.keys.revoked_at == revoked_at
+    monkeypatch.setattr(example_guardian, "DECISION_SIGNER", revoking)
+    before = signed_step("steps/toolCallRequest", ALLOWED)
+    monkeypatch.setattr(_key_document, "utcnow", lambda: revoked_at - datetime.timedelta(seconds=1))
+    assert_ml_dsa(example_guardian.handle_request(before), before, revoking)
+    monkeypatch.setattr(_key_document, "utcnow", lambda: revoked_at)
+    after = signed_step("steps/toolCallRequest", ALLOWED)
+    assert_floor(example_guardian.handle_request(after), after)
+    assert f"[guardian] decision key {KEY_ID} is not live" in capsys.readouterr().err
 
 
 def test_default_guardian_is_unchanged(monkeypatch):
