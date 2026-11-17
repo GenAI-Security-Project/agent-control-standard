@@ -174,3 +174,18 @@ def test_evaluate_denies_when_validation_itself_fails(monkeypatch):
     with StubOpa({"decision": "allow"}) as opa:
         result = _evaluate("steps/toolCallRequest", CALL, opa.url)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
+
+
+@pytest.mark.parametrize("path", ["/arguments/to", "/arguments/to/value", "/arguments"])
+def test_a_redaction_that_overlaps_a_parameter_override_is_invalid(path):
+    # Section 6.3: structured targets are disjoint. Overrides address /arguments/<key> in the payload.
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": path}], "parameter_overrides": {"to": "acct-2"}}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
+
+
+def test_a_redaction_beside_a_parameter_override_is_valid():
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": "/arguments/amount/value"}],
+                                 "parameter_overrides": {"to": "acct-2"}}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE) is None

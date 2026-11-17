@@ -340,6 +340,14 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
         unknown = sorted(set(overrides) - set(payload.get("arguments") or {}))
         if unknown:
             return f"parameter_overrides names arguments the call does not carry: {unknown}"
+        # acs.core compares overrides as /<key>, but a redaction path is rooted at the payload, where the same
+        # argument lives at /arguments/<key>. Compare them there, so two edits to one argument cannot both pass.
+        for key in overrides:
+            target = "/arguments/" + key.replace("~", "~0").replace("/", "~1")
+            for redaction in modifications.get("redactions") or []:
+                path = redaction.get("path") or ""
+                if path == target or path.startswith(target + "/") or target.startswith(path + "/"):
+                    return f"redaction path {path!r} overlaps parameter_override {key!r} (section 6.3)"
     paths = [redaction.get("path") for redaction in modifications.get("redactions") or []]
     for path in paths:
         # A path that misses would redact nothing and let the value through, so it is a policy error, not a no-op.
