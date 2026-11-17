@@ -41,7 +41,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from acs.client import KeyDocumentError, check_secret_file_perms, parse_key_document
+from acs.client import KeyDocumentError, parse_key_document, read_secret_file
 from acs.core import (
     derive_session_key,
     jcs_canonicalize,
@@ -62,6 +62,8 @@ STEP_PREFIX = "steps/"
 MAX_UNSETTLED = 12
 # Section 10 asks for at least 32 bytes of secret, the bound acs.client applies.
 MIN_SECRET_BYTES = 32
+# A secret file is a few dozen bytes. The bound keeps a wrong path, such as a log, from being read whole.
+MAX_SECRET_BYTES = 4096
 _FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
 
 EXIT_PASS = 0
@@ -393,6 +395,11 @@ class _Verifier:
         except KeyDocumentError as exc:
             raise _Fail(resp_line, "key_not_valid", f"key {key_id!r} was not live at the request's timestamp "
                                                     f"{_timestamp(request)}: {exc}") from exc
+        # verify_with_keyring never checks the validity window, so it is checked here, at this entry's own time,
+        # whatever parse_key_document's pin rules become.
+        if not keys.is_live(moment):
+            raise _Fail(resp_line, "key_not_valid", f"key {key_id!r} was not live at the request's timestamp "
+                                                    f"{_timestamp(request)}")
         if self.keys.fingerprints and keys.fingerprint not in self.keys.fingerprints:
             raise _Fail(resp_line, "fingerprint_mismatch", f"key {key_id!r} has fingerprint {keys.fingerprint}, "
                                                            "not the expected fingerprint")
@@ -520,10 +527,9 @@ def _walk(verifier: _Verifier, lines: Iterable[str | bytes]) -> None:
 
 def _read_secret(path: str) -> bytes:
     try:
-        # The same owner-only, no-symlink rule every other reader of the shared secret applies.
-        check_secret_file_perms(path, setting="--hmac-secret")
-        with open(path, "rb") as f:
-            secret = f.read().rstrip(b"\r\n\t ")
+        # The same owner-only, no-symlink rule every other reader of a secret file applies, checked on the
+        # descriptor that reads it.
+        secret = read_secret_file(path, setting="--hmac-secret", max_bytes=MAX_SECRET_BYTES).rstrip(b"\r\n\t ")
     except (OSError, RuntimeError) as exc:
         raise UsageError(f"--hmac-secret {path!r} can't be read: {exc}") from exc
     if len(secret) < MIN_SECRET_BYTES:

@@ -102,7 +102,7 @@ def test_a_missing_transcript_exits_2(tmp_path, secret_file, capsys):
     assert "can't be read" in capsys.readouterr().err
 
 
-def test_a_short_or_shared_secret_file_exits_2(tmp_path, hmac_run, capsys):
+def test_a_short_shared_or_linked_secret_file_exits_2(tmp_path, hmac_run, capsys):
     path = write(tmp_path, record_session(hmac_run))
     short = tmp_path / "short.key"
     short.write_bytes(b"too short")
@@ -112,6 +112,11 @@ def test_a_short_or_shared_secret_file_exits_2(tmp_path, hmac_run, capsys):
     readable.write_bytes(hmac_run.hmac_secret)
     os.chmod(readable, 0o644)
     assert main([str(path), "--hmac-secret", str(readable)]) == EXIT_USAGE
+    os.chmod(readable, 0o600)
+    link = tmp_path / "link.key"
+    link.symlink_to(readable)
+    assert main([str(path), "--hmac-secret", str(link)]) == EXIT_USAGE
+    assert main([str(path), "--hmac-secret", str(readable)]) == EXIT_PASS
 
 
 def test_the_module_runs_as_a_command():
