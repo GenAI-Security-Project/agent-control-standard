@@ -76,6 +76,8 @@ nav:
     - Trust Basis: concepts/trust.md
   - Specification:
     - Conformance Profiles: spec/conformance.md
+    - Predicates:
+      - Agent Change Admission: spec/predicates/agent-change-admission-v1.md
     - Instrument:
       - Overview: spec/instrument/README.md
       - Supported Hooks: spec/instrument/hooks.md
