@@ -467,20 +467,19 @@ class RequestBinding(unittest.TestCase):
         with self.assertRaises(TypeError):
             verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID)  # type: ignore[call-arg]
 
-    def test_a_step_request_without_a_string_request_id_is_a_caller_error(self) -> None:
-        # Review finding CR6-2: only the handshake binds on the id alone, so a step request
-        # that can't name its request_id is the caller's mistake, not a weaker binding.
+    def test_a_step_result_against_a_request_without_a_string_request_id_fails(self) -> None:
+        # Review findings CR6-2 and CR9-1: such a request binds no result, the same answer
+        # response_matches_request gives on the HMAC path. It is no longer a caller error.
         for request_id in (None, 7, "", ["r"]):
             request = _request()
             if request_id is None:
                 del request["params"]["request_id"]
             else:
                 request["params"]["request_id"] = request_id
-            with self.subTest(request_id=request_id), self.assertRaises(ValueError):
-                self._verify(self.signed, request)
+            with self.subTest(request_id=request_id):
+                self.assertFalse(self._verify(self.signed, request))
         without_params = {k: v for k, v in _request().items() if k != "params"}
-        with self.assertRaises(ValueError):
-            self._verify(self.signed, without_params)
+        self.assertFalse(self._verify(self.signed, without_params))
         hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello", "params": {"acs_version": "0.1.0"}}
         server_hello = {"jsonrpc": "2.0", "id": "hello-1",
                         "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
@@ -488,30 +487,30 @@ class RequestBinding(unittest.TestCase):
         sign_with_signing_key(server_hello, _signer())
         self.assertTrue(self._verify(server_hello, hello), "a ClientHello needs no request_id")
 
-    def test_the_precondition_runs_once_per_verification(self) -> None:
-        # Review finding CR8-7: verify_with_keyring checks the request, then binds without re-checking.
-        import acs.core._envelope as envelope_module
-        import acs.core._mldsa as module
-        spy = mock.Mock(wraps=envelope_module.request_binding_problem)
-        with mock.patch.object(envelope_module, "request_binding_problem", spy), \
-                mock.patch.object(module, "request_binding_problem", spy):
-            self.assertTrue(self._verify(self.signed, _request()))
-        self.assertEqual(spy.call_count, 1)
+    def test_a_signed_error_binds_by_id_whatever_the_request_id(self) -> None:
+        # Review finding CR9-1: the error rule reaches the keyring path too, as on the HMAC path.
+        error = {"jsonrpc": "2.0", "id": DECISION_ID, "error": {"code": -32000, "message": "refused"}}
+        sign_with_signing_key(error, _signer())
+        for params in ({"acs_version": "0.1.0"}, {"request_id": 7}, {"request_id": ""}, "params"):
+            request = {**_request(), "params": params}
+            with self.subTest(params=params):
+                self.assertTrue(self._verify(error, request))
+        self.assertFalse(self._verify(error, {**_request(), "id": "another-call"}))
 
-    def test_the_caller_error_is_the_shared_precondition(self) -> None:
-        # CR7-6: the keyring path raises exactly what request_binding_problem names.
-        from acs.core._envelope import request_binding_problem
-        bad = {**_request(), "params": {}}
+    def test_the_caller_error_is_the_envelope_precondition(self) -> None:
+        # CR9-1: only a request that isn't an envelope with an id is the caller's mistake.
+        from acs.core._envelope import request_envelope_problem
+        bad = {k: v for k, v in _request().items() if k != "id"}
         with self.assertRaises(ValueError) as raised:
             self._verify(self.signed, bad)
-        self.assertEqual(str(raised.exception), request_binding_problem(bad))
+        self.assertEqual(str(raised.exception), request_envelope_problem(bad))
 
-    def test_a_request_whose_params_is_not_an_object_is_a_caller_error(self) -> None:
-        # Review findings R5-M1, CR5-2: ValueError, not an AttributeError from deep inside.
+    def test_a_request_whose_params_is_not_an_object_binds_no_result(self) -> None:
+        # Review findings R5-M1, CR5-2, CR9-1: False, never an AttributeError from deep inside.
         for params in ("params", ["request_id"], 7, True):
             request = {**_request(), "params": params}
-            with self.subTest(params=params), self.assertRaises(ValueError):
-                self._verify(self.signed, request)
+            with self.subTest(params=params):
+                self.assertFalse(self._verify(self.signed, request))
 
 
 class Rejections(unittest.TestCase):

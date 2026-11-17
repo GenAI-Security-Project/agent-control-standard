@@ -56,22 +56,32 @@ def same_json_rpc_id(a: object, b: object) -> bool:
 HANDSHAKE_METHOD = "handshake/hello"
 
 
-def request_binding_problem(request: object) -> str | None:
-    """Why this request can't bind a response, or None. The one precondition both paths share.
+def request_envelope_problem(request: object) -> str | None:
+    """Why this is no request envelope a response could answer, or None.
 
-    A request needs a string or numeric JSON-RPC id, since a missing or null id matches
-    nothing, and params, when present, must be an object. Only the handshake binds on the id
-    alone, so any other request must carry a non-empty string params.request_id.
-    verify_with_keyring raises ValueError with this text, and response_matches_request
-    returns False.
+    The request must be a Mapping with a JSON-RPC id that is a string or a number. A missing or
+    null id matches nothing, and a bool would otherwise pass as a number. verify_with_keyring
+    treats this as a caller error and raises ValueError with this text.
     """
-    # Any Mapping binds, since _handshake passes a read-only view of the ClientHello.
     if not isinstance(request, Mapping):
         return "request must be the request envelope this response answers"
     json_rpc_id = request.get("id")
-    # JSON-RPC ids are strings or numbers. A bool would otherwise pass as a number.
     if isinstance(json_rpc_id, bool) or not isinstance(json_rpc_id, (str, int, float)):
         return "request must carry a string or numeric JSON-RPC id"
+    return None
+
+
+def request_binding_problem(request: object) -> str | None:
+    """Why this request can bind no result, or None.
+
+    It adds to request_envelope_problem: params, when present, must be a Mapping, and only the
+    handshake binds on the id alone, so any other request must carry a non-empty string
+    params.request_id. response_matches_request answers False for a result when this reports a
+    problem. An error still binds by id alone.
+    """
+    problem = request_envelope_problem(request)
+    if problem is not None:
+        return problem
     params = request.get("params")
     if params is not None and not isinstance(params, Mapping):
         return "request params must be an object when present"
@@ -82,37 +92,28 @@ def request_binding_problem(request: object) -> str | None:
     return None
 
 
-def response_matches_request(request: dict, response: dict) -> bool:
-    """Whether the response answers this request, so a signed response can't be replayed onto another call (D-029).
+def response_matches_request(request: Mapping, response: dict) -> bool:
+    """Whether the response answers this request (D-029), so a signed response can't be replayed.
 
-    The rule follows the request, never the response's shape. Every response needs the
-    request's JSON-RPC id. An error object is bound by the id alone, whatever the request's
+    This is the one binding rule, and the keyring path and the client's step exchange both call
+    it. The rule follows the request, never the response's shape. Every response needs the
+    request's JSON-RPC id. An error object binds by the id alone, whatever the request's
     request_id, and an id with neither a result nor an error object answers nothing. A result
-    binds only a request that passes request_binding_problem. For the handshake, a ServerHello echoes nothing else from the ClientHello, so its
-    result must carry no request_id, which keeps a step decision from answering a ClientHello.
-    Issue #13 tracks binding the handshake to the traffic after it. For every other request, a
-    result must carry the request's request_id. A result that isn't an object answers nothing.
+    binds only a request that passes request_binding_problem, and it must be an object. For the
+    handshake, a ServerHello echoes nothing else from the ClientHello, so its result must carry
+    no request_id, which keeps a step decision from answering a ClientHello. Issue #13 tracks
+    binding the handshake to the traffic after it. For every other request, a result must carry
+    the request's request_id.
     """
-    if not isinstance(request, Mapping):
+    if request_envelope_problem(request) is not None:
         return False
-    return _binds(request, response, request_checked=False)
-
-
-def _binds(request: Mapping, response: dict, *, request_checked: bool) -> bool:
-    """The binding rule behind response_matches_request.
-
-    request_checked says the caller already ran request_binding_problem on this request, as
-    verify_with_keyring does before it raises, so the precondition runs once per verification.
-    """
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return False
     result = response.get("result")
     if result is None:
         # An error object answers by id alone. Anything else without a result answers nothing.
         return isinstance(response.get("error"), dict)
-    if not request_checked and request_binding_problem(request) is not None:
-        return False
-    if not isinstance(result, dict):
+    if request_binding_problem(request) is not None or not isinstance(result, dict):
         return False
     if request.get("method") == HANDSHAKE_METHOD:
         return "request_id" not in result

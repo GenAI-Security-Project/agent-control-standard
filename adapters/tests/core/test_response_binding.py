@@ -65,7 +65,9 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
     def test_an_error_binds_by_id_with_the_same_rule(self) -> None:
         error = {"jsonrpc": "2.0", "id": True, "error": {"code": -32000, "message": "refused"}}
         self.assertFalse(response_matches_request(_request(1), error))
-        self.assertTrue(response_matches_request(_request(True), error))
+        # CR8-3, CR9-1: a bool is no request id, so a request carrying one binds even no error.
+        self.assertFalse(response_matches_request(_request(True), error))
+        self.assertTrue(response_matches_request(_request(1), {**error, "id": 1.0}))
 
     def test_request_id_uses_the_same_rule(self) -> None:
         # Review finding CR6-4: no plain != for request_id either.

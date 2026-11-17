@@ -27,7 +27,7 @@ except ImportError as exc:
         "can't be installed together (see adapters/README.md).") from exc
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
-from acs.core._envelope import _binds, request_binding_problem
+from acs.core._envelope import request_envelope_problem, response_matches_request
 from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
 
 ML_DSA_MODE = "pure"
@@ -156,7 +156,9 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
     raises ValueError with that problem's text.
     """
     check_key_id(expected_key_id)
-    problem = request_binding_problem(request)
+    # Only a request that is no envelope with a usable id is the caller's mistake. Everything
+    # else is the one binding rule's to answer, so an error binds by id here as on the HMAC path.
+    problem = request_envelope_problem(request)
     if problem is not None:
         raise ValueError(problem)
     if not isinstance(envelope, dict) or "method" in envelope:
@@ -169,8 +171,7 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
         return False
     if sig.get("key_id") != expected_key_id:
         return False
-    # request_binding_problem already ran above, so bind without running it again.
-    if not _binds(request, envelope, request_checked=True):
+    if not response_matches_request(request, envelope):
         return False
     key = keyring.resolve(expected_key_id)
     if key is None:
