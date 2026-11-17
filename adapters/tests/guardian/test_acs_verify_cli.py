@@ -124,3 +124,53 @@ def test_the_module_runs_as_a_command():
                           timeout=30)
     assert done.returncode == 0
     assert "usage: acs-verify" in done.stdout
+
+
+# Fix round 2.
+
+
+def test_a_transcript_over_the_byte_cap_exits_2(tmp_path, hmac_run, secret_file, capsys):
+    path = write(tmp_path, record_session(hmac_run))
+    assert main([str(path), "--hmac-secret", str(secret_file), "--max-bytes", "100"]) == EXIT_USAGE
+    assert "100 bytes" in capsys.readouterr().err
+    assert main([str(path), "--hmac-secret", str(secret_file), "--max-bytes", "0"]) == EXIT_USAGE
+
+
+@pytest.mark.parametrize("prepare", ["group_writable", "symlink"])
+def test_the_key_document_goes_through_the_trusted_file_reader(tmp_path, hmac_run, secret_file, prepare, capsys):
+    path = write(tmp_path, record_session(hmac_run))
+    document = tmp_path / "keys.json"
+    document.write_text("{}", encoding="utf-8")
+    os.chmod(document, 0o644)
+    if prepare == "group_writable":
+        os.chmod(document, 0o664)
+        target = document
+    else:
+        target = tmp_path / "link.json"
+        target.symlink_to(document)
+    assert main([str(path), "--keys", str(target)]) == EXIT_USAGE
+    assert "--keys" in capsys.readouterr().err
+
+
+def test_json_reports_a_missing_pqc_extra(tmp_path, hmac_run, secret_file, monkeypatch, capsys):
+    from acs.testing import verify
+
+    def no_extra(*args, **kwargs):
+        raise ImportError("ML-DSA-65 signing needs the pqc extra")
+
+    monkeypatch.setattr(verify, "verify_transcript", no_extra)
+    path = write(tmp_path, record_session(hmac_run))
+    assert main([str(path), "--hmac-secret", str(secret_file), "--json"]) == EXIT_USAGE
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"] == "error" and "pqc" in out["error"]
+
+
+def test_a_request_jcs_cannot_encode_still_prints_a_json_report(tmp_path, hmac_run, secret_file, capsys):
+    lines = record_session(hmac_run)
+    number = next(i for i, line in enumerate(lines, start=1) if '"steps/toolCallRequest"' in line
+                  and '"dir":"req"' in line)
+    lines[number - 1] = lines[number - 1].replace('"payload":{', '"payload":{"far":1e400,', 1)
+    path = write(tmp_path, lines)
+    assert main([str(path), "--hmac-secret", str(secret_file), "--json"]) == EXIT_FAIL
+    report = json.loads(capsys.readouterr().out)
+    assert report["failure"]["line"] == number and report["failure"]["code"] == "not_canonical"

@@ -29,6 +29,7 @@ PROCEED = FailPosture(deny_on_failure=False, timeout_s=5.0)
 ALLOWED = {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "ls -la"}}}
 DENIED = {"tool": {"name": "Bash"}, "arguments": {"command": {"value": "rm -rf /"}}}
 NO_PROXY = {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+MCP_CALL = ("protocols/MCP/tools/call", {"name": "echo", "arguments": {"text": "hi"}})
 FINGERPRINT_LINE = re.compile(r"\[guardian\] decision signing ML-DSA-65 key_id=(\S+) fingerprint=(sha256:[0-9a-f]{64})")
 
 
@@ -134,12 +135,17 @@ class Session:
                                           "platform": "lab"},
                                 payload=payload)
 
-    def send(self, request: dict):
-        return round_trip(request, guardian_url=self.run.url, posture=PROCEED, session_id=self.run.session_id,
-                          response_keys=self.keys, on_wire=self.recorder)
+    def send(self, request: dict, *, url: str | None = None):
+        """Send one request. When no answer arrived, write the null line with its cause, as the gateway does."""
+        before = len(self.recorder.lines)
+        outcome = round_trip(request, guardian_url=url or self.run.url, posture=PROCEED,
+                             session_id=self.run.session_id, response_keys=self.keys, on_wire=self.recorder)
+        if len(self.recorder.lines) == before + 1:
+            self.recorder.lines.append(transcript_line("resp", None, outcome.cause))
+        return outcome
 
-    def step(self, method: str, payload: dict):
-        return self.send(self.envelope(method, payload))
+    def step(self, method: str, payload: dict, *, url: str | None = None):
+        return self.send(self.envelope(method, payload), url=url)
 
     def open(self) -> None:
         def start(negotiated: Negotiated):
@@ -169,4 +175,24 @@ def record_session(run: GuardianRun, *, end: bool = True, replay: bool = False) 
     if end:
         ended = session.step("steps/sessionEnd", {"reason": "user_exit"})
         assert isinstance(ended, Decided), ended
+    return list(session.lines)
+
+
+def unreachable_url() -> str:
+    """A loopback URL nothing listens on, so a request to it is refused before it reaches any Guardian."""
+    import socket
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    return f"http://127.0.0.1:{port}/acs"
+
+
+def record_custom(run: GuardianRun, actions) -> list[str]:
+    """Handshake and sessionStart, then each action(session), then sessionEnd."""
+    session = Session(run)
+    session.open()
+    for action in actions:
+        action(session)
+    ended = session.step("steps/sessionEnd", {"reason": "user_exit"})
+    assert isinstance(ended, Decided), ended
     return list(session.lines)

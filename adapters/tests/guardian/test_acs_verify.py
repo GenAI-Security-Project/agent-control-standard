@@ -327,21 +327,27 @@ def test_a_truncated_transcript_does_not_claim_the_whole_log(mldsa_run):
 def test_a_request_with_no_answer_after_the_last_checkpoint_is_unverified(mldsa_run):
     from acs_verify_helpers import transcript_line
     lines = record_session(mldsa_run, end=False)
-    tail = [lines[-2].replace(json.loads(lines[-2])["envelope"]["id"], "no-answer"),
-            transcript_line("resp", None, "decision_timeout")]
+    unanswered = json.loads(lines[-2])
+    unanswered["envelope"]["id"] = "no-answer"
+    unanswered["envelope"]["params"]["request_id"] = "no-answer-request"
+    tail = [json.dumps(unanswered), transcript_line("resp", None, "decision_timeout")]
     report = mldsa_verify(mldsa_run, lines + tail)
     assert report.ok and not report.complete
     assert report.unverified_lines == [len(lines) + 1, len(lines) + 2]
+    assert report.unsigned_lines == [len(lines) + 1]
     assert f"Lines {len(lines) + 1} to {len(lines) + 2}" in report.to_text()
 
 
-def test_a_replayed_request_between_two_decisions_settles(mldsa_run):
+def test_a_replayed_request_fails_at_the_second_copy(mldsa_run):
+    # The Guardian refuses the copy with a signed -32005, but a request_id seen twice is itself the anomaly.
     lines = record_session(mldsa_run, replay=True)
-    codes = [(json.loads(line)["envelope"].get("error") or {}).get("code") for line in lines
-             if json.loads(line)["dir"] == "resp"]
-    assert -32005 in codes
+    assert any((r["envelope"].get("error") or {}).get("code") == -32005 for r in records(lines) if r["dir"] == "resp")
+    request_ids = [r["envelope"]["params"].get("request_id") for r in records(lines) if r["dir"] == "req"]
+    repeated = next(rid for rid in request_ids if request_ids.count(rid) > 1)
+    copies = [n for n, r in enumerate(records(lines), start=1)
+              if r["dir"] == "req" and r["envelope"]["params"].get("request_id") == repeated]
     report = mldsa_verify(mldsa_run, lines)
-    assert report.ok and report.complete, report.to_text()
+    assert (report.failure.line, report.failure.code) == (copies[1], "duplicate_request_id")
 
 
 def test_keys_only_checks_signatures_without_the_chain(mldsa_run):
@@ -357,7 +363,7 @@ def test_keys_only_checks_signatures_without_the_chain(mldsa_run):
     assert mldsa_verify(mldsa_run, flipped, keys_only=True).failure.code == "signature_invalid"
 
 
-def test_a_chained_request_whose_answer_was_lost_settles_at_the_next_checkpoint(mldsa_run):
+def test_a_chained_request_whose_answer_was_lost_settles_but_is_listed(mldsa_run):
     # The Guardian chained the allow, but the answer never reached the gateway (a timeout). The deny's signed
     # chain_hash settles that the entry is in the chain (PREMORTEM P6).
     from acs_verify_helpers import transcript_line
@@ -366,8 +372,183 @@ def test_a_chained_request_whose_answer_was_lost_settles_at_the_next_checkpoint(
     lost = list(lines)
     lost[number - 1] = transcript_line("resp", None, "decision_timeout")
     report = mldsa_verify(mldsa_run, lost)
-    assert report.ok and report.complete, report.to_text()
+    # The chain settles, but no signature covers what was decided for that request, so the log is not complete.
+    assert report.ok and not report.complete, report.to_text()
+    assert report.unsigned_lines == [number - 1]
     # Dropping the request line too leaves an entry the chain needs, so the next checkpoint fails.
     dropped = lines[:number - 2] + lines[number:]
     report = mldsa_verify(mldsa_run, dropped)
     assert (report.failure.line, report.failure.code) == (number - 1, "chain_mismatch")
+
+
+# Fix round 2. A pass claims only what a signature covers: every request line no signed decision covers is listed,
+# and then the transcript is never called complete.
+
+
+def assert_partial(report, listed):
+    assert report.ok, report.to_text()
+    assert not report.complete
+    assert set(listed) <= set(report.unsigned_lines), (listed, report.unsigned_lines)
+    text = report.to_text()
+    assert "whole transcript verified" not in text
+    assert "no signed decision" in text
+
+
+def test_a_deleted_deny_response_is_listed_and_the_log_is_not_complete(mldsa_run):
+    lines = record_session(mldsa_run)
+    deny_req = tool_request_line(lines, "rm -rf /")
+    report = mldsa_verify(mldsa_run, lines[:deny_req] + lines[deny_req + 1:])
+    assert_partial(report, [deny_req])
+
+
+def test_a_nulled_deny_response_is_listed_and_the_log_is_not_complete(mldsa_run):
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run)
+    deny_req = tool_request_line(lines, "rm -rf /")
+    nulled = list(lines)
+    nulled[deny_req] = transcript_line("resp", None, "decision_timeout")
+    assert_partial(mldsa_verify(mldsa_run, nulled), [deny_req])
+
+
+def test_an_inserted_request_with_a_null_response_is_listed(mldsa_run):
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run)
+    deny_req = tool_request_line(lines, "rm -rf /")
+    inserted = json.loads(lines[deny_req - 1])
+    inserted["envelope"]["id"] = "inserted"
+    inserted["envelope"]["params"]["request_id"] = "inserted-request"
+    out = lines[:deny_req + 1] + [json.dumps(inserted), transcript_line("resp", None, "decision_timeout")] \
+        + lines[deny_req + 1:]
+    assert_partial(mldsa_verify(mldsa_run, out), [deny_req + 2])
+
+
+def test_an_inserted_ping_pair_is_listed(mldsa_run):
+    from acs_verify_helpers import transcript_line
+    lines = record_session(mldsa_run)
+    ping = {"jsonrpc": "2.0", "id": "ping-1", "method": "system/ping",
+            "params": {"acs_version": "0.1.0", "request_id": "ping-1", "timestamp": iso8601_now(),
+                       "payload": {"echo": "x"}}}
+    pong = {"jsonrpc": "2.0", "id": "ping-1", "result": {"type": "final", "acs_version": "0.1.0",
+                                                         "request_id": "ping-1", "decision": "allow"}}
+    at = len(lines) - 2
+    out = lines[:at] + [transcript_line("req", ping), transcript_line("resp", pong)] + lines[at:]
+    assert_partial(mldsa_verify(mldsa_run, out), [at + 1])
+
+
+def test_a_duplicated_request_line_fails_at_the_copy(mldsa_run):
+    lines = record_session(mldsa_run)
+    deny_req = tool_request_line(lines, "rm -rf /")
+    out = lines[:deny_req] + [lines[deny_req - 1]] + lines[deny_req:]
+    report = mldsa_verify(mldsa_run, out)
+    assert (report.failure.line, report.failure.code) == (deny_req + 1, "duplicate_request_id")
+
+
+def test_a_wrapped_mcp_call_is_chained_as_the_guardian_chains_it(mldsa_run):
+    from acs_verify_helpers import MCP_CALL, record_custom
+    lines = record_custom(mldsa_run, [lambda session: session.step(*MCP_CALL)])
+    mcp = [r for r in records(lines) if r["dir"] == "resp" and "chain_hash" in (r["envelope"].get("result") or {})]
+    assert len(mcp) == 3  # sessionStart, the MCP call, sessionEnd
+    report = mldsa_verify(mldsa_run, lines)
+    assert report.ok and report.complete, report.to_text()
+
+
+def test_the_guardians_predicate_matches_what_it_chained(mldsa_run):
+    # The Guardian's own predicate decides which methods acs-verify chains, so no second copy of the rule exists.
+    from acs.guardian._chain import chains_method
+    from acs_verify_helpers import MCP_CALL, record_custom
+    lines = record_custom(mldsa_run, [lambda session: session.step(*MCP_CALL),
+                                      lambda session: session.step("steps/toolCallRequest",
+                                                                   {"tool": {"name": "Bash"},
+                                                                    "arguments": {"command": {"value": "ls"}}})])
+    rows = records(lines)
+    for request, response in zip(rows[0::2], rows[1::2]):
+        chained = "chain_hash" in (response["envelope"].get("result") or {})
+        assert chained == chains_method(request["envelope"]["method"]), request["envelope"]["method"]
+
+
+def test_thirteen_refused_connections_do_not_fail_a_genuine_transcript(mldsa_run):
+    from acs_verify_helpers import ALLOWED, record_custom, unreachable_url
+    dead = unreachable_url()
+
+    def refused(session):
+        for _ in range(13):
+            session.step("steps/toolCallRequest", ALLOWED, url=dead)
+
+    lines = record_custom(mldsa_run, [refused])
+    causes = [r.get("cause") for r in records(lines) if r["dir"] == "resp" and r["envelope"] is None]
+    assert causes == ["transport_failure"] * 13
+    report = mldsa_verify(mldsa_run, lines)
+    assert report.ok, report.to_text()
+    assert len(report.unsigned_lines) == 13
+    assert not report.complete
+
+
+def test_a_revoked_key_that_signed_an_entry_warns_about_backdating(mldsa_run):
+    lines = record_session(mldsa_run)
+    document = mldsa_run.key_document()
+    document["revoked"] = [{"key_id": "lab-guardian-1", "revoked_at": iso8601_now()}]
+    report = mldsa_verify(mldsa_run, lines, key_document=document)
+    assert report.ok
+    assert report.warnings and "backdate" in report.warnings[0]
+    assert "warning:" in report.to_text()
+    assert not mldsa_verify(mldsa_run, lines).warnings
+
+
+@pytest.mark.parametrize("raw", ['"big":9007199254740993,', '"far":1e400,'])
+def test_a_request_jcs_cannot_encode_fails_at_its_line(mldsa_run, raw):
+    lines = record_session(mldsa_run)
+    number = tool_request_line(lines, "ls -la")
+    out = list(lines)
+    out[number - 1] = out[number - 1].replace('"payload":{', '"payload":{' + raw, 1)
+    report = mldsa_verify(mldsa_run, out)
+    assert (report.failure.line, report.failure.code) == (number, "not_canonical"), report.to_text()
+
+
+@pytest.mark.parametrize("change,expected", [
+    (lambda d: d.update({"revoked": "nobody"}), "revoked"),
+    (lambda d: d.update({"revoked": [{"key_id": "lab-guardian-1", "revoked_at": "yesterday"}]}), "revoked_at"),
+])
+def test_a_malformed_revoked_list_is_a_usage_error(mldsa_run, change, expected):
+    from acs.testing.verify import UsageError
+    document = mldsa_run.key_document()
+    change(document)
+    with pytest.raises(UsageError, match=expected):
+        mldsa_verify(mldsa_run, record_session(mldsa_run), key_document=document)
+
+
+def test_an_unknown_key_id_pin_is_a_usage_error(mldsa_run):
+    from acs.testing.verify import UsageError
+    with pytest.raises(UsageError, match="lab-guardian-9"):
+        mldsa_verify(mldsa_run, record_session(mldsa_run), key_id="lab-guardian-9")
+
+
+def test_keys_are_parsed_once_per_key_not_per_response(mldsa_run, monkeypatch):
+    from acs.testing import verify
+    calls = []
+    real = verify.parse_key_document
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("key_id"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(verify, "parse_key_document", counting)
+    lines = record_session(mldsa_run)
+    assert mldsa_verify(mldsa_run, lines).ok
+    assert len(calls) <= 2  # the load check and the key itself, whatever the transcript's length
+
+
+@pytest.mark.parametrize("field,value,words,absent", [
+    ("id", "another-id", "JSON-RPC id", "request_id"),
+    ("request_id", "another-request", "request_id", "JSON-RPC id"),
+])
+def test_the_binding_failure_names_what_differs(mldsa_run, field, value, words, absent):
+    lines = record_session(mldsa_run)
+    req = tool_request_line(lines, "rm -rf /")
+    if field == "id":
+        out = rewrite(lines, req + 1, lambda r: r["envelope"].update({"id": value}))
+    else:
+        out = rewrite(lines, req + 1, lambda r: r["envelope"]["result"].update({"request_id": value}))
+    report = mldsa_verify(mldsa_run, out)
+    assert report.failure.code == "binding"
+    assert words in report.failure.reason
+    assert absent not in report.failure.reason
