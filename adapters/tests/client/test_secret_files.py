@@ -8,6 +8,7 @@ at most max_bytes and raises the caller's error class for every problem.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 import threading
 import unittest
@@ -112,46 +113,99 @@ class ReadTrustedFile(unittest.TestCase):
         self.assertIn("regular file", str(outcome[0]))
 
     def test_the_open_flags(self) -> None:
+        # The directory is opened once with O_DIRECTORY, and the file inside it with dir_fd (round 4 ruling).
         real_open = os.open
-        flags_seen = []
+        calls = []
 
-        def spy(path, flags, *args):
-            flags_seen.append(flags)
-            return real_open(path, flags, *args)
+        def spy(path, flags, *args, **kwargs):
+            calls.append((path, flags, kwargs.get("dir_fd")))
+            return real_open(path, flags, *args, **kwargs)
 
         with mock.patch.object(_secrets.os, "open", side_effect=spy):
             read(self.write(0o600))
+        directory, file = calls
+        self.assertTrue(directory[1] & os.O_DIRECTORY)
+        self.assertEqual(file[0], "secret.key")
+        self.assertIsNotNone(file[2])
         for name in ("O_NOFOLLOW", "O_NONBLOCK", "O_BINARY"):
             if hasattr(os, name):
-                self.assertTrue(flags_seen[0] & getattr(os, name), name)
+                self.assertTrue(file[1] & getattr(os, name), name)
 
-    def _owned_by(self, uid: int) -> mock._patch:
+    def _fstat_as(self, *, file_uid: int | None = None, dir_uid: int | None = None) -> mock._patch:
+        """Report another owner for the file or its directory, since a test can't chown without root."""
         real_fstat = os.fstat
 
         def fstat(fd):
             st = real_fstat(fd)
+            uid = dir_uid if stat.S_ISDIR(st.st_mode) else file_uid
+            if uid is None:
+                return st
             return SimpleNamespace(st_mode=st.st_mode, st_uid=uid, st_size=st.st_size)
         return mock.patch.object(_secrets.os, "fstat", side_effect=fstat)
 
     def test_another_owner_is_refused_and_root_is_accepted(self) -> None:
         path = self.write(0o600)
-        with self._owned_by(os.geteuid() + 1), self.assertRaisesRegex(Refused, "owned by uid"):
+        with self._fstat_as(file_uid=os.geteuid() + 1), self.assertRaisesRegex(Refused, "owned by uid"):
             read(path)
-        with self._owned_by(0):
+        with self._fstat_as(file_uid=0):
             self.assertEqual(read(path), b"a" * 65)
 
-    def test_a_parent_directory_others_can_write_is_refused_unless_sticky(self) -> None:
-        # Review CR3-3: whoever can write the directory can replace the file between runs.
+    def test_a_directory_another_user_owns_is_refused_for_a_secret(self) -> None:
+        # Review round 4 CR3: whoever owns the directory can replace the file in it.
+        path = self.write(0o600)
+        with self._fstat_as(dir_uid=os.geteuid() + 1), self.assertRaisesRegex(Refused, "directory .* owned by uid"):
+            read(path)
+        with self._fstat_as(dir_uid=0):
+            self.assertEqual(read(path), b"a" * 65)
+
+    def test_a_public_file_skips_both_owner_checks(self) -> None:
+        # Review round 4 CR2: a client reads the Guardian's key document, which the Guardian owns.
+        path = self.write(0o644)
+        other = os.geteuid() + 1
+        with self._fstat_as(file_uid=other, dir_uid=other):
+            data = read_trusted_file(path, setting=SETTING, max_bytes=100, mode_rule=not_writable_by_others,
+                                     refused=Refused, require_owner=False)
+        self.assertEqual(data, b"a" * 65)
+
+    def test_only_a_world_writable_directory_without_the_sticky_bit_is_refused(self) -> None:
+        # Review round 4 RR1: mkdir under umask 002 gives 0775, and a 0600 secret in it must still load.
         shared = os.path.join(self.dir, "shared")
         os.mkdir(shared)
         path = self.write(0o600, directory=shared)
-        for mode in (0o770, 0o707):
-            os.chmod(shared, mode)
-            with self.subTest(mode=oct(mode)), self.assertRaisesRegex(Refused, "directory .* writable"):
-                read(path)
-        os.chmod(shared, 0o1777)
-        self.assertEqual(read(path), b"a" * 65)
-        os.chmod(shared, 0o700)
+        try:
+            for mode in (0o700, 0o750, 0o770, 0o775, 0o1777):
+                os.chmod(shared, mode)
+                with self.subTest(mode=oct(mode)):
+                    self.assertEqual(read(path), b"a" * 65)
+            for mode in (0o777, 0o707, 0o703):
+                os.chmod(shared, mode)
+                with self.subTest(mode=oct(mode)), self.assertRaisesRegex(Refused, "world-writable"):
+                    read(path)
+        finally:
+            os.chmod(shared, 0o700)
+
+    def test_dot_dot_through_a_link_is_resolved_by_the_kernel(self) -> None:
+        # Review round 4 CR3: os.path.abspath would collapse link/.. lexically and check the wrong directory.
+        open_dir = os.path.join(self.dir, "open")
+        os.mkdir(open_dir)
+        os.chmod(open_dir, 0o777)
+        inner = os.path.join(open_dir, "inner")
+        os.mkdir(inner, 0o700)
+        os.symlink(inner, os.path.join(self.dir, "link"))
+        self.write(0o600, directory=open_dir)
+        try:
+            # Lexically this is self.dir/secret.key, which doesn't exist. The kernel reaches open/secret.key.
+            with self.assertRaisesRegex(Refused, "world-writable"):
+                read(os.path.join(self.dir, "link", "..", "secret.key"))
+        finally:
+            os.chmod(open_dir, 0o700)
+
+    def test_a_symlink_loop_in_the_directory_gets_the_directory_message(self) -> None:
+        # Review round 4 CR10: only the last component can make the file open fail with ELOOP.
+        loop = os.path.join(self.dir, "loop")
+        os.symlink(loop, loop)
+        with self.assertRaisesRegex(Unreadable, "directory .* cannot be opened"):
+            read(os.path.join(loop, "secret.key"))
 
     def test_an_os_error_after_open_raises_the_callers_class(self) -> None:
         # Review CR3-6: never a raw OSError.
@@ -172,8 +226,9 @@ class ReadTrustedFile(unittest.TestCase):
             read_trusted_file(os.path.join(self.dir, "absent"), setting=SETTING, max_bytes=10, mode_rule=owner_only,
                               refused=Refused)
 
-    def test_a_file_past_max_bytes_is_refused(self) -> None:
-        with self.assertRaisesRegex(Refused, "larger than 64 bytes"):
+    def test_a_file_past_max_bytes_is_unreadable(self) -> None:
+        # Review round 4 CR6: too large is not a permissions problem, so it raises the unreadable class.
+        with self.assertRaisesRegex(Unreadable, "larger than 64 bytes"):
             read(self.write(0o600), max_bytes=64)
 
 
@@ -198,6 +253,16 @@ class HmacSecretFile(unittest.TestCase):
         os.environ["ACS_HMAC_SECRET_FILE"] = fifo
         with self.assertRaisesRegex(SecretFilePermissionsError, "regular file"):
             load_hmac_secret()
+
+    def test_an_oversized_secret_is_unreadable_and_audited(self) -> None:
+        path = os.path.join(self.dir, "hmac.key")
+        with open(path, "wb") as f:
+            f.write(b"a" * (_secrets.MAX_SECRET_FILE_BYTES + 1))
+        os.chmod(path, 0o600)
+        os.environ["ACS_HMAC_SECRET_FILE"] = path
+        with self.assertRaisesRegex(SecretFileUnreadableError, "larger than"):
+            load_hmac_secret()
+        self.assertEqual(_secrets.audit_event.call_args.args[0], "hmac_secret_file_unreadable")
 
     def test_an_empty_file_is_unreadable(self) -> None:
         path = os.path.join(self.dir, "hmac.key")

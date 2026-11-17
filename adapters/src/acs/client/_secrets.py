@@ -71,46 +71,108 @@ def not_writable_by_others(setting: str, path: str, mode: int) -> str | None:
     return None
 
 
-def _directory_problem(setting: str, path: str) -> str | None:
-    # Whoever can write the directory can replace the file. A sticky directory such as /tmp lets nobody but the
-    # owner rename or remove it, so it is allowed.
-    directory = os.path.dirname(os.path.abspath(path))
-    mode = os.stat(directory).st_mode
-    if mode & 0o022 and not mode & stat.S_ISVTX:
-        return (f"{setting} {path!r} sits in directory {directory!r}, which is writable by group or other "
-                f"(mode {oct(stat.S_IMODE(mode))}). Move the file or chmod go-w {directory}")
+def _owner_problem(setting: str, path: str, uid: int, what: str) -> str | None:
+    if hasattr(os, "geteuid") and uid not in (os.geteuid(), 0):
+        return (f"{setting} {path!r}: {what} is owned by uid {uid}, but this process runs as uid {os.geteuid()}. "
+                "Refusing it")
     return None
 
 
-def read_trusted_file(path: str, *, setting: str, max_bytes: int, mode_rule: ModeRule,
-                      refused: type[Exception], unreadable: type[Exception] | None = None) -> bytes:
-    """The bytes of a secret or trusted file, read once and checked through the descriptor that reads them.
+def _directory_problem(setting: str, path: str, directory: str, st: os.stat_result,
+                       require_owner: bool) -> str | None:
+    """Whoever can replace a file in the directory can replace the file. Read from the directory's own descriptor.
 
-    The one reader for the HMAC secret, the Guardian's ML-DSA-65 seed, and the key document (issue #576). It opens
-    with O_NOFOLLOW so a symlink is refused, O_NONBLOCK so a FIFO can't hang it, and O_BINARY where defined, and it
-    never checks a path and then opens it again. On the open descriptor it requires a regular file, an owner that
-    is this user or root, a directory no group or other can write unless it is sticky, and the caller's mode rule.
-    It reads at most max_bytes. A problem with the file raises refused, and any OSError raises unreadable, which
-    defaults to refused, each with a message that names setting.
+    Group write is allowed, since mkdir under the common umask 002 gives 0775 and the group is the user's own. A
+    world-writable directory is refused unless it is sticky, as /tmp is, where only a file's owner can rename it.
+    For a secret, the directory's owner must also be this user or root (review round 4).
     """
-    unreadable = unreadable or refused
+    mode = st.st_mode
+    if mode & stat.S_IWOTH and not mode & stat.S_ISVTX:
+        return (f"{setting} {path!r} sits in directory {directory!r}, which is world-writable without the sticky "
+                f"bit (mode {oct(stat.S_IMODE(mode))}). Move the file or chmod o-w {directory}")
+    if require_owner:
+        return _owner_problem(setting, path, st.st_uid, f"its directory {directory!r}")
+    return None
+
+
+# Whether os.open takes dir_fd here. Windows doesn't, and falls back to the round 3 open by path.
+_OPENS_IN_DIRECTORY = os.open in os.supports_dir_fd and hasattr(os, "O_DIRECTORY")
+
+
+def _open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+
+
+def _open_in_directory(path: str, *, setting: str, require_owner: bool, refused: type[Exception],
+                       unreadable: type[Exception]) -> int:
+    """Open the file through one descriptor on its directory, so every path component is resolved once.
+
+    The directory is opened with O_DIRECTORY, so the kernel resolves "link/.." the way it will for the file, and its
+    fstat is the one every directory check reads. The file is then opened by name relative to it with O_NOFOLLOW.
+    A loop or a missing component in the directory fails the directory open with its own message, so an ELOOP from
+    the file open can only mean the last component is a symlink. Ancestors above the directory aren't checked.
+    """
+    directory, name = os.path.split(path)
+    directory = directory or "."
+    if name in ("", ".", ".."):
+        raise refused(f"{setting} {path!r} is not a regular file")
+    try:
+        dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        raise unreadable(f"{setting} {path!r}: its directory {directory!r} cannot be opened ({e})") from e
+    try:
+        try:
+            problem = _directory_problem(setting, path, directory, os.fstat(dfd), require_owner)
+        except OSError as e:
+            raise unreadable(f"{setting} {path!r}: its directory {directory!r} cannot be read ({e})") from e
+        if problem:
+            raise refused(problem)
+        try:
+            return os.open(name, _open_flags(), dir_fd=dfd)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise refused(f"{setting} {path!r} is a symlink. Refusing to follow it") from None
+            raise unreadable(f"{setting} {path!r} is configured but cannot be read ({e})") from e
+    finally:
+        os.close(dfd)
+
+
+def _open_by_path(path: str, *, setting: str, refused: type[Exception], unreadable: type[Exception]) -> int:
+    """Where os.open takes no dir_fd (Windows), the round 3 open: the file by path, with no directory checks."""
     if not hasattr(os, "O_NOFOLLOW") and os.path.islink(path):
         raise refused(f"{setting} {path!r} is a symlink. Refusing to follow it")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     try:
-        fd = os.open(path, flags)
+        return os.open(path, _open_flags())
     except OSError as e:
         if e.errno == errno.ELOOP or os.path.islink(path):
             raise refused(f"{setting} {path!r} is a symlink. Refusing to follow it") from None
         raise unreadable(f"{setting} {path!r} is configured but cannot be read ({e})") from e
+
+
+def read_trusted_file(path: str, *, setting: str, max_bytes: int, mode_rule: ModeRule,
+                      refused: type[Exception], unreadable: type[Exception] | None = None,
+                      require_owner: bool = True) -> bytes:
+    """The bytes of a secret or trusted file, read once and checked through descriptors, never through the path again.
+
+    The one reader for the HMAC secret, the Guardian's ML-DSA-65 seed, and the key document (issue #576). It opens
+    the file's directory once and the file inside it with O_NOFOLLOW so a symlink is refused, O_NONBLOCK so a FIFO
+    can't hang it, and O_BINARY where defined. It requires a directory that is not world-writable unless sticky, a
+    regular file, and the caller's mode rule. With require_owner, which secrets pass, the file and its directory
+    must belong to this user or root. A public file such as the key document passes False, and the fingerprint pin
+    covers an owner swap there. It reads at most max_bytes. A problem with the file raises refused. Any OSError and a
+    file past max_bytes raise unreadable, which defaults to refused. Every message names setting.
+    """
+    unreadable = unreadable or refused
+    if _OPENS_IN_DIRECTORY:
+        fd = _open_in_directory(path, setting=setting, require_owner=require_owner, refused=refused,
+                                unreadable=unreadable)
+    else:
+        fd = _open_by_path(path, setting=setting, refused=refused, unreadable=unreadable)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise refused(f"{setting} {path!r} is not a regular file")
-        if hasattr(os, "geteuid") and st.st_uid not in (os.geteuid(), 0):
-            raise refused(f"{setting} {path!r} is owned by uid {st.st_uid}, but this process runs as uid "
-                          f"{os.geteuid()}. Refusing it")
-        problem = (_directory_problem(setting, path) if not _IS_WINDOWS else None) \
+        problem = (_owner_problem(setting, path, st.st_uid, "the file") if require_owner else None) \
             or mode_rule(setting, path, stat.S_IMODE(st.st_mode))
         if problem:
             raise refused(problem)
@@ -127,7 +189,7 @@ def read_trusted_file(path: str, *, setting: str, max_bytes: int, mode_rule: Mod
         os.close(fd)
     data = b"".join(chunks)
     if len(data) > max_bytes:
-        raise refused(f"{setting} {path!r} is larger than {max_bytes} bytes")
+        raise unreadable(f"{setting} {path!r} is larger than {max_bytes} bytes")
     return data
 
 

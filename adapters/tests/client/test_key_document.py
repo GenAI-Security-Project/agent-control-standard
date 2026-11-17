@@ -256,7 +256,7 @@ class Pinning(unittest.TestCase):
         path = self.write()
         os.chmod(self.dir, 0o777)
         try:
-            with self.assertRaisesRegex(KeyDocumentError, "writable by group or other"):
+            with self.assertRaisesRegex(KeyDocumentError, "world-writable"):
                 load_response_keys(path)
         finally:
             os.chmod(self.dir, 0o700)

@@ -188,9 +188,10 @@ def test_a_fifo_at_the_key_path_is_refused_without_blocking(tmp_path):
 
 def test_a_key_in_a_directory_others_can_write_is_refused(files):
     key_path, _ = files
-    os.chmod(key_path.parent, 0o770)
+    # Group write passes since round 4 (0775 is what mkdir gives under umask 002). World write without sticky doesn't.
+    os.chmod(key_path.parent, 0o777)
     try:
-        with pytest.raises(DecisionKeyError, match="writable by group or other"):
+        with pytest.raises(DecisionKeyError, match="world-writable"):
             load_signing_key(str(key_path), KEY_ID)
     finally:
         os.chmod(key_path.parent, 0o700)
