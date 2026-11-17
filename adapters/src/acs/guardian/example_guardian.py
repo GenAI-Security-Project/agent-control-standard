@@ -909,23 +909,23 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(500, internal_error_envelope(self._answer_id))
 
     def _serve(self) -> None:
-        # Oversized requests are rejected before the body is read.
-        # A missing, negative, or non-integer length is refused before any read: a negative one would make the
-        # read wait for EOF, and a missing one gives nothing to bound the read with.
+        # The Content-Length is checked before any read. Only 1*DIGIT in ASCII is a length (RFC 9110): int() would
+        # also take +10, " 10 ", 1_0, and non-ASCII digits. A missing, empty, or non-digit value gets 400, since a
+        # negative one would make the read wait for EOF and a missing one gives nothing to bound the read with.
         raw_length = self.headers.get("Content-Length")
-        # 1*DIGIT in ASCII only (RFC 9110). int() would also take +10, " 10 ", 1_0, and non-ASCII digits.
-        # More digits than the body cap has is refused before int(), which raises past 4,300 digits.
-        length = (int(raw_length) if raw_length is not None and _CONTENT_LENGTH.fullmatch(raw_length)
-                  and len(raw_length) <= len(str(MAX_REQUEST_BODY_BYTES)) else -1)
-        if length < 0:
+        if raw_length is None or not _CONTENT_LENGTH.fullmatch(raw_length):
             self._respond(400, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32600, "message": "Invalid Request: missing or invalid Content-Length"}})
             return
-        if length > MAX_REQUEST_BODY_BYTES:
+        # Leading zeros don't change the length. With them gone, more digits than the cap has is over the cap,
+        # which is refused before int(), since int() raises past 4,300 digits.
+        digits = raw_length.lstrip("0") or "0"
+        if len(digits) > len(str(MAX_REQUEST_BODY_BYTES)) or int(digits) > MAX_REQUEST_BODY_BYTES:
             self._respond(413, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32600,
-                                          "message": f"Request body {length} bytes exceeds {MAX_REQUEST_BODY_BYTES} cap"}})
+                                          "message": f"Request body exceeds the {MAX_REQUEST_BODY_BYTES} byte cap"}})
             return
+        length = int(digits)
         try:
             body = self._read_body(length)
         except TimeoutError:

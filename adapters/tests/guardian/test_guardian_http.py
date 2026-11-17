@@ -356,9 +356,25 @@ def test_handle_request_never_raises_for_a_direct_caller(served, envelope):
         assert "signature" not in answer["error"]
 
 
-def test_a_content_length_of_5000_digits_is_refused_without_int(served):
-    head = "POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Type: application/json\r\nContent-Length: " + "9" * 5000
-    status, answer = send_raw(served, head, b'{"jsonrpc": "2.0"}')
+def _length_head(value: str) -> str:
+    return f"POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Type: application/json\r\nContent-Length: {value}"
+
+
+@pytest.mark.parametrize("value", ["9" * 5000, str(example_guardian.MAX_REQUEST_BODY_BYTES + 1), "1" + "0" * 30])
+def test_a_content_length_over_the_cap_gets_413_however_many_digits(served, value):
+    # Refused before int() for a long one, which raises past 4,300 digits.
+    status, answer = send_raw(served, _length_head(value), b'{"jsonrpc": "2.0"}')
+    assert (status, answer["error"]["code"]) == (413, -32600)
+
+
+def test_leading_zeros_in_a_content_length_are_accepted(served):
+    body = _ping("zeros")
+    status, answer = send_raw(served, _length_head("0" * 40 + str(len(body))), body)
+    assert answer["id"] == "zeros" and "result" in answer
+
+
+def test_an_empty_content_length_gets_400(served):
+    status, answer = send_raw(served, _length_head(""), b'{"jsonrpc": "2.0"}')
     assert (status, answer["error"]["code"]) == (400, -32600)
 
 
