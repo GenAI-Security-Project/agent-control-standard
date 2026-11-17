@@ -47,6 +47,9 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         if tool == "bad_path_tool":
             return {**base, "decision": "modify", "reasoning": "missing field",
                     "modifications": {"redactions": [{"path": "/outputs/0/value/missing"}]}}
+        if tool == "redact_path_tool":
+            return {**base, "decision": "modify", "reasoning": "redacted by path",
+                    "modifications": {"redactions": [{"path": os.environ["HARNESS_REDACT_PATH"]}]}}
         if tool == "text_tool":
             return {**base, "decision": "modify", "reasoning": "rewritten",
                     "modifications": {"modified_content": "summary withheld"}}

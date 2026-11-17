@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body, transcript_lines
 
 VENDOR = {"name": "Acme", "bank_account_number": "12345678", "bank_routing_number": "021000021"}
@@ -88,3 +90,38 @@ def test_a_result_for_a_call_the_gateway_never_saw_uses_the_client_name_and_says
     requests = [line["envelope"] for line in transcript_lines(tmp_path) if line["dir"] == "req"]
     assert requests[-1]["params"]["payload"]["tool"]["name"] == "get_vendor_details"
     assert [e["call_id"] for e in events(audit, "result_name_from_client")] == ["call_9"]
+
+
+ROWS = {"rows": [["Acme", "12345678"], ["Initech", "87654321"]]}
+
+
+@pytest.mark.parametrize(("path", "output", "expected"), [
+    # A redaction that replaces the output item, or the outputs array, leaves nothing to read back.
+    ("/outputs/0", json.dumps(VENDOR), NEUTRAL),
+    ("/outputs", json.dumps(VENDOR), NEUTRAL),
+    ("/outputs/0/value", "secret ledger", "[REDACTED]"),
+    ("/outputs/0/value", json.dumps(VENDOR), json.dumps("[REDACTED]")),
+    ("/outputs/0/value/rows/1/1", json.dumps(ROWS),
+     json.dumps({"rows": [["Acme", "12345678"], ["Initech", "[REDACTED]"]]})),
+])
+def test_a_redaction_of_the_output_itself_is_honored_without_failing(gateway, harness_guardian, upstream, audit,
+                                                                      path, output, expected):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_REDACT_PATH=path))
+    inputs = run_turns(client, upstream, "redact_path_tool", output)
+    assert sent_output(inputs[1]) == expected
+    assert sent_output(inputs[2]) == expected
+    applied = [e for e in events(audit, "decision_applied") if e["method"] == "steps/toolCallResult"]
+    assert len(applied) == 1 and applied[0]["decision"] == "modify"
+
+
+@pytest.mark.parametrize("path", ["/outputs/0/value/²", "/outputs/²", "/outputs/0/value/rows/١", "/outputs/0/value/rows/01"])
+def test_no_guardian_path_makes_apply_result_raise(path):
+    from acs.core._decision import Decision
+    from acs_gateway.apply import apply_result, result_payload
+    from acs_gateway.guardian import StepResult
+
+    item = output_item("call_1", json.dumps(ROWS))
+    payload, parsed, _ = result_payload("redact_path_tool", item["output"], None)
+    result = StepResult("steps/toolCallResult", "r1", Decision("modify", "", {"redactions": [{"path": path}]}))
+    applied = apply_result(item, payload, parsed, result)
+    assert applied.item["output"] == NEUTRAL

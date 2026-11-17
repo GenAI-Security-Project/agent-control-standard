@@ -198,6 +198,15 @@ def _unescape(token: str) -> str:
     return token.replace("~1", "/").replace("~0", "~")
 
 
+def _index(token: str, items: list[Any]) -> int | None:
+    """The array index an RFC 6901 token names, or None. Only ASCII digits without a leading zero count, since
+    str.isdigit also accepts digits from other scripts, which int() then reads or refuses."""
+    if not (token.isascii() and token.isdigit()) or (len(token) > 1 and token[0] == "0"):
+        return None
+    index = int(token)
+    return index if index < len(items) else None
+
+
 def _redact(document: Any, path: str, replacement: str) -> bool:
     """Replace the value at an RFC 6901 pointer that already exists. False when the pointer doesn't resolve."""
     if not path.startswith("/"):
@@ -207,18 +216,27 @@ def _redact(document: Any, path: str, replacement: str) -> bool:
     for token in tokens[:-1]:
         if isinstance(target, dict) and token in target:
             target = target[token]
-        elif isinstance(target, list) and token.isdigit() and int(token) < len(target):
-            target = target[int(token)]
+        elif isinstance(target, list) and (index := _index(token, target)) is not None:
+            target = target[index]
         else:
             return False
     last = tokens[-1]
     if isinstance(target, dict) and last in target:
         target[last] = replacement
         return True
-    if isinstance(target, list) and last.isdigit() and int(last) < len(target):
-        target[int(last)] = replacement
+    if isinstance(target, list) and (index := _index(last, target)) is not None:
+        target[index] = replacement
         return True
     return False
+
+
+def _output_value(payload: dict[str, Any]) -> tuple[bool, Any]:
+    """outputs[0].value after the redactions, and whether that shape survived them. A redaction may replace the
+    output item or the outputs array itself, and then nothing is left to read back."""
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, list) or not outputs or not isinstance(outputs[0], dict) or "value" not in outputs[0]:
+        return False, None
+    return True, outputs[0]["value"]
 
 
 def apply_result(item: dict[str, Any], payload: dict[str, Any], parsed: bool, result: StepResult) -> Applied:
@@ -243,6 +261,9 @@ def apply_result(item: dict[str, Any], payload: dict[str, Any], parsed: bool, re
         if not isinstance(replacement, str) or not _redact(edited, redaction.get("path", ""), replacement):
             # A redaction the gateway can't place would forward the raw value, so the whole output is withheld.
             return Applied("deny", denied, "modify_unsupported")
-    value = edited["outputs"][0]["value"]
+    survived, value = _output_value(edited)
+    if not survived:
+        # The Guardian's MODIFY was valid and is honored: it redacted the whole output, so none of it is forwarded.
+        return Applied("modify", denied, "output_withheld")
     output = json.dumps(value) if parsed else value if isinstance(value, str) else json.dumps(value)
     return Applied("modify", {**item, "output": output})
