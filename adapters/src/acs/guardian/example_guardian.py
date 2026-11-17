@@ -102,7 +102,11 @@ ALLOW_SUBAGENT = os.environ.get("ACS_ALLOW_SUBAGENT", "0") == "1"
 ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "").strip().lower() == "proceed" else "deny"
 
 
-PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/")
+# /proc/ is here because /proc/self/root/ reaches the whole filesystem on Linux.
+PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/", "/proc/")
+# macOS links /etc, /var, and /tmp to these, so each one is compared as the path it reaches.
+PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"), ("/private/var/", "/var/"),
+                                             ("/private/tmp/", "/tmp/"))
 # Case-folded tool names that write a file, and the arguments that name the file.
 WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit"})
 PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path")
@@ -466,6 +470,18 @@ def _normalize_path(path: str) -> str:
     return "/" + normalized.lstrip("/") if normalized.startswith("//") else normalized
 
 
+def _comparable_path(normalized: str) -> str:
+    """The normalized path case-folded, with a trailing / and macOS aliases resolved, for the prefix check.
+
+    Case-folded because the default macOS and Windows filesystems ignore case, so /ETC/passwd is /etc/passwd there.
+    """
+    folded = normalized.casefold() + "/"
+    for alias, target in PATH_ALIASES:
+        if folded.startswith(alias):
+            return target + folded[len(alias):]
+    return folded
+
+
 def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
     """The built-in denies for a tool call, or None. They hold under every policy backend."""
     if tool_name == "task" and not ALLOW_SUBAGENT:
@@ -505,7 +521,7 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                 return {**base, "decision": "deny",
                         "reasoning": f"relative path leaves its starting directory: {path}",
                         "reason_codes": ["path_traversal"]}
-            if any((normalized + "/").startswith(p) for p in PROTECTED_PATH_PREFIXES):
+            if any(_comparable_path(normalized).startswith(p) for p in PROTECTED_PATH_PREFIXES):
                 return {**base, "decision": "deny",
                         "reasoning": f"write to protected system path: {path}",
                         "reason_codes": ["protected_path"]}

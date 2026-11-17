@@ -369,3 +369,26 @@ def test_a_notebook_path_of_the_wrong_type_denies(no_backend):
     result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
 
+
+
+ALIASES = ["/private/etc/passwd", "/ETC/passwd", "/Etc/hosts", "/USR/bin/x", "/proc/self/root/etc/passwd",
+           "/proc/1/mem", "/private/../private/etc/sudoers"]
+
+
+@pytest.mark.parametrize("path", ALIASES)
+def test_a_protected_path_is_caught_under_its_aliases_without_a_backend(no_backend, path):
+    result = _step("steps/toolCallRequest", _write(path))
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
+
+
+@pytest.mark.parametrize("path", ALIASES)
+def test_a_protected_path_is_caught_under_its_aliases_under_opa(opa_on, path):
+    with StubOpa(ALLOW) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", _write(path))
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
+
+
+@pytest.mark.parametrize("path", ["/private/var/tmp/x", "/private/tmp/notes.txt", "/var/tmp/x", "/processes.txt"])
+def test_an_alias_of_an_unprotected_directory_still_writes(no_backend, path):
+    assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
