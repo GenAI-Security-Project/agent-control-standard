@@ -14,7 +14,7 @@ HMAC-SHA256 has no public key. Its "public key" column is the 32 byte shared sec
 
 ## Machine and versions
 
-The commit of a branch does not survive a squash merge, so the content hash below identifies the code that was measured. It covers every `.py` file in `acs.core` at the time of the run.
+The commit of a branch does not survive a squash merge, so the content hash below identifies the code that was measured. It covers every `.py` file under `acs.core`, nested folders included, at the time of the run.
 
 --8<-- "adapters/benchmarks/signatures/results/environment.md"
 
@@ -38,7 +38,7 @@ The command prints the table and writes `results.json` and `results.md` under `a
 
 ## What the numbers mean
 
-They show cost per signature on one laptop under normal load. Use them to compare algorithms and to judge whether a signature fits your latency budget.
+They show cost per signature on one laptop. Use them to compare algorithms and to judge whether a signature fits your latency budget.
 
 They do not predict your deployment. A container on a shared x86 host will differ, and the gap between algorithms can move with the CPU and the OpenSSL build. Run the command on the hardware you care about.
 

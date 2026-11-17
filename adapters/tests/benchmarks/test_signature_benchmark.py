@@ -5,7 +5,7 @@ import json
 import io
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -30,10 +30,12 @@ class SignatureBenchmarkTest(unittest.TestCase):
         sizes = {r["algorithm"]: r["signature_bytes"] for r in result["rows"]}
         self.assertEqual(sizes, {"HMAC-SHA256": 32, "ML-DSA-65": 3309, "ECDSA-P256": 64})
         for key in ("machine", "os", "python", "cryptography", "openssl", "date",
-                    "iterations", "warmup", "describe", "source_sha256", "acs_adapters"):
+                    "iterations", "warmup", "source_sha256", "acs_adapters"):
             self.assertIn(key, result["environment"])
         self.assertEqual(result["environment"]["iterations"], 3)
         self.assertIn("hybrid", result["not_measured"])
+        self.assertNotIn("describe", result["environment"])
+        self.assertNotIn("branch", result["not_measured"]["hybrid"])
 
     def test_main_writes_json_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -63,6 +65,20 @@ class SignatureBenchmarkTest(unittest.TestCase):
         digest = bench.core_source_sha256()
         self.assertRegex(digest, r"^[0-9a-f]{64}$")
         self.assertEqual(digest, bench.core_source_sha256())
+
+    def test_source_hash_covers_nested_python_files(self) -> None:
+        import acs.core
+        nested = Path(acs.core.__file__).resolve().parent / "_bench_probe" / "nested.py"
+        before = bench.core_source_sha256()
+        nested.parent.mkdir()
+        self.addCleanup(lambda: (nested.unlink(missing_ok=True), nested.parent.rmdir()))
+        nested.write_text("x = 1\n")
+        self.assertNotEqual(before, bench.core_source_sha256())
+
+    def test_update_reference_and_out_dir_are_mutually_exclusive(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            bench.main(["--update-reference", "--out-dir", "somewhere"])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_default_output_is_not_the_committed_reference(self) -> None:
         out = io.StringIO()

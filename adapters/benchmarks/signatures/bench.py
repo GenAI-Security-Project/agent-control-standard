@@ -62,7 +62,7 @@ from acs.core._ecdsa import (
 
 DEFAULT_ITERATIONS = 1000
 DEFAULT_WARMUP = 100
-NOT_MEASURED = {"hybrid": "acs.core has no hybrid signing on this branch (PR #564 would settle it)"}
+NOT_MEASURED = {"hybrid": "acs.core has no hybrid signature yet (PR #564 would settle its form)"}
 _KEY_ID = "bench-key-1"
 _HERE = Path(__file__).resolve().parent
 # The committed numbers the docs page quotes. Only --update-reference writes here.
@@ -204,23 +204,13 @@ def _cpu_model() -> str:
     return platform.processor() or "unknown"
 
 
-def _describe() -> str:
-    # A branch SHA does not survive a squash merge, and a dirty tree has no SHA at all, so the
-    # source hash below is the identity that lasts. This is context for a reader.
-    try:
-        return subprocess.run(["git", "describe", "--always", "--dirty"], capture_output=True,
-                              text=True, check=True, cwd=_HERE).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-
-
 def core_source_sha256() -> str:
     """SHA-256 over the acs.core source files, by relative path and bytes, in sorted order."""
     import acs.core
     root = Path(acs.core.__file__).resolve().parent
     digest = hashlib.sha256()
-    for path in sorted(root.glob("*.py")):
-        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    for path in sorted(root.rglob("*.py")):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
     return digest.hexdigest()
 
 
@@ -231,7 +221,6 @@ def environment(iterations: int, warmup: int) -> dict:
         "python": platform.python_version(),
         "cryptography": cryptography.__version__,
         "openssl": _openssl_backend.openssl_version_text(),
-        "describe": _describe(),
         "source_sha256": core_source_sha256(),
         "acs_adapters": importlib.metadata.version("acs-adapters"),
         "date": datetime.date.today().isoformat(),
@@ -262,7 +251,7 @@ def to_markdown(result: dict) -> str:
 _ENVIRONMENT_LABELS = (
     ("machine", "Machine"), ("os", "OS"), ("python", "Python"), ("cryptography", "cryptography"),
     ("openssl", "OpenSSL"), ("acs_adapters", "acs-adapters"),
-    ("source_sha256", "SHA-256 of the acs.core source"), ("describe", "git describe"),
+    ("source_sha256", "SHA-256 of the acs.core source"),
     ("date", "Date"), ("warmup", "Warm-up calls"), ("iterations", "Timed calls"),
 )
 
@@ -278,9 +267,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="benchmarks.signatures", description=__doc__.split("\n")[0])
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
-    parser.add_argument("--out-dir", type=Path, default=None,
+    where = parser.add_mutually_exclusive_group()
+    where.add_argument("--out-dir", type=Path, default=None,
                         help="where to write results (default: a new temporary directory)")
-    parser.add_argument("--update-reference", action="store_true",
+    where.add_argument("--update-reference", action="store_true",
                         help="write the committed reference results the docs page quotes")
     args = parser.parse_args(argv)
     result = run(args.iterations, args.warmup)
