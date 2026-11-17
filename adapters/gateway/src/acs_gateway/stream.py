@@ -234,8 +234,10 @@ class StreamEditor:
     decide(item) gets each function_call, and each item outside the output allowlist, from the upstream's final
     output, and returns the item to deliver or None to remove it. limit bounds the bytes enforce keeps, idle_timeout
     the wait for each upstream chunk and deadline the whole stream, all in enforce only. Shadow (enforce=False)
-    relays every byte, stops after the chunk that holds the final event, and queues decisions, at most queue_cap at
-    once, for drain(). A shadow editor given a deadline stops relaying when it passes, with nothing injected.
+    relays every byte, keeps relaying after the final event until the upstream closes or stays silent for
+    _SHADOW_TAIL_S, and queues decisions, at most queue_cap at once, for drain(). An upstream that keeps sending after
+    the final event keeps a shadow relay going until it stops. A shadow editor given a deadline stops relaying when it
+    passes, with nothing injected.
     """
 
     def __init__(self, *, enforce: bool, limit: int,
@@ -335,7 +337,8 @@ class StreamEditor:
     async def _relay(self, source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
         """Shadow: every byte as it came, whatever the chunking, decisions queued. After the final event it keeps
         relaying until the upstream closes or stays silent for _SHADOW_TAIL_S, so a trailing data: [DONE] in a later
-        chunk still goes out and an upstream that never closes doesn't hold the session lock."""
+        chunk still goes out. A silent upstream releases the session lock after the tail. One that keeps sending after
+        the final event holds it until it stops, since shadow has no overall deadline."""
         frames, reading = _Frames(), True
         try:
             async for chunk in source:
