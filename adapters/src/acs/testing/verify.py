@@ -1,0 +1,601 @@
+"""acs-verify: check a Guardian session transcript offline, its audit chain and every decision signature (issue #584).
+
+    python -m acs.testing.verify TRANSCRIPT --keys KEY_DOCUMENT [--expect-fingerprint FP] [--hmac-secret FILE]
+    python -m acs.testing.verify TRANSCRIPT --hmac-secret FILE
+
+The transcript is the lab gateway's JSONL (A.7): one {"dir": "req" | "resp", "envelope": {...}} object per line,
+in send order, and {"dir": "resp", "envelope": null, "cause": "..."} when a request got no usable answer. Each
+response line answers the request line before it.
+
+Four checks run on every pair, and the first failure is reported with its line number:
+
+- The response signature. With --keys, every response must verify under ML-DSA-65 with the key its key_id names in
+  the key document, and must carry the hash of the request it answers. With --hmac-secret alone, every response must
+  verify under the HMAC session key. The flags choose the algorithm. Nothing in the transcript does, so rewriting a
+  ServerHello can't switch a check to HMAC (PREMORTEM P5).
+- The request binding: the JSON-RPC id, the request_id, and under ML-DSA-65 x_acs_lab_request_sha256, the
+  SHA-256 of the request's section 10 signed input.
+- Key validity: the key must be live, and not revoked, at the request's timestamp (PREMORTEM P25).
+- The audit chain, recomputed exactly as the example Guardian's compute_entry_hash and append_to_chain build it,
+  against every chain_hash the Guardian signed.
+
+A transcript that ends without a verified sessionEnd passes only up to its last checkpoint. The report says the tail
+is unverified and never claims the whole log passed, since entries cut from the end leave no trace (PREMORTEM P31).
+
+Lab conventions: the key document format acs-lab-keys/1 (issue #460), the request hash (issue #576, closest
+tracking issue #13), and ML-DSA-65 response signing (issue #316). This module imports only acs.core and
+acs.client, and loads cryptography only when a key document is given, so the HMAC mode needs no pqc extra.
+
+Exit codes: 0 pass, 1 verification failure, 2 usage error or unreadable input.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import itertools
+import json
+import re
+import sys
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+from acs.client import KeyDocumentError, check_secret_file_perms, parse_key_document
+from acs.core import (
+    derive_session_key,
+    jcs_canonicalize,
+    parse_iso8601,
+    response_binding_problem,
+    response_names_request,
+    verify_with_key,
+)
+
+ML_DSA_65 = "ML-DSA-65"
+HMAC_SHA256 = "HMAC-SHA256"
+HANDSHAKE_METHOD = "handshake/hello"
+PING_METHOD = "system/ping"
+SESSION_END = "steps/sessionEnd"
+STEP_PREFIX = "steps/"
+# A request whose answer carries no chain_hash may or may not have advanced the chain (PREMORTEM P6). The next
+# checkpoint settles it by trying each such request in and out, 2**n candidates, so n is bounded.
+MAX_UNSETTLED = 12
+# Section 10 asks for at least 32 bytes of secret, the bound acs.client applies.
+MIN_SECRET_BYTES = 32
+_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
+
+EXIT_PASS = 0
+EXIT_FAIL = 1
+EXIT_USAGE = 2
+
+HMAC_TRUST_NOTE = ("HMAC-SHA256 proves only that someone holding the shared secret wrote each response. It can't "
+                   "say whether the Guardian or the agent side did (specification section 8.6).")
+
+
+class UsageError(Exception):
+    """Bad flags or input that can't be read. The command exits 2."""
+
+
+@dataclass(frozen=True)
+class Failure:
+    """The first entry that failed: its 1-based line (0 for the key document itself), a stable code, and why."""
+
+    line: int
+    code: str
+    reason: str
+
+
+@dataclass
+class Report:
+    ok: bool = False
+    complete: bool = False
+    failure: Failure | None = None
+    lines: int = 0
+    entries: int = 0
+    checkpoint_line: int | None = None
+    checkpoint_method: str | None = None
+    unverified_lines: list[int] = field(default_factory=list)
+    response_algorithm: str = ""
+    chain_checked: bool = True
+    session_id: str | None = None
+    chain_heads: list[str] = field(default_factory=list)
+    keys_used: dict[str, str] = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "result": "pass" if self.ok else "fail",
+            "complete": self.complete,
+            "failure": None if self.failure is None else {"line": self.failure.line, "code": self.failure.code,
+                                                          "reason": self.failure.reason},
+            "lines": self.lines,
+            "entries": self.entries,
+            "checkpoint_line": self.checkpoint_line,
+            "checkpoint_method": self.checkpoint_method,
+            "unverified_lines": self.unverified_lines,
+            "response_algorithm": self.response_algorithm,
+            "chain_checked": self.chain_checked,
+            "session_id": self.session_id,
+            "chain_heads": self.chain_heads,
+            "keys_used": self.keys_used,
+            "notes": self.notes,
+        }
+
+    def to_text(self) -> str:
+        out: list[str] = []
+        if self.failure is not None:
+            where = "the key document" if self.failure.line == 0 else f"line {self.failure.line}"
+            out.append(f"acs-verify: FAIL at {where} ({self.failure.code})")
+            out.append(f"  {self.failure.reason}")
+            if self.failure.line > 1:
+                out.append(f"  Lines 1 to {self.failure.line - 1} checked before it. Nothing after it was checked.")
+        elif self.complete:
+            out.append("acs-verify: PASS")
+        else:
+            out.append("acs-verify: PASS, tail unverified" if self.chain_checked
+                       else "acs-verify: PASS, signatures only")
+        out.append(f"  transcript: {self.lines} lines, {self.entries} requests, session {self.session_id or 'unknown'}")
+        if self.response_algorithm:
+            keys = ", ".join(f"{kid} ({fp})" for kid, fp in self.keys_used.items())
+            out.append(f"  responses: {self.response_algorithm}" + (f", key {keys}" if keys else ""))
+        if self.failure is None:
+            out.append(self._chain_line())
+        out.extend(f"  note: {note}" for note in self.notes)
+        return "\n".join(out)
+
+    def _chain_line(self) -> str:
+        if not self.chain_checked:
+            return "  chain: not checked (--keys-only). Signatures, bindings and key validity only."
+        if self.complete:
+            return (f"  chain: verified through line {self.checkpoint_line} ({SESSION_END}). "
+                    "The whole transcript verified.")
+        through = (f"verified through line {self.checkpoint_line} ({self.checkpoint_method})"
+                   if self.checkpoint_line else "no checkpoint verified")
+        tail = _ranges(self.unverified_lines)
+        tail_text = f" Lines {tail} are not covered by any signed chain_hash." if tail else ""
+        return (f"  chain: {through}. tail unverified: no {SESSION_END}.{tail_text} Entries cut from the end "
+                "of the transcript can't be detected.")
+
+
+def _ranges(numbers: Sequence[int]) -> str:
+    if not numbers:
+        return ""
+    spans, start, prev = [], numbers[0], numbers[0]
+    for n in list(numbers[1:]) + [None]:
+        if n is not None and n == prev + 1:
+            prev = n
+            continue
+        spans.append(str(start) if start == prev else f"{start} to {prev}")
+        if n is not None:
+            start = prev = n
+    return ", ".join(spans)
+
+
+class _Fail(Exception):
+    def __init__(self, line: int, code: str, reason: str) -> None:
+        super().__init__(reason)
+        self.failure = Failure(line, code, reason)
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    # Two parsers that keep different copies of a repeated key read one line two ways, so a repeat is refused.
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"the key {key!r} appears twice in one object")
+        out[key] = value
+    return out
+
+
+def _no_constants(name: str) -> Any:
+    # NaN and the infinities aren't JSON, and RFC 8785 has no form for them, so no signature could cover one.
+    raise ValueError(f"{name} is not JSON")
+
+
+def _parse_line(raw: str | bytes, number: int) -> dict[str, Any]:
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        record = json.loads(text, object_pairs_hook=_no_duplicate_keys, parse_constant=_no_constants)
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise _Fail(number, "line_invalid", f"the line is not one strict JSON object: {exc}") from exc
+    if not isinstance(record, dict) or record.get("dir") not in ("req", "resp"):
+        raise _Fail(number, "line_invalid", 'the line is not a {"dir": "req" or "resp", "envelope": ...} record')
+    envelope = record.get("envelope")
+    if record["dir"] == "req" and not isinstance(envelope, dict):
+        raise _Fail(number, "line_invalid", "a request line must carry its envelope as an object")
+    if record["dir"] == "resp" and envelope is not None and not isinstance(envelope, dict):
+        raise _Fail(number, "line_invalid", "a response line carries an envelope object, or null with a cause")
+    return record
+
+
+def _params(request: Mapping[str, Any]) -> Mapping[str, Any]:
+    params = request.get("params")
+    return params if isinstance(params, Mapping) else {}
+
+
+def _timestamp(request: Mapping[str, Any]) -> str | None:
+    value = _params(request).get("timestamp")
+    return value if isinstance(value, str) and value else None
+
+
+def _moment(request: Mapping[str, Any], line: int) -> datetime.datetime:
+    """The request's own timestamp, the time a key must be live at. It sits inside the signed request hash."""
+    value = _timestamp(request)
+    if value is None:
+        raise _Fail(line, "no_timestamp", "the request has no timestamp, so key validity can't be checked")
+    try:
+        moment = parse_iso8601(value)
+    except (ValueError, TypeError) as exc:
+        raise _Fail(line, "no_timestamp", f"the request timestamp {value!r} is not RFC 3339") from exc
+    if moment.tzinfo is None:
+        raise _Fail(line, "no_timestamp", f"the request timestamp {value!r} names no time zone")
+    return moment
+
+
+def chain_entry(request: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The ContextEntry the example Guardian appends for this request, without its hashes, or None without a timestamp.
+
+    Mirrors example_guardian.append_to_chain: the entry and step ids are params.request_id, step_type is the method,
+    request_hash is the SHA-256 of JCS(params) with the signature inside, and the timestamp is the request's own.
+    A request with no timestamp gets the Guardian's clock, which no reader can recompute.
+    """
+    params = _params(request)
+    timestamp = _timestamp(request)
+    if timestamp is None:
+        return None
+    request_id = params.get("request_id")
+    request_id = "" if request_id is None else request_id
+    return {
+        "entry_id": request_id,
+        "step_id": request_id,
+        "step_type": request.get("method"),
+        "request_hash": hashlib.sha256(jcs_canonicalize(dict(params))).hexdigest(),
+        "timestamp": timestamp,
+    }
+
+
+def entry_hash(entry: Mapping[str, Any], previous_hash: str | None) -> str:
+    """Section 8.2, as example_guardian.compute_entry_hash: SHA-256 of JCS(entry) and the previous head's raw bytes.
+
+    The entry is hashed without its own hashes, so previous_hash enters only as the trailing raw bytes.
+    """
+    body = {k: v for k, v in entry.items() if k not in ("entry_hash", "previous_hash")}
+    previous = bytes.fromhex(previous_hash) if previous_hash else b""
+    return hashlib.sha256(jcs_canonicalize(body) + previous).hexdigest()
+
+
+def _fold(head: str | None, entries: Iterable[Mapping[str, Any]]) -> str | None:
+    for entry in entries:
+        head = entry_hash(entry, head)
+    return head
+
+
+class _KeyDocument:
+    """The key document, every key_id it names, and the fingerprints an operator pinned."""
+
+    def __init__(self, document: Mapping[str, Any], *, key_id: str | None, fingerprints: Sequence[str]) -> None:
+        self.document = document
+        self.pin = key_id
+        self.fingerprints = tuple(fingerprints)
+        keys = document.get("keys") if isinstance(document, Mapping) else None
+        if not isinstance(keys, list) or not keys:
+            raise UsageError("the key document holds no keys list")
+        self.key_ids = {k.get("key_id") for k in keys if isinstance(k, Mapping) and isinstance(k.get("key_id"), str)}
+        # parse_key_document checks every entry whatever the time, so one parse at a key's own not_before proves
+        # the document well formed. A document none of whose keys is ever live can verify nothing.
+        problem: str = "no key entry names a key_id and a not_before"
+        self.fingerprint_by_id: dict[str, str] = {}
+        for entry in keys:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("not_before"), str):
+                continue
+            try:
+                moment = datetime.datetime.fromisoformat(entry["not_before"].replace("Z", "+00:00"))
+                parsed = parse_key_document(document, key_id=entry.get("key_id"), now=moment)
+            except (KeyDocumentError, ValueError, TypeError) as exc:
+                problem = str(exc)
+                continue
+            self.fingerprint_by_id[parsed.key_id] = parsed.fingerprint
+        if not self.fingerprint_by_id:
+            raise UsageError(f"the key document can't be used: {problem}")
+
+    def pinned_fingerprint_problem(self) -> str | None:
+        if self.fingerprints and not set(self.fingerprints) & set(self.fingerprint_by_id.values()):
+            return (f"the key document holds no key with fingerprint {', '.join(self.fingerprints)}. It has "
+                    f"{', '.join(sorted(self.fingerprint_by_id.values()))}, so it is not the Guardian's document")
+        return None
+
+
+@dataclass
+class _Pending:
+    line: int
+    entry: dict[str, Any] | None
+
+
+class _Verifier:
+    def __init__(self, *, keys: _KeyDocument | None, hmac_secret: bytes | None, keys_only: bool) -> None:
+        self.keys = keys
+        self.hmac_secret = hmac_secret
+        self.report = Report(response_algorithm=ML_DSA_65 if keys is not None else HMAC_SHA256,
+                             chain_checked=not keys_only)
+        self.head: str | None = None
+        self.pending: list[_Pending] = []
+        self.session_key: bytes | None = None
+
+    # Requests
+
+    def request(self, line: int, request: dict[str, Any]) -> None:
+        self.report.entries += 1
+        method = request.get("method")
+        if not isinstance(method, str):
+            raise _Fail(line, "line_invalid", "the request names no method")
+        if method == PING_METHOD:
+            return
+        metadata = _params(request).get("metadata")
+        session_id = metadata.get("session_id") if isinstance(metadata, Mapping) else None
+        if not isinstance(session_id, str) or not session_id:
+            raise _Fail(line, "line_invalid", "the request names no session_id")
+        if self.report.session_id is None:
+            self.report.session_id = session_id
+            if self.hmac_secret is not None:
+                self.session_key = derive_session_key(self.hmac_secret, session_id)
+        elif session_id != self.report.session_id:
+            raise _Fail(line, "session_mismatch", f"the request names session {session_id}, but the transcript "
+                                                  f"began with session {self.report.session_id}")
+        if self.session_key is not None and not verify_with_key(request, self.session_key):
+            raise _Fail(line, "request_signature_invalid",
+                        "the request signature does not verify under the HMAC session key")
+
+    # Responses
+
+    def response(self, req_line: int, request: dict[str, Any], resp_line: int, response: dict[str, Any]) -> None:
+        method = request.get("method")
+        if method == PING_METHOD:
+            # Section 13 leaves ping unsigned, so there is nothing to verify and nothing chained.
+            self.report.notes.append(f"line {resp_line} answers system/ping, which is unsigned by design")
+            return
+        container = response.get("result") if "result" in response else response.get("error")
+        signature = container.get("signature") if isinstance(container, Mapping) else None
+        if not isinstance(signature, Mapping):
+            raise _Fail(resp_line, "unsigned_response", "the response carries no signature")
+        problem = response_binding_problem(request, response)
+        if problem is not None:
+            raise _Fail(req_line, "binding", f"the response at line {resp_line} does not answer this request "
+                                             f"({problem}): the JSON-RPC id or the request_id differs")
+        if self.keys is not None:
+            self._verify_mldsa(req_line, request, resp_line, response, signature)
+        else:
+            self._verify_hmac(resp_line, response)
+        if not self.report.chain_checked or not isinstance(method, str) or not method.startswith(STEP_PREFIX):
+            return
+        result = response.get("result")
+        chain_hash = result.get("chain_hash") if isinstance(result, Mapping) else None
+        if isinstance(chain_hash, str):
+            self._checkpoint(req_line, request, resp_line, chain_hash)
+        else:
+            self.unanswered(req_line, request)
+
+    def _verify_mldsa(self, req_line: int, request: dict, resp_line: int, response: dict,
+                      signature: Mapping) -> None:
+        import acs.core
+        assert self.keys is not None
+        key_id = signature.get("key_id")
+        if not isinstance(key_id, str) or key_id not in self.keys.key_ids or (
+                self.keys.pin is not None and key_id != self.keys.pin):
+            raise _Fail(resp_line, "key_unknown", f"the response names key_id {key_id!r}, which the key document "
+                                                  f"does not hold{' under the pin' if self.keys.pin else ''}. "
+                                                  "It can't verify under ML-DSA-65")
+        moment = _moment(request, req_line)
+        try:
+            keys = parse_key_document(self.keys.document, key_id=key_id, now=moment)
+        except KeyDocumentError as exc:
+            raise _Fail(resp_line, "key_not_valid", f"key {key_id!r} was not live at the request's timestamp "
+                                                    f"{_timestamp(request)}: {exc}") from exc
+        if self.keys.fingerprints and keys.fingerprint not in self.keys.fingerprints:
+            raise _Fail(resp_line, "fingerprint_mismatch", f"key {key_id!r} has fingerprint {keys.fingerprint}, "
+                                                           "not the expected fingerprint")
+        if not response_names_request(response, request):
+            raise _Fail(req_line, "request_digest_mismatch",
+                        f"the response at line {resp_line} names a different request: its x_acs_lab_request_sha256 "
+                        "is missing or is not the hash of this request's signed input")
+        # require_request_digest stays True, or a response relayed from another session that copied these ids
+        # would verify (adapters/docs/signing.md, the relay limit).
+        if not acs.core.verify_with_keyring(response, keys.keyring, expected_key_id=key_id, request=request,
+                                            require_request_digest=True):
+            raise _Fail(resp_line, "signature_invalid",
+                        f"the response does not verify under {ML_DSA_65} key {key_id!r}")
+        self.report.keys_used[key_id] = keys.fingerprint
+
+    def _verify_hmac(self, resp_line: int, response: dict) -> None:
+        assert self.session_key is not None
+        if not verify_with_key(response, self.session_key):
+            raise _Fail(resp_line, "signature_invalid", "the response does not verify under the HMAC session key")
+
+    # The chain
+
+    def unanswered(self, req_line: int, request: dict[str, Any]) -> None:
+        """A step whose answer committed to no chain head. The next checkpoint decides whether it was chained."""
+        method = request.get("method")
+        if self.report.chain_checked and isinstance(method, str) and method.startswith(STEP_PREFIX):
+            self.pending.append(_Pending(req_line, chain_entry(request)))
+
+    def _checkpoint(self, req_line: int, request: dict, resp_line: int, chain_hash: str) -> None:
+        entry = chain_entry(request)
+        if entry is None:
+            raise _Fail(req_line, "no_timestamp", "the request has no timestamp, so its chain entry can't be "
+                                                  "recomputed")
+        if len(self.pending) > MAX_UNSETTLED:
+            raise _Fail(req_line, "chain_unsettled", f"{len(self.pending)} requests before this one got no chain "
+                                                     f"head, more than the {MAX_UNSETTLED} acs-verify settles")
+        # Fewest unsettled entries first, so a request the Guardian refused before chaining is left out.
+        candidates = [p for p in self.pending if p.entry is not None]
+        for size in range(len(candidates) + 1):
+            for chosen in itertools.combinations(candidates, size):
+                if _fold(self.head, [p.entry for p in chosen] + [entry]) == chain_hash:
+                    self._settle(resp_line, request, chain_hash)
+                    return
+        unsettled = f" with {len(self.pending)} unsettled requests before it tried in and out" if self.pending else ""
+        raise _Fail(req_line, "chain_mismatch", f"the chain_hash signed at line {resp_line} is not the head the "
+                                                f"transcript builds here{unsettled}. An entry was edited, removed, "
+                                                "inserted or moved at or before this line")
+
+    def _settle(self, resp_line: int, request: dict, chain_hash: str) -> None:
+        self.head = chain_hash
+        self.pending.clear()
+        self.report.chain_heads.append(chain_hash)
+        self.report.checkpoint_line = resp_line
+        self.report.checkpoint_method = request.get("method")
+
+
+def verify_transcript(lines: Iterable[str | bytes], *, key_document: Mapping[str, Any] | None,
+                      hmac_secret: bytes | None, expect_fingerprints: Sequence[str] = (), key_id: str | None = None,
+                      keys_only: bool = False) -> Report:
+    """Check a transcript and return the report. Raises UsageError when neither key material is given.
+
+    key_document selects ML-DSA-65 for every response. hmac_secret alone selects HMAC-SHA256. With both, the secret
+    checks request signatures and responses stay on ML-DSA-65, so an HMAC-signed response never passes beside a key
+    document.
+    """
+    if key_document is None and hmac_secret is None:
+        raise UsageError("give --keys (the Guardian's key document) or --hmac-secret")
+    for fingerprint in expect_fingerprints:
+        if not _FINGERPRINT.fullmatch(fingerprint):
+            raise UsageError(f"--expect-fingerprint {fingerprint!r} must be sha256: and 64 lowercase hex characters")
+    if expect_fingerprints and key_document is None:
+        raise UsageError("--expect-fingerprint needs --keys")
+    keys = None if key_document is None else _KeyDocument(key_document, key_id=key_id,
+                                                          fingerprints=expect_fingerprints)
+    verifier = _Verifier(keys=keys, hmac_secret=hmac_secret, keys_only=keys_only)
+    report = verifier.report
+    if keys is None:
+        report.notes.append(HMAC_TRUST_NOTE)
+    try:
+        if keys is not None:
+            problem = keys.pinned_fingerprint_problem()
+            if problem is not None:
+                raise _Fail(0, "fingerprint_mismatch", problem)
+        _walk(verifier, lines)
+    except _Fail as fail:
+        report.failure = fail.failure
+        report.ok = False
+        report.complete = False
+        return report
+    report.ok = True
+    last = report.lines
+    after = report.checkpoint_line or 0
+    report.unverified_lines = list(range(after + 1, last + 1)) if report.chain_checked else []
+    report.complete = (report.chain_checked and report.checkpoint_method == SESSION_END
+                       and not report.unverified_lines)
+    return report
+
+
+def _walk(verifier: _Verifier, lines: Iterable[str | bytes]) -> None:
+    report = verifier.report
+    open_request: tuple[int, dict[str, Any]] | None = None
+    for number, raw in enumerate(lines, start=1):
+        report.lines = number
+        record = _parse_line(raw, number)
+        envelope = record.get("envelope")
+        if record["dir"] == "req":
+            if open_request is not None:
+                verifier.unanswered(*open_request)
+            verifier.request(number, envelope)
+            open_request = (number, envelope)
+            continue
+        if open_request is None:
+            raise _Fail(number, "order", "a response line with no unanswered request line before it")
+        req_line, request = open_request
+        open_request = None
+        if envelope is None:
+            verifier.unanswered(req_line, request)
+        else:
+            verifier.response(req_line, request, number, envelope)
+    if open_request is not None:
+        verifier.unanswered(*open_request)
+    if report.lines == 0:
+        raise _Fail(1, "empty", "the transcript holds no lines")
+
+
+def _read_secret(path: str) -> bytes:
+    try:
+        # The same owner-only, no-symlink rule every other reader of the shared secret applies.
+        check_secret_file_perms(path, setting="--hmac-secret")
+        with open(path, "rb") as f:
+            secret = f.read().rstrip(b"\r\n\t ")
+    except (OSError, RuntimeError) as exc:
+        raise UsageError(f"--hmac-secret {path!r} can't be read: {exc}") from exc
+    if len(secret) < MIN_SECRET_BYTES:
+        raise UsageError(f"--hmac-secret {path!r} holds {len(secret)} bytes, under the {MIN_SECRET_BYTES} section "
+                         "10 requires")
+    return secret
+
+
+def _read_key_document(path: str) -> Mapping[str, Any]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            document = json.load(f, object_pairs_hook=_no_duplicate_keys, parse_constant=_no_constants)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise UsageError(f"--keys {path!r} can't be read as JSON: {exc}") from exc
+    if not isinstance(document, Mapping):
+        raise UsageError(f"--keys {path!r} is not a JSON object")
+    return document
+
+
+def _read_transcript(path: str) -> list[bytes]:
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        raise UsageError(f"the transcript {path!r} can't be read: {exc}") from exc
+    # Lines are split on bytes, so a line that isn't UTF-8 fails at its own number instead of failing the file.
+    return data.splitlines() if data else []
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="acs-verify",
+        description="Check a Guardian session transcript offline: the audit chain, every decision signature, the "
+                    "request binding, and key validity. Exit 0 pass, 1 verification failure, 2 usage or "
+                    "unreadable input. Lab conventions: issues #460, #576, #316.")
+    parser.add_argument("transcript", help="the gateway's <session_id>.jsonl transcript")
+    parser.add_argument("--keys", metavar="KEY_DOCUMENT",
+                        help="the Guardian's acs-lab-keys/1 key document. Every response must verify under ML-DSA-65")
+    parser.add_argument("--expect-fingerprint", action="append", default=[], metavar="FINGERPRINT",
+                        help="the fingerprint the Guardian printed at startup. Every verifying key must match one")
+    parser.add_argument("--key-id", help="accept only this key_id from the key document")
+    parser.add_argument("--hmac-secret", metavar="FILE",
+                        help="the shared HMAC secret file. Checks request signatures. Without --keys it also makes "
+                             "HMAC-SHA256 the response algorithm")
+    parser.add_argument("--keys-only", action="store_true", help="check signatures without the chain")
+    parser.add_argument("--json", action="store_true", help="print one JSON object instead of text")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_PASS if exc.code == 0 else EXIT_USAGE
+    try:
+        if args.key_id is not None and args.keys is None:
+            raise UsageError("--key-id needs --keys")
+        document = _read_key_document(args.keys) if args.keys else None
+        secret = _read_secret(args.hmac_secret) if args.hmac_secret else None
+        lines = _read_transcript(args.transcript)
+        report = verify_transcript(lines, key_document=document, hmac_secret=secret,
+                                   expect_fingerprints=args.expect_fingerprint, key_id=args.key_id,
+                                   keys_only=args.keys_only)
+    except UsageError as exc:
+        if args.json:
+            sys.stdout.write(json.dumps({"result": "error", "error": str(exc)}) + "\n")
+        else:
+            sys.stderr.write(f"acs-verify: {exc}\n")
+        return EXIT_USAGE
+    except ImportError as exc:
+        # The key document needs the pqc extra. Without it nothing can be checked, which is a setup problem.
+        sys.stderr.write(f"acs-verify: {exc}\n")
+        return EXIT_USAGE
+    if args.json:
+        sys.stdout.write(json.dumps(report.to_json(), sort_keys=True) + "\n")
+    else:
+        sys.stdout.write(report.to_text() + "\n")
+    return EXIT_PASS if report.ok else EXIT_FAIL
+
+
+if __name__ == "__main__":
+    sys.exit(main())
