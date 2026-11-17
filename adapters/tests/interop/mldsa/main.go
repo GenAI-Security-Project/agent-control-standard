@@ -1,8 +1,9 @@
 // Independent ML-DSA-65 implementation for the acs.core interop tests (issue #574).
 //
-// Go's standard library crypto/mldsa (Go 1.26 or later) shares no code with pyca/cryptography
-// or OpenSSL, so agreement between the two is evidence that acs.core signs plain FIPS 204
-// ML-DSA-65 in pure mode with the context it claims.
+// Go's standard library crypto/mldsa shares no code with pyca/cryptography or OpenSSL, so
+// agreement between the two is evidence that acs.core signs plain FIPS 204 ML-DSA-65 in pure
+// mode with the context it claims. It needs Go 1.27 or later, the version CI pins and the one
+// that produced the test vector.
 //
 // It reads one JSON object on stdin and writes one JSON object on stdout. Byte fields are
 // standard base64. Context is a string, empty by default, as in mldsa.Options.

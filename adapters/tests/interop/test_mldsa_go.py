@@ -31,7 +31,7 @@ PROBE_TIMEOUT_S = 60
 def go_problem(go: str | None, *, timeout: float = PROBE_TIMEOUT_S) -> str | None:
     """Why this Go can't run the check, or None. Probes once, with a timeout."""
     if go is None:
-        return "go is not on PATH: the ML-DSA-65 interop check needs Go 1.26 or later (crypto/mldsa)"
+        return "go is not on PATH: the ML-DSA-65 interop check needs Go 1.27 or later (crypto/mldsa)"
     try:
         probe = subprocess.run([go, "list", "crypto/mldsa"], capture_output=True, text=True,
                                env=GO_ENV, timeout=timeout)
@@ -40,7 +40,7 @@ def go_problem(go: str | None, *, timeout: float = PROBE_TIMEOUT_S) -> str | Non
     except OSError as exc:
         return f"{go} could not run: {exc}"
     if probe.returncode != 0:
-        return "this Go has no crypto/mldsa: the ML-DSA-65 interop check needs Go 1.26 or later"
+        return "this Go has no crypto/mldsa: the ML-DSA-65 interop check needs Go 1.27 or later"
     return None
 
 
