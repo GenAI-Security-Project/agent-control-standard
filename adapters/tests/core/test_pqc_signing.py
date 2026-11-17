@@ -37,19 +37,27 @@ from acs.core import (  # noqa: E402
 )
 from acs.core._keyring import ECDSA_P256  # noqa: E402
 
+VECTOR_REQUEST = {"jsonrpc": "2.0", "id": "5b0d7c3e-2f0a-4d4e-9a51-0c6f3c1e8a42", "method": "steps/toolCallRequest",
+                  "params": {"acs_version": "0.1.0", "request_id": "5b0d7c3e-2f0a-4d4e-9a51-0c6f3c1e8a42"}}
 VECTOR = json.loads((Path(__file__).parent / "vectors" / "ml_dsa_65_decision.json").read_text(encoding="utf-8"))
 SEED = bytes(range(32))
 # SHA-256 of the ML-DSA-65 public key for SEED. Go crypto/mldsa and pyca/cryptography agree on it.
 SEED_PUBLIC_KEY_SHA256 = "d666806e11cee19a7c989f7445f90dd419cf4d2d51db8c0fdb4c0f0a542238c9"
 KEY_ID = "lab-guardian-1"
-SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+DECISION_ID = "c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60"
+
+
+def _request(request_id: str = DECISION_ID) -> dict:
+    """The step request a decision answers. Its JSON-RPC id and request_id are the binding (D-029)."""
+    return {"jsonrpc": "2.0", "id": request_id, "method": "steps/toolCallRequest",
+            "params": {"acs_version": "0.1.0", "request_id": request_id,
+                       "metadata": {"session_id": "0f8fad5b-d9cb-469f-a165-70867728950e"}}}
 
 
 def _decision() -> dict:
-    return {"jsonrpc": "2.0", "id": "c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60",
-            "result": {"acs_version": "0.1.0", "request_id": "c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60",
-                       "decision": "allow", "chain_hash": "sha256:" + "cd" * 32,
-                       "metadata": {"session_id": SESSION_ID}}}
+    return {"jsonrpc": "2.0", "id": DECISION_ID,
+            "result": {"acs_version": "0.1.0", "request_id": DECISION_ID,
+                       "decision": "allow", "chain_hash": "sha256:" + "cd" * 32}}
 
 
 def _signer() -> MLDSA65SigningKey:
@@ -149,7 +157,7 @@ class KeysAreParsedOnce(unittest.TestCase):
         envelope = sign_with_signing_key(_decision(), signer)
         with mock.patch.object(mldsa.MLDSA65PublicKey, "from_public_bytes",
                                side_effect=AssertionError("parsed again")):
-            self.assertTrue(verify_with_keyring(envelope, keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+            self.assertTrue(verify_with_keyring(envelope, keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_building_a_key_without_the_extra_names_it(self) -> None:
         # The public name is gated (AttributeError), and the private module fails at build (ImportError).
@@ -178,7 +186,7 @@ class KeysSurviveCopyAndPickle(unittest.TestCase):
                 copied = clone(key)
                 self.assertEqual(copied, key)
                 self.assertTrue(verify_with_keyring(envelope, Keyring([copied]), expected_key_id=KEY_ID,
-                                                    expected_session_id=SESSION_ID))
+                                                    request=_request()))
 
     def test_a_keyring_deepcopies(self) -> None:
         keyring = _keyring()
@@ -197,10 +205,10 @@ class SignatureLengthIsCheckedFirst(unittest.TestCase):
             for signature in (raw[:-1], raw + b"\x00", b"", raw[:3306]):
                 with self.subTest(length=len(signature)):
                     envelope["result"]["signature"]["value"] = base64.b64encode(signature).decode()
-                    self.assertFalse(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+                    self.assertFalse(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, request=_request()))
             spy.assert_not_called()
             envelope["result"]["signature"]["value"] = base64.b64encode(raw).decode()
-            self.assertTrue(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+            self.assertTrue(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, request=_request()))
             spy.assert_called_once()
 
 
@@ -217,7 +225,7 @@ class ModeAndContext(unittest.TestCase):
         envelope["result"]["signature"] = {
             "algorithm": ML_DSA_65, "key_id": KEY_ID,
             "value": base64.b64encode(raw.sign(signing_input(envelope), b"acs")).decode()}
-        self.assertFalse(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, request=_request()))
 
     def test_the_signature_verifies_with_the_empty_context_directly(self) -> None:
         envelope = sign_with_signing_key(_decision(), _signer())
@@ -298,12 +306,12 @@ class NistAcvpKnownAnswers(unittest.TestCase):
 class VerifySideKnownAnswer(unittest.TestCase):
     def test_the_go_signed_vector_verifies(self) -> None:
         public = base64.b64decode(VECTOR["public_key"])
-        self.assertTrue(verify_with_keyring(VECTOR["envelope"], Keyring([VerificationKey(KEY_ID, ML_DSA_65, public)]), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertTrue(verify_with_keyring(VECTOR["envelope"], Keyring([VerificationKey(KEY_ID, ML_DSA_65, public)]), expected_key_id=KEY_ID, request=VECTOR_REQUEST))
 
     def test_the_go_signed_vector_fails_once_the_decision_changes(self) -> None:
         forged = copy.deepcopy(VECTOR["envelope"])
         forged["result"]["decision"] = "allow"
-        self.assertFalse(verify_with_keyring(forged, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(forged, _keyring(), expected_key_id=KEY_ID, request=VECTOR_REQUEST))
 
 
 class SignAndVerify(unittest.TestCase):
@@ -313,13 +321,13 @@ class SignAndVerify(unittest.TestCase):
         self.assertEqual(set(sig), {"algorithm", "value", "key_id"})
         self.assertEqual((sig["algorithm"], sig["key_id"]), (ML_DSA_65, KEY_ID))
         self.assertEqual(len(base64.b64decode(sig["value"], validate=True)), 3309)
-        self.assertTrue(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertTrue(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, request=_request()))
 
     def test_signing_is_randomized_and_both_signatures_verify(self) -> None:
         first = sign_with_signing_key(_decision(), _signer())
         second = sign_with_signing_key(_decision(), _signer())
         self.assertNotEqual(first["result"]["signature"]["value"], second["result"]["signature"]["value"])
-        self.assertTrue(verify_with_keyring(second, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertTrue(verify_with_keyring(second, _keyring(), expected_key_id=KEY_ID, request=_request()))
 
     def test_signs_the_same_bytes_hmac_signs(self) -> None:
         signer = _signer()
@@ -331,80 +339,88 @@ class SignAndVerify(unittest.TestCase):
         envelope = sign_with_key(_decision(), bytes(32), key_id="lab")
         sign_with_signing_key(envelope, _signer())
         self.assertEqual(envelope["result"]["signature"]["algorithm"], ML_DSA_65)
-        self.assertTrue(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertTrue(verify_with_keyring(envelope, _keyring(), expected_key_id=KEY_ID, request=_request()))
 
-    def test_a_request_envelope_signs_under_params(self) -> None:
-        request = {"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart",
-                   "params": {"acs_version": "0.1.0", "metadata": {"session_id": SESSION_ID}}}
+    def test_a_request_envelope_signs_under_params_but_answers_nothing(self) -> None:
+        # Keyring verification checks a response against the request it answers, so a request fails.
+        request = _request()
         sign_with_signing_key(request, _signer())
         self.assertEqual(request["params"]["signature"]["algorithm"], ML_DSA_65)
-        self.assertTrue(verify_with_keyring(request, _keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(request, _keyring(), expected_key_id=KEY_ID, request=_request()))
 
 
-class SessionBinding(unittest.TestCase):
-    """Review finding CR3-1: a response signed for one session never verifies in another.
+class RequestBinding(unittest.TestCase):
+    """Round 4, D-029: a response verifies only against the request it answers.
 
-    HMAC binds a response to its session through the per-session key. One ML-DSA key signs
-    every session, so the verifier reads the session the signed envelope names.
+    One ML-DSA key signs every session, so the key alone can't stop a response from one
+    exchange being replayed onto another. Request ids are fresh UUID4s never resent, so the
+    JSON-RPC id and result.request_id bind a response to one request, and so to one session.
     """
 
     def setUp(self) -> None:
         self.keyring = _keyring()
         self.signed = sign_with_signing_key(_decision(), _signer())
 
-    def test_a_response_replayed_into_another_session_is_rejected(self) -> None:
-        self.assertTrue(verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID,
-                                            expected_session_id=SESSION_ID))
-        self.assertFalse(verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID,
-                                             expected_session_id="6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"))
+    def _verify(self, envelope: dict, request: dict) -> bool:
+        return verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=request)
 
-    def test_session_id_is_matched_exactly(self) -> None:
-        for spelling in (SESSION_ID.upper(), f"urn:uuid:{SESSION_ID}", SESSION_ID + " "):
-            with self.subTest(spelling=spelling):
-                self.assertFalse(verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID,
-                                                     expected_session_id=spelling))
+    def test_a_matching_response_passes(self) -> None:
+        self.assertTrue(self._verify(self.signed, _request()))
 
-    def test_a_response_naming_no_session_is_rejected(self) -> None:
-        for metadata in (None, {}, {"session_id": None}, {"session_id": 7}, "not a dict"):
-            envelope = _decision()
-            if metadata is None:
-                del envelope["result"]["metadata"]
-            else:
-                envelope["result"]["metadata"] = metadata
-            sign_with_signing_key(envelope, _signer())
-            with self.subTest(metadata=metadata):
-                self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID,
-                                                     expected_session_id=SESSION_ID))
+    def test_a_response_replayed_under_another_request_is_rejected(self) -> None:
+        self.assertFalse(self._verify(self.signed, _request("6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36")))
 
-    def test_the_session_is_read_from_the_signed_bytes(self) -> None:
-        # Rewriting the session after signing breaks the signature, so the check can't be steered.
-        moved = copy.deepcopy(self.signed)
-        moved["result"]["metadata"]["session_id"] = "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"
-        self.assertFalse(verify_with_keyring(moved, self.keyring, expected_key_id=KEY_ID,
-                                             expected_session_id="6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"))
+    def test_the_json_rpc_id_and_request_id_each_bind(self) -> None:
+        other_id = _request()
+        other_id["id"] = "another-call"
+        other_request_id = _request()
+        other_request_id["params"]["request_id"] = "another-request"
+        for name, request in (("JSON-RPC id", other_id), ("request_id", other_request_id)):
+            with self.subTest(name):
+                self.assertFalse(self._verify(self.signed, request))
 
-    def test_a_session_mismatch_is_rejected_before_any_crypto(self) -> None:
+    def test_a_mismatch_is_rejected_before_any_crypto(self) -> None:
         import acs.core._mldsa as module
         spy = mock.Mock(return_value=True)
         with mock.patch.dict(module._VERIFIERS, {ML_DSA_65: spy}):
-            self.assertFalse(verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID,
-                                                 expected_session_id="another-session"))
+            self.assertFalse(self._verify(self.signed, _request("another-request")))
         spy.assert_not_called()
 
-    def test_an_error_response_names_its_session_under_error_data(self) -> None:
-        error = {"jsonrpc": "2.0", "id": "1",
-                 "error": {"code": -32000, "message": "refused", "data": {"session_id": SESSION_ID}}}
-        sign_with_signing_key(error, _signer())
-        self.assertTrue(verify_with_keyring(error, self.keyring, expected_key_id=KEY_ID,
-                                            expected_session_id=SESSION_ID))
-        self.assertFalse(verify_with_keyring(error, self.keyring, expected_key_id=KEY_ID,
-                                             expected_session_id="another-session"))
+    def test_a_rewritten_binding_fails_the_signature(self) -> None:
+        moved = copy.deepcopy(self.signed)
+        moved["id"] = moved["result"]["request_id"] = "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36"
+        self.assertFalse(self._verify(moved, _request("6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36")))
 
-    def test_expected_session_id_is_required(self) -> None:
-        for expected in (None, "", 7):
-            with self.subTest(expected=expected), self.assertRaises(ValueError):
-                verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID,
-                                    expected_session_id=expected)  # type: ignore[arg-type]
+    def test_an_error_binds_by_its_json_rpc_id(self) -> None:
+        error = {"jsonrpc": "2.0", "id": DECISION_ID, "error": {"code": -32000, "message": "refused"}}
+        sign_with_signing_key(error, _signer())
+        self.assertTrue(self._verify(error, _request()))
+        self.assertFalse(self._verify(error, _request("another-request")))
+
+    def test_a_server_hello_binds_by_its_json_rpc_id(self) -> None:
+        # A ServerHello carries no request_id under the current schema, so the id is the whole binding.
+        hello = {"jsonrpc": "2.0", "id": "hello-1", "method": "handshake/hello",
+                 "params": {"acs_version": "0.1.0", "request_id": "hello-request-1"}}
+        server_hello = {"jsonrpc": "2.0", "id": "hello-1",
+                        "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
+                                   "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
+        sign_with_signing_key(server_hello, _signer())
+        self.assertTrue(self._verify(server_hello, hello))
+        self.assertFalse(self._verify(server_hello, {**hello, "id": "hello-2"}))
+
+    def test_the_session_field_convention_is_gone(self) -> None:
+        # Round 4 reverses round 3: a session named in result.metadata neither helps nor hurts.
+        named = _decision()
+        named["result"]["metadata"] = {"session_id": "any"}
+        sign_with_signing_key(named, _signer())
+        self.assertTrue(self._verify(named, _request()))
+        import acs.core._mldsa as module
+        self.assertFalse(hasattr(module, "signed_session_id"))
+
+    def test_request_is_required_and_must_be_an_envelope(self) -> None:
+        for request in (None, "request", [], {}, {"id": None}):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                self._verify(self.signed, request)  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
             verify_with_keyring(self.signed, self.keyring, expected_key_id=KEY_ID)  # type: ignore[call-arg]
 
@@ -424,56 +440,56 @@ class Rejections(unittest.TestCase):
     def test_an_unknown_key_id_is_rejected(self) -> None:
         for key_id in ("lab-guardian-2", "LAB-GUARDIAN-1", "", None, 1):
             with self.subTest(key_id=key_id):
-                self.assertFalse(verify_with_keyring(self._with_signature(key_id=key_id), self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+                self.assertFalse(verify_with_keyring(self._with_signature(key_id=key_id), self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_an_expected_key_id_the_keyring_lacks_is_rejected(self) -> None:
         envelope = self._with_signature(key_id="lab-guardian-2")
-        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id="lab-guardian-2", expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id="lab-guardian-2", request=_request()))
 
     def test_a_response_from_another_keyring_key_is_rejected(self) -> None:
         # Review finding CR3-3: core enforces the pin, so no caller can skip it.
         other = MLDSA65SigningKey.from_seed(bytes(32), "lab-guardian-2")
         keyring = Keyring([_signer().verification_key(), other.verification_key()])
         envelope = sign_with_signing_key(_decision(), other)
-        self.assertTrue(verify_with_keyring(envelope, keyring, expected_key_id="lab-guardian-2", expected_session_id=SESSION_ID))
-        self.assertFalse(verify_with_keyring(envelope, keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertTrue(verify_with_keyring(envelope, keyring, expected_key_id="lab-guardian-2", request=_request()))
+        self.assertFalse(verify_with_keyring(envelope, keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_a_key_id_mismatch_is_rejected_before_any_crypto(self) -> None:
         import acs.core._mldsa as module
         spy = mock.Mock(return_value=True)
         with mock.patch.dict(module._VERIFIERS, {ML_DSA_65: spy}):
-            self.assertFalse(verify_with_keyring(self.signed, self.keyring, expected_key_id="lab-guardian-2", expected_session_id=SESSION_ID))
+            self.assertFalse(verify_with_keyring(self.signed, self.keyring, expected_key_id="lab-guardian-2", request=_request()))
         spy.assert_not_called()
 
     def test_expected_key_id_is_required(self) -> None:
         for expected in (None, "", 7):
             with self.subTest(expected=expected), self.assertRaises(ValueError):
-                verify_with_keyring(self.signed, self.keyring, expected_key_id=expected, expected_session_id=SESSION_ID)  # type: ignore[arg-type]
+                verify_with_keyring(self.signed, self.keyring, expected_key_id=expected, request=_request())  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
-            verify_with_keyring(self.signed, self.keyring, expected_session_id=SESSION_ID)  # type: ignore[call-arg]
+            verify_with_keyring(self.signed, self.keyring, request=_request())  # type: ignore[call-arg]
 
     def test_a_missing_key_id_is_rejected(self) -> None:
         envelope = copy.deepcopy(self.signed)
         del envelope["result"]["signature"]["key_id"]
-        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_an_algorithm_the_key_does_not_carry_is_rejected(self) -> None:
         for algorithm in ("HMAC-SHA256", "ECDSA-P256", "ML-DSA-65+ECDSA-P256", "ml-dsa-65", "", None):
             with self.subTest(algorithm=algorithm):
-                self.assertFalse(verify_with_keyring(self._with_signature(algorithm=algorithm), self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+                self.assertFalse(verify_with_keyring(self._with_signature(algorithm=algorithm), self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_an_hmac_signed_envelope_under_a_keyring_key_id_is_rejected(self) -> None:
         envelope = sign_with_key(_decision(), bytes(32), key_id=KEY_ID)
-        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=_request()))
         envelope["result"]["signature"]["algorithm"] = ML_DSA_65
-        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_another_key_under_the_same_key_id_is_rejected(self) -> None:
         other = MLDSA65SigningKey.from_seed(bytes(32), KEY_ID)
-        self.assertFalse(verify_with_keyring(self.signed, _keyring(other), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(self.signed, _keyring(other), expected_key_id=KEY_ID, request=_request()))
 
     def test_an_empty_keyring_rejects_everything(self) -> None:
-        self.assertFalse(verify_with_keyring(self.signed, Keyring(), expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(self.signed, Keyring(), expected_key_id=KEY_ID, request=_request()))
 
     def test_a_changed_envelope_is_rejected(self) -> None:
         for path, value in ((("result", "decision"), "deny"), (("id",), "other"), (("jsonrpc",), "3.0")):
@@ -483,10 +499,10 @@ class Rejections(unittest.TestCase):
                 target = target[part]
             target[path[-1]] = value
             with self.subTest(path=path):
-                self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+                self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=_request()))
         added = copy.deepcopy(self.signed)
         added["result"]["reasoning"] = "added after signing"
-        self.assertFalse(verify_with_keyring(added, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(added, self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_a_flipped_signature_byte_is_rejected(self) -> None:
         raw = bytearray(base64.b64decode(self.signed["result"]["signature"]["value"]))
@@ -495,14 +511,14 @@ class Rejections(unittest.TestCase):
             flipped[index] ^= 0x01
             with self.subTest(index=index):
                 value = base64.b64encode(bytes(flipped)).decode()
-                self.assertFalse(verify_with_keyring(self._with_signature(value=value), self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+                self.assertFalse(verify_with_keyring(self._with_signature(value=value), self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_a_malformed_value_is_rejected_without_raising(self) -> None:
         good = self.signed["result"]["signature"]["value"]
         for value in (None, 7, b"bytes", "", "not base64!", good[:-8], good + "AAAA", good + "=",
                       base64.urlsafe_b64encode(bytes(3309)).decode(), base64.b64encode(bytes(3309)).decode()):
             with self.subTest(value=str(value)[:24]):
-                self.assertFalse(verify_with_keyring(self._with_signature(value=value), self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+                self.assertFalse(verify_with_keyring(self._with_signature(value=value), self.keyring, expected_key_id=KEY_ID, request=_request()))
 
     def test_an_unsigned_or_misshapen_envelope_is_rejected(self) -> None:
         unsigned = _decision()
@@ -512,12 +528,12 @@ class Rejections(unittest.TestCase):
         for name, envelope in (("unsigned", unsigned), ("container not a dict", not_a_dict),
                                ("signature not a dict", signature_not_a_dict), ("not an envelope", [])):
             with self.subTest(name):
-                self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))  # type: ignore[arg-type]
+                self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=_request()))  # type: ignore[arg-type]
 
     def test_an_envelope_without_a_canonical_form_is_rejected(self) -> None:
         envelope = copy.deepcopy(self.signed)
         envelope["result"]["big"] = 2 ** 60  # RFC 8785 has no form for an integer beyond 2**53
-        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID))
+        self.assertFalse(verify_with_keyring(envelope, self.keyring, expected_key_id=KEY_ID, request=_request()))
 
 
 class VariantAndContextAreDocumented(unittest.TestCase):

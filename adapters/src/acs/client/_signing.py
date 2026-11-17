@@ -28,25 +28,27 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 def verify_signature(envelope: dict, *, key: bytes | None = None,
                      session_id: str | None = None, key_id: str | None = None,
                      keyring: Keyring | None = None, expected_key_id: str | None = None,
-                     expected_session_id: str | None = None) -> bool:
+                     request: dict | None = None) -> bool:
     """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid.
 
     With a keyring, the signature must name expected_key_id, the key this caller trusts to
-    answer, and the signed envelope must name expected_session_id. That key's algorithm
-    decides (RFC 8725 section 3.1). Core verify_with_keyring enforces both pins. The
-    ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra (issue #574).
+    answer, and the response must answer request, the envelope this caller sent (D-029).
+    That key's algorithm decides (RFC 8725 section 3.1). Core verify_with_keyring enforces
+    both. The ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra
+    (issue #574).
     """
     if keyring is None:
-        if expected_key_id is not None or expected_session_id is not None:
-            raise ValueError("expected_key_id and expected_session_id apply only to keyring verification")
+        if expected_key_id is not None or request is not None:
+            raise ValueError("expected_key_id and request apply only to keyring verification")
     else:
         if key is not None or session_id is not None or key_id is not None:
             raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
         # The lazy public export loads cryptography only here, never on the HMAC path, and
-        # raises AttributeError naming the pqc extra when it is missing. Core checks both pins.
+        # raises AttributeError naming the pqc extra when it is missing. Core checks the key_id
+        # pin and the request binding.
         import acs.core
         return acs.core.verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id,
-                                            expected_session_id=expected_session_id)
+                                            request=request)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False
