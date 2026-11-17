@@ -46,12 +46,15 @@ class VerificationKey:
     _parsed: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        # Every field's type is checked before any lookup, so a bad value is always ValueError.
         check_key_id(self.key_id)
+        if not isinstance(self.algorithm, str):
+            raise ValueError("algorithm must be a string")
+        if not isinstance(self.public_key, bytes):
+            raise ValueError("public_key must be the raw public key bytes")
         if self.algorithm not in WIRE_ALGORITHMS:
             raise ValueError(f"algorithm {self.algorithm!r} is not accepted on the wire. "
                              f"Accepted: {sorted(WIRE_ALGORITHMS)}")
-        if not isinstance(self.public_key, bytes):
-            raise ValueError("public_key must be the raw public key bytes")
         expected = PUBLIC_KEY_SIZES[self.algorithm]
         if len(self.public_key) != expected:
             raise ValueError(f"a {self.algorithm} public key is {expected} bytes, "

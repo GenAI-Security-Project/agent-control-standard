@@ -84,6 +84,12 @@ class VerificationKeyRules(unittest.TestCase):
             with self.subTest(algorithm=algorithm), self.assertRaises(ValueError):
                 VerificationKey(key_id="k", algorithm=algorithm, public_key=PUBLIC)
 
+    def test_refuses_an_algorithm_that_is_not_a_string(self) -> None:
+        # Review finding CR3-10: an unhashable value is a ValueError like any other bad field.
+        for algorithm in (["ML-DSA-65"], {"ML-DSA-65": 1}, None, 65):
+            with self.subTest(algorithm=algorithm), self.assertRaises(ValueError):
+                VerificationKey(key_id="k", algorithm=algorithm, public_key=PUBLIC)  # type: ignore[arg-type]
+
     def test_refuses_a_public_key_of_the_wrong_size(self) -> None:
         for public in (b"", PUBLIC[:-1], PUBLIC + b"\x00"):
             with self.subTest(size=len(public)), self.assertRaises(ValueError):
