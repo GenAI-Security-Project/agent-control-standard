@@ -3,7 +3,7 @@
 ACS_POLICY_BACKEND=opa sends steps/toolCallRequest and steps/toolCallResult to the OPA data API at
 ACS_OPA_URL as {"input": {"method", "payload", "metadata"}}. OPA answers {"result": verdict}. The input
 document and the verdict shape are not part of the specification. With ACS_POLICY_BACKEND unset the
-Guardian never imports a policy decision from here, so the reference adapters see today's decisions.
+Guardian never calls evaluate, so the reference adapters see today's decisions.
 """
 from __future__ import annotations
 

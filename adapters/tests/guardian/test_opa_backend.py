@@ -72,7 +72,7 @@ def test_a_body_that_is_not_a_bounded_json_object_is_malformed(body):
 
 
 def test_an_undefined_rule_is_a_missing_result():
-    # OPA answers {} when the rule is undefined; reading that as allow is the issue #469 failure.
+    # OPA answers {} when the rule is undefined. Reading that as allow is the issue #469 failure.
     with StubOpa(body=b"{}") as opa:
         assert _failure(_config(opa.url)).reason_code == "opa_result_missing"
 

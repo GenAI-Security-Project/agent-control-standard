@@ -10,7 +10,7 @@ HTTP server on `127.0.0.1:8787` (`--host`, `--port`) that answers JSON-RPC 2.0 P
 
 ## Policy implemented
 
-Tool names compare case-insensitively, so `Bash` (Claude Code), `Shell` (Cursor) and `shell` (NAT) take the same branch.
+Tool names compare case-insensitively, so `Bash` (Claude Code), `Shell` (Cursor) and `shell` (NAT) take the same branch. This table is the default backend. Under the [OPA backend](#opa-backend-lab-convention), OPA decides `steps/toolCallRequest` and `steps/toolCallResult` instead, and every other row stays as written.
 
 | Hook method | Rule |
 |---|---|
@@ -26,6 +26,67 @@ Tool names compare case-insensitively, so `Bash` (Claude Code), `Shell` (Cursor)
 | Any other method | `deny`, `unknown_method` |
 
 Every step response carries `chain_hash`, the head of the session's rolling SHA-256 audit chain (§8.2, `entry_hash = sha256(JCS(entry) || previous_hash)`). The chain head and the seen `request_id`s persist per session under `ACS_GUARDIAN_STATE_DIR` (default `~/.cache/acs-guardian-state/`), so a restart keeps replay protection; `ACS_GUARDIAN_STATE_DIR=""` keeps them in memory, for development.
+
+## OPA backend (lab convention)
+
+The Guardian can hand its tool decisions to [Open Policy Agent](https://www.openpolicyagent.org/). The input document and the verdict shape below are a lab convention, not part of the specification, until issue #531 (Specify or drop the Guardian's two-layer decision path and the OPA/Rego binding) settles the OPA binding. The backend is off by default. With `ACS_POLICY_BACKEND` unset, the Guardian decides exactly as the table above says, and the Claude Code, Cursor, and NAT adapters see the same decisions as before.
+
+| Setting | Meaning |
+|---|---|
+| `ACS_POLICY_BACKEND` | `opa` turns the backend on. Unset or empty keeps the built-in rules. Any other value is an error. |
+| `ACS_OPA_URL` | The OPA data API URL of the rule that returns the verdict, for example `http://opa:8181/v1/data/finbot/verdict`. Required with `opa`. Only `http` and `https` are accepted. |
+| `ACS_OPA_TIMEOUT_MS` | How long the Guardian waits for OPA, from 1 to 4999. Default 2000, which stays inside the 5000 ms the ServerHello advertises. |
+
+The Guardian refuses to start when the backend is named but its settings can't be used. As a backstop, a running Guardian that finds a bad setting denies both tool methods with `policy_backend_misconfigured`.
+
+Under the backend, `steps/toolCallRequest` and `steps/toolCallResult` go to OPA after the signature, skew, replay, and nonce checks pass and the step is on the chain. `steps/toolCallResult` is judged instead of allowed, so a result can be denied or redacted. Every other method keeps its row in the table above. The Guardian sends one POST per step:
+
+```json
+{
+  "input": {
+    "method": "steps/toolCallResult",
+    "payload": {
+      "tool": {"name": "get_vendor_details"},
+      "exit_status": "success",
+      "outputs": [{"value": {"name": "Acme", "bank_account_number": "111-222"}}]
+    },
+    "metadata": {"agent_id": "finbot", "session_id": "<uuid>", "platform": "lab"}
+  }
+}
+```
+
+`payload` and `metadata` are the request's own, unchanged. The signature, nonce, and timestamp stay out because the Guardian has already checked them. OPA answers `{"result": verdict}`:
+
+```json
+{
+  "decision": "modify",
+  "reasoning": "Bank account numbers are withheld",
+  "reason_codes": ["sensitive_field_redacted"],
+  "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}
+}
+```
+
+A verdict may carry `decision`, `reasoning`, `reason_codes`, `modifications`, `ask_details`, `policy_references`, and `policy_data`, and nothing else. The Guardian adds `type`, `acs_version`, `request_id`, and `chain_hash`, then signs the result. Before it does, the verdict has to pass these checks:
+
+- `decision` is `allow`, `deny`, `modify`, or `ask`. The lab has no use for `defer`.
+- The merged result validates against `AcsResult` in `response-envelope.json`, which applies `modifications.json` and `ask-details.json` and requires `reasoning` on deny, modify, and ask.
+- `modifications` appears only on modify, and `ask_details` only on ask.
+- A modify follows the section 6.3 composition rules. `parameter_overrides` names only arguments the call carries and never appears on a tool result. Every redaction path names a value in the payload, so a typo can't leave the value in place. A result with several outputs needs one redaction per output.
+- An ask leaves `timeout_disposition` unset or sets it to `deny`. Under [D-043 (Treat ASK as a soft deny)](../../../docs/decisions/index.md#d-043-treat-ask-as-a-soft-deny) the Guardian owns the ASK timeout, and nothing in the Guardian turns an ask into an allow.
+
+The Guardian never reads an OPA failure as allow. Each failure becomes a signed `deny` whose reason code says which, per [D-036 (Default the failure posture to deny)](../../../docs/decisions/index.md#d-036-default-the-failure-posture-to-deny) and [D-040 (Split decision failures from refusals)](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals):
+
+| Reason code | Raised when |
+|---|---|
+| `opa_unreachable` | The connection to OPA fails |
+| `opa_timeout` | OPA doesn't answer within `ACS_OPA_TIMEOUT_MS` |
+| `opa_http_error` | OPA answers with any status but 200, a redirect included |
+| `opa_response_malformed` | The body isn't a JSON object, or is larger than 1 MiB |
+| `opa_result_missing` | The body has no `result`, which is how OPA reports an undefined rule |
+| `opa_verdict_invalid` | The verdict fails a check above |
+| `policy_backend_misconfigured` | `ACS_POLICY_BACKEND` names an unknown backend, or the OPA settings can't be used |
+
+`tests/guardian/policy/lab_test.rego` is a minimal policy for the tests, with its entry point at `data.lab.verdict`. The lab's policy pack replaces it.
 
 ## Why it's shared
 
@@ -60,7 +121,7 @@ It prints `ACS_GUARDIAN_LISTENING port=<port>` on stdout once bound, and logs ea
 
 ## How to extend
 
-The policy is in the `evaluate_step(method, params, request_id, chain_hash)` function. To add a rule, add a pattern to `DESTRUCTIVE_BASH_PATTERNS` (`src/acs/examples/destructive_bash.py`), add a branch in `evaluate_step`, or add a method to `INFORMATIONAL_METHODS`.
+The policy is in the `evaluate_step(method, params, request_id, chain_hash)` function. The OPA backend plugs in there, in `src/acs/guardian/opa_backend.py`. To add a rule, add a pattern to `DESTRUCTIVE_BASH_PATTERNS` (`src/acs/examples/destructive_bash.py`), add a branch in `evaluate_step`, or add a method to `INFORMATIONAL_METHODS`.
 
 Production deployments replace this whole file with their actual policy engine. The wire shape (request format, response format) stays the same.
 
