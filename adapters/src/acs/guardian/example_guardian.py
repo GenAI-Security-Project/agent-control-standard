@@ -814,6 +814,12 @@ def main() -> int:
         return 1
 
     global OPA_CONFIG
+    if policy_backend_name() != POLICY_BACKEND_NAME:
+        # The name is read once, at import. A different value now would be silently ignored, so startup stops.
+        sys.stderr.write(f"[guardian] REFUSING TO START: {POLICY_BACKEND_ENV} changed after import "
+                         f"(was {POLICY_BACKEND_NAME!r}, now {policy_backend_name()!r}). Restart the process "
+                         "with the setting you want.\n")
+        return 1
     if POLICY_BACKEND_NAME:
         from acs.guardian import opa_backend
         backend_problem = opa_backend.backend_problem({**os.environ, POLICY_BACKEND_ENV: POLICY_BACKEND_NAME})

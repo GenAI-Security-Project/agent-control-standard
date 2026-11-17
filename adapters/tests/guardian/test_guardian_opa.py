@@ -478,3 +478,13 @@ def test_a_present_payload_that_is_not_an_object_denies(no_backend, method, payl
     params = {"request_id": REQUEST_ID, "metadata": METADATA, "payload": payload}
     result = example_guardian.evaluate_step(method, params, REQUEST_ID, CHAIN)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
+
+
+@pytest.mark.parametrize("at_import,live", [("", "opa"), ("opa", ""), ("opa", "rego")])
+def test_the_guardian_refuses_to_start_when_the_backend_changed_after_import(no_backend, capsys, at_import, live):
+    no_backend.setattr(example_guardian, "POLICY_BACKEND_NAME", at_import)
+    if live:
+        no_backend.setenv("ACS_POLICY_BACKEND", live)
+    assert _run_main(no_backend) == [1], "the Guardian started with a backend that changed after import"
+    assert "changed after import" in capsys.readouterr().err
