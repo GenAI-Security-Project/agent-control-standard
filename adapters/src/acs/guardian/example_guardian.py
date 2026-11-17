@@ -971,16 +971,20 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         can't hold this thread past BODY_READ_SECONDS. A short body ends at EOF and fails to parse later."""
         deadline = time.monotonic() + BODY_READ_SECONDS
         chunks, remaining = [], length
-        while remaining > 0:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise TimeoutError("the request body passed its read deadline")
-            self.connection.settimeout(min(left, self.timeout) if self.timeout else left)
-            chunk = self.rfile.read1(min(remaining, 65536))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
+        try:
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError("the request body passed its read deadline")
+                self.connection.settimeout(min(left, self.timeout) if self.timeout else left)
+                chunk = self.rfile.read1(min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            # Put the handler's own timeout back, so a later read isn't cut short by this deadline's remainder.
+            self.connection.settimeout(self.timeout)
         return b"".join(chunks)
 
     def _respond(self, status: int, body: dict) -> None:

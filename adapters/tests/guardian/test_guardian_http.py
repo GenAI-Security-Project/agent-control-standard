@@ -453,3 +453,17 @@ def test_a_timeout_outside_the_body_read_gets_the_floor_answer(served, monkeypat
     monkeypatch.setattr(example_guardian, "evaluate_step", slow_policy)
     status, answer = post(served, _signed("steps/sessionStart", {}))
     assert answer["error"]["code"] == -32603
+
+
+def test_the_body_read_restores_the_socket_timeout():
+    # _read_body narrows the socket timeout to the deadline's remainder. It has to put the handler's timeout back,
+    # so a later read on the same connection isn't cut short.
+    server_side, client_side = socket.socketpair()
+    with server_side, client_side:
+        handler = example_guardian.GuardianHandler.__new__(example_guardian.GuardianHandler)
+        handler.connection = server_side
+        handler.rfile = server_side.makefile("rb")
+        client_side.sendall(b"0123456789")
+        assert handler._read_body(10) == b"0123456789"
+        assert server_side.gettimeout() == example_guardian.GuardianHandler.timeout
+        handler.rfile.close()
