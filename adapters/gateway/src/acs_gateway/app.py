@@ -430,8 +430,8 @@ class Gateway:
                     # exact strings, so "1e2" never matches "100".
                     if (any(item.get(f) != cached.item.get(f) for f in ("type", "name", "call_id"))
                             or canonical(item.get("arguments")) != cached.canonical_arguments):
-                        self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id,
-                                     decision="modify" if self.enforce else "deny")
+                        # Recorded as a modify in both modes, since restoring the call is what enforce does.
+                        self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id, decision="modify")
                     if self.enforce:
                         # Any byte difference sends the call back as delivered, so the model reads exactly the call
                         # the Guardian judged, never the client's re-serialization of it.

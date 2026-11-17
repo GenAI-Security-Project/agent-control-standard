@@ -150,3 +150,13 @@ def test_an_identical_resend_is_never_canonicalized(gateway, guardian, upstream,
     monkeypatch.setattr(sessions_module, "canonical", counting)
     client.post("/v1/responses", json=finbot_request(call, output))
     assert calls == []
+
+
+def test_shadow_records_a_mismatched_resend_as_a_modify_like_enforce(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    renamed = {"type": "function_call", "name": "bash", "call_id": "call_1", "arguments": '{"vendor_id": 7}'}
+    client.post("/v1/responses", json=finbot_request(renamed))
+    recorded = [e for e in events(audit, "shadow_decision") if e["cause"] == "call_id_reused"]
+    assert [e["decision"] for e in recorded] == ["modify"]
