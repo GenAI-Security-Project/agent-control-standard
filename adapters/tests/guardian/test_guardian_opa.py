@@ -508,3 +508,16 @@ def test_a_request_too_deep_to_canonicalize_gets_a_signed_invalid_request(no_bac
     response = example_guardian.handle_request(request)
     assert response["error"]["code"] == -32600
     assert verify_signature(response, session_id=request["params"]["metadata"]["session_id"])
+
+
+
+@pytest.mark.parametrize("tool,arguments", [
+    ("Move", {"source": "/tmp/payload", "destination": "/etc/cron.d/x"}),
+    ("Rename", {"path": "/tmp/payload", "new_path": "/etc/sudoers"}),
+    ("move", {"path": "/tmp/payload", "target": "/usr/bin/ls"}),
+    ("Rename", {"from": "/tmp/payload", "to": "/etc/passwd"}),
+])
+def test_a_move_or_rename_into_a_protected_path_denies(no_backend, tool, arguments):
+    payload = {"tool": {"name": tool}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
+    result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])

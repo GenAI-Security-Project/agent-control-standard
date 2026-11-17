@@ -113,7 +113,9 @@ PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"),)
 # Case-folded tool names that change a file, and the argument names that can name the file. This is a fixed list:
 # a tool under any other name, an MCP file tool included, meets no path deny here, and a policy has to cover it.
 WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit", "delete", "remove", "move", "rename"})
-PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file")
+# Every one present is checked, so a move or rename can't carry its destination under a name the check skips.
+PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path", "path", "target_file",
+                                   "destination", "new_path", "target", "to")
 
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
