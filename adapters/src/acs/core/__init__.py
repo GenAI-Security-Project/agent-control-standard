@@ -7,10 +7,13 @@ _EXPORTS = {
     "ACS_VERSION": "_envelope",
     "DEFAULT_SKEW_WINDOW_MS": "_envelope",
     "Decision": "_decision",
+    "ECDSA_P256": "_keyring",
     "GUARDIAN_ERROR_CAUSE": "_errors",
     "GUARDIAN_REFUSAL_CODES": "_errors",
     "KNOWN_DECISIONS": "_decision",
+    "Keyring": "_keyring",
     "MAX_REQUEST_BODY_BYTES": "_envelope",
+    "ML_DSA_65": "_keyring",
     "SESSION_REFUSAL_CODES": "_errors",
     "coerce_uuid": "_envelope",
     "container_key": "_signing",
@@ -30,7 +33,9 @@ _EXPORTS = {
     "server_hello_problem": "_handshake",
     "sign_with_key": "_signing",
     "turn_start_envelope": "_envelope",
+    "VerificationKey": "_keyring",
     "verify_with_key": "_signing",
+    "WIRE_ALGORITHMS": "_keyring",
 }
 
 __all__ = sorted(_EXPORTS)
