@@ -265,8 +265,14 @@ class Gateway:
                     continue
                 if cached is None:
                     known = session.calls.get(call_id)
-                    name = names.get(call_id) or (known.name if known else "")
-                    cached = await self._gate_result(session, item, name if isinstance(name, str) else "", known)
+                    if known is not None:
+                        # The gateway's own record names the tool, never the client's resent copy of the call.
+                        name = known.name
+                    else:
+                        resent = names.get(call_id)
+                        name = resent if isinstance(resent, str) else ""
+                        _audit("result_name_from_client", session_id=session.session_id, call_id=call_id, tool=name)
+                    cached = await self._gate_result(session, item, name, known)
                     session.results[call_id] = cached
                 if self.enforce and cached.item is not None and item.get("output") != cached.item.get("output"):
                     item, changed = {**item, "output": cached.item.get("output")}, True

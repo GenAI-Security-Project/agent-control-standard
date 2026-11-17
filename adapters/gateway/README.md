@@ -97,6 +97,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `verification_failed` | A Guardian response failed its signature check |
 | `guardian_http_error` | The Guardian answered with a non-2xx status |
 | `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`) |
+| `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
 | `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
 | `session_evicted` | The session cap evicted the least recently used session |

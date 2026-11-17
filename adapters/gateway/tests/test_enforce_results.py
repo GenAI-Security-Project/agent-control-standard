@@ -68,3 +68,23 @@ def test_modified_content_replaces_a_text_output(gateway, harness_guardian, upst
     client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian())
     inputs = run_turns(client, upstream, "text_tool", "a long private summary")
     assert sent_output(inputs[1]) == "summary withheld"
+
+
+def test_the_result_is_named_by_the_gateways_own_record(gateway, harness_guardian, upstream):
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian())
+    client.post("/v1/responses", json=finbot_request())
+    renamed = {**call, "name": "plain_tool"}
+    client.post("/v1/responses", json=finbot_request(renamed, output_item("call_1", json.dumps(VENDOR))))
+    assert "12345678" not in upstream.received[-1].body.decode()
+
+
+def test_a_result_for_a_call_the_gateway_never_saw_uses_the_client_name_and_says_so(gateway, guardian, upstream,
+                                                                                    audit, tmp_path):
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_9")
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(call, output_item("call_9", "{}")))
+    requests = [line["envelope"] for line in transcript_lines(tmp_path) if line["dir"] == "req"]
+    assert requests[-1]["params"]["payload"]["tool"]["name"] == "get_vendor_details"
+    assert [e["call_id"] for e in events(audit, "result_name_from_client")] == ["call_9"]
