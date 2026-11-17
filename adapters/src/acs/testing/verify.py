@@ -41,7 +41,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from acs.client import KeyDocumentError, parse_key_document, read_secret_file
+from acs.client import KeyDocumentError, owner_only, parse_key_document, read_trusted_file
 from acs.core import (
     derive_session_key,
     jcs_canonicalize,
@@ -529,7 +529,10 @@ def _read_secret(path: str) -> bytes:
     try:
         # The same owner-only, no-symlink rule every other reader of a secret file applies, checked on the
         # descriptor that reads it.
-        secret = read_secret_file(path, setting="--hmac-secret", max_bytes=MAX_SECRET_BYTES).rstrip(b"\r\n\t ")
+        secret = read_trusted_file(path, setting="--hmac-secret", max_bytes=MAX_SECRET_BYTES, mode_rule=owner_only,
+                                   refused=UsageError).rstrip(b"\r\n\t ")
+    except UsageError:
+        raise
     except (OSError, RuntimeError) as exc:
         raise UsageError(f"--hmac-secret {path!r} can't be read: {exc}") from exc
     if len(secret) < MIN_SECRET_BYTES:
