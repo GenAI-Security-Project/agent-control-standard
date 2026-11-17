@@ -1,0 +1,64 @@
+package main
+
+import (
+	"encoding/base64"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// loadReferenceConfig loads guardian.yaml with environment overrides, as the
+// command does.
+func loadReferenceConfig(t *testing.T, overrides ...string) (config, error) {
+	t.Helper()
+	configPath, err := filepath.Abs("../../guardian.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretFile := filepath.Join(t.TempDir(), "hmac-secret")
+	if err := os.WriteFile(secretFile, []byte(base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return loadConfig([]string{"--config", configPath}, append([]string{
+		"ACS__SECURITY__HMAC_SECRET_FILE=" + secretFile,
+		"ACS__POLICY__OPA_PATH=.acs/agt/" + runtime.GOOS + "-" + runtime.GOARCH + "/bin",
+	}, overrides...))
+}
+
+// TestEvaluatorSelection: policy.evaluator has no default, and agt runs
+// only in a build with the agteval tag; agtSelection checks it for this
+// build.
+func TestEvaluatorSelection(t *testing.T) {
+	for name, tt := range map[string]struct {
+		overrides []string
+		want      string
+	}{
+		"missing":                           {[]string{"ACS__POLICY__EVALUATOR="}, `policy.evaluator must be "agt"`},
+		"unknown":                           {[]string{"ACS__POLICY__EVALUATOR=rego"}, `policy.evaluator must be "agt"`},
+		"agt_without_opa":                   {[]string{"ACS__POLICY__OPA_PATH="}, "policy.opa_path must name the opa executable"},
+		"agt_zero_timeout":                  {[]string{"ACS__POLICY__OPA_TIMEOUT=0s"}, "policy.opa_timeout must be positive"},
+		"agt_timeout_equal_to_decision":     {[]string{"ACS__POLICY__OPA_TIMEOUT=5s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
+		"agt_timeout_longer_than_decision":  {[]string{"ACS__POLICY__OPA_TIMEOUT=6s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "policy.opa_timeout must be shorter than protocol.decision_timeout"},
+		"agt_timeout_inside_answer_margin":  {[]string{"ACS__POLICY__OPA_TIMEOUT=4600ms", "ACS__PROTOCOL__DECISION_TIMEOUT=5s", "ACS__PROTOCOL__ANSWER_MARGIN=500ms"}, "policy.opa_timeout must be shorter than protocol.decision_timeout minus protocol.answer_margin"},
+		"answer_margin_missing":             {[]string{"ACS__PROTOCOL__ANSWER_MARGIN=0s"}, "protocol.answer_margin must be positive and shorter than protocol.decision_timeout"},
+		"answer_margin_as_long_as_decision": {[]string{"ACS__PROTOCOL__ANSWER_MARGIN=5s", "ACS__PROTOCOL__DECISION_TIMEOUT=5s"}, "protocol.answer_margin must be positive and shorter than protocol.decision_timeout"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadReferenceConfig(t, tt.overrides...); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %v, want %q", err, tt.want)
+			}
+		})
+	}
+	t.Run("agt", func(t *testing.T) {
+		c, err := loadReferenceConfig(t)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.evaluator != evaluatorAGT {
+			t.Fatalf("guardian.yaml selects %q, want the AGT evaluator", c.evaluator)
+		}
+		agtSelection(t, c)
+	})
+}

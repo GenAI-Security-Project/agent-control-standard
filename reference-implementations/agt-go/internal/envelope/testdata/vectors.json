@@ -1,0 +1,62 @@
+{
+  "ikm_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "key_id": "k1",
+  "session_id": "5c3f1b8e-9a0d-4c2e-8f4b-2d6a7e9c1b30",
+  "session_key_hex": "4e86230ba407bc623132e84189722dc2b4ab73f217ff67e0492c82fdf0d66309",
+  "request": {
+    "signed": {
+      "jsonrpc": "2.0",
+      "method": "steps/toolCallRequest",
+      "id": "8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10",
+      "params": {
+        "acs_version": "0.1.0",
+        "request_id": "8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10",
+        "timestamp": "2026-09-19T10:00:00Z",
+        "metadata": {
+          "agent_id": "agent",
+          "session_id": "5c3f1b8e-9a0d-4c2e-8f4b-2d6a7e9c1b30"
+        },
+        "payload": {
+          "tool": {
+            "name": "Bash"
+          },
+          "arguments": {
+            "command": {
+              "value": "echo rm -rf /"
+            }
+          },
+          "raw_command": "echo rm -rf /"
+        },
+        "signature": {
+          "algorithm": "HMAC-SHA256",
+          "value": "yJ3BXf/Hfc3jSnSMgOoNVGQ+5LKBKakvctDwE52lrM0=",
+          "key_id": "k1"
+        }
+      }
+    },
+    "signing_input": "{\"id\":\"8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10\",\"jsonrpc\":\"2.0\",\"method\":\"steps/toolCallRequest\",\"params\":{\"acs_version\":\"0.1.0\",\"metadata\":{\"agent_id\":\"agent\",\"session_id\":\"5c3f1b8e-9a0d-4c2e-8f4b-2d6a7e9c1b30\"},\"payload\":{\"arguments\":{\"command\":{\"value\":\"echo rm -rf /\"}},\"raw_command\":\"echo rm -rf /\",\"tool\":{\"name\":\"Bash\"}},\"request_id\":\"8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10\",\"timestamp\":\"2026-09-19T10:00:00Z\"}}"
+  },
+  "response": {
+    "signed": {
+      "jsonrpc": "2.0",
+      "id": "8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10",
+      "result": {
+        "type": "final",
+        "acs_version": "0.1.0",
+        "request_id": "8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10",
+        "decision": "deny",
+        "reasoning": "blocked",
+        "reason_codes": [
+          "destructive_shell_command_blocked"
+        ],
+        "chain_hash": "14e6d50a913e8295606bc0d86ee9cde870040e0e0a319b13ae15836128d0d111",
+        "signature": {
+          "algorithm": "HMAC-SHA256",
+          "value": "Shh4i+RWlfCNfAoFlE7gp5QUoyCI8jz3HMKHzH/2gG0=",
+          "key_id": "k1"
+        }
+      }
+    },
+    "signing_input": "{\"id\":\"8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10\",\"jsonrpc\":\"2.0\",\"result\":{\"acs_version\":\"0.1.0\",\"chain_hash\":\"14e6d50a913e8295606bc0d86ee9cde870040e0e0a319b13ae15836128d0d111\",\"decision\":\"deny\",\"reason_codes\":[\"destructive_shell_command_blocked\"],\"reasoning\":\"blocked\",\"request_id\":\"8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10\",\"type\":\"final\"}}"
+  }
+}
