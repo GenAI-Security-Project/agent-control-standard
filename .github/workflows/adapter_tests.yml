@@ -90,7 +90,7 @@ jobs:
         with:
           version: "0.9.9"
       - name: Install the adapters and the test group, without the NAT extra
-        run: uv sync --locked --python 3.12 --group test
+        run: uv sync --locked --python 3.12 --extra pqc --group test
       - name: Run the shared and Claude Code and Cursor suites
         run: uv run python run_conformance.py claude cursor
       - name: Check that imports flow integrations, client, core
