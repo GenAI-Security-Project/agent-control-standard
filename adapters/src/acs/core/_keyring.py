@@ -47,6 +47,7 @@ class VerificationKey:
 
     def __post_init__(self) -> None:
         # Every field's type is checked before any lookup, so a bad value is always ValueError.
+        # A good value on an OpenSSL without ML-DSA raises MLDSAUnavailableError when parsed.
         check_key_id(self.key_id)
         if not isinstance(self.algorithm, str):
             raise ValueError("algorithm must be a string")

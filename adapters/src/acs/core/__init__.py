@@ -52,6 +52,7 @@ _PQC_EXPORTS = {
     "sign_with_signing_key": "_mldsa",
     "verify_with_keyring": "_mldsa",
     "ml_dsa_available": "_mldsa",
+    "MLDSAUnavailableError": "_mldsa",
 }
 
 __all__ = sorted(_EXPORTS)

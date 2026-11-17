@@ -735,6 +735,17 @@ class BackendChecks(unittest.TestCase):
             self.assertFalse(acs.core.ml_dsa_available())
             self.assertTrue(hasattr(acs.core, "Keyring"), "the names still resolve on such a backend")
 
+    def test_a_key_on_a_backend_without_ml_dsa_raises_the_public_error(self) -> None:
+        # Review finding CR5-4: ValueError for a bad value, MLDSAUnavailableError for a missing backend.
+        import acs.core
+        import acs.core._mldsa as module
+        with mock.patch.object(module, "_backend_problem", return_value="no ML-DSA in this OpenSSL"):
+            with self.assertRaises(acs.core.MLDSAUnavailableError):
+                acs.core.VerificationKey("k", "ML-DSA-65", bytes(1952))
+            with self.assertRaises(ValueError):
+                acs.core.VerificationKey("k", "ML-DSA-65", bytes(10))
+        self.assertTrue(issubclass(acs.core.MLDSAUnavailableError, RuntimeError))
+
     def test_missing_cryptography_names_the_pqc_extra(self) -> None:
         proc = self._run("import sys\nsys.modules['cryptography'] = None\nimport acs.core._mldsa\n")
         self.assertNotEqual(proc.returncode, 0)

@@ -10,7 +10,8 @@ from tests.pqc_extra import pqc_installed
 
 # Review finding CR3-6: the keyring names are useless without the extra, so they share the gate.
 PQC_NAMES = ("ML_DSA_CONTEXT", "ML_DSA_MODE", "MLDSA65SigningKey", "sign_with_signing_key", "verify_with_keyring",
-             "Keyring", "VerificationKey", "ML_DSA_65", "WIRE_ALGORITHMS", "ml_dsa_available")
+             "Keyring", "VerificationKey", "ML_DSA_65", "WIRE_ALGORITHMS", "ml_dsa_available",
+             "MLDSAUnavailableError")
 
 PROBE = """
 import json, os, sys
