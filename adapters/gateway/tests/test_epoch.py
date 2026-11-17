@@ -94,3 +94,19 @@ def test_a_request_that_races_an_epoch_bump_moves_to_the_new_session(gateway, gu
             if line["dir"] == "req"}
     assert stale[0].handshake is None
     assert stale[0].session_id not in used and len(used) == 1
+
+
+def test_an_admin_token_path_that_is_not_a_regular_file_is_refused(tmp_path):
+    directory = tmp_path / "token-dir"
+    directory.mkdir(mode=0o700)
+    with pytest.raises(ValueError, match="regular file"):
+        load_admin_token(directory)
+
+
+def test_an_admin_token_fifo_is_refused_without_blocking(tmp_path):
+    import os
+
+    fifo = tmp_path / "token.fifo"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(ValueError, match="regular file"):
+        load_admin_token(fifo)

@@ -561,17 +561,29 @@ MIN_ADMIN_TOKEN_BYTES = 32
 
 
 def load_admin_token(path: Path) -> str:
-    """The admin listener's bearer token, held to acs.client's HMAC secret rules: no symlink, mode 0600 or 0400,
-    owned by the gateway's own uid, and at least 32 bytes."""
-    if path.is_symlink():
-        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is a symlink")
-    info = path.stat()
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must be mode 0600 or 0400")
-    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
-        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is owned by uid {info.st_uid}, "
-                         f"not the gateway's uid {os.geteuid()}")
-    token = path.read_text(encoding="utf-8").strip()
+    """The admin listener's bearer token, held to acs.client's HMAC secret rules: no symlink, a regular file, mode 0600
+    or 0400, owned by the gateway's own uid, and at least 32 bytes.
+
+    The checks and the read use one descriptor opened with O_NOFOLLOW, so the file can't be swapped between them, and
+    O_NONBLOCK keeps a FIFO from stalling startup.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError as e:
+        if path.is_symlink():
+            raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is a symlink") from e
+        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} can't be opened: {e}") from e
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is not a regular file")
+    with os.fdopen(fd, "rb") as f:
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must be mode 0600 or 0400")
+        if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
+            raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} is owned by uid {info.st_uid}, "
+                             f"not the gateway's uid {os.geteuid()}")
+        token = f.read().decode("utf-8").strip()
     if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
         raise ValueError(f"ACS_GATEWAY_ADMIN_TOKEN_FILE {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
     return token
