@@ -70,7 +70,8 @@ def response_matches_request(request: dict, response: dict) -> bool:
         return False
     result = response.get("result")
     if result is None:
-        return True
+        # An error answers by id. An id with neither a result nor an error answers nothing.
+        return response.get("error") is not None
     if not isinstance(result, dict):
         return False
     if request.get("method") == HANDSHAKE_METHOD:

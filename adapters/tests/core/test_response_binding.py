@@ -41,6 +41,13 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
         self.assertFalse(response_matches_request(no_id_request, no_id_response))
         self.assertFalse(response_matches_request(_request(None), _response(None)))
 
+    def test_a_response_with_neither_result_nor_error_binds_nothing(self) -> None:
+        # Review finding R7-M2: an id alone is not an answer.
+        for request in (_request("1"), {**_request("1"), "method": "handshake/hello"}):
+            with self.subTest(method=request["method"]):
+                self.assertFalse(response_matches_request(request, {"jsonrpc": "2.0", "id": "1"}))
+                self.assertFalse(response_matches_request(request, {"jsonrpc": "2.0", "id": "1", "result": None}))
+
     def test_an_error_binds_by_id_with_the_same_rule(self) -> None:
         error = {"jsonrpc": "2.0", "id": True, "error": {"code": -32000, "message": "refused"}}
         self.assertFalse(response_matches_request(_request(1), error))
