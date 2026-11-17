@@ -595,8 +595,11 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         "chain_hash": chain_hash,
     }
 
-    # read_request has already refused a payload that isn't an object, so absent is the only other case.
+    # Absent means empty. On the HTTP path read_request has already refused any other non-object with -32600, but
+    # direct callers such as acs.testing's real_policy_handler reach this function without it.
     payload = params.get("payload", {})
+    if not isinstance(payload, dict):
+        return _argument_type_deny(base, method, "payload", payload)
 
     if method == "steps/toolCallRequest":
         # Absent means empty. A present value is checked as it is, so [], "", 0, false, and null can't pass as {}.

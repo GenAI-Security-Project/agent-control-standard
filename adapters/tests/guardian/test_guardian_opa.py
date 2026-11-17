@@ -645,3 +645,20 @@ def test_only_paths_takes_a_list_and_it_must_not_be_empty(no_backend, arguments)
 
 def test_a_paths_list_of_ordinary_files_still_deletes(no_backend):
     assert _step("steps/toolCallRequest", _file_call("Delete", paths=["/tmp/a", "/tmp/b"]))["decision"] == "allow"
+
+@pytest.mark.parametrize("method", ["steps/toolCallRequest", "steps/toolCallResult", "steps/sessionStart"])
+@pytest.mark.parametrize("payload", [[], "", "x", 0, None])
+def test_evaluate_step_denies_a_payload_that_is_not_an_object(no_backend, method, payload):
+    # Direct callers, such as acs.testing's real_policy_handler and custom deployments, skip read_request.
+    params = {"request_id": REQUEST_ID, "metadata": METADATA, "payload": payload}
+    result = example_guardian.evaluate_step(method, params, REQUEST_ID, CHAIN)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
+
+@pytest.mark.parametrize("payload", [None, []])
+def test_real_policy_handler_gets_a_deny_for_a_payload_that_is_not_an_object(no_backend, payload):
+    from acs.testing.e2e_report import real_policy_handler
+    handler = real_policy_handler(example_guardian.evaluate_step)
+    result = handler({"method": "steps/toolCallRequest",
+                      "params": {"request_id": REQUEST_ID, "metadata": METADATA, "payload": payload}})
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
