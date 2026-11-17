@@ -585,10 +585,11 @@ class Gateway:
             raise
 
     def _retire(self, session: Session, method: str, token: StepToken, cause: str) -> None:
-        token.retire()
+        in_flight = token.retire()
         self.sessions.retire(session)
+        # write_in_flight says a line that started before retirement may still land, so a reader knows to expect it.
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
-               request_id=token.request_id)
+               request_id=token.request_id, write_in_flight=in_flight)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny") -> None:
         """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since

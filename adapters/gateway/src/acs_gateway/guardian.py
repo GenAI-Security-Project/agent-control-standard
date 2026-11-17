@@ -8,6 +8,7 @@ import math
 import re
 import threading
 import time
+from collections.abc import Callable
 import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -98,15 +99,33 @@ class StepToken:
         self._state = "pending"
         # The claimed step's request_id, so a late answer's audit line still names its transcript lines.
         self.request_id: str | None = None
-        # Set when the loop stopped waiting for a claimed step. The worker then writes and sends nothing more.
-        self._retired = threading.Event()
+        # Set when the loop stopped waiting for a claimed step. The worker then starts no write and no send.
+        self._retired = False
+        self._writing = 0
 
-    def retire(self) -> None:
-        self._retired.set()
+    def retire(self) -> bool:
+        """Retire the step. True when a write had already started, which can still land but nothing new will."""
+        with self._lock:
+            self._retired = True
+            return self._writing > 0
 
     @property
     def retired(self) -> bool:
-        return self._retired.is_set()
+        with self._lock:
+            return self._retired
+
+    def begin_write(self) -> bool:
+        """Start a write unless the step is retired, decided under the lock as one step with retirement. The lock is
+        never held during the write itself, so a stalled disk can't block the loop that retires the step."""
+        with self._lock:
+            if self._retired:
+                return False
+            self._writing += 1
+            return True
+
+    def end_write(self) -> None:
+        with self._lock:
+            self._writing -= 1
 
     def claim(self, request_id: str) -> bool:
         with self._lock:
@@ -124,6 +143,20 @@ class StepToken:
                 return False
             self._state = "cancelled"
             return True
+
+
+def write_line(token: StepToken | None, write: Callable[[], None]) -> bool:
+    """Run one transcript write unless the token was retired first. False when it was."""
+    if token is None:
+        write()
+        return True
+    if not token.begin_write():
+        return False
+    try:
+        write()
+    finally:
+        token.end_write()
+    return True
 
 
 class GuardianClient:
@@ -232,7 +265,8 @@ class GuardianClient:
         if token is not None and not token.claim(request_id):
             return None, request_id
         # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
-        self.transcript.append(session_id, "req", request)
+        if not write_line(token, lambda: self.transcript.append(session_id, "req", request)):
+            return None, request_id
         if token is not None and token.retired:
             # The loop gave up on this step and retired its session while the line was being written.
             return None, request_id
@@ -240,12 +274,12 @@ class GuardianClient:
                              session_id=session_id, gate=True)
         if request["params"].get("signature") != signature:
             audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
-        if token is not None and token.retired:
-            return None, request_id
         if isinstance(outcome, Resolution):
-            self.transcript.append(session_id, "resp", None, cause=outcome.cause)
-        if isinstance(outcome, Decided):
+            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=outcome.cause))
+        else:
             # round_trip has already verified the response's signature. acs.client accepts HMAC-SHA256 only, and
             # LAB-03 (issue #576) changes its algorithm dispatch to verify by key_id from the key document.
-            self.transcript.append(session_id, "resp", outcome.response)
+            written = write_line(token, lambda: self.transcript.append(session_id, "resp", outcome.response))
+        if not written:
+            return None, request_id
         return outcome, request_id
