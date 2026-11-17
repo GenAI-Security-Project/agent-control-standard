@@ -49,11 +49,6 @@ class GuardianHTTPError(Exception):
         super().__init__(f"HTTP {status}")
 
 
-def is_jsonrpc_response(body: Any) -> bool:
-    """Whether the body has the JSON-RPC 2.0 response shape the binding rule requires (response_shape_problem)."""
-    return response_shape_problem(body) is None
-
-
 def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
     """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or bad JSON."""
     body = json.dumps(request).encode("utf-8")
@@ -340,7 +335,8 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
         return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
                        f"envelope exceeds body cap: {e}")
     except GuardianHTTPError as e:
-        if not is_jsonrpc_response(e.body):
+        # The rule's own shape check: a body that isn't a JSON-RPC answer stays an HTTP outcome.
+        if response_shape_problem(e.body) is not None:
             fields = {"http_status": e.status, "method": method}
             if e.status in HTTP_REFUSAL_STATUSES:
                 return Refused(f"http_{e.status}_refusal", fields, f"Guardian refused at HTTP layer ({e.status})")

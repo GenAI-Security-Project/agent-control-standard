@@ -17,7 +17,7 @@ from typing import Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, key_id_rejected, post
+from acs.client._exchange import GuardianHTTPError, key_id_rejected, post
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
@@ -39,6 +39,7 @@ from acs.core import (
     normalize_decision,
     request_binding_problem,
     response_binding_problem,
+    response_shape_problem,
     server_hello_problem,
 )
 
@@ -282,7 +283,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     try:
         response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout)
     except GuardianHTTPError as e:
-        if not is_jsonrpc_response(e.body):
+        if response_shape_problem(e.body) is not None:
             return NoAnswer(f"http_{e.status}_error", {"http_status": e.status})
         response = e.body
     except (urllib.error.URLError, TimeoutError, OSError) as e:

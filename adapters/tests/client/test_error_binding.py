@@ -101,13 +101,31 @@ class OneShapeRule(unittest.TestCase):
                                timeout_s=1.0, session_id=SESSION)
         self.assertEqual(outcome.cause, "http_400_refusal")
 
-    def test_is_jsonrpc_response_is_the_rule_shape_check(self) -> None:
-        from acs.core import response_shape_problem
-        for body in ({"jsonrpc": "2.0", "id": "1", "result": {}}, {"jsonrpc": "2.0", "id": "1", "result": {}, "error": {}},
-                     {"jsonrpc": "2.0", "id": "1", "method": "x", "result": {}}, {"jsonrpc": "2.0"}, "body", None):
-            with self.subTest(body=body):
-                self.assertEqual(_exchange.is_jsonrpc_response(body), response_shape_problem(body) is None)
+    def test_an_http_503_body_with_both_result_and_error_is_an_http_error(self) -> None:
+        # Review finding CR12-6: such a body is no JSON-RPC answer, so a 503 is http_503_error.
+        import io
+        import json
+        import urllib.error
 
+        from acs.client import exchange
+        from acs.client._config import failure_class
+        body = {"jsonrpc": "2.0", "id": "rpc-1", "result": {"request_id": "req-1", "decision": "allow"},
+                "error": {"code": -32603, "message": "internal"}}
+
+        def unavailable(*args, **kwargs):
+            raise urllib.error.HTTPError("http://127.0.0.1:8787/acs", 503, "Service Unavailable", {},
+                                         io.BytesIO(json.dumps(body).encode()))
+        with mock.patch.object(_exchange, "_open", side_effect=unavailable):
+            outcome = exchange(_request({"request_id": "req-1"}), guardian_url="http://127.0.0.1:8787/acs",
+                               timeout_s=1.0, session_id=SESSION)
+        self.assertEqual(outcome.cause, "http_503_error")
+        self.assertEqual(failure_class(outcome.cause), "guardian_error")
+
+    def test_there_is_no_second_shape_check(self) -> None:
+        # Review finding CR12-7: the HTTP error paths call acs.core.response_shape_problem directly.
+        from acs.client import _handshake
+        self.assertFalse(hasattr(_exchange, "is_jsonrpc_response"))
+        self.assertFalse(hasattr(_handshake, "is_jsonrpc_response"))
 
 class ExchangeNeverRaises(unittest.TestCase):
     """Review finding CR11-3: exchange() refuses a request it can't bind, before any I/O, and never raises."""
