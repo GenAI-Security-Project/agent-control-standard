@@ -402,19 +402,12 @@ class Gateway:
         if not isinstance(items, list):
             return False
         names = {i.get("call_id"): i.get("name") for i in items if isinstance(i, dict) and i.get("type") == "function_call"}
+        # Every refusal is decided here, over the whole input, before any step goes to the Guardian or any outcome is
+        # cached, so a refused request leaves nothing gated behind it.
+        self._refuse_input(session, items)
         changed, kept = False, []
         for item in items:
             call_id = item.get("call_id") if isinstance(item, dict) else None
-            if item_type(item) == "function_call" and not (isinstance(call_id, str) and call_id in session.calls):
-                repeated = repeated_key(item.get("arguments"))
-                if repeated is not None:
-                    # A call the gateway never delivered, with no copy to restore, whose arguments the model could
-                    # read either way. Only a forged history carries one. Checked whatever its call_id is.
-                    _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
-                           where="function_call.arguments", mode=self.config.mode)
-                    if self.enforce:
-                        raise RequestRefused(openai_error(400, "The request body repeats a JSON key.",
-                                                          "invalid_request_error", "duplicate_json_key"))
             if not isinstance(call_id, str):
                 if item_type(item) == "function_call_output":
                     repeated = repeated_key(item.get("output"))
@@ -478,6 +471,21 @@ class Gateway:
         if changed:
             body["input"] = kept
         return changed
+
+    def _refuse_input(self, session: Session, items: list[Any]) -> None:
+        """Raise RequestRefused in enforce for an input the gateway must not gate. Shadow records and goes on."""
+        for item in items:
+            call_id = item.get("call_id") if isinstance(item, dict) else None
+            if item_type(item) == "function_call" and not (isinstance(call_id, str) and call_id in session.calls):
+                repeated = repeated_key(item.get("arguments"))
+                if repeated is not None:
+                    # A call the gateway never delivered, with no copy to restore, whose arguments the model could
+                    # read either way. Only a forged history carries one. Checked whatever its call_id is.
+                    _audit("duplicate_json_key", session_id=session.session_id, key=repeated,
+                           where="function_call.arguments", mode=self.config.mode)
+                    if self.enforce:
+                        raise RequestRefused(openai_error(400, "The request body repeats a JSON key.",
+                                                          "invalid_request_error", "duplicate_json_key"))
 
     def _refuse_result(self, session: Session, item: dict[str, Any], name: str, call: CachedOutcome | None,
                        cause: str) -> CachedOutcome:
