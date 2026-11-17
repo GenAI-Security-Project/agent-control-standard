@@ -560,10 +560,10 @@ class Gateway:
             result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
-        first, raw = fingerprint(item), content(item)
+        first_arguments = canonical(item.get("arguments"))
+        first, raw = fingerprint(item, first_arguments), content(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id, first, raw,
-                                 canonical(item.get("arguments")))
+            return CachedOutcome("delivered", name, item, result.request_id, first, raw, first_arguments)
         if applied.item is None:
             return CachedOutcome("removed", name, None, result.request_id, first, raw)
         return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw,

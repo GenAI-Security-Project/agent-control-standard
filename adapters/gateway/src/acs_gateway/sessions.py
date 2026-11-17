@@ -84,10 +84,15 @@ def same_content(item: dict[str, Any], cached: CachedOutcome) -> bool:
     return content(item) == cached.raw or fingerprint(item) == cached.fingerprint
 
 
-def fingerprint(item: dict[str, Any]) -> str:
-    """SHA-256 over what a function_call asks for (name, arguments) or what an output says (output)."""
+_UNSET = object()
+
+
+def fingerprint(item: dict[str, Any], canonical_arguments: Any = _UNSET) -> str:
+    """SHA-256 over what a function_call asks for (name, arguments) or what an output says (output). A caller that
+    already canonicalized a call's arguments passes them in, so they aren't canonicalized twice."""
     if item.get("type") == "function_call":
-        content: Any = [item.get("name"), canonical(item.get("arguments"))]
+        arguments = canonical(item.get("arguments")) if canonical_arguments is _UNSET else canonical_arguments
+        content: Any = [item.get("name"), arguments]
     else:
         content = canonical(item.get("output"))
     try:

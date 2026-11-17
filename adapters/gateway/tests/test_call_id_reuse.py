@@ -160,3 +160,21 @@ def test_shadow_records_a_mismatched_resend_as_a_modify_like_enforce(gateway, gu
     client.post("/v1/responses", json=finbot_request(renamed))
     recorded = [e for e in events(audit, "shadow_decision") if e["cause"] == "call_id_reused"]
     assert [e["decision"] for e in recorded] == ["modify"]
+
+
+def test_gating_a_new_call_canonicalizes_its_arguments_once(gateway, guardian, upstream, monkeypatch):
+    import acs_gateway.app as app_module
+    import acs_gateway.sessions as sessions_module
+
+    calls = []
+    original = sessions_module.canonical
+
+    def counting(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(app_module, "canonical", counting)
+    monkeypatch.setattr(sessions_module, "canonical", counting)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    assert len(calls) == 1
