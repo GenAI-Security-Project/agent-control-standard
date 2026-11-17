@@ -65,14 +65,15 @@ def request_binding_problem(request: object) -> str | None:
     verify_with_keyring raises ValueError with this text, and response_matches_request
     returns False.
     """
-    if not isinstance(request, dict):
+    # Any Mapping binds, since _handshake passes a read-only view of the ClientHello.
+    if not isinstance(request, Mapping):
         return "request must be the request envelope this response answers"
     json_rpc_id = request.get("id")
     # JSON-RPC ids are strings or numbers. A bool would otherwise pass as a number.
     if isinstance(json_rpc_id, bool) or not isinstance(json_rpc_id, (str, int, float)):
         return "request must carry a string or numeric JSON-RPC id"
     params = request.get("params")
-    if params is not None and not isinstance(params, dict):
+    if params is not None and not isinstance(params, Mapping):
         return "request params must be an object when present"
     if request.get("method") != HANDSHAKE_METHOD:
         request_id = (params or {}).get("request_id")

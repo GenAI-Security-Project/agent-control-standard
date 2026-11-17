@@ -145,6 +145,17 @@ class OneRequestPrecondition(unittest.TestCase):
             with self.subTest(id=json_rpc_id):
                 self.assertIsNone(request_binding_problem(_request(json_rpc_id)))
 
+    def test_a_read_only_mapping_request_binds(self) -> None:
+        # Review finding CR8-5: _handshake passes a Mapping such as MappingProxyType, not a dict.
+        from types import MappingProxyType
+
+        from acs.core._envelope import request_binding_problem
+        request = _request("1")
+        frozen = MappingProxyType({**request, "params": MappingProxyType(dict(request["params"]))})
+        self.assertIsNone(request_binding_problem(frozen))
+        self.assertTrue(response_matches_request(frozen, _response("1")))
+        self.assertFalse(response_matches_request(frozen, _response("1", request_id="r-2")))
+
     def test_each_malformed_request_names_its_problem_and_binds_nothing(self) -> None:
         from acs.core._envelope import request_binding_problem
         cases = {
