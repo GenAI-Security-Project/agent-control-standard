@@ -41,16 +41,9 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     else:
         if key is not None or session_id is not None or key_id is not None:
             raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
-        if not isinstance(expected_key_id, str) or not expected_key_id:
-            raise ValueError("keyring verification needs expected_key_id, the key_id that must answer")
-        container = envelope.get(container_key(envelope)) if isinstance(envelope, dict) else None
-        sig = container.get("signature") if isinstance(container, dict) else None
-        # Checked before any crypto, so a response from the wrong key costs nothing to refuse.
-        if not isinstance(sig, dict) or sig.get("key_id") != expected_key_id:
-            return False
-        # Imported here so the HMAC path never loads cryptography.
+        # Imported here so the HMAC path never loads cryptography. Core checks expected_key_id.
         from acs.core._mldsa import verify_with_keyring
-        return verify_with_keyring(envelope, keyring)
+        return verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False

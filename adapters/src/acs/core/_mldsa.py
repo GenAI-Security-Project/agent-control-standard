@@ -121,13 +121,17 @@ def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, mess
 _VERIFIERS = {ML_DSA_65: _verify_ml_dsa_65}
 
 
-def verify_with_keyring(envelope: dict, keyring: Keyring) -> bool:
-    """Whether the envelope's signature verifies under the key its key_id names.
+def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str) -> bool:
+    """Whether the envelope's signature verifies under expected_key_id, the key that must answer.
 
-    The algorithm comes from the resolved key, never from the envelope (RFC 8725 section 3.1,
-    issue #308). An unknown key_id, an envelope algorithm that disagrees with the key's, an
-    unsigned or malformed envelope, and a bad signature all return False (D-026).
+    A keyring can hold several keys, so the caller names the one it trusts here, and a
+    signature naming any other key_id fails before any crypto runs. The algorithm comes from
+    the resolved key, never from the envelope (RFC 8725 section 3.1, issue #308). An unknown
+    key_id, an envelope algorithm that disagrees with the key's, an unsigned or malformed
+    envelope, and a bad signature all return False (D-026). A missing or empty
+    expected_key_id is a caller error and raises ValueError.
     """
+    check_key_id(expected_key_id)
     if not isinstance(envelope, dict):
         return False
     container = envelope.get(container_key(envelope))
@@ -136,7 +140,9 @@ def verify_with_keyring(envelope: dict, keyring: Keyring) -> bool:
     sig = container.get("signature")
     if not isinstance(sig, dict):
         return False
-    key = keyring.resolve(sig.get("key_id"))
+    if sig.get("key_id") != expected_key_id:
+        return False
+    key = keyring.resolve(expected_key_id)
     if key is None:
         return False
     if sig.get("algorithm") != key.algorithm:

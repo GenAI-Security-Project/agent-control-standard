@@ -54,7 +54,7 @@ signer = MLDSA65SigningKey.from_seed(seed, "lab-guardian-1")   # seed: the 32 by
 keyring = Keyring([signer.verification_key()])
 
 sign_with_signing_key(envelope, signer)
-assert verify_with_keyring(envelope, keyring)
+assert verify_with_keyring(envelope, keyring, expected_key_id="lab-guardian-1")
 ```
 
 On the adapter side, `acs.client.verify_signature(envelope, keyring=keyring, expected_key_id="lab-guardian-1")` verifies a response by keyring. `expected_key_id` is required there. A keyring can hold several keys, and the caller names the one that must answer, so a response signed by any other key fails before any crypto runs. Without `keyring`, `verify_signature` applies the HMAC rules exactly as before.
