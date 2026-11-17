@@ -14,14 +14,20 @@ from typing import Any
 
 
 class StubOpa:
-    """Serve `{"result": verdict}`, or `body` verbatim when given, after `delay_s`, with `status`."""
+    """Serve `{"result": verdict}`, or `body` verbatim when given, after `delay_s`, with `status`.
+
+    With `dribble_s` the headers go out at once and the body follows one byte every `dribble_s` seconds.
+    `client_closed` is set when a write fails because the client hung up.
+    """
 
     def __init__(self, verdict: Any = None, *, status: int = 200, body: bytes | None = None,
-                 delay_s: float = 0.0) -> None:
+                 delay_s: float = 0.0, dribble_s: float = 0.0) -> None:
         self.verdict = verdict
         self.status = status
         self.body = body
         self.delay_s = delay_s
+        self.dribble_s = dribble_s
+        self.client_closed = threading.Event()
         self.inputs: list[Any] = []
         stub = self
 
@@ -37,10 +43,16 @@ class StubOpa:
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
-                    self.wfile.write(payload)
+                    if not stub.dribble_s:
+                        self.wfile.write(payload)
+                        return
+                    for i in range(len(payload)):
+                        self.wfile.write(payload[i:i + 1])
+                        self.wfile.flush()
+                        time.sleep(stub.dribble_s)
                 except OSError:
-                    # The client gave up on a delayed answer and closed the socket.
-                    pass
+                    # The client gave up on a delayed or dribbled answer and closed the socket.
+                    stub.client_closed.set()
 
             def log_message(self, *args: Any) -> None:
                 return

@@ -4,6 +4,8 @@ The input document and the verdict shape are a lab convention until issue #531 s
 """
 from __future__ import annotations
 
+import json
+import threading
 import time
 
 import pytest
@@ -27,6 +29,13 @@ DENY = {"decision": "deny", "reasoning": "Recipient outside the company", "reaso
 
 def _config(url: str, timeout_s: float = 0.5) -> OpaConfig:
     return OpaConfig(url=url, timeout_s=timeout_s)
+
+
+def _assert_no_query_thread_left() -> None:
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and any(t.name == "acs-opa-query" for t in threading.enumerate()):
+        time.sleep(0.02)
+    assert not any(t.name == "acs-opa-query" for t in threading.enumerate()), "the query thread outlived the call"
 
 
 def _failure(config: OpaConfig) -> OpaFailure:
@@ -57,6 +66,18 @@ def test_opa_slower_than_the_timeout_is_a_timeout():
         started = time.monotonic()
         assert _failure(_config(opa.url, timeout_s=0.3)).reason_code == "opa_timeout"
         assert time.monotonic() - started < 1.5
+        _assert_no_query_thread_left()
+
+
+def test_a_dribbling_opa_times_out_and_leaves_no_thread_or_socket_behind():
+    # Valid JSON, padded so the full body would take minutes at one byte per 50 ms.
+    body = json.dumps({"result": DENY}).encode() + b" " * 4000
+    with StubOpa(body=body, dribble_s=0.05) as opa:
+        started = time.monotonic()
+        assert _failure(_config(opa.url, timeout_s=0.3)).reason_code == "opa_timeout"
+        assert time.monotonic() - started < 1.0
+        _assert_no_query_thread_left()
+        assert opa.client_closed.wait(2.0), "the connection to OPA stayed open after the timeout"
 
 
 @pytest.mark.parametrize("status", [400, 404, 500, 503])

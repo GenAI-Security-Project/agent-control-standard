@@ -7,10 +7,13 @@ Guardian never calls evaluate, so the reference adapters see today's decisions.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
+import socket
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -88,63 +91,155 @@ def build_input(method: str, params: Mapping[str, Any]) -> dict:
                       "metadata": params.get("metadata") or {}}}
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    # A redirect from the policy server is a misconfiguration, so it surfaces as a non-200 instead of being followed.
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        return None
+class _Exchange:
+    """The sockets of one OPA query, so the caller can shut them down at the deadline and free the worker thread.
+
+    They are held as duplicates because TLS wrapping detaches the original socket.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sockets: list[socket.socket] = []
+        self.aborted = threading.Event()
+
+    def add(self, sock: socket.socket) -> None:
+        with self._lock:
+            if not self.aborted.is_set():
+                self._sockets.append(sock.dup())
+                return
+        sock.close()
+        raise TimeoutError("the OPA query passed its deadline")
+
+    def abort(self) -> None:
+        with self._lock:
+            self.aborted.set()
+            sockets, self._sockets = self._sockets, []
+        for sock in sockets:
+            # shutdown, not close, is what wakes a recv blocked in another thread.
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
+    def release(self) -> None:
+        with self._lock:
+            sockets, self._sockets = self._sockets, []
+        for sock in sockets:
+            sock.close()
 
 
-# No ProxyHandler entries, so proxy variables in the Guardian's environment never reroute a policy call.
-_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+_worker = threading.local()
 
 
-def _post(config: OpaConfig, body: bytes) -> bytes:
+def _create_connection(*args: Any, **kwargs: Any) -> socket.socket:
+    sock = socket.create_connection(*args, **kwargs)
+    exchange = getattr(_worker, "exchange", None)
+    if exchange is not None:
+        exchange.add(sock)
+    return sock
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _create_connection
+
+
+class _HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _create_connection
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(_HTTPConnection, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> Any:
+        kwargs: dict[str, Any] = {"context": self._context}
+        if hasattr(self, "_check_hostname"):
+            kwargs["check_hostname"] = self._check_hostname
+        return self.do_open(_HTTPSConnection, req, **kwargs)
+
+
+def _opener() -> urllib.request.OpenerDirector:
+    # No proxies, so proxy variables never reroute a policy call. No redirect handler, so a 3xx is an HTTP error.
+    opener = urllib.request.OpenerDirector()
+    for handler in (urllib.request.ProxyHandler({}), _HTTPHandler(), _HTTPSHandler(),
+                    urllib.request.HTTPDefaultErrorHandler(), urllib.request.HTTPErrorProcessor()):
+        opener.add_handler(handler)
+    return opener
+
+
+def _post(config: OpaConfig, body: bytes, deadline: float, exchange: _Exchange) -> bytes:
+    """One POST whose body read stops at the deadline, one socket read at a time."""
+    _worker.exchange = exchange
     request = urllib.request.Request(config.url, data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
+    timed_out = OpaFailure("opa_timeout", f"OPA did not answer within {config.timeout_s}s")
     try:
-        with _OPENER.open(request, timeout=config.timeout_s) as response:
+        with _opener().open(request, timeout=config.timeout_s) as response:
             if response.status != 200:
                 raise OpaFailure("opa_http_error", f"OPA answered HTTP {response.status}")
-            data = response.read(MAX_RESPONSE_BYTES + 1)
+            chunks, size = [], 0
+            while True:
+                if time.monotonic() >= deadline or exchange.aborted.is_set():
+                    raise timed_out
+                chunk = response.read1(65536)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_RESPONSE_BYTES:
+                    raise OpaFailure("opa_response_malformed", f"OPA response exceeds {MAX_RESPONSE_BYTES} bytes")
+                chunks.append(chunk)
     except OpaFailure:
         raise
     except urllib.error.HTTPError as e:
+        e.close()
         raise OpaFailure("opa_http_error", f"OPA answered HTTP {e.code}") from None
     except urllib.error.URLError as e:
-        if isinstance(e.reason, TimeoutError):
-            raise OpaFailure("opa_timeout", f"OPA did not answer within {config.timeout_s}s") from None
+        if isinstance(e.reason, TimeoutError) or exchange.aborted.is_set():
+            raise timed_out from None
         raise OpaFailure("opa_unreachable", f"OPA unreachable: {e.reason}") from None
-    except TimeoutError:
-        raise OpaFailure("opa_timeout", f"OPA did not answer within {config.timeout_s}s") from None
-    except OSError as e:
-        raise OpaFailure("opa_unreachable", f"OPA unreachable: {e}") from None
-    if len(data) > MAX_RESPONSE_BYTES:
-        raise OpaFailure("opa_response_malformed", f"OPA response exceeds {MAX_RESPONSE_BYTES} bytes")
-    return data
+    except (TimeoutError, http.client.HTTPException, OSError) as e:
+        if isinstance(e, TimeoutError) or exchange.aborted.is_set():
+            raise timed_out from None
+        raise OpaFailure("opa_unreachable", f"OPA unreachable: {type(e).__name__}") from None
+    finally:
+        _worker.exchange = None
+        exchange.release()
+    return b"".join(chunks)
 
 
 def query(config: OpaConfig, document: Mapping[str, Any]) -> Any:
     """POST the document and return OPA's result member. Raises OpaFailure for every way that can fail."""
     body = json.dumps(document).encode("utf-8")
+    deadline = time.monotonic() + config.timeout_s
+    exchange = _Exchange()
     box: dict[str, Any] = {}
 
     def fetch() -> None:
         try:
-            box["data"] = _post(config, body)
+            box["data"] = _post(config, body, deadline, exchange)
         except BaseException as e:  # noqa: BLE001
             box["error"] = e
 
-    # A socket timeout bounds each read, not the exchange, so a server that dribbles bytes is cut off here.
+    # A socket timeout bounds each read, not the exchange. The caller waits only until the deadline, then shuts
+    # the sockets down, so the worker thread and its connection end too instead of reading on in the background.
     worker = threading.Thread(target=fetch, name="acs-opa-query", daemon=True)
     worker.start()
     worker.join(config.timeout_s)
     if worker.is_alive():
+        exchange.abort()
         raise OpaFailure("opa_timeout", f"OPA did not answer within {config.timeout_s}s")
     if "error" in box:
         error = box["error"]
         if isinstance(error, OpaFailure):
             raise error
-        raise OpaFailure("opa_unreachable", f"OPA query failed: {error}")
+        raise OpaFailure("opa_unreachable", f"OPA query failed: {type(error).__name__}")
     try:
         answer = json.loads(box["data"].decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as e:
