@@ -73,6 +73,8 @@ class CachedOutcome:
     raw: Any = None
     # The delivered call's arguments in canonical form, computed once.
     canonical_arguments: Any = None
+    # The tool.version a call was gated under (A.10). A repeat of the call under another declaration is gated again.
+    digest: str | None = None
     # For a call, how many input items the request that produced it forwarded. Replay's branch tokens put a removed
     # call there, since the client never resends it (issue #579).
     position: int | None = None

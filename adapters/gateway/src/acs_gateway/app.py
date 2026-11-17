@@ -839,8 +839,11 @@ class Gateway:
         if cached is not None and not same_content(item, cached):
             self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
             return None if self.enforce else item
-        if cached is None:
-            cached = await self._gate_call(session, item, asks, digests.get(item.get("name")) if digests else None)
+        digest = digests.get(item.get("name")) if digests else None
+        if cached is None or cached.digest != digest:
+            # A call_id seen before is reused only under the declaration it was judged against, so a description
+            # or schema changed mid-conversation reaches the policy again (issue #580).
+            cached = await self._gate_call(session, item, asks, digest)
             session.calls[call_id] = cached
         if not self.enforce:
             return item
@@ -870,13 +873,13 @@ class Gateway:
                            else canonical(raw_arguments))
         first, raw = fingerprint(item, first_arguments), content(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id, first, raw, first_arguments)
+            return CachedOutcome("delivered", name, item, result.request_id, first, raw, first_arguments, digest)
         if applied.item is None:
-            return CachedOutcome("removed", name, None, result.request_id, first, raw)
+            return CachedOutcome("removed", name, None, result.request_id, first, raw, digest=digest)
         # The merged arguments are on hand, so their canonical form comes without parsing the rewrite again.
         rewritten = (canonical_value(applied.arguments, applied.item.get("arguments")) if applied.arguments is not None
                      else canonical(applied.item.get("arguments")))
-        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw, rewritten)
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw, rewritten, digest)
 
     def _held(self, result: StepResult) -> bool:
         """An ASK the approver page can take: enforce, the page on, and a usable ask decision. Shadow never holds."""

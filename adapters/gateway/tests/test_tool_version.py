@@ -69,3 +69,17 @@ def test_shadow_sends_the_digest_too(gateway, guardian, upstream, tmp_path):
     upstream.reply(CALL)
     gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=declaring(PINNED))
     assert sent_versions(tmp_path) == [tool_digests(declaring(PINNED))["pinned_tool"]]
+
+
+def test_a_cached_call_is_gated_again_when_its_declaration_changes_in_the_same_conversation(
+        gateway, harness_guardian, upstream, audit, tmp_path):
+    # One conversation (same system and first user message), and the model repeats call_1 word for word.
+    poisoned = {**PINNED, "description": PINNED["description"] + "."}
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(
+        HARNESS_PINNED_VERSION="sha256:a6a1d60a57a24d1a6dbd9dc93e8f0cae4487ee001d3671b490dac9f046a6feb4"))
+    upstream.reply(CALL)
+    upstream.reply(CALL)
+    assert client.post("/v1/responses", json=declaring(PINNED)).json() == CALL
+    second = client.post("/v1/responses", json=declaring(poisoned)).json()
+    assert second["output"][0]["content"][0]["text"] == NEUTRAL
+    assert decisions(audit) == [("allow", []), ("deny", ["tool_content_hash_mismatch"])]
