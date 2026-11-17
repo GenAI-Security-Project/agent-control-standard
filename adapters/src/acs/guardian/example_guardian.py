@@ -860,6 +860,10 @@ INTERNAL_ERROR_MESSAGE = "Internal error: the Guardian could not process this re
 
 
 class GuardianHandler(http.server.BaseHTTPRequestHandler):
+    # A socket timeout, so a client that never sends the body its Content-Length promised can't hold a handler
+    # thread forever. Generous next to the 5 s decision timeout a client waits for.
+    timeout = 30
+
     def do_POST(self) -> None:  # noqa: N802
         """Answer every request. The specific checks give specific codes. This guard is the floor beneath them."""
         self._answered = False

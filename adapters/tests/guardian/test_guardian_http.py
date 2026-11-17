@@ -267,3 +267,25 @@ def test_a_step_payload_that_is_not_an_object_is_refused_on_the_wire(served):
                        "params": {"metadata": {"session_id": STRUCT_SESSION}, "payload": "x"}}).encode()
     status, answer = post(served, body)
     assert answer["error"]["code"] == -32600
+
+
+def test_a_client_that_never_finishes_its_body_is_cut_off(served, monkeypatch):
+    # The real handler waits 30 s. A short timeout here shows the connection is answered or closed and the
+    # handler thread ends.
+    monkeypatch.setattr(example_guardian.GuardianHandler, "timeout", 0.5)
+    import time
+    before = threading.active_count()
+    with socket.create_connection(served, timeout=5) as sock:
+        sock.sendall(b"POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Length: 100\r\n\r\n{\"partial\":")
+        started = time.monotonic()
+        data = sock.recv(65536)  # an answer or EOF, never a hang
+        assert time.monotonic() - started < 4
+    deadline = time.monotonic() + 3
+    while threading.active_count() > before and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert threading.active_count() <= before, "the handler thread outlived the timeout"
+    assert data == b"" or b"HTTP/1." in data
+
+
+def test_the_handler_times_out_a_silent_client_after_30_seconds():
+    assert example_guardian.GuardianHandler.timeout == 30
