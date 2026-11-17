@@ -106,6 +106,7 @@ ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "")
 # /proc/ is here because /proc/self/root/ reaches the whole filesystem on Linux.
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/", "/proc/")
 # macOS links /etc, /var, and /tmp to these, so each one is compared as the path it reaches.
+DATA_VOLUME_PREFIX = "/system/volumes/data/"
 PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"), ("/private/var/", "/var/"),
                                              ("/private/tmp/", "/tmp/"))
 # Case-folded tool names that write a file, and the arguments that name the file.
@@ -485,6 +486,9 @@ def _comparable_path(normalized: str) -> str:
     Case-folded because the default macOS and Windows filesystems ignore case, so /ETC/passwd is /etc/passwd there.
     """
     folded = normalized.casefold() + "/"
+    # The same files are reachable through the macOS Data volume, so that prefix comes off before the aliases.
+    if folded.startswith(DATA_VOLUME_PREFIX):
+        folded = folded[len(DATA_VOLUME_PREFIX) - 1:]
     for alias, target in PATH_ALIASES:
         if folded.startswith(alias):
             return target + folded[len(alias):]

@@ -377,7 +377,8 @@ def test_a_notebook_path_of_the_wrong_type_denies(no_backend):
 
 
 ALIASES = ["/private/etc/passwd", "/ETC/passwd", "/Etc/hosts", "/USR/bin/x", "/proc/self/root/etc/passwd",
-           "/proc/1/mem", "/private/../private/etc/sudoers"]
+           "/proc/1/mem", "/private/../private/etc/sudoers", "/System/Volumes/Data/private/etc/passwd",
+           "/System/Volumes/Data/usr/local/bin/x", "/system/volumes/data/etc/hosts"]
 
 
 @pytest.mark.parametrize("path", ALIASES)
