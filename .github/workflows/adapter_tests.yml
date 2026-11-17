@@ -145,3 +145,5 @@ jobs:
         run: uv sync --locked --python 3.12
       - name: Run the gateway tests
         run: uv run pytest -v
+      - name: Check that the gateway imports no Guardian, example or test code
+        run: uv run lint-imports

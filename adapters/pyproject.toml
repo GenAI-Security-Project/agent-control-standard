@@ -41,6 +41,10 @@ test = ["import-linter>=2", "pytest>=8"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/acs"]
 
+# The gateway is its own project with its own lockfile, so it never ships inside the adapters' sdist.
+[tool.hatch.build.targets.sdist]
+exclude = ["gateway/"]
+
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"
 
