@@ -9,11 +9,12 @@ The signed bytes are the ones HMAC-SHA256 signs: JCS of the envelope without its
 Signing is randomized (the FIPS 204 hedged variant that cryptography 50 uses), so two signatures
 of one envelope differ and both verify.
 
-Nothing on the default path imports this module. It needs the pqc extra (cryptography 50),
-and it fails at import, not at the first signature, when ML-DSA is unavailable.
+Nothing on the default path imports this module. It needs the pqc extra (cryptography 50)
+and fails at import without it. A backend that lacks ML-DSA fails loudly on first use.
 """
 from __future__ import annotations
 
+import functools
 
 try:
     import cryptography
@@ -34,20 +35,29 @@ SEED_BYTES = 32
 SIGNATURE_BYTES = 3309  # FIPS 204 Table 2, ML-DSA-65
 
 
-def _check_backend() -> None:
+class MLDSAUnavailableError(RuntimeError):
+    """The installed cryptography's OpenSSL backend has no ML-DSA-65."""
+
+
+@functools.cache
+def _backend_problem() -> str | None:
     # cryptography exposes the ML-DSA classes even when its OpenSSL lacks the algorithm, and then
-    # raises UnsupportedAlgorithm on first use. Generating one throwaway key surfaces that here.
+    # raises UnsupportedAlgorithm on first use. One throwaway key per process finds out, and the
+    # answer is cached, since the backend can't change while the process runs.
     try:
         mldsa.MLDSA65PrivateKey.generate()
-    except UnsupportedAlgorithm as exc:
+    except UnsupportedAlgorithm:
         from cryptography.hazmat.backends.openssl.backend import backend
-        raise ImportError(
-            f"the OpenSSL backend of cryptography {cryptography.__version__} "
-            f"({backend.openssl_version_text()}) does not support ML-DSA-65. "
-            "Install the cryptography 50 wheel, which bundles an OpenSSL with ML-DSA.") from exc
+        return (f"the OpenSSL backend of cryptography {cryptography.__version__} "
+                f"({backend.openssl_version_text()}) does not support ML-DSA-65. "
+                "Install the cryptography 50 wheel, which bundles an OpenSSL with ML-DSA.")
+    return None
 
 
-_check_backend()
+def _require_backend() -> None:
+    problem = _backend_problem()
+    if problem is not None:
+        raise MLDSAUnavailableError(problem)
 
 
 class MLDSA65SigningKey:
@@ -63,6 +73,7 @@ class MLDSA65SigningKey:
 
     @classmethod
     def generate(cls, key_id: str) -> MLDSA65SigningKey:
+        _require_backend()
         return cls(mldsa.MLDSA65PrivateKey.generate(), key_id)
 
     @classmethod
@@ -70,6 +81,7 @@ class MLDSA65SigningKey:
         """Rebuild the key from its 32 byte FIPS 204 seed, the form a key file stores."""
         if not isinstance(seed, bytes) or len(seed) != SEED_BYTES:
             raise ValueError(f"an ML-DSA-65 seed is {SEED_BYTES} bytes")
+        _require_backend()
         return cls(mldsa.MLDSA65PrivateKey.from_seed_bytes(seed), key_id)
 
     @property
@@ -105,6 +117,7 @@ def sign_with_signing_key(envelope: dict, signing_key: MLDSA65SigningKey) -> dic
 
 def load_public_key(public_key: bytes) -> mldsa.MLDSA65PublicKey:
     """Parse a raw FIPS 204 public key. A VerificationKey calls this once, when it is built."""
+    _require_backend()
     return mldsa.MLDSA65PublicKey.from_public_bytes(public_key)
 
 

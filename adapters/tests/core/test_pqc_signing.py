@@ -588,26 +588,46 @@ class EcdsaP256BenchmarkPrimitive(unittest.TestCase):
         self.assertFalse({n for n in acs.core.__all__ if "ecdsa" in n.lower() and n != "ECDSA_P256"})
 
 
-class ImportTimeChecks(unittest.TestCase):
-    """The module fails loudly at import when ML-DSA is unavailable, instead of at the first signature."""
+class BackendChecks(unittest.TestCase):
+    """Review finding CR3-7: the backend check runs once, on first use, and still fails loudly."""
 
-    def _import_with(self, prelude: str) -> subprocess.CompletedProcess:
-        code = prelude + "\nimport acs.core._mldsa\n"
+    COUNTING = ("from cryptography.hazmat.primitives.asymmetric import mldsa\n"
+                "real = mldsa.MLDSA65PrivateKey.generate\n"
+                "calls = []\n"
+                "def counted(*a, **k):\n    calls.append(1)\n    return real(*a, **k)\n"
+                "mldsa.MLDSA65PrivateKey.generate = staticmethod(counted)\n")
+    REFUSING = ("from cryptography.exceptions import UnsupportedAlgorithm\n"
+                "from cryptography.hazmat.primitives.asymmetric import mldsa\n"
+                "def refuse(*a, **k): raise UnsupportedAlgorithm('no ML-DSA here')\n"
+                "mldsa.MLDSA65PrivateKey.generate = staticmethod(refuse)\n")
+
+    def _run(self, code: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
 
-    def test_a_backend_without_ml_dsa_fails_loudly(self) -> None:
-        prelude = ("from cryptography.exceptions import UnsupportedAlgorithm\n"
-                   "from cryptography.hazmat.primitives.asymmetric import mldsa\n"
-                   "def refuse(*a, **k): raise UnsupportedAlgorithm('no ML-DSA here')\n"
-                   "mldsa.MLDSA65PrivateKey.generate = staticmethod(refuse)\n")
-        proc = self._import_with(prelude)
+    def test_importing_the_module_generates_no_key(self) -> None:
+        proc = self._run(self.COUNTING + "import acs.core._mldsa\nprint(len(calls))\n")
+        self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "0"), proc.stderr)
+
+    def test_the_check_runs_once_across_uses(self) -> None:
+        code = (self.COUNTING + "from acs.core._mldsa import MLDSA65SigningKey, load_public_key\n"
+                "a = MLDSA65SigningKey.from_seed(bytes(32), 'k')\n"
+                "b = MLDSA65SigningKey.from_seed(bytes(range(32)), 'k')\n"
+                "load_public_key(a.verification_key().public_key)\n"
+                "print(len(calls))\n")
+        proc = self._run(code)
+        self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "1"), proc.stderr)
+
+    def test_a_backend_without_ml_dsa_fails_loudly_on_first_use(self) -> None:
+        proc = self._run(self.REFUSING + "import acs.core._mldsa as m\nprint('imported')\n"
+                         "m.MLDSA65SigningKey.from_seed(bytes(32), 'k')\n")
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("ImportError", proc.stderr)
+        self.assertIn("imported", proc.stdout)
+        self.assertIn("MLDSAUnavailableError", proc.stderr)
         self.assertIn("ML-DSA-65", proc.stderr)
         self.assertIn("OpenSSL", proc.stderr)
 
     def test_missing_cryptography_names_the_pqc_extra(self) -> None:
-        proc = self._import_with("import sys\nsys.modules['cryptography'] = None\n")
+        proc = self._run("import sys\nsys.modules['cryptography'] = None\nimport acs.core._mldsa\n")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("ImportError", proc.stderr)
         self.assertIn("pqc", proc.stderr)
