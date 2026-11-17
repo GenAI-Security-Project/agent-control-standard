@@ -33,6 +33,7 @@ from acs.core._signing import _attach_signature, container_key, signing_input
 ML_DSA_MODE = "pure"
 ML_DSA_CONTEXT = b""
 SEED_BYTES = 32
+SIGNATURE_BYTES = 3309  # FIPS 204 Table 2, ML-DSA-65
 
 
 def _check_backend() -> None:
@@ -104,9 +105,14 @@ def sign_with_signing_key(envelope: dict, signing_key: MLDSA65SigningKey) -> dic
                              key_id=signing_key.key_id)
 
 
-def _verify_ml_dsa_65(public_key: bytes, signature: bytes, message: bytes) -> bool:
+def load_public_key(public_key: bytes) -> mldsa.MLDSA65PublicKey:
+    """Parse a raw FIPS 204 public key. A VerificationKey calls this once, when it is built."""
+    return mldsa.MLDSA65PublicKey.from_public_bytes(public_key)
+
+
+def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, message: bytes) -> bool:
     try:
-        mldsa.MLDSA65PublicKey.from_public_bytes(public_key).verify(signature, message, ML_DSA_CONTEXT)
+        public_key.verify(signature, message, ML_DSA_CONTEXT)
     except (InvalidSignature, ValueError):
         return False
     return True
@@ -147,9 +153,12 @@ def verify_with_keyring(envelope: dict, keyring: Keyring) -> bool:
     # Only the canonical encoding verifies, which keeps a signed envelope's bytes unique.
     if base64.b64encode(signature).decode("ascii") != value:
         return False
+    # Any other length is malformed, so it never reaches the library.
+    if len(signature) != SIGNATURE_BYTES:
+        return False
     try:
         message = signing_input(envelope)
     except Exception:  # noqa: BLE001
         # RFC 8785 has no form for this envelope, so no signature covers it.
         return False
-    return verify(key.public_key, signature, message)
+    return verify(key._parsed, signature, message)

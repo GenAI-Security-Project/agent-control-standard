@@ -5,13 +5,16 @@ signature.algorithm field (RFC 8725 section 3.1, issue #308). key_id is an opaqu
 (D-026): the keyring matches it exactly, never derives it from key material, and never
 falls back to another key.
 
-This module imports only the standard library, so building a keyring needs no extra.
+This module imports only the standard library. Building a key parses it once, which needs
+the pqc extra for ML-DSA-65, so a malformed key fails when the keyring is built and no
+verification parses it again.
 """
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 ML_DSA_65 = "ML-DSA-65"
 ECDSA_P256 = "ECDSA-P256"
@@ -39,6 +42,8 @@ class VerificationKey:
     key_id: str
     algorithm: str
     public_key: bytes
+    # The parsed key, kept so verification never re-parses trusted key material.
+    _parsed: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         check_key_id(self.key_id)
@@ -51,10 +56,17 @@ class VerificationKey:
         if len(self.public_key) != expected:
             raise ValueError(f"a {self.algorithm} public key is {expected} bytes, "
                              f"got {len(self.public_key)}")
+        object.__setattr__(self, "_parsed", _parse_public_key(self.public_key))
 
     @property
     def fingerprint(self) -> str:
         return "sha256:" + hashlib.sha256(self.public_key).hexdigest()
+
+
+def _parse_public_key(public_key: bytes) -> Any:
+    # Imported here so this module, and the HMAC path that imports acs.core, need no extra.
+    from acs.core._mldsa import load_public_key
+    return load_public_key(public_key)
 
 
 class Keyring:
