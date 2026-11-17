@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -43,6 +44,7 @@ def signing_input(envelope: dict) -> bytes:
 # this hash, since specification section 10 gives a response no session_id. Issue #13 is the closest tracking
 # issue. The HMAC path never reads it, because each session's key already separates sessions.
 REQUEST_DIGEST_FIELD = "x_acs_lab_request_sha256"
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 def request_sha256(request: Mapping[str, Any]) -> str:
@@ -61,7 +63,9 @@ def response_names_request(response: Mapping[str, Any], request: Mapping[str, An
         error = response.get("error")
         holder = error.get("data") if isinstance(error, Mapping) else None
     claimed = holder.get(REQUEST_DIGEST_FIELD) if isinstance(holder, Mapping) else None
-    if not isinstance(claimed, str):
+    # Only the one spelling request_sha256 gives. compare_digest raises on non-ASCII text, so the shape is checked
+    # first and anything else simply fails.
+    if not isinstance(claimed, str) or not _SHA256_HEX.fullmatch(claimed):
         return False
     try:
         expected = request_sha256(request)

@@ -312,7 +312,10 @@ class RequestDigestBinding(_ResponseKeysBase):
                                              require_request_digest=True))
         self.assertTrue(verify_with_keyring(named, keyring, expected_key_id=KEY_ID, request=request,
                                             require_request_digest=True))
-        for wrong in ("0" * 64, _digest(request).upper(), 7, None):
+        # Anything but 64 lowercase hex characters fails, a non-ASCII value included, which compare_digest would
+        # otherwise raise on (review R-M1).
+        for wrong in ("0" * 64, _digest(request).upper(), 7, None, "\u00e9" * 64, _digest(request)[:63],
+                      _digest(request) + "0", " " + _digest(request)[1:]):
             with self.subTest(wrong=wrong):
                 forged = copy.deepcopy(named)
                 forged["result"][DIGEST] = wrong
