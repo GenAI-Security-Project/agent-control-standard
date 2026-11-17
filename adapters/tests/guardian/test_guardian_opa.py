@@ -1,7 +1,9 @@
-"""evaluate_step hands the two tool methods to OPA only when ACS_POLICY_BACKEND=opa, and nothing changes otherwise.
+"""evaluate_step hands the two tool methods to OPA only when settings were loaded, and nothing changes otherwise.
 
-main() loads the OPA settings once, into example_guardian.OPA_CONFIG. The OPA input document and verdict shape
-are a lab convention until issue #531 settles the OPA binding.
+The backend name is read once, at import, into example_guardian.POLICY_BACKEND_NAME, and main() loads its settings
+into example_guardian.OPA_CONFIG. Steps follow those two, never the live environment. The built-in hard denies run
+first under every backend. The OPA input document and verdict shape are a lab convention until issue #531 settles
+the OPA binding.
 """
 from __future__ import annotations
 
