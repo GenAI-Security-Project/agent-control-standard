@@ -20,12 +20,15 @@ try:
 finally:
     sys.path.remove(str(ADAPTERS))
 
-PQC_MODULES = {"core": "tests.core.test_pqc_signing", "client": "tests.client.test_pqc_verification"}
+# (suite, module) pairs, since one suite can hold several ML-DSA modules.
+PQC_MODULES = (("core", "tests.core.test_pqc_signing"),
+               ("client", "tests.client.test_pqc_verification"),
+               ("client", "tests.client.test_key_document"))
 
 
 class PqcSkipsAreAllowlisted(unittest.TestCase):
     def test_each_pqc_module_has_one_allowlisted_module_skip(self) -> None:
-        for suite, module in PQC_MODULES.items():
+        for suite, module in PQC_MODULES:
             with self.subTest(module=module):
                 self.assertTrue(rc._is_expected_skip(
                     suite, f"unittest.loader.ModuleSkipped.{module}", pqc_extra.PQC_SKIP_REASON))
@@ -33,7 +36,7 @@ class PqcSkipsAreAllowlisted(unittest.TestCase):
     def test_the_allowlist_names_no_other_pqc_entry(self) -> None:
         pqc = {e for e in rc.EXPECTED_SKIPS if e[2] == pqc_extra.PQC_SKIP_REASON}
         self.assertEqual(pqc, {(s, f"unittest.loader.ModuleSkipped.{m}", pqc_extra.PQC_SKIP_REASON)
-                               for s, m in PQC_MODULES.items()})
+                               for s, m in PQC_MODULES})
 
     def test_a_missing_extra_skips_the_module_under_the_allowlisted_id(self) -> None:
         # Discover a stand-in module the way run_conformance does, with ML-DSA reported absent.
