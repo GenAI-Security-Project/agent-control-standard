@@ -411,3 +411,32 @@ def test_two_streamed_asks_share_one_deadline(gateway, harness_guardian, upstrea
     assert _streamed_calls(received) == []
     assert [r["outcome"] for r in events(audit, "ask_resolved")] == ["timed_out", "timed_out"]
 
+
+def test_a_held_stream_sends_a_comment_line_to_keep_the_connection_open(gateway, harness_guardian, upstream, audit,
+                                                                        tmp_path, monkeypatch):
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    import acs_gateway.stream
+
+    monkeypatch.setattr(acs_gateway.stream, "KEEPALIVE_S", 0.1)
+    upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {}, "call_1")))))
+    client = enforce(gateway, harness_guardian, tmp_path)
+    approvals = client.app.state.gateway.approvals
+
+    def late() -> None:
+        end = time.monotonic() + 5
+        while not approvals.pending() and time.monotonic() < end:
+            time.sleep(0.01)
+        time.sleep(0.5)
+        approvals.answer(approvals.pending()[0].ask_id, "approve")
+
+    thread = threading.Thread(target=late, daemon=True)
+    thread.start()
+    with client.stream("POST", "/v1/responses", json={**finbot_request(), "stream": True}) as response:
+        raw = b"".join(response.iter_bytes())
+    thread.join()
+    assert raw.count(b": keepalive\n\n") >= 2
+    from streams import decode
+
+    assert _streamed_calls(decode(raw)) == ["call_1"]

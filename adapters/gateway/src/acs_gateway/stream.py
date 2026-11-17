@@ -42,6 +42,10 @@ _BOUNDARY = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 _LINES = re.compile(r"\r\n|\r|\n")
 UNREADABLE = "The model service returned an unreadable response."
 DEFAULT_QUEUE_CAP = 256
+# A call held for a decision, an ASK above all, can wait minutes with nothing to send. An SSE comment line every
+# KEEPALIVE_S keeps a proxy's idle timeout from cutting the stream. Clients skip comments (LAB-08, CR7).
+KEEPALIVE_S = 15.0
+KEEPALIVE = b": keepalive\n\n"
 
 
 def error_event(sequence_number: int) -> bytes:
@@ -560,7 +564,19 @@ class StreamEditor:
             elif item["type"] == "reasoning":
                 marked.append(_reasoning(item))
             else:
-                kept = await self._decided(item)
+                decision = asyncio.ensure_future(self._decided(item))
+                try:
+                    while not decision.done():
+                        await asyncio.wait({decision}, timeout=KEEPALIVE_S)
+                        if not decision.done():
+                            yield KEEPALIVE
+                finally:
+                    if not decision.done():
+                        # The stream was cancelled or closed while the call waited, so the decision stops with it.
+                        decision.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await decision
+                kept = decision.result()
                 built = _call(kept) if isinstance(kept, dict) and kept.get("type") == "function_call" else None
                 marked.append(built)
                 removed = removed or built is None
