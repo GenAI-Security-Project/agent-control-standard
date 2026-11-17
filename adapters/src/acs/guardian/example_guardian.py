@@ -161,16 +161,27 @@ class SigningUnavailable(RuntimeError):
 
 
 class RefusalLatch:
-    """Counts refusals and says whether this one is the first, so a dead key logs one line, not one per request."""
+    """Counts refusals and says whether this one starts an episode, so a dead key logs one line, not one per request.
+
+    A successful signature ends the episode, so the next time the key dies the log says so again (review round 4 CR9).
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._open = False
         self.count = 0
 
     def record(self) -> bool:
         with self._lock:
             self.count += 1
-            return self.count == 1
+            starts, self._open = not self._open, True
+            return starts
+
+    def reset(self) -> None:
+        # A plain bool read first, so a live key's every signature takes no lock.
+        if self._open:
+            with self._lock:
+                self._open = False
 
 
 # Unauthenticated requests reach signing too, so a log line per refusal would let anyone flood the log (CR3-5).
@@ -217,7 +228,9 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
         else:
             envelope["error"]["data"] = {**(envelope["error"].get("data") or {}), REQUEST_DIGEST_FIELD: digest}
         from acs.core import sign_with_signing_key
-        return sign_with_signing_key(envelope, DECISION_SIGNER.signing_key)
+        signed = sign_with_signing_key(envelope, DECISION_SIGNER.signing_key)
+        DEAD_KEY_REFUSALS.reset()
+        return signed
     return sign_envelope(envelope, session_id=session_id)
 
 

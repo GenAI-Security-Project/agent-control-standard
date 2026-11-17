@@ -330,3 +330,19 @@ def test_a_dead_key_is_logged_once_and_then_counted(signer, monkeypatch, capsys)
         assert_floor(example_guardian.handle_request(request), request)
     assert capsys.readouterr().err.count("is not live") == 1
     assert example_guardian.DEAD_KEY_REFUSALS.count == 3
+
+
+def test_a_second_dead_key_episode_is_logged_again(signer, monkeypatch, capsys):
+    # Review round 4 CR9: a successful signature resets the latch, so the next episode isn't silent.
+    import datetime
+    from acs.client import _key_document
+    dead, live = signer.keys.not_after, signer.keys.not_before + datetime.timedelta(seconds=1)
+    for moment, expect_floor in ((dead, True), (dead, True), (live, False), (dead, True)):
+        monkeypatch.setattr(_key_document, "utcnow", lambda moment=moment: moment)
+        request = signed_step("steps/toolCallRequest", ALLOWED)
+        response = example_guardian.handle_request(request)
+        if expect_floor:
+            assert_floor(response, request)
+        else:
+            assert_ml_dsa(response, request, signer)
+    assert capsys.readouterr().err.count("is not live") == 2
