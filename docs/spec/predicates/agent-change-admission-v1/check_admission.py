@@ -16,9 +16,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 ROLE = {
-    "https://lgd.dev/attestation/agent-change-admission/v1": ("admission", "guardian", "self"),
-    "https://lgd.dev/attestation/agent-change-witness/v1": ("witness", "witness", "peer"),
-    "https://lgd.dev/attestation/agent-change-anchor/v1": ("anchor", "anchor", "external"),
+    "urn:lgd:acs:predicate:agent-change-admission:v1": ("admission", "guardian", "self"),
+    "urn:lgd:acs:predicate:agent-change-witness:v1": ("witness", "witness", "peer"),
+    "urn:lgd:acs:predicate:agent-change-anchor:v1": ("anchor", "anchor", "external"),
 }
 ROLES = ("guardian", "witness", "anchor")
 
@@ -209,7 +209,7 @@ def build():
         if req: c["request_id"] = req
         return {"_type": "https://in-toto.io/Statement/v1",
                 "subject": [{"name": "change-payload", "digest": digest(payload)}],
-                "predicateType": "https://lgd.dev/attestation/agent-change-admission/v1",
+                "predicateType": "urn:lgd:acs:predicate:agent-change-admission:v1",
                 "predicate": {"change": {"kind": "tool_register", "payload_digest": digest(payload),
                                          "canonicalization": "jcs-rfc8785", "payload_media_type": "application/json"},
                               "context": c,
@@ -225,7 +225,7 @@ def build():
                             "key_fingerprint": p_fp, "pinned_at": "2026-10-30T00:00:00Z"}
         return {"_type": "https://in-toto.io/Statement/v1",
                 "subject": [{"name": "change-payload", "digest": digest(payload)}],
-                "predicateType": "https://lgd.dev/attestation/agent-change-witness/v1",
+                "predicateType": "urn:lgd:acs:predicate:agent-change-witness:v1",
                 "predicate": {"change": {"kind": "tool_register", "payload_digest": digest(payload),
                                          "canonicalization": "jcs-rfc8785"},
                               "context": ctx0, "witness": w,
@@ -236,7 +236,7 @@ def build():
     def anc(adm_d, pin_at="2026-10-30T00:00:00Z", ts_only=False):
         return {"_type": "https://in-toto.io/Statement/v1",
                 "subject": [{"name": "change-payload", "digest": digest(payload)}],
-                "predicateType": "https://lgd.dev/attestation/agent-change-anchor/v1",
+                "predicateType": "urn:lgd:acs:predicate:agent-change-anchor:v1",
                 "predicate": {"anchor": {"key_id": "anchor-key-1", "org": "org:independent-notary",
                                          "pin": {"registry_uri": "https://registry.example.org/keys/anchor-key-1",
                                                  "pinned_at": pin_at, "key_fingerprint": a_fp}},

@@ -1,5 +1,5 @@
 {
-  "_sig": "6hokyVYcsWNDLaZo5nknYDUChkYBLBklk62fD0F13JZeMlR2vDu8iiu6h0zU/JNufCRaN06v4d5RYGXOi1kDDw==",
+  "_sig": "73fGjli+JePvMrca8qidG/UjN5V76wpxDUwj39/oa+IuNZs+ZpYP+8wuCcgTJ5nAubL+9qRRksnb3rGz4H7BDw==",
   "_type": "https://in-toto.io/Statement/v1",
   "predicate": {
     "change": {
@@ -17,7 +17,7 @@
       "session_id": "6f1c2a9e-1d40-4d3e-9c3a-77ab01e2c9de"
     },
     "observed_admission": {
-      "sha256": "5a76f4fc2ed8906f3464e78df5bd421dc81347ec2f2b1c508d8068accb73e44c"
+      "sha256": "e00e40c5e0f8fa64d01d9030ac7650d5ca2a68596223920fa1848d56ed184cc1"
     },
     "outcome": {
       "applied": true,
@@ -36,7 +36,7 @@
     "witness_scope": "peer",
     "witnessed_at": "2026-11-17T01:52:00Z"
   },
-  "predicateType": "https://lgd.dev/attestation/agent-change-witness/v1",
+  "predicateType": "urn:lgd:acs:predicate:agent-change-witness:v1",
   "subject": [
     {
       "digest": {

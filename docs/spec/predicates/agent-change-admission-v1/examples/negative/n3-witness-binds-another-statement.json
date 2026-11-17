@@ -1,5 +1,5 @@
 {
-  "_sig": "C+MDRtMDBn3Zuk7+KPXk84KCbMjrfjQUoEM+2ss5w4PnN7qUvA1prc2x5Ogg9JabAQl+DTJqc/XsIDzaZeK7Cg==",
+  "_sig": "Gbzn6upowYFhiFLWCqrrniDhkchH6QghxXkTQjx+x+o1m3Xar0sV64U7HlFgDtMon5bCfI+/49+o78YU+Q7AAA==",
   "_type": "https://in-toto.io/Statement/v1",
   "predicate": {
     "change": {
@@ -31,7 +31,7 @@
       "control_domain": "org:peer-lab",
       "key_id": "peer-key-1",
       "key_pin": {
-        "key_fingerprint": "sha256:6aa2306918de751e8631eb43e7e4098b0ce44853b974444e9bb7794eb7ee4772",
+        "key_fingerprint": "sha256:27bea65f1ad1266ed098cd114e5c595016f23bb7be01a1136df912da43f55b5a",
         "pinned_at": "2026-10-30T00:00:00Z",
         "registry_uri": "https://registry.example.org/keys/peer-key-1"
       },
@@ -41,7 +41,7 @@
     "witness_scope": "peer",
     "witnessed_at": "2026-11-17T01:52:00Z"
   },
-  "predicateType": "https://lgd.dev/attestation/agent-change-witness/v1",
+  "predicateType": "urn:lgd:acs:predicate:agent-change-witness:v1",
   "subject": [
     {
       "digest": {

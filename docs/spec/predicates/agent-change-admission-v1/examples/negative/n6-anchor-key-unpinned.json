@@ -1,12 +1,12 @@
 {
-  "_sig": "OVVyo4hAFQkW+OQdPtlGfPGQxAo7ggbjxseQYp41Em3KC01jBJHGHtl6o6CABQ/zqTFfAO1MPDCUS1aHpU65AQ==",
+  "_sig": "C/He/W7XJqRJQwA7iB1bfubfg9ztHRDPh7TTgX3aJQYW9gNAUZNaADfaoSsFasT4sGyNTo6w+BacaYOjGXm/Bw==",
   "_type": "https://in-toto.io/Statement/v1",
   "predicate": {
     "anchor": {
       "key_id": "anchor-key-1",
       "org": "org:independent-notary",
       "pin": {
-        "key_fingerprint": "sha256:1aa95578811884c0da0581ef09388c7cb4f220a62f2993a5c91b4048f47bc684",
+        "key_fingerprint": "sha256:4154b74d6249b345534fad9c2d92811dcafaaa1149aa0ef411eb13e87804cb86",
         "pinned_at": "2026-10-30T00:00:00Z",
         "registry_uri": "https://registry.example.org/keys/anchor-key-1"
       }
@@ -14,7 +14,7 @@
     "anchored_at": "2026-11-17T02:00:00Z",
     "binds": {
       "statement_digest": {
-        "sha256": "5a76f4fc2ed8906f3464e78df5bd421dc81347ec2f2b1c508d8068accb73e44c"
+        "sha256": "e00e40c5e0f8fa64d01d9030ac7650d5ca2a68596223920fa1848d56ed184cc1"
       }
     },
     "independent_of": [
@@ -23,7 +23,7 @@
     ],
     "witness_scope": "external"
   },
-  "predicateType": "https://lgd.dev/attestation/agent-change-anchor/v1",
+  "predicateType": "urn:lgd:acs:predicate:agent-change-anchor:v1",
   "subject": [
     {
       "digest": {

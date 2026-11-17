@@ -1,5 +1,5 @@
 {
-  "_sig": "/TNj4CfmTLAutW8PuDSyaoWx/XL32v2sMqHhuEdQUfZit6WZveOCcZG0KRXgIhijzXNaT9IVF1fjWOd2iko4AA==",
+  "_sig": "3zfZIdylROCSx1ob9/iKxhvf7+cnr1HayMH9f38fWpMQpllhS1jluolwYL1tadiehkzSGFfT1JzK8ZiWehkJCw==",
   "_type": "https://in-toto.io/Statement/v1",
   "predicate": {
     "change": {
@@ -41,7 +41,7 @@
     "reason_codes": [],
     "witness_scope": "self"
   },
-  "predicateType": "https://lgd.dev/attestation/agent-change-admission/v1",
+  "predicateType": "urn:lgd:acs:predicate:agent-change-admission:v1",
   "subject": [
     {
       "digest": {

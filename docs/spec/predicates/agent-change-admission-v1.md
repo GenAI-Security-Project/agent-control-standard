@@ -1,13 +1,28 @@
 # Predicate family: Agent Change Admission (v1)
 
 Type URIs:
-- `https://lgd.dev/attestation/agent-change-admission/v1` — the admission decision
-- `https://lgd.dev/attestation/agent-change-witness/v1` — a peer's statement over an admission
-- `https://lgd.dev/attestation/agent-change-anchor/v1` — an external anchor over an admission
+- `urn:lgd:acs:predicate:agent-change-admission:v1` — the admission decision
+- `urn:lgd:acs:predicate:agent-change-witness:v1` — a peer's statement over an admission
+- `urn:lgd:acs:predicate:agent-change-anchor:v1` — an external anchor over an admission
 
 Version: v1.1 (revised after external review; for discussion against GenAI-Security-Project/agent-control-standard#33)
 Status: draft, not yet proposed upstream
 Scope: predicate-only. No change to ACS normative text, no wire-format change.
+
+### Why the type identifiers are URNs
+
+These are `urn:` identifiers, deliberately not `https:`. An earlier draft used an `https:` host for
+them and every one of those URIs returned HTTP 503 — a type URI that does not resolve is worse than
+one that never pretended to: a verifier that dereferences it fails in a way that looks like our
+fault, and a verifier that ignores it learns nothing. `docs/spec/conformance.md` records that
+ACS v0.1.0 has no registry and no steward body, so there is no authority to resolve a type URI
+against. A URN says exactly that: stable name, no resolver, resolution is the verifier's problem
+via `pin.registry_revision`.
+
+When a registry exists, `https:` URIs will be minted and these URNs kept as aliases, so no
+statement signed today becomes unverifiable tomorrow. Until then, a verifier MUST NOT dereference
+and MUST treat an unresolvable registry as `verifier_context_incomplete` (fail-closed), never as
+a pass.
 
 ---
 
@@ -63,7 +78,7 @@ without the signer's key.
 {
   "_type": "https://in-toto.io/Statement/v1",
   "subject": [{ "name": "change-payload", "digest": { "sha256": "<64 hex>" } }],
-  "predicateType": "https://lgd.dev/attestation/agent-change-admission/v1",
+  "predicateType": "urn:lgd:acs:predicate:agent-change-admission:v1",
   "predicate": {
     "change": {
       "kind": "tool_register|skill_load|skill_unload|memory_write|policy_update|capability_grant|config_mutation",
@@ -100,7 +115,7 @@ second; they MUST agree. Reject: `outcome_mismatch`.
 ## 5. Schema — witness
 
 ```jsonc
-"predicateType": "https://lgd.dev/attestation/agent-change-witness/v1",
+"predicateType": "urn:lgd:acs:predicate:agent-change-witness:v1",
 "predicate": {
   "change": { "...": "same as admission" },
   "context": { "...": "same session_id/request_id as the admission" },
@@ -133,7 +148,7 @@ NOT earn `peer`.
 ## 6. Schema — anchor
 
 ```jsonc
-"predicateType": "https://lgd.dev/attestation/agent-change-anchor/v1",
+"predicateType": "urn:lgd:acs:predicate:agent-change-anchor:v1",
 "predicate": {
   "anchor": {
     "key_id": "<string>",

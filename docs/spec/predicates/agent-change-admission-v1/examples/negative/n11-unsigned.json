@@ -40,7 +40,7 @@
     "reason_codes": [],
     "witness_scope": "self"
   },
-  "predicateType": "https://lgd.dev/attestation/agent-change-admission/v1",
+  "predicateType": "urn:lgd:acs:predicate:agent-change-admission:v1",
   "subject": [
     {
       "digest": {
