@@ -417,7 +417,9 @@ class RequestBinding(unittest.TestCase):
                                    "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
         sign_with_signing_key(server_hello, _signer())
         self.assertFalse(self._verify(server_hello, hello))
-        self.assertTrue(self._verify(server_hello, {**hello, "id": True}))
+        # Review finding CR8-3: a bool is no request id, so a ClientHello carrying one is a caller error.
+        with self.assertRaises(ValueError):
+            self._verify(server_hello, {**hello, "id": True})
 
     def test_a_step_decision_against_a_handshake_request_fails(self) -> None:
         # Review finding R6-M1: a matching id isn't enough when the result carries request_id.

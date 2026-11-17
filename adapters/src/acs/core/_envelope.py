@@ -67,8 +67,10 @@ def request_binding_problem(request: object) -> str | None:
     """
     if not isinstance(request, dict):
         return "request must be the request envelope this response answers"
-    if request.get("id") is None:
-        return "request must carry its JSON-RPC id"
+    json_rpc_id = request.get("id")
+    # JSON-RPC ids are strings or numbers. A bool would otherwise pass as a number.
+    if isinstance(json_rpc_id, bool) or not isinstance(json_rpc_id, (str, int, float)):
+        return "request must carry a string or numeric JSON-RPC id"
     params = request.get("params")
     if params is not None and not isinstance(params, dict):
         return "request params must be an object when present"

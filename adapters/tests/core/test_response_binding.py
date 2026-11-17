@@ -25,7 +25,8 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
                      ("c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60", "c9b0e0a2-6d1f-4a57-8f3e-2b7d9e4c1a60")):
             with self.subTest(a=a, b=b):
                 self.assertTrue(same_json_rpc_id(a, b))
-                self.assertTrue(response_matches_request(_request(a), _response(b)))
+                # CR8-3: a bool is no request id, so a request carrying one binds no result.
+                self.assertEqual(response_matches_request(_request(a), _response(b)), not isinstance(a, bool))
 
     def test_ids_of_different_json_types_do_not_match(self) -> None:
         for a, b in ((1, True), (True, 1), (0, False), (1.0, True), ("1", 1), (None, 0), (None, ""), ("a", "b")):
@@ -132,6 +133,17 @@ class OneRequestPrecondition(unittest.TestCase):
         self.assertIsNone(request_binding_problem(_client_hello()))
         hello_without_request_id = {**_client_hello(), "params": {"acs_version": "0.1.0"}}
         self.assertIsNone(request_binding_problem(hello_without_request_id), "a ClientHello needs no request_id")
+
+    def test_a_request_id_must_be_a_string_or_a_number(self) -> None:
+        # Review findings CR8-3, R8-M4: bool, object and array ids are refused.
+        from acs.core._envelope import request_binding_problem
+        for json_rpc_id in (True, False, {}, {"id": 1}, [], [1]):
+            with self.subTest(id=json_rpc_id):
+                self.assertEqual(request_binding_problem(_request(json_rpc_id)),
+                                 "request must carry a string or numeric JSON-RPC id")
+        for json_rpc_id in ("1", 1, 1.5, 0):
+            with self.subTest(id=json_rpc_id):
+                self.assertIsNone(request_binding_problem(_request(json_rpc_id)))
 
     def test_each_malformed_request_names_its_problem_and_binds_nothing(self) -> None:
         from acs.core._envelope import request_binding_problem
