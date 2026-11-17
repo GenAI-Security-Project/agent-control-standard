@@ -470,3 +470,11 @@ def test_the_canonicalization_errors_cover_every_jcs_failure():
         with pytest.raises(CANONICALIZATION_ERRORS):
             jcs_canonicalize({"v": value})
 
+
+
+@pytest.mark.parametrize("method", ["steps/toolCallRequest", "steps/toolCallResult", "steps/sessionStart"])
+@pytest.mark.parametrize("payload", [[], "", "x", 0, None])
+def test_a_present_payload_that_is_not_an_object_denies(no_backend, method, payload):
+    params = {"request_id": REQUEST_ID, "metadata": METADATA, "payload": payload}
+    result = example_guardian.evaluate_step(method, params, REQUEST_ID, CHAIN)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])

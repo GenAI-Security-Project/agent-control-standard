@@ -566,14 +566,18 @@ def _recheck_rewritten_call(base: dict, tool_name: str, payload: dict, result: d
 
 
 def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -> dict:
-    payload = params.get("payload") or {}
-
     base = {
         "type": "final",
         "acs_version": ACS_VERSION,
         "request_id": request_id,
         "chain_hash": chain_hash,
     }
+
+    # Absent means empty. A present payload that isn't an object denies, so a falsy one can't pass as {} and a
+    # string can't crash the checks below.
+    payload = params.get("payload", {})
+    if not isinstance(payload, dict):
+        return _argument_type_deny(base, method, "payload", payload)
 
     if method == "steps/toolCallRequest":
         # Absent means empty. A present value is checked as it is, so [], "", 0, false, and null can't pass as {}.
