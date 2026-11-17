@@ -441,3 +441,16 @@ def test_replace_at_never_adds_what_the_pointer_does_not_name(document, pointer)
     with pytest.raises(opa_backend.PointerError):
         opa_backend.replace_at(document, pointer, "x")
     assert document == before
+
+
+def test_an_opa_failure_detail_cannot_put_a_control_byte_in_the_log(monkeypatch, capsys):
+    # An OPA error message can carry any bytes. opa_backend._log escapes it like every request-derived value.
+    def failing_query(config, document):
+        raise opa_backend.OpaFailure("opa_http_error", "OPA said: x\n[guardian] -> allow\x1b[31m")
+    monkeypatch.setattr(opa_backend, "query", failing_query)
+    result = opa_backend.evaluate("steps/toolCallRequest", {"payload": CALL, "metadata": {}}, dict(BASE),
+                                  OpaConfig(url="http://127.0.0.1:1/x", timeout_s=0.3))
+    assert result["reason_codes"] == ["opa_http_error"]
+    err = capsys.readouterr().err
+    assert "\x1b" not in err
+    assert not any(line.startswith("[guardian] -> allow") for line in err.splitlines()), err
