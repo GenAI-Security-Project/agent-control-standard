@@ -23,6 +23,9 @@ RESULT = {"tool": {"name": "get_vendor_details"}, "exit_status": "success",
           "request_id_ref": "33333333-3333-4333-8333-333333333333",
           "outputs": [{"value": {"name": "Acme", "bank_account_number": "111"}},
                       {"value": {"name": "Beta", "bank_account_number": "222"}}]}
+# Only the first output carries the field, so one redaction covers the result.
+MIXED = {**RESULT, "outputs": [{"value": {"name": "Acme", "bank_account_number": "111"}},
+                               {"value": {"name": "Beta"}}, {"value": "plain text"}]}
 ASK_DETAILS = {"approver": {"type": "human", "id": "lab-approver"},
                "question": "Approve a transfer of 9000?", "timeout_seconds": 240}
 REDACT_ALL = {"redactions": [{"path": "/outputs/0/value/bank_account_number"},
@@ -39,6 +42,9 @@ VALID = [
     ("steps/toolCallResult", RESULT, {"decision": "deny", "reasoning": "secret in output"}),
     ("steps/toolCallResult", RESULT, {"decision": "modify", "reasoning": "bank account redacted",
                                       "reason_codes": ["sensitive_field_redacted"], "modifications": REDACT_ALL}),
+    ("steps/toolCallResult", MIXED, {"decision": "modify", "reasoning": "only one output carries it",
+                                     "modifications": {"redactions": [
+                                         {"path": "/outputs/0/value/bank_account_number"}]}}),
     ("steps/toolCallResult", RESULT, {"decision": "modify", "reasoning": "rewritten",
                                       "modifications": {"modified_content": "[withheld]"}}),
 ]
@@ -74,6 +80,11 @@ INVALID = {
                                              {"path": "/outputs/2/value/bank_account_number"}]}},
     "a redaction path that is not a pointer": {"decision": "modify", "reasoning": "r",
                                                "modifications": {"redactions": [{"path": "outputs.0"}]}},
+    "a redaction that skips an output carrying the field (issue #469)": {
+        "decision": "modify", "reasoning": "r",
+        "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}},
+    "a whole-value redaction that skips an output": {
+        "decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": "/outputs/1/value"}]}},
     "parameter_overrides on a result": {"decision": "modify", "reasoning": "r",
                                         "modifications": {"parameter_overrides": {"amount": 1}}},
     "reason_codes that are not strings": {"decision": "deny", "reasoning": "r", "reason_codes": [1]},

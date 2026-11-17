@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -244,11 +245,35 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
         unknown = sorted(set(overrides) - set(payload.get("arguments") or {}))
         if unknown:
             return f"parameter_overrides names arguments the call does not carry: {unknown}"
-    for redaction in modifications.get("redactions") or []:
-        path = redaction.get("path")
+    paths = [redaction.get("path") for redaction in modifications.get("redactions") or []]
+    for path in paths:
         # A path that misses would redact nothing and let the value through, so it is a policy error, not a no-op.
         if not path or not _resolve_pointer(payload, path):
             return f"redaction path {path!r} does not name a value in the payload"
+    return _sibling_output_problem(paths, payload)
+
+
+_OUTPUT_PATH = re.compile(r"/outputs/(?:0|[1-9][0-9]*)/value(/.*)?")
+
+
+def _sibling_output_problem(paths: list[str], payload: Mapping[str, Any]) -> str | None:
+    """A redaction inside one output must be repeated in every output that carries the same field.
+
+    Redacting only the first output let the rest through (issue #469), so a partial redaction is invalid.
+    """
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, list):
+        return None
+    wanted = set(paths)
+    for path in paths:
+        match = _OUTPUT_PATH.fullmatch(path)
+        if match is None:
+            continue
+        rest = match.group(1) or ""
+        for index in range(len(outputs)):
+            sibling = f"/outputs/{index}/value{rest}"
+            if sibling not in wanted and _resolve_pointer(payload, sibling):
+                return f"redaction {path!r} leaves the same field at {sibling!r} unredacted"
     return None
 
 

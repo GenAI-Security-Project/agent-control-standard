@@ -87,14 +87,22 @@ def test_a_modify_redacts_every_output_of_a_tool_result(guardian):
     assert "111-222" not in repr(redacted) and "333-444" not in repr(redacted)
 
 
-def test_a_modify_that_misses_an_output_is_a_deny_not_a_partial_redaction(guardian):
+def test_a_modify_that_redacts_only_the_first_output_is_a_deny(guardian):
     # Issue #469: redacting only the first output let the second one through.
     verdict = {"decision": "modify", "reasoning": "r",
-               "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"},
-                                                {"path": "/outputs/1/value/bank_acount_number"}]}}
+               "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}}
     with StubOpa(verdict) as opa:
         _, result = _send(guardian(opa.url), "steps/toolCallResult", VENDOR_RESULT)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
+
+
+def test_one_redaction_passes_when_only_one_output_carries_the_field(guardian):
+    payload = {**VENDOR_RESULT, "outputs": [VENDOR_RESULT["outputs"][0], {"value": {"name": "Beta"}}]}
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}}
+    with StubOpa(verdict) as opa:
+        _, result = _send(guardian(opa.url), "steps/toolCallResult", payload)
+    assert result["decision"] == "modify"
 
 
 def test_an_ask_comes_back_as_an_ask(guardian):
