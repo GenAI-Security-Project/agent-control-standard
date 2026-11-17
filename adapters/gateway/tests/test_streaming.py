@@ -247,3 +247,24 @@ def test_text_reaches_the_client_before_a_slow_decision(tmp_path, harness_guardi
     first_call = next(t for t, e in arrivals if e.get("item", {}).get("type") == "function_call")
     assert first_text < 1.0 and first_call > 1.4
     assert finbot_reads([e for _, e in arrivals]) == ("Checking the ledger", [("slow_tool", {"x": 1})])
+
+
+def test_an_upstream_without_sequence_numbers_streams_in_enforce(gateway, guardian, upstream):
+    upstream_events = stream_events(message_item("hi"), LOOKUP)
+    for event in upstream_events:
+        event.pop("sequence_number")
+    upstream.reply(SSE(encode(upstream_events)))
+    _, _, received, _ = streamed(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian))
+    assert [e["sequence_number"] for e in received] == list(range(len(received)))
+    assert finbot_reads(received) == ("hi", [("get_vendor_details", {"vendor_id": 7})])
+
+
+def test_a_stream_past_its_deadline_ends_and_frees_the_session(gateway, guardian, upstream, audit):
+    upstream.reply(SSE(encode(stream_events(message_item("hi")))[:-1], hold_open=5.0))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_STREAM_DEADLINE_S="1")
+    start = time.monotonic()
+    _, _, received, _ = streamed(client)
+    assert time.monotonic() - start < 4.0 and received[-1]["type"] == "error"
+    assert "upstream_deadline" in [e.get("cause") for e in events(audit, "upstream_error")]
+    session = client.app.state.gateway.sessions.peek(conversation_key(finbot_request()))
+    assert session.active == 0 and not session.lock.locked()

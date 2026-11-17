@@ -34,9 +34,6 @@ def item_events(item: dict[str, Any], index: int) -> list[dict[str, Any]]:
                  "item": {**item, "status": "in_progress", "content": []}},
                 {"type": "response.content_part.added", **where, "content_index": 0, "part": part},
                 *middle,
-                {"type": "response.output_text.annotation.added", **where, "content_index": 0,
-                 "annotation_index": 0, "annotation": {"type": "url_citation", "url": "https://example.com",
-                                                       "title": "x", "start_index": 0, "end_index": 1}},
                 {"type": "response.output_text.done", **where, "content_index": 0, "text": text, "logprobs": []},
                 {"type": "response.content_part.done", **where, "content_index": 0, "part": {**part, "text": text}},
                 {"type": "response.output_item.done", "output_index": index, "item": item}]
@@ -53,6 +50,11 @@ def item_events(item: dict[str, Any], index: int) -> list[dict[str, Any]]:
         text = item["summary"][0]["text"]
         part = {"type": "summary_text", "text": ""}
         return [{"type": "response.output_item.added", "output_index": index, "item": {**item, "summary": []}},
+                {"type": "response.content_part.added", **where, "content_index": 0,
+                 "part": {"type": "reasoning_text", "text": ""}},
+                {"type": "response.reasoning_text.delta", **where, "content_index": 0, "delta": "private"},
+                {"type": "response.content_part.done", **where, "content_index": 0,
+                 "part": {"type": "reasoning_text", "text": "private"}},
                 {"type": "response.reasoning_summary_part.added", **where, "summary_index": 0, "part": part},
                 {"type": "response.reasoning_summary_text.delta", **where, "summary_index": 0, "delta": text},
                 {"type": "response.reasoning_summary_text.done", **where, "summary_index": 0, "text": text},

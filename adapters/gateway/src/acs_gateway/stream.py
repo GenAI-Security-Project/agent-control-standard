@@ -1,17 +1,22 @@
-"""Governed streaming: a Responses API event stream edited so a tool call reaches the client only once it is decided.
+"""Governed streaming: a Responses API event stream that reaches the client only as the gateway rebuilt it.
 
-Issue #578, Appendix B WP2. Text streams as it arrives. A function_call reaches the client only as the item the gate
-judged: its events are rebuilt from the decided item and the upstream's own events for it never go out. An item's
-type is the type of its finished item, so an item announced as text that finishes as a call ends the stream. Events
-keep their sequence_number, so a removed event leaves a gap the client accepts (PREMORTEM P21), and output_index
-follows the edited output, so response.completed lists exactly what was streamed and an accumulating client (openai's
-responses.stream()) never indexes past its snapshot.
+Issue #578, Appendix B WP2. In enforce, only message text streams live, and every event of it is rebuilt from an exact
+allowlist of known fields. Every other item, function_call and reasoning included, is never relayed from upstream
+events: they are only counted while the stream runs, and when the upstream's final event arrives the gateway takes
+that event's output, gates each call, and builds each surviving item's events from the decided item. Upstream bytes
+never reach the client in enforce, so no event the gateway didn't build can carry a call. The gateway numbers every
+event it sends from its own counter, strictly rising, which P21 allows since FinBot reads only output_text.delta and
+output_item.done, and output_index is the gateway's dense count, so response.completed lists exactly what was streamed.
+
+Shadow relays the upstream byte for byte, injects nothing, and records decisions on a task of its own.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -23,41 +28,31 @@ from acs_gateway.strict import loads_recording
 
 _LIFECYCLE = frozenset({"response.created", "response.in_progress", "response.queued"})
 _TERMINAL = frozenset({"response.completed", "response.incomplete", "response.failed"})
-# The upstream's own error event ends a stream just as a terminal event does.
-_LAST = _TERMINAL | {"error"}
-_DONE = "response.output_item.done"
-# The events each streamed type may carry. An event of another type's family on an item is a type mismatch.
-_FAMILIES = {
-    "message": ("response.output_text.", "response.content_part.", "response.refusal."),
-    "reasoning": ("response.reasoning_summary_part.", "response.reasoning_summary_text.", "response.reasoning_text."),
-    "function_call": ("response.function_call_arguments.",),
-}
-_ALL_FAMILIES = tuple(prefix for prefixes in _FAMILIES.values() for prefix in prefixes)
+_ADDED, _DONE = "response.output_item.added", "response.output_item.done"
+# The only events of a message the client gets, each rebuilt from the fields named here.
+_MESSAGE_EVENTS = frozenset({_ADDED, "response.content_part.added", "response.output_text.delta",
+                             "response.output_text.done", "response.content_part.done", _DONE})
+# The Response fields a rebuilt lifecycle or final event carries. output is always the gateway's own.
+_RESPONSE_FIELDS = frozenset({
+    "id", "object", "created_at", "status", "error", "incomplete_details", "instructions", "max_output_tokens",
+    "model", "parallel_tool_calls", "previous_response_id", "reasoning", "store", "temperature", "text",
+    "tool_choice", "tools", "top_p", "truncation", "usage", "user", "metadata", "background", "service_tier",
+    "max_tool_calls", "top_logprobs", "prompt_cache_key", "safety_identifier"})
 _BOUNDARY = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 _LINES = re.compile(r"\r\n|\r|\n")
 UNREADABLE = "The model service returned an unreadable response."
+DEFAULT_QUEUE_CAP = 256
 
 
 def error_event(sequence_number: int) -> bytes:
     """The Responses API's own stream error, so a client sees an ordinary model failure and nothing about ACS."""
-    data = {"type": "error", "code": "upstream_unreadable", "message": UNREADABLE, "param": None,
-            "sequence_number": sequence_number}
-    return _frame("error", data)
+    return _frame({"type": "error", "sequence_number": sequence_number, "code": "upstream_unreadable",
+                   "message": UNREADABLE, "param": None})
 
 
-def _frame(name: str, data: dict[str, Any]) -> bytes:
+def _frame(data: dict[str, Any]) -> bytes:
     # ASCII-escaped, so text holding a lone surrogate can't fail to encode, and a JSON reader gets it back unchanged.
-    return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n".encode("ascii")
-
-
-def _fits(kind: str, event_type: str) -> bool:
-    """Whether an event belongs to an item of this type. An item outside the allowlist may carry its own events but
-    never another type's."""
-    if event_type == _DONE:
-        return True
-    if kind in _FAMILIES:
-        return event_type.startswith(_FAMILIES[kind])
-    return not event_type.startswith(_ALL_FAMILIES)
+    return f"event: {data['type']}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n".encode("ascii")
 
 
 class _Unreadable(Exception):
@@ -66,486 +61,485 @@ class _Unreadable(Exception):
         self.cause, self.detail = cause, detail
 
 
+def _refuse(detail: str) -> _Unreadable:
+    return _Unreadable("upstream_unparseable", detail)
+
+
 class _UpstreamFailed(Exception):
-    """Reading the upstream failed or stalled, as distinct from a fault in the editor itself."""
+    """Reading the upstream failed, stalled or ran past its deadline, as distinct from a fault in the editor."""
 
     def __init__(self, cause: str) -> None:
         super().__init__(cause)
         self.cause = cause
 
 
-@dataclass
-class _Event:
-    raw: bytes
-    data: dict[str, Any] | None
+def _parse(raw: bytes) -> dict[str, Any] | None:
+    """One SSE event's data. None for a comment-only block or the [DONE] sentinel."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise _refuse("event_not_utf8") from e
+    lines = [line[5:].removeprefix(" ") for line in _LINES.split(text) if line.startswith("data:")]
+    if not lines or lines == ["[DONE]"]:
+        return None
+    try:
+        data, repeated = loads_recording("\n".join(lines))
+    except (ValueError, RecursionError) as e:
+        raise _refuse("event_not_json") from e
+    if repeated is not None:
+        raise _refuse("duplicate_json_key")
+    if not isinstance(data, dict) or not isinstance(data.get("type"), str):
+        raise _refuse("event_without_type")
+    return data
 
-    @property
-    def type(self) -> str:
-        return self.data["type"] if self.data else ""
 
-    @property
-    def seq(self) -> int | None:
-        value = self.data.get("sequence_number") if self.data else None
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
-    @property
-    def index(self) -> int | None:
-        value = self.data.get("output_index") if self.data else None
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+def _text(value: Any, detail: str) -> str:
+    if not isinstance(value, str):
+        raise _refuse(detail)
+    return value
+
+
+def _message(item: Any) -> dict[str, Any]:
+    """A message item rebuilt from known keys, holding output_text parts only."""
+    if not isinstance(item, dict) or item.get("type") != "message" or not isinstance(item.get("content"), list):
+        raise _refuse("item_type_mismatch")
+    parts = []
+    for part in item["content"]:
+        if not isinstance(part, dict) or part.get("type") != "output_text":
+            raise _refuse("message_part_outside_allowlist")
+        parts.append({"type": "output_text", "text": _text(part.get("text"), "message_part_without_text"),
+                      "annotations": []})
+    status = item.get("status") if isinstance(item.get("status"), str) else "completed"
+    return {"type": "message", "id": _text(item.get("id"), "item_without_id"), "role": "assistant",
+            "status": status, "content": parts}
+
+
+def _call(item: dict[str, Any]) -> dict[str, Any]:
+    """A function_call rebuilt from known keys of the decided item."""
+    return {"type": "function_call", "id": _text(item.get("id"), "item_without_id"),
+            "call_id": _text(item.get("call_id"), "call_without_call_id"),
+            "name": _text(item.get("name"), "call_without_name"),
+            "arguments": _text(item.get("arguments"), "call_without_arguments"), "status": "completed"}
+
+
+def _reasoning(item: dict[str, Any]) -> dict[str, Any]:
+    """A reasoning item rebuilt from known keys: its summary text and, when present, the encrypted content a
+    reasoning model needs back on a resend. Private reasoning text never goes out."""
+    parts = item.get("summary") if isinstance(item.get("summary"), list) else []
+    summary = [{"type": "summary_text", "text": part["text"]} for part in parts
+               if isinstance(part, dict) and part.get("type") == "summary_text" and isinstance(part.get("text"), str)]
+    rebuilt = {"type": "reasoning", "id": _text(item.get("id"), "item_without_id"), "summary": summary}
+    if isinstance(item.get("encrypted_content"), str):
+        rebuilt["encrypted_content"] = item["encrypted_content"]
+    return rebuilt
+
+
+def _orphans(marked: list[Any]) -> set[int]:
+    """Positions of reasoning items to drop. A run of reasoning belongs to the items after it up to the next run, and
+    goes when every one of them was removed (None). A run with nothing after it stays."""
+    dropped: set[int] = set()
+    run: list[int] = []
+    turn: list[Any] = []
+
+    def close() -> None:
+        if run and turn and all(item is None for item in turn):
+            dropped.update(run)
+
+    for position, item in enumerate(marked):
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            if turn:
+                close()
+                run, turn = [], []
+            run.append(position)
+        else:
+            turn.append(item)
+    close()
+    return dropped
+
+
+# Marks a message already streamed live when the final output is walked.
+_STREAMED = object()
 
 
 @dataclass
 class _Item:
-    index: int
     kind: str
-    # Held events of a message or reasoning item, released as they came.
-    events: list[_Event] = field(default_factory=list)
-    # The sequence numbers of a call's own events, which its rebuilt events reuse in order.
-    numbers: list[int] = field(default_factory=list)
-    final: dict[str, Any] | None = None
+    item_id: str
+    done: bool = False
+    # A streamed message's dense output_index, and its rebuilt done item.
     client: int | None = None
-    # held, released or dropped
-    state: str = "held"
+    final: dict[str, Any] | None = None
 
 
-def _parse(raw: bytes) -> _Event:
-    """One SSE event. data is None for a comment-only block or the [DONE] sentinel."""
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise _Unreadable("upstream_unparseable", "event_not_utf8") from e
-    lines = [line[5:].removeprefix(" ") for line in _LINES.split(text) if line.startswith("data:")]
-    if not lines or lines == ["[DONE]"]:
-        return _Event(raw, None)
-    try:
-        data, repeated = loads_recording("\n".join(lines))
-    except (ValueError, RecursionError) as e:
-        raise _Unreadable("upstream_unparseable", "event_not_json") from e
-    if repeated is not None:
-        raise _Unreadable("upstream_unparseable", "duplicate_json_key")
-    if not isinstance(data, dict) or not isinstance(data.get("type"), str):
-        raise _Unreadable("upstream_unparseable", "event_without_type")
-    return _Event(raw, data)
+@dataclass
+class _Frames:
+    """Splits SSE bytes into events. A read offset and a resumed search keep a long stream linear."""
+    buffer: bytearray = field(default_factory=bytearray)
+    start: int = 0
+    scan: int = 0
 
+    def feed(self, chunk: bytes) -> Iterator[bytes]:
+        self.buffer += chunk
+        while True:
+            match = _BOUNDARY.search(self.buffer, max(self.start, self.scan - 3))
+            if match is None:
+                self.scan = len(self.buffer)
+                break
+            yield bytes(self.buffer[self.start:match.end()])
+            self.start = self.scan = match.end()
+        if self.start > len(self.buffer) // 2:
+            del self.buffer[:self.start]
+            self.scan -= self.start
+            self.start = 0
 
-def _item_of(event: _Event) -> dict[str, Any]:
-    item = event.data.get("item")
-    if not isinstance(item, dict):
-        raise _Unreadable("upstream_unparseable", "event_without_item")
-    return item
+    def pending(self) -> int:
+        return len(self.buffer) - self.start
 
 
 class StreamEditor:
     """Edits one upstream event stream for the client.
 
-    decide(item) gets each finished function_call, and each finished item outside the output allowlist, and returns
-    the item to deliver or None to remove it. Enforce releases items in the model's order: a later item waits while a
-    call before it waits for its decision. Shadow (enforce=False) relays every byte unchanged and records decisions on
-    a task of its own, so the client never waits, and drain() waits for those decisions. limit bounds a partial event
-    and every byte the editor keeps at once. idle_timeout bounds the wait for each upstream chunk.
+    decide(item) gets each function_call, and each item outside the output allowlist, from the upstream's final
+    output, and returns the item to deliver or None to remove it. limit bounds the bytes enforce keeps, idle_timeout
+    the wait for each upstream chunk and deadline the whole stream, all in enforce only. Shadow (enforce=False)
+    relays every byte, stops after the chunk that holds the final event, and queues decisions, at most queue_cap at
+    once, for drain(). A shadow editor given a deadline stops relaying when it passes, with nothing injected.
     """
 
     def __init__(self, *, enforce: bool, limit: int,
                  decide: Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]] | None,
                  audit: Callable[..., None], audit_fields: dict[str, Any] | None = None,
-                 idle_timeout: float | None = None) -> None:
+                 idle_timeout: float | None = None, deadline: float | None = None,
+                 queue_cap: int = DEFAULT_QUEUE_CAP) -> None:
         self.enforce, self.limit, self.decide, self._audit = enforce, limit, decide, audit
-        self.idle_timeout = idle_timeout
+        self.idle_timeout, self.deadline, self.queue_cap = idle_timeout, deadline, queue_cap
         self._fields = audit_fields or {}
         self._items: dict[int, _Item] = {}
-        self._run: list[_Item] = []
-        self._turn_items, self._turn_kept = 0, False
-        self._released: list[_Item] = []
-        self._removed: list[dict[str, Any]] = []
-        # The upstream's own copy of each call the gateway rewrote, which a terminal event may still list.
-        self._replaced: list[dict[str, Any]] = []
-        # A call or unsupported item waiting for its finished item, and the later events waiting behind it.
-        self._pending: _Item | None = None
-        self._backlog: list[_Event] = []
-        self._kept_bytes = 0
-        self._last_emitted = -1
-        self._max_seq = -1
-        # _finished: the client has had its last event.
+        self._ids: set[str] = set()
+        self._emitted: list[dict[str, Any]] = []
+        self._seq = 0
+        self._kept = 0
         self._finished = False
-        self._relay_raw = False
-        self._queue: asyncio.Queue[dict[str, Any] | None] | None = None
+        self._queue: deque[dict[str, Any]] = deque()
+        self._wake = asyncio.Event()
+        self._closing = False
         self._recorder: asyncio.Task[None] | None = None
 
     @property
     def _mode(self) -> str:
         return "enforce" if self.enforce else "shadow"
 
+    @property
+    def recording(self) -> bool:
+        return self._recorder is not None and not self._recorder.done()
+
     async def edit(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-        buffer, scan = bytearray(), 0
+        source = self._read(chunks)
+        if not self.enforce:
+            async for out in self._relay(source):
+                yield out
+            return
+        frames = _Frames()
         try:
-            async for chunk in self._read(chunks):
-                if self._relay_raw:
-                    yield chunk
-                    continue
-                buffer += chunk
-                while not self._relay_raw and not self._finished:
-                    # Resume near where the last search stopped, so a long event isn't rescanned per chunk.
-                    match = _BOUNDARY.search(buffer, max(0, scan - 3))
-                    if match is None:
-                        scan = len(buffer)
-                        break
-                    raw = bytes(buffer[:match.end()])
-                    del buffer[:match.end()]
-                    scan = 0
-                    try:
-                        async for out in self._event(raw):
-                            yield out
-                    except _Unreadable as e:
-                        async for out in self._unreadable(e, raw + bytes(buffer)):
-                            yield out
-                        buffer.clear()
-                if self._finished:
-                    return
-                if self._relay_raw:
-                    if buffer:
-                        yield bytes(buffer)
-                        buffer.clear()
-                elif len(buffer) > self.limit:
-                    async for out in self._unreadable(_Unreadable("upstream_too_large", "event_too_large"),
-                                                      bytes(buffer)):
+            async for chunk in source:
+                for raw in frames.feed(chunk):
+                    async for out in self._event(raw):
                         yield out
-                    buffer.clear()
                     if self._finished:
                         return
-            if self._relay_raw:
-                if buffer:
-                    yield bytes(buffer)
-                return
-            # The upstream ended without a final event. Held items were never finished, so nothing of them goes out.
-            async for out in self._unreadable(_Unreadable("upstream_unparseable", "stream_ended_early"),
-                                              bytes(buffer)):
-                yield out
+                if frames.pending() > self.limit:
+                    raise _Unreadable("upstream_too_large", "event_too_large")
+            raise _refuse("stream_ended_early")
+        except _Unreadable as e:
+            self._audit("upstream_error", cause=e.cause, detail=e.detail, mode="enforce", stream=True, **self._fields)
+            yield self._fail()
         except _UpstreamFailed as e:
-            self._audit("upstream_error", cause=e.cause, mode=self._mode, stream=True, **self._fields)
-            if not self._finished:
-                self._finished = True
-                yield error_event(self._max_seq + 1)
+            self._audit("upstream_error", cause=e.cause, mode="enforce", stream=True, **self._fields)
+            yield self._fail()
         except Exception as e:  # noqa: BLE001
-            # A fault in the editor itself. The stream ends cleanly rather than hanging or leaking a held call.
-            self._audit("gateway_step_error", phase="stream", mode=self._mode, error=f"{type(e).__name__}: {e}",
+            # A fault in the editor itself. The stream ends cleanly rather than hanging or leaking an item.
+            self._audit("gateway_step_error", phase="stream", mode="enforce", error=f"{type(e).__name__}: {e}",
                         **self._fields)
-            if not self._finished:
-                self._finished = True
-                yield error_event(self._max_seq + 1)
+            yield self._fail()
 
-    async def drain(self) -> None:
-        """Wait for every decision shadow queued. The caller holds the session lock until this returns, so the
-        session's steps stay in order."""
-        if self._recorder is not None and self._queue is not None:
-            self._queue.put_nowait(None)
-            await self._recorder
+    def _fail(self) -> bytes:
+        self._finished = True
+        return error_event(self._next())
+
+    def _next(self) -> int:
+        number, self._seq = self._seq, self._seq + 1
+        return number
+
+    def _emit(self, data: dict[str, Any]) -> bytes:
+        return _frame({"type": data["type"], "sequence_number": self._next(),
+                       **{k: v for k, v in data.items() if k != "type"}})
+
+    def _keep(self, size: int) -> None:
+        self._kept += size
+        if self._kept > self.limit:
+            raise _Unreadable("upstream_too_large", "kept_bytes_over_limit")
 
     async def _read(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        """Upstream chunks under enforce's idle timeout and the deadline. Shadow gets no idle timeout."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + self.deadline if self.deadline is not None else None
+        idle = self.idle_timeout if self.enforce else None
         iterator = chunks.__aiter__()
         while True:
+            waits = [w for w in (idle, None if end is None else end - loop.time()) if w is not None]
+            limit = min(waits) if waits else None
             try:
-                if self.idle_timeout is None:
-                    chunk = await iterator.__anext__()
-                else:
-                    chunk = await asyncio.wait_for(iterator.__anext__(), self.idle_timeout)
+                chunk = await (iterator.__anext__() if limit is None else asyncio.wait_for(iterator.__anext__(),
+                                                                                           max(limit, 0)))
             except StopAsyncIteration:
                 return
             except asyncio.TimeoutError as e:
-                # A stalled upstream would hold the session lock for as long as it stalls.
-                raise _UpstreamFailed("upstream_idle_timeout") from e
+                past = end is not None and loop.time() >= end
+                raise _UpstreamFailed("upstream_deadline" if past else "upstream_idle_timeout") from e
             except Exception as e:  # noqa: BLE001
                 raise _UpstreamFailed("upstream_unreachable") from e
             yield chunk
 
-    async def _unreadable(self, error: _Unreadable, rest: bytes) -> AsyncIterator[bytes]:
-        """Enforce ends the stream with an error event. Shadow, which only observes, relays the rest as it comes."""
-        self._audit("upstream_error", cause=error.cause, detail=error.detail, mode=self._mode, stream=True,
-                    **self._fields)
-        if self.enforce:
-            self._finished = True
-            yield error_event(self._max_seq + 1)
-        else:
-            self._relay_raw = True
-            if rest:
-                yield rest
-
-    async def _event(self, raw: bytes) -> AsyncIterator[bytes]:
-        event = _parse(raw)
-        if event.data is None:
-            # Comments carry nothing a client reads, so enforce drops them. [DONE] passes as an end marker.
-            if not self.enforce or raw.strip().endswith(b"[DONE]"):
-                yield raw
-            return
-        if event.seq is not None:
-            self._max_seq = max(self._max_seq, event.seq)
-        if not self.enforce:
-            # Read before relaying, so a malformed item is relayed once, as part of the rest.
-            item = _item_of(event) if event.type == _DONE else None
-            yield raw
-            if item is not None and item_type(item) not in ("message", "reasoning"):
-                self._record(item)
-            if event.type in _LAST:
-                self._finished = True
-            return
-        if event.seq is None:
-            # Rebuilt and inserted events take their numbers from the upstream's, so every event needs one.
-            raise _Unreadable("upstream_unparseable", "event_without_sequence_number")
-        self._backlog.append(event)
-        self._retain(len(event.raw))
-        while not self._finished:
-            event = self._next()
-            if event is None:
-                return
-            self._retain(-len(event.raw))
-            async for out in self._handle(event):
-                yield out
-
-    def _next(self) -> _Event | None:
-        """The next event to handle: the oldest, or while a call waits, the oldest of that call's own events."""
-        if self._pending is None:
-            return self._backlog.pop(0) if self._backlog else None
-        for position, event in enumerate(self._backlog):
-            if event.index == self._pending.index and event.type != "response.output_item.added":
-                return self._backlog.pop(position)
-        return None
-
-    def _retain(self, size: int) -> None:
-        self._kept_bytes += size
-        if self._kept_bytes > self.limit:
-            raise _Unreadable("upstream_too_large", "kept_bytes_over_limit")
+    async def _relay(self, source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        """Shadow: every byte as it came, decisions queued, and a stop after the chunk holding the final event."""
+        frames, reading = _Frames(), True
+        try:
+            async for chunk in source:
+                yield chunk
+                final = False
+                if reading:
+                    try:
+                        for raw in frames.feed(chunk):
+                            data = _parse(raw)
+                            if data is None:
+                                continue
+                            item = data.get("item")
+                            if data["type"] == _DONE and isinstance(item, dict) and item_type(item) not in (
+                                    "message", "reasoning"):
+                                self._record(item)
+                            final = final or data["type"] in _TERMINAL or data["type"] == "error"
+                    except _Unreadable as e:
+                        # Shadow only observes, so it relays the rest ungated.
+                        self._audit("upstream_error", cause=e.cause, detail=e.detail, mode="shadow", stream=True,
+                                    **self._fields)
+                        reading = False
+                if final:
+                    return
+        except _UpstreamFailed as e:
+            # Nothing is injected. The relay ends where the upstream did.
+            self._audit("upstream_error", cause=e.cause, mode="shadow", stream=True, **self._fields)
 
     def _record(self, item: dict[str, Any]) -> None:
-        """Queue a shadow decision. One task takes them in order, so steps keep the session's order."""
-        if self._queue is None:
-            self._queue = asyncio.Queue()
+        if self.decide is None:
+            return
+        if len(self._queue) >= self.queue_cap:
+            self._audit("shadow_decisions_dropped", call_id=item.get("call_id"), queue_cap=self.queue_cap,
+                        **self._fields)
+            return
+        self._queue.append(item)
+        self._wake.set()
+        if self._recorder is None:
             self._recorder = asyncio.get_running_loop().create_task(self._recording())
-        self._queue.put_nowait(item)
 
     async def _recording(self) -> None:
-        assert self._queue is not None
-        while (item := await self._queue.get()) is not None:
-            await self._decided(item)
+        """One task takes shadow decisions in order, so steps keep the session's order."""
+        while True:
+            while self._queue:
+                await self._decided(self._queue.popleft())
+            if self._closing:
+                return
+            self._wake.clear()
+            await self._wake.wait()
 
-    async def _handle(self, event: _Event) -> AsyncIterator[bytes]:
-        kind = event.type
+    async def drain(self) -> None:
+        """Wait for every queued shadow decision. The caller holds the session lock until this returns."""
+        self._closing = True
+        self._wake.set()
+        if self._recorder is not None:
+            await asyncio.shield(self._recorder)
+
+    async def abort(self) -> None:
+        """Stop the recorder and wait for it to end, so nothing runs on after the lock is released."""
+        if self._recorder is not None and not self._recorder.done():
+            self._recorder.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._recorder
+
+    async def _decided(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            return await self.decide(item)
+        except Exception as e:  # noqa: BLE001
+            # Fail closed: a fault while gating removes the item in enforce, and shadow only records it.
+            self._audit("gateway_step_error", phase="stream_output", mode=self._mode,
+                        error=f"{type(e).__name__}: {e}", **self._fields)
+            return None
+
+    async def _event(self, raw: bytes) -> AsyncIterator[bytes]:
+        data = _parse(raw)
+        if data is None:
+            return
+        kind = data["type"]
         if kind in _LIFECYCLE:
-            yield self._with_output(event, terminal=False)
+            yield self._emit({"type": kind, "response": self._response(data, terminal=False)})
             return
         if kind == "error":
+            # The upstream's own failure, rebuilt from known fields. Nothing buffered goes out.
+            yield self._emit({"type": "error",
+                              "code": data.get("code") if isinstance(data.get("code"), str) else None,
+                              "message": data.get("message") if isinstance(data.get("message"), str) else UNREADABLE,
+                              "param": data.get("param") if isinstance(data.get("param"), str) else None})
             self._finished = True
-            yield self._emit_raw(event)
             return
         if kind in _TERMINAL:
-            for out in self._close(event.seq):
+            async for out in self._terminal(data):
                 yield out
-            yield self._with_output(event, terminal=True)
             self._finished = True
             return
-        index = event.index
-        if index is None:
-            raise _Unreadable("upstream_unparseable", "event_without_output_index")
-        if kind == "response.output_item.added":
-            for out in self._added(event, index):
+        index = _int(data.get("output_index"))
+        if index is None or not kind.startswith("response."):
+            raise _refuse("unknown_event_type")
+        if kind == _ADDED:
+            for out in self._added(data, index, len(raw)):
                 yield out
             return
         entry = self._items.get(index)
         if entry is None:
-            raise _Unreadable("upstream_unparseable", "output_index_unannounced")
-        if not _fits(entry.kind, kind):
-            raise self._mismatch()
-        if kind == _DONE:
-            final = _item_of(event)
-            if item_type(final) != entry.kind:
-                raise self._mismatch()
-            entry.final = final
-            self._retain(len(event.raw))
-        if entry.state == "dropped":
-            return
-        if entry.state == "released":
-            yield self._emit(event, entry)
-            return
-        if entry.kind == "reasoning":
-            entry.events.append(event)
-            self._retain(len(event.raw))
-            return
-        entry.numbers.append(event.seq)
-        if kind != _DONE:
-            return
-        self._pending = None
-        kept = await self._decided(entry.final)
-        if entry.kind != "function_call" or kept is None:
-            self._drop(entry)
-        else:
-            for out in self._keep(entry, kept):
-                yield out
-
-    def _mismatch(self) -> _Unreadable:
-        # An item announced as one type and finished as another was never judged as what it became.
-        return _Unreadable("upstream_unparseable", "item_type_mismatch")
-
-    def _added(self, event: _Event, index: int) -> Iterator[bytes]:
-        if index in self._items:
-            raise _Unreadable("upstream_unparseable", "output_index_repeated")
-        entry = _Item(index, item_type(_item_of(event)))
-        self._items[index] = entry
-        if entry.kind == "reasoning":
-            if self._turn_items:
-                self._close_turn()
-            self._run.append(entry)
-            entry.events.append(event)
-            self._retain(len(event.raw))
-            return
-        self._turn_items += 1
+            raise _refuse("output_index_unannounced")
+        if entry.done:
+            raise _refuse("event_after_done")
         if entry.kind == "message":
-            entry.events.append(event)
-            self._retain(len(event.raw))
-            yield from self._keep(entry, None)
+            yield self._message_event(entry, data, len(raw))
             return
-        entry.numbers.append(event.seq)
-        self._pending = entry
+        # Any other item is only counted. The final event's output is what the gateway builds it from.
+        self._keep(len(raw))
+        if kind == _DONE:
+            entry.done = True
 
-    async def _decided(self, item: dict[str, Any]) -> dict[str, Any] | None:
-        try:
-            kept = await self.decide(item)
-        except Exception as e:  # noqa: BLE001
-            # Fail closed: a fault while gating removes the call in enforce, and shadow only records it.
-            self._audit("gateway_step_error", phase="stream_output", mode=self._mode,
-                        error=f"{type(e).__name__}: {e}", **self._fields)
-            return None
-        return kept
+    def _added(self, data: dict[str, Any], index: int, size: int) -> Iterator[bytes]:
+        item = data.get("item")
+        if not isinstance(item, dict) or not isinstance(item.get("type"), str):
+            raise _refuse("event_without_item")
+        item_id = _text(item.get("id"), "item_without_id")
+        if index in self._items or item_id in self._ids:
+            raise _refuse("item_repeated")
+        self._keep(size)
+        entry = _Item(item_type(item), item_id)
+        self._items[index] = entry
+        self._ids.add(item_id)
+        if entry.kind == "message":
+            entry.client = len(self._emitted)
+            self._emitted.append({})
+            yield self._emit({"type": _ADDED, "output_index": entry.client,
+                              "item": {"type": "message", "id": item_id, "role": "assistant",
+                                       "status": "in_progress", "content": []}})
 
-    def _drop(self, entry: _Item) -> None:
-        """Remove an item: none of its events reach the client."""
-        self._retain(-sum(len(e.raw) for e in entry.events))
-        entry.state, entry.events, entry.numbers = "dropped", [], []
-        if entry.kind != "reasoning":
-            self._removed.append(entry.final or {})
+    def _message_event(self, entry: _Item, data: dict[str, Any], size: int) -> bytes:
+        kind = data["type"]
+        if kind not in _MESSAGE_EVENTS:
+            raise _refuse("event_outside_allowlist")
+        where = {"output_index": entry.client}
+        if kind == _DONE:
+            final = _message(data.get("item"))
+            if final["id"] != entry.item_id:
+                raise _refuse("item_type_mismatch")
+            self._keep(size)
+            entry.done, entry.final = True, final
+            self._emitted[entry.client] = final
+            return self._emit({"type": _DONE, **where, "item": final})
+        if data.get("item_id") != entry.item_id or _int(data.get("content_index")) is None:
+            raise _refuse("event_outside_allowlist")
+        where = {"item_id": entry.item_id, **where, "content_index": data["content_index"]}
+        if kind in ("response.content_part.added", "response.content_part.done"):
+            part = data.get("part")
+            if not isinstance(part, dict) or part.get("type") != "output_text":
+                raise _refuse("message_part_outside_allowlist")
+            text = _text(part.get("text", ""), "message_part_without_text")
+            return self._emit({"type": kind, **where,
+                               "part": {"type": "output_text", "text": text, "annotations": []}})
+        if kind == "response.output_text.delta":
+            return self._emit({"type": kind, **where, "delta": _text(data.get("delta"), "delta_without_text"),
+                               "logprobs": []})
+        return self._emit({"type": kind, **where, "text": _text(data.get("text"), "done_without_text"),
+                           "logprobs": []})
 
-    def _close_turn(self) -> None:
-        """A reasoning run belongs to the items after it up to the next run. When every one of them was removed, the
-        run goes too, since a reasoning model rejects resent reasoning whose turn is gone."""
-        if not self._turn_kept:
-            for entry in self._run:
-                self._drop(entry)
-        self._run, self._turn_items, self._turn_kept = [], 0, False
-
-    def _keep(self, entry: _Item, kept: dict[str, Any] | None) -> Iterator[bytes]:
-        self._turn_kept = True
-        for reasoning in self._run:
-            yield from self._release(reasoning)
-        self._run = []
-        if kept is not None:
-            if kept != entry.final and entry.final is not None:
-                self._replaced.append(entry.final)
-            entry.final = kept
-        yield from self._release(entry)
-
-    def _release(self, entry: _Item) -> Iterator[bytes]:
-        entry.state, entry.client = "released", len(self._released)
-        self._released.append(entry)
-        if entry.kind == "function_call":
-            yield from self._rebuilt(entry)
-            return
-        self._retain(-sum(len(e.raw) for e in entry.events))
-        events, entry.events = entry.events, []
-        for event in events:
-            yield self._emit(event, entry)
-
-    def _rebuilt(self, entry: _Item) -> Iterator[bytes]:
-        """A call's events, built from the decided item alone and numbered with the call's own sequence numbers in
-        order. Numbers must keep rising past what was sent and stay below anything waiting behind the call, so a call
-        with few usable numbers gets fewer events, and output_item.done always goes out."""
-        item = entry.final
-        arguments = item.get("arguments") if isinstance(item.get("arguments"), str) else ""
-        waiting = [e.seq for e in self._backlog if e.seq is not None]
-        ceiling = min(waiting) if waiting else None
-        usable = [n for n in sorted(entry.numbers)
-                  if n > self._last_emitted and (ceiling is None or n < ceiling)]
-        where = {"item_id": item.get("id"), "output_index": entry.client}
-        added = {"type": "response.output_item.added", "output_index": entry.client,
-                 "item": {**item, "status": "in_progress", "arguments": arguments}}
-        delta = {"type": "response.function_call_arguments.delta", **where, "delta": arguments}
-        done_arguments = {"type": "response.function_call_arguments.done", **where, "name": item.get("name"),
-                          "arguments": arguments}
-        done = {"type": _DONE, "output_index": entry.client, "item": item}
-        if len(usable) >= 4:
-            added["item"]["arguments"] = ""
-            plan = [added, delta, done_arguments, done]
-        elif len(usable) == 3:
-            plan = [added, done_arguments, done]
-        elif len(usable) == 2:
-            plan = [added, done]
-        else:
-            plan = [done]
-        numbers = usable[:len(plan)] if usable else [self._last_emitted + 1]
-        for data, number in zip(plan, numbers):
-            self._last_emitted = max(self._last_emitted, number)
-            yield _frame(data["type"], {**data, "sequence_number": number})
-
-    def _emit(self, event: _Event, entry: _Item) -> bytes:
-        self._last_emitted = max(self._last_emitted, event.seq)
-        if event.index == entry.client:
-            return event.raw
-        return _frame(event.type, {**event.data, "output_index": entry.client})
-
-    def _emit_raw(self, event: _Event) -> bytes:
-        self._last_emitted = max(self._last_emitted, event.seq)
-        return event.raw
-
-    def _close(self, terminal_seq: int | None) -> Iterator[bytes]:
-        """Before the terminal event: drop what never finished, settle the last reasoning run, and add the neutral line
-        when removals left nothing else (A.4). The neutral line goes before a trailing reasoning run, so its numbers
-        fit between the last event sent and that run."""
-        for entry in self._items.values():
-            if entry.state == "held" and entry.kind != "reasoning":
-                self._drop(entry)
-        if self._turn_items:
-            self._close_turn()
-        trailing, self._run = self._run, []
-        if self._removed and not any(e.kind in ("message", "function_call") for e in self._released):
-            bounds = [n for n in [terminal_seq, *(e.seq for r in trailing for e in r.events[:1])] if n is not None]
-            yield from self._neutral(min(bounds) if bounds else self._last_emitted + 4)
-        for reasoning in trailing:
-            yield from self._release(reasoning)
-
-    def _neutral(self, ceiling: int) -> Iterator[bytes]:
-        """The neutral line as one assistant message, numbered strictly between the last event sent and ceiling. Its
-        added item already holds an empty text part, so a delta can follow without a content_part event."""
-        item = neutral_message()
-        entry = _Item(-1, "message", final=item, state="released", client=len(self._released))
-        self._released.append(entry)
-        where = {"item_id": item["id"], "output_index": entry.client}
-        added = {"type": "response.output_item.added", "output_index": entry.client,
-                 "item": {**item, "status": "in_progress",
-                          "content": [{"type": "output_text", "text": "", "annotations": []}]}}
-        delta = {"type": "response.output_text.delta", **where, "content_index": 0, "delta": NEUTRAL_LINE,
-                 "logprobs": []}
-        done = {"type": _DONE, "output_index": entry.client, "item": item}
-        free = list(range(self._last_emitted + 1, ceiling))
-        plan = [added, delta, done] if len(free) >= 3 else [added, delta] if len(free) == 2 else [delta]
-        for data, number in zip(plan, free or [self._last_emitted + 1]):
-            self._last_emitted = number
-            yield _frame(data["type"], {**data, "sequence_number": number})
-
-    def _with_output(self, event: _Event, *, terminal: bool) -> bytes:
-        """A lifecycle or terminal event whose response lists exactly the items streamed so far."""
-        self._last_emitted = max(self._last_emitted, event.seq)
-        response = event.data.get("response")
+    def _response(self, data: dict[str, Any], *, terminal: bool) -> dict[str, Any]:
+        response = data.get("response")
         if not isinstance(response, dict):
-            if terminal:
-                raise _Unreadable("upstream_unparseable", "terminal_without_response")
-            return event.raw
-        edited = [e.final for e in self._released if e.final is not None]
-        upstream = response.get("output")
-        if terminal and isinstance(upstream, list):
-            extra = [i for i in upstream if i not in edited and i not in self._removed and i not in self._replaced]
-            if extra:
-                # The terminal event lists items the stream never carried. Only what was gated and streamed goes out.
-                self._audit("upstream_error", cause="upstream_unparseable", detail="terminal_lists_unstreamed_items",
-                            mode=self._mode, stream=True, **self._fields)
-        if upstream == edited:
-            return event.raw
-        return _frame(event.type, {**event.data, "response": {**response, "output": edited}})
+            raise _refuse("final_event_without_response" if terminal else "lifecycle_without_response")
+        rebuilt = {k: v for k, v in response.items() if k in _RESPONSE_FIELDS}
+        rebuilt["output"] = [item for item in self._emitted if item]
+        return rebuilt
+
+    async def _terminal(self, data: dict[str, Any]) -> AsyncIterator[bytes]:
+        """The upstream's final event: gate and build every item that isn't streamed text, then rebuild the event
+        with exactly the items sent. On incomplete or failed, nothing buffered goes out."""
+        response = data.get("response")
+        output = response.get("output") if isinstance(response, dict) else None
+        if not isinstance(output, list) or not all(isinstance(i, dict) and isinstance(i.get("type"), str)
+                                                   for i in output):
+            raise _refuse("final_event_without_output")
+        if any(e.kind == "message" and not e.done for e in self._items.values()):
+            raise _refuse("message_without_done")
+        streamed = {e.item_id for e in self._items.values() if e.kind == "message"}
+        # Positions in output order, each a built item, None for a removal, or _STREAMED.
+        marked: list[Any] = []
+        removed = False
+        for item in output:
+            if item["type"] == "message" and item.get("id") in streamed:
+                marked.append(_STREAMED)
+            elif data["type"] != "response.completed":
+                marked.append(None)
+                removed = True
+            elif item["type"] == "message":
+                marked.append(_message(item))
+            elif item["type"] == "reasoning":
+                marked.append(_reasoning(item))
+            else:
+                kept = await self._decided(item)
+                built = _call(kept) if isinstance(kept, dict) and kept.get("type") == "function_call" else None
+                marked.append(built)
+                removed = removed or built is None
+        if data["type"] != "response.completed" and any(e.kind != "message" for e in self._items.values()):
+            removed = True
+        dropped = _orphans(marked)
+        for position, item in enumerate(marked):
+            if position in dropped or item is None or item is _STREAMED:
+                continue
+            for out in self._built(item):
+                yield out
+        if removed and not any(i.get("type") in ("message", "function_call") for i in self._emitted if i):
+            for out in self._built(neutral_message()):
+                yield out
+        yield self._emit({"type": data["type"], "response": self._response(data, terminal=True)})
+
+    def _built(self, item: dict[str, Any]) -> Iterator[bytes]:
+        """An item's full event set, built from the item alone, so an accumulating client always has it whole."""
+        index = len(self._emitted)
+        self._emitted.append(item)
+        where = {"item_id": item["id"], "output_index": index}
+        if item["type"] == "function_call":
+            yield self._emit({"type": _ADDED, "output_index": index,
+                              "item": {**item, "status": "in_progress", "arguments": ""}})
+            yield self._emit({"type": "response.function_call_arguments.delta", **where, "delta": item["arguments"]})
+            yield self._emit({"type": "response.function_call_arguments.done", **where, "name": item["name"],
+                              "arguments": item["arguments"]})
+        elif item["type"] == "message":
+            yield self._emit({"type": _ADDED, "output_index": index,
+                              "item": {**item, "status": "in_progress", "content": []}})
+            for position, part in enumerate(item["content"]):
+                at = {**where, "content_index": position}
+                yield self._emit({"type": "response.content_part.added", **at,
+                                  "part": {"type": "output_text", "text": "", "annotations": []}})
+                yield self._emit({"type": "response.output_text.delta", **at, "delta": part["text"], "logprobs": []})
+                yield self._emit({"type": "response.output_text.done", **at, "text": part["text"], "logprobs": []})
+                yield self._emit({"type": "response.content_part.done", **at, "part": part})
+        else:
+            yield self._emit({"type": _ADDED, "output_index": index, "item": {**item, "summary": []}})
+        yield self._emit({"type": _DONE, "output_index": index, "item": item})
 
 
 class GovernedStream(StreamingResponse):

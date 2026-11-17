@@ -380,9 +380,12 @@ class Gateway:
             if failed is not None:
                 await upstream.aclose()
                 return failed
-            # Shadow only observes, so a fault before gating relays the stream ungated.
-            return GovernedStream(upstream.aiter_bytes(), upstream.aclose, status_code=upstream.status_code,
-                                  headers=headers)
+            # Shadow only observes, so a fault before gating relays the stream ungated, through the same shadow relay
+            # that stops after the final event, bounded by the stream deadline since no lock orders anything here.
+            relay = StreamEditor(enforce=False, limit=self.config.max_body_bytes, decide=None, audit=_audit,
+                                 deadline=self.config.stream_deadline_s)
+            return GovernedStream(relay.edit(upstream.aiter_bytes()), upstream.aclose,
+                                  status_code=upstream.status_code, headers=headers)
         except BaseException:
             await stack.aclose()
             await upstream.aclose()
@@ -393,7 +396,8 @@ class Gateway:
         editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes,
                               decide=functools.partial(self._gate_item, session), audit=_audit,
                               audit_fields={"session_id": session.session_id},
-                              idle_timeout=self.config.stream_idle_timeout_s)
+                              idle_timeout=self.config.stream_idle_timeout_s,
+                              deadline=self.config.stream_deadline_s if self.enforce else None)
         closed = False
 
         async def cleanup() -> None:
@@ -403,12 +407,18 @@ class Gateway:
             closed = True
             try:
                 await upstream.aclose()
-                # Shadow's queued decisions still run under the session lock, after the client has its last byte.
-                await editor.drain()
             finally:
-                await stack.aclose()
-                for pinned in owned:
-                    pinned.active -= 1
+                try:
+                    # Shadow's queued decisions still run under the session lock, after the client has its last byte.
+                    await editor.drain()
+                finally:
+                    try:
+                        # Whatever ended the drain, nothing records on after the lock is released.
+                        await editor.abort()
+                    finally:
+                        await stack.aclose()
+                        for pinned in owned:
+                            pinned.active -= 1
 
         return GovernedStream(editor.edit(upstream.aiter_bytes()), cleanup, status_code=upstream.status_code,
                               headers=headers)

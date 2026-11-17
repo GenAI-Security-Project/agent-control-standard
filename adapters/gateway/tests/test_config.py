@@ -73,3 +73,9 @@ def test_the_stream_idle_timeout_defaults_to_60_seconds_and_reads_seconds(tmp_pa
     assert config.stream_idle_timeout_s == 2.5
     with pytest.raises(ValueError, match="ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S"):
         GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S": "0"})
+
+
+def test_the_stream_deadline_defaults_to_600_seconds(tmp_path):
+    assert GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)}).stream_deadline_s == 600.0
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_STREAM_DEADLINE_S": "30"})
+    assert config.stream_deadline_s == 30.0

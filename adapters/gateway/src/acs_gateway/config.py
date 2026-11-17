@@ -19,6 +19,8 @@ DEFAULT_WORKERS = 16
 DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024
 # The longest a governed stream waits for the upstream's next chunk while it holds the session lock.
 DEFAULT_STREAM_IDLE_TIMEOUT_S = 60.0
+# The longest a whole governed stream may run in enforce, however steadily the upstream sends.
+DEFAULT_STREAM_DEADLINE_S = 600.0
 
 
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
@@ -67,6 +69,7 @@ class GatewayConfig:
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
     workers: int = DEFAULT_WORKERS
     stream_idle_timeout_s: float = DEFAULT_STREAM_IDLE_TIMEOUT_S
+    stream_deadline_s: float = DEFAULT_STREAM_DEADLINE_S
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -99,6 +102,7 @@ class GatewayConfig:
             workers=_positive_int(env, "ACS_GATEWAY_WORKERS", DEFAULT_WORKERS),
             stream_idle_timeout_s=_positive_number(env, "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S",
                                                    DEFAULT_STREAM_IDLE_TIMEOUT_S),
+            stream_deadline_s=_positive_number(env, "ACS_GATEWAY_STREAM_DEADLINE_S", DEFAULT_STREAM_DEADLINE_S),
         )
 
 
