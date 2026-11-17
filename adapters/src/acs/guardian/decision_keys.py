@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from acs.client import KeyDocumentError, ResponseKeys, check_secret_file_perms, load_response_keys
+from acs.client import KeyDocumentError, ResponseKeys, load_response_keys, read_secret_file
 from acs.core import MLDSA65SigningKey
 
 SIGNING_KEY_FILE_ENV = "ACS_GUARDIAN_SIGNING_KEY_FILE"
@@ -94,9 +94,8 @@ def write_key_files(directory: Path, *, key_id: str, guardian_id: str, now: date
 def load_signing_key(path: str, key_id: str) -> MLDSA65SigningKey:
     """The signing key in an owner-only, non-symlink seed file. Every refusal names ACS_GUARDIAN_SIGNING_KEY_FILE."""
     try:
-        check_secret_file_perms(path, setting=SIGNING_KEY_FILE_ENV)
-        with open(path, "rb") as f:
-            raw = f.read(129)
+        # Opened without following a symlink and checked through that descriptor (review R-M2).
+        raw = read_secret_file(path, setting=SIGNING_KEY_FILE_ENV, max_bytes=65)
     except (OSError, RuntimeError) as exc:
         raise DecisionKeyError(f"{SIGNING_KEY_FILE_ENV} {path!r} can't be used: {exc}") from exc
     try:

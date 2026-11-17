@@ -32,18 +32,18 @@ _IS_WINDOWS = os.name == "nt"
 _ALLOW_UNCHECKED_ENV = "ACS_ALLOW_UNCHECKED_KEY_PERMS"
 
 
-def check_secret_file_perms(path: str, *, setting: str = "ACS_HMAC_SECRET_FILE") -> None:
-    """Refuse a secret file that is a symlink, readable by group or other, or owned by another user.
-
-    setting names the configuration the message blames, so the Guardian's ML-DSA-65 key file
-    meets the same rule under its own name (issue #576).
-    """
+def _check_secret_file_perms(path: str) -> None:
     # A symlink is refused: its target can change behind the visible path.
     if os.path.islink(path):
         raise SecretFilePermissionsError(
-            f"{setting} {path!r} is a symlink; refusing to follow")
+            f"ACS_HMAC_SECRET_FILE {path!r} is a symlink; refusing to follow")
     st = os.stat(path)
-    mode = stat.S_IMODE(st.st_mode)
+    _refuse_loose_secret(path, st.st_mode, st.st_uid, "ACS_HMAC_SECRET_FILE")
+
+
+def _refuse_loose_secret(path: str, st_mode: int, st_uid: int, setting: str) -> None:
+    """The owner-only rule for a secret file, given its mode and owner, with setting naming it in every message."""
+    mode = stat.S_IMODE(st_mode)
     if _IS_WINDOWS:
         # Refuse by default: an unchecked secret is an unknown quantity, not a permitted one.
         # Starting anyway takes an explicit opt-in and says so on stderr, which is where the
@@ -66,14 +66,42 @@ def check_secret_file_perms(path: str, *, setting: str = "ACS_HMAC_SECRET_FILE")
             f"{setting} {path!r} mode {oct(mode)} is too permissive; "
             f"must be 0600 or 0400 (no group/other access). "
             f"Fix: chmod 600 {path}")
-    if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+    if hasattr(os, "geteuid") and st_uid != os.geteuid():
         raise SecretFilePermissionsError(
-            f"{setting} {path!r} owned by uid {st.st_uid}, "
+            f"{setting} {path!r} owned by uid {st_uid}, "
             f"adapter is running as uid {os.geteuid()}; refusing")
 
 
-def _check_secret_file_perms(path: str) -> None:
-    check_secret_file_perms(path)
+def read_secret_file(path: str, *, setting: str, max_bytes: int) -> bytes:
+    """An owner-only secret file's bytes, checked through the descriptor that reads them (issue #576, review R-M2).
+
+    The file is opened without following a symlink, and fstat on that descriptor decides, so nothing can swap the
+    file between the check and the read. The rules are the ones ACS_HMAC_SECRET_FILE meets, named by setting.
+    Raises SecretFilePermissionsError for a symlink, a non-regular file, loose permissions, another owner, or more
+    than max_bytes, and OSError when the file can't be opened.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    symlink = SecretFilePermissionsError(f"{setting} {path!r} is a symlink; refusing to follow")
+    if not nofollow and os.path.islink(path):
+        raise symlink
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow)
+    except OSError:
+        if os.path.islink(path):
+            raise symlink from None
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise SecretFilePermissionsError(f"{setting} {path!r} is not a regular file")
+        _refuse_loose_secret(path, st.st_mode, st.st_uid, setting)
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read(max_bytes + 1)
+    finally:
+        os.close(fd)
+    if len(data) > max_bytes:
+        raise SecretFilePermissionsError(f"{setting} {path!r} is larger than {max_bytes} bytes")
+    return data
 
 
 def load_hmac_secret() -> bytes:
