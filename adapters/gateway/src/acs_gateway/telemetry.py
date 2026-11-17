@@ -10,12 +10,13 @@ exporting because the gateway does.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import logging
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
@@ -81,6 +82,21 @@ def session_root_span_id(session_id: str) -> int:
     return int.from_bytes(digest[:8], "big") or 1
 
 
+def _never_raises(method: Callable[..., None]) -> Callable[..., None]:
+    """A fault in making a span is logged once per Tracing and swallowed, so tracing never changes a request.
+
+    Without this, an exception from a step span would reach the gating code, which answers 500 in enforce.
+    """
+    @functools.wraps(method)
+    def guarded(self: Tracing, *args: Any, **kwargs: Any) -> None:
+        try:
+            method(self, *args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            self._fault(e)
+
+    return guarded
+
+
 class Tracing:
     """The gateway's spans, or nothing when provider is None."""
 
@@ -88,6 +104,7 @@ class Tracing:
         self.provider = provider
         self.mode = mode
         self._tracer = provider.get_tracer("acs_gateway") if provider is not None else None
+        self._faulted = False
 
     @classmethod
     def from_config(cls, config: GatewayConfig) -> Tracing:
@@ -103,6 +120,12 @@ class Tracing:
         """Wall clock nanoseconds for a span's start, or 0 when off, so off reads no clock."""
         return time.time_ns() if self._tracer is not None else 0
 
+    def _fault(self, error: Exception) -> None:
+        if not self._faulted:
+            self._faulted = True
+            _LOG.warning("acs-gateway: a span could not be recorded (%s), and requests go on unchanged",
+                         type(error).__name__)
+
     def shutdown(self) -> None:
         if self.provider is not None:
             self.provider.shutdown()
@@ -117,6 +140,7 @@ class Tracing:
                                  trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED))
         return trace.set_span_in_context(trace.NonRecordingSpan(root))
 
+    @_never_raises
     def session(self, session_id: str, epoch: int, request_id: str | None, handshake: Any, started: int) -> None:
         """The acs.session span for one opening: the handshake and steps/sessionStart, rooting the session's trace.
 
@@ -142,6 +166,7 @@ class Tracing:
         _session_outcome(span, request_id, handshake)
         span.end()
 
+    @_never_raises
     def step(self, session_id: str, method: str, payload: dict[str, Any], result: Any, started: int,
              shadow: bool) -> None:
         """The step span for one Guardian request, with its decision or its decision failure as an event.
@@ -181,6 +206,7 @@ class Tracing:
             _failure_event(span, result.failure_class, result.cause)
         span.end()
 
+    @_never_raises
     def ask_resolved(self, session_id: str, fields: dict[str, Any]) -> None:
         """An acs.lab.ask span covering one ASK's hold, back-dated by its wait, carrying its resolution as an event.
 
@@ -217,7 +243,12 @@ class Tracing:
         if session_id is not None:
             attributes["acs.session.id"] = session_id
         name = f"{MODEL_OPERATION} {model}" if isinstance(model, str) and model else MODEL_OPERATION
-        span = self._tracer.start_span(name, context=self._parent(session_id), attributes=attributes)
+        try:
+            span = self._tracer.start_span(name, context=self._parent(session_id), attributes=attributes)
+        except Exception as e:  # noqa: BLE001
+            self._fault(e)
+            yield _OFF_CALL
+            return
         token = _MODEL_SPAN.set(span)
         try:
             yield ModelCall(span)

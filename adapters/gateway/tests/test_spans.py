@@ -302,3 +302,25 @@ def test_a_replay_miss_outside_a_model_call_does_nothing():
     from acs_gateway.telemetry import replay_miss
 
     replay_miss(cause="no_recording", step=0, branch="", stream=False)
+
+
+def test_a_fault_in_span_making_never_touches_a_request(gateway, harness_guardian, upstream, audit, caplog):
+    import logging
+
+    from acs_gateway.telemetry import Tracing, new_provider
+
+    class Broken:
+        def start_span(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("tracer broke")
+
+    reply = response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1"))
+    upstream.reply(reply)
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian())
+    tracing = Tracing(new_provider(), "enforce")
+    tracing._tracer = Broken()
+    client.app.state.gateway.tracing = tracing
+    with caplog.at_level(logging.DEBUG, logger="acs_gateway.telemetry"):
+        response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200 and response.json() == reply
+    assert not [e for e in audit() if e["acs_audit_event"] == "gateway_step_error"]
+    assert len([r for r in caplog.records if r.name == "acs_gateway.telemetry"]) == 1
