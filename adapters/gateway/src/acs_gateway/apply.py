@@ -130,6 +130,8 @@ class Applied:
     item: dict[str, Any] | None
     # Why the step denied without the Guardian saying deny: a decision failure or a MODIFY the gateway can't apply.
     cause: str | None = None
+    # A modified call's merged arguments, so the caller can take their canonical form without parsing them again.
+    arguments: dict[str, Any] | None = None
 
 
 def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
@@ -188,7 +190,8 @@ def apply_call(item: dict[str, Any], arguments: dict[str, Any], result: StepResu
     overrides = modifications.get("parameter_overrides")
     if set(modifications) - {"parameter_overrides"} or not isinstance(overrides, dict):
         return Applied("deny", None, "modify_unsupported")
-    return Applied("modify", {**item, "arguments": json.dumps({**arguments, **overrides})})
+    merged = {**arguments, **overrides}
+    return Applied("modify", {**item, "arguments": json.dumps(merged)}, arguments=merged)
 
 
 def _unescape(token: str) -> str:

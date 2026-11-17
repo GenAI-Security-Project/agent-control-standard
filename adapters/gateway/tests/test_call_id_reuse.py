@@ -220,3 +220,35 @@ def test_reserialized_non_object_arguments_are_not_flagged(gateway, guardian, up
     rebuilt = {"type": "function_call", "name": "get_vendor_details", "call_id": "call_1", "arguments": "[1]"}
     client.post("/v1/responses", json=finbot_request(rebuilt))
     assert events(audit, "call_id_reused") == []
+
+
+def test_a_modified_call_is_not_parsed_again_after_its_rewrite(gateway, harness_guardian, upstream, monkeypatch):
+    import json as json_module
+
+    import acs_gateway.strict as strict_module
+
+    rewritten = json_module.dumps({"to": "ops@ns1.finbot", "body": "hi"})
+    parsed = []
+    original = strict_module.json.loads
+
+    def counting(text, *args, **kwargs):
+        if text == rewritten:
+            parsed.append(text)
+        return original(text, *args, **kwargs)
+
+    monkeypatch.setattr(strict_module.json, "loads", counting)
+    upstream.reply(response_body(call_item("override_tool", {"to": "x@evil.example", "body": "hi"}, "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian()).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["arguments"] == rewritten
+    assert parsed == []
+
+
+def test_canonical_is_built_on_canonical_value(monkeypatch):
+    import acs_gateway.sessions as sessions_module
+
+    seen = []
+    original = sessions_module.canonical_value
+    monkeypatch.setattr(sessions_module, "canonical_value", lambda value, raw: seen.append(raw) or original(value, raw))
+    assert sessions_module.canonical('{"b": 1, "a": 2}') == '{"a":2,"b":1}'
+    assert seen == ['{"b": 1, "a": 2}']

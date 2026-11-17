@@ -629,8 +629,10 @@ class Gateway:
             return CachedOutcome("delivered", name, item, result.request_id, first, raw, first_arguments)
         if applied.item is None:
             return CachedOutcome("removed", name, None, result.request_id, first, raw)
-        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw,
-                             canonical(applied.item.get("arguments")))
+        # The merged arguments are on hand, so their canonical form comes without parsing the rewrite again.
+        rewritten = (canonical_value(applied.arguments, applied.item.get("arguments")) if applied.arguments is not None
+                     else canonical(applied.item.get("arguments")))
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw, rewritten)
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
