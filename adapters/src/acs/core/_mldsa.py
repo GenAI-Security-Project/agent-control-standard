@@ -27,7 +27,7 @@ except ImportError as exc:
         "can't be installed together (see adapters/README.md).") from exc
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
-from acs.core._envelope import response_matches_request, same_json_rpc_id
+from acs.core._envelope import response_matches_request
 from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
 
 ML_DSA_MODE = "pure"
@@ -137,24 +137,6 @@ def _verify_ml_dsa_65(public_key: mldsa.MLDSA65PublicKey, signature: bytes, mess
 
 _VERIFIERS = {ML_DSA_65: _verify_ml_dsa_65}
 
-# The ClientHello's method, as handshake.json and request-envelope.json name it.
-HANDSHAKE_METHOD = "handshake/hello"
-
-
-def _answers(response: dict, request: dict) -> bool:
-    """Whether the response answers this request (D-029), from fields the signature covers.
-
-    The rule follows the request this caller sent, never the shape of the response. For the
-    handshake, the ServerHello echoes nothing from the ClientHello but its JSON-RPC id, so
-    the id is the whole binding, a limit issue #13 tracks. Every other request goes through
-    response_matches_request, which requires the same id and, for a result, the same
-    request_id, so a ServerHello or a result without request_id never answers a step.
-    """
-    if request.get("method") == HANDSHAKE_METHOD:
-        return same_json_rpc_id(response.get("id"), request.get("id"))
-    return response_matches_request(request, response)
-
-
 def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: str, request: dict) -> bool:
     """Whether the response's signature verifies under expected_key_id, as the answer to request.
 
@@ -187,7 +169,7 @@ def verify_with_keyring(envelope: dict, keyring: Keyring, *, expected_key_id: st
         return False
     if sig.get("key_id") != expected_key_id:
         return False
-    if not _answers(envelope, request):
+    if not response_matches_request(request, envelope):
         return False
     key = keyring.resolve(expected_key_id)
     if key is None:

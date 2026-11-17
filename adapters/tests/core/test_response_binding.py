@@ -44,5 +44,49 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
         self.assertTrue(response_matches_request(_request("1", request_id="r-1"), _response("1", request_id="r-1")))
 
 
+SERVER_HELLO = {"negotiated_version": "0.1.0", "methods_evaluated": [], "selected_transport": "http",
+                "timeout_config": {"default_ms": 5000}}
+
+
+def _client_hello(json_rpc_id: object = "hello-1") -> dict:
+    return {"jsonrpc": "2.0", "id": json_rpc_id, "method": "handshake/hello",
+            "params": {"acs_version": "0.1.0", "request_id": "hello-request-1"}}
+
+
+class OneHandshakeAwareRule(unittest.TestCase):
+    """Review findings CR6-5, CR6-6, R6-M1: one rule, keyed on the request, for both paths."""
+
+    def test_the_handshake_method_is_defined_once_in_core(self) -> None:
+        from acs.core import HANDSHAKE_METHOD
+        self.assertEqual(HANDSHAKE_METHOD, "handshake/hello")
+
+    def test_a_server_hello_answers_its_client_hello_by_id(self) -> None:
+        self.assertTrue(response_matches_request(_client_hello(), {"jsonrpc": "2.0", "id": "hello-1",
+                                                                   "result": dict(SERVER_HELLO)}))
+        self.assertFalse(response_matches_request(_client_hello(), {"jsonrpc": "2.0", "id": "hello-2",
+                                                                    "result": dict(SERVER_HELLO)}))
+
+    def test_an_error_answers_a_client_hello_by_id(self) -> None:
+        error = {"jsonrpc": "2.0", "id": "hello-1", "error": {"code": -32000, "message": "refused"}}
+        self.assertTrue(response_matches_request(_client_hello(), error))
+
+    def test_a_step_decision_never_answers_a_client_hello(self) -> None:
+        # R6-M1: a result carrying request_id is a step answer, even with a matching id.
+        decision = {"jsonrpc": "2.0", "id": "hello-1",
+                    "result": {"request_id": "hello-request-1", "decision": "allow"}}
+        self.assertFalse(response_matches_request(_client_hello(), decision))
+
+    def test_a_result_that_is_not_an_object_answers_nothing(self) -> None:
+        # R6-M4, CR6-1: False, never an AttributeError.
+        for request in (_request("1"), _client_hello("1")):
+            for result in ("allow", ["allow"], 7):
+                with self.subTest(method=request["method"], result=result):
+                    self.assertFalse(response_matches_request(request, {"jsonrpc": "2.0", "id": "1", "result": result}))
+
+    def test_a_server_hello_never_answers_a_step_request(self) -> None:
+        self.assertFalse(response_matches_request(_request("1"), {"jsonrpc": "2.0", "id": "1",
+                                                                  "result": dict(SERVER_HELLO)}))
+
+
 if __name__ == "__main__":
     unittest.main()

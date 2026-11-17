@@ -9,6 +9,7 @@ _EXPORTS = {
     "Decision": "_decision",
     "GUARDIAN_ERROR_CAUSE": "_errors",
     "GUARDIAN_REFUSAL_CODES": "_errors",
+    "HANDSHAKE_METHOD": "_envelope",
     "KNOWN_DECISIONS": "_decision",
     "MAX_REQUEST_BODY_BYTES": "_envelope",
     "SESSION_REFUSAL_CODES": "_errors",

@@ -50,16 +50,32 @@ def same_json_rpc_id(a: object, b: object) -> bool:
     return a is None and b is None
 
 
+# The ClientHello's method, as handshake.json and request-envelope.json name it.
+HANDSHAKE_METHOD = "handshake/hello"
+
+
 def response_matches_request(request: dict, response: dict) -> bool:
-    """Same JSON-RPC id and, for a result, the same request_id, so a signed response cannot be replayed onto another call."""
+    """Whether the response answers this request, so a signed response can't be replayed onto another call (D-029).
+
+    The rule follows the request, never the response's shape. Every response needs the
+    request's JSON-RPC id. An error is bound by the id alone. For the handshake, a ServerHello
+    echoes nothing else from the ClientHello, so its result must carry no request_id, which
+    keeps a step decision from answering a ClientHello. Issue #13 tracks binding the
+    handshake to the traffic after it. For every other request, a result must carry the
+    request's request_id. A result that isn't an object answers nothing.
+    """
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return False
     result = response.get("result")
-    if result is not None:
-        want = (request.get("params") or {}).get("request_id")
-        if not same_json_rpc_id(result.get("request_id"), want):
-            return False
-    return True
+    if result is None:
+        return True
+    if not isinstance(result, dict):
+        return False
+    if request.get("method") == HANDSHAKE_METHOD:
+        return "request_id" not in result
+    params = request.get("params")
+    want = params.get("request_id") if isinstance(params, dict) else None
+    return same_json_rpc_id(result.get("request_id"), want)
 
 
 def iso8601_now() -> str:

@@ -419,6 +419,19 @@ class RequestBinding(unittest.TestCase):
         self.assertFalse(self._verify(server_hello, hello))
         self.assertTrue(self._verify(server_hello, {**hello, "id": True}))
 
+    def test_a_step_decision_against_a_handshake_request_fails(self) -> None:
+        # Review finding R6-M1: a matching id isn't enough when the result carries request_id.
+        hello = {"jsonrpc": "2.0", "id": DECISION_ID, "method": "handshake/hello",
+                 "params": {"acs_version": "0.1.0", "request_id": DECISION_ID}}
+        self.assertFalse(self._verify(self.signed, hello))
+
+    def test_an_error_that_also_carries_a_string_result_returns_false(self) -> None:
+        # Review findings R6-M4, CR6-1: False, never an exception.
+        odd = {"jsonrpc": "2.0", "id": DECISION_ID, "error": {"code": -32000, "message": "refused"},
+               "result": "allow"}
+        sign_with_signing_key(odd, _signer())
+        self.assertFalse(self._verify(odd, _request()))
+
     def test_a_step_result_without_request_id_fails(self) -> None:
         # Review finding R5-I1: only the handshake binds on the id alone. A step result must carry
         # request_id, as the default path's classify_response already requires.
