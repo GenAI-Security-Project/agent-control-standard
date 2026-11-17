@@ -85,6 +85,7 @@ INVALID = {
         "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}},
     "a whole-value redaction that skips an output": {
         "decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": "/outputs/1/value"}]}},
+    "an empty redactions list": {"decision": "modify", "reasoning": "r", "modifications": {"redactions": []}},
     "parameter_overrides on a result": {"decision": "modify", "reasoning": "r",
                                         "modifications": {"parameter_overrides": {"amount": 1}}},
     "reason_codes that are not strings": {"decision": "deny", "reasoning": "r", "reason_codes": [1]},
