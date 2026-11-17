@@ -279,3 +279,14 @@ def test_a_timed_out_step_writes_nothing_after_the_request_returns(gateway, guar
     assert transcript_lines(tmp_path) == at_return
     methods = [(line["dir"], (line["envelope"] or {}).get("method")) for line in at_return]
     assert methods[-2:] == [("req", "steps/toolCallRequest"), ("resp", None)]
+
+
+def test_one_gateway_can_start_twice(gateway, guardian, upstream):
+    from starlette.testclient import TestClient
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.__exit__(None, None, None)
+    with TestClient(client.app) as again:
+        upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+        assert again.post("/v1/responses", json=finbot_request()).json()["output"][0]["call_id"] == "call_1"
+    client.__enter__()

@@ -96,22 +96,24 @@ class Gateway:
         self.enforce = config.mode == "enforce"
         self.sessions = SessionMap(config.max_sessions, on_evict=self._evicted)
         self.guardian = GuardianClient(config, Transcript(config.transcript_dir)) if self.governed else None
-        # acs.client blocks on sockets, so Guardian calls run here, on workers of their own, never the default pool.
-        self.executor = ThreadPoolExecutor(max_workers=config.workers, thread_name_prefix="acs-gateway")
+        self.executor: ThreadPoolExecutor | None = None
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
-        if self.guardian is not None:
-            check_client_state_dirs(os.environ)
-            await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.wait_ready)
-        # The model may think for minutes, so only connecting is bounded here and the client's own timeout governs.
+        # acs.client blocks on sockets, so Guardian calls run on workers of their own, never the default pool. Each
+        # startup gets a fresh executor, since shutdown ends the last one.
+        executor = self.executor = ThreadPoolExecutor(max_workers=self.config.workers, thread_name_prefix="acs-gateway")
         try:
+            if self.guardian is not None:
+                check_client_state_dirs(os.environ)
+                await asyncio.get_running_loop().run_in_executor(executor, self.guardian.wait_ready)
+            # The model may think for minutes, so only connecting is bounded and the client's own timeout governs.
             async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0)) as http:
                 self.http = http
                 yield
         finally:
             self.http = None
-            self.executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _evicted(self, session: Session) -> None:
         _audit("session_evicted", session_id=session.session_id, epoch=session.epoch,
