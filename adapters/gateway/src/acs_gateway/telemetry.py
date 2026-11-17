@@ -57,6 +57,8 @@ _ASK_FIELDS = ("outcome", "approver", "ask_request_id", "request_id", "decision"
 _REPLAY_FIELDS = ("cause", "step", "branch", "stream", "scenario")
 SESSION_OPERATION = "invoke_agent"
 TOOL_OPERATION = "execute_tool"
+# A custom operation name, which the GenAI conventions allow when no predefined one applies.
+ASK_OPERATION = "acs.lab.ask_hold"
 MODEL_OPERATION = "chat"
 PROVIDER_NAME = "openai"
 # The model call span in progress, so a replay miss inside the upstream transport finds it without importing anything.
@@ -152,6 +154,26 @@ class Tracing:
         if self.provider is not None:
             self.provider.shutdown()
 
+    def close(self, timeout_s: float) -> None:
+        """Flush and shut down on a daemon thread, returning after timeout_s at most.
+
+        A hung exporter keeps only that daemon thread, which never holds the process's exit.
+        """
+        if self.provider is None:
+            return
+        done = threading.Event()
+
+        def stop() -> None:
+            try:
+                self.provider.shutdown()
+            except Exception as e:  # noqa: BLE001
+                self._fault(e)
+            finally:
+                done.set()
+
+        threading.Thread(target=stop, name="acs-gateway-tracing-close", daemon=True).start()
+        done.wait(timeout_s)
+
     def _parent(self, session_id: str | None) -> Any:
         """The context whose parent is the session's acs.session span, or None for a span of no session."""
         if session_id is None:
@@ -193,17 +215,20 @@ class Tracing:
              shadow: bool) -> None:
         """The step span for one Guardian request, with its decision or its decision failure as an event.
 
-        Recorded once the step settles, with its real start time. A step that never claimed a request_id never reached
-        the Guardian, so it has no span (the mapping keys every step span on acs.request_id). Only the tool's name and
-        version, the result's exit status and its request_id_ref come from the payload, never arguments or output.
+        Recorded once the step settles, with its real start time. acs.request_id names only a request the Guardian was
+        sent, so a step that never went out (an unsignable envelope, a cancelled step) has its span and failure event
+        but no request_id a reader could join to a Guardian record. Only the tool's name and version, the result's exit
+        status and its request_id_ref come from the payload, never arguments or output.
         """
         name = STEP_SPANS.get(method)
-        if self._tracer is None or name is None or result.request_id is None:
+        if self._tracer is None or name is None:
             return
         tool = payload.get("tool") if isinstance(payload.get("tool"), dict) else {}
-        attributes: dict[str, Any] = {"acs.session.id": session_id, "acs.request_id": result.request_id,
-                                      "gen_ai.operation.name": TOOL_OPERATION, "acs.lab.mode": self.mode,
+        attributes: dict[str, Any] = {"acs.session.id": session_id, "gen_ai.operation.name": TOOL_OPERATION,
+                                      "acs.lab.mode": self.mode,
                                       "gen_ai.tool.name": tool.get("name") if isinstance(tool.get("name"), str) else ""}
+        if result.sent and result.request_id is not None:
+            attributes["acs.request_id"] = result.request_id
         if isinstance(tool.get("version"), str):
             attributes["acs.tool.version"] = tool["version"]
         if method == "steps/toolCallResult":
@@ -240,8 +265,9 @@ class Tracing:
         waited = fields.get("waited_s")
         start = end - int(waited * 1e9) if isinstance(waited, (int, float)) and waited >= 0 else end
         tool = fields.get("tool")
-        attributes = {"acs.session.id": session_id, "gen_ai.operation.name": TOOL_OPERATION,
-                      "gen_ai.tool.name": tool if isinstance(tool, str) else "", "acs.lab.mode": self.mode}
+        # Not execute_tool: the call already has its step spans, and a GenAI backend would count it twice.
+        attributes = {"acs.session.id": session_id, "gen_ai.operation.name": ASK_OPERATION,
+                      "acs.lab.ask.tool": tool if isinstance(tool, str) else "", "acs.lab.mode": self.mode}
         span = self._tracer.start_span(ASK_SPAN, context=self._parent(session_id), start_time=start,
                                        attributes=attributes)
         span.add_event(ASK_EVENT, _scalars("acs.lab.ask", fields, _ASK_FIELDS), timestamp=end)
@@ -275,28 +301,42 @@ class Tracing:
             return
         token = _MODEL_SPAN.set(span)
         try:
-            yield ModelCall(span)
+            yield ModelCall(span, self)
         except BaseException as e:
-            from opentelemetry.trace import Status, StatusCode
-
-            # The error's type only. Its message can quote a URL or a body, which never goes on a span.
-            span.set_attribute("error.type", type(e).__name__)
-            span.set_status(Status(StatusCode.ERROR))
+            self._guard(_mark_error, span, type(e).__name__)
             raise
         finally:
             _MODEL_SPAN.reset(token)
-            span.end()
+            # A fault ending the span would otherwise replace the caller's return value, an upstream response
+            # nobody would then close.
+            self._guard(span.end)
+
+    def _guard(self, operation: Callable[..., Any], *args: Any) -> None:
+        """Run one span operation, logging a fault once and never raising it."""
+        try:
+            operation(*args)
+        except Exception as e:  # noqa: BLE001
+            self._fault(e)
+
+
+def _mark_error(span: Any, error_type: str) -> None:
+    from opentelemetry.trace import Status, StatusCode
+
+    # The error's type only. Its message can quote a URL or a body, which never goes on a span.
+    span.set_attribute("error.type", error_type)
+    span.set_status(Status(StatusCode.ERROR))
 
 
 class ModelCall:
-    """The model call span a caller marks with the upstream's status."""
+    """The model call span a caller marks with the upstream's status. Every mark is guarded like the span itself."""
 
-    def __init__(self, span: Any) -> None:
+    def __init__(self, span: Any, tracing: Tracing | None = None) -> None:
         self._span = span
+        self._tracing = tracing
 
     def status(self, code: int) -> None:
-        if self._span is not None:
-            self._span.set_attribute("http.response.status_code", code)
+        if self._span is not None and self._tracing is not None:
+            self._tracing._guard(self._span.set_attribute, "http.response.status_code", code)
 
 
 _OFF_CALL = ModelCall(None)
@@ -310,7 +350,9 @@ def replay_miss(**fields: Any) -> None:
     """
     span = _MODEL_SPAN.get()
     if span is not None:
-        span.add_event(REPLAY_MISS_EVENT, _scalars("acs.lab.replay", fields, _REPLAY_FIELDS))
+        # The transport's answer matters more than the event, so a fault here is dropped.
+        with contextlib.suppress(Exception):
+            span.add_event(REPLAY_MISS_EVENT, _scalars("acs.lab.replay", fields, _REPLAY_FIELDS))
 
 
 def _scalars(prefix: str, fields: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:

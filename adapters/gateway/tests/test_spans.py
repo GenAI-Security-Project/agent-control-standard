@@ -254,8 +254,7 @@ def test_an_ask_resolution_is_a_span_event(gateway, harness_guardian, upstream, 
     resolved = next(e for e in audit() if e["acs_audit_event"] == "ask_resolved")
     (hold,) = named(spans(), "acs.lab.ask")
     assert hold.context.trace_id == uuid.UUID(resolved["session_id"]).int
-    assert hold.attributes["gen_ai.operation.name"] == "execute_tool"
-    assert hold.attributes["gen_ai.tool.name"] == "ask_tool"
+    assert hold.attributes["gen_ai.operation.name"] == "acs.lab.ask_hold"
     (event,) = hold.events
     assert event.name == "acs.lab.ask_resolved"
     assert event.attributes["acs.lab.ask.outcome"] == outcome
@@ -324,3 +323,174 @@ def test_a_fault_in_span_making_never_touches_a_request(gateway, harness_guardia
     assert response.status_code == 200 and response.json() == reply
     assert not [e for e in audit() if e["acs_audit_event"] == "gateway_step_error"]
     assert len([r for r in caplog.records if r.name == "acs_gateway.telemetry"]) == 1
+
+
+def _app(upstream: Any, **env: str) -> Any:
+    from acs_gateway.app import create_app
+    from acs_gateway.config import GatewayConfig
+
+    base = {"ACS_UPSTREAM_URL": upstream.url, "ACS_GATEWAY_STATE_DIR": os.environ["ACS_GATEWAY_STATE_DIR"]}
+    return create_app(GatewayConfig.from_env({**base, **env}))
+
+
+def test_shutdown_flushes_queued_spans(upstream):
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from starlette.testclient import TestClient
+
+    from acs_gateway.telemetry import Tracing, new_provider
+
+    app = _app(upstream)
+    exporter = InMemorySpanExporter()
+    provider = new_provider()
+    # A long delay, so only the shutdown's flush can export the span.
+    provider.add_span_processor(BatchSpanProcessor(exporter, schedule_delay_millis=600_000))
+    app.state.gateway.tracing = Tracing(provider, "off")
+    with TestClient(app) as client:
+        assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+        assert exporter.get_finished_spans() == ()
+    assert [s.name for s in exporter.get_finished_spans()] == ["chat gpt-5-nano"]
+
+
+def test_a_hung_exporter_delays_exit_by_at_most_the_bound(upstream):
+    import time
+
+    from opentelemetry.sdk.trace import SpanProcessor
+    from starlette.testclient import TestClient
+
+    from acs_gateway.app import TRACING_CLOSE_S
+    from acs_gateway.telemetry import Tracing, new_provider
+
+    class Hung(SpanProcessor):
+        def shutdown(self) -> None:
+            time.sleep(30)
+
+    app = _app(upstream)
+    provider = new_provider()
+    provider.add_span_processor(Hung())
+    app.state.gateway.tracing = Tracing(provider, "off")
+    with TestClient(app):
+        started = time.monotonic()
+    assert TRACING_CLOSE_S == 2.0
+    assert time.monotonic() - started < TRACING_CLOSE_S + 1.0
+
+
+def test_a_cancelled_open_still_records_the_session_root(tmp_path):
+    import asyncio
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from acs.client import Negotiated
+
+    from acs_gateway.app import Gateway
+    from acs_gateway.config import GatewayConfig
+    from acs_gateway.sessions import Session
+
+    gateway = Gateway(GatewayConfig.from_env({"ACS_LAB_MODE": "enforce",
+                                              "ACS_GATEWAY_STATE_DIR": os.environ["ACS_GATEWAY_STATE_DIR"]}))
+    spans = traced(type("Client", (), {"app": type("App", (), {"state": type("S", (), {"gateway": gateway})})})())
+
+    class SlowGuardian:
+        def open(self, session: Session) -> str:
+            time.sleep(0.3)
+            session.handshake = Negotiated({})
+            return "11111111-1111-4111-8111-111111111111"
+
+    gateway.guardian = SlowGuardian()
+    gateway.executor = ThreadPoolExecutor(max_workers=1)
+    session = Session(session_id=str(uuid.uuid4()), epoch=0)
+
+    async def cancel_while_opening() -> None:
+        task = asyncio.ensure_future(gateway._ensure_open(session))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_while_opening())
+    gateway.executor.shutdown(wait=True)
+    (root,) = named(spans(), "acs.session")
+    assert root.context.trace_id == uuid.UUID(session.session_id).int
+    assert root.attributes["acs.request_id"] == "11111111-1111-4111-8111-111111111111"
+
+
+def test_an_unsigned_step_claims_no_request_id(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(call_item("get_vendor_details", '{"amount": NaN}', "call_1")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    spans = traced(client)
+    client.post("/v1/responses", json=finbot_request())
+    assert next(e for e in audit() if e["acs_audit_event"] == "decision_applied")["cause"] == "envelope_not_signable"
+    (span,) = step_spans(spans())
+    assert "acs.request_id" not in span.attributes
+    assert [e.name for e in span.events] == ["acs.decision.failure"]
+
+
+def test_a_cancelled_token_step_is_not_sent(guardian, tmp_path):
+    from acs_gateway.config import GatewayConfig
+    from acs_gateway.guardian import TOOL_CALL_REQUEST, GuardianClient, StepToken
+    from acs_gateway.sessions import Session
+    from acs_gateway.transcript import Transcript
+
+    client = GuardianClient(GatewayConfig.from_env({"ACS_GUARDIAN_URL": guardian, "ACS_LAB_MODE": "enforce"}),
+                            Transcript(tmp_path / "t"))
+    session = Session(session_id=str(uuid.uuid4()), epoch=0)
+    client.open(session)
+    token = StepToken(float("inf"))
+    assert token.cancel()
+    result = client.step(session, TOOL_CALL_REQUEST, {"tool": {"name": "x"}, "arguments": {}}, token)
+    assert result.sent is False
+    sent = client.step(session, TOOL_CALL_REQUEST, {"tool": {"name": "x"}, "arguments": {}})
+    assert sent.sent is True and sent.request_id
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_a_processor_fault_on_end_never_touches_a_relayed_answer(gateway, guardian, upstream, mode):
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    from acs_gateway.telemetry import Tracing, new_provider
+
+    class Raising(SpanProcessor):
+        def on_end(self, span: Any) -> None:
+            raise RuntimeError("processor broke")
+
+    reply = response_body(message_item("relayed"))
+    upstream.reply(reply)
+    env = {"ACS_LAB_MODE": mode, "ACS_GUARDIAN_URL": guardian} if mode != "off" else {}
+    client = gateway(**env)
+    provider = new_provider()
+    provider.add_span_processor(Raising())
+    client.app.state.gateway.tracing = Tracing(provider, mode)
+    response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200 and response.json() == reply
+
+
+def test_the_ask_hold_is_not_counted_as_a_tool_call(gateway, harness_guardian, upstream, audit):
+    from test_ask import approver, enforce
+
+    upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
+    client = enforce(gateway, harness_guardian)
+    spans = traced(client)
+    thread = approver(client, "approve")
+    client.post("/v1/responses", json=finbot_request())
+    thread.join()
+    (hold,) = named(spans(), "acs.lab.ask")
+    assert hold.attributes["gen_ai.operation.name"] == "acs.lab.ask_hold"
+    assert "gen_ai.tool.name" not in hold.attributes
+    assert hold.attributes["acs.lab.ask.tool"] == "ask_tool"
+
+
+def test_the_verbatim_relay_parses_the_body_once(gateway, upstream, monkeypatch):
+    import acs_gateway.app as app_module
+
+    client = gateway(ACS_MODEL_INPUT_LOG=os.environ.get("ACS_GATEWAY_STATE_DIR", "") + "/model-inputs-once.jsonl")
+    traced(client)
+    calls: list[bytes] = []
+    real = app_module._parse
+
+    def counting(raw: bytes) -> Any:
+        calls.append(raw)
+        return real(raw)
+
+    monkeypatch.setattr(app_module, "_parse", counting)
+    assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+    assert len(calls) == 1

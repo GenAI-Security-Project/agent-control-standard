@@ -50,6 +50,9 @@ class StepResult:
     failure_class: str | None = None
     # The Guardian's ask_details when it answered ask, as sent, for the approver page (LAB-08).
     ask_details: dict[str, Any] | None = None
+    # True once the request went to the Guardian. request_id can be set without a send: an envelope that couldn't be
+    # signed, or a step cancelled after its id was minted. A step span claims acs.request_id only when sent (LAB-09).
+    sent: bool = False
 
 
 _MAX_SAFE_INTEGER = 2**53 - 1
@@ -105,6 +108,8 @@ class StepToken:
         self._retired = False
         self._writing = 0
         self._sending = False
+        # Whether a send ever started, for the step span after the loop gave up waiting (LAB-09).
+        self.sent = False
 
     def retire(self) -> bool:
         """Retire the step. True when a write or the send had already started, which can still land but nothing new
@@ -119,6 +124,7 @@ class StepToken:
             if self._retired:
                 return False
             self._sending = True
+            self.sent = True
             return True
 
     def end_send(self) -> None:
@@ -261,14 +267,17 @@ class GuardianClient:
         outcome, request_id = self._send(session.session_id, method, payload, posture, token)
         if outcome is None:
             return StepResult(method, request_id, cause="decision_timeout", failure_class="timeout")
+        # _send settles an unsignable envelope before anything is written or sent. Every other outcome went out.
+        sent = outcome.cause != "envelope_not_signable" if isinstance(outcome, Resolution) else True
         if isinstance(outcome, Resolution):
-            return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"))
+            return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"),
+                              sent=sent)
         result = outcome.response.get("result") or {}
         codes = result.get("reason_codes")
         details = result.get("ask_details")
         return StepResult(method, request_id, decision=normalize_decision(result),
                           reason_codes=[c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [],
-                          ask_details=details if isinstance(details, dict) else None)
+                          ask_details=details if isinstance(details, dict) else None, sent=sent)
 
     def _send(self, session_id: str, method: str, payload: dict[str, Any], posture: FailPosture,
               token: StepToken | None = None) -> tuple[Decided | Resolution | None, str]:

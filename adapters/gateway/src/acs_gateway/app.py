@@ -94,6 +94,8 @@ ASK_ANSWER_FIELD = "x_acs_lab_ask_answer"
 # How long an approval waits for a disconnect that may already be on its way before the resend goes out. Small
 # beside a person's click, and long enough for a local close to reach the event loop (LAB-08 round 4).
 _APPROVAL_SETTLE_S = 0.1
+# The longest shutdown waits for queued spans to flush (LAB-09).
+TRACING_CLOSE_S = 2.0
 _ASK_OUTCOMES = {"approve": "approved", "reject": "rejected", TIMEOUT: "timed_out"}
 
 
@@ -169,6 +171,9 @@ class Gateway:
         finally:
             self.http = None
             executor.shutdown(wait=False, cancel_futures=True)
+            if self.tracing.enabled:
+                # Flush queued spans, waiting at most TRACING_CLOSE_S so a hung Jaeger never holds the exit (LAB-09).
+                await asyncio.get_running_loop().run_in_executor(None, self.tracing.close, TRACING_CLOSE_S)
 
     def _evicted(self, session: Session) -> None:
         _audit("session_evicted", session_id=session.session_id, epoch=session.epoch,
@@ -560,10 +565,14 @@ class Gateway:
             _audit("session_retried", previous_session_id=session.session_id,
                    cause=getattr(session.handshake, "cause", None) or "session_start_failed")
             session.session_id = str(uuid.uuid4())
-        started = self.tracing.now()
-        request_id = await asyncio.get_running_loop().run_in_executor(self.executor, self.guardian.open, session)
-        self.tracing.session(session.session_id, session.epoch, request_id, session.handshake, started)
+        await asyncio.get_running_loop().run_in_executor(self.executor, self._open, session, self.tracing.now())
         session.open_failed_at = None if _opened(session.handshake) else time.monotonic()
+
+    def _open(self, session: Session, started: int) -> None:
+        """Open on a worker and record the session's root span there, so the root exists whenever the opening
+        finished, even when the request that started it was cancelled meanwhile (LAB-09)."""
+        request_id = self.guardian.open(session)
+        self.tracing.session(session.session_id, session.epoch, request_id, session.handshake, started)
 
     def _gating_failed(self, session: Session | None, phase: str, error: Exception) -> Response | None:
         """A fault in the gateway's own gating code: shadow forwards unchanged (None), enforce fails closed."""
@@ -656,11 +665,16 @@ class Gateway:
         """Relay the answer, streamed or not, as it arrives, encoding and headers included. logged replaces the body
         in the model input log, for a body that can't be read as text. parsed says logged is already the parse of
         raw, None included, so the body isn't parsed again."""
+        # Parsed at most once, for the model input log and, when tracing is on, the model's name on a span.
+        if parsed:
+            traced_body = logged
+        elif logged is None and (self.model_inputs.enabled or self.tracing.enabled):
+            traced_body = _parse(raw)
+        else:
+            traced_body = None
         if self.model_inputs.enabled:
-            body = logged if logged is not None or parsed else _parse(raw)
+            body = logged if logged is not None or parsed else traced_body
             self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        # Off parses the body only to name the model on a span, and only when tracing is on.
-        traced_body = _parse(raw) if self.tracing.enabled else None
         upstream = await self._send(raw, headers, traced_body, None, stream=None, arrival=arrival)
         if isinstance(upstream, Response):
             return upstream
@@ -1032,7 +1046,8 @@ class Gateway:
             result = await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
         except asyncio.TimeoutError:
             await self._settle_abandoned(session, method, token, future, timeout)
-            return StepResult(method, token.request_id, cause="decision_timeout", failure_class="timeout")
+            return StepResult(method, token.request_id, cause="decision_timeout", failure_class="timeout",
+                              sent=token.sent)
         except asyncio.CancelledError:
             # The request itself was cancelled (a client disconnect, a shutdown). The step must not outlive it.
             await self._settle_abandoned(session, method, token, future, timeout)
