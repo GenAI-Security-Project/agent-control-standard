@@ -304,8 +304,9 @@ class Gateway:
 
     async def _relay_verbatim(self, raw: bytes, headers: dict[str, str]) -> Response:
         """Off mode relays the answer, streamed or not, as it arrives, encoding and headers included."""
-        body = _parse(raw) if self.model_inputs.enabled else None
-        self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
+        if self.model_inputs.enabled:
+            body = _parse(raw)
+            self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
         assert self.http is not None
         try:
             upstream = await self.http.send(
