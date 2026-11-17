@@ -174,3 +174,31 @@ def test_a_request_jcs_cannot_encode_still_prints_a_json_report(tmp_path, hmac_r
     assert main([str(path), "--hmac-secret", str(secret_file), "--json"]) == EXIT_FAIL
     report = json.loads(capsys.readouterr().out)
     assert report["failure"]["line"] == number and report["failure"]["code"] == "not_canonical"
+
+
+# A signed ServerHello must also be one the client would accept: negotiated_version present and
+# acs.core.server_hello_problem clean against the ClientHello it answers (LAB-03 round 4). Re-signed here with the
+# HMAC session key, so only the content check can catch it.
+
+
+@pytest.mark.parametrize("change,expected", [
+    (lambda hello: hello.pop("negotiated_version"), "negotiated_version"),
+    (lambda hello: hello.update({"negotiated_version": "9.0.0"}), "9.0.0"),
+    (lambda hello: hello.update({"selected_transport": "carrier-pigeon"}), "selected_transport"),
+])
+def test_a_signed_server_hello_the_client_would_refuse_fails(hmac_run, change, expected):
+    from acs.core import derive_session_key, sign_with_key
+    from acs.testing.harness import TEST_KEY_ID
+    from acs.testing.verify import verify_transcript
+    lines = record_session(hmac_run)
+    records = [json.loads(line) for line in lines]
+    number = next(i for i, r in enumerate(records, start=1)
+                  if r["dir"] == "resp" and "negotiated_version" in ((r["envelope"] or {}).get("result") or {}))
+    hello = records[number - 1]["envelope"]
+    del hello["result"]["signature"]
+    change(hello["result"])
+    sign_with_key(hello, derive_session_key(hmac_run.hmac_secret, hmac_run.session_id), key_id=TEST_KEY_ID)
+    lines[number - 1] = json.dumps(records[number - 1], separators=(",", ":"))
+    report = verify_transcript(lines, key_document=None, hmac_secret=hmac_run.hmac_secret)
+    assert (report.failure.line, report.failure.code) == (number, "server_hello_invalid"), report.to_text()
+    assert expected in report.failure.reason

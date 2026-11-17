@@ -62,6 +62,7 @@ from acs.core import (
     parse_iso8601,
     response_binding_problem,
     response_names_request,
+    server_hello_problem,
     verify_with_key,
 )
 from acs.core._canonical import CANONICALIZATION_ERRORS
@@ -466,6 +467,7 @@ class _Verifier:
         else:
             self._verify_hmac(resp_line, response)
         if method == HANDSHAKE_METHOD:
+            self._check_server_hello(request, resp_line, response)
             return
         result = response.get("result")
         chain_hash = result.get("chain_hash") if isinstance(result, Mapping) else None
@@ -474,6 +476,20 @@ class _Verifier:
                 self._checkpoint(req_line, request, resp_line, chain_hash)
         else:
             self.unanswered(req_line, request, None)
+
+    def _check_server_hello(self, request: dict, resp_line: int, response: dict) -> None:
+        """A verified ServerHello must also be one acs.client would negotiate on, by the same rule it applies."""
+        hello = response.get("result")
+        if not isinstance(hello, Mapping):
+            return  # A signed refusal is an error, which the signature and binding checks already covered.
+        if "negotiated_version" not in hello:
+            raise _Fail(resp_line, "server_hello_invalid", "the ServerHello carries no negotiated_version, so no "
+                                                           "client would negotiate on it")
+        offered = _params(request).get("payload")
+        problem = server_hello_problem(hello, offered if isinstance(offered, Mapping) else {})
+        if problem is not None:
+            raise _Fail(resp_line, "server_hello_invalid", f"the ServerHello does not answer its ClientHello: "
+                                                           f"{problem}")
 
     def _verify_mldsa(self, req_line: int, request: dict, resp_line: int, response: dict,
                       signature: Mapping) -> None:
@@ -658,9 +674,11 @@ def _read_secret(path: str) -> bytes:
 
 def _read_key_document(path: str) -> Mapping[str, Any]:
     # The document decides which key verifies every decision, so it goes through the one reader for trusted files,
-    # the rule acs.client's load_response_keys applies to it: no symlink, no FIFO, no group or other write.
+    # with the rule acs.client's load_response_keys applies to it: no symlink, no FIFO, no group or other write. It is
+    # public and the Guardian owns it, so a verifier running as another user must still read it, and no owner is
+    # checked. --expect-fingerprint covers an owner swap.
     data = read_trusted_file(path, setting="--keys", max_bytes=MAX_KEY_DOCUMENT_BYTES,
-                             mode_rule=not_writable_by_others, refused=UsageError)
+                             mode_rule=not_writable_by_others, refused=UsageError, require_owner=False)
     try:
         document = _strict_loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:

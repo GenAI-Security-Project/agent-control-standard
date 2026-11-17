@@ -18,7 +18,7 @@ The command is `python -m acs.testing.verify`, and it calls itself `acs-verify` 
 
 | Flag | What it does |
 |---|---|
-| `--keys FILE` | The Guardian's key document (`acs-lab-keys/1`), read through the same reader as `ACS_GUARDIAN_KEYS`: no symlink, no FIFO, no group or other write. Every response must verify under ML-DSA-65 with the key its `key_id` names. |
+| `--keys FILE` | The Guardian's key document (`acs-lab-keys/1`), read through the same reader as `ACS_GUARDIAN_KEYS`: no symlink, no FIFO, no group or other write, and no owner check, since the Guardian owns the document and a verifier may run as another user. `--expect-fingerprint` covers a swapped document. Every response must verify under ML-DSA-65 with the key its `key_id` names. |
 | `--expect-fingerprint FP` | The fingerprint the Guardian printed at startup. Every key that verifies a response must have it. Repeat the flag to accept more than one key. |
 | `--key-id ID` | Accept only this `key_id` from the key document. |
 | `--hmac-secret FILE` | The shared HMAC secret, read under the same owner-only rule as `ACS_HMAC_SECRET_FILE`. With `--keys`, it also checks every request signature. Without `--keys`, HMAC-SHA256 becomes the response algorithm. |
@@ -47,8 +47,9 @@ Each request and its answer go through these checks in order, and the first fail
 3. With `--keys`, the answer must be signed with ML-DSA-65 by a key the document holds, under the `key_id` the signature names. The key comes from the document, never from the envelope's `algorithm` (issue #308, RFC 8725 section 3.1). With `--hmac-secret` alone, the answer must verify under the HMAC session key.
 4. The key must be live and not revoked at the request's own `timestamp`. That timestamp sits inside the request hash the signed answer carries, so nobody without the Guardian's private key can move it. Whoever holds a stolen private key can, though: they can sign a request hash with a timestamp from before the revocation. Offline, acs-verify can't tell that apart from a genuine early entry. So a key revoked after an entry's timestamp still verifies that entry, and whenever a revoked key signed any entry in the transcript, the output prints a warning that the entry could be backdated.
 5. With `--expect-fingerprint`, the key that verified the answer has one of the expected fingerprints.
-6. The answer carries the request's JSON-RPC `id` and `request_id`, and under ML-DSA-65 `x_acs_lab_request_sha256`, the SHA-256 of the request's section 10 signed input. `acs.core.verify_with_keyring` always runs with `require_request_digest=True`, so an answer relayed from another session fails.
-7. For each answer that carries `chain_hash`, the chain is recomputed exactly as the example Guardian builds it and must reach that value.
+6. A ServerHello must carry `negotiated_version` and pass `acs.core.server_hello_problem` against the ClientHello it answers, the rule acs.client applies before it negotiates.
+7. The answer carries the request's JSON-RPC `id` and `request_id`, and under ML-DSA-65 `x_acs_lab_request_sha256`, the SHA-256 of the request's section 10 signed input. `acs.core.verify_with_keyring` always runs with `require_request_digest=True`, so an answer relayed from another session fails.
+8. For each answer that carries `chain_hash`, the chain is recomputed exactly as the example Guardian builds it and must reach that value.
 
 The flags decide the response algorithm, and nothing in the transcript does. A rewritten ServerHello can't switch the check to HMAC. With `--keys`, an answer signed with the shared HMAC secret fails, even when `--hmac-secret` is also given.
 
