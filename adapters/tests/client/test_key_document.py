@@ -186,5 +186,64 @@ class FromEnvironment(unittest.TestCase):
                 load_response_keys(broken)
 
 
+class Pinning(unittest.TestCase):
+    """An optional fingerprint pin, and a key document file nobody else can rewrite (review CR2)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.signer = MLDSA65SigningKey.generate(KEY_ID)
+        cls.fingerprint = cls.signer.verification_key().fingerprint
+        cls.other = MLDSA65SigningKey.generate(KEY_ID).verification_key().fingerprint
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.dir = directory.name
+        now = datetime.datetime.now(UTC)
+        self.document = _document(_entry(self.signer, not_before=now - datetime.timedelta(days=1),
+                                         not_after=now + datetime.timedelta(days=1)))
+
+    def write(self, name: str = "keys.json", mode: int = 0o644) -> str:
+        path = os.path.join(self.dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.document, f)
+        os.chmod(path, mode)
+        return path
+
+    def test_a_fingerprint_pin_must_match(self) -> None:
+        keys = parse_key_document(_document(_entry(self.signer)), key_id=KEY_ID, now=NOW, fingerprint=self.fingerprint)
+        self.assertEqual(keys.fingerprint, self.fingerprint)
+        for pin in (self.other, self.fingerprint.upper(), self.fingerprint[len("sha256:"):], ""):
+            with self.subTest(pin=pin), self.assertRaises(KeyDocumentError):
+                parse_key_document(_document(_entry(self.signer)), key_id=KEY_ID, now=NOW, fingerprint=pin)
+
+    def test_the_environment_pin(self) -> None:
+        env = {"ACS_RESPONSE_ALGORITHMS": "ML-DSA-65", "ACS_GUARDIAN_KEYS": self.write()}
+        self.assertEqual(response_keys_from_env({**env, "ACS_GUARDIAN_KEY_FINGERPRINT": self.fingerprint}).key_id,
+                         KEY_ID)
+        with self.assertRaisesRegex(KeyDocumentError, "ACS_GUARDIAN_KEY_FINGERPRINT"):
+            response_keys_from_env({**env, "ACS_GUARDIAN_KEY_FINGERPRINT": self.other})
+
+    def test_an_owner_writable_document_loads(self) -> None:
+        for mode in (0o644, 0o600, 0o444):
+            with self.subTest(mode=oct(mode)):
+                self.assertEqual(load_response_keys(self.write(f"doc-{mode:o}.json", mode)).key_id, KEY_ID)
+
+    def test_a_document_others_can_rewrite_is_refused(self) -> None:
+        for mode in (0o664, 0o646, 0o666):
+            with self.subTest(mode=oct(mode)), self.assertRaisesRegex(KeyDocumentError, "writable"):
+                load_response_keys(self.write(f"doc-{mode:o}.json", mode))
+
+    def test_a_symlinked_document_is_refused(self) -> None:
+        link = os.path.join(self.dir, "link.json")
+        os.symlink(self.write(), link)
+        with self.assertRaisesRegex(KeyDocumentError, "symlink|regular"):
+            load_response_keys(link)
+
+    def test_a_directory_is_refused(self) -> None:
+        with self.assertRaisesRegex(KeyDocumentError, "regular file"):
+            load_response_keys(self.dir)
+
+
 if __name__ == "__main__":
     unittest.main()
