@@ -184,3 +184,17 @@ def test_a_resent_reasoning_item_with_reasoning_text_passes(gateway, guardian, u
     response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request(item))
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+@pytest.mark.parametrize("item", [
+    {"role": "user", "content": {"type": "input_file", "file_id": "file_1"}},
+    {"type": "function_call_output", "call_id": "c1", "output": {"type": "input_file", "file_id": "file_1"}},
+    {"type": "reasoning", "id": "rs_1", "summary": {"type": "summary_text", "text": "x"}},
+    {"role": "user", "content": 42},
+])
+def test_content_that_is_neither_a_string_nor_a_list_is_unsupported(gateway, guardian, upstream, audit, mode, item):
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(item))
+    assert response.status_code == (501 if mode == "enforce" else 200)
+    assert len(events(audit, "unsupported_content_part")) == 1

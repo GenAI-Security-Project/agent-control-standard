@@ -102,7 +102,12 @@ def unsupported_content_part(body: dict[str, Any]) -> str | None:
             continue
         for field, allowed in ALLOWED_CONTENT_PARTS.get(item_type(item), {}).items():
             parts = item.get(field)
-            for part in parts if isinstance(parts, list) else []:
+            if parts is None or isinstance(parts, str):
+                continue
+            if not isinstance(parts, list):
+                # Content is a string or a list of parts. Anything else is a shape the gateway can't read.
+                return type(parts).__name__
+            for part in parts:
                 kind = part.get("type") if isinstance(part, dict) else None
                 if kind not in allowed:
                     return kind if isinstance(kind, str) else type(part).__name__
