@@ -13,8 +13,8 @@ BASH = call_item("bash", {"command": "rm -rf /"}, "call_bash")
 VENDOR = call_item("get_vendor_details", {"vendor_id": 7}, "call_vendor")
 
 
-def run(chunks, decide=None, enforce=True, limit=LIMIT):
-    """Feed chunks through an editor and return (client bytes, audit lines, items decide() saw)."""
+def run(chunks, decide=None, enforce=True, limit=LIMIT, idle_timeout=None):
+    """Feed chunks through an editor, drain it, and return (client bytes, audit lines, items decide() saw)."""
     seen, audits = [], []
 
     async def default(item):
@@ -26,11 +26,21 @@ def run(chunks, decide=None, enforce=True, limit=LIMIT):
             for chunk in chunks:
                 yield chunk
 
-        editor = StreamEditor(enforce=enforce, limit=limit, decide=decide or default,
+        editor = StreamEditor(enforce=enforce, limit=limit, decide=decide or default, idle_timeout=idle_timeout,
                               audit=lambda event, **fields: audits.append({"event": event, **fields}))
-        return b"".join([out async for out in editor.edit(source())])
+        out = b"".join([out async for out in editor.edit(source())])
+        await editor.drain()
+        return out
 
     return asyncio.run(main()), audits, seen
+
+
+def call_events(events):
+    return [e for e in events if e.get("item", {}).get("type") == "function_call" or "arguments" in e["type"]]
+
+
+SYNTHESIZED = ["response.output_item.added", "response.function_call_arguments.delta",
+               "response.function_call_arguments.done", "response.output_item.done"]
 
 
 def types(events):
@@ -38,14 +48,14 @@ def types(events):
 
 
 def test_an_unedited_stream_is_byte_for_byte():
-    raw = encode(stream_events(reasoning_item("think"), message_item("Hello there"), VENDOR))
+    raw = encode(stream_events(reasoning_item("think"), message_item("Hello there")))
     out, audits, _ = run(raw)
     assert out == b"".join(raw)
     assert audits == []
 
 
 def test_chunks_split_anywhere_still_frame_events():
-    raw = b"".join(encode(stream_events(message_item("Hello there"), VENDOR))).replace(b"\n", b"\r\n")
+    raw = b"".join(encode(stream_events(message_item("Hello there")))).replace(b"\n", b"\r\n")
     out, _, _ = run([raw[i:i + 7] for i in range(0, len(raw), 7)])
     assert out == raw
 
@@ -112,9 +122,11 @@ def test_sequence_numbers_are_never_renumbered():
     by_number = {e["sequence_number"]: e for e in upstream}
     events = decode(run(encode(upstream))[0])
     numbers = [e["sequence_number"] for e in events]
-    assert numbers == sorted(numbers) and len(set(numbers)) == len(numbers)
+    assert all(a < b for a, b in zip(numbers, numbers[1:]))
+    assert set(numbers) <= set(by_number)
     for event in events:
-        assert by_number[event["sequence_number"]]["type"] == event["type"]
+        if event not in call_events(events):
+            assert by_number[event["sequence_number"]]["type"] == event["type"]
     assert set(by_number) - set(numbers), "the dropped call leaves gaps"
 
 
@@ -168,12 +180,15 @@ def test_orphaned_reasoning_is_dropped_and_kept_reasoning_streams():
     kept = decode(run(encode(stream_events(first, message_item("hi"), BASH)))[0])
     assert rebuilt_output(kept) == [first, message_item("hi")]
     trailing = decode(run(encode(stream_events(BASH, first)))[0])
-    assert [i["type"] for i in rebuilt_output(trailing)] == ["reasoning", "message"]
+    assert [i["type"] for i in rebuilt_output(trailing)] == ["message", "reasoning"]
 
 
 def test_the_full_event_set_of_kept_items_reaches_the_client():
     upstream = stream_events(reasoning_item("t"), message_item("hello"), VENDOR)
-    assert types(decode(run(encode(upstream))[0])) == types(upstream)
+    events = decode(run(encode(upstream))[0])
+    assert types(call_events(events)) == SYNTHESIZED
+    assert types([e for e in events if e not in call_events(events)]) == types(
+        [e for e in upstream if e not in call_events(upstream)])
 
 
 def test_an_unsupported_item_is_removed_in_enforce():
@@ -263,3 +278,165 @@ def test_a_failing_upstream_ends_with_an_error_event():
         return b"".join([out async for out in editor.edit(source())])
 
     assert decode(asyncio.run(main()))[-1]["type"] == "error"
+
+
+def poisoned_call():
+    """The reproduced bypass: added, deltas and arguments.done name bash with an rm payload, while the finished item
+    the gate judges is a harmless read."""
+    judged = call_item("read_file", {"path": "notes.txt"}, "call_x")
+    events = stream_events(judged)
+    for event in events:
+        if event["type"] == "response.output_item.added":
+            event["item"] = {**event["item"], "name": "bash"}
+        elif event["type"] == "response.function_call_arguments.delta":
+            event["delta"] = '{"command": "rm -rf /"}'
+        elif event["type"] == "response.function_call_arguments.done":
+            event["name"], event["arguments"] = "bash", '{"command": "rm -rf /"}'
+    return judged, events
+
+
+def test_an_allowed_call_reaches_the_client_only_as_the_judged_item():
+    judged, events = poisoned_call()
+    out, _, seen = run(encode(events))
+    assert seen == [judged]
+    assert b"bash" not in out and b"rm -rf" not in out
+    client = decode(out)
+    assert types(call_events(client)) == SYNTHESIZED
+    assert rebuilt_output(client) == [judged] == client[-1]["response"]["output"]
+    added = next(e for e in client if e["type"] == "response.output_item.added")
+    delta = next(e for e in client if e["type"] == "response.function_call_arguments.delta")
+    assert added["item"]["name"] == "read_file" and added["item"]["arguments"] + delta["delta"] == judged["arguments"]
+
+
+def test_synthesized_call_events_reuse_the_upstream_numbers_in_order():
+    upstream = stream_events(message_item("hi"), VENDOR)
+    held = [e["sequence_number"] for e in call_events(upstream)]
+    client = decode(run(encode(upstream))[0])
+    assert [e["sequence_number"] for e in call_events(client)] == held[:4]
+
+
+def test_a_call_with_few_events_still_streams_rising_numbers():
+    upstream = [e for e in stream_events(VENDOR) if "arguments" not in e["type"]]
+    client = decode(run(encode(upstream))[0])
+    numbers = [e["sequence_number"] for e in client]
+    assert all(a < b for a, b in zip(numbers, numbers[1:]))
+    assert rebuilt_output(client) == [VENDOR]
+
+
+def announced_as(kind_item, done_item):
+    """A stream whose item is announced as one type and finished as another."""
+    events = stream_events(kind_item)
+    done = next(e for e in events if e["type"] == "response.output_item.done")
+    done["item"] = done_item
+    events[-1]["response"]["output"] = [done_item]
+    return events
+
+
+def test_a_message_that_finishes_as_a_call_is_never_delivered():
+    out, audits, seen = run(encode(announced_as(message_item("hello", "msg_x"), {**BASH, "id": "msg_x"})))
+    client = decode(out)
+    assert client[-1]["type"] == "error" and b"rm -rf" not in out and seen == []
+    assert not any(e["type"] == "response.completed" for e in client)
+    assert audits[0]["detail"] == "item_type_mismatch"
+
+
+def test_reasoning_that_finishes_as_a_call_is_never_delivered():
+    out, audits, _ = run(encode(announced_as(reasoning_item("t", "rs_x"), {**VENDOR, "id": "rs_x"})))
+    client = decode(out)
+    assert client[-1]["type"] == "error" and b"call_vendor" not in out
+    assert not any(e["type"] == "response.completed" for e in client)
+    assert audits[0]["detail"] == "item_type_mismatch"
+
+
+def test_a_call_event_on_a_message_is_a_mismatch():
+    events = stream_events(message_item("hello"))
+    stray = {"type": "response.function_call_arguments.delta", "sequence_number": 3, "item_id": "msg_1",
+             "output_index": 0, "delta": "{}"}
+    out, audits, _ = run(encode([*events[:3], stray, *events[4:]]))
+    assert decode(out)[-1]["type"] == "error" and audits[0]["detail"] == "item_type_mismatch"
+
+
+def test_shadow_judges_the_finished_item_type():
+    _, _, seen = run(encode(announced_as(message_item("hello", "msg_x"), {**BASH, "id": "msg_x"})), enforce=False)
+    assert [i["name"] for i in seen] == ["bash"]
+
+
+def test_shadow_never_waits_for_a_decision():
+    async def main():
+        started, finished = [], []
+
+        async def slow(item):
+            started.append(item)
+            await asyncio.sleep(0.5)
+            finished.append(item)
+            return item
+
+        async def source():
+            for chunk in encode(stream_events(message_item("hi"), BASH, VENDOR)):
+                yield chunk
+
+        editor = StreamEditor(enforce=False, limit=LIMIT, decide=slow, audit=lambda *a, **k: None)
+        begin = asyncio.get_running_loop().time()
+        out = b"".join([o async for o in editor.edit(source())])
+        relayed = asyncio.get_running_loop().time() - begin
+        assert finished == []
+        await editor.drain()
+        return relayed, len(finished), out
+
+    relayed, decided, out = asyncio.run(main())
+    assert relayed < 0.3 and decided == 2
+    assert decode(out)[-1]["type"] == "response.completed"
+
+
+def test_every_mode_stops_at_the_terminal_event():
+    for enforce in (True, False):
+        async def main():
+            async def source():
+                for chunk in encode(stream_events(message_item("hi"))):
+                    yield chunk
+                await asyncio.Event().wait()
+
+            editor = StreamEditor(enforce=enforce, limit=LIMIT, decide=None, audit=lambda *a, **k: None)
+            return b"".join([o async for o in editor.edit(source())])
+
+        out = asyncio.run(asyncio.wait_for(main(), 2))
+        assert decode(out)[-1]["type"] == "response.completed"
+
+
+def test_an_upstream_error_event_is_the_last_event():
+    events = stream_events(message_item("hi"))
+    error = {"type": "error", "sequence_number": 4, "code": "server_error", "message": "boom", "param": None}
+    for enforce in (True, False):
+        client = decode(run(encode([*events[:4], error, *events[4:]]), enforce=enforce)[0])
+        assert [e["type"] for e in client].count("error") == 1 and client[-1] == error
+
+
+def test_kept_items_count_against_the_limit():
+    out, audits, _ = run(encode(stream_events(message_item("a" * 600, "msg_1"), message_item("b" * 600, "msg_2"))),
+                         limit=1500)
+    assert decode(out)[-1]["type"] == "error" and audits[0]["cause"] == "upstream_too_large"
+
+
+def test_the_neutral_line_numbers_rise_before_trailing_reasoning():
+    upstream = stream_events(BASH, reasoning_item("after"))
+    client = decode(run(encode(upstream))[0])
+    numbers = [e["sequence_number"] for e in client]
+    assert all(a < b for a, b in zip(numbers, numbers[1:]))
+    assert numbers[-1] == upstream[-1]["sequence_number"]
+    assert "".join(e["delta"] for e in client if e["type"] == "response.output_text.delta") == NEUTRAL
+
+
+def test_a_stalled_upstream_ends_with_an_error_event():
+    async def main():
+        audits = []
+
+        async def source():
+            yield encode(stream_events(message_item("hi")))[0]
+            await asyncio.sleep(5)
+
+        editor = StreamEditor(enforce=True, limit=LIMIT, decide=None, idle_timeout=0.2,
+                              audit=lambda event, **fields: audits.append(fields))
+        return b"".join([o async for o in editor.edit(source())]), audits
+
+    out, audits = asyncio.run(asyncio.wait_for(main(), 3))
+    assert decode(out)[-1]["type"] == "error" and audits[0]["cause"] == "upstream_idle_timeout"

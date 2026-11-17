@@ -64,3 +64,12 @@ def test_integer_settings_read_whole_numbers(tmp_path):
 def test_integer_settings_take_plain_ascii_digits_only(tmp_path, value):
     with pytest.raises(ValueError, match="ACS_GATEWAY_WORKERS must be plain ASCII digits"):
         GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_WORKERS": value})
+
+
+def test_the_stream_idle_timeout_defaults_to_60_seconds_and_reads_seconds(tmp_path):
+    assert GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)}).stream_idle_timeout_s == 60.0
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path),
+                                     "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S": "2.5"})
+    assert config.stream_idle_timeout_s == 2.5
+    with pytest.raises(ValueError, match="ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S": "0"})

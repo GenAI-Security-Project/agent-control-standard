@@ -309,8 +309,17 @@ class Gateway:
             if failed is not None:
                 return failed
         if is_stream(body):
-            return await self._governed_stream(key, raw, body, headers, pins)
-        upstream = await self._upstream(raw, body, headers)
+            self.model_inputs.append(body)
+            sent = await self._send(raw, headers)
+            if isinstance(sent, Response):
+                return sent
+            media = sent.headers.get("content-type", "").split(";")[0].strip().lower()
+            if 200 <= sent.status_code < 300 and media == "text/event-stream":
+                return await self._governed_stream(key, pins, sent)
+            # An error status, or an upstream that answered a stream request whole, takes the whole-answer path.
+            upstream = await self._read_answer(sent)
+        else:
+            upstream = await self._upstream(raw, body, headers)
         if isinstance(upstream, Response):
             return upstream
         if not 200 <= upstream.status_code < 300:
@@ -349,23 +358,12 @@ class Gateway:
             return _relay(upstream, None)
         return _relay(upstream, reply if changed else None)
 
-    async def _governed_stream(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str],
-                               pins: list[Session]) -> Response:
-        """A streamed answer (issue #578). Text streams as it arrives and each call waits for its decision. The session
-        lock is held for the life of the stream, so the session's steps stay in order, and the response owns the lock,
-        the pins and the upstream from here on, releasing them however the stream ends."""
-        self.model_inputs.append(body)
-        assert self.http is not None
-        try:
-            upstream = await self.http.send(
-                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
-                                        headers=headers), stream=True)
-        except httpx.HTTPError as e:
-            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
-            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
-        media = upstream.headers.get("content-type", "").split(";")[0].strip().lower()
-        if not 200 <= upstream.status_code < 300 or media != "text/event-stream":
-            return await self._stream_refused(upstream)
+    async def _governed_stream(self, key: str, pins: list[Session], upstream: httpx.Response) -> Response:
+        """A streamed answer (issue #578). Text streams as it arrives and each call reaches the client only as the item
+        its decision produced. The session lock is held for the life of the stream, so the session's steps stay in
+        order, and the response owns the lock, the pins and the upstream from here on, releasing them however the
+        stream ends."""
+        headers = _client_headers(upstream.headers, decoded=True)
         stack = contextlib.AsyncExitStack()
         session: Session | None = None
         try:
@@ -383,9 +381,8 @@ class Gateway:
                 await upstream.aclose()
                 return failed
             # Shadow only observes, so a fault before gating relays the stream ungated.
-            return StreamingResponse(upstream.aiter_bytes(), status_code=upstream.status_code,
-                                     headers=_client_headers(upstream.headers, decoded=True),
-                                     background=BackgroundTask(upstream.aclose))
+            return GovernedStream(upstream.aiter_bytes(), upstream.aclose, status_code=upstream.status_code,
+                                  headers=headers)
         except BaseException:
             await stack.aclose()
             await upstream.aclose()
@@ -393,6 +390,10 @@ class Gateway:
         owned = pins[:]
         # The response releases these pins, so responses() must not.
         pins.clear()
+        editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes,
+                              decide=functools.partial(self._gate_item, session), audit=_audit,
+                              audit_fields={"session_id": session.session_id},
+                              idle_timeout=self.config.stream_idle_timeout_s)
         closed = False
 
         async def cleanup() -> None:
@@ -402,53 +403,15 @@ class Gateway:
             closed = True
             try:
                 await upstream.aclose()
+                # Shadow's queued decisions still run under the session lock, after the client has its last byte.
+                await editor.drain()
             finally:
                 await stack.aclose()
                 for pinned in owned:
                     pinned.active -= 1
 
-        async def decide(item: dict[str, Any]) -> dict[str, Any] | None:
-            # One item through the same gate a whole answer takes, so every rule applies unchanged. A removed item
-            # comes back as the neutral message, which means remove it here.
-            reply = {"output": [item]}
-            await self._gate_output(session, reply)
-            kept = reply["output"]
-            return kept[0] if kept and item_type(kept[0]) == item_type(item) else None
-
-        editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes, decide=decide, audit=_audit,
-                              audit_fields={"session_id": session.session_id})
         return GovernedStream(editor.edit(upstream.aiter_bytes()), cleanup, status_code=upstream.status_code,
-                              headers=_client_headers(upstream.headers, decoded=True))
-
-    async def _stream_refused(self, upstream: httpx.Response) -> Response:
-        """A streamed request whose answer isn't a successful event stream. An error status is relayed as today. A
-        success in another form could carry calls the gateway never gated, so enforce refuses it and shadow relays
-        it."""
-        chunks, size = [], 0
-        try:
-            async for chunk in upstream.aiter_bytes():
-                size += len(chunk)
-                if size > self.config.max_body_bytes:
-                    break
-                chunks.append(chunk)
-        except httpx.HTTPError as e:
-            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
-            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
-        finally:
-            await upstream.aclose()
-        if size > self.config.max_body_bytes:
-            _audit("upstream_error", cause="upstream_too_large", max_body_bytes=self.config.max_body_bytes)
-            return openai_error(502, "The model service returned a response that is too large.", "server_error",
-                                "upstream_too_large")
-        answer = UpstreamAnswer(upstream.status_code, upstream.headers, b"".join(chunks))
-        if not 200 <= upstream.status_code < 300:
-            _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
-            return _relay(answer, None)
-        _audit("upstream_error", cause="upstream_unparseable", http_status=upstream.status_code, stream=True)
-        if not self.enforce:
-            return _relay(answer, None)
-        return openai_error(502, "The model service returned an unreadable response.", "server_error",
-                            "upstream_unreadable")
+                              headers=headers)
 
     @contextlib.asynccontextmanager
     async def _current(self, key: str, pins: list[Session],
@@ -507,14 +470,30 @@ class Gateway:
             return None
         return openai_error(500, "The request could not be completed.", "server_error", "internal_error")
 
+    async def _send(self, raw: bytes, headers: dict[str, str]) -> httpx.Response | Response:
+        """POST upstream and return the response unread, or the 502 an unreachable upstream gets. The one place every
+        path sends from."""
+        assert self.http is not None
+        try:
+            return await self.http.send(
+                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
+                                        headers=headers), stream=True)
+        except httpx.HTTPError as e:
+            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
+            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
+
     async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> UpstreamAnswer | Response:
         """POST upstream and read the whole answer, up to the size limit, so the gateway can gate it."""
         self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        assert self.http is not None
+        upstream = await self._send(raw, headers)
+        if isinstance(upstream, Response):
+            return upstream
+        return await self._read_answer(upstream)
+
+    async def _read_answer(self, upstream: httpx.Response) -> UpstreamAnswer | Response:
+        """Read a whole answer, up to the size limit. Over it, enforce answers 502 and shadow relays the answer whole,
+        streaming the rest."""
         try:
-            upstream = await self.http.send(
-                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
-                                        headers=headers), stream=True)
             chunks: deque[bytes] = deque()
             size, stream = 0, upstream.aiter_bytes()
             try:
@@ -526,10 +505,9 @@ class Gateway:
                                max_body_bytes=self.config.max_body_bytes)
                         if not self.enforce:
                             # Shadow relays the answer whole, streaming the rest rather than holding it.
-                            relay = _continue(chunks, stream)
-                            return StreamingResponse(relay, status_code=upstream.status_code,
-                                                     headers=_client_headers(upstream.headers, decoded=True),
-                                                     background=BackgroundTask(upstream.aclose))
+                            return GovernedStream(_continue(chunks, stream), upstream.aclose,
+                                                  status_code=upstream.status_code,
+                                                  headers=_client_headers(upstream.headers, decoded=True))
                         await upstream.aclose()
                         return openai_error(502, "The model service returned a response that is too large.",
                                             "server_error", "upstream_too_large")
@@ -550,14 +528,9 @@ class Gateway:
         if self.model_inputs.enabled:
             body = logged if logged is not None else _parse(raw)
             self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        assert self.http is not None
-        try:
-            upstream = await self.http.send(
-                self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
-                                        headers=headers), stream=True)
-        except httpx.HTTPError as e:
-            _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
-            return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
+        upstream = await self._send(raw, headers)
+        if isinstance(upstream, Response):
+            return upstream
         if not 200 <= upstream.status_code < 300:
             _audit("upstream_error", cause="upstream_status", http_status=upstream.status_code)
         return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code,
@@ -705,53 +678,13 @@ class Gateway:
         """Gate each new function_call before the client sees it (A.4)."""
         changed, removed, kept = False, False, []
         for item in reply["output"]:
-            call_id = item.get("call_id") if isinstance(item, dict) else None
-            if item_type(item) not in ALLOWED_OUTPUT_TYPES:
-                _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
-                       direction="output", mode=self.config.mode)
-                if self.enforce:
-                    changed = removed = True
-                    kept.append(_REMOVED)
-                else:
-                    kept.append(item)
-                continue
-            if not isinstance(item, dict) or item.get("type") != "function_call":
-                kept.append(item)
-                continue
-            if not isinstance(call_id, str) or not call_id:
-                # No usable call_id means no cache key and no way to match its output, and the pre-pass would refuse
-                # the resend that carries it, so enforce never delivers it.
-                _audit("call_id_invalid", session_id=session.session_id, item_type="function_call",
-                       direction="output", mode=self.config.mode)
-                invalid = StepResult(TOOL_CALL_REQUEST, None, cause="call_id_invalid",
-                                     failure_class="observed_agent_error")
-                self._record(session, invalid, Applied("deny", None, "call_id_invalid"), str(item.get("name")), None)
-                if self.enforce:
-                    changed = removed = True
-                    kept.append(_REMOVED)
-                else:
-                    kept.append(item)
-                continue
-            cached = session.calls.get(call_id)
-            if cached is not None and not same_content(item, cached):
-                self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
-                if self.enforce:
-                    changed = removed = True
-                    kept.append(_REMOVED)
-                else:
-                    kept.append(item)
-                continue
-            if cached is None:
-                cached = await self._gate_call(session, item)
-                session.calls[call_id] = cached
-            if not self.enforce:
-                kept.append(item)
-            elif cached.item is None:
+            delivered = await self._gate_item(session, item)
+            if delivered is None:
                 changed = removed = True
                 kept.append(_REMOVED)
             else:
-                changed = changed or cached.item != item
-                kept.append(cached.item)
+                changed = changed or delivered is not item
+                kept.append(delivered)
         if removed:
             kept = _without_orphaned_reasoning(kept)
         if removed and not any(isinstance(i, dict) and i.get("type") in ("message", "function_call") for i in kept):
@@ -759,6 +692,38 @@ class Gateway:
         if changed:
             reply["output"] = kept
         return changed
+
+    async def _gate_item(self, session: Session, item: Any) -> Any:
+        """One output item through the gate: the item to deliver, the same object when nothing changes, or None when
+        enforce removes it. A whole answer and a stream (issue #578) both gate each item here."""
+        call_id = item.get("call_id") if isinstance(item, dict) else None
+        if item_type(item) not in ALLOWED_OUTPUT_TYPES:
+            _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
+                   direction="output", mode=self.config.mode)
+            return None if self.enforce else item
+        if not isinstance(item, dict) or item.get("type") != "function_call":
+            return item
+        if not isinstance(call_id, str) or not call_id:
+            # No usable call_id means no cache key and no way to match its output, and the pre-pass would refuse
+            # the resend that carries it, so enforce never delivers it.
+            _audit("call_id_invalid", session_id=session.session_id, item_type="function_call",
+                   direction="output", mode=self.config.mode)
+            invalid = StepResult(TOOL_CALL_REQUEST, None, cause="call_id_invalid",
+                                 failure_class="observed_agent_error")
+            self._record(session, invalid, Applied("deny", None, "call_id_invalid"), str(item.get("name")), None)
+            return None if self.enforce else item
+        cached = session.calls.get(call_id)
+        if cached is not None and not same_content(item, cached):
+            self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
+            return None if self.enforce else item
+        if cached is None:
+            cached = await self._gate_call(session, item)
+            session.calls[call_id] = cached
+        if not self.enforce:
+            return item
+        if cached.item is None:
+            return None
+        return item if cached.item == item else cached.item
 
     async def _gate_call(self, session: Session, item: dict[str, Any]) -> CachedOutcome:
         name = item.get("name") if isinstance(item.get("name"), str) else ""

@@ -61,8 +61,10 @@ def finbot_request(*extra: dict[str, Any], system: str = "You are FinBot for ns1
 
 @dataclass
 class SSE:
-    """A streamed reply: each entry is written and flushed on its own, like a model emitting events."""
+    """A streamed reply: each entry is written and flushed on its own, like a model emitting events. hold_open keeps
+    the connection open that many seconds after the last event, like an upstream that never closes."""
     events: list[bytes]
+    hold_open: float = 0.0
 
 
 def sse_events(text: str) -> list[bytes]:
@@ -117,6 +119,7 @@ def upstream() -> Iterator[FakeUpstream]:
                 for event in reply.events:
                     self.wfile.write(event)
                     self.wfile.flush()
+                time.sleep(reply.hold_open)
                 self.close_connection = True
                 return
             raw = reply if isinstance(reply, bytes) else json.dumps(reply).encode()

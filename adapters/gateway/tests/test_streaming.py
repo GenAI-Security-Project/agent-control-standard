@@ -119,16 +119,74 @@ def test_an_upstream_error_status_is_relayed(gateway, guardian, upstream, audit)
 
 
 @pytest.mark.parametrize("mode", ["shadow", "enforce"])
-def test_a_success_that_is_not_a_stream(gateway, guardian, upstream, audit, mode):
-    reply = response_body(BASH)
+def test_a_json_answer_to_a_stream_request_takes_the_whole_answer_gate(gateway, guardian, upstream, audit, mode):
+    reply = response_body(message_item("Cleaning up"), BASH)
     upstream.reply(reply)
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json={**finbot_request(), "stream": True})
+    assert response.status_code == 200
     if mode == "enforce":
-        assert response.status_code == 502 and b"bash" not in response.content
+        assert b"rm -rf" not in response.content
+        assert [e["decision"] for e in events(audit, "decision_applied")] == ["deny"]
     else:
+        assert response.json() == reply
+        assert [e["decision"] for e in events(audit, "shadow_decision")] == ["deny"]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_an_oversize_answer_to_a_stream_request(gateway, guardian, upstream, audit, mode):
+    reply = response_body(message_item("x" * 6000))
+    upstream.reply(reply)
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_BODY_BYTES="4000").post(
+        "/v1/responses", json={**finbot_request(), "stream": True})
+    if mode == "enforce":
+        assert response.status_code == 502
+    else:
+        # Shadow relays an oversize answer whole, as it does for a request that isn't streamed.
         assert response.status_code == 200 and response.json() == reply
-    assert events(audit, "upstream_error")[0]["cause"] == "upstream_unparseable"
+    assert events(audit, "upstream_error")[0]["cause"] == "upstream_too_large"
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_the_stream_ends_at_the_final_event_even_if_the_upstream_stays_open(gateway, guardian, upstream, mode):
+    upstream.reply(SSE(encode(stream_events(message_item("hi"))), hold_open=6.0))
+    client = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian)
+    start = time.monotonic()
+    _, _, received, _ = streamed(client)
+    assert time.monotonic() - start < 4.0
+    assert received[-1]["type"] == "response.completed"
+
+
+def test_an_allowed_call_reaches_the_client_only_as_the_judged_item(gateway, guardian, upstream, audit):
+    """The reproduced bypass: the announcement and argument deltas say bash with an rm payload, while the finished
+    item the Guardian judges is a vendor lookup."""
+    upstream_events = stream_events(LOOKUP)
+    for event in upstream_events:
+        if event["type"] == "response.output_item.added":
+            event["item"] = {**event["item"], "name": "bash"}
+        elif event["type"] == "response.function_call_arguments.delta":
+            event["delta"] = '{"command": "rm -rf /"}'
+        elif event["type"] == "response.function_call_arguments.done":
+            event["name"], event["arguments"] = "bash", '{"command": "rm -rf /"}'
+    upstream.reply(SSE(encode(upstream_events)))
+    _, _, received, raw = streamed(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian))
+    assert b"bash" not in raw and b"rm -rf" not in raw
+    assert finbot_reads(received) == ("", [("get_vendor_details", {"vendor_id": 7})])
+    assert received[-1]["response"]["output"] == [LOOKUP]
+    assert [e["tool"] for e in events(audit, "decision_applied")] == ["get_vendor_details"]
+
+
+def test_a_message_that_finishes_as_a_call_never_reaches_the_client(gateway, guardian, upstream, audit):
+    upstream_events = stream_events(message_item("hello", "msg_x"))
+    for event in upstream_events:
+        if event["type"] == "response.output_item.done":
+            event["item"] = {**BASH, "id": "msg_x"}
+    upstream_events[-1]["response"]["output"] = [{**BASH, "id": "msg_x"}]
+    upstream.reply(SSE(encode(upstream_events)))
+    _, _, received, raw = streamed(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian))
+    assert b"rm -rf" not in raw and received[-1]["type"] == "error"
+    assert not any(e["type"] == "response.completed" for e in received)
+    assert events(audit, "upstream_error")[0]["detail"] == "item_type_mismatch"
 
 
 def test_the_session_is_free_after_a_stream(gateway, guardian, upstream):
