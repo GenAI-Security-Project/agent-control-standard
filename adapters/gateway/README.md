@@ -1,6 +1,6 @@
 # acs-gateway
 
-Version 0.1.0. Owner: Rock Lambros (@rocklambros). Issue #577.
+Version 0.1.0. Owner: Rock Lambros (@rocklambros). Built for issue #577, [RefImpl] An OpenAI Responses API gateway that makes an unmodified client an Observed Agent, with off, shadow, and enforce modes.
 
 An agent you can't modify can still be governed. Point its `OPENAI_BASE_URL` at this gateway, change nothing else, and every tool call it receives has already passed an ACS Guardian. The gateway sits at the model boundary of an OpenAI Responses API client and acts as that client's ACS Observed Agent.
 
@@ -144,16 +144,34 @@ Each of these is the gateway's own choice where the specification is silent or a
 
 | Convention | Settled by |
 |---|---|
-| The three modes and `ACS_LAB_MODE` | This issue, #577. Shadow isn't decision honoring under section 6.4 |
+| The three modes and `ACS_LAB_MODE` | Issue #577. Shadow isn't decision honoring under section 6.4 |
 | A decision after the timeout is discarded, and the step is audited as `decision_timeout` | Issue #435 |
 | The gateway denies on any decision failure whatever the ServerHello says, a missing posture included | D-045 and issue #32 |
-| The neutral line stands in for a removed call or a denied output | This issue, #577 |
+| The neutral line stands in for a removed call or a denied output | Issue #577 |
 | ASK and DEFER deny | LAB-08, issue #581, adds the approver |
 | Streamed requests answer 501 in shadow and enforce. Off relays them untouched | LAB-05, issue #578 |
 | Responses are verified with acs.client's HMAC-SHA256 check inside its round trip. LAB-03 changes the algorithm dispatch inside acs.client to verify by key_id from the key document | LAB-03, issue #576, and issue #460 |
+| An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and the signed bytes would differ from the transcript line | Issue #577 |
 | `tool.version` is not sent yet | LAB-07, issue #580, sends the tool digest (issue #38) |
-| `previous_response_id` and `conversation` answer 501 in shadow and enforce, since server-side history would hide items from the gateway. FinBot never sends either | This issue, #577 |
+| `previous_response_id` and `conversation` answer 501 in shadow and enforce, since server-side history would hide items from the gateway. FinBot never sends either | Issue #577 |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
 | `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
 
 Replay and capture (LAB-06, issue #579) and spans (LAB-09, issue #582) build on this gateway as separate modules.
+
+## Issues this README names
+
+| Issue | Type | Title |
+|---|---|---|
+| #32 | Bug | §6.4 conflates Guardian refusal with decision failure; refusals are attacker-reachable and should fail closed |
+| #38 | Bug | Tool declarations have no integrity binding, so a same-version redefinition is invisible to Inspect-Dynamic |
+| #435 | Conformance | §6.4 does not say what a host does with a decision that arrives after the timeout |
+| #460 | Bug | An asymmetric key_id has no defined binding to an identity, no publication, and no revocation |
+| #576 | RefImpl | Example Guardian: sign decisions with ML-DSA-65, publish a key document, and refuse an HMAC fallback |
+| #577 | RefImpl | An OpenAI Responses API gateway that makes an unmodified client an Observed Agent, with off, shadow, and enforce modes |
+| #578 | RefImpl | Gateway: stream model responses while a tool call waits for its decision |
+| #579 | RefImpl | Gateway: replay, live, and capture modes for the model upstream |
+| #580 | RefImpl | Gateway: carry a digest of each tool declaration in tool.version so a redefinition is visible |
+| #581 | RefImpl | Gateway: resolve an ASK through an approver page and return the answer to the Guardian |
+| #582 | RefImpl | Gateway: emit OpenTelemetry spans for model calls, hooks, and decisions, with a collector configuration for Jaeger |
+| #588 | RefImpl | FinBot guided lab: compose file, container images, and the lab CLI |

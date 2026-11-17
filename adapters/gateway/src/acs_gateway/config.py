@@ -111,7 +111,7 @@ def prepare_state_dirs(env: MutableMapping[str, str]) -> Path:
             env[name] = str(state / default)
     for name in ("ACS_SESSION_STATE_DIR", "ACS_HANDSHAKE_CACHE"):
         if _under_home(Path(env[name])):
-            raise ValueError(f"{name}={env[name]} is under the home directory; the gateway keeps its state elsewhere")
+            raise ValueError(f"{name}={env[name]} is under the home directory, and the gateway keeps its state elsewhere")
     return state
 
 
