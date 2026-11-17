@@ -20,16 +20,17 @@ def test_a_2xx_answer_that_is_not_a_response_object_gets_502(gateway, guardian, 
     assert events(audit, "upstream_error")[0]["cause"] == "upstream_unparseable"
 
 
-@pytest.mark.parametrize("stream", ["true", 1, "yes", None])
-def test_any_stream_value_but_false_counts_as_streaming(gateway, guardian, upstream, stream):
+@pytest.mark.parametrize("stream", ["true", 1, "yes", 0, ""])
+def test_any_stream_value_but_false_or_null_counts_as_streaming(gateway, guardian, upstream, stream):
     body = {**finbot_request(), "stream": stream}
     response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=body)
     assert response.status_code == 501
     assert upstream.received == []
 
 
-def test_stream_false_is_not_streaming(gateway, guardian, upstream):
-    body = {**finbot_request(), "stream": False}
+@pytest.mark.parametrize("stream", [False, None])
+def test_stream_false_or_null_is_not_streaming(gateway, guardian, upstream, stream):
+    body = {**finbot_request(), "stream": stream}
     assert gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=body).status_code == 200
 
 

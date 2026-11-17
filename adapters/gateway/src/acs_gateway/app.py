@@ -81,8 +81,8 @@ def _client_headers(headers: httpx.Headers, *, decoded: bool) -> dict[str, str]:
 
 
 def is_stream(body: Any) -> bool:
-    """Any stream value but an absent one or false asks for a stream, so a truthy oddity can't slip past the 501."""
-    return isinstance(body, dict) and "stream" in body and body["stream"] is not False
+    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the 501."""
+    return isinstance(body, dict) and body.get("stream") is not None and body["stream"] is not False
 
 
 class Gateway:
