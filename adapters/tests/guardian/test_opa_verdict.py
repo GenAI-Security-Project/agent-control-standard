@@ -242,15 +242,6 @@ def test_every_failure_message_fits_200_characters():
     assert all(0 < len(text) <= 200 for text in opa_backend.FAILURE_REASONING.values())
 
 
-@pytest.mark.parametrize("number", [b"9007199254740993", b"-9007199254740993", b"1e400"])
-def test_evaluate_denies_a_number_the_guardian_cannot_sign(number):
-    # JCS (RFC 8785) encodes only integers within 2^53 and finite floats, so signing would fail after the checks.
-    body = b'{"result": {"decision": "allow", "policy_data": {"n": ' + number + b"}}}"
-    with StubOpa(body=body) as opa:
-        result = _evaluate("steps/toolCallRequest", CALL, opa.url)
-    assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
-
-
 @pytest.mark.parametrize("paths", [
     ["/outputs/0/value/bank_account_number", "/outputs/1/value/bank_account_number",
      "/outputs/0/value/bank_account_number"],

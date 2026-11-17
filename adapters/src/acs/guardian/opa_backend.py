@@ -520,12 +520,5 @@ def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], co
         problem = f"verdict validation failed: {type(e).__name__}"
     if problem:
         return _deny(base, "opa_verdict_invalid", f"OPA verdict rejected: {problem}")
-    result = {**base, **verdict}
-    try:
-        # The Guardian signs the JCS form of the response. A number JCS cannot encode (an integer beyond 2^53, or a
-        # float that overflowed to infinity) would fail there, after every check, and drop the connection.
-        from acs.core import jcs_canonicalize
-        jcs_canonicalize(result)
-    except Exception as e:  # noqa: BLE001
-        return _deny(base, "opa_verdict_invalid", f"OPA verdict cannot be canonicalized: {type(e).__name__}")
-    return result
+    # A number JCS cannot encode passes these checks. The Guardian's signing site turns it into a signed deny.
+    return {**base, **verdict}

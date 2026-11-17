@@ -215,3 +215,42 @@ def test_a_harmless_rewrite_stays_a_modify(opa_on):
         opa_on(opa)
         result = _step("steps/toolCallRequest", LISTING)
     assert (result["decision"], result["modifications"]) == ("modify", verdict["modifications"])
+
+
+
+def _handle(monkeypatch, payload: dict) -> tuple[dict, str]:
+    """One step through handle_request with the request-side checks stubbed, so only the Guardian's own answer can
+    fail to sign. A signed request can't carry a lone surrogate, so this is the only way to put one in a decision."""
+    from acs.testing.harness import make_envelope
+    monkeypatch.setenv("ACS_HMAC_SECRET", "guardian-opa-test-secret-32-bytes-long")
+    monkeypatch.setenv("ACS_HMAC_KEY_ID", "test-key")
+    monkeypatch.delenv("ACS_HMAC_SECRET_FILE", raising=False)
+    for name in ("check_signature", "check_skew", "check_replay", "check_nonce"):
+        monkeypatch.setattr(example_guardian, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(example_guardian, "append_to_chain", lambda *args, **kwargs: CHAIN)
+    # The request's own canonical form feeds the chain. A signed request always has one, so it is stubbed too.
+    monkeypatch.setattr(example_guardian, "jcs_canonicalize", lambda value: b"{}")
+    monkeypatch.setattr(example_guardian, "_SPEC_VALIDATION_AVAILABLE", False)
+    request = make_envelope("steps/toolCallRequest", payload)
+    return example_guardian.handle_request(request), request["params"]["metadata"]["session_id"]
+
+
+def _assert_signed_unsignable_deny(response: dict, session_id: str) -> None:
+    from acs.client import verify_signature
+    result = response["result"]
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["response_not_signable"])
+    assert result["reasoning"].isascii()
+    assert verify_signature(response, session_id=session_id)
+
+
+def test_a_lone_surrogate_in_a_file_path_is_a_signed_deny(no_backend):
+    payload = {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": "/etc/x\ud800"}}}
+    _assert_signed_unsignable_deny(*_handle(no_backend, payload))
+
+
+@pytest.mark.parametrize("number", [b"9007199254740993", b"1e400"])
+def test_an_opa_number_the_guardian_cannot_sign_is_a_signed_deny(opa_on, no_backend, number):
+    body = b'{"result": {"decision": "allow", "policy_data": {"n": ' + number + b"}}}"
+    with StubOpa(body=body) as opa:
+        opa_on(opa)
+        _assert_signed_unsignable_deny(*_handle(no_backend, LISTING))

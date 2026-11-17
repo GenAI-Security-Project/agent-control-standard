@@ -104,4 +104,4 @@ def test_an_unsignable_number_is_a_signed_deny(guardian, body):
     with StubOpa(body=body) as opa:
         _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
     assert result["decision"] == "deny"
-    assert result["reason_codes"][0] in ("opa_response_malformed", "opa_verdict_invalid")
+    assert result["reason_codes"][0] in ("opa_response_malformed", "response_not_signable")

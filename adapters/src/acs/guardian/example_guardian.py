@@ -640,9 +640,27 @@ def handle_request(request: dict) -> dict:
     except GuardianError as e:
         return _error_envelope(request_id, session_id, e.code, e.message)
 
+    return _signed_step_response(request_id, session_id, result)
+
+
+# Fixed ASCII, so the fallback itself always signs.
+UNSIGNABLE_REASONING = "The Guardian could not sign its decision for this step, so the step is denied."
+
+
+def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dict:
+    """Sign a step's decision. One JCS cannot encode (a lone surrogate, an integer beyond 2^53, a non-finite float)
+    is answered with a signed deny instead of a dropped connection, which a proceed posture would run."""
     envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-    sign_envelope(envelope, session_id=session_id)
-    return envelope
+    try:
+        sign_envelope(envelope, session_id=session_id)
+        return envelope
+    except Exception:  # noqa: BLE001
+        fallback = {key: result[key] for key in ("type", "acs_version", "request_id", "chain_hash") if key in result}
+        envelope = {"jsonrpc": "2.0", "id": request_id,
+                    "result": {**fallback, "decision": "deny", "reasoning": UNSIGNABLE_REASONING,
+                               "reason_codes": ["response_not_signable"]}}
+        sign_envelope(envelope, session_id=session_id)
+        return envelope
 
 
 class GuardianHandler(http.server.BaseHTTPRequestHandler):
