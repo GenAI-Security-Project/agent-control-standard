@@ -243,3 +243,11 @@ def test_a_400_digit_integer_id_is_answered_never_500(served):
     big = int("9" * 400)
     status, answer = post(served, _ping(big))
     assert status != 500 and answer["id"] == big
+
+
+def test_the_floor_echoes_an_id_that_parsed(served, monkeypatch):
+    def broken(request, read=None):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(example_guardian, "handle_request", broken)
+    status, answer = post(served, _ping("keep-me"))
+    assert (answer["error"]["code"], answer["id"]) == (-32603, "keep-me")

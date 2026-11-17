@@ -863,6 +863,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         """Answer every request. The specific checks give specific codes. This guard is the floor beneath them."""
         self._answered = False
+        self._answer_id = None
         try:
             self._serve()
         except Exception as e:  # noqa: BLE001
@@ -870,7 +871,8 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             sys.stderr.write(f"[guardian] internal error: {type(e).__name__}\n")
             sys.stderr.flush()
             if not self._answered:
-                self._respond(500, {"jsonrpc": "2.0", "id": None,
+                # The request's own id when it parsed and passed the id rule, else null.
+                self._respond(500, {"jsonrpc": "2.0", "id": self._answer_id,
                                     "error": {"code": -32603, "message": INTERNAL_ERROR_MESSAGE}})
 
     def _serve(self) -> None:
@@ -903,7 +905,9 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
 
         # One extraction for the log line too. A request whose structure is wrong logs as invalid, and
         # handle_request answers it.
-        fields = read_request(request).fields
+        read = read_request(request)
+        self._answer_id = read.id
+        fields = read.fields
         if fields is None:
             sys.stderr.write("[guardian] invalid request\n")
         else:
