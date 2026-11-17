@@ -7,12 +7,14 @@ on:
   push:
     paths:
       - 'adapters/**'
+      - 'adapters/gateway/**'
       - 'specification/**'
       - 'docs/spec/**'
       - '.github/workflows/adapter_tests.yml'
   pull_request:
     paths:
       - 'adapters/**'
+      - 'adapters/gateway/**'
       - 'specification/**'
       - 'docs/spec/**'
       - '.github/workflows/adapter_tests.yml'
@@ -122,3 +124,24 @@ jobs:
         run: uv build --python "$PYTHON" -o dist
       - name: Install the wheel outside the repository and check it
         run: uv run --no-project --python "$PYTHON" python scripts/check_wheel.py dist/acs_adapters-*-py3-none-any.whl
+
+  gateway:
+    # The OpenAI Responses API gateway (issue #577) is its own uv project, with its own lockfile, that depends on
+    # the adapters by path. Its tests start the example Guardian and a fake model upstream on localhost.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: adapters/gateway
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Install the gateway and its test group from the lockfile
+        run: uv sync --locked --python 3.12
+      - name: Run the gateway tests
+        run: uv run pytest -v
