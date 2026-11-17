@@ -256,6 +256,40 @@ class ResponseKeysTest(_ResponseKeysBase):
         self.assertIsInstance(decision, SessionRefused)
         self.assertEqual(decision.cause, "server_hello_signature_invalid")
 
+    def test_a_signed_step_decision_offered_as_a_server_hello_is_no_answer(self) -> None:
+        # Review round 4 L1: LAB-01 drops the binding rule's request_id refusal, so a signed decision whose JSON-RPC id
+        # collides with the ClientHello's verifies by keyring alone. The required-field check must still refuse it,
+        # with or without the request_id, on the key document path as on the HMAC path.
+        from acs.client import NoAnswer
+        for name, with_request_id in (("with request_id", True), ("without request_id", False)):
+            with self.subTest(name):
+                def answer(hello: dict) -> dict:
+                    result = {"type": "final", "acs_version": ACS_VERSION, "decision": "allow",
+                              DIGEST: _digest(hello)}
+                    if with_request_id:
+                        result["request_id"] = hello["params"]["request_id"]
+                    return sign_with_signing_key({"jsonrpc": "2.0", "id": hello["id"], "result": result},
+                                                 self.signer)
+                with mock.patch.object(_handshake, "server_hello_problem",
+                                       wraps=_handshake.server_hello_problem) as checked:
+                    decision = self.hello(answer, session_id=f"decision-as-hello-{with_request_id}")
+                self.assertNotIsInstance(decision, Negotiated)
+                if with_request_id and isinstance(decision, SessionRefused):
+                    # Today's base still refuses a handshake result that carries request_id inside the binding rule,
+                    # so the signature never verifies. After LAB-01 drops that rule, this case reaches the
+                    # required-field check below like the other one.
+                    self.assertEqual(decision.cause, "server_hello_signature_invalid")
+                    continue
+                self.assertIsInstance(decision, NoAnswer)
+                self.assertEqual(decision.cause, "invalid_server_hello")
+                # It lacks negotiated_version, which the classifier checks before server_hello_problem runs.
+                self.assertEqual(checked.call_count, 0)
+
+    def test_a_verified_server_hello_goes_through_server_hello_problem(self) -> None:
+        with mock.patch.object(_handshake, "server_hello_problem", wraps=_handshake.server_hello_problem) as checked:
+            self.assertIsInstance(self.hello(self.ml_hello, session_id="checked-hello"), Negotiated)
+        checked.assert_called_once()
+
     def test_a_verified_refusal_keeps_its_reason(self) -> None:
         reason = {"reason": "unsupported_signature_algorithm"}
         decision = self.hello(lambda h: self.ml_error(h, -32000, reason))
