@@ -11,7 +11,7 @@ import pytest
 
 from acs.testing.harness import launch_guardian, signing_env
 from opa_stub import StubOpa, closed_port_url
-from round_trip_helpers import TRANSFER, VENDOR_RESULT, apply_redactions, send_step
+from round_trip_helpers import SESSION, TRANSFER, VENDOR_RESULT, apply_redactions, send_step
 
 
 def test_a_modify_redacts_every_output_of_a_tool_result(guardian):
@@ -126,14 +126,30 @@ def test_a_request_nested_past_the_parser_limit_gets_a_parse_error(guardian):
     assert (status, body["error"]["code"]) == (400, -32700)
 
 
-def test_a_request_nested_just_under_the_parser_limit_gets_an_answer(guardian):
+def _signed_nested(depth: int) -> bytes:
     import json
     from acs.testing.harness import make_envelope
-    url = guardian(closed_port_url())
-    text = json.dumps(make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {}}))
-    text = text.replace('"arguments": {}', '"arguments": {"deep": {"value": ' + "[" * 990 + "]" * 990 + "}}")
-    status, body = _post_raw(url, text.encode())
-    assert "error" in body or "result" in body
+    deep: list = []
+    for _ in range(depth):
+        deep = [deep]
+    request = make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {"x": {"value": deep}}},
+                            session_id=SESSION, sign_with_secret=signing_env()["ACS_HMAC_SECRET"])
+    return json.dumps(request).encode()
+
+
+def test_a_signed_request_under_the_depth_bound_gets_a_decision_over_http(guardian):
+    from acs.guardian.example_guardian import MAX_REQUEST_DEPTH
+    status, body = _post_raw(guardian(closed_port_url()), _signed_nested(MAX_REQUEST_DEPTH - 20))
+    assert status == 200 and body["result"]["decision"] == "deny"  # OPA is down in this fixture, so it denies
+
+
+def test_a_signed_request_past_the_depth_bound_gets_a_signed_invalid_request_over_http(guardian):
+    from acs.client import verify_signature
+    from acs.guardian.example_guardian import MAX_REQUEST_DEPTH
+    status, body = _post_raw(guardian(closed_port_url()), _signed_nested(MAX_REQUEST_DEPTH + 50))
+    assert body["error"]["code"] == -32600
+    assert verify_signature(body, session_id=SESSION)
+
 
 
 @pytest.mark.parametrize("body,code", [
