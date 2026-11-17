@@ -141,6 +141,38 @@ class GoCryptoMldsaAcceptsTheLibrary(unittest.TestCase):
         # A context mismatch fails with no other sign, which is why the library states its context.
         self.assertFalse(self._verify(context="acs"))
 
+    def _go_raw(self, request: dict) -> dict:
+        """The Go tool's JSON output as written, so byte fields stay in Go's own base64 spelling."""
+        proc = subprocess.run([str(self.binary)], input=json.dumps(request), capture_output=True,
+                              text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_a_go_encoded_ml_dsa_value_verifies_as_written(self) -> None:
+        # Review finding CR5-8: Go's standard encoder emits the canonical spelling the library requires.
+        import acs.core
+        from acs.core._signing import signing_input
+        request = {"jsonrpc": "2.0", "id": "go-1", "method": "steps/toolCallRequest",
+                   "params": {"acs_version": "0.1.0", "request_id": "go-1"}}
+        response = {"jsonrpc": "2.0", "id": "go-1",
+                    "result": {"acs_version": "0.1.0", "request_id": "go-1", "decision": "allow"}}
+        go_value = self._go_raw({"op": "sign", "seed": _b64(SEED), "message": _b64(signing_input(response))})["signature"]
+        response["result"]["signature"] = {"algorithm": "ML-DSA-65", "value": go_value, "key_id": KEY_ID}
+        keyring = acs.core.Keyring([self.signer.verification_key()])
+        self.assertTrue(acs.core.verify_with_keyring(response, keyring, expected_key_id=KEY_ID, request=request))
+
+    def test_a_go_encoded_hmac_value_verifies_on_the_default_path(self) -> None:
+        # CR5-8: the canonical-base64 rule on the HMAC default path accepts what Go emits.
+        from acs.core import derive_session_key, verify_with_key
+        from acs.core._signing import signing_input
+        key = derive_session_key(bytes(range(32)), "0f8fad5b-d9cb-469f-a165-70867728950e")
+        request = {"jsonrpc": "2.0", "id": "go-2", "method": "steps/toolCallRequest",
+                   "params": {"acs_version": "0.1.0", "request_id": "go-2",
+                              "metadata": {"session_id": "0f8fad5b-d9cb-469f-a165-70867728950e"}}}
+        go_value = self._go_raw({"op": "hmac", "key": _b64(key), "message": _b64(signing_input(request))})["mac"]
+        request["params"]["signature"] = {"algorithm": "HMAC-SHA256", "value": go_value, "key_id": "lab"}
+        self.assertTrue(verify_with_key(request, key))
+
     def test_go_rejects_a_flipped_signature_byte(self) -> None:
         flipped = bytearray(self.signature)
         flipped[100] ^= 0x01

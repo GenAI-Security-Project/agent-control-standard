@@ -12,10 +12,16 @@
 //	{"op": "sign", "seed": ..., "message": ..., "context": ...}          -> {"signature": ...}
 //	{"op": "verify", "public_key": ..., "message": ..., "signature": ..., "context": ...}
 //	                                                                     -> {"valid": true|false}
+//	{"op": "hmac", "key": ..., "message": ...}                           -> {"mac": ...}
+//
+// The hmac op is HMAC-SHA256. It exists so a test can feed the library a value spelled by
+// Go's own base64 encoder, which encoding/json uses for every byte field.
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/mldsa"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,6 +34,7 @@ type request struct {
 	Message   []byte `json:"message"`
 	Signature []byte `json:"signature"`
 	Context   string `json:"context"`
+	Key       []byte `json:"key"`
 }
 
 func run() (map[string]any, error) {
@@ -61,6 +68,10 @@ func run() (map[string]any, error) {
 		}
 		// A bad signature is an answer, not an error, so the caller can tell the two apart.
 		return map[string]any{"valid": mldsa.Verify(pk, req.Message, req.Signature, opts) == nil}, nil
+	case "hmac":
+		mac := hmac.New(sha256.New, req.Key)
+		mac.Write(req.Message)
+		return map[string]any{"mac": mac.Sum(nil)}, nil
 	}
 	return nil, fmt.Errorf("unknown op %q", req.Op)
 }
