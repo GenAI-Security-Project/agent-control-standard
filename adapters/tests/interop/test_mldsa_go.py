@@ -1,8 +1,9 @@
 """Go's crypto/mldsa, an implementation outside the library under test, accepts acs.core's ML-DSA-65 signatures.
 
-Issue #574 done_when. This module sits outside every suite run_conformance.py runs, because CI
-runners don't promise Go 1.26. Run it with `uv run --extra pqc python -m pytest tests/interop -v`
-from adapters/. Without Go it skips and says why.
+Issue #574 done_when. The tests-pqc CI job runs this module with ACS_REQUIRE_GO_INTEROP=1,
+under which a missing Go or a missing pqc extra fails instead of skipping. Locally, from
+adapters/: `ACS_REQUIRE_GO_INTEROP=1 uv run --extra pqc python -m pytest tests/interop -q`.
+Without the variable it skips and says why. It sits outside every run_conformance.py suite.
 """
 from __future__ import annotations
 
@@ -10,50 +11,102 @@ import base64
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.pqc_extra import require_pqc
+from tests.pqc_extra import PQC_SKIP_REASON, pqc_installed
 
-require_pqc()
-
-from acs.core import MLDSA65SigningKey, sign_with_signing_key, signing_input  # noqa: E402
-
+REQUIRE = os.environ.get("ACS_REQUIRE_GO_INTEROP") == "1"
 GO_SOURCE = Path(__file__).resolve().parent / "mldsa" / "main.go"
 SEED = bytes(range(32))
 KEY_ID = "lab-guardian-1"
 # GOTOOLCHAIN=local stops go from downloading a toolchain the test didn't ask for.
 GO_ENV = {**os.environ, "GOTOOLCHAIN": "local"}
+PROBE_TIMEOUT_S = 60
 
 
-def _go_problem() -> str | None:
-    go = shutil.which("go")
+def go_problem(go: str | None, *, timeout: float = PROBE_TIMEOUT_S) -> str | None:
+    """Why this Go can't run the check, or None. Probes once, with a timeout."""
     if go is None:
         return "go is not on PATH: the ML-DSA-65 interop check needs Go 1.26 or later (crypto/mldsa)"
-    probe = subprocess.run([go, "list", "crypto/mldsa"], capture_output=True, text=True, env=GO_ENV, timeout=60)
+    try:
+        probe = subprocess.run([go, "list", "crypto/mldsa"], capture_output=True, text=True,
+                               env=GO_ENV, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return f"{go} list crypto/mldsa timed out after {timeout} s"
+    except OSError as exc:
+        return f"{go} could not run: {exc}"
     if probe.returncode != 0:
         return "this Go has no crypto/mldsa: the ML-DSA-65 interop check needs Go 1.26 or later"
     return None
+
+
+def unavailable(problem: str, *, require: bool) -> Exception:
+    """A skip normally. A failure under ACS_REQUIRE_GO_INTEROP=1, where CI promises Go and the extra."""
+    if require:
+        return AssertionError(f"ACS_REQUIRE_GO_INTEROP=1 but {problem}")
+    return unittest.SkipTest(problem)
 
 
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
-@unittest.skipIf(_go_problem() is not None, _go_problem() or "")
+class GoProbe(unittest.TestCase):
+    """The probe and the skip-or-fail choice, checked without needing Go."""
+
+    def _script(self, body: str) -> str:
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = Path(directory) / "go"
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return str(path)
+
+    def test_no_go_on_path(self) -> None:
+        self.assertIn("not on PATH", go_problem(None) or "")
+
+    def test_a_go_that_hangs_times_out(self) -> None:
+        self.assertIn("timed out", go_problem(self._script("sleep 5"), timeout=0.5) or "")
+
+    def test_a_go_that_cannot_run(self) -> None:
+        self.assertIn("could not run", go_problem("/nonexistent/acs-test/go") or "")
+
+    def test_a_go_without_crypto_mldsa(self) -> None:
+        self.assertIn("no crypto/mldsa", go_problem(self._script("exit 1")) or "")
+
+    def test_a_go_with_crypto_mldsa(self) -> None:
+        self.assertIsNone(go_problem(self._script("echo crypto/mldsa")))
+
+    def test_skip_by_default_and_fail_when_required(self) -> None:
+        self.assertIsInstance(unavailable("why", require=False), unittest.SkipTest)
+        failure = unavailable("why", require=True)
+        self.assertIsInstance(failure, AssertionError)
+        self.assertIn("why", str(failure))
+
+
 class GoCryptoMldsaAcceptsTheLibrary(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if not pqc_installed():
+            raise unavailable(PQC_SKIP_REASON, require=REQUIRE)
+        go = shutil.which("go")
+        problem = go_problem(go)
+        if problem is not None:
+            raise unavailable(problem, require=REQUIRE)
         cls._tmp = tempfile.TemporaryDirectory()
         cls.binary = Path(cls._tmp.name) / "mldsa"
-        subprocess.run(["go", "build", "-o", str(cls.binary), str(GO_SOURCE)],
+        subprocess.run([go, "build", "-o", str(cls.binary), str(GO_SOURCE)],
                        check=True, capture_output=True, env=GO_ENV, timeout=300)
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls._tmp.cleanup()
+        tmp = getattr(cls, "_tmp", None)
+        if tmp is not None:
+            tmp.cleanup()
 
     def _go(self, request: dict) -> dict:
         proc = subprocess.run([str(self.binary)], input=json.dumps(request), capture_output=True,
@@ -62,6 +115,8 @@ class GoCryptoMldsaAcceptsTheLibrary(unittest.TestCase):
         return json.loads(proc.stdout)
 
     def setUp(self) -> None:
+        from acs.core._mldsa import MLDSA65SigningKey, sign_with_signing_key
+        from acs.core._signing import signing_input
         self.signer = MLDSA65SigningKey.from_seed(SEED, KEY_ID)
         self.public_key = self.signer.verification_key().public_key
         envelope = {"jsonrpc": "2.0", "id": "1",
