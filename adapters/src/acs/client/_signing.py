@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from acs.client._secrets import load_hmac_secret, load_key_id, load_signing_material
 from acs.core import container_key, derive_session_key, sign_with_key, verify_with_key
+
+if TYPE_CHECKING:
+    from acs.core import Keyring
 
 
 def sign_envelope(envelope: dict, *, key: bytes | None = None,
@@ -21,8 +26,20 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 
 
 def verify_signature(envelope: dict, *, key: bytes | None = None,
-                     session_id: str | None = None, key_id: str | None = None) -> bool:
-    """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid."""
+                     session_id: str | None = None, key_id: str | None = None,
+                     keyring: Keyring | None = None) -> bool:
+    """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid.
+
+    With a keyring, the envelope's key_id names a key in it and that key's algorithm decides
+    (RFC 8725 section 3.1). The ACS_HMAC_* settings play no part. Keyring verification needs
+    the pqc extra (issue #574).
+    """
+    if keyring is not None:
+        if key is not None or session_id is not None or key_id is not None:
+            raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
+        # Imported here so the HMAC path never loads cryptography.
+        from acs.core import verify_with_keyring
+        return verify_with_keyring(envelope, keyring)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False
