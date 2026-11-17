@@ -118,7 +118,7 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
                  start: Callable[[Negotiated], Decided | Resolution | None] | None = None,
                  count_start_failure: Callable[[str], None] | None = None,
                  response_keys: ResponseKeys | None = None, on_wire: OnWire | None = None) -> Handshake:
-    """The session's decision, stored once under an HMAC; with start, the opening process also sends sessionStart under the startup lock. Never raises.
+    """The session's decision, stored once under an HMAC. With start, the opening process also sends sessionStart under the startup lock. Never raises.
 
     on_wire sees the ClientHello before it is sent and the Guardian's answer before it is
     classified. A stored decision is reused with no on_wire call, since nothing crosses the wire.

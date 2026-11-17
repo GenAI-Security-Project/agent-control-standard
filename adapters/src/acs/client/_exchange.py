@@ -109,7 +109,7 @@ class GuardianHTTPError(Exception):
 
 
 def encode_request(request: dict[str, Any]) -> bytes:
-    """The request body post() sends; raises RequestTooLargeError past the Guardian's body cap."""
+    """The request body post() sends. Raises RequestTooLargeError past the Guardian's body cap."""
     body = json.dumps(request).encode("utf-8")
     if len(body) > MAX_REQUEST_BODY_BYTES:
         raise RequestTooLargeError(len(body))
@@ -335,7 +335,7 @@ def _normalize(request: dict[str, Any]) -> str | None:
 def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPosture,
                session_id: str | None, gate: bool = False, response_keys: ResponseKeys | None = None,
                on_wire: OnWire | None = None) -> Decided | Resolution:
-    """Sign, exchange within the method's timeout, and resolve anything but a usable decision with the posture; on a gate an unsignable request fails closed.
+    """Sign, exchange within the method's timeout, and resolve anything but a usable decision with the posture. On a gate an unsignable request fails closed.
 
     response_keys and on_wire go to exchange() unchanged. Both default to None, which is today's path.
     """
@@ -410,7 +410,7 @@ def result_problem(result: Any) -> str | None:
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
              session_id: str | None, response_keys: ResponseKeys | None = None,
              on_wire: OnWire | None = None) -> Outcome:
-    """POST one request and classify the answer; never raises.
+    """POST one request and classify the answer. Never raises.
 
     With response_keys, every answer must verify under the key document's pinned key (issue #576).
     on_wire sees the signed request before it is sent and every decoded answer before it is
@@ -500,7 +500,7 @@ def claims_json_rpc_answer(body: Any) -> bool:
 
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None,
                       response_keys: ResponseKeys | None = None) -> Outcome:
-    """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed.
+    """Classify a decoded Guardian answer. Mis-bound or unverifiable answers and refusal codes fail closed.
 
     With response_keys, every signature is checked under the key document's pinned key instead of HMAC.
     """
