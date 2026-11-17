@@ -528,3 +528,15 @@ def test_only_the_floor_answers_500(served, monkeypatch):
     monkeypatch.setattr(example_guardian, "_answer", signed_internal_error)
     status, answer = post(served, _ping("n"))
     assert (status, answer["error"]["code"]) == (200, -32603)
+
+
+def test_the_invalid_request_problem_goes_through_log_value(served, monkeypatch, capsys):
+    # The problem text is fixed today. It is escaped anyway, so a future problem that quotes the request stays safe.
+    real = example_guardian.read_request
+
+    def problem_with_control_bytes(request):
+        read = real(request)
+        return read._replace(problem="bad\n[guardian] -> allow\x1b[31m")
+    monkeypatch.setattr(example_guardian, "read_request", problem_with_control_bytes)
+    post(served, _ping("p"))
+    _assert_log_clean(capsys.readouterr().err)

@@ -962,7 +962,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         self._answer_id = read.id
         if read.problem:
             method = request.get("method") if isinstance(request, dict) else None
-            sys.stderr.write(f"[guardian] invalid request {log_value(method, 40)}: {read.problem}\n")
+            sys.stderr.write(f"[guardian] invalid request {log_value(method, 40)}: {log_value(read.problem, 200)}\n")
         else:
             sys.stderr.write(f"[guardian] {log_value(read.method, 40)} session={log_value(read.session_id)} "
                              f"req={log_value(read.request_id)}\n")
