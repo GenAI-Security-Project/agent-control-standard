@@ -66,7 +66,6 @@ def test_the_probe_rejects_another_listener(fake_opa):
     assert not opa_process.healthy(port, _Alive(), "mine", deadline_s=1)
 
 
-
 @pytest.mark.parametrize("config", [b'{"result": "x"}', b'{"result": {"labels": "x"}}', b'[1]', b'not json',
                                     b'{"result": null}'])
 def test_a_malformed_config_body_is_not_this_opa(fake_opa, config):

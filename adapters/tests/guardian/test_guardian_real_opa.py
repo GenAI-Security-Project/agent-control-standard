@@ -23,6 +23,7 @@ def opa_url(tmp_path):
     with running_opa(OPA, POLICY, tmp_path) as url:
         yield url
 
+
 def test_the_policy_redacts_every_output(guardian, opa_url):
     _, result = send_step(guardian(opa_url), "steps/toolCallResult", VENDOR_RESULT)
     assert result["decision"] == "modify"

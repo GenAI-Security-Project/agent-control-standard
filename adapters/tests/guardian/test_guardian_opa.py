@@ -239,7 +239,6 @@ def test_a_harmless_rewrite_stays_a_modify(opa_on):
     assert (result["decision"], result["modifications"]) == ("modify", verdict["modifications"])
 
 
-
 def _handle(monkeypatch, payload: dict) -> tuple[dict, str]:
     """One step through handle_request with the request-side checks stubbed, so only the Guardian's own answer can
     fail to sign. A signed request can't carry a lone surrogate, so this is the only way to put one in a decision."""
@@ -278,7 +277,6 @@ def test_an_opa_number_the_guardian_cannot_sign_is_a_signed_deny(opa_on, no_back
         _assert_signed_unsignable_deny(*_handle(no_backend, LISTING))
 
 
-
 def test_a_modify_cannot_rename_the_tool_after_the_hard_denies_ran(opa_on):
     payload = {"tool": {"name": "noop"}, "arguments": {"command": {"value": "rm -rf /"}}}
     verdict = _modify(redactions=[{"path": "/tool/name", "replacement": "Bash"}])
@@ -286,8 +284,6 @@ def test_a_modify_cannot_rename_the_tool_after_the_hard_denies_ran(opa_on):
         opa_on(opa)
         result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
-
-
 
 
 def test_the_recheck_copies_only_the_arguments(opa_on, monkeypatch):
@@ -304,7 +300,6 @@ def test_the_recheck_copies_only_the_arguments(opa_on, monkeypatch):
         opa_on(opa)
         assert _step("steps/toolCallRequest", payload)["decision"] == "modify"
     assert copied == [LISTING["arguments"]]
-
 
 
 def _write(path: str) -> dict:
@@ -344,7 +339,6 @@ def test_an_ordinary_path_still_writes(no_backend, path):
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
 
 
-
 WRITE_CAPABLE = [
     ("Write", "file_path"), ("Edit", "file_path"), ("MultiEdit", "file_path"),
     ("NotebookEdit", "notebook_path"), ("edit", "file_path"), ("write", "file_path"),
@@ -377,7 +371,6 @@ def test_a_notebook_path_of_the_wrong_type_denies(no_backend):
     assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
 
 
-
 ALIASES = ["/private/etc/passwd", "/ETC/passwd", "/Etc/hosts", "/USR/bin/x", "/proc/self/root/etc/passwd",
            "/proc/1/mem", "/private/../private/etc/sudoers", "/System/Volumes/Data/private/etc/passwd",
            "/System/Volumes/Data/usr/local/bin/x", "/system/volumes/data/etc/hosts"]
@@ -397,7 +390,6 @@ def test_a_protected_path_is_caught_under_its_aliases_under_opa(opa_on, path):
     assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
 
 
-
 @pytest.mark.parametrize("field", ["tool", "arguments"])
 @pytest.mark.parametrize("value", [[], "", 0, False, None])
 def test_a_present_falsy_tool_or_arguments_denies(no_backend, field, value):
@@ -408,7 +400,6 @@ def test_a_present_falsy_tool_or_arguments_denies(no_backend, field, value):
 
 def test_absent_tool_and_arguments_keep_todays_answer(no_backend):
     assert _step("steps/toolCallRequest", {})["decision"] == "allow"
-
 
 
 @pytest.mark.parametrize("name", ["opa", "rego"])
@@ -431,7 +422,6 @@ def test_the_backend_name_is_read_once_at_import():
     assert out.stdout.strip() == "['policy_backend_misconfigured']"
 
 
-
 def test_a_signing_failure_other_than_canonicalization_is_not_relabeled(no_backend, monkeypatch):
     # Only an encoding failure becomes response_not_signable. Anything else is a bug and propagates as before.
     calls = []
@@ -446,7 +436,6 @@ def test_a_signing_failure_other_than_canonicalization_is_not_relabeled(no_backe
     monkeypatch.setattr(example_guardian, "sign_envelope", first_call_breaks)
     with pytest.raises(KeyError):
         _handle(no_backend, LISTING)
-
 
 
 def test_a_result_nested_past_the_recursion_limit_is_a_signed_deny(no_backend, monkeypatch):
@@ -471,8 +460,6 @@ def test_the_canonicalization_errors_cover_every_jcs_failure():
             jcs_canonicalize({"v": value})
 
 
-
-
 @pytest.mark.parametrize("at_import,live", [("", "opa"), ("opa", ""), ("opa", "rego")])
 def test_the_guardian_refuses_to_start_when_the_backend_changed_after_import(no_backend, capsys, at_import, live):
     no_backend.setattr(example_guardian, "POLICY_BACKEND_NAME", at_import)
@@ -480,7 +467,6 @@ def test_the_guardian_refuses_to_start_when_the_backend_changed_after_import(no_
         no_backend.setenv("ACS_POLICY_BACKEND", live)
     assert _run_main(no_backend) == [1], "the Guardian started with a backend that changed after import"
     assert "changed after import" in capsys.readouterr().err
-
 
 
 def _nested_request(depth: int, monkeypatch) -> dict:
@@ -537,7 +523,6 @@ def test_the_last_resort_guard_answers_signed(no_backend, monkeypatch):
     assert verify_signature(response, session_id=request["params"]["metadata"]["session_id"])
 
 
-
 @pytest.mark.parametrize("tool,arguments", [
     ("Move", {"source": "/tmp/payload", "destination": "/etc/cron.d/x"}),
     ("Rename", {"path": "/tmp/payload", "new_path": "/etc/sudoers"}),
@@ -548,7 +533,6 @@ def test_a_move_or_rename_into_a_protected_path_denies(no_backend, tool, argumen
     payload = {"tool": {"name": tool}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
     result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
-
 
 
 @pytest.mark.parametrize("derivation", [["fresh"], {"x": 1}, 7, True])
@@ -562,13 +546,11 @@ def test_an_absent_or_null_intent_derivation_keeps_todays_answer(no_backend):
         assert _step("steps/subagentStart", payload)["reason_codes"] == ["subagent_gated"]
 
 
-
 @pytest.mark.parametrize("path", ["/private/tmp/x", "/var/tmp/x", "/processes.txt",
                                   "/System/Volumes/Data/private/tmp/x", "/etcetera/notes.txt"])
 def test_an_unprotected_path_beside_a_protected_one_still_writes(no_backend, path):
     # Prefixes end at a path separator, and only /private/etc is an alias, so these neighbours stay writable.
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
-
 
 
 def _string_literals(source: str) -> list[tuple[str, int]]:
@@ -590,13 +572,11 @@ def test_the_backend_variable_name_is_defined_once():
     assert found == ["_policy_backend.py"]
 
 
-
 @pytest.mark.parametrize("path", ["/Volumes/Macintosh HD/etc/passwd", "/tmp/link-to-etc/passwd"])
 def test_known_limit_a_symlink_or_firmlink_spelling_passes_the_lexical_check(no_backend, path):
     # Known limit, documented in docs/guardian/README.md: the built-in path denies compare spellings, not files.
     # The Guardian may not share the agent's filesystem, so it can't resolve links, and a policy is the control.
     assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
-
 
 
 def _file_call(tool: str, **arguments) -> dict:
@@ -645,6 +625,7 @@ def test_only_paths_takes_a_list_and_it_must_not_be_empty(no_backend, arguments)
 
 def test_a_paths_list_of_ordinary_files_still_deletes(no_backend):
     assert _step("steps/toolCallRequest", _file_call("Delete", paths=["/tmp/a", "/tmp/b"]))["decision"] == "allow"
+
 
 @pytest.mark.parametrize("method", ["steps/toolCallRequest", "steps/toolCallResult", "steps/sessionStart"])
 @pytest.mark.parametrize("payload", [[], "", "x", 0, None])

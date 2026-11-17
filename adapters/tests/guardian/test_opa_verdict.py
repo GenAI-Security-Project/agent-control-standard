@@ -328,7 +328,6 @@ def test_an_empty_parameter_overrides_object_is_invalid():
     assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
 
 
-
 @pytest.mark.parametrize("method,payload,path", [
     ("steps/toolCallRequest", CALL, "/tool/name"),
     ("steps/toolCallRequest", CALL, "/tool"),
@@ -350,7 +349,6 @@ def test_a_modify_touches_only_arguments_on_a_call_and_outputs_on_a_result(metho
     assert problem
 
 
-
 def _deep_paths(count: int, depth: int) -> list[str]:
     stem = "/outputs/0/value" + "/a" * (depth - 4)
     return [f"{stem}/k{i}" for i in range(count)]
@@ -368,7 +366,6 @@ def test_the_overlap_check_still_finds_a_deep_prefix_or_duplicate(extra):
     assert opa_backend._overlap_problem(_deep_paths(2000, 900) + [extra])
 
 
-
 @pytest.mark.parametrize("paths", [
     ["/arguments/a~", "/arguments/a~0"],
     ["/arguments/a~2"],
@@ -377,7 +374,6 @@ def test_the_overlap_check_still_finds_a_deep_prefix_or_duplicate(extra):
 def test_an_invalid_pointer_escape_is_an_overlap_problem(paths):
     # RFC 6901 allows only ~0 and ~1. Without that rule, /arguments/a~ and /arguments/a~0 both name key a~.
     assert opa_backend._overlap_problem(paths)
-
 
 
 def _deep_result(depth: int) -> tuple[dict, str]:
@@ -401,7 +397,6 @@ def test_a_redaction_path_64_tokens_deep_passes():
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) is None
 
 
-
 @pytest.mark.parametrize("pointer", ["/a~2", "/a~", "/~x/b", "a/b"])
 def test_one_pointer_parser_rejects_an_invalid_pointer_everywhere(pointer):
     document = {"a~2": 1, "a~": 1, "~x": {"b": 1}, "a": {"b": 1}}
@@ -419,7 +414,6 @@ def test_a_redaction_with_an_invalid_escape_is_invalid_even_when_its_raw_key_exi
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE)
 
 
-
 @pytest.mark.parametrize("token", ["\u0663", "\u00b2", "01", "+1", " 1", "1 "])
 def test_an_array_index_is_ascii_digits_only(token):
     # str.isdigit accepts Arabic-Indic digits and superscripts. Neither is an RFC 6901 array index.
@@ -427,7 +421,6 @@ def test_an_array_index_is_ascii_digits_only(token):
     verdict = {"decision": "modify", "reasoning": "r",
                "modifications": {"redactions": [{"path": f"/outputs/{token}/value"}]}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", RESULT, BASE)
-
 
 
 def test_the_coverage_walk_treats_an_unresolved_path_as_a_problem():

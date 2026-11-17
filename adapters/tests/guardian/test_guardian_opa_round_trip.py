@@ -107,7 +107,6 @@ def test_an_unsignable_number_is_a_signed_deny(guardian, body):
     assert result["reason_codes"][0] in ("opa_response_malformed", "response_not_signable")
 
 
-
 def _post_raw(url: str, body: bytes) -> tuple[int, dict]:
     import json
     import urllib.error
@@ -150,7 +149,6 @@ def test_a_signed_request_past_the_depth_bound_gets_a_signed_invalid_request_ove
     status, body = _post_raw(guardian(closed_port_url()), _signed_nested(MAX_REQUEST_DEPTH + 50))
     assert body["error"]["code"] == -32600
     assert verify_signature(body, session_id=SESSION)
-
 
 
 @pytest.mark.parametrize("body,code", [
