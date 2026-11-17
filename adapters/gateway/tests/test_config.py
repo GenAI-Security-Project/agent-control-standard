@@ -45,3 +45,16 @@ def test_prepare_state_dirs_without_a_state_dir_uses_a_private_temp_dir():
     assert state.name.startswith("acs-gateway-")
     assert env["ACS_GATEWAY_STATE_DIR"] == str(state)
     assert (state.stat().st_mode & 0o777) == 0o700
+
+
+@pytest.mark.parametrize("name", ["ACS_GATEWAY_WORKERS", "ACS_GATEWAY_MAX_SESSIONS", "ACS_GATEWAY_MAX_BODY_BYTES"])
+@pytest.mark.parametrize("value", ["0.5", "1.5", "0", "-3", "ten", "1e3"])
+def test_integer_settings_refuse_anything_but_a_whole_number_of_at_least_one(tmp_path, name, value):
+    with pytest.raises(ValueError, match=name):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), name: value})
+
+
+def test_integer_settings_read_whole_numbers(tmp_path):
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_WORKERS": "3",
+                                     "ACS_GATEWAY_MAX_SESSIONS": "7", "ACS_GATEWAY_MAX_BODY_BYTES": "1024"})
+    assert (config.workers, config.max_sessions, config.max_body_bytes) == (3, 7, 1024)

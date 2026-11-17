@@ -32,6 +32,16 @@ def _positive_number(env: Mapping[str, str], name: str, default: float) -> float
     return value
 
 
+def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
+    """A whole number of at least 1. A fraction is refused rather than truncated, since 0.5 workers would become 0."""
+    raw = env.get(name, "").strip()
+    if not raw:
+        return default
+    if not raw.isdigit() or int(raw) < 1:
+        raise ValueError(f"{name} must be a whole number of at least 1, got {raw!r}")
+    return int(raw)
+
+
 @dataclass(frozen=True)
 class GatewayConfig:
     mode: str
@@ -78,9 +88,9 @@ class GatewayConfig:
             admin_token_file=Path(token_file) if token_file else None,
             listen_host=env.get("ACS_GATEWAY_HOST", "").strip() or "127.0.0.1",
             listen_port=int(env.get("ACS_GATEWAY_PORT", "").strip() or "8080"),
-            max_sessions=int(_positive_number(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS)),
-            max_body_bytes=int(_positive_number(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)),
-            workers=int(_positive_number(env, "ACS_GATEWAY_WORKERS", DEFAULT_WORKERS)),
+            max_sessions=_positive_int(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
+            max_body_bytes=_positive_int(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
+            workers=_positive_int(env, "ACS_GATEWAY_WORKERS", DEFAULT_WORKERS),
         )
 
 
