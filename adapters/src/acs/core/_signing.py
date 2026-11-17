@@ -47,12 +47,16 @@ REQUEST_DIGEST_FIELD = "x_acs_lab_request_sha256"
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
-def request_sha256(request: Mapping[str, Any]) -> str:
+def request_sha256(request: object) -> str | None:
     """Lowercase hex SHA-256 of the request's section 10 signed input, which covers its session, ids, time and content.
 
-    Raises when RFC 8785 has no form for the request, as signing_input does.
+    None when the request has no signed input: it isn't an object, its params aren't an object, or RFC 8785 has no
+    form for it. No client could have signed such a request, so no answer can name it. Never raises.
     """
-    return hashlib.sha256(signing_input(request)).hexdigest()
+    try:
+        return hashlib.sha256(signing_input(request)).hexdigest()  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def response_names_request(response: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
@@ -67,12 +71,9 @@ def response_names_request(response: Mapping[str, Any], request: Mapping[str, An
     # first and anything else simply fails.
     if not isinstance(claimed, str) or not _SHA256_HEX.fullmatch(claimed):
         return False
-    try:
-        expected = request_sha256(request)
-    except Exception:  # noqa: BLE001
-        # No canonical form, so no hash can name it.
-        return False
-    return hmac.compare_digest(claimed, expected)
+    expected = request_sha256(request)
+    # A request with no signed input has no hash, so nothing can name it.
+    return expected is not None and hmac.compare_digest(claimed, expected)
 
 
 def decode_signature_value(value: object) -> bytes | None:

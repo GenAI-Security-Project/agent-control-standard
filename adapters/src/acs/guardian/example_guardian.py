@@ -186,8 +186,15 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
             raise SigningUnavailable("the decision key is not live")
         if not isinstance(request, dict):
             raise SigningUnavailable("an ML-DSA-65 answer needs the request it answers")
-        # A request JCS can't encode raises here like any canonicalization failure, and no client could sign it.
         digest = request_sha256(request)
+        if digest is None:
+            # The request has no signed input (params that aren't an object, or nothing JCS can encode), so no client
+            # signed it and no hash can name it. An error to it goes unsigned, as the README lists for a request
+            # with no readable session (review CR3-1). A decision never reaches here, since only a signed request
+            # gets one, so anything else is a bug and the floor answers.
+            if "error" in envelope:
+                return envelope
+            raise SigningUnavailable("a decision for a request with no signed input")
         if "result" in envelope:
             envelope["result"] = {**envelope["result"], REQUEST_DIGEST_FIELD: digest}
         else:

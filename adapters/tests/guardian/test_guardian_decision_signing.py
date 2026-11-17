@@ -243,3 +243,24 @@ def test_sign_envelope_is_not_called_with_the_mode_on(signer, monkeypatch):
     example_guardian.handle_request(signed_hello())
     request = signed_step("steps/toolCallRequest", DENIED)
     assert example_guardian.handle_request(request)["result"]["decision"] == "deny"
+
+
+@pytest.mark.parametrize("params", [[], "params", 5, None], ids=["list", "string", "int", "null"])
+def test_a_request_that_cannot_be_hashed_gets_an_unsigned_answer(signer, params):
+    # Review CR3-1: no hash can name this request, so the answer is the unsigned one the README lists for a request
+    # with no readable session, and handle_request never raises.
+    request = {"jsonrpc": "2.0", "id": "p-1", "method": "steps/toolCallRequest", "params": params}
+    response = example_guardian.handle_request(request)
+    assert response["id"] == "p-1"
+    assert response["error"]["code"] == -32600
+    assert "signature" not in response["error"]
+    assert request_sha256(request) is None
+
+
+def test_a_non_object_metadata_still_gets_a_signed_answer(signer):
+    # params is an object, so the request has a hash, and the refusal names it under ML-DSA-65.
+    request = {"jsonrpc": "2.0", "id": "m-1", "method": "steps/toolCallRequest",
+               "params": {"request_id": "r", "metadata": ["not", "an", "object"]}}
+    response = example_guardian.handle_request(request)
+    assert response["error"]["code"] == -32600
+    assert_ml_dsa(response, request, signer)
