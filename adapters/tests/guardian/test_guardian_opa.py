@@ -268,7 +268,7 @@ def test_a_lone_surrogate_in_a_file_path_is_a_signed_deny(no_backend):
     _assert_signed_unsignable_deny(*_handle(no_backend, payload))
 
 
-@pytest.mark.parametrize("number", [b"9007199254740993", b"1e400"])
+@pytest.mark.parametrize("number", [b"9007199254740993", b"-9007199254740993", b"1e400"])
 def test_an_opa_number_the_guardian_cannot_sign_is_a_signed_deny(opa_on, no_backend, number):
     body = b'{"result": {"decision": "allow", "policy_data": {"n": ' + number + b"}}}"
     with StubOpa(body=body) as opa:
