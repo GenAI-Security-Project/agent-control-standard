@@ -238,3 +238,67 @@ def test_no_body_argument_output_or_secret_reaches_a_span(gateway, harness_guard
     assert secret not in dumped
     assert '"value"' not in dumped and "signature" not in dumped
 
+
+@pytest.mark.parametrize("choice,outcome,decision", [("approve", "approved", "allow"), (None, "timed_out", "deny")])
+def test_an_ask_resolution_is_a_span_event(gateway, harness_guardian, upstream, audit, choice, outcome, decision):
+    from test_ask import approver, enforce
+
+    upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
+    env = {} if choice else {"HARNESS_ASK_TIMEOUT_S": "1"}
+    client = enforce(gateway, harness_guardian, **env)
+    spans = traced(client)
+    thread = approver(client, choice) if choice else None
+    client.post("/v1/responses", json=finbot_request())
+    if thread:
+        thread.join()
+    resolved = next(e for e in audit() if e["acs_audit_event"] == "ask_resolved")
+    (hold,) = named(spans(), "acs.lab.ask")
+    assert hold.context.trace_id == uuid.UUID(resolved["session_id"]).int
+    assert hold.attributes["gen_ai.operation.name"] == "execute_tool"
+    assert hold.attributes["gen_ai.tool.name"] == "ask_tool"
+    (event,) = hold.events
+    assert event.name == "acs.lab.ask_resolved"
+    assert event.attributes["acs.lab.ask.outcome"] == outcome
+    assert event.attributes["acs.lab.ask.decision"] == decision
+    assert event.attributes["acs.lab.ask.ask_request_id"] == resolved["ask_request_id"]
+    assert event.attributes["acs.lab.ask.call_id"] == "call_1"
+    assert (hold.end_time - hold.start_time) / 1e9 == pytest.approx(resolved["waited_s"], abs=0.05)
+    assert "Approve?" not in json.dumps(json.loads(hold.to_json()))
+    # The ASK itself and, after an approval, the resend are each their own step span.
+    assert len(step_spans(spans())) == (2 if choice else 1)
+
+
+def test_a_replay_miss_is_an_event_on_the_model_call_span(gateway, upstream):
+    import httpx
+
+    from acs_gateway.telemetry import replay_miss
+
+    class MissingReplay(httpx.AsyncBaseTransport):
+        """Stands in for LAB-06's ReplayTransport, which calls replay_miss when no recording fits."""
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            replay_miss(cause="no_recording", step=2, branch="a,d", stream=False, scenario=None)
+            raw = json.dumps(response_body(message_item("I couldn't complete that action."))).encode()
+            # Unread, as a network transport returns it, since off mode relays the raw stream.
+            return httpx.Response(200, headers={"content-type": "application/json"}, stream=httpx.ByteStream(raw))
+
+    client = gateway()
+    spans = traced(client)
+    gateway_app = client.app.state.gateway
+    original = gateway_app.http
+    gateway_app.http = httpx.AsyncClient(transport=MissingReplay())
+    try:
+        assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+    finally:
+        gateway_app.http = original
+    (model,) = spans()
+    (event,) = model.events
+    assert event.name == "acs.lab.replay_miss"
+    assert dict(event.attributes) == {"acs.lab.replay.cause": "no_recording", "acs.lab.replay.step": 2,
+                                      "acs.lab.replay.branch": "a,d", "acs.lab.replay.stream": False}
+
+
+def test_a_replay_miss_outside_a_model_call_does_nothing():
+    from acs_gateway.telemetry import replay_miss
+
+    replay_miss(cause="no_recording", step=0, branch="", stream=False)

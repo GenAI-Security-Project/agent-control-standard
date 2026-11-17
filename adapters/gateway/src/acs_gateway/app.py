@@ -991,13 +991,17 @@ class Gateway:
             raise
         finally:
             applied = apply_call(item, arguments, result) if outcome == "approved" else None
-            _audit("ask_resolved", session_id=session.session_id, call_id=call_id, tool=name,
-                   ask_request_id=asked.request_id, approver=settings.approver_id, deadline_s=self.config.ask_max_s,
-                   outcome=outcome, waited_s=round(time.monotonic() - started, 3), resent=resent,
-                   request_id=result.request_id if applied else None,
-                   guardian_decision=result.decision.disposition if applied and result.decision else None,
-                   decision=applied.decision if applied else "deny",
-                   cause=(applied.cause if applied else None) or result.cause)
+            resolved = {"session_id": session.session_id, "call_id": call_id, "tool": name,
+                        "ask_request_id": asked.request_id, "approver": settings.approver_id,
+                        "deadline_s": self.config.ask_max_s, "outcome": outcome,
+                        "waited_s": round(time.monotonic() - started, 3), "resent": resent,
+                        "request_id": result.request_id if applied else None,
+                        "guardian_decision": result.decision.disposition if applied and result.decision else None,
+                        "decision": applied.decision if applied else "deny",
+                        "cause": (applied.cause if applied else None) or result.cause}
+            _audit("ask_resolved", **resolved)
+            # The acs.lab.ask span (LAB-09), from the same fields as the audit line.
+            self.tracing.ask_resolved(session.session_id, resolved)
 
     def _resend_reserve(self, session: Session) -> float:
         """The time an approved resend can take: the step's own timeout, which is the one the Guardian negotiated

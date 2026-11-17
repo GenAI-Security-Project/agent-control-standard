@@ -36,6 +36,14 @@ FAILURE_CLASSES = frozenset({"timeout", "unreachable", "malformed_response", "gu
                              "signature_invalid", "handshake_failure", "other"})
 # The OpenTelemetry GenAI operation names, so a GenAI backend keeps every span (issue #520). The mapping names none for
 # a session or a model call, so the session span is the agent's invocation and the model call is a chat.
+# Lab names, under acs.lab until a spec issue names an ASK hold or a replay miss in the mapping.
+ASK_SPAN = "acs.lab.ask"
+ASK_EVENT = "acs.lab.ask_resolved"
+REPLAY_MISS_EVENT = "acs.lab.replay_miss"
+# The ask_resolved audit fields a span may carry. The question is the Guardian's free text and may quote arguments.
+_ASK_FIELDS = ("outcome", "approver", "ask_request_id", "request_id", "decision", "guardian_decision", "cause",
+               "deadline_s", "waited_s", "tool", "call_id")
+_REPLAY_FIELDS = ("cause", "step", "branch", "stream", "scenario")
 SESSION_OPERATION = "invoke_agent"
 TOOL_OPERATION = "execute_tool"
 MODEL_OPERATION = "chat"
@@ -171,6 +179,24 @@ class Tracing:
             _failure_event(span, result.failure_class, result.cause)
         span.end()
 
+    def ask_resolved(self, session_id: str, fields: dict[str, Any]) -> None:
+        """An acs.lab.ask span covering one ASK's hold, back-dated by its wait, carrying its resolution as an event.
+
+        The ASK's own step span and the resend's sit beside it in the session's trace.
+        """
+        if self._tracer is None:
+            return
+        end = time.time_ns()
+        waited = fields.get("waited_s")
+        start = end - int(waited * 1e9) if isinstance(waited, (int, float)) and waited >= 0 else end
+        tool = fields.get("tool")
+        attributes = {"acs.session.id": session_id, "gen_ai.operation.name": TOOL_OPERATION,
+                      "gen_ai.tool.name": tool if isinstance(tool, str) else "", "acs.lab.mode": self.mode}
+        span = self._tracer.start_span(ASK_SPAN, context=self._parent(session_id), start_time=start,
+                                       attributes=attributes)
+        span.add_event(ASK_EVENT, _scalars("acs.lab.ask", fields, _ASK_FIELDS), timestamp=end)
+        span.end(end_time=end)
+
     @contextlib.contextmanager
     def model_call(self, session_id: str | None, body: Any, stream: bool) -> Iterator[ModelCall]:
         """A span for one call to the model upstream, from the send until the answer's headers arrive.
@@ -217,6 +243,23 @@ class ModelCall:
 
 
 _OFF_CALL = ModelCall(None)
+
+
+def replay_miss(**fields: Any) -> None:
+    """Mark a replay miss on the model call span in progress, for LAB-06's replay transport (A.8).
+
+    The transport runs inside the gateway's upstream send, so the span is the one that send opened. Outside a traced
+    model call this does nothing, and it never imports OpenTelemetry.
+    """
+    span = _MODEL_SPAN.get()
+    if span is not None:
+        span.add_event(REPLAY_MISS_EVENT, _scalars("acs.lab.replay", fields, _REPLAY_FIELDS))
+
+
+def _scalars(prefix: str, fields: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """The listed fields that hold a string, number or bool, named under prefix. Anything else stays off the span."""
+    return {f"{prefix}.{key}": fields[key] for key in keys
+            if isinstance(fields.get(key), (str, int, float, bool))}
 
 
 def _failure_event(span: Any, failure_class: str | None, detail: str | None) -> None:
