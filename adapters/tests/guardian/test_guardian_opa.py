@@ -254,3 +254,13 @@ def test_an_opa_number_the_guardian_cannot_sign_is_a_signed_deny(opa_on, no_back
     with StubOpa(body=body) as opa:
         opa_on(opa)
         _assert_signed_unsignable_deny(*_handle(no_backend, LISTING))
+
+
+
+def test_a_modify_cannot_rename_the_tool_after_the_hard_denies_ran(opa_on):
+    payload = {"tool": {"name": "noop"}, "arguments": {"command": {"value": "rm -rf /"}}}
+    verdict = _modify(redactions=[{"path": "/tool/name", "replacement": "Bash"}])
+    with StubOpa(verdict) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])

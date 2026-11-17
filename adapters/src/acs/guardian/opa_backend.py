@@ -308,6 +308,8 @@ MAX_VERDICT_DEPTH = 64
 # Caps on a redacting modify, checked before anything walks the redactions, so validation stays well inside
 # the decision timeout.
 MAX_REDACTIONS = 2000
+# The one subtree of each payload a modify may change.
+MODIFY_ROOTS = {"steps/toolCallRequest": "/arguments", "steps/toolCallResult": "/outputs"}
 MAX_REDACTED_OUTPUTS = 1000
 
 
@@ -372,6 +374,12 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
                 if path == target or path.startswith(target + "/") or target.startswith(path + "/"):
                     return f"redaction path {path!r} overlaps parameter_override {key!r} (section 6.3)"
     paths = [redaction.get("path") for redaction in modifications.get("redactions") or []]
+    # The allowlist the gateway applies too: a modify changes a call's arguments or a result's outputs and nothing
+    # else, so it can never rename the tool after the hard denies judged the original name.
+    root = MODIFY_ROOTS.get(method)
+    for path in paths:
+        if not isinstance(path, str) or root is None or not path.startswith(root + "/"):
+            return f"redaction path {path!r} is outside {root}/, the only part of {method} a modify may change"
     for path in paths:
         # A path that misses would redact nothing and let the value through, so it is a policy error, not a no-op.
         if not path or not _resolve_pointer(payload, path):

@@ -319,3 +319,25 @@ def test_more_than_two_thousand_redactions_is_invalid():
 def test_an_empty_parameter_overrides_object_is_invalid():
     verdict = {"decision": "modify", "reasoning": "r", "modifications": {"parameter_overrides": {}}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallRequest", CALL, BASE)
+
+
+
+@pytest.mark.parametrize("method,payload,path", [
+    ("steps/toolCallRequest", CALL, "/tool/name"),
+    ("steps/toolCallRequest", CALL, "/tool"),
+    ("steps/toolCallRequest", CALL, "/"),
+    ("steps/toolCallRequest", CALL, "/metadata/agent_id"),
+    ("steps/toolCallRequest", CALL, "/arguments"),
+    ("steps/toolCallRequest", CALL, "/outputs/0/value"),
+    ("steps/toolCallResult", RESULT, "/tool/name"),
+    ("steps/toolCallResult", RESULT, "/exit_status"),
+    ("steps/toolCallResult", RESULT, "/request_id_ref"),
+    ("steps/toolCallResult", RESULT, "/outputs"),
+    ("steps/toolCallResult", RESULT, "/arguments/to"),
+])
+def test_a_modify_touches_only_arguments_on_a_call_and_outputs_on_a_result(method, payload, path):
+    # Renaming /tool/name after the hard denies ran would turn a harmless tool into bash.
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": path, "replacement": "Bash"}]}}
+    problem = opa_backend.verdict_problem(verdict, method, payload, BASE)
+    assert problem
