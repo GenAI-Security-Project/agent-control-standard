@@ -6,10 +6,8 @@ upstream or the client read the other would gate the wrong thing, so governed mo
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
-_SURROGATE_ESCAPE = re.compile(r"\\u[dD][89a-fA-F][0-9a-fA-F]{2}")
 
 
 class DuplicateKey(ValueError):
@@ -52,53 +50,3 @@ def repeated_key(text: Any) -> str | None:
         return loads_recording(text)[1]
     except (ValueError, RecursionError):
         return None
-
-
-def has_lone_surrogate(value: Any) -> bool:
-    """Whether any string in a parsed JSON value, keys included, holds a lone surrogate, which UTF-8 can't encode and
-    RFC 8785 can't sign. Walks iteratively, so nesting depth can't exhaust the stack."""
-    stack = [value]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, str):
-            try:
-                item.encode("utf-8")
-            except UnicodeEncodeError:
-                return True
-        elif isinstance(item, dict):
-            stack.extend(item.keys())
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-    return False
-
-
-def request_has_lone_surrogate(body: dict[str, Any]) -> bool:
-    """Whether a request body holds a lone surrogate anywhere the gateway refuses one.
-
-    A function_call_output's output is exempt: it is tool data an attacker can plant, so it is gated per result
-    (it can't be signed, so its step is refused) rather than refusing the whole request every turn. A call's
-    arguments are JSON text, so a surrogate escaped inside them is found by parsing them too.
-    """
-    items = body.get("input")
-    rest = {k: v for k, v in body.items() if k != "input"}
-    if has_lone_surrogate(rest):
-        return True
-    for item in items if isinstance(items, list) else [items]:
-        if isinstance(item, dict) and item.get("type") == "function_call_output":
-            # Every key and every other field is still checked, only the output's content is exempt.
-            if has_lone_surrogate({k: v for k, v in item.items() if k != "output"}):
-                return True
-            continue
-        if has_lone_surrogate(item):
-            return True
-        arguments = item.get("arguments") if isinstance(item, dict) and item.get("type") == "function_call" else None
-        # Parsed only when the text holds a surrogate escape (\uD800 to \uDFFF), the one way a lone surrogate can
-        # hide in JSON text past the string walk above, so ordinary arguments are still parsed once per request.
-        if isinstance(arguments, str) and _SURROGATE_ESCAPE.search(arguments):
-            try:
-                if has_lone_surrogate(loads_recording(item["arguments"])[0]):
-                    return True
-            except (ValueError, RecursionError):
-                pass
-    return False

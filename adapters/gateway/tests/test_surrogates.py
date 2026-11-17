@@ -1,4 +1,8 @@
-"""A lone surrogate in a request never crashes a log or transcript write (found by LAB-07)."""
+"""A lone surrogate in a request never crashes the gateway (found by LAB-07).
+
+Message text is never signed, so it passes. A value that must be signed is denied per step, and every error body and
+every log line is written ASCII-escaped, so nothing can fail to encode.
+"""
 import json
 
 import pytest
@@ -9,7 +13,7 @@ from conftest import NEUTRAL, call_item, finbot_request, response_body
 LONE = '{"model": "gpt-5-nano", "input": [{"role": "system", "content": "S"}, {"role": "user", "content": "hi \\ud800 there"}]}'
 
 
-@pytest.mark.parametrize("mode", ["off", "shadow"])
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
 def test_a_lone_surrogate_in_a_message_is_forwarded_and_logged(gateway, guardian, upstream, mode, tmp_path):
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", content=LONE.encode(), headers={"Content-Type": "application/json"})
@@ -41,56 +45,52 @@ def test_a_lone_surrogate_in_a_tool_output_denies_only_that_result(gateway, guar
     assert [e for e in audit() if e["acs_audit_event"] == "lone_surrogate"] == []
 
 
-def test_a_lone_surrogate_in_user_text_is_refused_in_enforce(gateway, guardian, upstream, audit):
-    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
-        "/v1/responses", content=LONE.encode(), headers={"Content-Type": "application/json"})
-    assert response.status_code == 400 and response.json()["error"]["code"] == "lone_surrogate"
-    assert upstream.received == []
+def post_raw(client, body):
+    text = json.dumps(body, ensure_ascii=True)
+    return client.post("/v1/responses", content=text.encode(), headers={"Content-Type": "application/json"})
 
 
-def test_a_lone_surrogate_in_call_arguments_is_refused_in_enforce(gateway, guardian, upstream):
-    call = {"type": "function_call", "call_id": "c1", "name": "send", "arguments": '{"to": "a\\ud800"}'}
-    body = json.dumps(finbot_request(call), ensure_ascii=True)
-    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
-        "/v1/responses", content=body.encode(), headers={"Content-Type": "application/json"})
-    assert response.status_code == 400 and response.json()["error"]["code"] == "lone_surrogate"
-
-
-def test_an_audit_line_naming_a_lone_surrogate_key_is_written(gateway, guardian, upstream, audit):
-    # Shadow, since enforce now refuses any lone surrogate before the duplicate-key check.
-    arguments = json.dumps({"x": 1}).replace('"x": 1', '"\\ud800": 1, "\\ud800": 2')
-    forged = {"type": "function_call", "call_id": "c9", "name": "send", "arguments": arguments}
-    body = json.dumps(finbot_request(forged), ensure_ascii=True)
-    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post(
-        "/v1/responses", content=body.encode(), headers={"Content-Type": "application/json"})
+def test_a_resent_assistant_message_with_a_lone_surrogate_goes_through(gateway, guardian, upstream):
+    relayed = {"type": "message", "role": "assistant", "content": [
+        {"type": "output_text", "text": "model said \ud800", "annotations": []}]}
+    response = post_raw(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian), finbot_request(relayed))
     assert response.status_code == 200
-    assert [e["key"] for e in audit() if e["acs_audit_event"] == "duplicate_json_key"] == ["\ud800"]
+    assert upstream.received[0].json()["input"][-1] == relayed
 
 
-# Each body puts a lone surrogate where an enforce refusal used to echo it into the error message, plus one in an
-# ordinary value, which only the boundary check catches.
-SURROGATE_BODIES = {
-    "field_name": '{"model": "m", "input": "hi", "x\\ud800y": 1}',
-    "input_item_type": '{"model": "m", "input": [{"type": "x\\ud800y", "id": "i1"}]}',
-    "content_part_type": '{"model": "m", "input": [{"role": "user", "content": [{"type": "x\\ud800y"}]}]}',
-    "plain_value": '{"model": "m", "input": "hi \\ud800 there"}',
+def test_user_text_with_a_lone_surrogate_is_forwarded_in_enforce(gateway, guardian, upstream):
+    response = post_raw(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian),
+                        finbot_request(user="hi \ud800 there"))
+    assert response.status_code == 200
+    assert upstream.received[0].json()["input"][1]["content"] == "hi \ud800 there"
+
+
+def test_a_model_call_whose_arguments_hold_a_lone_surrogate_is_denied_per_step(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(call_item("get_vendor_details", '{"note": "x\\ud800"}', "call_1")))
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200
+    assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
+    applied = [e for e in audit() if e["acs_audit_event"] == "decision_applied"]
+    assert [(e["decision"], e["cause"]) for e in applied] == [("deny", "envelope_not_signable")]
+
+
+REFUSALS = {
+    "field": ({"x\ud800y": 1}, "The x\ud800y parameter is not supported by this endpoint.", "unsupported_parameter"),
+    "item_type": ({"input": [{"type": "x\ud800y", "id": "i1"}]},
+                  "Input items of type x\ud800y are not supported by this endpoint.", "unsupported_item_type"),
+    "part_type": ({"input": [{"role": "user", "content": [{"type": "x\ud800y"}]}]},
+                  "Content parts of type x\ud800y are not supported by this endpoint.", "unsupported_content_part"),
 }
 
 
-@pytest.mark.parametrize("mode", ["shadow", "enforce"])
-@pytest.mark.parametrize("case", sorted(SURROGATE_BODIES))
-def test_a_lone_surrogate_anywhere_gets_a_documented_answer(gateway, guardian, upstream, audit, mode, case):
-    raw = SURROGATE_BODIES[case].encode()
-    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
-        "/v1/responses", content=raw, headers={"Content-Type": "application/json"})
-    if mode == "enforce":
-        assert response.status_code == 400
-        error = response.json()["error"]
-        assert error["code"] == "lone_surrogate"
-        # A fixed message, echoing nothing from the request.
-        assert "x" not in error["message"].split() and "\\ud800" not in response.text
-        assert upstream.received == []
-    else:
-        assert response.status_code == 200
-        assert upstream.received[0].body == raw
-    assert [e["mode"] for e in audit() if e["acs_audit_event"] == "lone_surrogate"] == [mode]
+@pytest.mark.parametrize("case", sorted(REFUSALS))
+def test_a_refusal_naming_a_lone_surrogate_is_encoded_safely(gateway, guardian, upstream, case):
+    extra, message, code = REFUSALS[case]
+    body = {**finbot_request(), **extra}
+    response = post_raw(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian), body)
+    assert response.status_code == 501
+    # The body is ASCII-escaped JSON, so it decodes to the exact message and the name sits in param.
+    assert response.content.isascii()
+    error = response.json()["error"]
+    assert error == {"message": message, "type": "invalid_request_error", "param": "x\ud800y", "code": code}
+    assert upstream.received == []

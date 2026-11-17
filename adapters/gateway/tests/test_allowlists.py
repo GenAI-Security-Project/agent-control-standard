@@ -24,8 +24,8 @@ def test_a_field_outside_the_allowlist_is_refused_in_enforce_and_recorded_in_sha
         "/v1/responses", json={**finbot_request(), field: value})
     if mode == "enforce":
         assert response.status_code == 501
-        # The name goes to the audit line, never back into the error body.
-        assert field not in response.json()["error"]["message"]
+        assert response.json()["error"]["param"] == field
+        assert field in response.json()["error"]["message"]
         assert upstream.received == []
     else:
         # Shadow observes only, so it records the field and forwards the request unchanged.
@@ -53,6 +53,7 @@ def test_an_input_item_outside_the_allowlist_is_refused_in_enforce_and_recorded_
     if mode == "enforce":
         assert response.status_code == 501
         assert response.json()["error"]["code"] == "unsupported_item_type"
+        assert response.json()["error"]["param"] == kind
         assert upstream.received == []
     else:
         assert response.status_code == 200
@@ -143,6 +144,7 @@ def test_a_content_part_outside_the_allowlist_is_refused_in_enforce_and_recorded
     if mode == "enforce":
         assert response.status_code == 501
         assert response.json()["error"]["code"] == "unsupported_content_part"
+        assert response.json()["error"]["param"] == part["type"]
     else:
         assert response.status_code == 200
     assert [e["part_type"] for e in events(audit, "unsupported_content_part")] == [part["type"]]
