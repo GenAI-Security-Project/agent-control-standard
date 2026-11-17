@@ -30,13 +30,14 @@ from acs_gateway.apply import (
     apply_call,
     apply_result,
     call_payload,
-    is_foreign_call,
-    is_foreign_output,
+    ALLOWED_OUTPUT_TYPES,
+    item_type,
     NEUTRAL_LINE,
     neutral_message,
-    neutralize_foreign_output,
     parse_arguments,
     result_payload,
+    unsupported_field,
+    unsupported_input_item,
     unsupported_tool,
 )
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
@@ -158,12 +159,18 @@ class Gateway:
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
-        stateful = [f for f in ("previous_response_id", "conversation") if body.get(f) is not None]
-        if stateful:
-            # Server-side history hides earlier items from the gateway, so session keying and the result cache
-            # can't see them. Lab convention: FinBot never sends either field (verified at 1450fc4).
-            return openai_error(501, f"The {stateful[0]} parameter is not supported by this endpoint.",
+        field = unsupported_field(body)
+        if field is not None:
+            # An allowlist, so a new field fails closed. Server-side history (previous_response_id, conversation,
+            # item references) or a stored prompt would hide items or tools from the gateway.
+            _audit("unsupported_field", field=field, mode=self.config.mode)
+            return openai_error(501, f"The {field} parameter is not supported by this endpoint.",
                                 "invalid_request_error", "unsupported_parameter")
+        kind = unsupported_input_item(body)
+        if kind is not None:
+            _audit("unsupported_item_type", item_type=kind, direction="input", mode=self.config.mode)
+            return openai_error(501, f"Input items of type {kind} are not supported by this endpoint.",
+                                "invalid_request_error", "unsupported_item_type")
         unsupported = unsupported_tool(body)
         if unsupported is not None:
             # Function tools only. Any other tool type runs where the gateway can't gate it: a hosted tool runs
@@ -296,13 +303,6 @@ class Gateway:
         names = {i.get("call_id"): i.get("name") for i in items if isinstance(i, dict) and i.get("type") == "function_call"}
         changed, kept = False, []
         for item in items:
-            if isinstance(item, dict) and is_foreign_output(item):
-                _audit("unsupported_tool_type", session_id=session.session_id, item_type=item.get("type"),
-                       direction="input", mode=self.config.mode)
-                if self.enforce:
-                    item, changed = neutralize_foreign_output(item), True
-                kept.append(item)
-                continue
             call_id = item.get("call_id") if isinstance(item, dict) else None
             if not isinstance(call_id, str):
                 kept.append(item)
@@ -356,8 +356,8 @@ class Gateway:
         changed, removed, kept = False, False, []
         for item in reply["output"]:
             call_id = item.get("call_id") if isinstance(item, dict) else None
-            if isinstance(item, dict) and is_foreign_call(item):
-                _audit("unsupported_tool_type", session_id=session.session_id, item_type=item.get("type"),
+            if item_type(item) not in ALLOWED_OUTPUT_TYPES:
+                _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
                        direction="output", mode=self.config.mode)
                 if self.enforce:
                     changed = removed = True

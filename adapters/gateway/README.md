@@ -14,7 +14,12 @@ The gateway forwards `POST /v1/responses` to a model upstream. In shadow and enf
 - Before a request reaches the model, each new `function_call_output` in it goes to the Guardian as `steps/toolCallResult`.
 - In enforce mode the gateway applies each decision. In shadow mode it records each decision and changes nothing.
 
-Shadow and enforce gate function tools only. A request whose `tools` declares any other type (custom, shell, apply_patch, computer use, or a hosted tool such as mcp, code_interpreter, web_search or file_search, which runs upstream where no hook reaches it) answers 501. As a backstop, enforce removes any other `*_call` or `mcp_approval_request` item from a model response, replaces the output of any non-function `*_call_output` item with the neutral line, and turns an `mcp_approval_response` into a refusal. Each case writes an `unsupported_tool_type` audit line. Off forwards every tool type.
+Shadow and enforce accept only what they can gate, by allowlist, so anything new fails closed. Off forwards everything.
+
+- **Request fields:** `model`, `input`, `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens`, `reasoning`, `text`, `metadata`, `parallel_tool_calls`, `store`, `user`, `temperature`, `top_p`. FinBot sends a subset of these. Any other field, such as `prompt`, `previous_response_id`, `conversation`, `background` or `include`, answers 501 naming the field and is audited as `unsupported_field`, since server-side history or a stored prompt would hide items or tools from the gateway.
+- **Input items:** `message` (any role), `function_call`, `function_call_output`, `reasoning`. Any other type, such as `item_reference`, a hosted tool's `*_call`, or a non-function `*_call_output`, answers 501 naming the type before anything goes upstream, audited as `unsupported_item_type`.
+- **Tool declarations:** `function` only. Any other type, hosted tools that run upstream where no hook reaches them included, answers 501, audited as `unsupported_tool_type`.
+- **Output items:** `message`, `function_call`, `reasoning`. Enforce removes any other item from a model response and adds the neutral line if nothing else is left. Shadow forwards it. Both audit `unsupported_item_type`.
 
 
 In shadow and enforce, any `stream` value other than an absent field or `false` counts as a stream request. A compressed request body answers 415, the gateway asks the upstream for gzip or deflate only, and a 2xx answer that isn't a JSON object with an `output` list answers 502, since it could carry calls the gateway never gated. Off relays requests and answers verbatim, encodings and headers included, except that every mode strips `x-acs-*` lab headers in both directions.
@@ -101,7 +106,9 @@ Each request line is written before the request is sent, so the file holds the c
 | `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`) |
 | `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
-| `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
+| `unsupported_field` | A request field outside the allowlist, with `field` |
+| `unsupported_item_type` | An input or output item outside the allowlist, with `item_type` and `direction` |
+| `unsupported_tool_type` | A tool declaration that isn't a function tool |
 | `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |
 | `session_retried` | A failed handshake or sessionStart was retried under a new session_id |
 | `session_evicted` | The session cap evicted the least recently used session |
@@ -153,7 +160,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | Responses are verified with acs.client's HMAC-SHA256 check inside its round trip. LAB-03 changes the algorithm dispatch inside acs.client to verify by key_id from the key document | LAB-03, issue #576, and issue #460 |
 | An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and the signed bytes would differ from the transcript line | Issue #577 |
 | `tool.version` is not sent yet | LAB-07, issue #580, sends the tool digest (issue #38) |
-| `previous_response_id` and `conversation` answer 501 in shadow and enforce, since server-side history would hide items from the gateway. FinBot never sends either | Issue #577 |
+| The request field, input item and output item allowlists. FinBot sends only fields and items on them | Issue #577 |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
 | `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
 

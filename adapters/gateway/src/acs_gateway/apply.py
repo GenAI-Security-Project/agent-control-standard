@@ -40,25 +40,39 @@ def unsupported_tool(body: dict[str, Any]) -> str | None:
     return None
 
 
-def is_foreign_call(item: dict[str, Any]) -> bool:
-    """An output item asking for a tool run the gateway can't gate: any *_call but function_call, or an MCP approval."""
+# Shadow and enforce accept only what an unmodified FinBot sends (openai_client.py and chat.py at 1450fc4), plus the
+# ordinary Responses API fields that don't move history or tools out of the gateway's sight. Anything else, such as
+# prompt, previous_response_id, conversation, background or include, could hide items or enable tools upstream.
+ALLOWED_FIELDS = frozenset({"model", "input", "instructions", "tools", "tool_choice", "stream", "max_output_tokens",
+                            "reasoning", "text", "metadata", "parallel_tool_calls", "store", "user", "temperature",
+                            "top_p"})
+# Input items the gateway can read and gate. An item with a role and no type is a message.
+ALLOWED_INPUT_TYPES = frozenset({"message", "function_call", "function_call_output", "reasoning"})
+# Output items the gateway lets through: text, gated function calls, and the reasoning that goes with them.
+ALLOWED_OUTPUT_TYPES = frozenset({"message", "function_call", "reasoning"})
+
+
+def item_type(item: Any) -> str:
+    """An item's type, "message" for a role-only message, or the Python type name for a non-object."""
+    if not isinstance(item, dict):
+        return type(item).__name__
     kind = item.get("type")
-    return isinstance(kind, str) and kind != "function_call" and (
-        kind.endswith("_call") or kind == "mcp_approval_request")
+    if kind is None and "role" in item:
+        return "message"
+    return kind if isinstance(kind, str) else type(kind).__name__
 
 
-def is_foreign_output(item: dict[str, Any]) -> bool:
-    """An input item carrying a non-function tool's result, or an MCP approval, to the model."""
-    kind = item.get("type")
-    return isinstance(kind, str) and kind != "function_call_output" and (
-        kind.endswith("_call_output") or kind == "mcp_approval_response")
+def unsupported_field(body: dict[str, Any]) -> str | None:
+    """The first top-level field outside ALLOWED_FIELDS, or None."""
+    return next((field for field in body if field not in ALLOWED_FIELDS), None)
 
 
-def neutralize_foreign_output(item: dict[str, Any]) -> dict[str, Any]:
-    """An MCP approval becomes a refusal, and any other foreign output carries only the neutral line."""
-    if item.get("type") == "mcp_approval_response":
-        return {**item, "approve": False}
-    return {**item, "output": NEUTRAL_LINE}
+def unsupported_input_item(body: dict[str, Any]) -> str | None:
+    """The type of the first input item outside ALLOWED_INPUT_TYPES, or None."""
+    items = body.get("input")
+    if not isinstance(items, list):
+        return None
+    return next((item_type(i) for i in items if item_type(i) not in ALLOWED_INPUT_TYPES), None)
 
 
 @dataclass(frozen=True)
