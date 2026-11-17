@@ -307,13 +307,20 @@ def test_a_thousand_outputs_each_redacted_passes_within_a_second():
 
 def test_ten_thousand_outputs_each_redacted_denies_within_a_second():
     problem, elapsed = _timed_problem(*_many(10_000))
-    assert problem and "1000" in problem
+    assert problem == "the modify carries 10000 redactions, more than 2000"
+    assert elapsed < 1.0
+
+
+def test_more_than_a_thousand_outputs_is_invalid_under_the_redaction_cap():
+    # 1,001 redactions stays under the 2,000 redaction cap, so only the outputs cap can reject this.
+    problem, elapsed = _timed_problem(*_many(1001))
+    assert problem == "a redacting modify on 1001 outputs, more than 1000"
     assert elapsed < 1.0
 
 
 def test_more_than_two_thousand_redactions_is_invalid():
     problem, _ = _timed_problem(*_many(700, fields=3))
-    assert problem and "2000" in problem
+    assert problem == "the modify carries 2100 redactions, more than 2000"
 
 
 def test_an_empty_parameter_overrides_object_is_invalid():
