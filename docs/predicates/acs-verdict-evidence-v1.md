@@ -3,6 +3,8 @@
 Predicate type URI (proposed, pending acceptance):
 `https://owaspacs.org/docs/predicates/acs-verdict-evidence-v1/`
 
+That path follows this site's `/docs/` mapping and has the same shape as pages that resolve today, for example `https://owaspacs.org/docs/spec/conformance/`. It returns 404 until this page is published, which happens when this change merges; it names no branch, so merging is the only step needed to make it resolve.
+
 Status: proposed draft — `v1.0.0-draft.2` (draft 1 circulated as `v1.0.0-draft`; an intermediate `v1.0.1-draft` numbering is retired, so the accepted version is not lower than any draft). On acceptance this becomes `v1.0.0` at the URI above. The reference kit at `e2f85f6` writes no signature yet, so its sample records cannot pass the verification steps below; until the kit signs, its samples are illustrative drafts of records, not verifiable evidence. Modeled on the
 agent-change-admission-v1 predicate of the agent-evidence-vocabulary
 project: same DSSE v1 envelope, same field table, same verification-step
