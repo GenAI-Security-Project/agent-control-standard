@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acs-gateway"
+version = "0.1.0"
+description = "An OpenAI Responses API gateway that makes an unmodified client an ACS Observed Agent"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+# Exact pins: each release is at least seven days old as of 2026-11-16 (COMMON-BRIEF rule 4).
+dependencies = [
+    "acs-adapters",
+    "starlette==1.10.0",
+    "httpx==0.28.1",
+    "uvicorn==0.54.0",
+]
+
+[project.scripts]
+acs-gateway = "acs_gateway.app:main"
+
+[dependency-groups]
+test = ["pytest==9.2.0"]
+
+[tool.uv]
+default-groups = ["test"]
+
+# The gateway builds on the adapters in this repository, never on a published copy.
+[tool.uv.sources]
+acs-adapters = { path = "..", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs_gateway"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
