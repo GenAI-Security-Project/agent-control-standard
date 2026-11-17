@@ -63,6 +63,7 @@ from acs_gateway.sessions import (
 )
 from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
+from acs_gateway.telemetry import Tracing
 from acs_gateway.tool_digest import ToolDigests
 from acs_gateway.transcript import ModelInputLog, Transcript
 from acs_gateway.upstream import (
@@ -145,6 +146,8 @@ class Gateway:
         self.upstream_source = UpstreamSource(config)
         # Off mode has no sessions, so its arrivals for capture are counted here, as each request is relayed.
         self._ungoverned_arrivals = 0
+        # Spans (LAB-09). Off unless OTEL_EXPORTER_OTLP_ENDPOINT is set, and then nothing here waits on the exporter.
+        self.tracing = Tracing.from_config(config)
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:

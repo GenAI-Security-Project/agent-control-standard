@@ -15,6 +15,8 @@ dependencies = [
     "starlette==1.10.0",
     "httpx==0.28.1",
     "uvicorn==0.54.0",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
 ]
 
 [project.scripts]

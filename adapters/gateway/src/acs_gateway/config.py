@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 MODES = ("off", "shadow", "enforce")
 DEFAULT_GUARDIAN_URL = "http://127.0.0.1:8787/"
@@ -70,6 +71,25 @@ def _port(env: Mapping[str, str], name: str) -> int | None:
     if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= 65535:
         raise ValueError(f"{name} must be a port from 1 to 65535 in plain ASCII digits, got {raw!r}")
     return int(raw)
+def _otlp_endpoint(env: Mapping[str, str]) -> str | None:
+    """OTEL_EXPORTER_OTLP_ENDPOINT, the base URL of an OTLP HTTP receiver such as Jaeger's port 4318, or None.
+
+    Unset leaves tracing off. A value that can't be an export target stops startup, so a typo never means spans quietly
+    go nowhere.
+    """
+    raw = env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    if not raw:
+        return None
+    try:
+        parts = urlsplit(raw)
+        # Reading the port raises ValueError for a port that isn't a number in range.
+        _ = parts.port
+    except ValueError:
+        parts = None
+    if parts is None or parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
+        raise ValueError(f"OTEL_EXPORTER_OTLP_ENDPOINT must be an http or https base URL such as http://jaeger:4318, "
+                         f"got {raw!r}")
+    return raw.rstrip("/")
 
 
 @dataclass(frozen=True)
@@ -106,6 +126,8 @@ class GatewayConfig:
     capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
     upstream_model: str | None = None
     replay_scenario: str | None = None
+    # Spans (LAB-09, issue #582). None leaves tracing off, with no exporter and no network call.
+    otlp_endpoint: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -190,6 +212,7 @@ class GatewayConfig:
             capture_scenario=scenario,
             upstream_model=model or None,
             replay_scenario=replay_scenario or None,
+            otlp_endpoint=_otlp_endpoint(env),
         )
 
 
