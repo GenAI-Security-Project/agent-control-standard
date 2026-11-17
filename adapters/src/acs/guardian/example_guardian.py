@@ -738,14 +738,16 @@ UNSIGNABLE_REASONING = "The Guardian could not sign its decision for this step, 
 
 
 def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dict:
-    """Sign a step's decision. One JCS cannot encode (a lone surrogate, an integer beyond 2^53, a non-finite float)
-    is answered with a signed deny instead of a dropped connection, which a proceed posture would run."""
+    """Sign a step's decision. One JCS can't canonicalize (a lone surrogate, an integer beyond 2^53, a non-finite
+    float, or nesting past the recursion limit) is answered with a signed deny instead of a dropped connection,
+    which a proceed posture would run."""
     envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
     try:
         sign_envelope(envelope, session_id=session_id)
         return envelope
     except CANONICALIZATION_ERRORS:
-        # Only an encoding failure is relabeled. Any other error is a bug and propagates as before.
+        # Only a canonicalization failure is relabeled, recursion depth included. Any other error is a bug and
+        # propagates as before.
         fallback = {key: result[key] for key in ("type", "acs_version", "request_id", "chain_hash") if key in result}
         envelope = {"jsonrpc": "2.0", "id": request_id,
                     "result": {**fallback, "decision": "deny", "reasoning": UNSIGNABLE_REASONING,
