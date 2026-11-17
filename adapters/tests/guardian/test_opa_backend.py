@@ -148,3 +148,18 @@ def test_redact_url_strips_userinfo(url, shown):
 def test_a_config_error_never_repeats_userinfo():
     problem = opa_backend.backend_problem({"ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "ftp://lab:secret-pw@opa/x"})
     assert problem and "secret-pw" not in problem
+
+
+def test_queries_reuse_the_opener_built_with_the_config(monkeypatch):
+    with StubOpa(DENY) as opa:
+        config = _config(opa.url)
+        same = OpaConfig(url=opa.url, timeout_s=0.5)
+        opener = config.opener
+
+        def fail():
+            raise AssertionError("a query built a new opener")
+        monkeypatch.setattr(opa_backend, "_opener", fail)
+        for _ in range(3):
+            assert opa_backend.query(config, {"input": {}}) == DENY
+    assert config.opener is opener
+    assert config == same and config.opener is not same.opener, "the opener takes no part in equality"
