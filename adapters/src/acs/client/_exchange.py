@@ -82,9 +82,10 @@ def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: R
                                         request=request, require_request_digest=True)
 
 
-def _response_verified(response: dict[str, Any], request: Mapping[str, Any], session_id: str | None,
-                       response_keys: ResponseKeys | None) -> bool:
-    """The step exchange's one signature check: the key document's pinned key with response_keys, else HMAC."""
+def response_verified(response: Any, request: Mapping[str, Any], session_id: str | None,
+                      response_keys: ResponseKeys | None) -> bool:
+    """The one signature check for the step exchange and the handshake: the key document's pinned key with
+    response_keys, else HMAC under the session key."""
     if response_keys is None:
         return verify_signature(response, session_id=session_id)
     return keyring_verified(response, request, response_keys)
@@ -515,7 +516,7 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         err = response["error"]
         code = err.get("code")
         # Errors are signed too; an unverifiable error under fail-open would be an allow.
-        if not _response_verified(response, request, session_id, response_keys):
+        if not response_verified(response, request, session_id, response_keys):
             if key_id_rejected(err):
                 return Refused("key_id_rejected", {"claimed_error_code": code},
                                "Guardian answered an unsigned SIGNATURE_INVALID, how it reports a key_id it does not "
@@ -530,6 +531,6 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         if is_guardian_refusal(code):
             return Refused(cause, fields, message)
         return Undecided(cause, fields, message)
-    if not _response_verified(response, request, session_id, response_keys):
+    if not response_verified(response, request, session_id, response_keys):
         return Refused("response_signature_invalid", {}, "response signature invalid")
     return Decided(response)

@@ -134,7 +134,8 @@ class Classification(_SessionTest):
                     self.assertEqual(decision.cause, cause)
 
     def test_a_verifier_that_raises_refuses_the_session(self) -> None:
-        with mock.patch.object(_handshake, "verify_signature", side_effect=RuntimeError("verifier bug")):
+        # The handshake verifies through the step exchange's one helper (issue #576), so that is where the bug goes.
+        with mock.patch.object(_exchange, "verify_signature", side_effect=RuntimeError("verifier bug")):
             decision, _ = self._open()
         self.assertEqual(decision, SessionRefused("response_unverifiable", {"error": "verifier bug"}))
 

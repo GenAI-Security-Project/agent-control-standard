@@ -26,12 +26,12 @@ from acs.client._exchange import (
     ON_WIRE_FAILED,
     RequestTooLargeError,
     encode_request,
-    keyring_verified,
     report_on_wire,
+    response_verified,
 )
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
-from acs.client._signing import sign_envelope, verify_signature
+from acs.client._signing import sign_envelope
 from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
 from acs.core import (
@@ -380,7 +380,7 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     if "result" in response and (client_hello.get("method") != HANDSHAKE_METHOD
                                  or request_binding_problem(client_hello) is not None):
         return SessionRefused("request_envelope_invalid")
-    verified = _hello_verified(response, client_hello, session_id, response_keys)
+    verified = response_verified(response, client_hello, session_id, response_keys)
     if error is not None:
         if not verified:
             if key_id_rejected(error):
@@ -412,14 +412,6 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
             return SessionRefused("response_algorithm_not_negotiated",
                                   {"offered": [response_keys.algorithm], "selected": selected})
     return Negotiated(server_hello)
-
-
-def _hello_verified(response: Any, client_hello: Mapping[str, Any], session_id: str,
-                    response_keys: ResponseKeys | None) -> bool:
-    """The handshake's one signature check: the key document's pinned key with response_keys, else HMAC."""
-    if response_keys is None:
-        return verify_signature(response, session_id=session_id)
-    return keyring_verified(response, client_hello, response_keys)
 
 
 def _audit_start(decision: Handshake, config: Config, session_id: str, claimed: list[str]) -> None:
