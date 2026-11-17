@@ -14,7 +14,6 @@ import re
 import socket
 import sys
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -210,8 +209,8 @@ def _opener() -> urllib.request.OpenerDirector:
     return opener
 
 
-def _post(config: OpaConfig, body: bytes, deadline: float, exchange: _Exchange) -> bytes:
-    """One POST whose body read stops at the deadline, one socket read at a time."""
+def _post(config: OpaConfig, body: bytes, exchange: _Exchange) -> bytes:
+    """One POST, read one socket read at a time so an abort from query() ends it between reads."""
     _worker.exchange = exchange
     request = urllib.request.Request(config.url, data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
@@ -222,7 +221,7 @@ def _post(config: OpaConfig, body: bytes, deadline: float, exchange: _Exchange) 
                 raise OpaFailure("opa_http_error", f"OPA answered HTTP {response.status}")
             chunks, size = [], 0
             while True:
-                if time.monotonic() >= deadline or exchange.aborted.is_set():
+                if exchange.aborted.is_set():
                     raise timed_out
                 chunk = response.read1(65536)
                 if not chunk:
@@ -253,18 +252,18 @@ def _post(config: OpaConfig, body: bytes, deadline: float, exchange: _Exchange) 
 def query(config: OpaConfig, document: Mapping[str, Any]) -> Any:
     """POST the document and return OPA's result member. Raises OpaFailure for every way that can fail."""
     body = json.dumps(document).encode("utf-8")
-    deadline = time.monotonic() + config.timeout_s
     exchange = _Exchange()
     box: dict[str, Any] = {}
 
     def fetch() -> None:
         try:
-            box["data"] = _post(config, body, deadline, exchange)
+            box["data"] = _post(config, body, exchange)
         except BaseException as e:  # noqa: BLE001
             box["error"] = e
 
-    # A socket timeout bounds each read, not the exchange. The caller waits only until the deadline, then shuts
-    # the sockets down, so the worker thread and its connection end too instead of reading on in the background.
+    # The one timeout: the caller waits until the deadline, then shuts the sockets down, so the worker thread and its
+    # connection end too instead of reading on in the background. A socket timeout alone bounds each read, not the
+    # exchange, so a server that dribbles bytes would outlast it.
     worker = threading.Thread(target=fetch, name="acs-opa-query", daemon=True)
     worker.start()
     worker.join(config.timeout_s)
