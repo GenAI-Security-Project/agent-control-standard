@@ -443,3 +443,13 @@ def test_a_tool_name_echoed_by_the_policy_cannot_forge_a_log_line(served, monkey
             monkeypatch.setattr(example_guardian, "OPA_CONFIG", OpaConfig(url=opa.url, timeout_s=1.0))
             post(served, _signed("steps/toolCallRequest", {"tool": {"name": FORGED}, "arguments": {}}))
     _assert_log_clean(capsys.readouterr().err)
+
+
+def test_a_timeout_outside_the_body_read_gets_the_floor_answer(served, monkeypatch):
+    # Only a body read that runs out of time closes silently. A timeout raised anywhere else, here inside policy
+    # evaluation, has to reach the -32603 floor, because a dropped connection lets a proceed posture run the tool.
+    def slow_policy(*args, **kwargs):
+        raise socket.timeout("policy evaluation timed out")
+    monkeypatch.setattr(example_guardian, "evaluate_step", slow_policy)
+    status, answer = post(served, _signed("steps/sessionStart", {}))
+    assert answer["error"]["code"] == -32603

@@ -900,11 +900,6 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         self._answer_id = None
         try:
             self._serve()
-        except TimeoutError:
-            # The client stopped sending. The socket is probably gone, so close without writing to it.
-            sys.stderr.write("[guardian] request body read timed out, closing the connection\n")
-            sys.stderr.flush()
-            self.close_connection = True
         except Exception as e:  # noqa: BLE001
             # A dropped connection reads as transport_failure, which a proceed posture runs ungoverned.
             sys.stderr.write(f"[guardian] internal error: {type(e).__name__}\n")
@@ -931,7 +926,15 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                                 "error": {"code": -32600,
                                           "message": f"Request body {length} bytes exceeds {MAX_REQUEST_BODY_BYTES} cap"}})
             return
-        body = self._read_body(length)
+        try:
+            body = self._read_body(length)
+        except TimeoutError:
+            # Only the body read closes silently: the client stopped sending, and the socket is probably gone. A
+            # timeout anywhere else reaches the -32603 floor, because a dropped connection lets proceed run the tool.
+            sys.stderr.write("[guardian] request body read timed out, closing the connection\n")
+            sys.stderr.flush()
+            self.close_connection = True
+            return
         try:
             request = json.loads(body.decode("utf-8"))
         except (ValueError, RecursionError):
