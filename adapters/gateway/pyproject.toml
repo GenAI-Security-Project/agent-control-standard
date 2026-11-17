@@ -35,3 +35,5 @@ packages = ["src/acs_gateway"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# starlette 1.10 prefers httpx2 for its TestClient. httpx is the approved dependency, so the notice is expected.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
