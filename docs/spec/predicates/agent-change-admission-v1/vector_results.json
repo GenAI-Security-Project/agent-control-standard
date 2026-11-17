@@ -1,0 +1,230 @@
+[
+  {
+    "name": "P1 admission / self",
+    "expect_ok": true,
+    "got_ok": true,
+    "codes": [],
+    "scope": "self",
+    "pass": true
+  },
+  {
+    "name": "P2 witness / peer (pinned key)",
+    "expect_ok": true,
+    "got_ok": true,
+    "codes": [],
+    "scope": "peer",
+    "pass": true
+  },
+  {
+    "name": "P3 anchor / external",
+    "expect_ok": true,
+    "got_ok": true,
+    "codes": [],
+    "scope": "external",
+    "pass": true
+  },
+  {
+    "name": "N1 subject swapped",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "subject_mismatch"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N2 outcome restates payload",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "outcome_mismatch"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N3 witness binds another statement",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "witness_not_bound"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N4 witness signed by observed party",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "witness_control_overlap",
+      "witness_key_unpinned"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N5 witness key has no pin",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "witness_key_unpinned"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N6 anchor key unpinned",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "anchor_key_unpinned"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N7 timestamp only",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "timestamp_not_lift"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N8 anchor pinned after anchoring",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "anchor_key_unpinned"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N9 policy stale",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "policy_stale"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N10 replay: same request_id reused",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "replay_detected"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N11 unsigned",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "unsigned"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N12 scope claim upgraded",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "scope_mismatch"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N13 foreign role block in witness",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "bad_signature",
+      "foreign_role_block"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N14 payload digest omitted",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "invalid_digest",
+      "subject_mismatch"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N15 witness domain omitted",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "witness_control_overlap"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N16 verifier context incomplete",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "verifier_context_incomplete",
+      "witness_not_bound"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N17 request_id omitted",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "invalid_context"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N18 witness recycled onto another request_id",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "witness_not_bound"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N19 payload tampered after signing",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "bad_signature"
+    ],
+    "scope": null,
+    "pass": true
+  },
+  {
+    "name": "N20 peer key in a registry the observed party writes",
+    "expect_ok": false,
+    "got_ok": false,
+    "codes": [
+      "witness_key_unpinned"
+    ],
+    "scope": null,
+    "pass": true
+  }
+]

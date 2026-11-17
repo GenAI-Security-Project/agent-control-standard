@@ -1,0 +1,4 @@
+{
+  "scope": "/etc/hosts",
+  "tool": "read_file"
+}
