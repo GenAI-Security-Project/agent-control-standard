@@ -251,3 +251,11 @@ def test_the_floor_echoes_an_id_that_parsed(served, monkeypatch):
     monkeypatch.setattr(example_guardian, "handle_request", broken)
     status, answer = post(served, _ping("keep-me"))
     assert (answer["error"]["code"], answer["id"]) == (-32603, "keep-me")
+
+
+# Headers are Latin-1 on the wire, so non-ASCII digits can't be sent here.
+@pytest.mark.parametrize("value", ["+10", " 10 ", "1_0", "0x10", "1e1"])
+def test_a_content_length_that_is_not_plain_digits_is_refused_without_reading(served, value):
+    head = f"POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Type: application/json\r\nContent-Length: {value}"
+    status, answer = send_raw(served, head, b'{"jsonrpc": "2.0"}')
+    assert (status, answer["error"]["code"]) == (400, -32600)

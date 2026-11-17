@@ -16,6 +16,7 @@ import json
 import math
 import os
 import posixpath
+import re
 import socketserver
 import sys
 import threading
@@ -855,6 +856,8 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
         return envelope
 
 
+_CONTENT_LENGTH = re.compile(r"[0-9]+")
+
 # The one answer for anything that escapes every specific check. Fixed text, so nothing internal reaches the agent.
 INTERNAL_ERROR_MESSAGE = "Internal error: the Guardian could not process this request"
 
@@ -880,10 +883,8 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         # A missing, negative, or non-integer length is refused before any read: a negative one would make the
         # read wait for EOF, and a missing one gives nothing to bound the read with.
         raw_length = self.headers.get("Content-Length")
-        try:
-            length = int(raw_length) if raw_length is not None else -1
-        except (TypeError, ValueError):
-            length = -1
+        # 1*DIGIT in ASCII only (RFC 9110). int() would also take +10, " 10 ", 1_0, and non-ASCII digits.
+        length = int(raw_length) if raw_length is not None and _CONTENT_LENGTH.fullmatch(raw_length) else -1
         if length < 0:
             self._respond(400, {"jsonrpc": "2.0", "id": None,
                                 "error": {"code": -32600, "message": "Invalid Request: missing or invalid Content-Length"}})
