@@ -103,3 +103,24 @@ def test_a_forged_resend_of_a_removed_call_with_repeated_arguments_is_audited(ga
     assert response.status_code == 200
     assert not [i for i in upstream.received[-1].json()["input"] if i.get("type") == "function_call"]
     assert [e["where"] for e in events(audit, "duplicate_json_key")] == ["function_call.arguments"]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+@pytest.mark.parametrize("call_id", ["", 7, None])
+def test_a_model_call_without_a_string_call_id_is_removed_in_enforce_and_recorded_in_shadow(
+        gateway, guardian, upstream, audit, mode, call_id):
+    from conftest import NEUTRAL, call_item, response_body
+
+    item = call_item("get_vendor_details", {"vendor_id": 7}, "x")
+    if call_id is None:
+        del item["call_id"]
+    else:
+        item["call_id"] = call_id
+    upstream.reply(response_body(item))
+    output = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    if mode == "enforce":
+        assert output[0]["content"][0]["text"] == NEUTRAL
+    else:
+        assert output == [item]
+    assert [(e["item_type"], e["direction"]) for e in events(audit, "call_id_invalid")] == [("function_call", "output")]

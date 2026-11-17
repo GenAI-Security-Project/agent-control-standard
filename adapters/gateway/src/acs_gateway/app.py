@@ -490,7 +490,7 @@ class Gateway:
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 # With no call_id the item has no cache key and no call to match, so it can't be gated.
-                _audit("call_id_invalid", item_type=kind, mode=self.config.mode, **where)
+                _audit("call_id_invalid", item_type=kind, direction="input", mode=self.config.mode, **where)
                 if self.enforce:
                     return openai_error(400, "Every function call and function call output needs a call_id.",
                                         "invalid_request_error", "call_id_invalid"), deferred
@@ -565,11 +565,14 @@ class Gateway:
             if not isinstance(item, dict) or item.get("type") != "function_call":
                 kept.append(item)
                 continue
-            if not isinstance(call_id, str):
-                # No call_id means no cache key and no way to match its output, so enforce never delivers it.
-                missing = StepResult(TOOL_CALL_REQUEST, None, cause="call_id_missing",
+            if not isinstance(call_id, str) or not call_id:
+                # No usable call_id means no cache key and no way to match its output, and the pre-pass would refuse
+                # the resend that carries it, so enforce never delivers it.
+                _audit("call_id_invalid", session_id=session.session_id, item_type="function_call",
+                       direction="output", mode=self.config.mode)
+                invalid = StepResult(TOOL_CALL_REQUEST, None, cause="call_id_invalid",
                                      failure_class="observed_agent_error")
-                self._record(session, missing, Applied("deny", None, "call_id_missing"), str(item.get("name")), None)
+                self._record(session, invalid, Applied("deny", None, "call_id_invalid"), str(item.get("name")), None)
                 if self.enforce:
                     changed = removed = True
                     kept.append(_REMOVED)

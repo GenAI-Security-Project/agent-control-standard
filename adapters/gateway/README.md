@@ -114,7 +114,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`) |
 | `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
-| `call_id_invalid` | A call or output without a non-empty string call_id, with `item_type` |
+| `call_id_invalid` | A call or output without a non-empty string call_id, with `item_type` and `direction`. On the input side enforce answers 400. On the output side, a call from the model, enforce removes it and gives the neutral line if nothing else is left. Shadow records both |
 | `duplicate_json_key` | A request repeated a JSON key, with `key` and `where` |
 | `upstream_rejected` | An upstream answer the gateway won't gate, with `cause` (`duplicate_json_key`) and `mode` |
 | `unsupported_field` | A request field outside the allowlist, with `field` |
