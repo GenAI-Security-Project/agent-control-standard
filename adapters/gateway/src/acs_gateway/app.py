@@ -63,6 +63,7 @@ from acs_gateway.sessions import (
 )
 from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
+from acs_gateway.tool_digest import tool_digests
 from acs_gateway.transcript import ModelInputLog, Transcript
 from acs_gateway.upstream import (
     ARRIVAL_EXTENSION,
@@ -398,7 +399,7 @@ class Gateway:
                 if session.handshake is None:
                     await self._ensure_open(session)
                 reply_calls = reply_call_ids(reply)
-                changed = await self._gate_output(session, reply, hold)
+                changed = await self._gate_output(session, reply, tool_digests(body), hold)
                 # Replay's branch tokens place this reply's removed calls where this request ended (issue #579).
                 note_reply_calls(session, reply_calls, body, arrival)
         except SessionsBusy:
@@ -778,13 +779,15 @@ class Gateway:
             return CachedOutcome("delivered", name, item, result.request_id, first, raw)
         return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw)
 
-    async def _gate_output(self, session: Session, reply: dict[str, Any], asks: AskHold | None = None) -> bool:
-        """Gate each new function_call before the client sees it (A.4). asks is the request's ASK budget, which a
-        stream passes in so its calls, decided one at a time, share it too."""
+    async def _gate_output(self, session: Session, reply: dict[str, Any], digests: dict[str, str] | None = None,
+                           asks: AskHold | None = None) -> bool:
+        """Gate each new function_call before the client sees it (A.4), each carrying its declaration digest (A.10).
+        asks is the request's ASK budget, which a stream passes in so its calls, decided one at a time, share it
+        too."""
         asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s)
         changed, removed, kept = False, False, []
         for item in reply["output"]:
-            delivered = await self._gate_item(session, item, asks)
+            delivered = await self._gate_item(session, item, asks, digests)
             if delivered is None:
                 changed = removed = True
                 kept.append(_REMOVED)
@@ -799,10 +802,11 @@ class Gateway:
             reply["output"] = kept
         return changed
 
-    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None = None) -> Any:
+    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None = None,
+                         digests: dict[str, str] | None = None) -> Any:
         """One output item through the gate: the item to deliver, the same object when nothing changes, or None when
         enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the request's
-        ASK budget, shared by every item of one response."""
+        ASK budget, shared by every item of one response. digests are the request's declaration digests (A.10)."""
         asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s)
         call_id = item.get("call_id") if isinstance(item, dict) else None
         if item_type(item) not in ALLOWED_OUTPUT_TYPES:
@@ -836,7 +840,7 @@ class Gateway:
             self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
             return None if self.enforce else item
         if cached is None:
-            cached = await self._gate_call(session, item, asks)
+            cached = await self._gate_call(session, item, asks, digests.get(item.get("name")) if digests else None)
             session.calls[call_id] = cached
         if not self.enforce:
             return item
@@ -844,7 +848,8 @@ class Gateway:
             return None
         return item if cached.item == item else cached.item
 
-    async def _gate_call(self, session: Session, item: dict[str, Any], asks: AskHold) -> CachedOutcome:
+    async def _gate_call(self, session: Session, item: dict[str, Any], asks: AskHold,
+                         digest: str | None = None) -> CachedOutcome:
         name = item.get("name") if isinstance(item.get("name"), str) else ""
         raw_arguments = item.get("arguments")
         arguments, repeated = parse_arguments(raw_arguments)
@@ -853,7 +858,7 @@ class Gateway:
             cause = "duplicate_json_key" if repeated is not None else "arguments_not_an_object"
             result = StepResult(TOOL_CALL_REQUEST, None, cause=cause, failure_class="observed_agent_error")
         else:
-            result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
+            result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments, digest))
         if self._held(result):
             result = await self._resolve_ask(session, item, name, arguments, result, asks)
         applied = apply_call(item, arguments or {}, result)

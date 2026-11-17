@@ -4,6 +4,8 @@ import pytest
 
 from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body, transcript_lines
 
+from acs_gateway.tool_digest import tool_digests
+
 
 def events(audit, name):
     return [e for e in audit() if e["acs_audit_event"] == name]
@@ -25,7 +27,9 @@ def test_an_allowed_call_is_returned_unchanged(gateway, guardian, upstream, audi
     assert methods == [("req", "steps/sessionStart"), ("resp", None),
                        ("req", "steps/toolCallRequest"), ("resp", None)]
     request = lines[2]["envelope"]["params"]
-    assert request["payload"] == {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+    version = tool_digests(finbot_request())["get_vendor_details"]
+    assert request["payload"] == {"tool": {"name": "get_vendor_details", "version": version},
+                                  "arguments": {"vendor_id": {"value": 7}}}
     assert lines[3]["envelope"]["result"]["request_id"] == request["request_id"]
     assert len(events(audit, "session_opened")) == 1
     applied = events(audit, "decision_applied")

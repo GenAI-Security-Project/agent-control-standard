@@ -187,9 +187,11 @@ def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
     return value, None
 
 
-def call_payload(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    # tool.version carries the tool digest once LAB-07 (issue #580) computes it.
-    return {"tool": {"name": name}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
+def call_payload(name: str, arguments: dict[str, Any], version: str | None = None) -> dict[str, Any]:
+    """The toolCallRequest payload. version is the declaration digest from tool_digests (A.10, a lab convention
+    until issue #38), or None for a function the request never declared, which leaves tool.version out."""
+    tool = {"name": name} if version is None else {"name": name, "version": version}
+    return {"tool": tool, "arguments": {k: {"value": v} for k, v in arguments.items()}}
 
 
 def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[dict[str, Any], bool, str | None]:

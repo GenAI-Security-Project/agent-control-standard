@@ -46,6 +46,12 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                     "ask_details": {"approver": {"type": "agent", "id": "approval-bot",
                                                  "endpoint": "https://example.com/approve"},
                                     "question": "Approve?", "timeout_seconds": 60}}
+        if tool == "pinned_tool":
+            # The A.10 pin check LAB-12 writes in Rego, reduced to one comparison against the pinned digest.
+            version = ((params.get("payload") or {}).get("tool") or {}).get("version")
+            if version != os.environ.get("HARNESS_PINNED_VERSION"):
+                return {**base, "decision": "deny", "reasoning": f"tool.version {version}",
+                        "reason_codes": ["tool_content_hash_mismatch"]}
         if tool == "defer_tool":
             return {**base, "decision": "defer", "reasoning": "later", "reason_codes": ["deferred"],
                     "defer_details": {"reason": "low_confidence", "resolution_method": "timeout",
