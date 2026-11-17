@@ -262,7 +262,12 @@ ACVP = json.loads((Path(__file__).parent / "vectors" / "acvp_ml_dsa_65.json").re
 
 
 class NistAcvpKnownAnswers(unittest.TestCase):
-    """Review finding F-M2: vectors from NIST's ACVP-Server, cited by file, commit and test case in the JSON."""
+    """Review finding F-M2: vectors from NIST's ACVP-Server, cited by file, commit and test case in the JSON.
+
+    ACVP has no valid pure ML-DSA-65 case with an empty context, so none of these is a positive
+    for the library's own empty-context verify path. The Go crypto/mldsa interop test in
+    tests/interop/ is that positive, and VerifySideKnownAnswer pins a Go-signed vector here.
+    """
 
     def test_keygen_from_the_acvp_seed_gives_the_acvp_public_key(self) -> None:
         case = ACVP["keyGen"]
