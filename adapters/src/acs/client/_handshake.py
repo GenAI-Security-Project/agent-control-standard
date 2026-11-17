@@ -314,7 +314,10 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     # A request problem can come with any response at all, so read the claimed code defensively.
     error = response.get("error") if isinstance(response, Mapping) else None
     code = error.get("code") if isinstance(error, Mapping) else None
-    if binding in (BINDING_REQUEST, BINDING_ID):
+    if binding == BINDING_REQUEST:
+        # The ClientHello is the caller's own error, not the Guardian's.
+        return SessionRefused("request_envelope_invalid")
+    if binding == BINDING_ID:
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
     # A result goes on to the signature and ServerHello checks only when the request is a real
