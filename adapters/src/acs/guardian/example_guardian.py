@@ -28,6 +28,7 @@ from acs.guardian._limits import depth_exceeds
 from acs.guardian._logging import log_value
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
+from acs.client._exchange import _MAX_SAFE_INTEGER
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
 from acs.core._canonical import CANONICALIZATION_ERRORS
 from acs.core import (
@@ -690,10 +691,8 @@ class RequestRead(NamedTuple):
     problem: str | None
 
 
-# The JCS (RFC 8785) integer bound. acs.client keeps the same value privately (_exchange._MAX_SAFE_INTEGER), and
-# acs.core exports none on this branch. Exporting one shared constant from acs.core belongs to LAB-01's files and
-# is on the post-merge follow-up list.
-MAX_SAFE_ID = 2**53 - 1
+# The JCS (RFC 8785) integer bound, the one acs.client applies to what it signs.
+MAX_SAFE_ID = _MAX_SAFE_INTEGER
 
 
 def _valid_id(value: Any) -> bool:
