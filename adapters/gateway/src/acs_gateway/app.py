@@ -284,10 +284,12 @@ class Gateway:
             try:
                 refused = self._refuse_unrestorable(key, candidate, body, audited=audited)
             except Exception as e:  # noqa: BLE001
-                if self.enforce:
-                    raise
+                # Audited the same way in both modes. Enforce then fails closed, and shadow goes on gating.
                 _audit("gateway_step_error", phase="locked_check", mode=self.config.mode, conversation=key,
                        error=f"{type(e).__name__}: {e}")
+                if self.enforce:
+                    raise RequestRefused(openai_error(500, "The request could not be completed.", "server_error",
+                                                      "internal_error")) from e
                 return
             if refused is not None:
                 raise RequestRefused(refused)

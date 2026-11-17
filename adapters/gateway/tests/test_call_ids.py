@@ -318,3 +318,27 @@ def test_shadow_dedup_keeps_two_different_findings_on_one_call_id(gateway, guard
     assert response.status_code == 200
     assert sorted(e["key"] for e in events(audit, "duplicate_json_key")) == ["a", "b"]
 
+
+
+def test_an_enforce_fault_in_the_locked_check_is_audited_as_locked_check(gateway, guardian, upstream, audit):
+    from conftest import call_item, response_body
+
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    gw = client.app.state.gateway
+    client.post("/v1/responses", json=finbot_request())
+    retire_on_peek(gw, call)
+    original, calls = gw._refuse_unrestorable, []
+
+    def faulting(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("locked check bug")
+        return original(*args, **kwargs)
+
+    gw._refuse_unrestorable = faulting
+    response = client.post("/v1/responses", json=finbot_request(call))
+    assert response.status_code == 500
+    errors = events(audit, "gateway_step_error")
+    assert [(e["phase"], bool(e.get("conversation"))) for e in errors] == [("locked_check", True)]
