@@ -196,25 +196,39 @@ def fill(value: Any, mapping: dict[str, str]) -> tuple[Any, bool]:
     return walk(value), complete
 
 
-def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int]:
-    """(first user message with placeholders, step), read from the request alone (A.8, PREMORTEM P11).
+def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int, int]:
+    """(first user message with placeholders, turn, step), read from the request alone (A.8, PREMORTEM P11).
 
-    The step is the number of function_call_output items, so an SDK retry or an agent rerun lands on the same step.
+    The turn is the number of user messages, so each turn of one chat has its own answer (fix round 2, CR1). The
+    step is the number of function_call_output items, so an SDK retry or an agent rerun lands on the same step.
     """
     items = body.get("input")
     if isinstance(items, str):
-        return to_placeholders(items, mapping), 0
+        return to_placeholders(items, mapping), 1, 0
     items = items if isinstance(items, list) else []
-    first_user = next((_text(i.get("content")) for i in items
-                       if isinstance(i, dict) and i.get("role") == "user" and i.get("type", "message") == "message"), "")
+    users = [i for i in items if isinstance(i, dict) and i.get("role") == "user" and i.get("type", "message") == "message"]
+    first_user = _text(users[0].get("content")) if users else ""
     step = sum(1 for i in items if isinstance(i, dict) and i.get("type") == "function_call_output")
-    return to_placeholders(first_user, mapping), step
+    return to_placeholders(first_user, mapping), len(users), step
 
 
 def _governed_items(body: Any) -> list[dict[str, Any]]:
     items = body.get("input") if isinstance(body, dict) else None
     return [i for i in items if isinstance(i, dict) and i.get("type") in ("function_call", "function_call_output")
             and isinstance(i.get("call_id"), str) and i["call_id"]] if isinstance(items, list) else []
+
+
+def override_model(raw: bytes, model: str) -> bytes:
+    """The body with its model field set to ACS_UPSTREAM_MODEL. A body that isn't a readable JSON object, such as a
+    compressed one, goes on unchanged, since nothing in it can be set."""
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return raw
+    if not isinstance(body, dict):
+        return raw
+    body["model"] = model
+    return json.dumps(body).encode("utf-8")
 
 
 def off_branch(body: Any) -> str:
@@ -267,18 +281,20 @@ def _audit(event: str, **fields: Any) -> None:
 
 
 _BRANCH = re.compile(r"(?:[adm](?:,[adm])*)?")
-_RECORDING_FIELDS = ("scenario", "match", "step", "branch", "stream", "ids", "response")
+_RECORDING_FIELDS = ("scenario", "match", "turn", "step", "branch", "stream", "ids", "response")
 
 
 @dataclass(frozen=True)
 class Recording:
-    """One recording line (A.8, plus ids): {"scenario", "match", "step", "branch", "stream", "ids", "response"}.
+    """One recording line (A.8, plus turn and ids):
+    {"scenario", "match", "turn", "step", "branch", "stream", "ids", "response"}.
 
     match is a regular expression for the first user message with placeholders, matched in full. A non-streamed
     response is the Responses API body. A streamed one is the list of {"event", "data"} server-sent events.
     """
     scenario: str
     match: re.Pattern[str]
+    turn: int
     step: int
     branch: str
     stream: bool
@@ -300,9 +316,10 @@ def _recording(raw: str) -> Recording:
         match = re.compile(line["match"])
     except re.error as e:
         raise ValueError(f"match is not a regular expression ({e})") from None
-    step = line["step"]
-    if not isinstance(step, int) or isinstance(step, bool) or step < 0:
-        raise ValueError("step is a whole number of at least 0")
+    turn, step = line["turn"], line["step"]
+    for name, value in (("turn", turn), ("step", step)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{name} is a whole number of at least 0")
     if not isinstance(line["branch"], str) or not _BRANCH.fullmatch(line["branch"]):
         raise ValueError("branch is a comma-separated list of a, d and m tokens")
     if not isinstance(line["stream"], bool):
@@ -318,7 +335,7 @@ def _recording(raw: str) -> Recording:
             raise ValueError("a streamed response is a list of {event, data} objects")
     elif not isinstance(response, dict) or not isinstance(response.get("output"), list):
         raise ValueError("a response is a Responses API object with an output list")
-    return Recording(line["scenario"], match, step, line["branch"], line["stream"], line["ids"], response)
+    return Recording(line["scenario"], match, turn, step, line["branch"], line["stream"], line["ids"], response)
 
 
 class RecordingStore:
@@ -342,10 +359,10 @@ class RecordingStore:
                     raise ValueError(f"{path.name}:{number}: {e}") from None
         return cls(recordings)
 
-    def find(self, first_user: str, step: int, branch: str, stream: bool) -> Recording | None:
-        """The first recording, in file and line order, that fits all four parts of the key."""
+    def find(self, first_user: str, turn: int, step: int, branch: str, stream: bool) -> Recording | None:
+        """The first recording, in file and line order, that fits every part of the key."""
         for recording in self.recordings:
-            if (recording.step == step and recording.branch == branch and recording.stream == stream
+            if (recording.turn == turn and recording.step == step and recording.branch == branch and recording.stream == stream
                     and recording.match.fullmatch(first_user)):
                 return recording
         return None
@@ -445,10 +462,10 @@ class ReplayTransport(httpx.AsyncBaseTransport):
             return self._miss(None, "unreadable_request", None, "", False)
         stream = _is_stream(body)
         mapping = placeholder_map(body)
-        first_user, step = replay_key(body, mapping)
+        first_user, turn, step = replay_key(body, mapping)
         if branch is None:
             branch = off_branch(body)
-        recording = self.store.find(first_user, step, branch, stream)
+        recording = self.store.find(first_user, turn, step, branch, stream)
         if recording is None:
             return self._miss(body.get("model"), "no_recording", step, branch, stream)
         if id_skeleton(body, mapping) != recording.ids:
@@ -567,7 +584,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
             return
         mapping = placeholder_map(body)
-        first_user, step = replay_key(body, mapping)
+        first_user, turn, step = replay_key(body, mapping)
         if branch is None:
             branch = off_branch(body)
         normalized = to_placeholders(response, mapping)
@@ -575,7 +592,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             # The request named no such user, so the line would carry this FinBot's namespace into another one.
             _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario)
             return
-        line = {"scenario": self._scenario, "match": re.escape(first_user), "step": step, "branch": branch,
+        line = {"scenario": self._scenario, "match": re.escape(first_user), "turn": turn, "step": step, "branch": branch,
                 "stream": stream, "ids": id_skeleton(body, mapping), "response": normalized}
         try:
             with self._lock:
@@ -594,6 +611,8 @@ class UpstreamSource:
 
     def __init__(self, config: GatewayConfig) -> None:
         self.mode = config.upstream_mode
+        # Replay answers from recordings, so a model name has nothing to choose there.
+        self.model = config.upstream_model if self.mode != "replay" else None
         self._key = read_key_file(config.upstream_key_file) if config.upstream_key_file is not None else None
         self._store = None
         self._capture_path = None

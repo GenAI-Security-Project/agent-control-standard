@@ -63,7 +63,7 @@ from acs_gateway.sessions import (
 from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
-from acs_gateway.upstream import BRANCH_HEADER, UpstreamSource, off_branch, session_branch
+from acs_gateway.upstream import BRANCH_HEADER, UpstreamSource, off_branch, override_model, session_branch
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
 _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -197,6 +197,8 @@ class Gateway:
         if not self.governed:
             # Off is a pure passthrough, with no size limit on either leg.
             raw = await request.body()
+            if self.upstream_source.model is not None:
+                raw = override_model(raw, self.upstream_source.model)
             if self.upstream_source.records_branch:
                 headers[BRANCH_HEADER] = off_branch(_parse(raw))
             return await self._relay_verbatim(raw, headers)
@@ -340,6 +342,10 @@ class Gateway:
         if self.upstream_source.records_branch:
             # Capture and replay key on what the gateway did, read from its own records (A.8).
             headers[BRANCH_HEADER] = session_branch(session, body) if session is not None else off_branch(body)
+        if self.upstream_source.model is not None:
+            # ACS_UPSTREAM_MODEL picks the model live and capture call. The model input log then shows what was sent.
+            body["model"] = self.upstream_source.model
+            raw = json.dumps(body).encode("utf-8")
         if is_stream(body):
             self.model_inputs.append(body)
             sent = await self._send(raw, headers)

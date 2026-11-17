@@ -101,6 +101,7 @@ class GatewayConfig:
     upstream_key_file: Path | None = None
     recordings_dir: Path | None = None
     capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
+    upstream_model: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -135,6 +136,7 @@ class GatewayConfig:
             raise ValueError(f"ACS_GATEWAY_ASK_MAX_S must be more than the decision timeout plus "
                              f"{STEP_GRACE_S:g} s ({decision_timeout_s + STEP_GRACE_S:g}), got {ask_max_s:g}")
         upstream_mode, key_file, recordings, scenario = _upstream_settings(env)
+        model = env.get("ACS_UPSTREAM_MODEL", "").strip()
         return cls(
             mode=mode,
             upstream_url=(env.get("ACS_UPSTREAM_URL", "").strip() or DEFAULT_UPSTREAM_URL).rstrip("/"),
@@ -164,6 +166,7 @@ class GatewayConfig:
             upstream_key_file=key_file,
             recordings_dir=recordings,
             capture_scenario=scenario,
+            upstream_model=model or None,
         )
 
 

@@ -73,10 +73,10 @@ def test_the_key_takes_the_step_from_outputs_whatever_they_say():
                 {"type": "function_call", "call_id": "call_3", "name": "c", "arguments": "{}"},
                 output("call_3", '{"bank_account_number": "[REDACTED]"}'),
                 first_user=f"Mail admin@{NS_A}.finbot")
-    assert replay_key(live, placeholder_map(live)) == ("Mail admin@ns_{{acs:user:1}}.finbot", 3)
+    assert replay_key(live, placeholder_map(live)) == ("Mail admin@ns_{{acs:user:1}}.finbot", 1, 3)
 
 
 def test_a_first_user_message_in_parts_is_joined():
     live = {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Pay "},
                                                    {"type": "input_text", "text": "vendor 7"}]}]}
-    assert replay_key(live, placeholder_map(live)) == ("Pay vendor 7", 0)
+    assert replay_key(live, placeholder_map(live)) == ("Pay vendor 7", 1, 0)

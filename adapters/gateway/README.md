@@ -100,20 +100,21 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 **Recordings.** Each line is one JSON object (A.8):
 
 ```json
-{"scenario": "s1", "match": "Pay\\ vendor\\ 7", "step": 1, "branch": "a,a", "stream": false, "ids": ["user:1", "time:1"], "response": {"id": "resp_...", "output": ["..."]}}
+{"scenario": "s1", "match": "Pay\\ vendor\\ 7", "turn": 1, "step": 1, "branch": "a,a", "stream": false, "ids": ["user:1", "time:1"], "response": {"id": "resp_...", "output": ["..."]}}
 ```
 
 | Field | Meaning |
 |---|---|
 | `scenario` | The capture's scenario name |
 | `match` | A regular expression the request's first user message, with placeholders, must match in full. Capture writes the escaped message, and a curator may loosen it by hand |
+| `turn` | How many user messages the request held, so each turn of one chat has its own answer |
 | `step` | How many `function_call_output` items the request held. A retry, from FinBot's SDK or its agent runner, lands on the same step |
 | `branch` | One token per governed item, comma separated, from the session's own outcome records, never from text in the request: `a` delivered, `d` removed or replaced by the neutral line, `m` rewritten (a MODIFY of a call or an output). Calls and outputs take their tokens in the order the request holds them. A removed call never comes back from the client, so its `d` sits where the request that produced it ended. Off and shadow change nothing, so they give `a` for every call and output |
 | `stream` | Whether the request asked for a stream |
 | `ids` | Every placeholder in the request, in document order, as `kind:n`. Replay fills only a request with the same list, so an id that moved or an extra one is a miss (`placeholder_mismatch`) instead of a value in the wrong place |
 | `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
 
-Replay serves the first line, in file name and line order, that fits all of `match`, `step`, `branch` and `stream`. A byte-identical request gets the bytes it got before, from a cache of the last 1,024 requests keyed on the request's SHA-256.
+Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch` and `stream`. A byte-identical request gets the bytes it got before, from a cache of the last 1,024 requests keyed on the request's SHA-256.
 
 **Placeholders.** FinBot mints a namespace and ids for every visitor, so a recording made in one FinBot would point the replayed model at another FinBot's addresses. Capture swaps each value below for `{{acs:<kind>:<n>}}`, where `n` counts distinct values of that kind in the order they appear in the request, the system text first. Replay fills each placeholder from the live request, so a recording replays into a fresh FinBot with a different namespace.
 
@@ -251,6 +252,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only |
 | `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
 | `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64 |
+| `ACS_UPSTREAM_MODEL` | None | In live and capture, the model name sent upstream in place of the client's. The model input log shows the name sent. Replay ignores it |
 | `ACS_GUARDIAN_URL` | `http://127.0.0.1:8787/` | Guardian endpoint |
 | `ACS_HMAC_SECRET_FILE` or `ACS_HMAC_SECRET` | None | Request signing secret, at least 32 bytes. The file must be 0600 or 0400 |
 | `ACS_HMAC_KEY_ID` | None | The label that names the secret |

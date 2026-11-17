@@ -27,7 +27,7 @@ def history(n: int) -> list[dict]:
 
 def line(step: int, response, *, branch: str = "", stream: bool = False, match: str = "Pay vendor 7",
          ids: tuple = ()) -> dict:
-    return {"scenario": "s1", "match": match, "step": step, "branch": branch, "stream": stream, "ids": list(ids),
+    return {"scenario": "s1", "match": match, "turn": 1, "step": step, "branch": branch, "stream": stream, "ids": list(ids),
             "response": response}
 
 
@@ -114,11 +114,11 @@ def test_an_unfillable_placeholder_is_a_miss(gateway, tmp_path, audit, no_networ
 
 @pytest.mark.parametrize("bad", [
     "not json",
-    json.dumps({"scenario": "s1", "match": "(", "step": 0, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": -1, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "q", "stream": False, "ids": [], "response": {"output": []}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "", "stream": False, "ids": [], "response": {}}),
-    json.dumps({"scenario": "s1", "match": "x", "step": 0, "branch": "", "stream": True, "ids": [], "response": [{"event": 1}]}),
+    json.dumps({"scenario": "s1", "match": "(", "turn": 1, "step": 0, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
+    json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": -1, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
+    json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 0, "branch": "q", "stream": False, "ids": [], "response": {"output": []}}),
+    json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 0, "branch": "", "stream": False, "ids": [], "response": {}}),
+    json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 0, "branch": "", "stream": True, "ids": [], "response": [{"event": 1}]}),
 ])
 def test_a_malformed_recording_stops_startup(gateway, tmp_path, bad):
     (tmp_path / "rec").mkdir()
