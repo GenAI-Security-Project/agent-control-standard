@@ -300,9 +300,10 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
         return NoAnswer("malformed_response")
     error = response.get("error")
     code = error.get("code") if error is not None else None
-    # The id binds the ServerHello, compared as JSON values. A result carrying request_id is
-    # no answer below, the contract test_signed_legacy_result_wrapper_is_no_answer pins, so this
-    # stays an id check rather than response_matches_request, which would refuse the session.
+    # The id binds the ServerHello, compared as JSON values. A result carrying request_id is no
+    # answer, through server_hello_problem below, which SignedServerHellos in
+    # tests/client/test_handshake_binding.py pins. This stays an id check because
+    # response_matches_request would refuse the session instead.
     if not same_json_rpc_id(response.get("id"), client_hello["id"]):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
@@ -323,10 +324,6 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     server_hello = response["result"]
     if "negotiated_version" not in server_hello:
         return NoAnswer("invalid_server_hello")
-    # A ServerHello carries no request_id. A result that does is a step answer, which the
-    # keyring path refuses too, so it gets the fail posture instead of negotiating.
-    if "request_id" in server_hello:
-        return NoAnswer("invalid_server_hello", {"problem": "a ServerHello carries no request_id"})
     problem = server_hello_problem(server_hello, client_hello["params"]["payload"])
     if problem is not None:
         return NoAnswer("invalid_server_hello", {"problem": problem})
