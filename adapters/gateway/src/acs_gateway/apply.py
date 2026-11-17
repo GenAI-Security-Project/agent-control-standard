@@ -11,6 +11,7 @@ from acs.core import modify_composition_violation
 
 from acs_gateway.guardian import StepResult
 from acs_gateway.strict import loads_recording
+from acs_gateway.tool_digest import declared_functions
 
 # The one artifact of governance the client and the model may see.
 NEUTRAL_LINE = "I couldn't complete that action."
@@ -76,6 +77,17 @@ def unsupported_tool(body: dict[str, Any]) -> str | None:
         kind = tool.get("type") if isinstance(tool, dict) else None
         if kind != "function":
             return kind if isinstance(kind, str) else type(tool).__name__
+    return None
+
+
+def repeated_function_name(body: dict[str, Any]) -> str | None:
+    """The first function name the request declares twice, or None. The policy can't know which declaration the model
+    read, so such a name has no digest to pin (A.10)."""
+    seen: set[str] = set()
+    for tool in declared_functions(body):
+        if tool["name"] in seen:
+            return tool["name"]
+        seen.add(tool["name"])
     return None
 
 
@@ -194,9 +206,11 @@ def call_payload(name: str, arguments: dict[str, Any], version: str | None = Non
     return {"tool": tool, "arguments": {k: {"value": v} for k, v in arguments.items()}}
 
 
-def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[dict[str, Any], bool, str | None]:
+def result_payload(name: str, output: Any, request_id_ref: str | None,
+                   version: str | None = None) -> tuple[dict[str, Any], bool, str | None]:
     """The toolCallResult payload, whether outputs[0].value is parsed JSON a redaction can point into, and the first
-    key the output repeats, or None. Parsed once, strictly."""
+    key the output repeats, or None. Parsed once, strictly. version is the declaration digest of the function whose
+    output this is, as on toolCallRequest (A.10, a lab convention until issue #38), or None to leave it out."""
     value, parsed, repeated = output, False, None
     if isinstance(output, str):
         try:
@@ -204,7 +218,8 @@ def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[
             parsed = True
         except (ValueError, RecursionError):
             value = output
-    payload: dict[str, Any] = {"tool": {"name": name}, "exit_status": "success", "outputs": [{"value": value}]}
+    tool = {"name": name} if version is None else {"name": name, "version": version}
+    payload: dict[str, Any] = {"tool": tool, "exit_status": "success", "outputs": [{"value": value}]}
     if request_id_ref:
         payload["request_id_ref"] = request_id_ref
     return payload, parsed, repeated

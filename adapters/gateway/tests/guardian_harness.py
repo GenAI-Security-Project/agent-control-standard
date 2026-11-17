@@ -47,9 +47,11 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                                                  "endpoint": "https://example.com/approve"},
                                     "question": "Approve?", "timeout_seconds": 60}}
         if tool == "pinned_tool":
-            # The A.10 pin check LAB-12 writes in Rego, reduced to one comparison against the pinned digest.
+            # The A.10 pin check LAB-12 writes in Rego, reduced to one comparison against the pinned digest. It fails
+            # closed: no version, or no pin to compare with, denies like a mismatch.
             version = ((params.get("payload") or {}).get("tool") or {}).get("version")
-            if version != os.environ.get("HARNESS_PINNED_VERSION"):
+            pin = os.environ.get("HARNESS_PINNED_VERSION")
+            if not version or not pin or version != pin:
                 return {**base, "decision": "deny", "reasoning": f"tool.version {version}",
                         "reason_codes": ["tool_content_hash_mismatch"]}
         if tool == "defer_tool":
