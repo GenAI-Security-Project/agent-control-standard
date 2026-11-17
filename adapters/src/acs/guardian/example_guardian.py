@@ -764,9 +764,10 @@ def _handle(request: Any, read: RequestRead) -> dict:
     """The one path every request takes after its single read. do_POST calls it with the read it already logged."""
     try:
         return _answer(request, read)
-    except CANONICALIZATION_ERRORS:
+    except CANONICALIZATION_ERRORS as e:
         # Signing itself failed, as for a session_id JCS can't encode. A direct caller gets the same unsigned floor
-        # envelope do_POST sends, so handle_request never raises for one.
+        # envelope do_POST sends, so handle_request never raises for one, and it is logged the same way.
+        _log_internal_error(e)
         return internal_error_envelope(read.id)
 
 
@@ -777,6 +778,16 @@ def _foreign_key_id(request: Any) -> bool:
     params = request.get("params")
     signature = params.get("signature") if isinstance(params, dict) else None
     return isinstance(signature, dict) and signature.get("key_id") != load_key_id()
+
+
+def _log_internal_error(error: BaseException) -> None:
+    """The one log line for either floor. Only the exception's type, never its text, which can echo the request."""
+    sys.stderr.write(f"[guardian] internal error: {type(error).__name__}\n")
+    sys.stderr.flush()
+
+
+def is_internal_error(envelope: Any) -> bool:
+    return isinstance(envelope, dict) and (envelope.get("error") or {}).get("code") == -32603
 
 
 def internal_error_envelope(request_id: Any) -> dict:
@@ -902,8 +913,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             self._serve()
         except Exception as e:  # noqa: BLE001
             # A dropped connection reads as transport_failure, which a proceed posture runs ungoverned.
-            sys.stderr.write(f"[guardian] internal error: {type(e).__name__}\n")
-            sys.stderr.flush()
+            _log_internal_error(e)
             if not self._answered:
                 # The request's own id when it parsed and passed the id rule, else null.
                 self._respond(500, internal_error_envelope(self._answer_id))
@@ -964,7 +974,8 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             tail = f" {log_value(result.get('reasoning', ''), 80)}" if decision == "deny" else ""
             sys.stderr.write(f"[guardian] -> {log_value(decision, 16)}{tail}\n")
             sys.stderr.flush()
-        self._respond(200, response)
+        # Both floors answer alike: a floor envelope from _handle gets the same 500 as do_POST's own floor.
+        self._respond(500 if is_internal_error(response) else 200, response)
 
     def _read_body(self, length: int) -> bytes:
         """Read the body within one deadline for the whole read, so a client dripping one byte per interval

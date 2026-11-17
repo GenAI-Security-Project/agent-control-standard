@@ -483,3 +483,21 @@ def test_the_body_read_restores_the_socket_timeout():
         assert handler._read_body(10) == b"0123456789"
         assert server_side.gettimeout() == example_guardian.GuardianHandler.timeout
         handler.rfile.close()
+
+
+def test_both_floors_answer_500_and_log(served, monkeypatch, capsys):
+    # Signing fails inside handle_request: the floor envelope comes back from _handle.
+    body = _envelope_text(session_id="SURROGATE").replace(b'"SURROGATE"', b'"\\ud800"')
+    status_signing, answer_signing = post(served, body)
+    signing_log = capsys.readouterr().err
+
+    # Anything else escapes into do_POST's own floor.
+    def broken(request, read):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(example_guardian, "_handle", broken)
+    status_escape, answer_escape = post(served, _ping("e"))
+    escape_log = capsys.readouterr().err
+
+    assert (status_signing, status_escape) == (500, 500)
+    assert answer_signing["error"]["code"] == answer_escape["error"]["code"] == -32603
+    assert "[guardian] internal error" in signing_log and "[guardian] internal error" in escape_log
