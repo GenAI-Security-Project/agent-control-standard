@@ -39,6 +39,7 @@ from acs_gateway.apply import (
     unsupported_field,
     unsupported_input_item,
     unsupported_tool,
+    unsupported_tool_choice,
 )
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
 from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult, StepToken
@@ -206,6 +207,12 @@ class Gateway:
             if self.enforce:
                 return openai_error(501, "Only function tools are supported by this endpoint.",
                                     "invalid_request_error", "unsupported_tool_type")
+        choice = unsupported_tool_choice(body)
+        if choice is not None:
+            _audit("unsupported_tool_choice", tool_choice=choice, mode=self.config.mode)
+            if self.enforce:
+                return openai_error(501, "This tool_choice is not supported by this endpoint.",
+                                    "invalid_request_error", "unsupported_tool_choice")
         try:
             key = conversation_key(body)
         except RecursionError:

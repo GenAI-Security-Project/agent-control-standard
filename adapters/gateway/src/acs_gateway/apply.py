@@ -68,6 +68,20 @@ def unsupported_field(body: dict[str, Any]) -> str | None:
     return next((field for field in body if field not in ALLOWED_FIELDS), None)
 
 
+def unsupported_tool_choice(body: dict[str, Any]) -> str | None:
+    """The tool_choice, rendered for the audit line, when it isn't auto, none, required, or a function choice naming a
+    declared function tool. A hosted tool named here would run upstream, out of the gateway's reach."""
+    choice = body.get("tool_choice")
+    if choice is None or choice in ("auto", "none", "required"):
+        return None
+    if isinstance(choice, dict) and set(choice) == {"type", "name"} and choice.get("type") == "function":
+        tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+        declared = {t.get("name") for t in tools if isinstance(t, dict) and t.get("type") == "function"}
+        if choice.get("name") in declared:
+            return None
+    return json.dumps(choice, sort_keys=True, default=str)[:200]
+
+
 def unsupported_input_item(body: dict[str, Any]) -> str | None:
     """The type of the first input item outside ALLOWED_INPUT_TYPES, or None."""
     items = body.get("input")
