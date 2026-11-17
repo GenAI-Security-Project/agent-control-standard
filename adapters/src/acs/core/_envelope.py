@@ -35,9 +35,18 @@ def turn_start_envelope(metadata: Mapping[str, Any], turn_id: str) -> dict[str, 
                             payload={"turn_id": turn_id, "triggered_by": "user_message"})
 
 
+def same_json_rpc_id(a: object, b: object) -> bool:
+    """Whether two JSON-RPC ids are the same id: equal and of one type.
+
+    Python's == treats True, 1 and 1.0 as equal, and JSON doesn't, so a response whose id
+    differs only in type answers a different request.
+    """
+    return type(a) is type(b) and a == b
+
+
 def response_matches_request(request: dict, response: dict) -> bool:
     """Same JSON-RPC id and, for a result, the same request_id, so a signed response cannot be replayed onto another call."""
-    if response.get("id") != request.get("id"):
+    if not same_json_rpc_id(response.get("id"), request.get("id")):
         return False
     result = response.get("result")
     if result is not None:

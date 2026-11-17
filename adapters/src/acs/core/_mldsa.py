@@ -27,7 +27,7 @@ except ImportError as exc:
         "can't be installed together (see adapters/README.md).") from exc
 
 from acs.core._keyring import ML_DSA_65, Keyring, VerificationKey, check_key_id
-from acs.core._envelope import response_matches_request
+from acs.core._envelope import response_matches_request, same_json_rpc_id
 from acs.core._signing import _attach_signature, container_key, decode_signature_value, signing_input
 
 ML_DSA_MODE = "pure"
@@ -146,7 +146,7 @@ def _answers(response: dict, request: dict) -> bool:
     request_id, so a ServerHello or a result without request_id never answers a step.
     """
     if request.get("method") == HANDSHAKE_METHOD:
-        return response.get("id") == request.get("id")
+        return same_json_rpc_id(response.get("id"), request.get("id"))
     return response_matches_request(request, response)
 
 

@@ -408,6 +408,16 @@ class RequestBinding(unittest.TestCase):
         self.assertTrue(self._verify(server_hello, hello))
         self.assertFalse(self._verify(server_hello, {**hello, "id": "hello-2"}))
 
+    def test_a_server_hello_id_must_match_in_type(self) -> None:
+        # Review finding R5-M2 on the handshake branch: True is not the id 1.
+        hello = {"jsonrpc": "2.0", "id": 1, "method": "handshake/hello", "params": {"acs_version": "0.1.0"}}
+        server_hello = {"jsonrpc": "2.0", "id": True,
+                        "result": {"negotiated_version": "0.1.0", "methods_evaluated": [],
+                                   "selected_transport": "http", "timeout_config": {"default_ms": 5000}}}
+        sign_with_signing_key(server_hello, _signer())
+        self.assertFalse(self._verify(server_hello, hello))
+        self.assertTrue(self._verify(server_hello, {**hello, "id": True}))
+
     def test_a_step_result_without_request_id_fails(self) -> None:
         # Review finding R5-I1: only the handshake binds on the id alone. A step result must carry
         # request_id, as the default path's classify_response already requires.
