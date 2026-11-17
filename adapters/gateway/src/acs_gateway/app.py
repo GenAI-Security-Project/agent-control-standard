@@ -183,23 +183,27 @@ class Gateway:
                                     "duplicate_json_key")
         field = unsupported_field(body)
         if field is not None:
-            # An allowlist, so a new field fails closed. Server-side history (previous_response_id, conversation,
+            # An allowlist, so a new field fails closed in enforce. Shadow only observes, so every allowlist there
+            # records and forwards, and shadow never blocks a run. Server-side history (previous_response_id, conversation,
             # item references) or a stored prompt would hide items or tools from the gateway.
             _audit("unsupported_field", field=field, mode=self.config.mode)
-            return openai_error(501, f"The {field} parameter is not supported by this endpoint.",
-                                "invalid_request_error", "unsupported_parameter")
+            if self.enforce:
+                return openai_error(501, f"The {field} parameter is not supported by this endpoint.",
+                                    "invalid_request_error", "unsupported_parameter")
         kind = unsupported_input_item(body)
         if kind is not None:
             _audit("unsupported_item_type", item_type=kind, direction="input", mode=self.config.mode)
-            return openai_error(501, f"Input items of type {kind} are not supported by this endpoint.",
-                                "invalid_request_error", "unsupported_item_type")
+            if self.enforce:
+                return openai_error(501, f"Input items of type {kind} are not supported by this endpoint.",
+                                    "invalid_request_error", "unsupported_item_type")
         unsupported = unsupported_tool(body)
         if unsupported is not None:
             # Function tools only. Any other tool type runs where the gateway can't gate it: a hosted tool runs
             # upstream, and a client-run one has no toolCallRequest mapping yet.
             _audit("unsupported_tool_type", item_type=unsupported, direction="request_tools", mode=self.config.mode)
-            return openai_error(501, "Only function tools are supported by this endpoint.",
-                                "invalid_request_error", "unsupported_tool_type")
+            if self.enforce:
+                return openai_error(501, "Only function tools are supported by this endpoint.",
+                                    "invalid_request_error", "unsupported_tool_type")
         try:
             key = conversation_key(body)
         except RecursionError:

@@ -14,15 +14,15 @@ The gateway forwards `POST /v1/responses` to a model upstream. In shadow and enf
 - Before a request reaches the model, each new `function_call_output` in it goes to the Guardian as `steps/toolCallResult`.
 - In enforce mode the gateway applies each decision. In shadow mode it records each decision and changes nothing.
 
-Shadow and enforce accept only what they can gate, by allowlist, so anything new fails closed. Off forwards everything.
+Enforce accepts only what it can gate, by allowlist, so anything new fails closed. Shadow checks the same allowlists but only records what falls outside them, audited the same way, and forwards the traffic unchanged, so shadow never blocks a run. Off forwards everything and checks nothing.
 
-- **Request fields:** `model`, `input`, `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens`, `reasoning`, `text`, `metadata`, `parallel_tool_calls`, `store`, `user`, `temperature`, `top_p`. FinBot sends a subset of these. Any other field, such as `prompt`, `previous_response_id`, `conversation`, `background` or `include`, answers 501 naming the field and is audited as `unsupported_field`, since server-side history or a stored prompt would hide items or tools from the gateway.
-- **Input items:** `message` (any role), `function_call`, `function_call_output`, `reasoning`. Any other type, such as `item_reference`, a hosted tool's `*_call`, or a non-function `*_call_output`, answers 501 naming the type before anything goes upstream, audited as `unsupported_item_type`.
-- **Tool declarations:** `function` only. Any other type, hosted tools that run upstream where no hook reaches them included, answers 501, audited as `unsupported_tool_type`.
+- **Request fields:** `model`, `input`, `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens`, `reasoning`, `text`, `metadata`, `parallel_tool_calls`, `store`, `user`, `temperature`, `top_p`. FinBot sends a subset of these. Any other field, such as `prompt`, `previous_response_id`, `conversation`, `background` or `include`, answers 501 in enforce naming the field and is audited as `unsupported_field`, since server-side history or a stored prompt would hide items or tools from the gateway.
+- **Input items:** `message` (any role), `function_call`, `function_call_output`, `reasoning`. Any other type, such as `item_reference`, a hosted tool's `*_call`, or a non-function `*_call_output`, answers 501 in enforce naming the type before anything goes upstream, audited as `unsupported_item_type`.
+- **Tool declarations:** `function` only. Any other type, hosted tools that run upstream where no hook reaches them included, answers 501 in enforce, audited as `unsupported_tool_type`.
 - **Output items:** `message`, `function_call`, `reasoning`. Enforce removes any other item from a model response and adds the neutral line if nothing else is left. Shadow forwards it. Both audit `unsupported_item_type`.
 
 
-In shadow and enforce, a JSON key repeated anywhere in the request body, or inside the arguments or output string of a resent call, is refused in enforce with 400 and recorded in shadow, audited as `duplicate_json_key`. Parsers disagree on which copy of a repeated key wins, so the gateway could gate one copy while the model read the other. A call whose arguments repeat a key is denied, and an upstream answer that repeats a key gets 502.
+A JSON key repeated anywhere in the request body, or inside the arguments or output string of a resent call, is refused in enforce with 400 and recorded in shadow, audited as `duplicate_json_key`. Parsers disagree on which copy of a repeated key wins, so the gateway could gate one copy while the model read the other. A call whose arguments repeat a key is denied, and an upstream answer that repeats a key gets 502.
 
 In shadow and enforce, any `stream` value other than an absent field, `null` or `false` counts as a stream request. A compressed request body answers 415, the gateway asks the upstream for gzip or deflate only, and a 2xx answer that isn't a JSON object with an `output` list answers 502, since it could carry calls the gateway never gated. Off relays requests and answers verbatim, encodings and headers included, except that every mode strips `x-acs-*` lab headers in both directions.
 
@@ -53,7 +53,7 @@ Run the tests with `uv run pytest -v`. They start the example Guardian and a fak
 | Mode | Hooks sent | Transcript | What reaches the client and the model |
 |---|---|---|---|
 | `off` | None | None | Exactly what each side sent, byte for byte, streamed answers included. A pure passthrough with no allowlists and no size limits |
-| `shadow` | Every one | Yes | Unchanged. Each decision is recorded as `shadow_decision` |
+| `shadow` | Every one | Yes | Unchanged. Each decision is recorded as `shadow_decision`, and anything outside the allowlists is recorded, never refused |
 | `enforce` | Every one | Yes | Each decision applied, as below |
 
 Shadow mode isn't decision honoring under specification section 6.4. It shows what enforce would have done.

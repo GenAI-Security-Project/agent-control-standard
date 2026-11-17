@@ -19,12 +19,17 @@ def test_every_field_finbot_sends_is_accepted(gateway, guardian, upstream, mode)
 @pytest.mark.parametrize("field,value", [("prompt", {"id": "pmpt_1"}), ("previous_response_id", "resp_1"),
                                          ("conversation", "conv_1"), ("background", True),
                                          ("include", ["file_search_call.results"]), ("anything_new", 1)])
-def test_a_field_outside_the_allowlist_is_refused(gateway, guardian, upstream, audit, mode, field, value):
+def test_a_field_outside_the_allowlist_is_refused_in_enforce_and_recorded_in_shadow(gateway, guardian, upstream, audit, mode, field, value):
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json={**finbot_request(), field: value})
-    assert response.status_code == 501
-    assert field in response.json()["error"]["message"]
-    assert upstream.received == []
+    if mode == "enforce":
+        assert response.status_code == 501
+        assert field in response.json()["error"]["message"]
+        assert upstream.received == []
+    else:
+        # Shadow observes only, so it records the field and forwards the request unchanged.
+        assert response.status_code == 200
+        assert upstream.received[0].json()[field] == value
     assert [e["field"] for e in events(audit, "unsupported_field")] == [field]
 
 
@@ -40,13 +45,17 @@ def test_a_field_outside_the_allowlist_is_refused(gateway, guardian, upstream, a
     {"type": "mcp_approval_response", "approval_request_id": "mcpr_1", "approve": True},
     "a bare string",
 ])
-def test_an_input_item_outside_the_allowlist_is_refused(gateway, guardian, upstream, audit, mode, item):
+def test_an_input_item_outside_the_allowlist_is_refused_in_enforce_and_recorded_in_shadow(gateway, guardian, upstream, audit, mode, item):
     response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request(item))
-    assert response.status_code == 501
     kind = item["type"] if isinstance(item, dict) else "str"
-    assert kind in response.json()["error"]["message"]
-    assert upstream.received == []
+    if mode == "enforce":
+        assert response.status_code == 501
+        assert kind in response.json()["error"]["message"]
+        assert upstream.received == []
+    else:
+        assert response.status_code == 200
+        assert upstream.received[0].json()["input"][-1] == item
     assert [e["item_type"] for e in events(audit, "unsupported_item_type")] == [kind]
 
 
@@ -91,3 +100,13 @@ def test_shadow_records_an_output_item_outside_the_allowlist_and_forwards_it(gat
 def test_off_forwards_any_field_and_item(gateway, upstream):
     body = {**finbot_request({"type": "item_reference", "id": "x"}), "prompt": {"id": "p"}}
     assert gateway().post("/v1/responses", json=body).status_code == 200
+
+
+def test_shadow_never_blocks_a_run_that_resends_an_unknown_output_item(gateway, guardian, upstream, audit):
+    item = {"type": "custom_tool_call", "id": "ctc_1", "call_id": "c1", "name": "patch", "input": "x"}
+    upstream.reply(response_body(item))
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    first = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    second = client.post("/v1/responses", json=finbot_request(*first))
+    assert second.status_code == 200
+    assert [e["direction"] for e in events(audit, "unsupported_item_type")] == ["output", "input"]
