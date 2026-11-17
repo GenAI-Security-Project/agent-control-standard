@@ -80,3 +80,20 @@ def test_a_missing_negative_or_non_integer_content_length_is_refused_without_rea
     status, answer = send_raw(served, head, b'{"jsonrpc": "2.0"}')
     assert (status, answer["error"]["code"]) == (400, -32600)
     assert "signature" not in answer["error"]
+
+
+def _ping(request_id) -> bytes:
+    return json.dumps({"jsonrpc": "2.0", "id": request_id, "method": "system/ping", "params": {"payload": {}}}).encode()
+
+
+@pytest.mark.parametrize("request_id", ["abc", 7, 1.0, 1.5, -2, None])
+def test_an_id_that_is_a_string_a_finite_number_or_null_is_answered_with_that_id(served, request_id):
+    status, answer = post(served, _ping(request_id))
+    assert answer["id"] == request_id and "result" in answer
+
+
+@pytest.mark.parametrize("raw_id", [b"true", b"false", b"NaN", b"Infinity", b"[1]", b'{"a": 1}'])
+def test_an_id_that_is_a_bool_a_non_finite_number_or_a_container_is_refused_with_a_null_id(served, raw_id):
+    body = b'{"jsonrpc": "2.0", "id": ' + raw_id + b', "method": "system/ping", "params": {"payload": {}}}'
+    status, answer = post(served, body)
+    assert (answer["id"], answer["error"]["code"]) == (None, -32600)

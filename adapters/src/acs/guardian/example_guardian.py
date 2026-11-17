@@ -13,6 +13,7 @@ except ImportError:  # Windows
 import hashlib
 import http.server
 import json
+import math
 import os
 import posixpath
 import socketserver
@@ -680,6 +681,15 @@ class RequestFields(NamedTuple):
     session_id: str
 
 
+def _valid_id(value: Any) -> bool:
+    """A JSON-RPC id: a string, a finite number that isn't a bool, or null. The rule LAB-01's client uses too."""
+    if value is None or isinstance(value, str):
+        return True
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
+
+
 def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
     """(fields, None, id) for a readable request, or (None, problem, id) for one whose structure is wrong.
 
@@ -689,9 +699,9 @@ def read_request(request: Any) -> tuple[RequestFields | None, str | None, Any]:
         kind = "batch" if isinstance(request, list) else type(request).__name__
         return None, f"expected a JSON-RPC object, got {kind} (batches unsupported in v0.1)", None
     raw_id = request.get("id")
-    answer_id = raw_id if isinstance(raw_id, (str, int)) else None
-    if "id" in request and raw_id is not None and not isinstance(raw_id, (str, int)):
-        return None, "id must be a string, a number, or null", None
+    if not _valid_id(raw_id):
+        return None, "id must be a string, a finite number, or null", None
+    answer_id = raw_id
     method = request.get("method", "")
     if not isinstance(method, str):
         return None, "method must be a string", answer_id
