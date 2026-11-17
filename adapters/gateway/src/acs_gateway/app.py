@@ -173,8 +173,18 @@ class Gateway:
         changed, removed, kept = False, False, []
         for item in reply["output"]:
             call_id = item.get("call_id") if isinstance(item, dict) else None
-            if not isinstance(item, dict) or item.get("type") != "function_call" or not isinstance(call_id, str):
+            if not isinstance(item, dict) or item.get("type") != "function_call":
                 kept.append(item)
+                continue
+            if not isinstance(call_id, str):
+                # No call_id means no cache key and no way to match its output, so enforce never delivers it.
+                missing = StepResult(TOOL_CALL_REQUEST, None, cause="call_id_missing",
+                                     failure_class="observed_agent_error")
+                self._record(session, missing, Applied("deny", None, "call_id_missing"), str(item.get("name")), None)
+                if self.enforce:
+                    changed = removed = True
+                else:
+                    kept.append(item)
                 continue
             cached = session.calls.get(call_id)
             if cached is None:

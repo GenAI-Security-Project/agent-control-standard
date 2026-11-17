@@ -114,3 +114,41 @@ def test_the_server_hello_never_loosens_the_fail_closed_posture(gateway, harness
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     assert output[0]["content"][0]["text"] == NEUTRAL
     assert events(audit, "decision_applied")[0]["cause"] == "decision_timeout"
+
+
+def test_a_call_without_a_call_id_is_removed(gateway, guardian, upstream):
+    item = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    del item["call_id"]
+    upstream.reply(response_body(item))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert [i["type"] for i in output] == ["message"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+
+
+def test_a_transcript_that_cannot_be_written_denies(gateway, guardian, upstream, audit, tmp_path):
+    blocker = tmp_path / "blocked"
+    blocker.write_text("a file where the transcript directory should be")
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_TRANSCRIPT_DIR=str(blocker)).post(
+        "/v1/responses", json=finbot_request())
+    assert response.status_code == 200
+    assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
+    assert events(audit, "decision_applied")[0]["cause"] == "adapter_exception"
+
+
+class FailingTranscript:
+    def append(self, *args):
+        raise OSError("disk full")
+
+
+def test_a_step_whose_transcript_line_fails_denies(gateway, guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    client.app.state.gateway.guardian.transcript = FailingTranscript()
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200
+    assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
+    assert events(audit, "decision_applied")[0]["cause"] == "adapter_exception"

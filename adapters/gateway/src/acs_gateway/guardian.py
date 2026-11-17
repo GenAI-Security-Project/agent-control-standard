@@ -146,6 +146,14 @@ class GuardianClient:
                     guardian_url=self.config.guardian_url)
 
     def step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
+        """Never raises: anything that goes wrong on the gateway's side settles the step as a deny."""
+        try:
+            return self._step(session, method, payload)
+        except Exception as e:  # noqa: BLE001
+            audit_event("gateway_step_error", session_id=session.session_id, method=method, error=str(e))
+            return StepResult(method, None, cause="adapter_exception", failure_class="observed_agent_error")
+
+    def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         gated = self.acs_config.gate(session.handshake, method)
         if gated is not None:
             return StepResult(method, None, cause=gated.cause, failure_class=gated.fields.get("failure_class"))
