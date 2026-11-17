@@ -131,3 +131,17 @@ def test_the_guardian_refuses_to_start_with_a_misconfigured_backend(no_backend, 
     assert _run_main(no_backend) == [1], "the Guardian started with a misconfigured policy backend"
     assert "REFUSING TO START" in capsys.readouterr().err
     assert example_guardian.OPA_CONFIG is None
+
+
+@pytest.mark.parametrize("payload,code", [
+    ({"tool": {"name": "Bash"}, "arguments": {"command": {"value": "rm -rf /"}}}, "destructive_command"),
+    ({"tool": {"name": "shell"}, "arguments": {"command": {"value": "echo " + "a" * 9000}}}, "input_too_large"),
+    ({"tool": {"name": "Task"}, "arguments": {}}, "subagent_gated"),
+    ({"tool": {"name": "Write"}, "arguments": {"file_path": {"value": "/etc/passwd"}}}, "protected_path"),
+])
+def test_built_in_hard_denies_hold_under_opa_even_when_the_policy_allows(opa_on, payload, code):
+    with StubOpa(ALLOW) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+    assert opa.inputs == [], "OPA decides only what the built-in rules allow"

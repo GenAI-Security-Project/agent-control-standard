@@ -104,7 +104,6 @@ PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/",
 # Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
 # once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
 POLICY_BACKEND_ENV = "ACS_POLICY_BACKEND"
-POLICY_BACKEND_METHODS = frozenset({"steps/toolCallRequest", "steps/toolCallResult"})
 OPA_CONFIG: Any = None
 
 
@@ -454,11 +453,6 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         "chain_hash": chain_hash,
     }
 
-    # Under a policy backend OPA judges both tool methods, so a tool result can be denied or redacted.
-    # Unset, this branch never runs and the rules below decide as before.
-    if method in POLICY_BACKEND_METHODS and _policy_backend_named():
-        return _policy_backend_decision(method, params, base)
-
     if method == "steps/toolCallRequest":
         tool = payload.get("tool") or {}
         # Case-folded, so Claude Code's Bash, Cursor's Shell and NAT's shell meet one policy.
@@ -491,6 +485,9 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                         "reasoning": f"write to protected system path: {path}",
                         "reason_codes": ["protected_path"]}
 
+        # The hard denies above hold under every backend. A policy backend decides only what they allow.
+        if _policy_backend_named():
+            return _policy_backend_decision(method, params, base)
         return {**base, "decision": "allow"}
 
     if method == "steps/subagentStart":
@@ -508,6 +505,10 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                         + ". Set ACS_ALLOW_SUBAGENT=1 to allow."),
                     "reason_codes": [code]}
         return {**base, "decision": "allow"}
+
+    if method == "steps/toolCallResult" and _policy_backend_named():
+        # Under a policy backend a tool result is judged, so it can be denied or redacted.
+        return _policy_backend_decision(method, params, base)
 
     if method in INFORMATIONAL_METHODS:
         return {**base, "decision": "allow"}
