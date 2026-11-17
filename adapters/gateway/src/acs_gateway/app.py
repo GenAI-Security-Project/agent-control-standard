@@ -11,7 +11,7 @@ import stat
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -45,8 +45,8 @@ from acs_gateway.apply import (
     unsupported_tool,
     unsupported_tool_choice,
 )
-from acs_gateway.approver import Approvals
-from acs_gateway.config import GatewayConfig, check_client_state_dirs
+from acs_gateway.approver import CHOICES, TIMEOUT, Approvals
+from acs_gateway.config import STEP_GRACE_S, GatewayConfig, check_client_state_dirs
 from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult, StepToken
 from acs_gateway.sessions import (
     CachedOutcome,
@@ -69,14 +69,14 @@ _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "pro
                           "transfer-encoding", "upgrade", "host", "content-length"})
 # Governed modes edit bodies, so they ask only for encodings httpx decodes and relay the decoded body.
 _GOVERNED_ACCEPT_ENCODING = "gzip, deflate"
-_STEP_GRACE_S = 1.0
+_STEP_GRACE_S = STEP_GRACE_S
 _OPEN_RETRY_BACKOFF_S = 1.0
 # What makes a function_call the call it is. A client rebuilding history may drop id and status, so those don't count.
 _CALL_FIELDS = ("type", "name", "call_id", "arguments")
 # Carries the approver's answer in the resent step's payload. Lab convention until issue #175 names a field. It sits in
 # the payload because the lab's Guardian hands policy only the method, payload and metadata.
 ASK_ANSWER_FIELD = "x_acs_lab_ask_answer"
-_ASK_OUTCOMES = {"approve": "approved", "reject": "rejected", None: "timed_out"}
+_ASK_OUTCOMES = {"approve": "approved", "reject": "rejected", TIMEOUT: "timed_out"}
 
 
 def _audit(event: str, **fields: Any) -> None:
@@ -126,8 +126,9 @@ class Gateway:
         self.sessions = SessionMap(config.max_sessions, on_evict=self._evicted)
         self.guardian = GuardianClient(config, Transcript(config.transcript_dir)) if self.governed else None
         self.executor: ThreadPoolExecutor | None = None
-        # Held ASKs for the approver page (LAB-08). None leaves every ASK denying, as it did before the page.
-        self.approvals = Approvals() if self.governed and config.approver_port is not None else None
+        # Held ASKs for the approver page (LAB-08). Enforce only, since shadow never holds. None leaves every ASK
+        # denying, as it did before the page.
+        self.approvals = Approvals() if self.enforce and config.approver_port is not None else None
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
@@ -174,6 +175,10 @@ class Gateway:
         return openai_error(404, "Unknown request URL.", "invalid_request_error", "unknown_url")
 
     async def responses(self, request: Request) -> Response:
+        # An ASK's budget runs from here, so the model's time counts against it and the answer lands inside the
+        # client's own timeout (CR3).
+        hold = AskHold(time.monotonic(), self.config.ask_max_s, self.config.decision_timeout_s + _STEP_GRACE_S,
+                       request.is_disconnected)
         if request.method != "POST":
             return await self.not_found(request)
         headers = forward_headers(request.headers)
@@ -267,7 +272,7 @@ class Gateway:
         # Every session the request takes is pinned, in this list, before it waits for the session's lock.
         pins: list[Session] = []
         try:
-            return await self._governed(key, raw, body, headers, pins, audited, checked)
+            return await self._governed(key, raw, body, headers, pins, audited, checked, hold)
         except SessionsBusy:
             # A new session was needed and every slot was busy.
             return self._busy()
@@ -280,7 +285,7 @@ class Gateway:
         return openai_error(503, "The service is busy. Try again shortly.", "server_error", "busy")
 
     async def _governed(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str],
-                        pins: list[Session], audited: set[tuple[str, str]], checked: Any) -> Response:
+                        pins: list[Session], audited: set[tuple[str, str]], checked: Any, hold: AskHold) -> Response:
         session = None
 
         def recheck(candidate: Session | None) -> None:
@@ -324,7 +329,7 @@ class Gateway:
                 return sent
             media = sent.headers.get("content-type", "").split(";")[0].strip().lower()
             if 200 <= sent.status_code < 300 and media == "text/event-stream":
-                return await self._governed_stream(key, pins, sent)
+                return await self._governed_stream(key, pins, sent, hold)
             # An error status, or an upstream that answered a stream request whole, takes the whole-answer path.
             upstream = await self._read_answer(sent)
         else:
@@ -357,7 +362,7 @@ class Gateway:
                 # The input phase already made this request's one attempt, so only a new epoch's session opens here.
                 if session.handshake is None:
                     await self._ensure_open(session)
-                changed = await self._gate_output(session, reply)
+                changed = await self._gate_output(session, reply, hold)
         except SessionsBusy:
             raise
         except Exception as e:  # noqa: BLE001
@@ -367,7 +372,8 @@ class Gateway:
             return _relay(upstream, None)
         return _relay(upstream, reply if changed else None)
 
-    async def _governed_stream(self, key: str, pins: list[Session], upstream: httpx.Response) -> Response:
+    async def _governed_stream(self, key: str, pins: list[Session], upstream: httpx.Response,
+                               hold: AskHold) -> Response:
         """A streamed answer (issue #578). Text streams as it arrives and each call reaches the client only as the item
         its decision produced. The session lock is held for the life of the stream, so the session's steps stay in
         order, and the response owns the lock, the pins and the upstream from here on, releasing them however the
@@ -402,11 +408,12 @@ class Gateway:
         owned = pins[:]
         # The response releases these pins, so responses() must not.
         pins.clear()
+        # The stream is one model response, so its calls share the request's ASK budget though each is decided alone
+        # (P26). A disconnect cancels the stream itself, and the receive channel belongs to Starlette's disconnect
+        # listener here, so the hold doesn't poll it.
+        hold.disconnected = None
         editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes,
-                              # The stream is one model response, so its calls share one ASK deadline though
-                              # each is decided alone (P26).
-                              decide=functools.partial(self._gate_item, session,
-                                                       asks=AskDeadline(self.config.ask_max_s)), audit=_audit,
+                              decide=functools.partial(self._gate_item, session, asks=hold), audit=_audit,
                               audit_fields={"session_id": session.session_id},
                               idle_timeout=self.config.stream_idle_timeout_s,
                               deadline=self.config.stream_deadline_s if self.enforce else None)
@@ -696,10 +703,11 @@ class Gateway:
             return CachedOutcome("delivered", name, item, result.request_id, first, raw)
         return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw)
 
-    async def _gate_output(self, session: Session, reply: dict[str, Any], asks: AskDeadline | None = None) -> bool:
-        """Gate each new function_call before the client sees it (A.4). asks is the response's one ASK deadline, which
-        a stream passes in so its calls, decided one at a time, share it too."""
-        asks = asks if asks is not None else AskDeadline(self.config.ask_max_s)
+    async def _gate_output(self, session: Session, reply: dict[str, Any], asks: AskHold | None = None) -> bool:
+        """Gate each new function_call before the client sees it (A.4). asks is the request's ASK budget, which a
+        stream passes in so its calls, decided one at a time, share it too."""
+        asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s,
+                                                     self.config.decision_timeout_s + _STEP_GRACE_S, None)
         changed, removed, kept = False, False, []
         for item in reply["output"]:
             delivered = await self._gate_item(session, item, asks)
@@ -717,11 +725,12 @@ class Gateway:
             reply["output"] = kept
         return changed
 
-    async def _gate_item(self, session: Session, item: Any, asks: AskDeadline | None = None) -> Any:
+    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None = None) -> Any:
         """One output item through the gate: the item to deliver, the same object when nothing changes, or None when
-        enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the response's
-        one ASK deadline, shared by every item of one response."""
-        asks = asks if asks is not None else AskDeadline(self.config.ask_max_s)
+        enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the request's
+        ASK budget, shared by every item of one response."""
+        asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s,
+                                                     self.config.decision_timeout_s + _STEP_GRACE_S, None)
         call_id = item.get("call_id") if isinstance(item, dict) else None
         if item_type(item) not in ALLOWED_OUTPUT_TYPES:
             _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
@@ -762,7 +771,7 @@ class Gateway:
             return None
         return item if cached.item == item else cached.item
 
-    async def _gate_call(self, session: Session, item: dict[str, Any], asks: AskDeadline) -> CachedOutcome:
+    async def _gate_call(self, session: Session, item: dict[str, Any], asks: AskHold) -> CachedOutcome:
         name = item.get("name") if isinstance(item.get("name"), str) else ""
         raw_arguments = item.get("arguments")
         arguments, repeated = parse_arguments(raw_arguments)
@@ -777,7 +786,7 @@ class Gateway:
             result, ask = await self._resolve_ask(session, item.get("call_id"), name, arguments, result, asks)
         applied = apply_call(item, arguments or {}, result)
         if ask is not None:
-            answered = ask["outcome"] != "timed_out"
+            answered = ask["outcome"] == "approved"
             _audit("ask_resolved", **ask, request_id=result.request_id if answered else None,
                    guardian_decision=result.decision.disposition if answered and result.decision else None,
                    decision=applied.decision, cause=applied.cause or result.cause)
@@ -803,40 +812,67 @@ class Gateway:
                 and result.decision is not None and result.decision.disposition == "ask")
 
     async def _resolve_ask(self, session: Session, call_id: Any, name: str, arguments: dict[str, Any],
-                           asked: StepResult, asks: AskDeadline) -> tuple[StepResult, dict[str, Any] | None]:
-        """Hold the call for the approver, then resend the step carrying the answer (LAB-08, issue #581, D-043).
+                           asked: StepResult, hold: AskHold) -> tuple[StepResult, dict[str, Any] | None]:
+        """Hold the call for the approver, then resend the step carrying an approval (LAB-08, issue #581, D-043).
 
         The Guardian's decision on the resend is what the gateway applies after an approval, so the gateway never
-        allows on its own. A rejection denies whatever that decision says. No answer by the deadline denies without
-        a resend. The audit fields go back to the caller, which writes ask_resolved once the decision is applied.
+        allows on its own. Everything else denies with no resend: a rejection (whose resend could change nothing),
+        no answer by the deadline, and a request that stopped standing during the hold (the client disconnected, the
+        epoch moved, or the session retired). The audit fields go back to the caller, which writes ask_resolved once
+        the decision is applied.
         """
         settings = ask_settings(asked.ask_details)
-        if settings is None:
-            return replace(asked, cause="ask_details_invalid", failure_class="guardian_error"), None
-        question, approver_id, timeout_s = settings
-        deadline, budget = asks.deadline(timeout_s)
+        if isinstance(settings, str):
+            _audit("ask_unsupported", session_id=session.session_id, call_id=call_id, tool=name,
+                   request_id=asked.request_id, field=settings)
+            return replace(asked, cause="ask_unsupported", failure_class="guardian_error"), None
+        deadline = hold.deadline(settings.timeout_s)
         fields = {"session_id": session.session_id, "call_id": call_id, "tool": name,
-                  "ask_request_id": asked.request_id, "approver": approver_id, "deadline_s": budget}
+                  "ask_request_id": asked.request_id, "approver": settings.approver_id,
+                  "deadline_s": self.config.ask_max_s}
         _audit("ask_pending", session_id=session.session_id, call_id=call_id, tool=name, request_id=asked.request_id,
-               approver=approver_id, question=question, deadline_s=budget,
+               approver=settings.approver_id, question=settings.question, deadline_s=self.config.ask_max_s,
                remaining_s=round(max(0.0, deadline - time.monotonic()), 3))
         assert self.approvals is not None
+        epoch = self.sessions.epoch
+
+        def stale() -> str | None:
+            if session.retired:
+                return "session_retired"
+            if session.epoch != epoch or self.sessions.epoch != epoch:
+                return "epoch_bumped"
+            return None
+
+        async def stop() -> str | None:
+            cause = stale()
+            if cause is None and hold.disconnected is not None and await hold.disconnected():
+                cause = "client_disconnected"
+            return cause
+
         started = time.monotonic()
-        choice = await self.approvals.wait(session_id=session.session_id, call_id=str(call_id), tool=name,
-                                           arguments=arguments, question=question, approver_id=approver_id,
-                                           deadline=deadline)
-        fields.update(outcome=_ASK_OUTCOMES[choice], waited_s=round(time.monotonic() - started, 3))
-        if choice is None:
-            return replace(asked, cause="ask_timeout", failure_class="timeout"), fields
-        answer = {"ask_request_id": asked.request_id, "answer": choice,
-                  "approver": {"type": "human", "id": approver_id},
+        try:
+            ended = await self.approvals.wait(session_id=session.session_id, call_id=str(call_id), tool=name,
+                                              arguments=arguments, question=settings.question,
+                                              approver_id=settings.approver_id, context=settings.context,
+                                              deadline=deadline, stop=stop)
+        except asyncio.CancelledError:
+            # A streamed request's client went away, which cancels the stream. Nothing is resent.
+            _audit("ask_resolved", **fields, outcome="abandoned", waited_s=round(time.monotonic() - started, 3),
+                   request_id=None, guardian_decision=None, decision="deny", cause="client_disconnected")
+            raise
+        if ended == "approve":
+            # An approval that raced a bump or a retirement still has no session to resend on.
+            ended = stale() or ended
+        fields.update(outcome=_ASK_OUTCOMES.get(ended, "abandoned"), waited_s=round(time.monotonic() - started, 3))
+        if ended != "approve":
+            cause = {"reject": "ask_rejected", TIMEOUT: "ask_timeout"}.get(ended, ended)
+            return replace(asked, cause=cause, failure_class="timeout" if ended == TIMEOUT else None), fields
+        answer = {"ask_request_id": asked.request_id, "answer": "approve",
+                  "approver": {"type": "human", "id": settings.approver_id},
                   # No approver signature exists yet, so the answer is the gateway's word for it (issue #175).
                   "assurance": "declared"}
-        resent = await self._step(session, TOOL_CALL_REQUEST, {**call_payload(name, arguments),
-                                                               ASK_ANSWER_FIELD: answer})
-        if choice == "reject" and resent.cause is None:
-            resent = replace(resent, cause="ask_rejected")
-        return resent, fields
+        return await self._step(session, TOOL_CALL_REQUEST, {**call_payload(name, arguments),
+                                                             ASK_ANSWER_FIELD: answer}), fields
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
@@ -909,40 +945,65 @@ class Gateway:
             _audit("guardian_http_error", **fields)
 
 
-class AskDeadline:
-    """One deadline for every ASK in one model response, started by its first ASK (PREMORTEM P26).
+class AskHold:
+    """The ASK budget of one request: ACS_GATEWAY_ASK_MAX_S from the request's arrival (CR3, PREMORTEM P26).
 
-    FinBot waits LLM_TIMEOUT for the whole response, so two ASKs that each waited their own full time could outlive
-    it. Each ASK waits until the earlier of the shared deadline and its own timeout_seconds, capped.
+    Every ASK in the response waits until the earlier of its own timeout_seconds and the budget's end, less the time
+    kept back for the resend an approval sends, so the whole answer lands inside FinBot's LLM_TIMEOUT. disconnected
+    is the request's own check, or None when a disconnect cancels the work instead.
     """
 
-    def __init__(self, cap_s: float) -> None:
-        self.cap_s = cap_s
-        self._at: float | None = None
-        self._budget: float | None = None
+    def __init__(self, arrival: float, cap_s: float, reserve_s: float,
+                 disconnected: Callable[[], Awaitable[bool]] | None) -> None:
+        self.ends = arrival + cap_s - reserve_s
+        self.disconnected = disconnected
 
-    def deadline(self, timeout_s: float) -> tuple[float, float]:
-        """The monotonic deadline for one ASK and the shared budget in seconds, for the audit line."""
-        own = min(float(timeout_s), self.cap_s)
-        at = time.monotonic() + own
-        if self._at is None:
-            self._at, self._budget = at, own
-        return min(self._at, at), self._budget
+    def deadline(self, timeout_s: float) -> float:
+        """The monotonic deadline for one ASK."""
+        return min(self.ends, time.monotonic() + float(timeout_s))
 
 
-def ask_settings(details: Any) -> tuple[str, str, int] | None:
-    """The question, the approver's id and timeout_seconds from an ASK's ask_details, or None when ask-details.json's
-    required fields aren't usable, which denies the step. bool is refused, since Python counts it as an int."""
+@dataclass(frozen=True)
+class AskSettings:
+    question: str
+    approver_id: str
+    timeout_s: int
+    context: str | None
+
+
+def ask_settings(details: Any) -> AskSettings | str:
+    """The usable parts of an ASK's ask_details, or the name of the first field the gateway can't honor, which denies
+    the step at once.
+
+    Only a human approver answers on the page, so any other approver type denies rather than letting a person stand
+    in for it. options, when present, must be exactly approve and reject, the page's two buttons. A
+    timeout_disposition other than deny would let silence allow, which D-043 rules out. bool is refused as a timeout,
+    since Python counts it as an int.
+    """
     if not isinstance(details, dict):
-        return None
+        return "ask_details"
     approver = details.get("approver")
-    question = details.get("question")
-    timeout = details.get("timeout_seconds")
     approver_id = approver.get("id") if isinstance(approver, dict) else None
-    if (not isinstance(approver_id, str) or not isinstance(question, str)
-            or not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1):
-        return None
-    return question, approver_id, timeout
+    if not isinstance(approver_id, str):
+        return "approver.id"
+    if approver.get("type") != "human":
+        return "approver.type"
+    question = details.get("question")
+    if not isinstance(question, str):
+        return "question"
+    timeout = details.get("timeout_seconds")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
+        return "timeout_seconds"
+    options = details.get("options")
+    if options is not None and (not isinstance(options, list) or len(options) != len(CHOICES)
+                                or not all(isinstance(o, str) for o in options) or set(options) != set(CHOICES)):
+        return "options"
+    if details.get("timeout_disposition", "deny") != "deny":
+        return "timeout_disposition"
+    context = details.get("context")
+    if context is not None and not isinstance(context, str):
+        return "context"
+    return AskSettings(question, approver_id, timeout, context)
 
 
 def _pin(session: Session, pins: list[Session]) -> None:

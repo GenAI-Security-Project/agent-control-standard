@@ -41,6 +41,11 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
             return {**base, "decision": "ask", "reasoning": "needs approval", "reason_codes": ["payment_over_threshold"],
                     "ask_details": {"approver": {"type": "human", "id": "lab-approver"}, "question": "Approve?",
                                     "timeout_seconds": int(os.environ.get("HARNESS_ASK_TIMEOUT_S", "60"))}}
+        if tool == "ask_agent_tool":
+            return {**base, "decision": "ask", "reasoning": "needs a bot", "reason_codes": ["agent_approval"],
+                    "ask_details": {"approver": {"type": "agent", "id": "approval-bot",
+                                                 "endpoint": "https://example.com/approve"},
+                                    "question": "Approve?", "timeout_seconds": 60}}
         if tool == "defer_tool":
             return {**base, "decision": "defer", "reasoning": "later", "reason_codes": ["deferred"],
                     "defer_details": {"reason": "low_confidence", "resolution_method": "timeout",

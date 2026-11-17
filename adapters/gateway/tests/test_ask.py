@@ -1,4 +1,4 @@
-"""ASK through the approver page (LAB-08, issue #581): the approver answers, the Guardian decides, and silence denies."""
+"""ASK through the approver page (LAB-08, issue #581, tmp_path): the approver answers, the Guardian decides, and silence denies."""
 from __future__ import annotations
 
 import threading
@@ -35,12 +35,20 @@ def approver(client: Any, *choices: str) -> threading.Thread:
     return thread
 
 
-def enforce(gateway, harness_guardian, **env: str) -> Any:
+def token_file(tmp_path) -> str:
+    path = tmp_path / "approver.token"
+    path.write_text("approver-secret-" + "0123456789abcdef" * 2)
+    path.chmod(0o600)
+    return str(path)
+
+
+def enforce(gateway, harness_guardian, tmp_path, **env: str) -> Any:
     guardian_env = {k: v for k, v in env.items() if k.startswith("HARNESS_")}
     gateway_env = {k: v for k, v in env.items() if not k.startswith("HARNESS_")}
     mode = gateway_env.pop("ACS_LAB_MODE", "enforce")
     return gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=harness_guardian(**guardian_env),
-                   ACS_GATEWAY_APPROVER_PORT="8090", **gateway_env)
+                   ACS_GATEWAY_APPROVER_PORT="8090", ACS_GATEWAY_APPROVER_TOKEN_FILE=token_file(tmp_path),
+                   **gateway_env)
 
 
 def tool_requests(tmp_path) -> list[dict[str, Any]]:
@@ -52,7 +60,7 @@ def test_an_approved_ask_delivers_the_call_once_the_guardian_allows_the_resend(g
                                                                               audit, tmp_path):
     call = call_item("ask_tool", {"vendor_id": 7}, "call_1")
     upstream.reply(response_body(call))
-    client = enforce(gateway, harness_guardian)
+    client = enforce(gateway, harness_guardian, tmp_path)
     thread = approver(client, "approve")
     response = client.post("/v1/responses", json=finbot_request())
     thread.join()
@@ -76,19 +84,21 @@ def test_an_approved_ask_delivers_the_call_once_the_guardian_allows_the_resend(g
 
 def test_a_rejected_ask_blocks_the_call(gateway, harness_guardian, upstream, audit, tmp_path):
     upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
-    client = enforce(gateway, harness_guardian)
+    client = enforce(gateway, harness_guardian, tmp_path)
     thread = approver(client, "reject")
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     thread.join()
     assert [i["type"] for i in output] == ["message"] and output[0]["content"][0]["text"] == NEUTRAL
-    assert tool_requests(tmp_path)[1]["payload"][ANSWER_FIELD]["answer"] == "reject"
+    # A rejection denies at once. No resend goes out, since its decision could change nothing (CR6).
+    assert len(tool_requests(tmp_path)) == 1
     resolved = events(audit, "ask_resolved")
-    assert [(r["outcome"], r["decision"]) for r in resolved] == [("rejected", "deny")]
+    assert [(r["outcome"], r["decision"], r["cause"], r["request_id"]) for r in resolved] == [
+        ("rejected", "deny", "ask_rejected", None)]
 
 
 def test_one_approve_and_one_reject_give_matching_outcomes_and_two_audit_entries(gateway, harness_guardian, upstream,
-                                                                                audit):
-    client = enforce(gateway, harness_guardian)
+                                                                                audit, tmp_path):
+    client = enforce(gateway, harness_guardian, tmp_path)
     outcomes = []
     for choice, run in (("approve", "Pay vendor 7"), ("reject", "Pay vendor 8")):
         upstream.reply(response_body(call_item("ask_tool", {"run": run}, f"call_{choice}")))
@@ -101,9 +111,9 @@ def test_one_approve_and_one_reject_give_matching_outcomes_and_two_audit_entries
     assert [(r["outcome"], r["decision"]) for r in resolved] == [("approved", "allow"), ("rejected", "deny")]
 
 
-def test_approval_releases_nothing_when_the_guardian_denies_the_resend(gateway, harness_guardian, upstream, audit):
+def test_approval_releases_nothing_when_the_guardian_denies_the_resend(gateway, harness_guardian, upstream, audit, tmp_path):
     upstream.reply(response_body(call_item("ask_deny_tool", {}, "call_1")))
-    client = enforce(gateway, harness_guardian)
+    client = enforce(gateway, harness_guardian, tmp_path)
     thread = approver(client, "approve")
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     thread.join()
@@ -115,7 +125,7 @@ def test_approval_releases_nothing_when_the_guardian_denies_the_resend(gateway, 
 def test_no_answer_before_the_guardians_timeout_denies_without_a_resend(gateway, harness_guardian, upstream, audit,
                                                                        tmp_path):
     upstream.reply(response_body(call_item("ask_tool", {}, "call_1")))
-    client = enforce(gateway, harness_guardian, HARNESS_ASK_TIMEOUT_S="1")
+    client = enforce(gateway, harness_guardian, tmp_path, HARNESS_ASK_TIMEOUT_S="1")
     started = time.monotonic()
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     assert 0.9 <= time.monotonic() - started < 3
@@ -127,10 +137,11 @@ def test_no_answer_before_the_guardians_timeout_denies_without_a_resend(gateway,
     assert events(audit, "decision_applied")[0]["cause"] == "ask_timeout"
 
 
-def test_two_asks_in_one_response_share_one_deadline(gateway, harness_guardian, upstream, audit):
+def test_two_asks_in_one_response_share_one_deadline(gateway, harness_guardian, upstream, audit, tmp_path):
     upstream.reply(response_body(call_item("ask_tool", {"n": 1}, "call_1"), call_item("ask_tool", {"n": 2}, "call_2")))
     # The Guardian asks for 60 s each. The cap stands in for 240 s, and both calls must fit inside one of it.
-    client = enforce(gateway, harness_guardian, ACS_GATEWAY_ASK_MAX_S="1")
+    client = enforce(gateway, harness_guardian, tmp_path, ACS_GATEWAY_ASK_MAX_S="2",
+                     ACS_DECISION_TIMEOUT_MS="200")
     started = time.monotonic()
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     elapsed = time.monotonic() - started
@@ -138,13 +149,16 @@ def test_two_asks_in_one_response_share_one_deadline(gateway, harness_guardian, 
     assert output[0]["content"][0]["text"] == NEUTRAL
     resolved = events(audit, "ask_resolved")
     assert [r["outcome"] for r in resolved] == ["timed_out", "timed_out"]
-    assert resolved[0]["deadline_s"] == resolved[1]["deadline_s"] == 1
+    # One budget for the response: the second ASK found it already spent and waited for nothing.
+    assert resolved[0]["deadline_s"] == resolved[1]["deadline_s"] == 2
+    assert resolved[1]["waited_s"] < 0.1
 
 
-def test_a_second_ask_waits_only_for_what_is_left_of_the_first(gateway, harness_guardian, upstream, audit):
+def test_a_second_ask_waits_only_for_what_is_left_of_the_first(gateway, harness_guardian, upstream, audit, tmp_path):
     calls = [call_item("ask_tool", {"n": 1}, "call_1"), call_item("ask_tool", {"n": 2}, "call_2")]
     upstream.reply(response_body(*calls))
-    client = enforce(gateway, harness_guardian, ACS_GATEWAY_ASK_MAX_S="1.5")
+    client = enforce(gateway, harness_guardian, tmp_path, ACS_GATEWAY_ASK_MAX_S="2.6",
+                     ACS_DECISION_TIMEOUT_MS="200")
     approvals = client.app.state.gateway.approvals
 
     def first_only() -> None:
@@ -177,32 +191,185 @@ def test_without_the_approver_page_an_ask_denies_as_before(gateway, harness_guar
 def test_shadow_records_the_ask_and_delivers(gateway, harness_guardian, upstream, audit, tmp_path):
     call = call_item("ask_tool", {}, "call_1")
     upstream.reply(response_body(call))
-    client = enforce(gateway, harness_guardian, ACS_LAB_MODE="shadow")
+    client = enforce(gateway, harness_guardian, tmp_path, ACS_LAB_MODE="shadow")
     output = client.post("/v1/responses", json=finbot_request()).json()["output"]
     assert output == [call]
     assert len(tool_requests(tmp_path)) == 1
     assert events(audit, "ask_pending") == []
+    # Shadow never holds, so it keeps no approvals and the page has nothing to serve (CR8).
+    assert client.app.state.gateway.approvals is None
     assert [(e["guardian_decision"], e["decision"]) for e in events(audit, "shadow_decision")] == [("ask", "deny")]
 
 
-@pytest.mark.parametrize("details", [None, {}, {"approver": {"type": "human", "id": "a"}, "question": "q"},
-                                     {"approver": {"type": "human", "id": "a"}, "question": "q",
-                                      "timeout_seconds": 0},
-                                     {"approver": {"type": "human", "id": "a"}, "question": "q",
-                                      "timeout_seconds": True},
-                                     {"approver": {"type": "human"}, "question": "q", "timeout_seconds": 5},
-                                     {"approver": {"type": "human", "id": "a"}, "question": 3, "timeout_seconds": 5}])
-def test_unusable_ask_details_are_refused(details):
+HUMAN = {"approver": {"type": "human", "id": "lab-approver"}, "question": "Pay?", "timeout_seconds": 30}
+
+
+@pytest.mark.parametrize(("details", "field"), [
+    (None, "ask_details"), ({}, "approver.id"),
+    ({**HUMAN, "approver": {"type": "human"}}, "approver.id"),
+    ({**HUMAN, "approver": {"type": "agent", "id": "bot", "endpoint": "https://example.com/approve"}}, "approver.type"),
+    ({**HUMAN, "approver": {"type": "service", "id": "svc"}}, "approver.type"),
+    ({**HUMAN, "question": 3}, "question"),
+    ({k: v for k, v in HUMAN.items() if k != "timeout_seconds"}, "timeout_seconds"),
+    ({**HUMAN, "timeout_seconds": 0}, "timeout_seconds"), ({**HUMAN, "timeout_seconds": True}, "timeout_seconds"),
+    ({**HUMAN, "options": ["approve_once", "deny"]}, "options"), ({**HUMAN, "options": ["approve"]}, "options"),
+    ({**HUMAN, "timeout_disposition": "allow"}, "timeout_disposition"),
+    ({**HUMAN, "context": 5}, "context"),
+])
+def test_unusable_or_unsupported_ask_details_name_the_field(details, field):
     from acs_gateway.app import ask_settings
 
-    assert ask_settings(details) is None
+    assert ask_settings(details) == field
 
 
 def test_usable_ask_details_are_read():
-    from acs_gateway.app import ask_settings
+    from acs_gateway.app import AskSettings, ask_settings
 
-    assert ask_settings({"approver": {"type": "human", "id": "lab-approver"}, "question": "Pay?",
-                         "timeout_seconds": 30}) == ("Pay?", "lab-approver", 30)
+    assert ask_settings(HUMAN) == AskSettings("Pay?", "lab-approver", 30, None)
+    assert ask_settings({**HUMAN, "options": ["reject", "approve"], "timeout_disposition": "deny",
+                         "context": "New vendor"}) == AskSettings("Pay?", "lab-approver", 30, "New vendor")
+
+
+def test_an_ask_for_a_non_human_approver_denies_at_once_and_names_the_field(gateway, harness_guardian, upstream,
+                                                                           audit, tmp_path):
+    upstream.reply(response_body(call_item("ask_agent_tool", {}, "call_1")))
+    client = enforce(gateway, harness_guardian, tmp_path)
+    started = time.monotonic()
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert time.monotonic() - started < 2
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert [(e["field"], e["tool"]) for e in events(audit, "ask_unsupported")] == [("approver.type", "ask_agent_tool")]
+    assert events(audit, "ask_pending") == []
+    assert events(audit, "decision_applied")[0]["cause"] == "ask_unsupported"
+
+
+def test_an_epoch_bump_during_a_hold_denies_without_a_resend(gateway, harness_guardian, upstream, audit, tmp_path):
+    upstream.reply(response_body(call_item("ask_tool", {}, "call_1")))
+    client = enforce(gateway, harness_guardian, tmp_path)
+    gateway_ = client.app.state.gateway
+
+    def bump_then_approve() -> None:
+        end = time.monotonic() + 5
+        while not gateway_.approvals.pending() and time.monotonic() < end:
+            time.sleep(0.01)
+        ask_id = gateway_.approvals.pending()[0].ask_id
+        gateway_.bump_epoch()
+        gateway_.approvals.answer(ask_id, "approve")
+
+    thread = threading.Thread(target=bump_then_approve, daemon=True)
+    thread.start()
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    thread.join()
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert len(tool_requests(tmp_path)) == 1
+    resolved = events(audit, "ask_resolved")
+    assert [(r["outcome"], r["cause"], r["decision"]) for r in resolved] == [("abandoned", "epoch_bumped", "deny")]
+
+
+def test_a_slow_upstream_still_lands_the_response_inside_the_budget(gateway, harness_guardian, audit, tmp_path,
+                                                                    upstream):
+    """The budget runs from the request's arrival, so time the model spent counts against the hold (CR3)."""
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    reply = json.dumps(response_body(call_item("ask_tool", {}, "call_1"))).encode()
+
+    class Slow(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            time.sleep(0.8)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args: Any) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = enforce(gateway, harness_guardian, tmp_path, ACS_GATEWAY_ASK_MAX_S="2.5",
+                         ACS_DECISION_TIMEOUT_MS="300",
+                         ACS_UPSTREAM_URL=f"http://127.0.0.1:{server.server_address[1]}/v1")
+        started = time.monotonic()
+        output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+    # 2.5 s budget, less 1.3 s kept for the resend, so the hold ends 1.2 s after arrival, model time included.
+    assert 1.0 <= elapsed < 2.5, elapsed
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert [r["outcome"] for r in events(audit, "ask_resolved")] == ["timed_out"]
+
+
+def _serve(app: Any) -> tuple[Any, threading.Thread, int]:
+    import socket
+
+    import uvicorn
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    end = time.monotonic() + 20
+    while not server.started and time.monotonic() < end:
+        time.sleep(0.05)
+    return server, thread, port
+
+
+def _live_gateway(harness_guardian, upstream, tmp_path) -> Any:
+    from acs_gateway.app import create_app
+    from acs_gateway.config import GatewayConfig
+
+    import os
+
+    return create_app(GatewayConfig.from_env({
+        "ACS_LAB_MODE": "enforce", "ACS_GUARDIAN_URL": harness_guardian(), "ACS_UPSTREAM_URL": upstream.url,
+        "ACS_TRANSCRIPT_DIR": str(tmp_path / "transcripts"), "ACS_GATEWAY_STATE_DIR": os.environ["ACS_GATEWAY_STATE_DIR"],
+        "ACS_GATEWAY_APPROVER_PORT": "8090", "ACS_GATEWAY_APPROVER_TOKEN_FILE": token_file(tmp_path)}))
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_client_disconnect_ends_the_hold_with_a_deny_and_no_resend(harness_guardian, upstream, audit, tmp_path,
+                                                                     stream):
+    """Through a real HTTP server, since only a real connection can drop."""
+    import httpx
+
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    call = call_item("ask_tool", {}, "call_1")
+    upstream.reply(SSE(encode(stream_events(call))) if stream else response_body(call))
+    app = _live_gateway(harness_guardian, upstream, tmp_path)
+    approvals = app.state.gateway.approvals
+    server, thread, port = _serve(app)
+    try:
+        url = f"http://127.0.0.1:{port}/v1/responses"
+        body = {**finbot_request(), "stream": True} if stream else finbot_request()
+        with pytest.raises(httpx.ReadTimeout):
+            with httpx.stream("POST", url, json=body, timeout=httpx.Timeout(10, read=1.0)) as response:
+                for _ in response.iter_bytes():
+                    pass
+        # The client gave up and closed. The call leaves the page, and a late approval finds nothing to take.
+        end = time.monotonic() + 3
+        while approvals.pending() and time.monotonic() < end:
+            time.sleep(0.05)
+        assert approvals.pending() == []
+        end = time.monotonic() + 3
+        while not events(audit, "ask_resolved") and time.monotonic() < end:
+            time.sleep(0.05)
+    finally:
+        server.should_exit = True
+        thread.join(10)
+    assert len(tool_requests(tmp_path)) == 1
+    resolved = events(audit, "ask_resolved")
+    assert [(r["outcome"], r["cause"], r["decision"]) for r in resolved] == [
+        ("abandoned", "client_disconnected", "deny")]
 
 
 def _streamed(client: Any) -> list[dict[str, Any]]:
@@ -217,12 +384,12 @@ def _streamed_calls(received: list[dict[str, Any]]) -> list[str]:
             if e["type"] == "response.output_item.done" and e["item"]["type"] == "function_call"]
 
 
-def test_a_streamed_ask_is_held_and_released_after_approval(gateway, harness_guardian, upstream, audit):
+def test_a_streamed_ask_is_held_and_released_after_approval(gateway, harness_guardian, upstream, audit, tmp_path):
     from conftest import SSE
     from streams import encode, stream_events
 
     upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {"vendor_id": 7}, "call_1")))))
-    client = enforce(gateway, harness_guardian)
+    client = enforce(gateway, harness_guardian, tmp_path)
     thread = approver(client, "approve")
     received = _streamed(client)
     thread.join()
@@ -230,15 +397,17 @@ def test_a_streamed_ask_is_held_and_released_after_approval(gateway, harness_gua
     assert [(r["outcome"], r["decision"]) for r in events(audit, "ask_resolved")] == [("approved", "allow")]
 
 
-def test_two_streamed_asks_share_one_deadline(gateway, harness_guardian, upstream, audit):
+def test_two_streamed_asks_share_one_deadline(gateway, harness_guardian, upstream, audit, tmp_path):
     from conftest import SSE
     from streams import encode, stream_events
 
     upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {"n": 1}, "call_1"),
                                             call_item("ask_tool", {"n": 2}, "call_2")))))
-    client = enforce(gateway, harness_guardian, ACS_GATEWAY_ASK_MAX_S="1")
+    client = enforce(gateway, harness_guardian, tmp_path, ACS_GATEWAY_ASK_MAX_S="2",
+                     ACS_DECISION_TIMEOUT_MS="200")
     started = time.monotonic()
     received = _streamed(client)
     assert time.monotonic() - started < 1.8
     assert _streamed_calls(received) == []
     assert [r["outcome"] for r in events(audit, "ask_resolved")] == ["timed_out", "timed_out"]
+
