@@ -70,3 +70,13 @@ def test_an_integer_too_long_to_parse_is_a_parse_error(served):
     body = b'{"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": {"x": ' + b"9" * 5000 + b"}}"
     status, answer = post(served, body)
     assert (status, answer["error"]["code"]) == (400, -32700)
+
+
+@pytest.mark.parametrize("length_header", ["", "Content-Length: -5", "Content-Length: abc", "Content-Length: 1.5"])
+def test_a_missing_negative_or_non_integer_content_length_is_refused_without_reading(served, length_header):
+    head = "POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Type: application/json"
+    if length_header:
+        head += "\r\n" + length_header
+    status, answer = send_raw(served, head, b'{"jsonrpc": "2.0"}')
+    assert (status, answer["error"]["code"]) == (400, -32600)
+    assert "signature" not in answer["error"]

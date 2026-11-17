@@ -839,11 +839,16 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
 
     def _serve(self) -> None:
         # Oversized requests are rejected before the body is read.
+        # A missing, negative, or non-integer length is refused before any read: a negative one would make the
+        # read wait for EOF, and a missing one gives nothing to bound the read with.
+        raw_length = self.headers.get("Content-Length")
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = int(raw_length) if raw_length is not None else -1
         except (TypeError, ValueError):
+            length = -1
+        if length < 0:
             self._respond(400, {"jsonrpc": "2.0", "id": None,
-                                "error": {"code": -32600, "message": "Invalid Content-Length"}})
+                                "error": {"code": -32600, "message": "Invalid Request: missing or invalid Content-Length"}})
             return
         if length > MAX_REQUEST_BODY_BYTES:
             self._respond(413, {"jsonrpc": "2.0", "id": None,
