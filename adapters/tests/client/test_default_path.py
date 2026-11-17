@@ -62,5 +62,34 @@ class DefaultPathImportsNoCryptography(unittest.TestCase):
         self.assertEqual(self.result["has_pqc"], {n: pqc_installed() for n in PQC_NAMES})
 
 
+BLOCKED = """
+import json, sys
+sys.modules["cryptography"] = None
+import acs.core
+out = {"dir": [n for n in ("ml_dsa_available", "MLDSAUnavailableError") if n in dir(acs.core)]}
+for name in ("ml_dsa_available", "MLDSAUnavailableError"):
+    try:
+        getattr(acs.core, name)
+        out[name] = "resolved"
+    except AttributeError as exc:
+        out[name] = "AttributeError: " + str(exc)
+print(json.dumps(out))
+"""
+
+
+class WithoutTheExtra(unittest.TestCase):
+    """Review finding R6-M3: the gated names fail the same way in a base install, with cryptography blocked."""
+
+    def test_ml_dsa_available_and_its_error_raise_attribute_error_naming_the_extra(self) -> None:
+        proc = subprocess.run([sys.executable, "-c", BLOCKED], capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads(proc.stdout)
+        self.assertEqual(out["dir"], [])
+        for name in ("ml_dsa_available", "MLDSAUnavailableError"):
+            with self.subTest(name=name):
+                self.assertTrue(out[name].startswith("AttributeError: "), out[name])
+                self.assertIn("pqc", out[name])
+
+
 if __name__ == "__main__":
     unittest.main()
