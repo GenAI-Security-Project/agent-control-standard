@@ -119,7 +119,7 @@ Everything else ends the hold with a deny and no resend:
 
 - A rejection denies at once. Its resend could change nothing, so the Guardian learns of it only from the gateway's audit line until issue #175 defines how an answer reaches it.
 - No answer before the deadline.
-- The client disconnecting. A non-streamed request checks for it while it waits, and a streamed one is cancelled with its stream.
+- The client disconnecting, during the wait or the approved resend. Both paths read one disconnect signal, set the moment the request's receive channel reports the disconnect. After an approval the gateway waits up to 100 ms for a disconnect already on its way, so a click that lands just after the client left sends nothing.
 - An epoch bump or a retired session during the wait, since the call's session is gone.
 
 The budget is `ACS_GATEWAY_ASK_MAX_S` (240 seconds, and never higher) from the request's arrival, so the model's own time counts against it. An ASK waits until the earlier of its own `timeout_seconds` and the budget's end, less one decision timeout plus a second kept back for the resend. The answer then lands inside FinBot's 360-second `LLM_TIMEOUT`. Every ASK in one model response, streamed or not, shares that one budget, so two ASKs never add up past it. A cap no longer than one decision timeout plus a second stops startup.
@@ -162,7 +162,7 @@ Each request line is written before the request is sent, so the file holds the c
 | Event | When |
 |---|---|
 | `ask_pending` | Enforce held a call for the approver page, with `request_id` (the ASK step's), `tool`, `call_id`, `approver`, `question`, `deadline_s` (the request's budget) and `remaining_s` |
-| `ask_resolved` | A held call was settled. `outcome` is `approved`, `rejected`, `timed_out` or `abandoned`, with `ask_request_id`, and `request_id` and `guardian_decision` of the resent step (null unless approved, since nothing else sends one), `decision` (what the gateway did), `cause` (`ask_rejected`, `ask_timeout`, `client_disconnected`, `epoch_bumped`, `session_retired`, or the resend's own failure) and `waited_s`. A `decision_applied` line follows for the same call, except after a streamed disconnect, which ends the request |
+| `ask_resolved` | A held call was settled, exactly one line per held call on every path. `outcome` is `approved`, `rejected`, `timed_out` or `abandoned`, with `ask_request_id`, `resent` (whether the approved resend went out, which a disconnect during it leaves true with outcome `abandoned`), and `request_id` and `guardian_decision` of the resent step (null unless approved), `decision` (what the gateway did), `cause` (`ask_rejected`, `ask_timeout`, `client_disconnected`, `epoch_bumped`, `session_retired`, or the resend's own failure) and `waited_s`. A `decision_applied` line follows for the same call, except after a streamed disconnect, which ends the request |
 | `ask_unsupported` | An ASK the page can't carry out denied at once, with `field` (`approver.type`, `options`, `timeout_disposition`, or a required field that isn't usable) |
 | `session_opened` | A session finished its handshake and sessionStart. `handshake` says Negotiated, SessionRefused or NoAnswer |
 | `decision_applied` | Enforce mode settled a step. `decision` is what the gateway did, `guardian_decision` what the Guardian said, `cause` why a step denied without a Guardian deny (for example `decision_timeout`, `http_429_error`, `response_signature_invalid`, `modify_unsupported`) |
