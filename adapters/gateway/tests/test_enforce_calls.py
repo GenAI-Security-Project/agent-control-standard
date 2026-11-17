@@ -389,14 +389,24 @@ def test_a_request_cancelled_while_settling_ends_cancelled(gateway, guardian, up
     upstream.reply(response_body(message_item("hello")))
     client.post("/v1/responses", json=finbot_request())
     gw = client.app.state.gateway
-    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 3.0)
+    hung = HungTranscript(gw.guardian.transcript)
+    gw.guardian.transcript = hung
     session = next(iter(gw.sessions._sessions.values()))
     payload = {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+    settle = gw._settle_abandoned
 
     async def cancel_while_settling():
+        settling = asyncio.Event()
+
+        async def watched(*args, **kwargs):
+            settling.set()
+            return await settle(*args, **kwargs)
+
+        gw._settle_abandoned = watched
         task = asyncio.create_task(gw._step(session, "steps/toolCallRequest", payload))
-        # Past the outer deadline (1.5 s), inside the bounded wait for the claimed worker.
-        await asyncio.sleep(1.8)
+        # Driven by the event, not the clock: cancel as soon as the loop is waiting on the claimed worker.
+        await settling.wait()
+        await asyncio.sleep(0)
         task.cancel()
         try:
             await task
@@ -404,6 +414,9 @@ def test_a_request_cancelled_while_settling_ends_cancelled(gateway, guardian, up
             return "cancelled"
         return "finished"
 
-    assert client.portal.call(cancel_while_settling) == "cancelled"
+    try:
+        assert client.portal.call(cancel_while_settling) == "cancelled"
+    finally:
+        hung.release.set()
     assert session.retired
-    assert len(events(audit, "session_retired")) == 1
+    assert [e["cause"] for e in events(audit, "session_retired")] == ["request_cancelled"]
