@@ -194,8 +194,9 @@ def _upstream_settings(env: Mapping[str, str]) -> tuple[str, Path | None, Path |
     recordings = env.get("ACS_RECORDINGS_DIR", "").strip()
     if mode != "live" and not recordings:
         raise ValueError(f"ACS_RECORDINGS_DIR is required with ACS_UPSTREAM={mode}")
-    scenario = env.get("ACS_CAPTURE_SCENARIO", DEFAULT_CAPTURE_SCENARIO).strip()
-    if not _SCENARIO.fullmatch(scenario):
+    scenario = env.get("ACS_CAPTURE_SCENARIO", "").strip() or DEFAULT_CAPTURE_SCENARIO
+    # Only capture writes a file named by the scenario, so no other mode stops on it.
+    if mode == "capture" and not _SCENARIO.fullmatch(scenario):
         raise ValueError(f"ACS_CAPTURE_SCENARIO must be a plain name of letters, digits, _ and -, got {scenario!r}")
     return mode, Path(key) if key else None, Path(recordings) if recordings else None, scenario
 

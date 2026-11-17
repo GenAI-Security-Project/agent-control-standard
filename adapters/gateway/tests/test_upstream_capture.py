@@ -62,10 +62,11 @@ def test_a_failed_exchange_writes_nothing(gateway, upstream, tmp_path):
 
 
 def test_a_capture_write_failure_still_answers(gateway, upstream, tmp_path, audit):
+    client = capture(gateway, tmp_path)
     (tmp_path / "rec").mkdir()
     (tmp_path / "rec" / "s1.jsonl").mkdir()  # a directory where the file should be, so the append fails
     upstream.reply(response_body(message_item("still here")))
-    response = capture(gateway, tmp_path).post("/v1/responses", json=finbot_request())
+    response = client.post("/v1/responses", json=finbot_request())
     assert response.json()["output"][0]["content"][0]["text"] == "still here"
     assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_failed"] == ["write_error"]
 
@@ -105,3 +106,32 @@ def test_live_without_a_key_leaves_the_client_header(gateway, upstream):
     upstream.reply(response_body(message_item("ok")))
     gateway().post("/v1/responses", json=finbot_request(), headers={"authorization": "Bearer lab-dummy"})
     assert upstream.received[0].headers["authorization"] == "Bearer lab-dummy"
+
+
+def test_capture_refuses_to_start_over_an_existing_scenario_file(gateway, tmp_path):
+    (tmp_path / "rec").mkdir()
+    (tmp_path / "rec" / "s1.jsonl").write_text("stale\n")
+    with pytest.raises(ValueError, match="s1.jsonl"):
+        capture(gateway, tmp_path)
+
+
+def test_capture_never_follows_a_symlinked_scenario_file(gateway, upstream, tmp_path, audit):
+    client = capture(gateway, tmp_path)
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("untouched\n")
+    (tmp_path / "rec").mkdir(exist_ok=True)
+    (tmp_path / "rec" / "s1.jsonl").symlink_to(target)
+    upstream.reply(response_body(message_item("ok")))
+    assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+    assert target.read_text() == "untouched\n"
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_failed"] == ["write_error"]
+
+
+def test_capture_stops_buffering_past_the_body_limit(gateway, upstream, tmp_path, audit):
+    upstream.reply(response_body(message_item("x" * 4000)))
+    response = capture(gateway, tmp_path, ACS_GATEWAY_MAX_BODY_BYTES="1000").post("/v1/responses",
+                                                                                   json=finbot_request())
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "upstream_too_large"
+    assert recorded(tmp_path) == []
+    assert "upstream_too_large" in [e["cause"] for e in audit() if e["acs_audit_event"] == "upstream_error"]

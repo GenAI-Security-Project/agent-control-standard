@@ -130,7 +130,7 @@ A value the request never held, one the model made up, stays as the model wrote 
 
 **A miss.** When no line fits, or a line holds a placeholder the live request can't fill, replay never guesses. It answers with a fixed response, `resp_replay_miss`, holding one assistant message, `msg_replay_miss`, that carries the neutral line (as server-sent events when the request asked for a stream), and audits `replay_miss`.
 
-Capture waits for a whole streamed answer before passing it on, since the line needs all of it. Capture records the body the gateway forwarded, after gating, so the key it writes is the key replay computes for the same run. A failed write is audited as `capture_failed` and the client still gets its answer.
+Capture waits for a whole streamed answer before passing it on, since the line needs all of it, and holds no more than `ACS_GATEWAY_MAX_BODY_BYTES` of it in any mode, off included. Past that it answers 502 and audits `upstream_error` with cause `upstream_too_large`. Capture refuses to start when the scenario file already exists, since replay serves the first matching line and a recapture appended after stale lines would never take effect. It opens the file with `O_NOFOLLOW`, so a symlink at that path fails the write instead of redirecting it. Capture records the body the gateway forwarded, after gating, so the key it writes is the key replay computes for the same run. A failed write is audited as `capture_failed` and the client still gets its answer.
 
 ## How enforce applies a decision
 
@@ -251,7 +251,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_CAPTURE` | `0` | `1` turns live into capture. Refused with replay |
 | `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only |
 | `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
-| `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64 |
+| `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64. Empty means the default, and only capture checks it |
 | `ACS_UPSTREAM_MODEL` | None | In live and capture, the model name sent upstream in place of the client's. The model input log shows the name sent. Replay ignores it |
 | `ACS_GUARDIAN_URL` | `http://127.0.0.1:8787/` | Guardian endpoint |
 | `ACS_HMAC_SECRET_FILE` or `ACS_HMAC_SECRET` | None | Request signing secret, at least 32 bytes. The file must be 0600 or 0400 |

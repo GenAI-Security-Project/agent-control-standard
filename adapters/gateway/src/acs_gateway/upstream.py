@@ -538,20 +538,33 @@ class CaptureTransport(httpx.AsyncBaseTransport):
     the client still gets its answer.
     """
 
-    def __init__(self, live: LiveTransport, path: Path, scenario: str) -> None:
+    def __init__(self, live: LiveTransport, path: Path, scenario: str, max_bytes: int) -> None:
         self._live = live
         self._path = path
         self._scenario = scenario
+        self._max_bytes = max_bytes
         self._lock = threading.Lock()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         raw_request = await request.aread()
         branch = request.headers.get(BRANCH_HEADER)
         upstream = await self._live.handle_async_request(request)
+        chunks, size = [], 0
         try:
-            raw = b"".join([chunk async for chunk in upstream.aiter_raw()])
+            async for chunk in upstream.aiter_raw():
+                size += len(chunk)
+                if size > self._max_bytes:
+                    # Capture holds the whole answer to write its line, so the gateway's body limit bounds it in every
+                    # mode, off included (fix round 2, CR3).
+                    _audit("upstream_error", cause="upstream_too_large", max_body_bytes=self._max_bytes,
+                           scenario=self._scenario)
+                    error = {"error": {"message": "The model service returned a response that is too large.",
+                                       "type": "server_error", "param": None, "code": "upstream_too_large"}}
+                    return _response(502, json.dumps(error).encode("utf-8"), "application/json")
+                chunks.append(chunk)
         finally:
             await upstream.aclose()
+        raw = b"".join(chunks)
         if 200 <= upstream.status_code < 300:
             self._record(raw_request, branch, upstream.headers, raw)
         return httpx.Response(upstream.status_code, headers=upstream.headers, stream=httpx.ByteStream(raw))
@@ -597,7 +610,9 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         try:
             with self._lock:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
-                with self._path.open("a", encoding="utf-8") as f:
+                # O_NOFOLLOW so a symlink planted at the scenario path can't redirect the write (fix round 2, R5).
+                fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o644)
+                with os.fdopen(fd, "a", encoding="utf-8") as f:
                     f.write(json.dumps(line, ensure_ascii=False) + "\n")
         except OSError as e:
             _audit("capture_failed", cause="write_error", scenario=self._scenario, error=type(e).__name__)
@@ -620,6 +635,12 @@ class UpstreamSource:
             assert config.recordings_dir is not None
             self._capture_path = config.recordings_dir / f"{config.capture_scenario}.jsonl"
             self._scenario = config.capture_scenario
+            self._max_bytes = config.max_body_bytes
+            if os.path.lexists(self._capture_path):
+                # Replay serves the first matching line, so lines appended after stale ones would never take effect
+                # (fix round 2, CR5).
+                raise ValueError(f"ACS_CAPTURE_SCENARIO file {self._capture_path} already exists. Move it away or "
+                                 "choose another scenario")
         if self.mode == "replay":
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir)
@@ -640,7 +661,7 @@ class UpstreamSource:
             assert self._store is not None
             return ReplayTransport(self._store)
         if self._capture_path is not None:
-            return CaptureTransport(LiveTransport(self._key), self._capture_path, self._scenario)
+            return CaptureTransport(LiveTransport(self._key), self._capture_path, self._scenario, self._max_bytes)
         if self._key is not None:
             return LiveTransport(self._key)
         return None

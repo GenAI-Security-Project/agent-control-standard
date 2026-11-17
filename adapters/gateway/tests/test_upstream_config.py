@@ -51,7 +51,7 @@ def test_replay_refuses_the_capture_flag_and_a_key(tmp_path):
         config(tmp_path, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=rec, ACS_UPSTREAM_KEY_FILE="/run/acs/openai.key")
 
 
-@pytest.mark.parametrize("scenario", ["", "../x", "a/b", "-x", "x" * 65])
+@pytest.mark.parametrize("scenario", ["../x", "a/b", "-x", "x" * 65])
 def test_a_bad_scenario_name_is_refused(tmp_path, scenario):
     with pytest.raises(ValueError, match="ACS_CAPTURE_SCENARIO"):
         config(tmp_path, ACS_UPSTREAM="capture", ACS_RECORDINGS_DIR=str(tmp_path), ACS_CAPTURE_SCENARIO=scenario)
@@ -88,3 +88,16 @@ def test_a_bad_key_file_is_refused_without_showing_the_key(tmp_path, problem):
     with pytest.raises(ValueError, match="ACS_UPSTREAM_KEY_FILE") as raised:
         read_key_file(path)
     assert KEY not in str(raised.value)
+
+
+@pytest.mark.parametrize("mode", ["live", "replay"])
+def test_an_empty_or_odd_scenario_matters_only_to_capture(tmp_path, mode):
+    rec = str(tmp_path)
+    for scenario in ("", "../x"):
+        c = config(tmp_path, ACS_UPSTREAM=mode, ACS_RECORDINGS_DIR=rec, ACS_CAPTURE_SCENARIO=scenario)
+        assert c.upstream_mode == mode
+
+
+def test_an_empty_scenario_means_the_default_in_capture(tmp_path):
+    c = config(tmp_path, ACS_UPSTREAM="capture", ACS_RECORDINGS_DIR=str(tmp_path), ACS_CAPTURE_SCENARIO="  ")
+    assert c.capture_scenario == "capture"
