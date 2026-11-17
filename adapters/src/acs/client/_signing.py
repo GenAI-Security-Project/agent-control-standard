@@ -27,18 +27,29 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 
 def verify_signature(envelope: dict, *, key: bytes | None = None,
                      session_id: str | None = None, key_id: str | None = None,
-                     keyring: Keyring | None = None) -> bool:
+                     keyring: Keyring | None = None, expected_key_id: str | None = None) -> bool:
     """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid.
 
-    With a keyring, the envelope's key_id names a key in it and that key's algorithm decides
-    (RFC 8725 section 3.1). The ACS_HMAC_* settings play no part. Keyring verification needs
-    the pqc extra (issue #574).
+    With a keyring, the signature must name expected_key_id, the key this caller trusts to
+    answer, and that key's algorithm decides (RFC 8725 section 3.1). A keyring can hold
+    several keys, so without the pin a response signed by any of them would pass. The
+    ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra (issue #574).
     """
-    if keyring is not None:
+    if keyring is None:
+        if expected_key_id is not None:
+            raise ValueError("expected_key_id applies only to keyring verification")
+    else:
         if key is not None or session_id is not None or key_id is not None:
             raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
+        if not isinstance(expected_key_id, str) or not expected_key_id:
+            raise ValueError("keyring verification needs expected_key_id, the key_id that must answer")
+        container = envelope.get(container_key(envelope)) if isinstance(envelope, dict) else None
+        sig = container.get("signature") if isinstance(container, dict) else None
+        # Checked before any crypto, so a response from the wrong key costs nothing to refuse.
+        if not isinstance(sig, dict) or sig.get("key_id") != expected_key_id:
+            return False
         # Imported here so the HMAC path never loads cryptography.
-        from acs.core import verify_with_keyring
+        from acs.core._mldsa import verify_with_keyring
         return verify_with_keyring(envelope, keyring)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
