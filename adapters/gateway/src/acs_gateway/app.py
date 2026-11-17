@@ -63,6 +63,7 @@ from acs_gateway.sessions import (
 from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
+from acs_gateway.upstream import UpstreamSource
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
 _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -132,6 +133,8 @@ class Gateway:
         # Held ASKs for the approver page (LAB-08). Enforce only, since shadow never holds. None leaves every ASK
         # denying, as it did before the page.
         self.approvals = Approvals() if self.enforce and config.approver_port is not None else None
+        # Live, capture or replay (issue #579). A bad key file or recording stops startup here.
+        self.upstream_source = UpstreamSource(config)
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
@@ -143,7 +146,11 @@ class Gateway:
                 check_client_state_dirs(os.environ)
                 await asyncio.get_running_loop().run_in_executor(executor, self.guardian.wait_ready)
             # The model may think for minutes, so only connecting is bounded and the client's own timeout governs.
-            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0)) as http:
+            # A custom upstream transport ignores proxy variables on this client: replay must never reach the network,
+            # and live and capture make their own ordinary client inside the transport.
+            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0),
+                                         transport=self.upstream_source.transport(),
+                                         trust_env=not self.upstream_source.custom) as http:
                 self.http = http
                 yield
         finally:

@@ -5,14 +5,23 @@ Live with no key file passes no transport at all, which is the gateway's behavio
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import stat
+from collections import OrderedDict
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from acs_gateway.apply import DEFAULT_REDACTION, NEUTRAL_LINE
+
+if TYPE_CHECKING:
+    from acs_gateway.config import GatewayConfig
 
 # FinBot's per-visitor values at 1450fc4, which differ in every fresh FinBot and so can't be replayed verbatim
 # (PREMORTEM P2): the namespace ns_<user id> (session.py:233-240, routing.py:23), the user id user_<token_urlsafe(12)>,
@@ -184,3 +193,247 @@ def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int,
             text = item.get("output") if isinstance(item.get("output"), str) else _text(item.get("output"))
             tokens.append("d" if text == NEUTRAL_LINE else "m" if DEFAULT_REDACTION in text else "a")
     return to_placeholders(first_user, mapping), len(tokens), ",".join(tokens)
+
+
+def _audit(event: str, **fields: Any) -> None:
+    from acs.client import audit_event
+
+    audit_event(event, **fields)
+
+
+_BRANCH = re.compile(r"(?:[adm](?:,[adm])*)?")
+_RECORDING_FIELDS = ("scenario", "match", "step", "branch", "stream", "response")
+
+
+@dataclass(frozen=True)
+class Recording:
+    """One recording line (A.8): {"scenario", "match", "step", "branch", "stream", "response"}.
+
+    match is a regular expression for the first user message with placeholders, matched in full. A non-streamed
+    response is the Responses API body. A streamed one is the list of {"event", "data"} server-sent events.
+    """
+    scenario: str
+    match: re.Pattern[str]
+    step: int
+    branch: str
+    stream: bool
+    response: Any
+
+
+def _recording(raw: str) -> Recording:
+    """One line, checked, or ValueError naming what is wrong."""
+    try:
+        line = json.loads(raw)
+    except ValueError as e:
+        raise ValueError(f"not JSON ({e.msg})") from None
+    if not isinstance(line, dict) or set(line) != set(_RECORDING_FIELDS):
+        raise ValueError(f"a recording line has exactly the fields {', '.join(_RECORDING_FIELDS)}")
+    if not isinstance(line["scenario"], str) or not isinstance(line["match"], str):
+        raise ValueError("scenario and match are strings")
+    try:
+        match = re.compile(line["match"])
+    except re.error as e:
+        raise ValueError(f"match is not a regular expression ({e})") from None
+    step = line["step"]
+    if not isinstance(step, int) or isinstance(step, bool) or step < 0:
+        raise ValueError("step is a whole number of at least 0")
+    if not isinstance(line["branch"], str) or not _BRANCH.fullmatch(line["branch"]):
+        raise ValueError("branch is a comma-separated list of a, d and m tokens")
+    if not isinstance(line["stream"], bool):
+        raise ValueError("stream is true or false")
+    response = line["response"]
+    if line["stream"]:
+        if not isinstance(response, list) or not all(
+                isinstance(e, dict) and set(e) == {"event", "data"} and isinstance(e["event"], str)
+                and isinstance(e["data"], dict) for e in response):
+            raise ValueError("a streamed response is a list of {event, data} objects")
+    elif not isinstance(response, dict) or not isinstance(response.get("output"), list):
+        raise ValueError("a response is a Responses API object with an output list")
+    return Recording(line["scenario"], match, step, line["branch"], line["stream"], response)
+
+
+class RecordingStore:
+    """Every recording under ACS_RECORDINGS_DIR, loaded once at startup so a bad line stops the gateway there."""
+
+    def __init__(self, recordings: list[Recording]) -> None:
+        self.recordings = recordings
+
+    @classmethod
+    def load(cls, directory: Path) -> RecordingStore:
+        if not directory.is_dir():
+            raise ValueError(f"ACS_RECORDINGS_DIR {directory} is not a directory")
+        recordings = []
+        for path in sorted(directory.glob("*.jsonl")):
+            for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not raw.strip():
+                    continue
+                try:
+                    recordings.append(_recording(raw))
+                except ValueError as e:
+                    raise ValueError(f"{path.name}:{number}: {e}") from None
+        return cls(recordings)
+
+    def find(self, first_user: str, step: int, branch: str, stream: bool) -> Recording | None:
+        """The first recording, in file and line order, that fits all four parts of the key."""
+        for recording in self.recordings:
+            if (recording.step == step and recording.branch == branch and recording.stream == stream
+                    and recording.match.fullmatch(first_user)):
+                return recording
+        return None
+
+
+# The documented miss: fixed ids and the gateway's own neutral line, so a miss never looks like a model's guess.
+MISS_RESPONSE_ID = "resp_replay_miss"
+MISS_MESSAGE_ID = "msg_replay_miss"
+
+
+def miss_response(model: Any) -> dict[str, Any]:
+    message = {"type": "message", "id": MISS_MESSAGE_ID, "role": "assistant", "status": "completed",
+               "content": [{"type": "output_text", "text": NEUTRAL_LINE, "annotations": []}]}
+    return {"id": MISS_RESPONSE_ID, "object": "response", "created_at": 0, "status": "completed",
+            "model": model if isinstance(model, str) else None, "output": [message]}
+
+
+def miss_events(model: Any) -> list[dict[str, Any]]:
+    """The miss as the events FinBot's chat reads (chat.py at 1450fc4), in the Responses API's order."""
+    done = miss_response(model)
+    message = done["output"][0]
+    return [
+        {"event": "response.created",
+         "data": {"type": "response.created", "sequence_number": 0,
+                  "response": {**done, "status": "in_progress", "output": []}}},
+        {"event": "response.output_text.delta",
+         "data": {"type": "response.output_text.delta", "sequence_number": 1, "item_id": MISS_MESSAGE_ID,
+                  "output_index": 0, "content_index": 0, "delta": NEUTRAL_LINE, "logprobs": []}},
+        {"event": "response.output_item.done",
+         "data": {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": message}},
+        {"event": "response.completed",
+         "data": {"type": "response.completed", "sequence_number": 3, "response": done}},
+    ]
+
+
+def encode_events(events: list[dict[str, Any]]) -> bytes:
+    return "".join(f"event: {e['event']}\ndata: {json.dumps(e['data'])}\n\n" for e in events).encode("utf-8")
+
+
+def _is_stream(body: dict[str, Any]) -> bool:
+    # The gateway's own rule (app.is_stream): any stream value but an absent one, null or false asks for a stream.
+    return body.get("stream") is not None and body["stream"] is not False
+
+
+@dataclass(frozen=True)
+class _Answer:
+    content: bytes
+    content_type: str
+    miss: dict[str, Any] | None
+
+
+def _response(status: int, content: bytes, content_type: str) -> httpx.Response:
+    """An unread response, as a network transport returns one, since the gateway reads the raw stream in off mode."""
+    return httpx.Response(status, headers={"content-type": content_type, "content-length": str(len(content))},
+                          stream=httpx.ByteStream(content))
+
+
+class ReplayTransport(httpx.AsyncBaseTransport):
+    """Answers POST <base>/responses from recordings. It opens no socket and holds no credential.
+
+    A byte-identical request gets the bytes it got before from a bounded cache keyed on the request's sha256
+    (PREMORTEM P11), so an SDK retry sees exactly the first answer, a miss included.
+    """
+    CACHE_SIZE = 1024
+
+    def __init__(self, store: RecordingStore) -> None:
+        self.store = store
+        self.cache: OrderedDict[str, _Answer] = OrderedDict()
+        self.cache_hits = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.method != "POST" or not request.url.path.endswith("/responses"):
+            error = {"error": {"message": "Unknown request URL.", "type": "invalid_request_error", "param": None,
+                               "code": "unknown_url"}}
+            return _response(404, json.dumps(error).encode("utf-8"), "application/json")
+        raw = await request.aread()
+        digest = hashlib.sha256(raw).hexdigest()
+        answer = self.cache.get(digest)
+        if answer is not None:
+            self.cache.move_to_end(digest)
+            self.cache_hits += 1
+        else:
+            answer = self._answer(raw)
+            self.cache[digest] = answer
+            if len(self.cache) > self.CACHE_SIZE:
+                self.cache.popitem(last=False)
+        if answer.miss is not None:
+            _audit("replay_miss", **answer.miss)
+        return _response(200, answer.content, answer.content_type)
+
+    def _answer(self, raw: bytes) -> _Answer:
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            body = None
+        if not isinstance(body, dict):
+            return self._miss(None, "unreadable_request", None, "", False)
+        stream = _is_stream(body)
+        mapping = placeholder_map(body)
+        first_user, step, branch = replay_key(body, mapping)
+        recording = self.store.find(first_user, step, branch, stream)
+        if recording is None:
+            return self._miss(body.get("model"), "no_recording", step, branch, stream)
+        response, complete = fill(recording.response, mapping)
+        if not complete:
+            return self._miss(body.get("model"), "placeholder_unfilled", step, branch, stream,
+                              scenario=recording.scenario)
+        if stream:
+            return _Answer(encode_events(response), "text/event-stream", None)
+        return _Answer(json.dumps(response).encode("utf-8"), "application/json", None)
+
+    @staticmethod
+    def _miss(model: Any, cause: str, step: int | None, branch: str, stream: bool, **extra: Any) -> _Answer:
+        fields = {"cause": cause, "step": step, "branch": branch, "stream": stream, **extra}
+        if stream:
+            return _Answer(encode_events(miss_events(model)), "text/event-stream", fields)
+        return _Answer(json.dumps(miss_response(model)).encode("utf-8"), "application/json", fields)
+
+
+class LiveTransport(httpx.AsyncBaseTransport):
+    """The real upstream through an ordinary httpx client, so proxy settings and timeouts stay what they are in plain
+    live mode. With a key it replaces the client's Authorization header, so FinBot never holds the real key."""
+
+    def __init__(self, key: str | None) -> None:
+        self._key = key
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0))
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self._key is not None:
+            request.headers["authorization"] = f"Bearer {self._key}"
+        return await self._client.send(request, stream=True)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+class UpstreamSource:
+    """The configured upstream mode, checked at construction so a bad key file or recording stops startup."""
+
+    def __init__(self, config: GatewayConfig) -> None:
+        self.mode = config.upstream_mode
+        self._key = read_key_file(config.upstream_key_file) if config.upstream_key_file is not None else None
+        self._store = None
+        if self.mode == "replay":
+            assert config.recordings_dir is not None
+            self._store = RecordingStore.load(config.recordings_dir)
+
+    @property
+    def custom(self) -> bool:
+        """False only for live with no key, where the gateway's client stays exactly as it was before #579."""
+        return self.mode != "live" or self._key is not None
+
+    def transport(self) -> httpx.AsyncBaseTransport | None:
+        """A fresh transport for one lifespan, or None for the default."""
+        if self.mode == "replay":
+            assert self._store is not None
+            return ReplayTransport(self._store)
+        if self._key is not None:
+            return LiveTransport(self._key)
+        return None
