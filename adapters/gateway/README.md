@@ -101,9 +101,11 @@ The gateway's own configuration always denies on a decision failure. A ServerHel
 
 ## ASK and the approver page
 
-An ASK means the Guardian wants a person to answer before a call runs. With `ACS_GATEWAY_APPROVER_PORT` set, enforce holds a model's `function_call` that gets an ASK and lists it on a one-page approver UI on that port. The lab sets 8090. The page binds `127.0.0.1` unless `ACS_GATEWAY_APPROVER_HOST` says otherwise. Without the port, every ASK denies, as before.
+An ASK means the Guardian wants a person to answer before a call runs. With `ACS_GATEWAY_APPROVER_PORT` and `ACS_GATEWAY_APPROVER_TOKEN_FILE` set, enforce holds a model's `function_call` that gets an ASK and lists it on a one-page approver UI on that port. The lab sets 8090. The page binds `127.0.0.1` unless `ACS_GATEWAY_APPROVER_HOST` says otherwise. Without the port, every ASK denies, as before. The port without the token file stops startup, on any host.
 
-The page shows each held call's tool name, its arguments and the Guardian's question, with an Approve and a Reject button. The approver's choice goes back to the Guardian as the same `steps/toolCallRequest` payload, sent again under a new request_id, with one more field:
+The page releases held tool calls, so it needs the secret in the token file, which follows the admin token's rules (a regular file, 0600 or 0400, owned by the gateway, at least 32 bytes). A script sends it as `Authorization: Bearer <secret>`. A browser gets a sign-in form, and the secret entered there is kept as an `HttpOnly`, `SameSite=Strict` cookie derived from it. Without the secret there is no page and no answer, whatever `Host` and `Origin` a local process or a sibling container claims.
+
+The page shows each held call's tool name, its arguments, the Guardian's question and its `context`, with an Approve and a Reject button. An approval goes back to the Guardian as the same `steps/toolCallRequest` payload, sent again under a new request_id, with one more field:
 
 ```json
 {"tool": {"name": "pay_vendor"}, "arguments": {"vendor_id": {"value": 7}},
@@ -111,13 +113,24 @@ The page shows each held call's tool name, its arguments and the Guardian's ques
                           "approver": {"type": "human", "id": "lab-approver"}, "assurance": "declared"}}
 ```
 
-The Guardian's decision on that resend is what the gateway applies after an approval, so an approved call reaches the client only when the Guardian then allows or modifies it. The gateway never turns an ASK into an allow on its own (D-043). A rejection denies the call whatever the Guardian answers. A second ASK on the resend denies. `assurance: declared` says the answer is the gateway's word for it, since no approver signature exists yet.
+The Guardian's decision on that resend is what the gateway applies after an approval, so an approved call reaches the client only when the Guardian then allows or modifies it. The gateway never turns an ASK into an allow on its own (D-043). A second ASK on the resend denies. `assurance: declared` says the answer is the gateway's word for it, since no approver signature exists yet.
 
-No answer before the deadline denies, with no resend. The deadline is the ASK's `timeout_seconds`, capped at `ACS_GATEWAY_ASK_MAX_S` (240 seconds, and never higher, so a hold fits inside FinBot's 360-second `LLM_TIMEOUT`). Every ASK in one model response shares one deadline, started by the first, so two ASKs never add up past the cap. A streamed response holds the call's events the same way, under one deadline for the whole stream. An `ask_details` without a string `question`, a string `approver.id` and an integer `timeout_seconds` of at least 1 denies the call without listing it.
+Everything else ends the hold with a deny and no resend:
 
-Shadow records the ASK as a `shadow_decision` and delivers the call, so it never holds anything. Off never sees an ASK. An ASK on a tool's output isn't held, since the tool already ran, and the output is replaced by the neutral line.
+- A rejection denies at once. Its resend could change nothing, so the Guardian learns of it only from the gateway's audit line until issue #175 defines how an answer reaches it.
+- No answer before the deadline.
+- The client disconnecting. A non-streamed request checks for it while it waits, and a streamed one is cancelled with its stream.
+- An epoch bump or a retired session during the wait, since the call's session is gone.
 
-Tool arguments come from the model, which an attacker can steer, so the page escapes everything it renders, shows invisible characters as `\uXXXX` escapes, runs no script, and refuses to load in a frame. An answer is a POST carrying only the call's id, the choice and a token minted with the page. The page refuses an answer whose `Origin` isn't the page's own, a `Sec-Fetch-Site` of `cross-site` or `same-site`, and any `Host` that isn't a loopback name or the bind host, so neither another site nor a rebinding name that resolves to `127.0.0.1` can answer for the approver. A click after the deadline, or a second click, changes nothing. When the client disconnects, the held call leaves the page.
+The budget is `ACS_GATEWAY_ASK_MAX_S` (240 seconds, and never higher) from the request's arrival, so the model's own time counts against it. An ASK waits until the earlier of its own `timeout_seconds` and the budget's end, less one decision timeout plus a second kept back for the resend. The answer then lands inside FinBot's 360-second `LLM_TIMEOUT`. Every ASK in one model response, streamed or not, shares that one budget, so two ASKs never add up past it. A cap no longer than one decision timeout plus a second stops startup.
+
+The gateway honors only what the page can carry out. An ASK whose approver isn't `human`, whose `options` are anything but exactly `approve` and `reject`, or whose `timeout_disposition` isn't `deny` denies at once, audited as `ask_unsupported` naming the field. So does an `ask_details` without a string `question`, a string `approver.id` and an integer `timeout_seconds` of at least 1. The gateway never claims a human answered for a non-human approver.
+
+While a call is held, the session's lock is held too, for up to the 240-second budget, so a second request for the same conversation waits behind it. FinBot runs one agent per conversation, so nothing of its own queues there. A streamed response sends an SSE comment line, `: keepalive`, every 15 seconds while a call is held, so a proxy's idle timeout doesn't cut the stream. Clients skip comment lines.
+
+Shadow records the ASK as a `shadow_decision` and delivers the call, and keeps no approvals, so it never holds anything. Off never sees an ASK. An ASK on a tool's output isn't held, since the tool already ran, and the output is replaced by the neutral line.
+
+Tool arguments come from the model, which an attacker can steer, so the page escapes everything it renders, shows invisible and bidirectional characters in every label and argument as `\uXXXX` escapes, runs no script, and refuses to load in a frame. An answer is a POST carrying only the call's id, the choice and a token minted with the page. A token answers only the calls its page showed, once each. Behind the secret, the page also refuses an answer whose `Origin` isn't the page's own, a `Sec-Fetch-Site` of `cross-site` or `same-site`, and any `Host` that isn't a loopback name or the bind host. A click after the deadline, or a second click, changes nothing.
 
 ## Sessions and resends
 
@@ -148,8 +161,9 @@ Each request line is written before the request is sent, so the file holds the c
 
 | Event | When |
 |---|---|
-| `ask_pending` | Enforce held a call for the approver page, with `request_id` (the ASK step's), `tool`, `call_id`, `approver`, `question`, `deadline_s` (the response's shared budget) and `remaining_s` |
-| `ask_resolved` | A held call was settled. `outcome` is `approved`, `rejected` or `timed_out`, with `ask_request_id`, `request_id` and `guardian_decision` of the resent step (null on `timed_out`, which sends none), `decision` (what the gateway did), `cause` (`ask_rejected`, `ask_timeout`, or the resend's own failure) and `waited_s`. A `decision_applied` line follows for the same call |
+| `ask_pending` | Enforce held a call for the approver page, with `request_id` (the ASK step's), `tool`, `call_id`, `approver`, `question`, `deadline_s` (the request's budget) and `remaining_s` |
+| `ask_resolved` | A held call was settled. `outcome` is `approved`, `rejected`, `timed_out` or `abandoned`, with `ask_request_id`, and `request_id` and `guardian_decision` of the resent step (null unless approved, since nothing else sends one), `decision` (what the gateway did), `cause` (`ask_rejected`, `ask_timeout`, `client_disconnected`, `epoch_bumped`, `session_retired`, or the resend's own failure) and `waited_s`. A `decision_applied` line follows for the same call, except after a streamed disconnect, which ends the request |
+| `ask_unsupported` | An ASK the page can't carry out denied at once, with `field` (`approver.type`, `options`, `timeout_disposition`, or a required field that isn't usable) |
 | `session_opened` | A session finished its handshake and sessionStart. `handshake` says Negotiated, SessionRefused or NoAnswer |
 | `decision_applied` | Enforce mode settled a step. `decision` is what the gateway did, `guardian_decision` what the Guardian said, `cause` why a step denied without a Guardian deny (for example `decision_timeout`, `http_429_error`, `response_signature_invalid`, `modify_unsupported`) |
 | `shadow_decision` | Shadow mode recorded a step, with the same fields |
@@ -200,8 +214,9 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_GATEWAY_HOST`, `ACS_GATEWAY_PORT` | `127.0.0.1`, `8080` | The model port |
 | `ACS_GATEWAY_ADMIN_HOST`, `ACS_GATEWAY_ADMIN_PORT` | `127.0.0.1`, unset | The admin port, off unless set |
 | `ACS_GATEWAY_ADMIN_TOKEN_FILE` | None | Bearer token for the admin port, 0600, at least 32 bytes. Required with the admin port |
-| `ACS_GATEWAY_APPROVER_HOST`, `ACS_GATEWAY_APPROVER_PORT` | `127.0.0.1`, unset | The approver page, off unless the port is set. The lab sets 8090 |
-| `ACS_GATEWAY_ASK_MAX_S` | `240` | The longest one model response is held for its ASKs. A larger value stops startup |
+| `ACS_GATEWAY_APPROVER_HOST`, `ACS_GATEWAY_APPROVER_PORT` | `127.0.0.1`, unset | The approver page, enforce only, off unless the port is set. The port is 1 to 65535 and differs from the model and admin ports. The lab sets 8090 |
+| `ACS_GATEWAY_APPROVER_TOKEN_FILE` | None | The approver secret, 0600, at least 32 bytes. Required with the approver port |
+| `ACS_GATEWAY_ASK_MAX_S` | `240` | One request's ASK budget, from its arrival. Above 240, or no more than one decision timeout plus a second, stops startup |
 | `ACS_GUARDIAN_HOST_ALLOWLIST` | None | Read by acs.client: Guardian hosts it may contact |
 | `ACS_HANDSHAKE_TIMEOUT_SECONDS` | `5` | Read by acs.client: handshake timeout |
 | `NO_PROXY` | None | acs.client honors proxy variables on every call, so list the Guardian here when a proxy is set |
@@ -222,7 +237,9 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The neutral line stands in for a removed call or a denied output | Issue #577 |
 | DEFER denies, and ASK denies unless the approver page is on | Issue #14 for DEFER. Issue #581 adds the page |
 | The approver's answer reaches the Guardian as the step resent with `x_acs_lab_ask_answer` in its payload, marked `assurance: declared` | Issue #175 |
-| One deadline per model response for all its ASKs, capped at 240 seconds | Issue #581 and PREMORTEM P26 |
+| One ASK budget per request, from its arrival, capped at 240 seconds and covering the resend | Issue #581 and PREMORTEM P26 |
+| A rejection is not resent, and only a human approver with options approve and reject is held | Issue #175 |
+| An SSE comment line every 15 seconds while a streamed call is held | Issue #578. The specification defers streaming semantics |
 | In enforce a streamed answer is built by the gateway: message text streams live from an allowlist, every other item is built after the final event from its output, and the gateway owns `sequence_number` and `output_index` | Issue #578. The specification defers streaming semantics, and PREMORTEM P21 allows gateway numbering |
 | Responses are verified with acs.client's HMAC-SHA256 check inside its round trip. LAB-03 changes the algorithm dispatch inside acs.client to verify by key_id from the key document | LAB-03, issue #576, and issue #460 |
 | An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and the signed bytes would differ from the transcript line | Issue #577 |
