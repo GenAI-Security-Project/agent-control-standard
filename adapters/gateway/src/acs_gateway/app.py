@@ -361,7 +361,7 @@ class Gateway:
                        direction="output", mode=self.config.mode)
                 if self.enforce:
                     changed = removed = True
-                    _drop_trailing_reasoning(kept)
+                    kept.append(_REMOVED)
                 else:
                     kept.append(item)
                 continue
@@ -375,7 +375,7 @@ class Gateway:
                 self._record(session, missing, Applied("deny", None, "call_id_missing"), str(item.get("name")), None)
                 if self.enforce:
                     changed = removed = True
-                    _drop_trailing_reasoning(kept)
+                    kept.append(_REMOVED)
                 else:
                     kept.append(item)
                 continue
@@ -384,7 +384,7 @@ class Gateway:
                 self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
                 if self.enforce:
                     changed = removed = True
-                    _drop_trailing_reasoning(kept)
+                    kept.append(_REMOVED)
                 else:
                     kept.append(item)
                 continue
@@ -395,10 +395,12 @@ class Gateway:
                 kept.append(item)
             elif cached.item is None:
                 changed = removed = True
-                _drop_trailing_reasoning(kept)
+                kept.append(_REMOVED)
             else:
                 changed = changed or cached.item != item
                 kept.append(cached.item)
+        if removed:
+            kept = _without_orphaned_reasoning(kept)
         if removed and not any(isinstance(i, dict) and i.get("type") in ("message", "function_call") for i in kept):
             kept.append(neutral_message())
         if changed:
@@ -462,11 +464,30 @@ def _opened(handshake: Any) -> bool:
     return isinstance(handshake, Negotiated) and handshake.start_failure is None
 
 
-def _drop_trailing_reasoning(kept: list[Any]) -> None:
-    """Drop the reasoning items just before a removed call. A reasoning model rejects a resent reasoning item whose
-    call is missing, and reasoning that a kept item follows stays with that item."""
-    while kept and isinstance(kept[-1], dict) and kept[-1].get("type") == "reasoning":
-        kept.pop()
+# Marks where enforce removed an output item, so reasoning is judged by what its turn kept.
+_REMOVED = object()
+
+
+def _without_orphaned_reasoning(marked: list[Any]) -> list[Any]:
+    """Drop each reasoning item that no kept non-reasoning item follows before the next reasoning item.
+
+    A reasoning model rejects a resent reasoning item whose turn is gone, and it also rejects a call resent without
+    its reasoning, so [R, removed, kept call] keeps R and [R, removed] drops it.
+    """
+    kept: list[Any] = []
+    for index, item in enumerate(marked):
+        if item is _REMOVED:
+            continue
+        if isinstance(item, dict) and item.get("type") == "reasoning":
+            following = []
+            for later in marked[index + 1:]:
+                if isinstance(later, dict) and later.get("type") == "reasoning":
+                    break
+                following.append(later)
+            if not any(later is not _REMOVED for later in following):
+                continue
+        kept.append(item)
+    return kept
 
 
 @dataclass(frozen=True)

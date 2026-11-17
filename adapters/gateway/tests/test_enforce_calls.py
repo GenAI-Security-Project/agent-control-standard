@@ -238,3 +238,11 @@ def test_a_server_hello_that_skips_tool_calls_denies_them(gateway, harness_guard
     assert [(e["decision"], e["cause"]) for e in events(audit, name)] == [("deny", "method_not_evaluated")]
     if mode == "enforce":
         assert output[0]["content"][0]["text"] == NEUTRAL
+
+
+def test_reasoning_stays_when_a_later_call_of_its_turn_is_kept(gateway, guardian, upstream):
+    upstream.reply(response_body(reasoning("rs_1"), call_item("bash", {"command": "rm -rf /"}, "call_1"),
+                                 call_item("get_vendor_details", {"vendor_id": 7}, "call_2")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert [(i["type"], i.get("call_id")) for i in output] == [("reasoning", None), ("function_call", "call_2")]
