@@ -10,6 +10,7 @@ import copy
 import pytest
 
 from acs.guardian import opa_backend
+from acs.guardian.opa_backend import OpaConfig
 from opa_stub import StubOpa, closed_port_url
 
 REQUEST_ID = "11111111-1111-4111-8111-111111111111"
@@ -96,8 +97,7 @@ def test_parameter_overrides_must_name_an_argument_the_call_carries():
 
 def _evaluate(method: str, payload: dict, url: str) -> dict:
     params = {"request_id": REQUEST_ID, "metadata": METADATA, "payload": copy.deepcopy(payload)}
-    env = {"ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": url, "ACS_OPA_TIMEOUT_MS": "300"}
-    return opa_backend.evaluate(method, params, dict(BASE), env)
+    return opa_backend.evaluate(method, params, dict(BASE), OpaConfig(url=url, timeout_s=0.3))
 
 
 @pytest.mark.parametrize("method,payload,verdict", VALID)
@@ -135,9 +135,3 @@ def test_evaluate_denies_each_opa_failure_with_its_code(stub_kwargs, code):
 def test_evaluate_denies_when_opa_is_down():
     result = _evaluate("steps/toolCallRequest", CALL, closed_port_url())
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_unreachable"])
-
-
-def test_evaluate_denies_a_misconfigured_backend_without_calling_anything():
-    params = {"request_id": REQUEST_ID, "metadata": METADATA, "payload": CALL}
-    result = opa_backend.evaluate("steps/toolCallRequest", params, dict(BASE), {"ACS_POLICY_BACKEND": "opa"})
-    assert (result["decision"], result["reason_codes"]) == ("deny", ["policy_backend_misconfigured"])

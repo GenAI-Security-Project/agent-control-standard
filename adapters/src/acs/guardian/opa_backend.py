@@ -46,15 +46,6 @@ class OpaConfig:
     timeout_s: float
 
 
-# The two methods this backend judges. Every other method keeps the example Guardian's own handling.
-METHODS = frozenset({"steps/toolCallRequest", "steps/toolCallResult"})
-
-
-def configured(env: Mapping[str, str] = os.environ) -> bool:
-    """Whether any policy backend is named. A name other than opa is a misconfiguration, which denies."""
-    return bool(env.get(BACKEND_ENV, "").strip())
-
-
 def selected(env: Mapping[str, str] = os.environ) -> bool:
     return env.get(BACKEND_ENV, "").strip().lower() == "opa"
 
@@ -280,13 +271,14 @@ def _deny(base: Mapping[str, Any], reason_code: str, reasoning: str) -> dict:
     return {**base, "decision": "deny", "reasoning": reasoning, "reason_codes": [reason_code]}
 
 
-def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any],
-             env: Mapping[str, str] = os.environ) -> dict:
+def misconfigured(base: Mapping[str, Any]) -> dict:
+    """The deny for a backend that is named but was never loaded, which main() would have refused to start with."""
+    return _deny(base, "policy_backend_misconfigured",
+                 f"policy backend misconfigured: {BACKEND_ENV} is set but no OPA settings were loaded at startup")
+
+
+def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], config: OpaConfig) -> dict:
     """The step's result from OPA. Every failure, and every verdict that does not validate, is a deny (D-036, D-040)."""
-    problem = backend_problem(env) if selected(env) else f"{BACKEND_ENV} does not select opa"
-    if problem:
-        return _deny(base, "policy_backend_misconfigured", f"policy backend misconfigured: {problem}")
-    config = load_config(env)
     try:
         verdict = query(config, build_input(method, params))
     except OpaFailure as e:

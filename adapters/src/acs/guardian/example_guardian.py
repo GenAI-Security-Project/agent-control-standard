@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
-from acs.guardian import opa_backend
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
 from acs.core import (
     ACS_VERSION,
@@ -101,6 +100,24 @@ ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "")
 
 
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/")
+
+# Lab convention (issue #531): ACS_POLICY_BACKEND=opa hands these two methods to OPA. main() loads the settings
+# once into OPA_CONFIG, and acs.guardian.opa_backend is imported only on that path.
+POLICY_BACKEND_ENV = "ACS_POLICY_BACKEND"
+POLICY_BACKEND_METHODS = frozenset({"steps/toolCallRequest", "steps/toolCallResult"})
+OPA_CONFIG: Any = None
+
+
+def _policy_backend_named() -> bool:
+    return OPA_CONFIG is not None or bool(os.environ.get(POLICY_BACKEND_ENV, "").strip())
+
+
+def _policy_backend_decision(method: str, params: dict, base: dict) -> dict:
+    from acs.guardian import opa_backend
+    if OPA_CONFIG is None:
+        return opa_backend.misconfigured(base)
+    return opa_backend.evaluate(method, params, base, OPA_CONFIG)
+
 
 # Acknowledged with an unconditional allow; subagentStart is absent because it is the confused-deputy gate.
 INFORMATIONAL_METHODS = {
@@ -437,10 +454,10 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         "chain_hash": chain_hash,
     }
 
-    # Lab convention (issue #531): with ACS_POLICY_BACKEND set, OPA judges both tool methods, so a tool
-    # result can be denied or redacted. Unset, this branch never runs and the rules below decide as before.
-    if method in opa_backend.METHODS and opa_backend.configured():
-        return opa_backend.evaluate(method, params, base)
+    # Under a policy backend OPA judges both tool methods, so a tool result can be denied or redacted.
+    # Unset, this branch never runs and the rules below decide as before.
+    if method in POLICY_BACKEND_METHODS and _policy_backend_named():
+        return _policy_backend_decision(method, params, base)
 
     if method == "steps/toolCallRequest":
         tool = payload.get("tool") or {}
@@ -659,10 +676,14 @@ def main() -> int:
         )
         return 1
 
-    backend_problem = opa_backend.backend_problem()
-    if backend_problem:
-        sys.stderr.write(f"[guardian] REFUSING TO START: {backend_problem}\n")
-        return 1
+    global OPA_CONFIG
+    if os.environ.get(POLICY_BACKEND_ENV, "").strip():
+        from acs.guardian import opa_backend
+        backend_problem = opa_backend.backend_problem()
+        if backend_problem:
+            sys.stderr.write(f"[guardian] REFUSING TO START: {backend_problem}\n")
+            return 1
+        OPA_CONFIG = opa_backend.load_config()
 
     class ReusableServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True
@@ -675,8 +696,8 @@ def main() -> int:
         sys.stdout.write(f"ACS_GUARDIAN_LISTENING port={port}\n")
         sys.stdout.flush()
         sys.stderr.write(f"[guardian] listening on {args.host}:{port} (case-insensitive-tool-policy)\n")
-        if opa_backend.selected():
-            sys.stderr.write(f"[guardian] tool calls and tool results go to OPA at {opa_backend.load_config().url} "
+        if OPA_CONFIG is not None:
+            sys.stderr.write(f"[guardian] tool calls and tool results go to OPA at {OPA_CONFIG.url} "
                              "(lab convention, issue #531)\n")
         sys.stderr.flush()
         try:
