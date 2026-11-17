@@ -14,6 +14,9 @@ _EXPORTS = {
     "Keyring": "_keyring",
     "MAX_REQUEST_BODY_BYTES": "_envelope",
     "ML_DSA_65": "_keyring",
+    "ML_DSA_CONTEXT": "_mldsa",
+    "ML_DSA_MODE": "_mldsa",
+    "MLDSA65SigningKey": "_mldsa",
     "SESSION_REFUSAL_CODES": "_errors",
     "coerce_uuid": "_envelope",
     "container_key": "_signing",
@@ -32,9 +35,12 @@ _EXPORTS = {
     "schemas_dir": "_schemas",
     "server_hello_problem": "_handshake",
     "sign_with_key": "_signing",
+    "sign_with_signing_key": "_mldsa",
+    "signing_input": "_signing",
     "turn_start_envelope": "_envelope",
     "VerificationKey": "_keyring",
     "verify_with_key": "_signing",
+    "verify_with_keyring": "_mldsa",
     "WIRE_ALGORITHMS": "_keyring",
 }
 

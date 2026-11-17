@@ -26,14 +26,22 @@ def container_key(envelope: dict) -> str:
     return "result"
 
 
+def signing_input(envelope: dict) -> bytes:
+    """The bytes every algorithm signs: JCS of the envelope without its signature (§10).
+
+    Raises when RFC 8785 has no form for the envelope. A verifier treats that as a failed check.
+    """
+    ckey = container_key(envelope)
+    container = envelope.get(ckey, {})
+    unsigned_container = {k: v for k, v in container.items() if k != "signature"}
+    return jcs_canonicalize({**envelope, ckey: unsigned_container})
+
+
 def sign_with_key(envelope: dict, key: bytes, *, key_id: str) -> dict:
     """Sign in place with HMAC-SHA256 over JCS(envelope without its signature), labelled key_id (§10)."""
     ckey = container_key(envelope)
     container = envelope.get(ckey, {})
-    unsigned_container = {k: v for k, v in container.items() if k != "signature"}
-    unsigned_envelope = {**envelope, ckey: unsigned_container}
-
-    sig_bytes = hmac.new(key, jcs_canonicalize(unsigned_envelope), hashlib.sha256).digest()
+    sig_bytes = hmac.new(key, signing_input(envelope), hashlib.sha256).digest()
     container["signature"] = {
         "algorithm": "HMAC-SHA256",
         "value": base64.b64encode(sig_bytes).decode("ascii"),
@@ -54,10 +62,8 @@ def verify_with_key(envelope: dict, key: bytes) -> bool:
     expected_b64 = sig.get("value")
     if not expected_b64:
         return False
-    unsigned_container = {k: v for k, v in container.items() if k != "signature"}
-    unsigned_envelope = {**envelope, ckey: unsigned_container}
     try:
-        canonical = jcs_canonicalize(unsigned_envelope)
+        canonical = signing_input(envelope)
     except Exception:  # noqa: BLE001
         # RFC 8785 has no form for this envelope (an integer beyond 2**53, NaN, deep nesting), so no signature covers it.
         return False
