@@ -76,6 +76,9 @@ _CALL_FIELDS = ("type", "name", "call_id", "arguments")
 # Carries the approver's answer in the resent step's payload. Lab convention until issue #175 names a field. It sits in
 # the payload because the lab's Guardian hands policy only the method, payload and metadata.
 ASK_ANSWER_FIELD = "x_acs_lab_ask_answer"
+# How long an approval waits for a disconnect that may already be on its way before the resend goes out. Small
+# beside a person's click, and long enough for a local close to reach the event loop (LAB-08 round 4).
+_APPROVAL_SETTLE_S = 0.1
 _ASK_OUTCOMES = {"approve": "approved", "reject": "rejected", TIMEOUT: "timed_out"}
 
 
@@ -177,8 +180,10 @@ class Gateway:
     async def responses(self, request: Request) -> Response:
         # An ASK's budget runs from here, so the model's time counts against it and the answer lands inside the
         # client's own timeout (CR3).
-        hold = AskHold(time.monotonic(), self.config.ask_max_s, self.config.decision_timeout_s + _STEP_GRACE_S,
-                       request.is_disconnected)
+        hold = AskHold(time.monotonic(), self.config.ask_max_s, self.config.decision_timeout_s + _STEP_GRACE_S)
+        # A non-streamed request has no reader on its receive channel once the body is in, so the hold polls through
+        # one that flags a disconnect on the hold's own event. A stream swaps in its own reader (_governed_stream).
+        hold.poll = Request(request.scope, hold.watch(request.receive)).is_disconnected
         if request.method != "POST":
             return await self.not_found(request)
         headers = forward_headers(request.headers)
@@ -409,9 +414,10 @@ class Gateway:
         # The response releases these pins, so responses() must not.
         pins.clear()
         # The stream is one model response, so its calls share the request's ASK budget though each is decided alone
-        # (P26). A disconnect cancels the stream itself, and the receive channel belongs to Starlette's disconnect
-        # listener here, so the hold doesn't poll it.
-        hold.disconnected = None
+        # (P26). Starlette's disconnect listener owns the receive channel here, so the hold doesn't poll it.
+        # GovernedStream hands the listener a receive that sets the hold's disconnect event first, the same event a
+        # non-streamed hold reads (round 4).
+        hold.poll = None
         editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes,
                               decide=functools.partial(self._gate_item, session, asks=hold), audit=_audit,
                               audit_fields={"session_id": session.session_id},
@@ -440,7 +446,7 @@ class Gateway:
                             pinned.active -= 1
 
         return GovernedStream(editor.edit(upstream.aiter_bytes()), cleanup, status_code=upstream.status_code,
-                              headers=headers)
+                              headers=headers, watch=hold.watch)
 
     @contextlib.asynccontextmanager
     async def _current(self, key: str, pins: list[Session],
@@ -707,7 +713,7 @@ class Gateway:
         """Gate each new function_call before the client sees it (A.4). asks is the request's ASK budget, which a
         stream passes in so its calls, decided one at a time, share it too."""
         asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s,
-                                                     self.config.decision_timeout_s + _STEP_GRACE_S, None)
+                                                     self.config.decision_timeout_s + _STEP_GRACE_S)
         changed, removed, kept = False, False, []
         for item in reply["output"]:
             delivered = await self._gate_item(session, item, asks)
@@ -730,7 +736,7 @@ class Gateway:
         enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the request's
         ASK budget, shared by every item of one response."""
         asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s,
-                                                     self.config.decision_timeout_s + _STEP_GRACE_S, None)
+                                                     self.config.decision_timeout_s + _STEP_GRACE_S)
         call_id = item.get("call_id") if isinstance(item, dict) else None
         if item_type(item) not in ALLOWED_OUTPUT_TYPES:
             _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
@@ -781,15 +787,9 @@ class Gateway:
             result = StepResult(TOOL_CALL_REQUEST, None, cause=cause, failure_class="observed_agent_error")
         else:
             result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
-        ask: dict[str, Any] | None = None
         if self._held(result):
-            result, ask = await self._resolve_ask(session, item.get("call_id"), name, arguments, result, asks)
+            result = await self._resolve_ask(session, item, name, arguments, result, asks)
         applied = apply_call(item, arguments or {}, result)
-        if ask is not None:
-            answered = ask["outcome"] == "approved"
-            _audit("ask_resolved", **ask, request_id=result.request_id if answered else None,
-                   guardian_decision=result.decision.disposition if answered and result.decision else None,
-                   decision=applied.decision, cause=applied.cause or result.cause)
         self._record(session, result, applied, name, item.get("call_id"))
         # The one parse above gives the canonical form of an object. Arguments that parse to anything else still
         # get their canonical form, so a re-serialization of them isn't taken for a reuse. canonical() leaves
@@ -811,69 +811,82 @@ class Gateway:
         return (self.enforce and self.approvals is not None and result.cause is None
                 and result.decision is not None and result.decision.disposition == "ask")
 
-    async def _resolve_ask(self, session: Session, call_id: Any, name: str, arguments: dict[str, Any],
-                           asked: StepResult, hold: AskHold) -> tuple[StepResult, dict[str, Any] | None]:
+    async def _resolve_ask(self, session: Session, item: dict[str, Any], name: str, arguments: dict[str, Any],
+                           asked: StepResult, hold: AskHold) -> StepResult:
         """Hold the call for the approver, then resend the step carrying an approval (LAB-08, issue #581, D-043).
 
         The Guardian's decision on the resend is what the gateway applies after an approval, so the gateway never
         allows on its own. Everything else denies with no resend: a rejection (whose resend could change nothing),
         no answer by the deadline, and a request that stopped standing during the hold (the client disconnected, the
-        epoch moved, or the session retired). The audit fields go back to the caller, which writes ask_resolved once
-        the decision is applied.
+        epoch moved, or the session retired).
+
+        Exactly one ask_resolved line comes out of every path, the resend and a cancellation included, from the one
+        finally below (round 4). A cancellation is a client that left, since the request's task is what ends.
         """
+        call_id = item.get("call_id")
         settings = ask_settings(asked.ask_details)
         if isinstance(settings, str):
             _audit("ask_unsupported", session_id=session.session_id, call_id=call_id, tool=name,
                    request_id=asked.request_id, field=settings)
-            return replace(asked, cause="ask_unsupported", failure_class="guardian_error"), None
+            return replace(asked, cause="ask_unsupported", failure_class="guardian_error")
         deadline = hold.deadline(settings.timeout_s)
-        fields = {"session_id": session.session_id, "call_id": call_id, "tool": name,
-                  "ask_request_id": asked.request_id, "approver": settings.approver_id,
-                  "deadline_s": self.config.ask_max_s}
         _audit("ask_pending", session_id=session.session_id, call_id=call_id, tool=name, request_id=asked.request_id,
                approver=settings.approver_id, question=settings.question, deadline_s=self.config.ask_max_s,
                remaining_s=round(max(0.0, deadline - time.monotonic()), 3))
         assert self.approvals is not None
         epoch = self.sessions.epoch
 
-        def stale() -> str | None:
+        async def stop() -> str | None:
             if session.retired:
                 return "session_retired"
             if session.epoch != epoch or self.sessions.epoch != epoch:
                 return "epoch_bumped"
+            if await hold.disconnected():
+                return "client_disconnected"
             return None
 
-        async def stop() -> str | None:
-            cause = stale()
-            if cause is None and hold.disconnected is not None and await hold.disconnected():
-                cause = "client_disconnected"
-            return cause
-
         started = time.monotonic()
+        # What the finally records. Until something settles them, the hold ended by an exception: abandoned.
+        outcome, result = "abandoned", replace(asked, cause="client_disconnected", failure_class=None)
+        resent = False
         try:
             ended = await self.approvals.wait(session_id=session.session_id, call_id=str(call_id), tool=name,
                                               arguments=arguments, question=settings.question,
                                               approver_id=settings.approver_id, context=settings.context,
                                               deadline=deadline, stop=stop)
-        except asyncio.CancelledError:
-            # A streamed request's client went away, which cancels the stream. Nothing is resent.
-            _audit("ask_resolved", **fields, outcome="abandoned", waited_s=round(time.monotonic() - started, 3),
-                   request_id=None, guardian_decision=None, decision="deny", cause="client_disconnected")
+            if ended == "approve":
+                # Let a disconnect that already happened land first, then check everything again. An approval that
+                # raced a bump, a retirement or a disconnect has nowhere to go, so it sends nothing (R-I1, I-1).
+                await asyncio.sleep(0)
+                await hold.settle(_APPROVAL_SETTLE_S)
+                ended = (await stop()) or ended
+            outcome = _ASK_OUTCOMES.get(ended, "abandoned")
+            if ended != "approve":
+                cause = {"reject": "ask_rejected", TIMEOUT: "ask_timeout"}.get(ended, ended)
+                result = replace(asked, cause=cause, failure_class="timeout" if ended == TIMEOUT else None)
+                return result
+            answer = {"ask_request_id": asked.request_id, "answer": "approve",
+                      "approver": {"type": "human", "id": settings.approver_id},
+                      # No approver signature exists yet, so the answer is the gateway's word for it (issue #175).
+                      "assurance": "declared"}
+            outcome, resent = "abandoned", True
+            result = await self._step(session, TOOL_CALL_REQUEST, {**call_payload(name, arguments),
+                                                                   ASK_ANSWER_FIELD: answer})
+            outcome = "approved"
+            return result
+        except Exception:
+            # A fault in the gateway's own code, not a client that left. The step still denies.
+            result = replace(asked, cause="gateway_step_error", failure_class="observed_agent_error")
             raise
-        if ended == "approve":
-            # An approval that raced a bump, a retirement or a disconnect has nowhere to go, so it sends nothing. The
-            # disconnect poll runs every 0.2 s, so a click just after the client left lands here (R-I1).
-            ended = (await stop()) or ended
-        fields.update(outcome=_ASK_OUTCOMES.get(ended, "abandoned"), waited_s=round(time.monotonic() - started, 3))
-        if ended != "approve":
-            cause = {"reject": "ask_rejected", TIMEOUT: "ask_timeout"}.get(ended, ended)
-            return replace(asked, cause=cause, failure_class="timeout" if ended == TIMEOUT else None), fields
-        answer = {"ask_request_id": asked.request_id, "answer": "approve",
-                  "approver": {"type": "human", "id": settings.approver_id},
-                  # No approver signature exists yet, so the answer is the gateway's word for it (issue #175).
-                  "assurance": "declared"}
-        return await self._step(session, TOOL_CALL_REQUEST, {**call_payload(name, arguments),
-                                                             ASK_ANSWER_FIELD: answer}), fields
+        finally:
+            applied = apply_call(item, arguments, result) if outcome == "approved" else None
+            _audit("ask_resolved", session_id=session.session_id, call_id=call_id, tool=name,
+                   ask_request_id=asked.request_id, approver=settings.approver_id, deadline_s=self.config.ask_max_s,
+                   outcome=outcome, waited_s=round(time.monotonic() - started, 3), resent=resent,
+                   request_id=result.request_id if applied else None,
+                   guardian_decision=result.decision.disposition if applied and result.decision else None,
+                   decision=applied.decision if applied else "deny",
+                   cause=(applied.cause if applied else None) or result.cause)
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
@@ -947,21 +960,55 @@ class Gateway:
 
 
 class AskHold:
-    """The ASK budget of one request: ACS_GATEWAY_ASK_MAX_S from the request's arrival (CR3, PREMORTEM P26).
+    """The ASK budget of one request: ACS_GATEWAY_ASK_MAX_S from the request's arrival (CR3, PREMORTEM P26), and the
+    one signal that the request's client left.
 
     Every ASK in the response waits until the earlier of its own timeout_seconds and the budget's end, less the time
-    kept back for the resend an approval sends, so the whole answer lands inside FinBot's LLM_TIMEOUT. disconnected
-    is the request's own check, or None when a disconnect cancels the work instead.
+    kept back for the resend an approval sends, so the whole answer lands inside FinBot's LLM_TIMEOUT.
+
+    gone is set the moment the request's receive channel yields http.disconnect, through watch(), on both paths: a
+    non-streamed hold reads it by polling (poll), and a streamed one through Starlette's own disconnect listener
+    (round 4, one disconnect signal).
     """
 
-    def __init__(self, arrival: float, cap_s: float, reserve_s: float,
-                 disconnected: Callable[[], Awaitable[bool]] | None) -> None:
+    def __init__(self, arrival: float, cap_s: float, reserve_s: float) -> None:
         self.ends = arrival + cap_s - reserve_s
-        self.disconnected = disconnected
+        self.gone = asyncio.Event()
+        self.poll: Callable[[], Awaitable[Any]] | None = None
 
     def deadline(self, timeout_s: float) -> float:
         """The monotonic deadline for one ASK."""
         return min(self.ends, time.monotonic() + float(timeout_s))
+
+    def watch(self, receive: Callable[[], Awaitable[dict[str, Any]]]) -> Callable[[], Awaitable[dict[str, Any]]]:
+        """receive, wrapped so a disconnect message sets gone before anyone else sees it."""
+        async def watched() -> dict[str, Any]:
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                self.gone.set()
+            return message
+
+        return watched
+
+    async def disconnected(self) -> bool:
+        if not self.gone.is_set() and self.poll is not None:
+            await self.poll()
+        return self.gone.is_set()
+
+    async def settle(self, seconds: float) -> bool:
+        """Wait up to seconds for a disconnect, polling when this path polls. True once the client is gone.
+
+        One yield to the loop isn't enough: a client that closed just before the approval reaches the loop as a
+        socket event, then a protocol callback, then the listener task, and each takes an iteration of its own.
+        """
+        end = time.monotonic() + seconds
+        while not await self.disconnected():
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return False
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.gone.wait(), min(remaining, 0.02))
+        return True
 
 
 @dataclass(frozen=True)

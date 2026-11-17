@@ -631,12 +631,16 @@ class GovernedStream(StreamingResponse):
     """A StreamingResponse whose cleanup always runs once the response is sent or abandoned, even if its body never
     starts, so a governed stream never keeps its session lock, its pins or its upstream connection."""
 
-    def __init__(self, content: AsyncIterator[bytes], cleanup: Callable[[], Awaitable[None]], **kwargs: Any) -> None:
+    def __init__(self, content: AsyncIterator[bytes], cleanup: Callable[[], Awaitable[None]],
+                 watch: Callable[[Any], Any] | None = None, **kwargs: Any) -> None:
         super().__init__(content, **kwargs)
         self._cleanup = cleanup
+        # Wraps the receive channel Starlette's disconnect listener reads, so a held ASK learns of a disconnect the
+        # moment the listener does (LAB-08 round 4).
+        self._watch = watch
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         try:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, self._watch(receive) if self._watch is not None else receive, send)
         finally:
             await self._cleanup()

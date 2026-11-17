@@ -475,3 +475,120 @@ def test_a_held_stream_sends_a_comment_line_to_keep_the_connection_open(gateway,
     from streams import decode
 
     assert _streamed_calls(decode(raw)) == ["call_1"]
+
+
+def _raw_request(port: int, body: dict[str, Any]) -> Any:
+    import json
+    import socket
+
+    raw = json.dumps(body).encode()
+    sock = socket.create_connection(("127.0.0.1", port))
+    sock.sendall(b"POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                 + f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw)
+    return sock
+
+
+def _hang_up(sock: Any) -> None:
+    import socket
+
+    sock.shutdown(socket.SHUT_RDWR)
+    sock.close()
+
+
+def _first_pending(approvals: Any) -> Any:
+    end = time.monotonic() + 10
+    while not approvals.pending() and time.monotonic() < end:
+        time.sleep(0.01)
+    return approvals.pending()[0]
+
+
+def _resolved_after(audit, seconds: float = 5.0) -> list[tuple[Any, Any, Any]]:
+    """The ask_resolved lines once one has landed, then a moment more, so a second line would be seen too."""
+    end = time.monotonic() + seconds
+    while not events(audit, "ask_resolved") and time.monotonic() < end:
+        time.sleep(0.02)
+    time.sleep(0.3)
+    return [(r["outcome"], r["cause"], r["decision"]) for r in events(audit, "ask_resolved")]
+
+
+@pytest.mark.parametrize("delay_s", [0.0, 0.05, 0.15, 0.4])
+def test_a_streamed_approval_just_after_a_disconnect_sends_no_resend(harness_guardian, upstream, audit, tmp_path,
+                                                                     delay_s):
+    """The streamed twin of R-I1 (round 4, I-1): one disconnect signal for both paths, and one outcome line."""
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {"v": 1}, "call_1")))))
+    app = _live_gateway(harness_guardian, upstream, tmp_path)
+    approvals = app.state.gateway.approvals
+    server, thread, port = _serve(app)
+    try:
+        sock = _raw_request(port, {**finbot_request(), "stream": True})
+        ask_id = _first_pending(approvals).ask_id
+        _hang_up(sock)
+        time.sleep(delay_s)
+        approvals.answer(ask_id, "approve")
+        resolved = _resolved_after(audit)
+    finally:
+        server.should_exit = True
+        thread.join(10)
+    assert len(tool_requests(tmp_path)) == 1, resolved
+    assert resolved == [("abandoned", "client_disconnected", "deny")]
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("run", range(20))
+def test_an_approval_racing_a_disconnect_never_resends(harness_guardian, upstream, audit, tmp_path, run, stream):
+    """The zero-delay race, repeated so a scheduling window can't hide it."""
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    call = call_item("ask_tool", {"v": 1}, "call_1")
+    upstream.reply(SSE(encode(stream_events(call))) if stream else response_body(call))
+    app = _live_gateway(harness_guardian, upstream, tmp_path)
+    approvals = app.state.gateway.approvals
+    server, thread, port = _serve(app)
+    try:
+        sock = _raw_request(port, {**finbot_request(), "stream": True} if stream else finbot_request())
+        ask_id = _first_pending(approvals).ask_id
+        _hang_up(sock)
+        approvals.answer(ask_id, "approve")
+        resolved = _resolved_after(audit)
+    finally:
+        server.should_exit = True
+        thread.join(10)
+    assert len(tool_requests(tmp_path)) == 1, resolved
+    assert resolved == [("abandoned", "client_disconnected", "deny")]
+
+
+def test_a_streamed_disconnect_during_the_approved_resend_writes_one_outcome(harness_guardian, upstream, audit,
+                                                                            tmp_path):
+    """Approve first, then the client leaves while the resend is still at the Guardian. The resend went out, and
+    exactly one ask_resolved line says the request ended."""
+    from conftest import SSE
+    from streams import encode, stream_events
+
+    upstream.reply(SSE(encode(stream_events(call_item("ask_tool", {"v": 1}, "call_1")))))
+    app = _live_gateway(harness_guardian, upstream, tmp_path)
+    gateway_ = app.state.gateway
+    real = gateway_.guardian.step
+
+    def slow_resend(session, method, payload, token):
+        if ANSWER_FIELD in payload:
+            time.sleep(1.0)
+        return real(session, method, payload, token)
+
+    gateway_.guardian.step = slow_resend
+    server, thread, port = _serve(app)
+    try:
+        sock = _raw_request(port, {**finbot_request(), "stream": True})
+        assert gateway_.approvals.answer(_first_pending(gateway_.approvals).ask_id, "approve")
+        time.sleep(0.3)
+        _hang_up(sock)
+        resolved = _resolved_after(audit, seconds=8)
+        time.sleep(1.5)
+        resolved = [(r["outcome"], r["cause"], r["decision"]) for r in events(audit, "ask_resolved")]
+    finally:
+        server.should_exit = True
+        thread.join(10)
+    assert resolved == [("abandoned", "client_disconnected", "deny")]
