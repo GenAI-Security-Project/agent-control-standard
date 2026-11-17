@@ -110,17 +110,16 @@ OPA_CONFIG: Any = None
 
 
 def policy_backend_requested(env: Mapping[str, str] = os.environ) -> bool:
-    """The one rule for whether a policy backend is on, used by main() and by every step.
+    """The one rule for whether a policy backend was asked for. main() reads it once, at startup.
 
-    Any non-empty name counts, an unknown one included, so a typo fails closed instead of falling back.
+    Any non-empty name counts, an unknown one included, so a typo stops startup instead of falling back.
+    Steps never read the environment: they follow OPA_CONFIG, which only main() sets.
     """
     return bool(env.get(POLICY_BACKEND_ENV, "").strip())
 
 
 def _policy_backend_decision(method: str, params: dict, base: dict) -> dict:
     from acs.guardian import opa_backend
-    if OPA_CONFIG is None:
-        return opa_backend.misconfigured(base)
     return opa_backend.evaluate(method, params, base, OPA_CONFIG)
 
 
@@ -537,7 +536,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
         # The hard denies hold under every backend. A policy backend decides only what they allow, and a modify
         # that rewrites the arguments is checked again, so a policy cannot turn ls into rm -rf /.
-        if policy_backend_requested():
+        if OPA_CONFIG is not None:
             result = _policy_backend_decision(method, params, base)
             if result.get("decision") == "modify":
                 return _recheck_rewritten_call(base, tool_name, payload, result)
@@ -560,7 +559,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
                     "reason_codes": [code]}
         return {**base, "decision": "allow"}
 
-    if method == "steps/toolCallResult" and policy_backend_requested():
+    if method == "steps/toolCallResult" and OPA_CONFIG is not None:
         # Under a policy backend a tool result is judged, so it can be denied or redacted.
         return _policy_backend_decision(method, params, base)
 

@@ -40,7 +40,6 @@ FAILURE_REASONING = {
     "opa_response_malformed": "The policy service returned an unreadable answer, so the step is denied.",
     "opa_result_missing": "The policy returned no decision for this step, so the step is denied.",
     "opa_verdict_invalid": "The policy returned a decision the Guardian cannot accept, so the step is denied.",
-    "policy_backend_misconfigured": "The Guardian's policy backend is misconfigured, so the step is denied.",
 }
 
 
@@ -504,12 +503,6 @@ def verdict_problem(verdict: Any, method: str, payload: Mapping[str, Any], base:
 def _deny(base: Mapping[str, Any], reason_code: str, detail: str) -> dict:
     _log(reason_code, detail)
     return {**base, "decision": "deny", "reasoning": FAILURE_REASONING[reason_code], "reason_codes": [reason_code]}
-
-
-def misconfigured(base: Mapping[str, Any]) -> dict:
-    """The deny for a backend that is named but was never loaded, which main() would have refused to start with."""
-    return _deny(base, "policy_backend_misconfigured",
-                 f"{BACKEND_ENV} is set but no OPA settings were loaded at startup")
 
 
 def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], config: OpaConfig) -> dict:

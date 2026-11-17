@@ -42,7 +42,6 @@ def no_backend(monkeypatch):
 def opa_on(no_backend):
     """Point the Guardian at a stub OPA, as main() does after loading the settings once."""
     def start(opa: StubOpa) -> None:
-        no_backend.setenv("ACS_POLICY_BACKEND", "opa")
         no_backend.setattr(example_guardian, "OPA_CONFIG", OpaConfig(url=opa.url, timeout_s=0.5))
     return start
 
@@ -108,13 +107,21 @@ def test_under_opa_other_methods_keep_todays_handling(opa_on, method):
     assert opa.inputs == []
 
 
-@pytest.mark.parametrize("name", ["opa", "rego"])
-def test_a_backend_named_but_never_loaded_denies_both_tool_methods(no_backend, name):
-    # main() refuses to start on a bad setting. This backstop covers a caller that skipped main().
-    no_backend.setenv("ACS_POLICY_BACKEND", name)
-    for method, payload in (("steps/toolCallRequest", LISTING), ("steps/toolCallResult", RESULT)):
-        result = _step(method, payload)
-        assert (result["decision"], result["reason_codes"]) == ("deny", ["policy_backend_misconfigured"])
+def test_clearing_the_variable_after_startup_changes_nothing(opa_on, no_backend):
+    # The loaded configuration decides. A later change to the environment must not switch OPA off.
+    with StubOpa(DENY) as opa:
+        opa_on(opa)
+        no_backend.delenv("ACS_POLICY_BACKEND", raising=False)
+        assert _step("steps/toolCallResult", RESULT)["decision"] == "deny"
+    assert len(opa.inputs) == 1
+
+
+def test_setting_the_variable_after_startup_changes_nothing(no_backend):
+    with StubOpa(DENY) as opa:
+        no_backend.setenv("ACS_POLICY_BACKEND", "opa")
+        no_backend.setenv("ACS_OPA_URL", opa.url)
+        assert _step("steps/toolCallResult", RESULT)["decision"] == "allow"
+    assert opa.inputs == []
 
 
 def _run_main(monkeypatch) -> list[int]:
