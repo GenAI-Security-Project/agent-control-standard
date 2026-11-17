@@ -13,11 +13,12 @@ import urllib.parse
 import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import GuardianHTTPError, claims_json_rpc_answer, key_id_rejected, post
+from acs.client._exchange import (GuardianHTTPError, OnWire, claims_json_rpc_answer, key_id_rejected, post,
+                                  report_on_wire)
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
@@ -42,6 +43,9 @@ from acs.core import (
     response_shape_problem,
     server_hello_problem,
 )
+
+if TYPE_CHECKING:
+    from acs.client._key_document import ResponseKeys
 
 
 _HANDSHAKE_CACHE_DIR = Path(
@@ -102,8 +106,15 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
                  timeout: float | None = None, profiles_supported: list[str] | None = None,
                  transports_supported: list[str] | None = None,
                  start: Callable[[Negotiated], Decided | Resolution | None] | None = None,
-                 count_start_failure: Callable[[str], None] | None = None) -> Handshake:
-    """The session's decision, stored once under an HMAC; with start, the opening process also sends sessionStart under the startup lock. Never raises."""
+                 count_start_failure: Callable[[str], None] | None = None,
+                 response_keys: ResponseKeys | None = None, on_wire: OnWire | None = None) -> Handshake:
+    """The session's decision, stored once under an HMAC; with start, the opening process also sends sessionStart under the startup lock. Never raises.
+
+    on_wire sees the ClientHello before it is sent and the Guardian's answer before it is
+    classified. A stored decision is reused with no on_wire call, since nothing crosses the wire.
+    response_keys turns on response verification by key document (issue #576). start sends its
+    own request, so the caller passes both to the round_trip inside it.
+    """
     if not session_id:
         return NoAnswer("missing_session_id")
     # §10: every request is signed, so a session with no usable secret and label is refused before any stored one is read.
@@ -116,7 +127,8 @@ def open_session(*, config: Config, session_id: str | None, agent_id: str, platf
     path = _handshake_cache_path(session_id, config.guardian_url)
     hello = dict(config=config, session_id=session_id, agent_id=agent_id, platform=platform,
                  methods_implemented=methods_implemented, wrapped_protocols=wrapped_protocols, timeout=timeout,
-                 profiles_supported=profiles_supported, transports_supported=transports_supported)
+                 profiles_supported=profiles_supported, transports_supported=transports_supported,
+                 response_keys=response_keys, on_wire=on_wire)
     if start is None:
         return _required_profiles(_decide(path, ikm, **hello), config)
     started = Path(f"{path}.started")
@@ -194,7 +206,8 @@ def session_start_outcome(decision: Negotiated, result: Decided | Resolution | N
 
 def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id: str, platform: str,
             methods_implemented: list[str], wrapped_protocols: list[str] | None, timeout: float | None,
-            profiles_supported: list[str] | None, transports_supported: list[str] | None) -> Handshake:
+            profiles_supported: list[str] | None, transports_supported: list[str] | None,
+            response_keys: ResponseKeys | None = None, on_wire: OnWire | None = None) -> Handshake:
     stored = _read_record(path, ikm, session_id, config.guardian_url)
     if stored is not None:
         return stored
@@ -208,6 +221,7 @@ def _decide(path: Path, ikm: bytes, *, config: Config, session_id: str, agent_id
             wrapped_protocols=wrapped_protocols, profiles_supported=claimed,
             transports_supported=transports_supported,
             timeout=_handshake_timeout_s() if timeout is None else timeout,
+            response_keys=response_keys, on_wire=on_wire,
         )
     decision, ours = _store_first(path, decision, ikm, session_id, config.guardian_url)
     if ours:
@@ -249,7 +263,7 @@ def store_session_decision(directory: Path, session_id: str, guardian_url: str,
 def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
            methods_implemented: list[str], wrapped_protocols: list[str] | None,
            profiles_supported: list[str], transports_supported: list[str] | None,
-           timeout: float) -> Handshake:
+           timeout: float, response_keys: ResponseKeys | None = None, on_wire: OnWire | None = None) -> Handshake:
     # The client POSTs to the Guardian URL, so that URL's scheme is the one transport it offers.
     scheme = urllib.parse.urlsplit(guardian_url).scheme
     client_hello = {
@@ -280,9 +294,19 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     except Exception as e:  # noqa: BLE001
         return NoAnswer("guardian_url_rejected" if isinstance(e, ValueError) else "adapter_exception",
                         {"error": str(e)})
+    failed = report_on_wire(on_wire, "req", client_hello, HANDSHAKE_METHOD)
+    if failed is not None:
+        return SessionRefused("on_wire_failed", {"dir": "req", "error": failed["error"]})
+    reported = False
     try:
         response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout)
     except GuardianHTTPError as e:
+        # Any decoded body is an answer that arrived, so on_wire sees it whatever its shape.
+        if e.body is not None:
+            reported = True
+            failed = report_on_wire(on_wire, "resp", e.body, HANDSHAKE_METHOD)
+            if failed is not None:
+                return SessionRefused("on_wire_failed", {"dir": "resp", "error": failed["error"]})
         if response_shape_problem(e.body) is not None:
             return NoAnswer(f"http_{e.status}_error", {"http_status": e.status})
         response = e.body
@@ -293,6 +317,10 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
         return NoAnswer("malformed_response", {"error": str(e)})
     except Exception as e:  # noqa: BLE001
         return NoAnswer("adapter_exception", {"error": str(e)})
+    if not reported:
+        failed = report_on_wire(on_wire, "resp", response, HANDSHAKE_METHOD)
+        if failed is not None:
+            return SessionRefused("on_wire_failed", {"dir": "resp", "error": failed["error"]})
     try:
         return _classify_hello(client_hello, response, session_id)
     except Exception as e:  # noqa: BLE001
