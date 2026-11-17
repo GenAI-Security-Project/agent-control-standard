@@ -1,12 +1,15 @@
 """Measure signature size, public key size, sign time and verify time (issue #583).
 
 Run from adapters/:  uv run --extra pqc python -m benchmarks.signatures
+Results go to a temporary directory. --update-reference rewrites the committed ones.
 
 Every timed call goes through the library an adapter runs. HMAC-SHA256 uses sign_with_key and
 verify_with_key. ML-DSA-65 uses sign_with_signing_key and verify_with_keyring. Both
-canonicalize the envelope with JCS inside the call. ECDSA-P256 is a benchmark primitive that no
-envelope function signs with (acs.core._ecdsa, lab convention, settled by PR #564 and issue #532),
-so its timed region adds signing_input() to match what the other two do internally.
+canonicalize the envelope with JCS, encode the signature in base64 and attach or decode it inside
+the call. ECDSA-P256 is a benchmark primitive that no envelope function signs with
+(acs.core._ecdsa, lab convention, settled by PR #564 and issue #532), so sign_ecdsa_envelope and
+verify_ecdsa_envelope do that same envelope-level work around the raw ECDSA call, and the three
+timed regions match.
 
 The signed message is the Guardian's decision response to a toolCallRequest step, since that is
 the message ML-DSA signs in the lab. Verification through the keyring also checks the response
@@ -22,12 +25,15 @@ import argparse
 import base64
 import copy
 import datetime
+import hashlib
+import importlib.metadata
 import json
 import math
 import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -37,6 +43,7 @@ from cryptography.hazmat.backends.openssl.backend import backend as _openssl_bac
 
 from acs.core import (
     Keyring,
+    container_key,
     MLDSA65SigningKey,
     request_envelope,
     sign_with_key,
@@ -45,6 +52,7 @@ from acs.core import (
     verify_with_key,
     verify_with_keyring,
 )
+from acs.core._signing import decode_signature_value
 from acs.core._ecdsa import (
     ecdsa_p256_generate,
     ecdsa_p256_public_bytes,
@@ -57,6 +65,8 @@ DEFAULT_WARMUP = 100
 NOT_MEASURED = {"hybrid": "acs.core has no hybrid signing on this branch (PR #564 would settle it)"}
 _KEY_ID = "bench-key-1"
 _HERE = Path(__file__).resolve().parent
+# The committed numbers the docs page quotes. Only --update-reference writes here.
+REFERENCE_DIR = _HERE / "results"
 
 
 def _workload() -> tuple[dict, dict]:
@@ -97,6 +107,44 @@ def _timed(call):
     return run
 
 
+def sign_ecdsa_envelope(envelope: dict, key, *, key_id: str) -> dict:
+    """Sign in place the way sign_with_key does: canonicalize, sign, base64 and attach.
+
+    The library has no ECDSA envelope function (lab convention, see the module docstring), so
+    this does the same envelope-level work the HMAC and ML-DSA calls do, and the three timed
+    regions match.
+    """
+    signature = ecdsa_p256_sign(key, signing_input(envelope))
+    container_name = container_key(envelope)
+    container = envelope.setdefault(container_name, {})
+    container["signature"] = {"algorithm": "ECDSA-P256",
+                              "value": base64.b64encode(signature).decode("ascii"),
+                              "key_id": key_id}
+    return envelope
+
+
+def verify_ecdsa_envelope(envelope: dict, public_key: bytes) -> bool:
+    """Verify the way verify_with_key does: read the signature object, decode it, check it."""
+    container = envelope.get(container_key(envelope))
+    if not isinstance(container, dict):
+        return False
+    sig = container.get("signature")
+    if not isinstance(sig, dict) or sig.get("algorithm") != "ECDSA-P256":
+        return False
+    signature = decode_signature_value(sig.get("value"))
+    if signature is None:
+        return False
+    return ecdsa_p256_verify(public_key, signing_input(envelope), signature)
+
+
+def _signature_bytes(envelope: dict) -> int:
+    return len(base64.b64decode(envelope[container_key(envelope)]["signature"]["value"]))
+
+
+def _signed_size(envelope: dict) -> int:
+    return len(json.dumps(envelope, separators=(",", ":")).encode())
+
+
 def _signatures(iterations: int, warmup: int):
     request, response = _workload()
     hmac_key = os.urandom(32)
@@ -107,20 +155,13 @@ def _signatures(iterations: int, warmup: int):
 
     signed_hmac = sign_with_key(copy.deepcopy(response), hmac_key, key_id=_KEY_ID)
     signed_mldsa = sign_with_signing_key(copy.deepcopy(response), mldsa_key)
-    ec_message = signing_input(response)
-    ec_signature = ecdsa_p256_sign(ec_key, ec_message)
+    signed_ec = sign_ecdsa_envelope(copy.deepcopy(response), ec_key, key_id=_KEY_ID)
 
     # A benchmark of a broken verify would still print numbers, so check each path first.
     assert verify_with_key(signed_hmac, hmac_key)
     assert verify_with_keyring(signed_mldsa, keyring, expected_key_id=_KEY_ID, request=request)
-    assert ecdsa_p256_verify(ec_public, ec_message, ec_signature)
+    assert verify_ecdsa_envelope(signed_ec, ec_public)
 
-    def size(envelope: dict) -> int:
-        return len(json.dumps(envelope, separators=(",", ":")).encode())
-
-    ec_envelope = copy.deepcopy(response)
-    ec_envelope["result"]["signature"] = {"algorithm": "ECDSA-P256", "key_id": _KEY_ID,
-                                          "value": base64.b64encode(ec_signature).decode()}
     # Each sign call gets a fresh copy made outside the timed region, since signing mutates it.
     def sign_timed(sign):
         def run():
@@ -131,22 +172,22 @@ def _signatures(iterations: int, warmup: int):
         return run
 
     cases = [
-        ("HMAC-SHA256", 32, len(hmac_key), size(signed_hmac),
+        ("HMAC-SHA256", signed_hmac, len(hmac_key),
          lambda e: sign_with_key(e, hmac_key, key_id=_KEY_ID),
          lambda: verify_with_key(signed_hmac, hmac_key)),
-        ("ML-DSA-65", len(base64.b64decode(signed_mldsa['result']['signature']['value'])), len(mldsa_key.verification_key().public_key),
-         size(signed_mldsa),
+        ("ML-DSA-65", signed_mldsa, len(mldsa_key.verification_key().public_key),
          lambda e: sign_with_signing_key(e, mldsa_key),
          lambda: verify_with_keyring(signed_mldsa, keyring, expected_key_id=_KEY_ID, request=request)),
-        ("ECDSA-P256", len(ec_signature), len(ec_public), size(ec_envelope),
-         lambda e: ecdsa_p256_sign(ec_key, signing_input(e)),
-         lambda: ecdsa_p256_verify(ec_public, signing_input(ec_envelope), ec_signature)),
+        ("ECDSA-P256", signed_ec, len(ec_public),
+         lambda e: sign_ecdsa_envelope(e, ec_key, key_id=_KEY_ID),
+         lambda: verify_ecdsa_envelope(signed_ec, ec_public)),
     ]
-    for name, sig_bytes, pub_bytes, env_bytes, sign, verify in cases:
+    for name, signed, pub_bytes, sign, verify in cases:
         sign_median, sign_p95 = _time(sign_timed(sign), iterations, warmup)
         verify_median, verify_p95 = _time(_timed(verify), iterations, warmup)
-        yield {"algorithm": name, "signature_bytes": sig_bytes, "public_key_bytes": pub_bytes,
-               "envelope_bytes": env_bytes, "sign_median_us": sign_median, "sign_p95_us": sign_p95,
+        yield {"algorithm": name, "signature_bytes": _signature_bytes(signed),
+               "public_key_bytes": pub_bytes, "envelope_bytes": _signed_size(signed),
+               "sign_median_us": sign_median, "sign_p95_us": sign_p95,
                "verify_median_us": verify_median, "verify_p95_us": verify_p95}
 
 
@@ -163,12 +204,24 @@ def _cpu_model() -> str:
     return platform.processor() or "unknown"
 
 
-def _commit() -> str:
+def _describe() -> str:
+    # A branch SHA does not survive a squash merge, and a dirty tree has no SHA at all, so the
+    # source hash below is the identity that lasts. This is context for a reader.
     try:
-        return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                              check=True, cwd=_HERE).stdout.strip()
+        return subprocess.run(["git", "describe", "--always", "--dirty"], capture_output=True,
+                              text=True, check=True, cwd=_HERE).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+def core_source_sha256() -> str:
+    """SHA-256 over the acs.core source files, by relative path and bytes, in sorted order."""
+    import acs.core
+    root = Path(acs.core.__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(root.glob("*.py")):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
 
 
 def environment(iterations: int, warmup: int) -> dict:
@@ -178,7 +231,9 @@ def environment(iterations: int, warmup: int) -> dict:
         "python": platform.python_version(),
         "cryptography": cryptography.__version__,
         "openssl": _openssl_backend.openssl_version_text(),
-        "commit": _commit(),
+        "describe": _describe(),
+        "source_sha256": core_source_sha256(),
+        "acs_adapters": importlib.metadata.version("acs-adapters"),
         "date": datetime.date.today().isoformat(),
         "iterations": iterations,
         "warmup": warmup,
@@ -208,12 +263,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="benchmarks.signatures", description=__doc__.split("\n")[0])
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
-    parser.add_argument("--out-dir", type=Path, default=_HERE / "results")
+    parser.add_argument("--out-dir", type=Path, default=None,
+                        help="where to write results (default: a new temporary directory)")
+    parser.add_argument("--update-reference", action="store_true",
+                        help="write the committed reference results the docs page quotes")
     args = parser.parse_args(argv)
     result = run(args.iterations, args.warmup)
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    (args.out_dir / "results.json").write_text(json.dumps(result, indent=2) + "\n")
+    if args.update_reference:
+        out_dir = REFERENCE_DIR
+    else:
+        out_dir = args.out_dir or Path(tempfile.mkdtemp(prefix="acs-signature-benchmark-"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "results.json").write_text(json.dumps(result, indent=2) + "\n")
     table = to_markdown(result)
-    (args.out_dir / "results.md").write_text(table)
+    (out_dir / "results.md").write_text(table)
     print(table)
+    print(f"Wrote results.json and results.md to {out_dir}")
     return 0

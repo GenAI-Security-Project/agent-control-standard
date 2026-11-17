@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from tests.pqc_extra import require_pqc
 
@@ -26,8 +29,8 @@ class SignatureBenchmarkTest(unittest.TestCase):
                 self.assertIn(field, row)
         sizes = {r["algorithm"]: r["signature_bytes"] for r in result["rows"]}
         self.assertEqual(sizes, {"HMAC-SHA256": 32, "ML-DSA-65": 3309, "ECDSA-P256": 64})
-        for key in ("machine", "os", "python", "cryptography", "openssl", "commit", "date",
-                    "iterations", "warmup"):
+        for key in ("machine", "os", "python", "cryptography", "openssl", "date",
+                    "iterations", "warmup", "describe", "source_sha256", "acs_adapters"):
             self.assertIn(key, result["environment"])
         self.assertEqual(result["environment"]["iterations"], 3)
         self.assertIn("hybrid", result["not_measured"])
@@ -41,6 +44,37 @@ class SignatureBenchmarkTest(unittest.TestCase):
         self.assertEqual(len(data["rows"]), 3)
         for name in ALGORITHMS:
             self.assertIn(name, table)
+
+    def test_ecdsa_envelope_helpers_round_trip_and_reject_tampering(self) -> None:
+        from acs.core._ecdsa import ecdsa_p256_generate, ecdsa_p256_public_bytes
+        _, response = bench._workload()
+        key = ecdsa_p256_generate()
+        public = ecdsa_p256_public_bytes(key)
+        signed = bench.sign_ecdsa_envelope(response, key, key_id="k")
+        self.assertEqual(signed["result"]["signature"]["algorithm"], "ECDSA-P256")
+        self.assertTrue(bench.verify_ecdsa_envelope(signed, public))
+        signed["result"]["decision"] = "deny"
+        self.assertFalse(bench.verify_ecdsa_envelope(signed, public))
+
+    def test_source_hash_is_a_sha256_of_the_core_files(self) -> None:
+        digest = bench.core_source_sha256()
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(digest, bench.core_source_sha256())
+
+    def test_default_output_is_not_the_committed_reference(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out), tempfile.TemporaryDirectory() as ref:
+            with mock.patch.object(bench, "REFERENCE_DIR", Path(ref)):
+                bench.main(["--iterations", "2", "--warmup", "1"])
+                self.assertEqual(list(Path(ref).iterdir()), [])
+        self.assertIn("Wrote", out.getvalue())
+
+    def test_update_reference_writes_the_committed_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as ref, redirect_stdout(io.StringIO()):
+            with mock.patch.object(bench, "REFERENCE_DIR", Path(ref)):
+                bench.main(["--iterations", "2", "--warmup", "1", "--update-reference"])
+            self.assertTrue((Path(ref) / "results.json").exists())
+            self.assertTrue((Path(ref) / "results.md").exists())
 
 
 if __name__ == "__main__":
