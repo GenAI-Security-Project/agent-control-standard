@@ -287,6 +287,41 @@ def test_a_redaction_that_covers_every_index_passes(payload, verdict):
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) is None
 
 
+
+def _outputs(*values) -> dict:
+    return {**RESULT, "outputs": [{"value": value} for value in values]}
+
+
+# Coverage compares field paths with every array index removed, so one field covers every occurrence at any list
+# depth. Bar's case: /outputs/0/value/ssn must also reach /outputs/1/value/0/ssn.
+BAR = _outputs({"ssn": "1"}, [{"ssn": "2"}])
+NESTED = _outputs({"ssn": "1"}, [[{"ssn": "2"}, {"ssn": "3"}]])
+RECORDS = _outputs([{"ssn": "1", "name": "a"}, {"name": "b"}], {"name": "c"}, [[{"ssn": "2"}]])
+ELSEWHERE = _outputs({"ssn": "1"}, {"contact": {"ssn": "2"}}, {"ssn": "3"})
+
+
+@pytest.mark.parametrize("payload,verdict", [
+    (BAR, _redact("/outputs/0/value/ssn")),
+    (NESTED, _redact("/outputs/0/value/ssn")),
+    (NESTED, _redact("/outputs/0/value/ssn", "/outputs/1/value/0/0/ssn")),
+    (RECORDS, _redact("/outputs/0/value/0/ssn")),
+    (ELSEWHERE, _redact("/outputs/0/value/ssn", "/outputs/1/value/contact/ssn")),
+])
+def test_a_redaction_must_cover_the_same_field_at_any_list_depth(payload, verdict):
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE)
+
+
+@pytest.mark.parametrize("payload,verdict", [
+    (BAR, _redact("/outputs/0/value/ssn", "/outputs/1/value/0/ssn")),
+    (NESTED, _redact("/outputs/0/value/ssn", "/outputs/1/value/0/0/ssn", "/outputs/1/value/0/1/ssn")),
+    (RECORDS, _redact("/outputs/0/value/0/ssn", "/outputs/2/value/0/0/ssn")),
+    # /outputs/1/value/contact/ssn is a different field path, so redacting /value/ssn does not demand it.
+    (ELSEWHERE, _redact("/outputs/0/value/ssn", "/outputs/2/value/ssn")),
+])
+def test_a_redaction_that_covers_the_field_at_every_list_depth_passes(payload, verdict):
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) is None
+
+
 def _many(outputs: int, fields: int = 1) -> tuple[dict, dict]:
     payload = {**RESULT, "outputs": [{"value": {f"f{k}": "x" for k in range(fields)}} for _ in range(outputs)]}
     paths = [f"/outputs/{i}/value/f{k}" for i in range(outputs) for k in range(fields)]

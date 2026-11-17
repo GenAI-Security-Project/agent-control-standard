@@ -450,14 +450,13 @@ def _overlap_problem(paths: list[str]) -> str | None:
 
 
 class _Shape:
-    """One node of the redaction shapes: array positions are wildcards, object keys are literal."""
+    """One node of the redaction shapes, keyed by object keys only. Array indexes never appear in a shape."""
 
-    __slots__ = ("keys", "items", "path")
+    __slots__ = ("keys", "path")
 
     def __init__(self) -> None:
         self.keys: dict[str, _Shape] = {}
-        self.items: _Shape | None = None
-        self.path: str | None = None  # set where a redaction path ends
+        self.path: str | None = None  # set where a redaction's field path ends
 
 
 def _encode(token: str) -> str:
@@ -465,12 +464,13 @@ def _encode(token: str) -> str:
 
 
 def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | None:
-    """A redaction must also cover every other array index that holds the same field.
+    """A redaction of a field must cover that field everywhere it occurs, at any list depth and any index.
 
-    Redacting /outputs/0/value/ssn but not /outputs/1/value/ssn, or rows/0/ssn but not rows/1/ssn, let the rest
-    through (issue #469). Each path becomes a shape with its array indexes wildcarded. One walk of the payload
-    along the merged shapes then finds every value a shape names, and each one must be redacted. Arrays hold
-    only wildcards and objects only keys, so the walk visits each payload node at most once.
+    Redacting /outputs/0/value/ssn but not /outputs/1/value/ssn or /outputs/1/value/0/ssn let the rest through
+    (issue #469). Each path becomes its field path, the object keys with every array index removed. One walk of
+    the payload along the merged field paths finds every occurrence, and each must sit at a redacted pointer.
+    A list is transparent to the walk, so it keeps its parent's shape whatever depth the lists nest to. Each
+    payload node has one field path, so the walk visits it at most once.
     """
     root = _Shape()
     redacted: set[str] = set()
@@ -483,21 +483,23 @@ def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | Non
             if not found:
                 # Never counted as covered: a path that names nothing redacts nothing.
                 return f"redaction path {path!r} does not name a value in the payload"
-            if is_array:
-                shape.items = shape.items or _Shape()
-                shape = shape.items
-            else:
+            if not is_array:
                 shape = shape.keys.setdefault(token, _Shape())
-        shape.path = path
+        shape.path = shape.path or path
         redacted.add("/" + "/".join(_encode(token) for token in tokens))
     stack: list[tuple[Any, _Shape, str]] = [(payload, root, "")]
     while stack:
         node, shape, pointer = stack.pop()
-        if shape.path is not None and pointer not in redacted:
+        if pointer in redacted:
+            # The redaction replaces this value whole, so nothing inside it can leak.
+            continue
+        if isinstance(node, list):
+            # An array index is not part of a field path, so every item keeps this shape.
+            stack.extend((item, shape, f"{pointer}/{index}") for index, item in enumerate(node))
+            continue
+        if shape.path is not None:
             return f"redaction {shape.path!r} leaves the same field at {pointer!r} unredacted"
-        if isinstance(node, list) and shape.items is not None:
-            stack.extend((item, shape.items, f"{pointer}/{index}") for index, item in enumerate(node))
-        elif isinstance(node, dict) and shape.keys:
+        if isinstance(node, dict) and shape.keys:
             # Walk the smaller side, so a wide object or a wide set of shapes costs no more than the other.
             if len(node) <= len(shape.keys):
                 keys = [key for key in node if key in shape.keys]
