@@ -178,3 +178,33 @@ def test_a_non_string_argument_a_hard_deny_reads_denies_without_a_backend(no_bac
     result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
 
+
+WRITE_TMP = {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": "/tmp/notes.txt"},
+                                                      "content": {"value": "x"}}}
+
+
+def _modify(**modifications) -> dict:
+    return {"decision": "modify", "reasoning": "rewritten by policy", "modifications": modifications}
+
+
+@pytest.mark.parametrize("payload,verdict,code", [
+    (LISTING, _modify(parameter_overrides={"command": "rm -rf /"}), "destructive_command"),
+    (LISTING, _modify(parameter_overrides={"command": {"value": "rm -rf /"}}), "destructive_command"),
+    (LISTING, _modify(parameter_overrides={"command": ["rm", "-rf", "/"]}), "argument_type_invalid"),
+    (WRITE_TMP, _modify(parameter_overrides={"file_path": "/etc/passwd"}), "protected_path"),
+    (LISTING, _modify(redactions=[{"path": "/arguments/command/value", "replacement": "rm -rf /"}]),
+     "destructive_command"),
+])
+def test_a_modify_that_rewrites_arguments_is_checked_against_the_hard_denies(opa_on, payload, verdict, code):
+    with StubOpa(verdict) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", payload)
+    assert (result["decision"], result["reason_codes"]) == ("deny", [code])
+
+
+def test_a_harmless_rewrite_stays_a_modify(opa_on):
+    verdict = _modify(parameter_overrides={"command": "ls -l"})
+    with StubOpa(verdict) as opa:
+        opa_on(opa)
+        result = _step("steps/toolCallRequest", LISTING)
+    assert (result["decision"], result["modifications"]) == ("modify", verdict["modifications"])

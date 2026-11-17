@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import errno
 try:
     import fcntl
@@ -489,6 +490,30 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
     return None
 
 
+def _recheck_rewritten_call(base: dict, tool_name: str, payload: dict, result: dict) -> dict:
+    """The hard denies run on the arguments as a modify would leave them. A deny there replaces the modify."""
+    modifications = result.get("modifications") or {}
+    try:
+        rewritten = copy.deepcopy(payload)
+        for redaction in modifications.get("redactions") or []:
+            *parents, leaf = [t.replace("~1", "/").replace("~0", "~") for t in redaction["path"][1:].split("/")]
+            node = rewritten
+            for token in parents:
+                node = node[int(token)] if isinstance(node, list) else node[token]
+            if isinstance(node, list):
+                node[int(leaf)] = redaction.get("replacement", "[REDACTED]")
+            else:
+                node[leaf] = redaction.get("replacement", "[REDACTED]")
+        arguments = rewritten.setdefault("arguments", {})
+        arguments.update(modifications.get("parameter_overrides") or {})
+        return _hard_deny(base, tool_name, _unwrap_arguments(arguments)) or result
+    except Exception:  # noqa: BLE001
+        # The verdict already validated, so this is unexpected. It still ends in a deny, never an unchecked modify.
+        return {**base, "decision": "deny",
+                "reasoning": "The rewritten tool call could not be checked, so the step is denied.",
+                "reason_codes": ["opa_verdict_invalid"]}
+
+
 def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -> dict:
     payload = params.get("payload") or {}
 
@@ -510,9 +535,13 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         if hard_deny is not None:
             return hard_deny
 
-        # The hard denies hold under every backend. A policy backend decides only what they allow.
+        # The hard denies hold under every backend. A policy backend decides only what they allow, and a modify
+        # that rewrites the arguments is checked again, so a policy cannot turn ls into rm -rf /.
         if policy_backend_requested():
-            return _policy_backend_decision(method, params, base)
+            result = _policy_backend_decision(method, params, base)
+            if result.get("decision") == "modify":
+                return _recheck_rewritten_call(base, tool_name, payload, result)
+            return result
         return {**base, "decision": "allow"}
 
     if method == "steps/subagentStart":
