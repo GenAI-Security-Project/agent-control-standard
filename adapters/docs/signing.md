@@ -54,10 +54,14 @@ signer = MLDSA65SigningKey.from_seed(seed, "lab-guardian-1")   # seed: the 32 by
 keyring = Keyring([signer.verification_key()])
 
 sign_with_signing_key(envelope, signer)
-assert verify_with_keyring(envelope, keyring, expected_key_id="lab-guardian-1")
+assert verify_with_keyring(envelope, keyring, expected_key_id="lab-guardian-1", expected_session_id=session_id)
 ```
 
-On the adapter side, `acs.client.verify_signature(envelope, keyring=keyring, expected_key_id="lab-guardian-1")` verifies a response by keyring. `expected_key_id` is required there. A keyring can hold several keys, and the caller names the one that must answer, so a response signed by any other key fails before any crypto runs. Without `keyring`, `verify_signature` applies the HMAC rules exactly as before.
+Verification takes two required pins. `expected_key_id` names the key that must answer. A keyring can hold several keys, so a response signed by any other key fails before any crypto runs. `expected_session_id` names the session the response must belong to. HMAC binds a response to its session through the per-session key, but one ML-DSA key signs every session, so the signed envelope has to name its session. A response that names another session, or none, fails before any crypto runs. A session rewritten after signing fails the signature.
+
+The envelope names its session in `params.metadata.session_id` for a request, `result.metadata.session_id` for a response, and `error.data.session_id` for an error. A signer puts it there before signing.
+
+On the adapter side, `acs.client.verify_signature(envelope, keyring=keyring, expected_key_id="lab-guardian-1", expected_session_id=session_id)` verifies a response by keyring, and core enforces both pins. Without `keyring`, `verify_signature` applies the HMAC rules exactly as before.
 
 The ML-DSA names stay out of `acs.core.__all__`, so `from acs.core import *` never loads `cryptography`. Without the extra, `hasattr(acs.core, "ML_DSA_MODE")` is False.
 
@@ -68,6 +72,8 @@ Each item below is a lab convention. Each stays off by default and changes nothi
 The library puts no hybrid on the wire. Pull request #564 (spec(crypto): call HMAC a MAC, take the algorithm from the key, and adopt composite ML-DSA) proposes a composite construction that differs from the length-prefixed one the lab plan first used. No hybrid ships until #564 merges and issue #532 closes.
 
 ECDSA-P256 is a benchmark primitive only. `acs.core._ecdsa` signs and verifies it with SHA-256, low-s only, so the signature benchmark can measure it. No keyring accepts an ECDSA-P256 key, and `acs.core` doesn't export it. #564 and #532 would settle whether it goes on the wire.
+
+A signed response names its session in `result.metadata.session_id`, or in `error.data.session_id` for an error. The specification gives a response no `session_id` (§10), since the per-session HMAC key already binds it. Issue #532 (Signatures) would settle where an asymmetrically signed response names its session.
 
 The `pqc` and `nat` extras can't be installed together. `nvidia-nat-core` pins `cryptography` below 47, and ML-DSA-65 needs a newer release. Issue #543 (NeMo Relay migration) would remove the conflict.
 

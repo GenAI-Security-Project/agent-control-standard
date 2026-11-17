@@ -27,23 +27,25 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 
 def verify_signature(envelope: dict, *, key: bytes | None = None,
                      session_id: str | None = None, key_id: str | None = None,
-                     keyring: Keyring | None = None, expected_key_id: str | None = None) -> bool:
+                     keyring: Keyring | None = None, expected_key_id: str | None = None,
+                     expected_session_id: str | None = None) -> bool:
     """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid.
 
     With a keyring, the signature must name expected_key_id, the key this caller trusts to
-    answer, and that key's algorithm decides (RFC 8725 section 3.1). A keyring can hold
-    several keys, so without the pin a response signed by any of them would pass. The
+    answer, and the signed envelope must name expected_session_id. That key's algorithm
+    decides (RFC 8725 section 3.1). Core verify_with_keyring enforces both pins. The
     ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra (issue #574).
     """
     if keyring is None:
-        if expected_key_id is not None:
-            raise ValueError("expected_key_id applies only to keyring verification")
+        if expected_key_id is not None or expected_session_id is not None:
+            raise ValueError("expected_key_id and expected_session_id apply only to keyring verification")
     else:
         if key is not None or session_id is not None or key_id is not None:
             raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
-        # Imported here so the HMAC path never loads cryptography. Core checks expected_key_id.
+        # Imported here so the HMAC path never loads cryptography. Core checks both pins.
         from acs.core._mldsa import verify_with_keyring
-        return verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id)
+        return verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id,
+                                   expected_session_id=expected_session_id)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False
