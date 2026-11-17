@@ -561,3 +561,11 @@ def test_the_backend_variable_name_is_defined_once():
     found = [path.name for path in sorted(Path(example_guardian.__file__).parent.glob("*.py"))
              for value, _ in _string_literals(path.read_text(encoding="utf-8")) if "ACS_POLICY_BACKEND" in value]
     assert found == ["_policy_backend.py"]
+
+
+
+@pytest.mark.parametrize("path", ["/Volumes/Macintosh HD/etc/passwd", "/tmp/link-to-etc/passwd"])
+def test_known_limit_a_symlink_or_firmlink_spelling_passes_the_lexical_check(no_backend, path):
+    # Known limit, documented in docs/guardian/README.md: the built-in path denies compare spellings, not files.
+    # The Guardian may not share the agent's filesystem, so it can't resolve links, and a policy is the control.
+    assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
