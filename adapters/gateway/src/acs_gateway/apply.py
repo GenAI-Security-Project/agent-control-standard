@@ -11,7 +11,6 @@ from acs.core import modify_composition_violation
 
 from acs_gateway.guardian import StepResult
 from acs_gateway.strict import loads_recording
-from acs_gateway.tool_digest import declared_functions
 
 # The one artifact of governance the client and the model may see.
 NEUTRAL_LINE = "I couldn't complete that action."
@@ -77,17 +76,6 @@ def unsupported_tool(body: dict[str, Any]) -> str | None:
         kind = tool.get("type") if isinstance(tool, dict) else None
         if kind != "function":
             return kind if isinstance(kind, str) else type(tool).__name__
-    return None
-
-
-def repeated_function_name(body: dict[str, Any]) -> str | None:
-    """The first function name the request declares twice, or None. The policy can't know which declaration the model
-    read, so such a name has no digest to pin (A.10)."""
-    seen: set[str] = set()
-    for tool in declared_functions(body):
-        if tool["name"] in seen:
-            return tool["name"]
-        seen.add(tool["name"])
     return None
 
 
@@ -200,7 +188,7 @@ def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def call_payload(name: str, arguments: dict[str, Any], version: str | None = None) -> dict[str, Any]:
-    """The toolCallRequest payload. version is the declaration digest from tool_digests (A.10, a lab convention
+    """The toolCallRequest payload. version is the declaration digest from ToolDigests (A.10, a lab convention
     until issue #38), or None for a function the request never declared, which leaves tool.version out."""
     tool = {"name": name} if version is None else {"name": name, "version": version}
     return {"tool": tool, "arguments": {k: {"value": v} for k, v in arguments.items()}}

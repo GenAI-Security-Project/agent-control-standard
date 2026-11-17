@@ -18,11 +18,22 @@ from rfc8785 import CanonicalizationError
 DIGEST_FIELDS = ("name", "description", "parameters", "strict")
 
 
-def declared_functions(body: dict[str, Any]) -> list[dict[str, Any]]:
-    """The request's function tool declarations that carry a non-empty string name, in request order."""
+def declarations_by_name(body: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """The request's function tool declarations that carry a non-empty string name, grouped by name in request
+    order."""
     tools = body.get("tools")
-    return [t for t in (tools if isinstance(tools, list) else [])
-            if isinstance(t, dict) and t.get("type") == "function" and isinstance(t.get("name"), str) and t["name"]]
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for tool in tools if isinstance(tools, list) else []:
+        name = tool.get("name") if isinstance(tool, dict) and tool.get("type") == "function" else None
+        if isinstance(name, str) and name:
+            grouped.setdefault(name, []).append(tool)
+    return grouped
+
+
+def repeated_function_name(body: dict[str, Any]) -> str | None:
+    """The first function name the request declares more than once, or None. The policy can't know which declaration
+    the model read, so such a name has no digest to pin, and enforce refuses the request."""
+    return next((name for name, tools in declarations_by_name(body).items() if len(tools) > 1), None)
 
 
 class ToolDigests:
@@ -35,10 +46,9 @@ class ToolDigests:
     """
 
     def __init__(self, body: dict[str, Any], on_skip: Callable[[str, str], None] | None = None) -> None:
-        self._declared: dict[str, dict[str, Any] | None] = {}
-        for tool in declared_functions(body):
-            # A second declaration of a name leaves None, so the name gets no digest.
-            self._declared[tool["name"]] = None if tool["name"] in self._declared else tool
+        # A name declared more than once maps to None, so it gets no digest.
+        self._declared = {name: tools[0] if len(tools) == 1 else None
+                          for name, tools in declarations_by_name(body).items()}
         self._digests: dict[str, str | None] = {}
         self._on_skip = on_skip
 

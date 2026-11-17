@@ -185,3 +185,58 @@ def test_a_lone_surrogate_key_in_shadow_is_audited_and_gating_goes_on(gateway, g
     assert response.json() == CALL
     assert [e["tool"] for e in events(audit, "tool_digest_skipped")] == ["pinned_tool"]
     assert sent_versions(tmp_path) == [None]
+
+
+OUTPUT = {"type": "function_call_output", "call_id": "call_1", "output": "sent"}
+HISTORY = (CALL["output"][0], OUTPUT)
+
+
+def test_a_denied_regate_never_drops_the_delivered_call_from_history(gateway, harness_guardian, upstream):
+    # Turn 1 delivers call_1. Turn 2 changes the declaration and the model repeats call_1, which is denied. Turn 3
+    # resends the history, which still holds the call_1 the client ran, and its output.
+    client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
+    upstream.reply(CALL)
+    assert client.post("/v1/responses", json=declaring(PINNED)).json() == CALL
+    upstream.reply(CALL)
+    second = client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY)).json()
+    assert second["output"][0]["content"][0]["text"] == NEUTRAL
+    third = client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY))
+    assert third.status_code == 200
+    forwarded = [(i.get("type"), i.get("call_id")) for i in upstream.received[-1].json()["input"]]
+    assert ("function_call", "call_1") in forwarded and ("function_call_output", "call_1") in forwarded
+
+
+def test_a_result_carries_the_digest_its_call_was_gated_under(gateway, guardian, upstream, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    upstream.reply(CALL)
+    assert client.post("/v1/responses", json=declaring(PINNED)).json() == CALL
+    client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
+
+
+def test_a_result_keeps_its_calls_digest_when_the_declaration_vanishes(gateway, guardian, upstream, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    upstream.reply(CALL)
+    client.post("/v1/responses", json=declaring(PINNED))
+    client.post("/v1/responses", json=declaring(extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
+
+
+def test_a_result_for_a_call_never_gated_carries_no_version(gateway, guardian, upstream, tmp_path):
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=declaring(PINNED, extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [None]
+
+
+def test_a_resent_result_is_gated_again_once_its_call_is_delivered_under_another_digest(
+        gateway, guardian, upstream, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    upstream.reply(CALL)
+    client.post("/v1/responses", json=declaring(PINNED))
+    # The result is gated under the call's digest, and the model then repeats call_1 under the changed declaration,
+    # which the Guardian allows, so the client now holds call_1 under the new digest.
+    upstream.reply(CALL)
+    assert client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY)).json() == CALL
+    client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST, POISONED_DIGEST]
+    assert sent_versions(tmp_path) == [PINNED_DIGEST, POISONED_DIGEST]

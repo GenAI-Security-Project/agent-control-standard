@@ -1,7 +1,6 @@
 import pytest
 
-from acs_gateway.apply import repeated_function_name
-from acs_gateway.tool_digest import ToolDigests
+from acs_gateway.tool_digest import ToolDigests, repeated_function_name
 
 SEND = {"type": "function", "name": "send_email", "description": "Send an email to a recipient",
         "parameters": {"type": "object", "properties": {"to": {"type": "string"}, "body": {"type": "string"}},

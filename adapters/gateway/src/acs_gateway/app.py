@@ -44,7 +44,6 @@ from acs_gateway.apply import (
     unsupported_message_part,
     unsupported_tool,
     unsupported_tool_choice,
-    repeated_function_name,
 )
 from acs_gateway.approver import CHOICES, TIMEOUT, Approvals
 from acs_gateway.config import STEP_GRACE_S, GatewayConfig, check_client_state_dirs
@@ -64,7 +63,7 @@ from acs_gateway.sessions import (
 )
 from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
-from acs_gateway.tool_digest import ToolDigests
+from acs_gateway.tool_digest import ToolDigests, repeated_function_name
 from acs_gateway.transcript import ModelInputLog, Transcript
 from acs_gateway.upstream import (
     ARRIVAL_EXTENSION,
@@ -269,11 +268,11 @@ class Gateway:
             if self.enforce:
                 return openai_error(501, "Only function tools are supported by this endpoint.",
                                     "invalid_request_error", "unsupported_tool_type")
-        repeated = repeated_function_name(body)
-        if repeated is not None:
+        repeated_name = repeated_function_name(body)
+        if repeated_name is not None:
             # A name declared twice has no one declaration to digest, so no pin could hold it (A.10). Shadow sends
             # its calls with no tool.version.
-            _audit("unsupported_tool_type", item_type="repeated_function", tool=repeated, direction="request_tools",
+            _audit("unsupported_tool_type", item_type="repeated_function", tool=repeated_name, direction="request_tools",
                    mode=self.config.mode)
             if self.enforce:
                 return openai_error(501, "Each function tool name may be declared only once.",
@@ -357,7 +356,7 @@ class Gateway:
         try:
             async with self._current(key, pins, recheck) as session:
                 await self._ensure_open(session)
-                if await self._gate_input(session, body, digests):
+                if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
                 arrival = note_arrival(session, body)
         except RequestRefused as e:
@@ -655,7 +654,7 @@ class Gateway:
                                  headers=_client_headers(upstream.headers, decoded=False),
                                  background=BackgroundTask(upstream.aclose))
 
-    async def _gate_input(self, session: Session, body: dict[str, Any], digests: ToolDigests) -> bool:
+    async def _gate_input(self, session: Session, body: dict[str, Any]) -> bool:
         """Gate each new function_call_output before it reaches the model, and reapply cached outcomes on resends."""
         items = body.get("input")
         if not isinstance(items, list):
@@ -692,6 +691,12 @@ class Gateway:
                         changed = True
             elif item.get("type") == "function_call_output":
                 cached = session.results.get(call_id)
+                known = session.calls.get(call_id)
+                # A result carries the digest its call was last delivered under, never this request's declaration, and
+                # is reused only under that digest (A.10).
+                digest = session.call_digests.get(call_id, known.digest if known is not None else None)
+                if cached is not None and cached.digest != digest:
+                    cached = None
                 if cached is not None and not same_content(item, cached):
                     self._reused(session, TOOL_CALL_RESULT, cached.name, call_id)
                     if self.enforce:
@@ -699,7 +704,6 @@ class Gateway:
                     kept.append(item)
                     continue
                 if cached is None:
-                    known = session.calls.get(call_id)
                     if known is not None:
                         # The gateway's own record names the tool, never the client's resent copy of the call.
                         name = known.name
@@ -707,7 +711,9 @@ class Gateway:
                         resent = names.get(call_id)
                         name = resent if isinstance(resent, str) else ""
                         _audit("result_name_from_client", session_id=session.session_id, call_id=call_id, tool=name)
-                    cached = await self._gate_result(session, item, name, known, digests)
+                    # request_id_ref names the step that delivered the call under that digest.
+                    call = known if known is None or known.digest == digest else session.verdicts.get((call_id, digest))
+                    cached = await self._gate_result(session, item, name, call, digest)
                     session.results[call_id] = cached
                 if self.enforce and cached.item is not None and item.get("output") != cached.item.get("output"):
                     item, changed = {**item, "output": cached.item.get("output")}, True
@@ -774,9 +780,9 @@ class Gateway:
         return fields
 
     async def _gate_result(self, session: Session, item: dict[str, Any], name: str,
-                           call: CachedOutcome | None, digests: ToolDigests) -> CachedOutcome:
+                           call: CachedOutcome | None, digest: str | None) -> CachedOutcome:
         payload, parsed, repeated = result_payload(name, item.get("output"), call.request_id if call else None,
-                                                   digests.get(name))
+                                                   digest)
         if repeated is not None:
             # Tool output is third-party data. A repeated key in it denies only this result, through the normal
             # path, so the run goes on and the cached outcome reapplies on every resend without parsing it again.
@@ -790,8 +796,8 @@ class Gateway:
         self._record(session, result, applied, name, item.get("call_id"))
         first, raw = fingerprint(item), content(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id, first, raw)
-        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw)
+            return CachedOutcome("delivered", name, item, result.request_id, first, raw, digest=digest)
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw, digest=digest)
 
     async def _gate_output(self, session: Session, reply: dict[str, Any], digests: ToolDigests | None = None,
                            asks: AskHold | None = None) -> bool:
@@ -854,16 +860,31 @@ class Gateway:
             self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
             return None if self.enforce else item
         digest = digests.get(item.get("name")) if digests is not None else None
-        if cached is None or cached.digest != digest:
-            # A call_id seen before is reused only under the declaration it was judged against, so a description
-            # or schema changed mid-conversation reaches the policy again (issue #580).
-            cached = await self._gate_call(session, item, asks, digest)
-            session.calls[call_id] = cached
+        cached = await self._call_verdict(session, item, call_id, cached, digest, asks)
         if not self.enforce:
             return item
         if cached.item is None:
             return None
         return item if cached.item == item else cached.item
+
+    async def _call_verdict(self, session: Session, item: dict[str, Any], call_id: str, record: CachedOutcome | None,
+                            digest: str | None, asks: AskHold) -> CachedOutcome:
+        """The verdict on a call under this request's declaration digest. A call's identity is (call_id, digest)
+        (A.10): the same digest reuses its verdict, and another digest is a new Guardian step. A later verdict replaces
+        the calls record only when that record removed the call and the new verdict delivers it."""
+        if record is not None and record.digest == digest:
+            verdict = record
+        else:
+            verdict = session.verdicts.get((call_id, digest))
+            if verdict is None:
+                verdict = await self._gate_call(session, item, asks, digest)
+                if record is None or (record.item is None and verdict.item is not None):
+                    session.calls[call_id] = verdict
+                else:
+                    session.verdicts[(call_id, digest)] = verdict
+        if verdict.item is not None:
+            session.call_digests[call_id] = digest
+        return verdict
 
     async def _gate_call(self, session: Session, item: dict[str, Any], asks: AskHold,
                          digest: str | None = None) -> CachedOutcome:
