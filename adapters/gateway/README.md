@@ -73,7 +73,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 | deny, ask, defer | Removed | Output replaced by the neutral line |
 | Any decision failure | Removed | Output replaced by the neutral line |
 
-A decision failure is an error, any non-2xx status (429 included), a timeout, a refusal, or a response that fails verification (D-040, D-046). A MODIFY the gateway can't apply in full, such as a redaction path that doesn't resolve, denies.
+A decision failure is an error, any non-2xx status (429 included), a timeout, a refusal, or a response that fails verification (D-040, D-046). A MODIFY the gateway can't apply in full, such as a redaction path that doesn't resolve, denies. A redaction that replaces the output item or the outputs array itself (`/outputs/0`, `/outputs`) is honored by withholding the whole output: the model gets the neutral line, and the step is audited as `modify` with cause `output_withheld`. An answer that comes back after the decision deadline is a `decision_timeout`, whatever it says.
 
 When removing calls leaves a response with no message and no call, the gateway adds one assistant message: `I couldn't complete that action.` That line is the one artifact of governance the client or the model ever sees. No session id, request id, reason code, signature or lab header reaches either side.
 
@@ -102,7 +102,7 @@ One gap remains by design. When an epoch bump lands between a turn's calls and t
 {"dir": "resp", "envelope": {"jsonrpc": "2.0", "result": {"decision": "deny", "...": "..."}}}
 ```
 
-Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. When a request gets no usable answer (a timeout, an HTTP error, a refusal, a malformed or tampered answer), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. acs.client doesn't hand back the rejected answer itself, so the line can't carry it until LAB-03 (issue #576) adds that hook. The handshake isn't in the file, since acs.client sends it internally.
+Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. When a request gets no usable answer (a timeout, an HTTP error, a refusal, a malformed or tampered answer), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. acs.client doesn't hand back the rejected answer itself, so the line can't carry it until LAB-03 (issue #576) adds that hook. An answer that arrived after the deadline keeps its envelope, since the Guardian chained it, and its line adds `"cause": "decision_timeout"`. The handshake isn't in the file, since acs.client sends it internally.
 
 **Audit.** The gateway writes audit lines through acs.client `audit_event`, as `ACS_AUDIT {json}` on stderr and in `ACS_AUDIT_FILE`. The `acs_audit_event` field names the event:
 

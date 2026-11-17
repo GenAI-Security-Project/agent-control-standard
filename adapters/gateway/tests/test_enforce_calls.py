@@ -291,6 +291,67 @@ def test_a_timed_out_step_writes_nothing_after_the_request_returns(gateway, guar
     assert events(audit, "decision_applied")[0]["request_id"] == at_return[-2]["envelope"]["params"]["request_id"]
 
 
+def test_an_answer_that_arrives_after_the_deadline_is_a_timeout(gateway, guardian, upstream, audit, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="100")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    # The request line takes longer than the whole deadline, so the Guardian's allow comes back late.
+    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 0.3)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    applied = events(audit, "decision_applied")[0]
+    assert (applied["decision"], applied["cause"], applied["failure_class"]) == ("deny", "decision_timeout", "timeout")
+    lines = transcript_lines(tmp_path)
+    assert lines[-2]["envelope"]["method"] == "steps/toolCallRequest"
+    # The late answer stays in the transcript, since the Guardian chained it, and the line says it was too late.
+    assert lines[-1]["envelope"]["result"]["decision"] == "allow"
+    assert lines[-1]["cause"] == "decision_timeout"
+
+
+class SlowResponseLine:
+    """Wraps the real transcript and stalls on the response line, after the answer has already arrived."""
+
+    def __init__(self, inner, delay):
+        self.inner, self.delay = inner, delay
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        import time
+
+        if direction == "resp" and envelope and "decision" in (envelope.get("result") or {}):
+            time.sleep(self.delay)
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def test_an_answer_that_comes_back_after_the_deadline_is_a_timeout(gateway, guardian, upstream, audit, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="300")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    gw.guardian.transcript = SlowResponseLine(gw.guardian.transcript, 0.5)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    applied = events(audit, "decision_applied")[0]
+    assert (applied["decision"], applied["cause"]) == ("deny", "decision_timeout")
+    assert applied["request_id"] == transcript_lines(tmp_path)[-2]["envelope"]["params"]["request_id"]
+
+
+def test_an_answer_inside_the_deadline_is_honored(gateway, guardian, upstream, audit, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="2000")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 0.3)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["call_id"] == "call_1"
+    applied = events(audit, "decision_applied")[0]
+    assert (applied["decision"], applied["cause"]) == ("allow", None)
+    assert "cause" not in transcript_lines(tmp_path)[-1]
+
+
 def test_one_gateway_can_start_twice(gateway, guardian, upstream):
     from starlette.testclient import TestClient
 

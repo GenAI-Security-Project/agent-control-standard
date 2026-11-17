@@ -697,8 +697,9 @@ class Gateway:
         future = asyncio.get_running_loop().run_in_executor(
             self.executor, functools.partial(self.guardian.step, session, method, payload, token))
         try:
-            # acs.client bounds the exchange itself. The grace covers a worker stuck outside it, such as a slow disk.
-            return await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
+            # acs.client bounds the exchange itself. The grace covers a worker stuck outside it, such as a slow disk,
+            # and bounds only the wait. It never makes a late answer usable.
+            result = await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
         except asyncio.TimeoutError:
             await self._settle_abandoned(session, method, token, future, timeout)
             return StepResult(method, token.request_id, cause="decision_timeout", failure_class="timeout")
@@ -706,6 +707,11 @@ class Gateway:
             # The request itself was cancelled (a client disconnect, a shutdown). The step must not outlive it.
             await self._settle_abandoned(session, method, token, future, timeout)
             raise
+        if result.cause is None and time.monotonic() >= token.deadline:
+            # The worker times out an answer that arrived late. This catches one that arrived in time but came back
+            # late, such as behind a slow response line, which the transcript then holds without a cause.
+            return StepResult(method, result.request_id, cause="decision_timeout", failure_class="timeout")
+        return result
 
     async def _settle_abandoned(self, session: Session, method: str, token: StepToken, future: Any,
                                 timeout: float) -> None:

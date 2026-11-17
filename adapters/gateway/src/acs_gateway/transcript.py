@@ -30,7 +30,9 @@ class Transcript:
 
     def append(self, session_id: str, direction: str, envelope: dict[str, Any] | None, *,
                cause: str | None = None) -> None:
-        """envelope None with a cause marks a request that got no usable answer, so the gap is explicit.
+        """envelope None with a cause marks a request that got no usable answer, so the gap is explicit. A response
+        line may also carry its envelope and a cause, for an answer that came back but can't be used, such as one
+        that arrived after its deadline.
 
         acs.client doesn't hand back a refused, malformed or tampered answer, so the line can't carry it yet.
         LAB-03 (issue #576) adds that hook (PREMORTEM P6).
@@ -42,7 +44,7 @@ class Transcript:
         # The session_id names the file, so only the gateway's own UUIDs are accepted.
         name = str(uuid.UUID(session_id))
         record: dict[str, Any] = {"dir": direction, "envelope": envelope}
-        if envelope is None:
+        if cause is not None:
             record["cause"] = cause
         with self._lock:
             self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)

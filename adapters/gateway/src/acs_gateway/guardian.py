@@ -260,7 +260,8 @@ class GuardianClient:
 
     def _send(self, session_id: str, method: str, payload: dict[str, Any], posture: FailPosture,
               token: StepToken | None = None) -> tuple[Decided | Resolution | None, str]:
-        """None as the outcome means the token was cancelled first, so nothing was written or sent."""
+        """None as the outcome means no answer the gateway may use came in time: the token was cancelled or retired
+        first, or the answer arrived after the token's deadline."""
         request_id = str(uuid.uuid4())
         request = request_envelope(method, request_id=request_id,
                                    metadata={"agent_id": self.config.agent_id, "session_id": session_id,
@@ -290,14 +291,21 @@ class GuardianClient:
         finally:
             if token is not None:
                 token.end_send()
+        # round_trip's own timeout was set before the request line was written, so a slow write lets an answer
+        # through after the deadline. Whatever a late answer says, the step times out.
+        late = token is not None and time.monotonic() >= token.deadline
         if request["params"].get("signature") != signature:
             audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
         if isinstance(outcome, Resolution):
-            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=outcome.cause))
+            cause = "decision_timeout" if late else outcome.cause
+            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=cause))
         else:
             # round_trip has already verified the response's signature. acs.client accepts HMAC-SHA256 only, and
-            # LAB-03 (issue #576) changes its algorithm dispatch to verify by key_id from the key document.
-            written = write_line(token, lambda: self.transcript.append(session_id, "resp", outcome.response))
-        if not written:
+            # LAB-03 (issue #576) changes its algorithm dispatch to verify by key_id from the key document. A late
+            # answer keeps its envelope, since the Guardian chained it.
+            cause = "decision_timeout" if late else None
+            written = write_line(token, lambda: self.transcript.append(session_id, "resp", outcome.response,
+                                                                       cause=cause))
+        if not written or late:
             return None, request_id
         return outcome, request_id
