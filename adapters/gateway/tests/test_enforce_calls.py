@@ -164,3 +164,23 @@ def test_a_step_without_a_usable_answer_leaves_an_explicit_gap_in_the_transcript
     lines = transcript_lines(tmp_path)
     assert lines[2]["dir"] == "req" and lines[2]["envelope"]["method"] == "steps/toolCallRequest"
     assert lines[3] == {"dir": "resp", "envelope": None, "cause": cause}
+
+
+def reasoning(item_id):
+    return {"type": "reasoning", "id": item_id, "summary": [], "encrypted_content": "opaque"}
+
+
+def test_removing_a_call_also_removes_the_reasoning_that_led_to_it(gateway, guardian, upstream):
+    upstream.reply(response_body(reasoning("rs_1"), call_item("bash", {"command": "rm -rf /"}, "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert [i["type"] for i in output] == ["message"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+
+
+def test_reasoning_before_a_kept_item_stays(gateway, guardian, upstream):
+    upstream.reply(response_body(reasoning("rs_1"), message_item("thinking out loud"), reasoning("rs_2"),
+                                 call_item("bash", {"command": "rm -rf /"}, "call_1")))
+    output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request()).json()["output"]
+    assert [(i["type"], i["id"]) for i in output] == [("reasoning", "rs_1"), ("message", "msg_1")]

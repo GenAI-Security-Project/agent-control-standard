@@ -296,6 +296,7 @@ class Gateway:
                        direction="output", mode=self.config.mode)
                 if self.enforce:
                     changed = removed = True
+                    _drop_trailing_reasoning(kept)
                 else:
                     kept.append(item)
                 continue
@@ -309,6 +310,7 @@ class Gateway:
                 self._record(session, missing, Applied("deny", None, "call_id_missing"), str(item.get("name")), None)
                 if self.enforce:
                     changed = removed = True
+                    _drop_trailing_reasoning(kept)
                 else:
                     kept.append(item)
                 continue
@@ -317,6 +319,7 @@ class Gateway:
                 self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
                 if self.enforce:
                     changed = removed = True
+                    _drop_trailing_reasoning(kept)
                 else:
                     kept.append(item)
                 continue
@@ -327,6 +330,7 @@ class Gateway:
                 kept.append(item)
             elif cached.item is None:
                 changed = removed = True
+                _drop_trailing_reasoning(kept)
             else:
                 changed = changed or cached.item != item
                 kept.append(cached.item)
@@ -376,6 +380,13 @@ class Gateway:
             _audit("verification_failed", **fields)
         elif result.cause and result.cause.startswith("http_"):
             _audit("guardian_http_error", **fields)
+
+
+def _drop_trailing_reasoning(kept: list[Any]) -> None:
+    """Drop the reasoning items just before a removed call. A reasoning model rejects a resent reasoning item whose
+    call is missing, and reasoning that a kept item follows stays with that item."""
+    while kept and isinstance(kept[-1], dict) and kept[-1].get("type") == "reasoning":
+        kept.pop()
 
 
 @dataclass(frozen=True)
