@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import stat
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,8 @@ from starlette.requests import Request
 from starlette.background import BackgroundTask
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+
+from acs.client import Negotiated
 
 from acs_gateway.apply import (
     Applied,
@@ -165,7 +168,13 @@ class Gateway:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
         session = self.sessions.get(key)
         async with session.lock:
-            if session.handshake is None:
+            if not _opened(session.handshake):
+                if session.handshake is not None:
+                    # acs.client stores a session's handshake first-wins, so a retry needs a fresh session_id.
+                    # One attempt per request, and every step denies until one succeeds.
+                    _audit("session_retried", previous_session_id=session.session_id,
+                           cause=getattr(session.handshake, "cause", None) or "session_start_failed")
+                    session.session_id = str(uuid.uuid4())
                 await asyncio.to_thread(self.guardian.open, session)
             if await self._gate_input(session, body):
                 raw = json.dumps(body).encode("utf-8")
@@ -386,6 +395,11 @@ class Gateway:
             _audit("verification_failed", **fields)
         elif result.cause and result.cause.startswith("http_"):
             _audit("guardian_http_error", **fields)
+
+
+def _opened(handshake: Any) -> bool:
+    """A handshake that negotiated and whose sessionStart got a decision."""
+    return isinstance(handshake, Negotiated) and handshake.start_failure is None
 
 
 def _drop_trailing_reasoning(kept: list[Any]) -> None:

@@ -62,7 +62,14 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
     return hello
 
 
+_failed_hellos = 0
+
+
 def handle_request(request: dict) -> dict:
+    global _failed_hellos
+    if request.get("method") == "handshake/hello" and _failed_hellos < int(os.environ.get("HARNESS_FAIL_HELLOS", "0")):
+        _failed_hellos += 1
+        return {"__harness_status__": 503}
     tool = _tool(request.get("params") or {})
     if tool == "rate_limited_tool":
         return {"__harness_status__": 429}

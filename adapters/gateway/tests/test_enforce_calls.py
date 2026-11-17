@@ -184,3 +184,16 @@ def test_reasoning_before_a_kept_item_stays(gateway, guardian, upstream):
     output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request()).json()["output"]
     assert [(i["type"], i["id"]) for i in output] == [("reasoning", "rs_1"), ("message", "msg_1")]
+
+
+def test_a_failed_handshake_is_retried_on_the_next_request(gateway, harness_guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_FAIL_HELLOS="1"))
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    first = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert first[0]["content"][0]["text"] == NEUTRAL
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 8}, "call_2")))
+    second = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert second[0]["call_id"] == "call_2"
+    opened = events(audit, "session_opened")
+    assert [e["handshake"] for e in opened] == ["NoAnswer", "Negotiated"]
+    assert opened[0]["session_id"] != opened[1]["session_id"]
