@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
+from acs.guardian import opa_backend
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
 from acs.core import (
     ACS_VERSION,
@@ -436,6 +437,11 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         "chain_hash": chain_hash,
     }
 
+    # Lab convention (issue #531): with ACS_POLICY_BACKEND set, OPA judges both tool methods, so a tool
+    # result can be denied or redacted. Unset, this branch never runs and the rules below decide as before.
+    if method in opa_backend.METHODS and opa_backend.configured():
+        return opa_backend.evaluate(method, params, base)
+
     if method == "steps/toolCallRequest":
         tool = payload.get("tool") or {}
         # Case-folded, so Claude Code's Bash, Cursor's Shell and NAT's shell meet one policy.
@@ -653,6 +659,11 @@ def main() -> int:
         )
         return 1
 
+    backend_problem = opa_backend.backend_problem()
+    if backend_problem:
+        sys.stderr.write(f"[guardian] REFUSING TO START: {backend_problem}\n")
+        return 1
+
     class ReusableServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True
         daemon_threads = True
@@ -664,6 +675,9 @@ def main() -> int:
         sys.stdout.write(f"ACS_GUARDIAN_LISTENING port={port}\n")
         sys.stdout.flush()
         sys.stderr.write(f"[guardian] listening on {args.host}:{port} (case-insensitive-tool-policy)\n")
+        if opa_backend.selected():
+            sys.stderr.write(f"[guardian] tool calls and tool results go to OPA at {opa_backend.load_config().url} "
+                             "(lab convention, issue #531)\n")
         sys.stderr.flush()
         try:
             httpd.serve_forever()

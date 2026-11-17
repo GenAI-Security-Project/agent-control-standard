@@ -46,6 +46,15 @@ class OpaConfig:
     timeout_s: float
 
 
+# The two methods this backend judges. Every other method keeps the example Guardian's own handling.
+METHODS = frozenset({"steps/toolCallRequest", "steps/toolCallResult"})
+
+
+def configured(env: Mapping[str, str] = os.environ) -> bool:
+    """Whether any policy backend is named. A name other than opa is a misconfiguration, which denies."""
+    return bool(env.get(BACKEND_ENV, "").strip())
+
+
 def selected(env: Mapping[str, str] = os.environ) -> bool:
     return env.get(BACKEND_ENV, "").strip().lower() == "opa"
 
