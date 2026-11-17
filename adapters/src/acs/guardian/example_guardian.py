@@ -903,6 +903,11 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         self._answer_id = None
         try:
             self._serve()
+        except TimeoutError:
+            # The client stopped sending. The socket is probably gone, so close without writing to it.
+            sys.stderr.write("[guardian] request body read timed out, closing the connection\n")
+            sys.stderr.flush()
+            self.close_connection = True
         except Exception as e:  # noqa: BLE001
             # A dropped connection reads as transport_failure, which a proceed posture runs ungoverned.
             sys.stderr.write(f"[guardian] internal error: {type(e).__name__}\n")

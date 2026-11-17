@@ -363,34 +363,31 @@ def test_a_content_length_of_5000_digits_is_refused_without_int(served):
 
 
 def _drip(address, monkeypatch, *, per_recv: float, whole_body: float, gap: float, chunks: int) -> tuple[bytes, float]:
-    """Send a body one byte per gap seconds and return (what came back, how long until it did)."""
+    """Send a body one byte per gap seconds and return (every byte that came back, seconds until EOF)."""
     import time
     monkeypatch.setattr(example_guardian.GuardianHandler, "timeout", per_recv)
     monkeypatch.setattr(example_guardian, "BODY_READ_SECONDS", whole_body)
+    received = b""
     with socket.create_connection(address, timeout=10) as sock:
         sock.sendall(b"POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Length: 100\r\n\r\n")
         started = time.monotonic()
         sock.settimeout(gap)
-        data = b""
         for _ in range(chunks):
             try:
                 sock.sendall(b" ")
                 data = sock.recv(65536)
-                if not data:
-                    break
             except TimeoutError:
                 continue  # nothing came back within the gap, which is the drip continuing
             except OSError:
                 break
-        sock.settimeout(5)
-        try:
-            data = data or sock.recv(65536)
-        except OSError:
-            data = b""
-        return data, time.monotonic() - started
+            if not data:
+                break  # EOF
+            received += data
+        return received, time.monotonic() - started
 
 
 def test_a_slow_drip_body_is_cut_off_by_one_deadline_and_closed_without_an_answer(served, monkeypatch):
     # Each byte arrives inside the per-recv timeout, so only a deadline for the whole read stops this.
     data, elapsed = _drip(served, monkeypatch, per_recv=0.5, whole_body=1.0, gap=0.2, chunks=40)
     assert elapsed < 5, "the drip held the connection past the whole-body deadline"
+    assert data == b"", "a timed-out read closes without writing to the socket"
