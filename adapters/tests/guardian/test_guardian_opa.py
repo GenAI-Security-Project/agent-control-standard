@@ -533,3 +533,11 @@ def test_a_non_string_intent_derivation_denies(no_backend, derivation):
 def test_an_absent_or_null_intent_derivation_keeps_todays_answer(no_backend):
     for payload in ({}, {"intent_derivation": None}):
         assert _step("steps/subagentStart", payload)["reason_codes"] == ["subagent_gated"]
+
+
+
+@pytest.mark.parametrize("path", ["/private/tmp/x", "/var/tmp/x", "/processes.txt",
+                                  "/System/Volumes/Data/private/tmp/x", "/etcetera/notes.txt"])
+def test_an_unprotected_path_beside_a_protected_one_still_writes(no_backend, path):
+    # Prefixes end at a path separator, and only /private/etc is an alias, so these neighbours stay writable.
+    assert _step("steps/toolCallRequest", _write(path))["decision"] == "allow"
