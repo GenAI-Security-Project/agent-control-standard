@@ -167,8 +167,19 @@ TYPE_ERRORS = [
     {"tool": {"name": "Bash"}, "arguments": {"command": {"value": ["rm", "-rf", "/"]}}},
     {"tool": {"name": "shell"}, "arguments": {"command": {"value": {"cmd": "ls"}}}},
     {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": 42}}},
-    {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": None}}},
+    {"tool": {"name": "Bash"}, "arguments": {"command": {"value": 0}}},
+    {"tool": {"name": "Bash"}, "arguments": {"command": {"value": False}}},
 ]
+
+
+@pytest.mark.parametrize("payload", [
+    {"tool": {"name": "Bash"}, "arguments": {"command": {"value": None}}},
+    {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": None}}},
+    {"tool": {"name": "Write"}, "arguments": {}},
+])
+def test_a_null_argument_reads_as_absent(no_backend, payload):
+    # The same answer as a missing argument, for every argument a hard deny reads.
+    assert _step("steps/toolCallRequest", payload)["decision"] == "allow"
 
 
 @pytest.mark.parametrize("payload", TYPE_ERRORS)

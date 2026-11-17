@@ -462,6 +462,7 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
                 "reason_codes": ["subagent_gated"]}
 
     if tool_name in ("bash", "shell"):
+        # None reads as absent for every argument a hard deny reads, the same answer as a missing one.
         cmd = args.get("command", "")
         cmd = "" if cmd is None else cmd
         # The pattern scan reads a string. Anything else is denied here instead of crashing the request handler.
@@ -480,6 +481,7 @@ def _hard_deny(base: dict, tool_name: str, args: dict) -> dict | None:
 
     if tool_name == "write":
         path = args.get("file_path", "")
+        path = "" if path is None else path
         if not isinstance(path, str):
             return _argument_type_deny(base, tool_name, "file_path", path)
         if any(path.startswith(p) for p in PROTECTED_PATH_PREFIXES):
