@@ -47,13 +47,33 @@ The keyring matches `key_id` exactly. It never folds case, trims, or falls back 
 A keyring admits ML-DSA-65 keys only. Each key is parsed once, when it is built, so a malformed key fails at load. `VerificationKey.fingerprint` gives `sha256:` and the hex SHA-256 of the raw 1,952 byte public key.
 
 ```python
+import secrets
+import uuid
+
 from acs.core import Keyring, MLDSA65SigningKey, sign_with_signing_key, verify_with_keyring
 
-signer = MLDSA65SigningKey.from_seed(seed, "lab-guardian-1")   # seed: the 32 byte FIPS 204 seed
+# The Guardian keeps the 32 byte FIPS 204 seed in its key file. The verifier needs only the public key.
+signer = MLDSA65SigningKey.from_seed(secrets.token_bytes(32), "lab-guardian-1")
 keyring = Keyring([signer.verification_key()])
 
-sign_with_signing_key(envelope, signer)
-assert verify_with_keyring(response, keyring, expected_key_id="lab-guardian-1", request=request)
+# The request the Observed Agent sent, with a fresh UUID4 as both ids, as acs.client does.
+request_id = str(uuid.uuid4())
+request = {"jsonrpc": "2.0", "id": request_id, "method": "steps/toolCallRequest",
+           "params": {"acs_version": "0.1.0", "request_id": request_id}}
+
+# The Guardian signs its decision, which echoes both ids.
+response = {"jsonrpc": "2.0", "id": request_id,
+            "result": {"acs_version": "0.1.0", "request_id": request_id, "decision": "deny"}}
+sign_with_signing_key(response, signer)
+
+verified = verify_with_keyring(response, keyring, expected_key_id="lab-guardian-1", request=request)
+
+# The same decision offered as the answer to another request fails before any crypto.
+other_id = str(uuid.uuid4())
+other_request = {**request, "id": other_id, "params": {"acs_version": "0.1.0", "request_id": other_id}}
+replayed = verify_with_keyring(response, keyring, expected_key_id="lab-guardian-1", request=other_request)
+
+assert verified and not replayed
 ```
 
 Verification takes two required arguments besides the keyring. `expected_key_id` names the key that must answer. A keyring can hold several keys, so a response signed by any other key fails before any crypto runs. `request` is the request envelope the response answers ([D-029](../../docs/decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). HMAC binds a response to its session through the per-session key, but one ML-DSA key signs every session, so the key alone can't stop a response from one exchange being replayed onto another. The response must carry the request's JSON-RPC `id` and, when its result carries a `request_id`, the request's `request_id`. Request ids are fresh UUID4s that are never resent, so a mismatch fails before any crypto runs, and a binding rewritten after signing fails the signature. This is the same check `acs.core.response_matches_request` applies to every step response today. A request envelope answers nothing, so it fails keyring verification.

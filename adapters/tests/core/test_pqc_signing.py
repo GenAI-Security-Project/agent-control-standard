@@ -9,6 +9,7 @@ import base64
 import copy
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -584,6 +585,16 @@ class VariantAndContextAreDocumented(unittest.TestCase):
         self.assertRegex(text, r"not (use )?(the pre-hash )?HashML-DSA")
         self.assertRegex(text, r'context string is empty \(`b""`')
         self.assertNotIn("HashML-DSA-65 with", text)
+
+    def test_the_usage_example_runs(self) -> None:
+        # Review finding CR5-6: the doc's Python example is executed, so it can't rot.
+        text = self.DOC.read_text(encoding="utf-8")
+        blocks = re.findall(r"```python\n(.*?)```", text, flags=re.DOTALL)
+        self.assertEqual(len(blocks), 1, "signing.md has exactly one Python example")
+        namespace: dict = {}
+        exec(compile(blocks[0], str(self.DOC), "exec"), namespace)  # noqa: S102
+        self.assertTrue(namespace["verified"])
+        self.assertFalse(namespace["replayed"])
 
     def test_the_module_docstring_names_pure_mode_and_the_empty_context(self) -> None:
         import acs.core._mldsa as module
