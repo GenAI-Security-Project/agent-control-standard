@@ -4,7 +4,7 @@ Version 0.1.0. Owner: Rock Lambros (@rocklambros). Built for issue #577, [RefImp
 
 An agent you can't modify can still be governed. Point its `OPENAI_BASE_URL` at this gateway, change nothing else, and every tool call it receives has already passed an ACS Guardian. The gateway sits at the model boundary of an OpenAI Responses API client and acts as that client's ACS Observed Agent.
 
-It's built for the ACS Guided Lab, where OWASP FinBot runs unmodified behind it, and it works with any client that sends non-streamed `POST /v1/responses` requests.
+It's built for the ACS Guided Lab, where OWASP FinBot runs unmodified behind it, and it works with any client that sends `POST /v1/responses` requests, streamed or not.
 
 ## What it does
 
@@ -14,7 +14,7 @@ The gateway forwards `POST /v1/responses` to a model upstream. In shadow and enf
 - Before a request reaches the model, each new `function_call_output` in it goes to the Guardian as `steps/toolCallResult`.
 - In enforce mode the gateway applies each decision. In shadow mode it records each decision and changes nothing.
 
-Enforce accepts only what it can gate, by allowlist, so anything new fails closed. Shadow checks the same allowlists but only records what falls outside them, audited the same way, and forwards the traffic unchanged, so shadow doesn't block a run, with two exceptions. A streamed request answers 501 in shadow as in enforce until LAB-05 (issue #578) gates streams, and FinBot's chat streams (chat.py at 1450fc4), so a shadow chat run fails until then. A new conversation gets 503 when every session is busy, in shadow too, since that limit protects the gateway itself. Off forwards everything and checks nothing.
+Enforce accepts only what it can gate, by allowlist, so anything new fails closed. Shadow checks the same allowlists but only records what falls outside them, audited the same way, and forwards the traffic unchanged, so shadow doesn't block a run, with one exception. A new conversation gets 503 when every session is busy, in shadow too, since that limit protects the gateway itself. Off forwards everything and checks nothing.
 
 - **Request fields:** `model`, `input`, `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens`, `reasoning`, `text`, `metadata`, `parallel_tool_calls`, `store`, `user`, `temperature`, `top_p`. FinBot sends a subset of these. Any other field, such as `prompt`, `previous_response_id`, `conversation`, `background` or `include`, answers 501 in enforce naming the field, and is audited as `unsupported_field`, since server-side history or a stored prompt would hide items or tools from the gateway.
 - **Input items:** `message` (any role), `function_call`, `function_call_output`, `reasoning`. Any other type, such as `item_reference`, a hosted tool's `*_call`, or a non-function `*_call_output`, answers 501 in enforce before anything goes upstream, audited as `unsupported_item_type`.
@@ -32,7 +32,26 @@ A JSON key repeated in the request body's own structure, or inside the arguments
 
 In shadow and enforce, any `stream` value other than an absent field, `null` or `false` counts as a stream request. The gateway asks the upstream for gzip or deflate only. A compressed request body can't be read, so enforce answers 415 and shadow forwards it unchanged with nothing gated, both audited as `compressed_request`. In shadow that includes a compressed streamed request, which reaches the upstream as an ungoverned stream. The model input log records `{"compressed": <encoding>, "bytes": <size>}` in place of a body it can't read. A 2xx answer that isn't a JSON object with an `output` list could carry calls the gateway never gated, so enforce answers 502 and shadow relays it as it came, both audited as `upstream_unparseable`. Off relays requests and answers verbatim, encodings and headers included, except that every mode strips `x-acs-*` lab headers in both directions.
 
-Every other path answers 404. Off mode relays a streamed request (`"stream": true`) as the upstream sends it. Shadow and enforce answer a streamed request with 501 until issue #578 adds governed streaming.
+Every other path answers 404. Off mode relays a streamed request (`"stream": true`) as the upstream sends it. Shadow and enforce govern it, as [Streaming](#streaming) describes.
+
+## Streaming
+
+In shadow and enforce, a streamed request (`"stream": true`) gets a governed Server-Sent Events stream. The request side is gated exactly as a non-streamed one, so each new `function_call_output` is decided before anything goes upstream.
+
+On the answer side, enforce reads the upstream's events one at a time:
+
+- Text, refusals and annotations of a message go to the client as they arrive.
+- A `function_call` is held whole, from `response.output_item.added` through its argument deltas to `response.output_item.done`. The finished item then goes to the Guardian through the same gate as a non-streamed answer. Allow releases the held events as they came. Modify releases them with the new arguments, in one argument delta. Deny, any decision failure, and any fault while gating remove every event of the call, so no part of it reaches the client.
+- An output item outside the allowlist, such as a hosted tool's call, is held and removed the same way.
+- A reasoning item waits until an item of its turn is kept, and is removed with its turn when every item in it was removed, the rule a non-streamed answer follows.
+- When removals leave no message and no call, the neutral line streams as one assistant message before the final event.
+- Items go out in the order the model sent them, so text the model writes after a call waits for that call's decision. Text before it goes out before the decision lands.
+
+Every event keeps the upstream's `sequence_number`. An event the gateway removed leaves a gap, and the neutral line's events take numbers of removed events. `output_index` is renumbered to the item's place in the edited output, so a client that builds the response from events, as the OpenAI SDK's `responses.stream()` does, never points past what it has. `response.created`, `response.in_progress`, `response.completed`, `response.incomplete` and `response.failed` carry exactly the items streamed, so the final response matches the stream. A stream with nothing removed reaches the client byte for byte.
+
+A stream the gateway can't read ends in enforce with one `error` event, `{"type": "error", "code": "upstream_unreadable", ...}`, audited as `upstream_error`. That covers an event that isn't JSON, repeats a key, or names an `output_index` no `response.output_item.added` announced, an upstream that stops before its final event, an event or a held item over `ACS_GATEWAY_MAX_BODY_BYTES`, and an upstream that fails mid-stream. Nothing held is released. A successful answer to a streamed request that isn't `text/event-stream` gets 502 in enforce. An error status passes through as it does for any request.
+
+Shadow relays the stream byte for byte and records a `shadow_decision` for each call as its `response.output_item.done` passes. After an event it can't read, shadow relays the rest ungated. The session's lock is held for the whole stream, so the session's steps stay in order.
 
 ## Run it
 
@@ -113,7 +132,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `shadow_decision` | Shadow mode recorded a step, with the same fields |
 | `verification_failed` | A Guardian response failed its signature check |
 | `guardian_http_error` | The Guardian answered with a non-2xx status |
-| `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`) |
+| `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`). A streamed answer adds `stream: true` and a `detail` naming what it couldn't read, such as `event_not_json`, `output_index_unannounced` or `stream_ended_early` |
 | `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
 | `call_id_invalid` | A call or output without a non-empty string call_id, with `item_type` and `direction`. On the input side enforce answers 400. On the output side, a call from the model, enforce removes it and gives the neutral line if nothing else is left. Shadow records both |
@@ -175,7 +194,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The gateway denies on any decision failure whatever the ServerHello says, a missing posture included | D-045 and issue #32 |
 | The neutral line stands in for a removed call or a denied output | Issue #577 |
 | ASK and DEFER deny | LAB-08, issue #581, adds the approver |
-| Streamed requests answer 501 in shadow and enforce. Off relays them untouched | LAB-05, issue #578 |
+| A streamed answer keeps every `sequence_number` and leaves gaps where events were removed, `output_index` follows the edited output, and text after a held call waits for that call's decision | Issue #578. The specification defers streaming semantics |
 | Responses are verified with acs.client's HMAC-SHA256 check inside its round trip. LAB-03 changes the algorithm dispatch inside acs.client to verify by key_id from the key document | LAB-03, issue #576, and issue #460 |
 | An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and the signed bytes would differ from the transcript line | Issue #577 |
 | `tool.version` is not sent yet | LAB-07, issue #580, sends the tool digest (issue #38) |
