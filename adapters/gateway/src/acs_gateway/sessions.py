@@ -59,6 +59,9 @@ class CachedOutcome:
     raw: Any = None
     # The delivered call's arguments in canonical form, computed once.
     canonical_arguments: Any = None
+    # For a call, how many input items the request that produced it forwarded. Replay's branch tokens put a removed
+    # call there, since the client never resends it (issue #579).
+    position: int | None = None
 
 
 def canonical_value(value: Any, raw: Any) -> Any:

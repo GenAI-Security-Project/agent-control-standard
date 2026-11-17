@@ -19,10 +19,15 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from acs_gateway.apply import DEFAULT_REDACTION, NEUTRAL_LINE
+from acs_gateway.apply import NEUTRAL_LINE
 
 if TYPE_CHECKING:
     from acs_gateway.config import GatewayConfig
+    from acs_gateway.sessions import Session
+
+# The gateway's branch tokens travel to capture and replay on this header, set after every client x-acs-* header is
+# stripped and removed again before a request leaves for a real upstream (A.8).
+BRANCH_HEADER = "x-acs-lab-branch"
 
 # FinBot's per-visitor values at 1450fc4, which differ in every fresh FinBot and so can't be replayed verbatim
 # (PREMORTEM P2): the namespace ns_<user id> (session.py:233-240, routing.py:23), the user id user_<token_urlsafe(12)>,
@@ -175,25 +180,68 @@ def fill(value: Any, mapping: dict[str, str]) -> tuple[Any, bool]:
     return walk(value), complete
 
 
-def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int, str]:
-    """(first user message with placeholders, step, branch), read from the request alone (A.8, PREMORTEM P11).
+def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int]:
+    """(first user message with placeholders, step), read from the request alone (A.8, PREMORTEM P11).
 
     The step is the number of function_call_output items, so an SDK retry or an agent rerun lands on the same step.
-    The branch has one token per output: d when the gateway replaced it with the neutral line, m when it holds the
-    default redaction marker, a otherwise. A Guardian redaction with its own replacement text reads as a.
     """
     items = body.get("input")
     if isinstance(items, str):
-        return to_placeholders(items, mapping), 0, ""
+        return to_placeholders(items, mapping), 0
     items = items if isinstance(items, list) else []
     first_user = next((_text(i.get("content")) for i in items
                        if isinstance(i, dict) and i.get("role") == "user" and i.get("type", "message") == "message"), "")
-    tokens = []
-    for item in items:
-        if isinstance(item, dict) and item.get("type") == "function_call_output":
-            text = item.get("output") if isinstance(item.get("output"), str) else _text(item.get("output"))
-            tokens.append("d" if text == NEUTRAL_LINE else "m" if DEFAULT_REDACTION in text else "a")
-    return to_placeholders(first_user, mapping), len(tokens), ",".join(tokens)
+    step = sum(1 for i in items if isinstance(i, dict) and i.get("type") == "function_call_output")
+    return to_placeholders(first_user, mapping), step
+
+
+def _governed_items(body: Any) -> list[dict[str, Any]]:
+    items = body.get("input") if isinstance(body, dict) else None
+    return [i for i in items if isinstance(i, dict) and i.get("type") in ("function_call", "function_call_output")
+            and isinstance(i.get("call_id"), str) and i["call_id"]] if isinstance(items, list) else []
+
+
+def off_branch(body: Any) -> str:
+    """Off governs nothing, so every call and output in the request is delivered: one a for each (A.8)."""
+    return ",".join("a" for _ in _governed_items(body))
+
+
+def _token(outcome: Any, result: bool) -> str:
+    if outcome.outcome == "delivered":
+        return "a"
+    if outcome.outcome == "removed":
+        return "d"
+    # A denied output is stored rewritten to the neutral line. The gateway's own record says so, never the request.
+    if result and outcome.item is not None and outcome.item.get("output") == NEUTRAL_LINE:
+        return "d"
+    return "m"
+
+
+def session_branch(session: Session, body: Any) -> str:
+    """One token per governed item, from the session's own outcome records (A.8): a delivered, d removed or replaced
+    by the neutral line, m rewritten.
+
+    Calls and outputs take their tokens in the order the request holds them. A call the gateway removed never comes
+    back from the client, so its d goes where the request that produced it ended, which is where its siblings and
+    the model's next items sit in every later resend. The producing request and its retries end exactly there, so
+    they carry no token for calls they haven't been shown yet.
+    """
+    items = body.get("input") if isinstance(body, dict) and isinstance(body.get("input"), list) else []
+    removed: dict[int, int] = {}
+    for outcome in session.calls.values():
+        if outcome.outcome == "removed" and outcome.position is not None:
+            removed[outcome.position] = removed.get(outcome.position, 0) + 1
+    tokens: list[str] = []
+    for index, item in enumerate(items):
+        tokens += ["d"] * removed.get(index, 0)
+        call_id = item.get("call_id") if isinstance(item, dict) else None
+        if not isinstance(call_id, str) or not call_id:
+            continue
+        if item.get("type") == "function_call" and call_id in session.calls:
+            tokens.append(_token(session.calls[call_id], result=False))
+        elif item.get("type") == "function_call_output" and call_id in session.results:
+            tokens.append(_token(session.results[call_id], result=True))
+    return ",".join(tokens)
 
 
 def _audit(event: str, **fields: Any) -> None:
@@ -354,13 +402,13 @@ class ReplayTransport(httpx.AsyncBaseTransport):
                                "code": "unknown_url"}}
             return _response(404, json.dumps(error).encode("utf-8"), "application/json")
         raw = await request.aread()
-        digest = hashlib.sha256(raw).hexdigest()
+        digest = hashlib.sha256(raw + b"\0" + request.headers.get(BRANCH_HEADER, "").encode("utf-8")).hexdigest()
         answer = self.cache.get(digest)
         if answer is not None:
             self.cache.move_to_end(digest)
             self.cache_hits += 1
         else:
-            answer = self._answer(raw)
+            answer = self._answer(raw, request.headers.get(BRANCH_HEADER))
             self.cache[digest] = answer
             if len(self.cache) > self.CACHE_SIZE:
                 self.cache.popitem(last=False)
@@ -368,7 +416,7 @@ class ReplayTransport(httpx.AsyncBaseTransport):
             _audit("replay_miss", **answer.miss)
         return _response(200, answer.content, answer.content_type)
 
-    def _answer(self, raw: bytes) -> _Answer:
+    def _answer(self, raw: bytes, branch: str | None) -> _Answer:
         try:
             body = json.loads(raw)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -377,7 +425,9 @@ class ReplayTransport(httpx.AsyncBaseTransport):
             return self._miss(None, "unreadable_request", None, "", False)
         stream = _is_stream(body)
         mapping = placeholder_map(body)
-        first_user, step, branch = replay_key(body, mapping)
+        first_user, step = replay_key(body, mapping)
+        if branch is None:
+            branch = off_branch(body)
         recording = self.store.find(first_user, step, branch, stream)
         if recording is None:
             return self._miss(body.get("model"), "no_recording", step, branch, stream)
@@ -406,6 +456,8 @@ class LiveTransport(httpx.AsyncBaseTransport):
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=10.0))
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        for name in [n for n in request.headers if n.lower().startswith("x-acs-")]:
+            del request.headers[name]
         if self._key is not None:
             request.headers["authorization"] = f"Bearer {self._key}"
         return await self._client.send(request, stream=True)
@@ -454,16 +506,17 @@ class CaptureTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         raw_request = await request.aread()
+        branch = request.headers.get(BRANCH_HEADER)
         upstream = await self._live.handle_async_request(request)
         try:
             raw = b"".join([chunk async for chunk in upstream.aiter_raw()])
         finally:
             await upstream.aclose()
         if 200 <= upstream.status_code < 300:
-            self._record(raw_request, upstream.headers, raw)
+            self._record(raw_request, branch, upstream.headers, raw)
         return httpx.Response(upstream.status_code, headers=upstream.headers, stream=httpx.ByteStream(raw))
 
-    def _record(self, raw_request: bytes, headers: httpx.Headers, raw: bytes) -> None:
+    def _record(self, raw_request: bytes, branch: str | None, headers: httpx.Headers, raw: bytes) -> None:
         try:
             body = json.loads(raw_request)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -491,7 +544,9 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
             return
         mapping = placeholder_map(body)
-        first_user, step, branch = replay_key(body, mapping)
+        first_user, step = replay_key(body, mapping)
+        if branch is None:
+            branch = off_branch(body)
         line = {"scenario": self._scenario, "match": re.escape(first_user), "step": step, "branch": branch,
                 "stream": stream, "response": to_placeholders(response, mapping)}
         try:
@@ -521,6 +576,11 @@ class UpstreamSource:
         if self.mode == "replay":
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir)
+
+    @property
+    def records_branch(self) -> bool:
+        """Capture and replay key on the gateway's branch tokens, so the gateway hands them over on BRANCH_HEADER."""
+        return self.mode in ("capture", "replay")
 
     @property
     def custom(self) -> bool:

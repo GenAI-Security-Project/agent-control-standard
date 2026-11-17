@@ -64,7 +64,7 @@ def test_a_recording_replays_into_a_new_namespace_with_no_network(gateway, upstr
 
 def test_the_step_comes_from_the_request_not_from_how_many_requests_came_before(gateway, upstream, tmp_path, no_network):
     write(tmp_path / "rec", line(0, response_body(message_item("step zero"))),
-          line(2, response_body(message_item("step two")), branch="a,a"))
+          line(2, response_body(message_item("step two")), branch="a,a,a,a"))
     client = replay(gateway, tmp_path)
     text = lambda r: r.json()["output"][0]["content"][0]["text"]  # noqa: E731
     assert text(client.post("/v1/responses", json=finbot_request(*history(2)))) == "step two"
@@ -85,12 +85,12 @@ def test_a_byte_identical_retry_gets_the_cached_answer(gateway, tmp_path, no_net
     assert transport.cache_hits == 1
 
 
-def test_the_branch_picks_the_recording(gateway, tmp_path, no_network):
-    write(tmp_path / "rec", line(1, response_body(message_item("after allow")), branch="a"),
-          line(1, response_body(message_item("after deny")), branch="d"))
+def test_off_mode_reads_a_neutral_output_as_delivered(gateway, tmp_path, no_network):
+    write(tmp_path / "rec", line(1, response_body(message_item("after allow")), branch="a,a"),
+          line(1, response_body(message_item("after deny")), branch="a,d"))
     client = replay(gateway, tmp_path)
     denied = finbot_request(call_item("get_vendor_details", {}, "call_0"), output("call_0", NEUTRAL))
-    assert client.post("/v1/responses", json=denied).json()["output"][0]["content"][0]["text"] == "after deny"
+    assert client.post("/v1/responses", json=denied).json()["output"][0]["content"][0]["text"] == "after allow"
 
 
 def test_a_miss_returns_the_recorded_neutral_line_and_is_audited(gateway, tmp_path, audit, no_network):
@@ -100,7 +100,7 @@ def test_a_miss_returns_the_recorded_neutral_line_and_is_audited(gateway, tmp_pa
     assert reply["id"] == "resp_replay_miss"
     assert [(i["type"], i["content"][0]["text"]) for i in reply["output"]] == [("message", NEUTRAL)]
     assert [(e["cause"], e["step"], e["branch"], e["stream"]) for e in miss_events(audit)] == [
-        ("no_recording", 1, "a", False)]
+        ("no_recording", 1, "a,a", False)]
 
 
 def test_an_unfillable_placeholder_is_a_miss(gateway, tmp_path, audit, no_network):

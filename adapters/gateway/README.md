@@ -108,7 +108,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 | `scenario` | The capture's scenario name |
 | `match` | A regular expression the request's first user message, with placeholders, must match in full. Capture writes the escaped message, and a curator may loosen it by hand |
 | `step` | How many `function_call_output` items the request held. A retry, from FinBot's SDK or its agent runner, lands on the same step |
-| `branch` | One token per `function_call_output`, comma separated: `d` when the output is the neutral line, `m` when it holds `[REDACTED]`, `a` otherwise |
+| `branch` | One token per governed item, comma separated, from the session's own outcome records, never from text in the request: `a` delivered, `d` removed or replaced by the neutral line, `m` rewritten (a MODIFY of a call or an output). Calls and outputs take their tokens in the order the request holds them. A removed call never comes back from the client, so its `d` sits where the request that produced it ended. Off and shadow change nothing, so they give `a` for every call and output |
 | `stream` | Whether the request asked for a stream |
 | `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
 
@@ -303,7 +303,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The request field, input item and output item allowlists. FinBot sends only fields and items on them | Issue #577 |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
 | `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
-| Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, the branch tokens read from the request, and the miss response | Issue #579 |
+| Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | Issue #579 |
 | Replay runs inside the gateway, so no lab header goes to a separate replay server | Issue #579 |
 
 Spans (LAB-09, issue #582) build on this gateway as a separate module.
