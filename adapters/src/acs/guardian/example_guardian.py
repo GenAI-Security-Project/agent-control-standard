@@ -408,9 +408,9 @@ def check_skew(timestamp: str) -> None:
 
 
 def check_signature(envelope: dict, session_id: str) -> None:
-    # Signed, unlike every error before it: §10 exempts only an unknown key_id, and acs.client reads a signed -32004
-    # as signature_invalid_response, the cause the conformance suite requires (Core08). An unknown key_id gets its
-    # unsigned -32004 earlier, in _handle_request.
+    # Signed, like every error once a session_id is readable: §10 exempts only an unknown key_id, and acs.client
+    # reads a signed -32004 as signature_invalid_response, the cause the conformance suite requires (Core08). An
+    # unknown key_id gets its unsigned -32004 earlier, in _answer, before the structure and depth checks.
     if not verify_signature(envelope, session_id=session_id):
         raise GuardianError(-32004, "SIGNATURE_INVALID")
 
@@ -752,11 +752,11 @@ def read_request(request: Any) -> RequestRead:
 
 def handle_request(request: dict) -> dict:
     """Answer one JSON-RPC request. A request the Guardian can't read or canonicalize gets an error answer."""
-    # Errors are signed whenever the session key is derivable, as spec section 10 requires. The two unsigned
-    # answers are the -32004 for an unknown key_id (the section 10 exemption) and do_POST's floor, which answers
-    # when signing itself fails. Signing an error before the sender is verified gives that sender an HMAC under a
-    # session key it chose, over an error envelope with an id it chose. A client accepts a response only for its
-    # own UUID request ids, so it can't use one.
+    # Errors are signed whenever a session_id is readable, as spec section 10 requires. docs/guardian/README.md
+    # lists every unsigned answer: system/ping, an unknown key_id, the answers before any session is known, a
+    # structure error with no readable session, and the -32603 floor when signing itself fails. Signing an error
+    # before the sender is verified gives that sender an HMAC under a session key it chose. An on-path attacker
+    # who could use one can already drop or tamper with any response, so that is out of scope without TLS.
     return _handle(request, read_request(request))
 
 
@@ -796,8 +796,8 @@ def internal_error_envelope(request_id: Any) -> dict:
 
 
 def _answer(request: dict, read: RequestRead) -> dict:
-    # §10: a key_id this Guardian holds no secret for gets an unsigned -32004 before any other check, whenever the
-    # signature object is readable, so key_id_rejected is never hidden behind an error signed with this Guardian's
+    # §10: a key_id this Guardian holds no secret for gets an unsigned -32004 before the structure and depth checks,
+    # whenever the signature object is readable, so key_id_rejected is never hidden behind an error signed with this Guardian's
     # key. system/ping is exempt: it is unsigned and answers whatever it carries (§13).
     if _foreign_key_id(request):
         return _error_envelope(read.id, "", -32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
@@ -809,7 +809,7 @@ def _answer(request: dict, read: RequestRead) -> dict:
     try:
         return _handle_request(request, read)
     except CANONICALIZATION_ERRORS as e:
-        # Last resort, after the depth bound. If even this error can't be signed, do_POST's floor answers.
+        # Last resort, after the depth bound. If even this error can't be signed, _handle returns the -32603 floor.
         cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
         return _error_envelope(read.id, read.session_id, -32600,
                                f"Invalid Request: the envelope could not be canonicalized{cause}")
