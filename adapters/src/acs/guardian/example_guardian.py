@@ -885,6 +885,8 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
 
 
 _CONTENT_LENGTH = re.compile(r"[0-9]+")
+# One deadline for reading a whole request body. The per-recv socket timeout alone lets a slow drip run for days.
+BODY_READ_SECONDS = 30.0
 
 # The one answer for anything that escapes every specific check. Fixed text, so nothing internal reaches the agent.
 INTERNAL_ERROR_MESSAGE = "Internal error: the Guardian could not process this request"
@@ -927,7 +929,7 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
                                 "error": {"code": -32600,
                                           "message": f"Request body {length} bytes exceeds {MAX_REQUEST_BODY_BYTES} cap"}})
             return
-        body = self.rfile.read(length)
+        body = self._read_body(length)
         try:
             request = json.loads(body.decode("utf-8"))
         except (ValueError, RecursionError):
@@ -962,6 +964,23 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             )
             sys.stderr.flush()
         self._respond(200, response)
+
+    def _read_body(self, length: int) -> bytes:
+        """Read the body within one deadline for the whole read, so a client dripping one byte per interval
+        can't hold this thread past BODY_READ_SECONDS. A short body ends at EOF and fails to parse later."""
+        deadline = time.monotonic() + BODY_READ_SECONDS
+        chunks, remaining = [], length
+        while remaining > 0:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("the request body passed its read deadline")
+            self.connection.settimeout(min(left, self.timeout) if self.timeout else left)
+            chunk = self.rfile.read1(min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def _respond(self, status: int, body: dict) -> None:
         payload = json.dumps(body).encode("utf-8")
