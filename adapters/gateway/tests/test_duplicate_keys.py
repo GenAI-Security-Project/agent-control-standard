@@ -149,3 +149,11 @@ def test_the_strict_loader_parses_once_and_keeps_the_last_copy():
     value, repeated = loads_recording('{"a": 1, "b": {"c": 2, "c": 3}, "a": 4}')
     assert value == {"a": 4, "b": {"c": 3}} and repeated == "c"
     assert loads_recording('{"a": 1}') == ({"a": 1}, None)
+
+
+def test_shadow_records_the_deny_enforce_would_make_for_a_repeated_upstream_key(gateway, guardian, upstream, audit):
+    upstream.reply(REPEATED_ANSWER)
+    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=finbot_request())
+    assert response.content == REPEATED_ANSWER
+    recorded = events(audit, "shadow_decision")
+    assert [(e["decision"], e["cause"]) for e in recorded] == [("deny", "duplicate_json_key")]

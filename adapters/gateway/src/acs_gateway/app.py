@@ -279,6 +279,14 @@ class Gateway:
             if self.enforce:
                 return openai_error(502, "The model service returned an unreadable response.", "server_error",
                                     "upstream_unreadable")
+            # Shadow records the deny enforce makes for the whole answer, rather than gating the last-wins copy,
+            # since a client that reads the first copy runs calls that copy never shows.
+            async with self._current(key) as session:
+                _pin(session, pins)
+                result = StepResult(TOOL_CALL_REQUEST, None, cause="duplicate_json_key",
+                                    failure_class="malformed_response")
+                self._record(session, result, Applied("deny", None, "duplicate_json_key"), "", None)
+            return _relay(upstream, None)
         if not isinstance(reply, dict) or not isinstance(reply.get("output"), list):
             # A success the gateway can't read could carry calls it never gated, so enforce never relays it.
             # Shadow only observes, so it relays the answer as it came.
