@@ -65,15 +65,20 @@ class GuardianRun:
 
     def startup_fingerprint(self, timeout: float = 5.0) -> str:
         """The fingerprint the Guardian printed on stderr at startup, read from the live process."""
+        # Raw reads from the descriptor: a buffered readline can pull several lines into Python's buffer, and then
+        # select reports nothing left to read while the fingerprint line sits unread in that buffer.
+        fd = self.process.stderr.fileno()
         deadline = time.time() + timeout
         while time.time() < deadline:
-            for line in self.stderr_lines:
-                match = FINGERPRINT_LINE.search(line)
-                if match:
-                    return match.group(2)
-            readable, _, _ = select.select([self.process.stderr], [], [], 0.2)
+            match = FINGERPRINT_LINE.search("".join(self.stderr_lines))
+            if match:
+                return match.group(2)
+            readable, _, _ = select.select([fd], [], [], 0.2)
             if readable:
-                self.stderr_lines.append(self.process.stderr.readline())
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                self.stderr_lines.append(chunk.decode("utf-8", "replace"))
         raise AssertionError(f"the Guardian printed no fingerprint line: {self.stderr_lines!r}")
 
 

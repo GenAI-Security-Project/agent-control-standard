@@ -235,3 +235,67 @@ def test_a_response_with_no_request_before_it_fails(mldsa_run):
     lines = record_session(mldsa_run)
     report = mldsa_verify(mldsa_run, lines[1:])
     assert (report.failure.line, report.failure.code) == (1, "order")
+
+
+# The key document sits beside the transcript in the attendee's state tree, so swapping both must be caught by the
+# fingerprint the Guardian printed at startup (PREMORTEM P5).
+
+
+def resign(lines, signing_key):
+    """Every response re-signed with another key, as an attacker who swapped the key document would do."""
+    from acs.core import sign_with_signing_key
+    out = []
+    for line in lines:
+        record = json.loads(line)
+        if record["dir"] == "resp" and record["envelope"] is not None:
+            sign_with_signing_key(record["envelope"], signing_key)
+        out.append(json.dumps(record, separators=(",", ":"), ensure_ascii=True))
+    return out
+
+
+def attacker_document(run, key_id):
+    import datetime
+    from acs.core import MLDSA65SigningKey
+    from acs.guardian.decision_keys import key_document
+    signing_key = MLDSA65SigningKey.generate(key_id)
+    start = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    document = key_document(signing_key, guardian_id="lab-guardian", not_before=start,
+                            not_after=start + datetime.timedelta(days=3650))
+    return signing_key, document
+
+
+def test_the_guardian_prints_the_fingerprint_of_its_key_document_at_startup(mldsa_run):
+    assert mldsa_run.startup_fingerprint() == mldsa_run.key_document()["keys"][0]["fingerprint"]
+
+
+def test_the_startup_fingerprint_passes_the_guardians_own_document(mldsa_run):
+    fingerprint = mldsa_run.startup_fingerprint()
+    report = mldsa_verify(mldsa_run, record_session(mldsa_run), expect_fingerprints=[fingerprint])
+    assert report.ok and report.complete, report.to_text()
+    assert report.keys_used == {"lab-guardian-1": fingerprint}
+
+
+def test_a_swapped_key_document_fails_with_the_expected_fingerprint(mldsa_run):
+    fingerprint = mldsa_run.startup_fingerprint()
+    lines = record_session(mldsa_run)
+    signing_key, swapped = attacker_document(mldsa_run, "lab-guardian-1")
+    forged = resign(rewrite(lines, tool_request_line(lines, "rm -rf /") + 1,
+                            lambda r: r["envelope"]["result"].update({"decision": "allow"})), signing_key)
+    # Without the pin, a swapped document and re-signed responses pass. That is why the pin exists.
+    assert mldsa_verify(mldsa_run, forged, key_document=swapped).ok
+    report = mldsa_verify(mldsa_run, forged, key_document=swapped, expect_fingerprints=[fingerprint])
+    assert (report.failure.line, report.failure.code) == (0, "fingerprint_mismatch")
+    assert "FAIL at the key document" in report.to_text()
+
+
+def test_an_extra_key_added_to_the_real_document_fails_at_the_first_response_it_signed(mldsa_run):
+    fingerprint = mldsa_run.startup_fingerprint()
+    lines = record_session(mldsa_run)
+    signing_key, extra = attacker_document(mldsa_run, "lab-guardian-2")
+    document = mldsa_run.key_document()
+    document["keys"].append(extra["keys"][0])
+    number = tool_request_line(lines, "rm -rf /") + 1
+    flipped = rewrite(lines, number, lambda r: r["envelope"]["result"].update({"decision": "allow"}))
+    forged = flipped[:number - 1] + resign(flipped[number - 1:number], signing_key) + flipped[number:]
+    report = mldsa_verify(mldsa_run, forged, key_document=document, expect_fingerprints=[fingerprint])
+    assert (report.failure.line, report.failure.code) == (number, "fingerprint_mismatch")
