@@ -106,15 +106,15 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 | Field | Meaning |
 |---|---|
 | `scenario` | The capture's scenario name |
-| `match` | A regular expression the request's first user message, with placeholders, must match in full. Capture writes the escaped message, and a curator may loosen it by hand |
+| `match` | A regular expression the request's first user message, with placeholders, must match in full. A message given as a list of content parts is read as its text parts joined, so a regex targets the text a person reads. Capture writes the escaped message, and a curator may loosen it by hand |
 | `turn` | How many user messages the request held, so each turn of one chat has its own answer |
-| `step` | How many `function_call_output` items the request held. A retry, from FinBot's SDK or its agent runner, lands on the same step |
+| `step` | How many `function_call_output` items with a call_id the request held, the outputs the gateway governs. A retry, from FinBot's SDK or its agent runner, lands on the same step |
 | `branch` | One token per governed item, comma separated, from the session's own outcome records, never from text in the request: `a` delivered, `d` removed or replaced by the neutral line, `m` rewritten (a MODIFY of a call or an output). Calls and outputs take their tokens in the order the request holds them. A removed call never comes back from the client, so its `d` sits where the request that produced it ended. Off and shadow change nothing, so they give `a` for every call and output |
 | `stream` | Whether the request asked for a stream |
-| `ids` | Every placeholder in the request, in document order, as `kind:n`. Replay fills only a request with the same list, so an id that moved or an extra one is a miss (`placeholder_mismatch`) instead of a value in the wrong place |
+| `ids` | Every placeholder in the request, in document order, as `kind:n`. It is part of the lookup, so an id that moved or an extra one never fills a value into the wrong place. When some line fits everything but `ids`, the miss says `placeholder_mismatch` |
 | `response` | The Responses API body, or for a stream the list of `{"event", "data"}` server-sent events |
 
-Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch` and `stream`. A byte-identical retry gets the same answer as the first attempt, a miss included, because an answer depends only on the request bytes and the gateway's branch tokens, and a retry carries both unchanged. A line whose `branch` has fewer tokens than its `step` could never match, so it stops startup with its file and line number. So does any other malformed line, and the gateway exits with code 2 and a one-line message naming the file, as it does for a bad key file.
+Replay serves the first line, in file name and line order, that fits all of `match`, `turn`, `step`, `branch`, `stream` and `ids`. `ACS_REPLAY_SCENARIO` limits replay to `<ACS_RECORDINGS_DIR>/<scenario>.jsonl`, so two scenarios that share a key never collide. Capture never writes a line the loader would reject. It audits `capture_skipped` with cause `invalid_line` instead. A byte-identical retry gets the same answer as the first attempt, a miss included, because an answer depends only on the request bytes and the gateway's branch tokens, and a retry carries both unchanged. A line whose `branch` has fewer tokens than its `step` could never match, so it stops startup with its file and line number. So does any other malformed line, and the gateway exits with code 2 and a one-line message naming the file, as it does for a bad key file.
 
 Recordings come from the repository, so `match` is trusted input: the gateway runs it as written, with no time limit, and a recording from anywhere else deserves the review any other code would get.
 
@@ -238,7 +238,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `session_evicted` | The session cap evicted the least recently used session |
 | `epoch_bumped` | The epoch moved |
 | `replay_miss` | Replay answered with the miss response. `cause` is `no_recording`, `placeholder_mismatch`, `placeholder_unfilled` or `unreadable_request`, with `step`, `branch` and `stream`, and `scenario` when a line matched but couldn't be filled |
-| `capture_skipped` | Capture wrote no line for a successful exchange. `cause` is `unreadable_request`, `unreadable_response`, or `unmapped_id` (the answer would still carry a user id or namespace) |
+| `capture_skipped` | Capture wrote no line for a successful exchange. `cause` is `unreadable_request`, `unreadable_response`, `unmapped_id` (the answer would still carry a user id or namespace), or `invalid_line` (the loader would reject the line) |
 | `capture_failed` | Capture couldn't write its line (`cause` `write_error`). The client still got its answer |
 
 **Model input log.** When `ACS_MODEL_INPUT_LOG` is set, every request body forwarded upstream is appended there, one per line, in every mode, off included.
@@ -254,6 +254,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only |
 | `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
 | `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64. Empty means the default, and only capture checks it |
+| `ACS_REPLAY_SCENARIO` | None | In replay, load only `<ACS_RECORDINGS_DIR>/<scenario>.jsonl`, which must exist. Same name rules as the capture scenario. Other modes ignore it |
 | `ACS_UPSTREAM_MODEL` | None | In live and capture, the model name sent upstream in place of the client's. The model input log shows the name sent. Replay ignores it |
 | `ACS_GUARDIAN_URL` | `http://127.0.0.1:8787/` | Guardian endpoint |
 | `ACS_HMAC_SECRET_FILE` or `ACS_HMAC_SECRET` | None | Request signing secret, at least 32 bytes. The file must be 0600 or 0400 |

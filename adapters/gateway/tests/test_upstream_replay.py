@@ -151,6 +151,38 @@ def test_a_streamed_request_replays_its_events_in_off_mode(gateway, tmp_path, no
     assert len(blocks) == 2
 
 
+def test_the_id_skeleton_is_part_of_the_lookup(gateway, tmp_path, audit, no_network):
+    """Fix round 3, CR3-3: a line whose ids don't fit is passed over, not answered with a miss."""
+    write(tmp_path / "rec", line(0, response_body(message_item("needs a transfer {{acs:tr:1}}")), ids=["tr:1"]),
+          line(0, response_body(message_item("plain"))))
+    reply = replay(gateway, tmp_path).post("/v1/responses", json=finbot_request()).json()
+    assert reply["output"][0]["content"][0]["text"] == "plain"
+    assert miss_events(audit) == []
+
+
+def test_replay_scenario_restricts_replay_to_one_file(gateway, tmp_path, no_network):
+    """Fix round 3, CR3-3: two scenarios sharing a key no longer collide."""
+    write(tmp_path / "rec", line(0, response_body(message_item("from s1"))), name="s1.jsonl")
+    write(tmp_path / "rec", line(0, response_body(message_item("from s2"))), name="s2.jsonl")
+    reply = replay(gateway, tmp_path, ACS_REPLAY_SCENARIO="s2").post("/v1/responses", json=finbot_request()).json()
+    assert reply["output"][0]["content"][0]["text"] == "from s2"
+
+
+def test_a_missing_replay_scenario_stops_startup(gateway, tmp_path):
+    write(tmp_path / "rec", line(0, response_body(message_item("from s1"))), name="s1.jsonl")
+    with pytest.raises(ValueError, match="s9.jsonl"):
+        replay(gateway, tmp_path, ACS_REPLAY_SCENARIO="s9")
+
+
+def test_a_hand_written_match_fits_list_content(gateway, tmp_path, no_network):
+    """Fix round 3, CR3-10: list content keys on its joined text parts."""
+    write(tmp_path / "rec", line(0, response_body(message_item("paid")), match=r"Pay vendor \d+"))
+    body = finbot_request()
+    body["input"][1]["content"] = [{"type": "input_text", "text": "Pay "}, {"type": "input_text", "text": "vendor 7"}]
+    reply = replay(gateway, tmp_path).post("/v1/responses", json=body).json()
+    assert reply["output"][0]["content"][0]["text"] == "paid"
+
+
 def test_replay_works_in_enforce_and_gates_the_recorded_call(gateway, guardian, tmp_path, audit):
     write(tmp_path / "rec", line(0, response_body(call_item("bash", {"command": "rm -rf /"}, "call_1"))))
     reply = replay(gateway, tmp_path, ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(

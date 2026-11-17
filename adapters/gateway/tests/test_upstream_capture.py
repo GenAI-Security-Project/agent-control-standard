@@ -135,3 +135,27 @@ def test_capture_stops_buffering_past_the_body_limit(gateway, upstream, tmp_path
     assert response.json()["error"]["code"] == "upstream_too_large"
     assert recorded(tmp_path) == []
     assert "upstream_too_large" in [e["cause"] for e in audit() if e["acs_audit_event"] == "upstream_error"]
+
+
+def test_an_output_with_no_call_id_takes_no_step_and_the_line_loads(gateway, upstream, tmp_path):
+    """Fix round 3, CR3-5: step counts only outputs the gateway governs, the same ones the branch counts."""
+    upstream.reply(response_body(message_item("ok")))
+    capture(gateway, tmp_path).post("/v1/responses", json=finbot_request(
+        {"type": "function_call_output", "output": "orphan"}))
+    [line] = recorded(tmp_path)
+    assert (line["step"], line["branch"]) == (0, "")
+    gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"))
+
+
+def test_capture_never_writes_a_line_the_loader_rejects(gateway, upstream, tmp_path, audit, monkeypatch):
+    from acs_gateway import upstream as module
+
+    def reject(raw):
+        raise ValueError("rejected for the test")
+
+    client = capture(gateway, tmp_path)
+    monkeypatch.setattr(module, "_recording", reject)
+    upstream.reply(response_body(message_item("ok")))
+    assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["invalid_line"]

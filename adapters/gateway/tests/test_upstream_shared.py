@@ -77,6 +77,8 @@ def test_replay_reads_a_request_by_the_session_rules():
                       {"role": "user", "type": "message",
                        "content": [{"type": "input_text", "text": "Pay "}, {"type": "input_text", "text": "vendor 7"}]},
                       {"role": "user", "content": "Again"}]}
+    # The same first user item as the session rule picks, read as its joined text (fix round 3, CR3-10).
     system, first_user = sessions.conversation_parts(body)
-    assert replay_key(body, placeholder_map(body))[:2] == (first_user, 2)
+    assert '"vendor 7"' in first_user
+    assert replay_key(body, placeholder_map(body))[:2] == ("Pay vendor 7", 2)
     assert app.is_stream is sessions.is_stream

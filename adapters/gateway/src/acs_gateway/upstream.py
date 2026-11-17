@@ -163,15 +163,34 @@ def replay_key(body: dict[str, Any], mapping: dict[str, str]) -> tuple[str, int,
     The turn is the number of user messages, so each turn of one chat has its own answer (fix round 2, CR1). The
     step is the number of function_call_output items, so an SDK retry or an agent rerun lands on the same step.
     """
-    # The first user message is read by the same rule that groups requests into sessions (fix round 2, CR10).
-    first_user = conversation_parts(body)[1]
+    first_user = _first_user_text(body)
     items = body.get("input")
     if isinstance(items, str):
         return to_placeholders(first_user, mapping), 1, 0
     items = items if isinstance(items, list) else []
     turn = sum(1 for i in items if isinstance(i, dict) and i.get("role") == "user")
-    step = sum(1 for i in items if isinstance(i, dict) and i.get("type") == "function_call_output")
+    # Only outputs the gateway governs, the same ones the branch counts, so a capture never writes a step its branch
+    # can't cover (fix round 3, CR3-5).
+    step = sum(1 for i in _governed_items(body) if i.get("type") == "function_call_output")
     return to_placeholders(first_user, mapping), turn, step
+
+
+def _first_user_text(body: dict[str, Any]) -> str:
+    """The first user message, picked by the rule sessions use, as the text a person reads: a string as it is, a list
+    of parts as its text parts joined, so a hand-written match targets plain text (fix round 3, CR3-10). Any other
+    shape falls back to the session's own form."""
+    items = body.get("input")
+    if isinstance(items, str):
+        return items
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("role") == "user":
+            content = item.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str))
+            break
+    return conversation_parts(body)[1]
 
 
 def _governed_items(body: Any) -> list[dict[str, Any]]:
@@ -342,11 +361,20 @@ class RecordingStore:
         self.recordings = recordings
 
     @classmethod
-    def load(cls, directory: Path) -> RecordingStore:
+    def load(cls, directory: Path, scenario: str | None = None) -> RecordingStore:
+        """Every *.jsonl file in directory, or only <scenario>.jsonl when ACS_REPLAY_SCENARIO names one, so two
+        scenarios sharing a key never collide (fix round 3, CR3-3)."""
         if not directory.is_dir():
             raise ValueError(f"ACS_RECORDINGS_DIR {directory} is not a directory")
+        if scenario is not None:
+            only = directory / f"{scenario}.jsonl"
+            if not only.is_file():
+                raise ValueError(f"ACS_REPLAY_SCENARIO file {only} does not exist")
+            paths = [only]
+        else:
+            paths = sorted(directory.glob("*.jsonl"))
         recordings = []
-        for path in sorted(directory.glob("*.jsonl")):
+        for path in paths:
             for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if not raw.strip():
                     continue
@@ -356,13 +384,18 @@ class RecordingStore:
                     raise ValueError(f"{path}:{number}: {e}") from None
         return cls(recordings)
 
-    def find(self, first_user: str, turn: int, step: int, branch: str, stream: bool) -> Recording | None:
-        """The first recording, in file and line order, that fits every part of the key."""
+    def find(self, first_user: str, turn: int, step: int, branch: str, stream: bool,
+             ids: list[str]) -> tuple[Recording | None, bool]:
+        """The first recording, in file and line order, that fits every part of the key, the id skeleton included
+        (fix round 3, CR3-3), and whether some line fit all but the skeleton."""
+        shape_only = False
         for recording in self.recordings:
-            if (recording.turn == turn and recording.step == step and recording.branch == branch and recording.stream == stream
-                    and recording.match.fullmatch(first_user)):
-                return recording
-        return None
+            if (recording.turn == turn and recording.step == step and recording.branch == branch
+                    and recording.stream == stream and recording.match.fullmatch(first_user)):
+                if recording.ids == ids:
+                    return recording, False
+                shape_only = True
+        return None, shape_only
 
 
 # The documented miss: fixed ids and the gateway's own neutral line, so a miss never looks like a model's guess.
@@ -444,12 +477,10 @@ class ReplayTransport(httpx.AsyncBaseTransport):
         first_user, turn, step = replay_key(body, mapping)
         if branch is None:
             branch = off_branch(body)
-        recording = self.store.find(first_user, turn, step, branch, stream)
+        recording, shape_only = self.store.find(first_user, turn, step, branch, stream, id_skeleton(body, mapping))
         if recording is None:
-            return self._miss(body.get("model"), "no_recording", step, branch, stream)
-        if id_skeleton(body, mapping) != recording.ids:
-            return self._miss(body.get("model"), "placeholder_mismatch", step, branch, stream,
-                              scenario=recording.scenario)
+            return self._miss(body.get("model"), "placeholder_mismatch" if shape_only else "no_recording", step,
+                              branch, stream)
         response, complete = fill(recording.response, mapping)
         if not complete:
             return self._miss(body.get("model"), "placeholder_unfilled", step, branch, stream,
@@ -586,13 +617,21 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             return
         line = {"scenario": self._scenario, "match": re.escape(first_user), "turn": turn, "step": step, "branch": branch,
                 "stream": stream, "ids": id_skeleton(body, mapping), "response": normalized}
+        encoded = json.dumps(line, ensure_ascii=False)
+        try:
+            # A line the loader rejects would stop replay for the whole directory, so it is never written
+            # (fix round 3, CR3-5).
+            _recording(encoded)
+        except ValueError as e:
+            _audit("capture_skipped", cause="invalid_line", scenario=self._scenario, error=str(e))
+            return
         try:
             with self._lock:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 # O_NOFOLLOW so a symlink planted at the scenario path can't redirect the write (fix round 2, R5).
                 fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o644)
                 with os.fdopen(fd, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(line, ensure_ascii=False) + "\n")
+                    f.write(encoded + "\n")
         except OSError as e:
             _audit("capture_failed", cause="write_error", scenario=self._scenario, error=type(e).__name__)
 
@@ -622,7 +661,7 @@ class UpstreamSource:
                                  "choose another scenario")
         if self.mode == "replay":
             assert config.recordings_dir is not None
-            self._store = RecordingStore.load(config.recordings_dir)
+            self._store = RecordingStore.load(config.recordings_dir, config.replay_scenario)
 
     @property
     def records_branch(self) -> bool:

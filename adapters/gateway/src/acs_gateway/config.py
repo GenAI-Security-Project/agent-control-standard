@@ -102,6 +102,7 @@ class GatewayConfig:
     recordings_dir: Path | None = None
     capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
     upstream_model: str | None = None
+    replay_scenario: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -137,6 +138,10 @@ class GatewayConfig:
                              f"{STEP_GRACE_S:g} s ({decision_timeout_s + STEP_GRACE_S:g}), got {ask_max_s:g}")
         upstream_mode, key_file, recordings, scenario = _upstream_settings(env)
         model = env.get("ACS_UPSTREAM_MODEL", "").strip()
+        replay_scenario = env.get("ACS_REPLAY_SCENARIO", "").strip() if upstream_mode == "replay" else ""
+        if replay_scenario and not _SCENARIO.fullmatch(replay_scenario):
+            raise ValueError(f"ACS_REPLAY_SCENARIO must be a plain name of letters, digits, _ and -, "
+                             f"got {replay_scenario!r}")
         return cls(
             mode=mode,
             upstream_url=(env.get("ACS_UPSTREAM_URL", "").strip() or DEFAULT_UPSTREAM_URL).rstrip("/"),
@@ -167,6 +172,7 @@ class GatewayConfig:
             recordings_dir=recordings,
             capture_scenario=scenario,
             upstream_model=model or None,
+            replay_scenario=replay_scenario or None,
         )
 
 

@@ -101,3 +101,13 @@ def test_an_empty_or_odd_scenario_matters_only_to_capture(tmp_path, mode):
 def test_an_empty_scenario_means_the_default_in_capture(tmp_path):
     c = config(tmp_path, ACS_UPSTREAM="capture", ACS_RECORDINGS_DIR=str(tmp_path), ACS_CAPTURE_SCENARIO="  ")
     assert c.capture_scenario == "capture"
+
+
+def test_replay_scenario_is_read_and_checked_only_in_replay(tmp_path):
+    rec = str(tmp_path)
+    assert config(tmp_path, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=rec).replay_scenario is None
+    assert config(tmp_path, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=rec,
+                  ACS_REPLAY_SCENARIO="s2").replay_scenario == "s2"
+    with pytest.raises(ValueError, match="ACS_REPLAY_SCENARIO"):
+        config(tmp_path, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=rec, ACS_REPLAY_SCENARIO="../s2")
+    assert config(tmp_path, ACS_REPLAY_SCENARIO="../s2").upstream_mode == "live"
