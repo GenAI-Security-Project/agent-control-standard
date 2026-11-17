@@ -255,6 +255,11 @@ def _post(config: OpaConfig, body: bytes, exchange: _Exchange) -> bytes:
     return b"".join(chunks)
 
 
+def _reject_constant(name: str) -> Any:
+    # NaN, Infinity, and -Infinity are not JSON, and JCS cannot sign them.
+    raise ValueError(f"non-finite constant {name}")
+
+
 def query(config: OpaConfig, document: Mapping[str, Any]) -> Any:
     """POST the document and return OPA's result member. Raises OpaFailure for every way that can fail."""
     body = json.dumps(document).encode("utf-8")
@@ -282,7 +287,7 @@ def query(config: OpaConfig, document: Mapping[str, Any]) -> Any:
             raise error
         raise OpaFailure("opa_unreachable", f"OPA query failed: {type(error).__name__}")
     try:
-        answer = json.loads(box["data"].decode("utf-8"))
+        answer = json.loads(box["data"].decode("utf-8"), parse_constant=_reject_constant)
     except (UnicodeDecodeError, ValueError, RecursionError) as e:
         # RecursionError: a body nested past the parser's limit is malformed too, never an unhandled crash.
         raise OpaFailure("opa_response_malformed", f"OPA response is not usable JSON: {type(e).__name__}") from None
@@ -449,4 +454,12 @@ def evaluate(method: str, params: Mapping[str, Any], base: Mapping[str, Any], co
         problem = f"verdict validation failed: {type(e).__name__}"
     if problem:
         return _deny(base, "opa_verdict_invalid", f"OPA verdict rejected: {problem}")
-    return {**base, **verdict}
+    result = {**base, **verdict}
+    try:
+        # The Guardian signs the JCS form of the response. A number JCS cannot encode (an integer beyond 2^53, or a
+        # float that overflowed to infinity) would fail there, after every check, and drop the connection.
+        from acs.core import jcs_canonicalize
+        jcs_canonicalize(result)
+    except Exception as e:  # noqa: BLE001
+        return _deny(base, "opa_verdict_invalid", f"OPA verdict cannot be canonicalized: {type(e).__name__}")
+    return result

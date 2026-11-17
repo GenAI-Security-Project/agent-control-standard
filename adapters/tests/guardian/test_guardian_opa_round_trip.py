@@ -95,3 +95,15 @@ def test_the_startup_log_never_prints_url_userinfo(tmp_path, monkeypatch):
     _, stderr = process.communicate(timeout=5)
     assert "127.0.0.1:1/v1/data/lab/verdict" in stderr
     assert "secret-pw" not in stderr
+
+
+
+@pytest.mark.parametrize("body", [
+    b'{"result": {"decision": "allow", "policy_data": {"n": 9007199254740993}}}',
+    b'{"result": {"decision": "allow", "policy_data": {"n": NaN}}}',
+])
+def test_an_unsignable_number_is_a_signed_deny(guardian, body):
+    with StubOpa(body=body) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
+    assert result["decision"] == "deny"
+    assert result["reason_codes"][0] in ("opa_response_malformed", "opa_verdict_invalid")

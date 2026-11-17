@@ -166,3 +166,11 @@ def test_queries_reuse_the_opener_built_with_the_config(monkeypatch):
             assert opa_backend.query(config, {"input": {}}) == DENY
     assert config.opener is opener
     assert config == same and config.opener is not same.opener, "the opener takes no part in equality"
+
+
+
+@pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
+def test_a_non_finite_constant_is_malformed(constant):
+    body = b'{"result": {"decision": "allow", "policy_data": {"n": ' + constant + b"}}}"
+    with StubOpa(body=body) as opa:
+        assert _failure(_config(opa.url)).reason_code == "opa_response_malformed"
