@@ -371,7 +371,23 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
         # A path that misses would redact nothing and let the value through, so it is a policy error, not a no-op.
         if not path or not _resolve_pointer(payload, path):
             return f"redaction path {path!r} does not name a value in the payload"
-    return _sibling_output_problem(paths, payload)
+    return _overlap_problem(paths) or _sibling_output_problem(paths, payload)
+
+
+def _overlap_problem(paths: list[str]) -> str | None:
+    """Section 6.3 wants disjoint targets, so no redaction path repeats or sits inside another. Linear in path length."""
+    seen: set[str] = set()
+    for path in paths:
+        if path in seen:
+            return f"redaction path {path!r} appears more than once"
+        seen.add(path)
+    for path in paths:
+        tokens = path.split("/")
+        for end in range(2, len(tokens)):
+            prefix = "/".join(tokens[:end])
+            if prefix in seen:
+                return f"redaction path {path!r} sits inside redaction path {prefix!r}"
+    return None
 
 
 _OUTPUT_PATH = re.compile(r"/outputs/(?:0|[1-9][0-9]*)/value(/.*)?")

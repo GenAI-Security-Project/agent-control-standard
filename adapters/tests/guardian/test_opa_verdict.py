@@ -250,3 +250,17 @@ def test_evaluate_denies_a_number_the_guardian_cannot_sign(number):
     with StubOpa(body=body) as opa:
         result = _evaluate("steps/toolCallRequest", CALL, opa.url)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
+
+
+@pytest.mark.parametrize("paths", [
+    ["/outputs/0/value/bank_account_number", "/outputs/1/value/bank_account_number",
+     "/outputs/0/value/bank_account_number"],
+    ["/outputs/0/value", "/outputs/1/value", "/outputs/0/value/bank_account_number",
+     "/outputs/1/value/bank_account_number"],
+    ["/outputs/0", "/outputs/1", "/outputs/1/value"],
+])
+def test_redaction_paths_that_repeat_or_nest_are_invalid(paths):
+    # Section 6.3: structured targets are disjoint, so no path repeats or contains another.
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": p} for p in paths]}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", RESULT, BASE)
