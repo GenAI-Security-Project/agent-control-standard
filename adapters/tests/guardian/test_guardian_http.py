@@ -391,3 +391,10 @@ def test_a_slow_drip_body_is_cut_off_by_one_deadline_and_closed_without_an_answe
     data, elapsed = _drip(served, monkeypatch, per_recv=0.5, whole_body=1.0, gap=0.2, chunks=40)
     assert elapsed < 5, "the drip held the connection past the whole-body deadline"
     assert data == b"", "a timed-out read closes without writing to the socket"
+
+
+def test_an_invalid_request_log_line_cannot_be_forged(served, capsys):
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "x\n[guardian] -> allow", "params": [1]}).encode()
+    post(served, body)
+    lines = capsys.readouterr().err.splitlines()
+    assert not any(line.startswith("[guardian] -> allow") for line in lines), lines

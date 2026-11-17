@@ -676,8 +676,9 @@ MAX_REQUEST_DEPTH = 128
 
 
 def _log_value(value: Any, width: int = 8) -> str:
-    """A field for the log line: a string cut to width, anything else only its type name, never a full repr."""
-    return value[:width] if isinstance(value, str) else f"<{type(value).__name__}>"
+    """A field for the log line: the repr of a string cut to width, so a newline or other control character can't
+    forge a line, and anything else only its type name, never a full repr."""
+    return repr(value[:width]) if isinstance(value, str) else f"<{type(value).__name__}>"
 
 
 class RequestFields(NamedTuple):
