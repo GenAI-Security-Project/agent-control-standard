@@ -60,6 +60,14 @@ def test_an_unencodable_declaration_is_skipped_and_reported_once():
     assert skipped == ["send_email"]
 
 
+def test_a_lone_surrogate_key_is_skipped_and_reported():
+    skipped = []
+    digests = ToolDigests({"tools": [{**SEND, "parameters": {"\ud800": 1}}]},
+                          on_skip=lambda name, reason: skipped.append(name))
+    assert digests.get("send_email") is None
+    assert skipped == ["send_email"]
+
+
 def test_any_other_error_is_raised(monkeypatch):
     import acs_gateway.tool_digest as td
 
