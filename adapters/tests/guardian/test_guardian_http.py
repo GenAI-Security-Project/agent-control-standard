@@ -259,3 +259,10 @@ def test_a_content_length_that_is_not_plain_digits_is_refused_without_reading(se
     head = f"POST /acs HTTP/1.1\r\nHost: guardian\r\nContent-Type: application/json\r\nContent-Length: {value}"
     status, answer = send_raw(served, head, b'{"jsonrpc": "2.0"}')
     assert (status, answer["error"]["code"]) == (400, -32600)
+
+
+def test_a_step_payload_that_is_not_an_object_is_refused_on_the_wire(served):
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest",
+                       "params": {"metadata": {"session_id": STRUCT_SESSION}, "payload": "x"}}).encode()
+    status, answer = post(served, body)
+    assert answer["error"]["code"] == -32600

@@ -595,11 +595,8 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         "chain_hash": chain_hash,
     }
 
-    # Absent means empty. A present payload that isn't an object denies, so a falsy one can't pass as {} and a
-    # string can't crash the checks below.
+    # read_request has already refused a payload that isn't an object, so absent is the only other case.
     payload = params.get("payload", {})
-    if not isinstance(payload, dict):
-        return _argument_type_deny(base, method, "payload", payload)
 
     if method == "steps/toolCallRequest":
         # Absent means empty. A present value is checked as it is, so [], "", 0, false, and null can't pass as {}.
