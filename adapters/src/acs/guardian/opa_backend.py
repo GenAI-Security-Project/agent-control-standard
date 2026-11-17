@@ -336,6 +336,8 @@ class PointerError(ValueError):
 
 
 _INVALID_ESCAPE = re.compile(r"~(?![01])")
+# RFC 6901 array indexes in ASCII. str.isdigit would also accept Arabic-Indic digits and superscripts.
+_ARRAY_INDEX = re.compile(r"0|[1-9][0-9]*")
 
 
 def decode_pointer(path: Any) -> list[str]:
@@ -356,7 +358,7 @@ def _step(node: Any, token: str) -> tuple[bool, Any]:
     if isinstance(node, dict):
         return (True, node[token]) if token in node else (False, None)
     if isinstance(node, list):
-        if token.isdigit() and (token == "0" or not token.startswith("0")) and int(token) < len(node):
+        if _ARRAY_INDEX.fullmatch(token) and int(token) < len(node):
             return True, node[int(token)]
     return False, None
 

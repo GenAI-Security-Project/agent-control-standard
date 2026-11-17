@@ -417,3 +417,13 @@ def test_a_redaction_with_an_invalid_escape_is_invalid_even_when_its_raw_key_exi
     verdict = {"decision": "modify", "reasoning": "r",
                "modifications": {"redactions": [{"path": "/outputs/0/value/a~2"}]}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE)
+
+
+
+@pytest.mark.parametrize("token", ["\u0663", "\u00b2", "01", "+1", " 1", "1 "])
+def test_an_array_index_is_ascii_digits_only(token):
+    # str.isdigit accepts Arabic-Indic digits and superscripts. Neither is an RFC 6901 array index.
+    assert opa_backend._resolve_pointer({"a": [0, 1, 2, 3]}, f"/a/{token}") is False
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": f"/outputs/{token}/value"}]}}
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", RESULT, BASE)
