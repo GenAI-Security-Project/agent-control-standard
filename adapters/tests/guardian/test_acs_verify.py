@@ -482,14 +482,14 @@ def refused_session(run, count):
 
 def test_refused_connections_up_to_the_cap_pass_as_not_complete(mldsa_run):
     # transport_failure can also follow a send whose reply was lost, so each is held, not dropped (fix round 3).
-    report = mldsa_verify(mldsa_run, refused_session(mldsa_run, 12))
+    report = mldsa_verify(mldsa_run, refused_session(mldsa_run, 20))
     assert report.ok, report.to_text()
-    assert len(report.unsigned_lines) == 12
+    assert len(report.unsigned_lines) == 20
     assert not report.complete
 
 
 def test_more_unanswered_requests_than_the_cap_fail_as_unsettled(mldsa_run):
-    report = mldsa_verify(mldsa_run, refused_session(mldsa_run, 13))
+    report = mldsa_verify(mldsa_run, refused_session(mldsa_run, 21))
     assert report.failure.code == "chain_unsettled", report.to_text()
 
 

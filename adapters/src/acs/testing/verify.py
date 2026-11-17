@@ -72,8 +72,9 @@ ML_DSA_65 = "ML-DSA-65"
 HMAC_SHA256 = "HMAC-SHA256"
 SESSION_END = "steps/sessionEnd"
 # A request whose answer carries no chain_hash may or may not have advanced the chain (PREMORTEM P6). The next
-# checkpoint settles it by trying each such request in and out, 2**n candidates, so n is bounded.
-MAX_UNSETTLED = 12
+# checkpoint settles it by trying each such request in and out, 2**n candidates, so n is bounded. 20 keeps a lab
+# segment with the Guardian down from failing a genuine transcript as tampered, at about a second of hashing.
+MAX_UNSETTLED = 20
 # Causes acs.client gives only when a request failed before post(), so it never left the client: a Guardian URL it
 # refused, an envelope it couldn't sign, a request that can't bind an answer, and a body over the cap. Such a
 # request is listed but not held for the chain. Every other cause is held, because it can follow a send the Guardian
