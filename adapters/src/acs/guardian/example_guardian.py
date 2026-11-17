@@ -179,6 +179,15 @@ def _answering(request: Any):
         _REQUEST_DIGEST.reset(token)
 
 
+class SigningUnavailable(RuntimeError):
+    """ML-DSA-65 is on but the decision key can't sign now. handle_request answers the -32603 floor for it."""
+
+
+def _utcnow() -> datetime.datetime:
+    """The clock the decision key's validity is checked against. Tests replace it."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 def _sign_response(envelope: dict, session_id: str) -> dict:
     """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
 
@@ -191,7 +200,14 @@ def _sign_response(envelope: dict, session_id: str) -> dict:
         if DECISION_SIGNER is None:
             # Named at import but never loaded, as when a caller serves handle_request without main(). Falling back
             # to HMAC would hand clients a signature their key document can't verify, so the floor answers.
-            raise RuntimeError("ACS_RESPONSE_SIGNING=ML-DSA-65 but no decision key was loaded")
+            raise SigningUnavailable("ACS_RESPONSE_SIGNING=ML-DSA-65 but no decision key was loaded")
+        if not DECISION_SIGNER.keys.is_live(_utcnow()):
+            # Past not_after, before not_before, or revoked since startup (review R-I1). A signature no client
+            # accepts would read as tampering, so the floor answers and the log says why.
+            sys.stderr.write(f"[guardian] decision key {DECISION_SIGNER.keys.key_id} is not live "
+                             "(outside its validity window or revoked), refusing to sign\n")
+            sys.stderr.flush()
+            raise SigningUnavailable("the decision key is not live")
         digest = _REQUEST_DIGEST.get()
         if digest is not None:
             if "result" in envelope:
@@ -862,9 +878,10 @@ def _handle(request: Any, read: RequestRead) -> tuple[int, dict]:
     try:
         with _answering(request):
             return 200, _answer(request, read)
-    except CANONICALIZATION_ERRORS as e:
-        # Signing itself failed, as for a session_id JCS can't encode. A direct caller gets the same unsigned floor
-        # envelope do_POST sends, so handle_request never raises for one, and it is logged the same way.
+    except (*CANONICALIZATION_ERRORS, SigningUnavailable) as e:
+        # Signing itself failed, as for a session_id JCS can't encode, or a decision key that can't sign now. A direct
+        # caller gets the same unsigned floor envelope do_POST sends, so handle_request never raises for one, and it
+        # is logged the same way.
         _log_internal_error(e)
         return 500, internal_error_envelope(read.id)
 

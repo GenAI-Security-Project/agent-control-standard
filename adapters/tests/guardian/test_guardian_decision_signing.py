@@ -134,10 +134,37 @@ def test_server_hello_names_the_algorithm(signer):
     assert response["result"]["signature_algorithms_supported"] == ["HMAC-SHA256"]
 
 
-def test_served_without_main_never_falls_back(signer, monkeypatch):
+def assert_floor(response: dict, request: dict) -> None:
+    assert response == {"jsonrpc": "2.0", "id": request["id"],
+                        "error": {"code": -32603, "message": example_guardian.INTERNAL_ERROR_MESSAGE}}
+
+
+def test_served_without_main_answers_the_floor(signer, monkeypatch, capsys):
+    # Never an HMAC fallback, and never an exception out of handle_request (review CR5).
     monkeypatch.setattr(example_guardian, "DECISION_SIGNER", None)
-    with pytest.raises(RuntimeError, match="ML-DSA-65"):
-        example_guardian.handle_request(signed_step("steps/toolCallRequest", ALLOWED))
+    request = signed_step("steps/toolCallRequest", ALLOWED)
+    assert_floor(example_guardian.handle_request(request), request)
+    assert "[guardian] internal error: SigningUnavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("moment", ["not_after", "before", "revoked"])
+def test_a_key_outside_its_window_never_signs(signer, monkeypatch, capsys, moment):
+    # The window and revocation are checked at every signature, not only at startup (review R-I1).
+    import dataclasses
+    import datetime
+    keys = signer.keys
+    if moment == "revoked":
+        revoked_at = keys.not_before + datetime.timedelta(seconds=1)
+        monkeypatch.setattr(example_guardian, "DECISION_SIGNER",
+                            dataclasses.replace(signer, keys=dataclasses.replace(keys, revoked_at=revoked_at)))
+        now = revoked_at
+    else:
+        now = keys.not_after if moment == "not_after" else keys.not_before - datetime.timedelta(seconds=1)
+    monkeypatch.setattr(example_guardian, "_utcnow", lambda: now)
+    request = signed_step("steps/toolCallRequest", ALLOWED)
+    assert_floor(example_guardian.handle_request(request), request)
+    err = capsys.readouterr().err
+    assert f"[guardian] decision key {KEY_ID} is not live" in err
 
 
 def test_default_guardian_is_unchanged(monkeypatch):

@@ -66,7 +66,9 @@ def _flip(text: str) -> str:
     return text[:i] + ("B" if text[i] != "B" else "C") + text[i + 1:]
 
 
-class ResponseKeysTest(unittest.TestCase):
+class _ResponseKeysBase(unittest.TestCase):
+    """Keys, signed answers, and calls the tests below share. It holds no tests itself."""
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.signer = MLDSA65SigningKey.generate(KEY_ID)
@@ -131,6 +133,9 @@ class ResponseKeysTest(unittest.TestCase):
         self.assertEqual(outcome.cause, cause)
         self.assertEqual(outcome.fields["failure_class"], "signature_invalid")
 
+
+
+class ResponseKeysTest(_ResponseKeysBase):
     # Step exchange.
 
     def test_a_signed_decision_is_decided(self) -> None:
@@ -263,7 +268,7 @@ class ResponseKeysTest(unittest.TestCase):
         self.assert_blocked(self.step(self.ml_decision, keys=None), "response_signature_invalid")
 
 
-class RequestDigestBinding(ResponseKeysTest):
+class RequestDigestBinding(_ResponseKeysBase):
     """One ML-DSA key signs every session, so a response names its request by hash (lab convention, issue #13)."""
 
     def test_the_relay_attack_is_refused(self) -> None:
@@ -315,6 +320,45 @@ class RequestDigestBinding(ResponseKeysTest):
                 sign_with_signing_key(forged, self.signer)
                 self.assertFalse(verify_with_keyring(forged, keyring, expected_key_id=KEY_ID, request=request,
                                                      require_request_digest=True))
+
+
+class KeyValidity(_ResponseKeysBase):
+    """The key's window and revocation are checked on every response, not only at load (review R-I1)."""
+
+    def at(self, moment: datetime.datetime) -> None:
+        patcher = mock.patch.object(_exchange, "_utcnow", return_value=moment)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_parsed_keys_carry_their_window(self) -> None:
+        self.assertLess(self.keys.not_before, self.keys.not_after)
+        self.assertIsNone(self.keys.revoked_at)
+        self.assertTrue(self.keys.is_live(self.keys.not_before))
+        self.assertFalse(self.keys.is_live(self.keys.not_after))
+        self.assertFalse(self.keys.is_live(self.keys.not_before - datetime.timedelta(seconds=1)))
+
+    def test_a_key_that_expires_while_running_fails_every_response(self) -> None:
+        self.at(self.keys.not_after)
+        self.assert_blocked(self.step(self.ml_decision), "response_signature_invalid")
+        self.assert_blocked(self.step(self.ml_error), "error_signature_invalid")
+        decision = self.hello(self.ml_hello)
+        self.assertEqual(decision, SessionRefused("server_hello_signature_invalid"))
+
+    def test_a_key_not_yet_valid_fails(self) -> None:
+        self.at(self.keys.not_before - datetime.timedelta(seconds=1))
+        self.assert_blocked(self.step(self.ml_decision), "response_signature_invalid")
+
+    def test_a_key_revoked_after_load_fails_from_its_revocation(self) -> None:
+        now = datetime.datetime.now(UTC)
+        revoked = [{"key_id": KEY_ID, "revoked_at": (now + datetime.timedelta(hours=1)).isoformat().replace(
+            "+00:00", "Z")}]
+        keys = parse_key_document(_document(_entry(self.signer, **_window()), revoked=revoked), key_id=KEY_ID,
+                                  now=now)
+        self.assertIsNotNone(keys.revoked_at)
+        self.at(now + datetime.timedelta(minutes=59))
+        self.assertIsInstance(self.step(self.ml_decision, keys=keys), Decided)
+        self.at(now + datetime.timedelta(hours=1))
+        self.assert_blocked(self.step(self.ml_decision, keys=keys), "response_signature_invalid")
 
 
 if __name__ == "__main__":

@@ -48,6 +48,15 @@ class ResponseKeys:
     fingerprint: str
     guardian_id: str
     document: Mapping[str, Any] = field(repr=False)
+    # The pinned key's validity, checked again at every signature and every verification, so a key that expires
+    # or is revoked while a process runs stops working then, not at the next restart (review R-I1).
+    not_before: datetime.datetime = field(default=datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
+    not_after: datetime.datetime = field(default=datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
+    revoked_at: datetime.datetime | None = None
+
+    def is_live(self, now: datetime.datetime) -> bool:
+        """Whether the key may sign or verify at now: not_before <= now < not_after, and not revoked by now."""
+        return self.not_before <= now < self.not_after and (self.revoked_at is None or now < self.revoked_at)
 
 
 def _timestamp(value: object, where: str) -> datetime.datetime:
@@ -111,7 +120,7 @@ def parse_key_document(document: object, *, key_id: str | None, now: datetime.da
         raise KeyDocumentError("the key_id pin must be a non-empty string")
     revoked = _revocations(document)
 
-    live: dict[str, VerificationKey] = {}
+    live: dict[str, tuple[VerificationKey, datetime.datetime, datetime.datetime, datetime.datetime | None]] = {}
     seen: set[str] = set()
     for i, entry in enumerate(entries):
         where = f"keys[{i}]"
@@ -137,7 +146,7 @@ def parse_key_document(document: object, *, key_id: str | None, now: datetime.da
         not_after = _timestamp(entry.get("not_after"), f"{where}.not_after")
         revoked_at = revoked.get(entry_id)
         if not_before <= now < not_after and (revoked_at is None or now < revoked_at):
-            live[entry_id] = key
+            live[entry_id] = (key, not_before, not_after, revoked_at)
 
     if key_id is None:
         if len(live) != 1:
@@ -148,8 +157,10 @@ def parse_key_document(document: object, *, key_id: str | None, now: datetime.da
         chosen = live.get(key_id)
         if chosen is None:
             raise KeyDocumentError(f"key_id {key_id!r} is not a live key in the key document")
-    return ResponseKeys(keyring=Keyring([chosen]), key_id=chosen.key_id, algorithm=chosen.algorithm,
-                        fingerprint=chosen.fingerprint, guardian_id=guardian_id, document=document)
+    key, not_before, not_after, revoked_at = chosen
+    return ResponseKeys(keyring=Keyring([key]), key_id=key.key_id, algorithm=key.algorithm,
+                        fingerprint=key.fingerprint, guardian_id=guardian_id, document=document,
+                        not_before=not_before, not_after=not_after, revoked_at=revoked_at)
 
 
 def load_response_keys(path: str | os.PathLike, *, key_id: str | None = None,

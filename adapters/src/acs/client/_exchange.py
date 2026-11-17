@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import http.client
 import json
 import math
@@ -55,6 +56,11 @@ def report_on_wire(on_wire: OnWire | None, direction: str, envelope: Any, method
     return None
 
 
+def _utcnow() -> datetime.datetime:
+    """The clock the key's validity is checked against. Tests replace it."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: ResponseKeys) -> bool:
     """Whether the answer verifies under the key document's pinned key, as the answer to request.
 
@@ -63,7 +69,11 @@ def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: R
     answer must also answer request (D-029), and an HMAC signature never passes. It must also
     carry the hash of request's signed input, since one key signs every session and ids alone
     let an answer be relayed between sessions (lab convention, issue #13 is the closest issue).
+    The key must be live now, so one that expires or is revoked while the process runs stops
+    verifying then.
     """
+    if not response_keys.is_live(_utcnow()):
+        return False
     # The lazy public export loads cryptography only on this path.
     import acs.core
     return acs.core.verify_with_keyring(response, response_keys.keyring, expected_key_id=response_keys.key_id,
