@@ -42,10 +42,11 @@ def verify_signature(envelope: dict, *, key: bytes | None = None,
     else:
         if key is not None or session_id is not None or key_id is not None:
             raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
-        # Imported here so the HMAC path never loads cryptography. Core checks both pins.
-        from acs.core._mldsa import verify_with_keyring
-        return verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id,
-                                   expected_session_id=expected_session_id)
+        # The lazy public export loads cryptography only here, never on the HMAC path, and
+        # raises AttributeError naming the pqc extra when it is missing. Core checks both pins.
+        import acs.core
+        return acs.core.verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id,
+                                            expected_session_id=expected_session_id)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False

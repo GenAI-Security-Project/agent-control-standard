@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -89,6 +91,24 @@ class KeyringVerification(unittest.TestCase):
         envelope = sign_with_signing_key(_decision(), self.signer)
         with self.assertRaises(ValueError):
             verify_signature(envelope, expected_session_id=SESSION_ID)
+
+    def test_the_client_goes_through_the_public_export(self) -> None:
+        # Review finding CR3-5: acs.client uses acs.core's lazy export, not the private module.
+        import acs.core
+        envelope = sign_with_signing_key(_decision(), self.signer)
+        spy = mock.Mock(return_value=True)
+        with mock.patch.object(acs.core, "verify_with_keyring", spy):
+            self.assertTrue(verify_signature(envelope, keyring=self.keyring, expected_key_id=KEY_ID,
+                                             expected_session_id=SESSION_ID))
+        spy.assert_called_once_with(envelope, self.keyring, expected_key_id=KEY_ID, expected_session_id=SESSION_ID)
+
+    def test_without_the_extra_the_keyring_path_names_it(self) -> None:
+        code = ("import sys\nsys.modules['cryptography'] = None\nfrom acs.client import verify_signature\n"
+                "verify_signature({}, keyring=object(), expected_key_id='k', expected_session_id='s')\n")
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("AttributeError", proc.stderr)
+        self.assertIn("pqc", proc.stderr)
 
     def test_an_expected_key_id_without_a_keyring_is_refused(self) -> None:
         envelope = sign_with_signing_key(_decision(), self.signer)

@@ -47,8 +47,7 @@ The keyring matches `key_id` exactly. It never folds case, trims, or falls back 
 A keyring admits ML-DSA-65 keys only. Each key is parsed once, when it is built, so a malformed key fails at load. `VerificationKey.fingerprint` gives `sha256:` and the hex SHA-256 of the raw 1,952 byte public key.
 
 ```python
-from acs.core import Keyring
-from acs.core._mldsa import MLDSA65SigningKey, sign_with_signing_key, verify_with_keyring
+from acs.core import Keyring, MLDSA65SigningKey, sign_with_signing_key, verify_with_keyring
 
 signer = MLDSA65SigningKey.from_seed(seed, "lab-guardian-1")   # seed: the 32 byte FIPS 204 seed
 keyring = Keyring([signer.verification_key()])
