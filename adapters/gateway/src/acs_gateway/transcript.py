@@ -13,7 +13,9 @@ DIRECTIONS = ("req", "resp")
 
 def _append_line(path: Path, record: Any) -> None:
     # O_APPEND keeps each line whole when two writers share the file, and 0600 keeps signed envelopes private.
-    line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
+    # ensure_ascii escapes every non-ASCII character as \uXXXX, so a lone surrogate, which UTF-8 can't encode, is
+    # written as its escape and the line can never fail to encode. Reading it back with json.loads gives the same text.
+    line = json.dumps(record, separators=(",", ":"), ensure_ascii=True) + "\n"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(line)
