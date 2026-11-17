@@ -11,7 +11,7 @@ import stat
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -231,13 +231,16 @@ class Gateway:
             key = conversation_key(body)
         except RecursionError:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
+        # One order in both modes: decide which session will be used, check, then create. Every refusal is decided
+        # before a Guardian session opens and before any session is created or evicted.
+        audited: set[str] = set()
         try:
             peeked = self.sessions.peek(key)
             refused = self._refuse_input(key, peeked, body)
-            if refused is None and self.enforce:
-                # Checked once against the session as it stands, so a refused request creates, evicts and opens
-                # nothing. The same check runs again under the lock, against the session actually used.
-                refused = self._refuse_unrestorable(key, peeked, body)
+            if refused is None:
+                # Calls are only ever added to a session, so if the peeked one is still the one used, this check
+                # needs no repeat under the lock. Shadow audits here, so the line survives a later 503.
+                refused = self._refuse_unrestorable(key, peeked, body, audited=audited)
         except Exception as e:  # noqa: BLE001
             # The pre-pass is gating code too: shadow forwards unchanged and enforce fails closed.
             failed = self._gating_failed(None, "pre_pass", e)
@@ -246,18 +249,13 @@ class Gateway:
             refused = None
         if refused is not None:
             return refused
-        try:
-            pinned = self.sessions.get(key)
-        except SessionsBusy:
-            return self._busy()
         # Pinned from the input phase through the output phase, so eviction never splits one turn over two sessions.
-        # A session the request moves to after an epoch bump is pinned too, in the same list.
-        pins = [pinned]
-        pinned.active += 1
+        # Every session the request takes is pinned, in this list, once it holds the session's lock.
+        pins: list[Session] = []
         try:
-            return await self._governed(key, raw, body, headers, pins)
+            return await self._governed(key, raw, body, headers, pins, audited)
         except SessionsBusy:
-            # An epoch bump mid-request needed a new session and every slot was busy.
+            # A new session was needed and every slot was busy.
             return self._busy()
         finally:
             for session in pins:
@@ -268,19 +266,32 @@ class Gateway:
         return openai_error(503, "The service is busy. Try again shortly.", "server_error", "busy")
 
     async def _governed(self, key: str, raw: bytes, body: dict[str, Any], headers: dict[str, str],
-                        pins: list[Session]) -> Response:
+                        pins: list[Session], audited: set[str]) -> Response:
         session = None
+
+        def before_create() -> None:
+            """The session this request will use is a new one, with no calls, so every call is unrestorable. The
+            check runs against that empty set before the session is created, so a refused request creates and
+            evicts nothing. Shadow audits only what the pre-pass didn't, and a fault there doesn't stop gating."""
+            try:
+                refused = self._refuse_before_create(key, body, audited)
+            except Exception as e:  # noqa: BLE001
+                if self.enforce:
+                    raise
+                _audit("gateway_step_error", phase="locked_check", mode=self.config.mode, conversation=key,
+                       error=f"{type(e).__name__}: {e}")
+                return
+            if refused is not None:
+                raise RequestRefused(refused)
+
         try:
-            async with self._current(key) as session:
+            async with self._current(key, before_create) as session:
                 _pin(session, pins)
-                # One rule against the session that will be used, before its Guardian session opens: every call it
-                # can't restore gets the repeated-key check. A refused request opens nothing.
-                refused = self._refuse_unrestorable(key, session, body)
-                if refused is not None:
-                    return refused
                 await self._ensure_open(session)
                 if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
+        except RequestRefused as e:
+            return e.response
         except SessionsBusy:
             raise
         except Exception as e:  # noqa: BLE001
@@ -328,13 +339,19 @@ class Gateway:
         return _relay(upstream, reply if changed else None)
 
     @contextlib.asynccontextmanager
-    async def _current(self, key: str) -> AsyncIterator[Session]:
-        """The key's session for the current epoch, locked. A bump that lands while this waits for the lock moves
-        the request to the new epoch's session, so nothing finishes on a forgotten one."""
+    async def _current(self, key: str, before_create: Callable[[], None] | None = None) -> AsyncIterator[Session]:
+        """The key's session for the current epoch, locked. A bump, an eviction or a retirement that lands while this
+        waits for the lock moves the request to the key's new session, so nothing finishes on a forgotten one.
+        before_create runs before any session is created, and may refuse the request by raising."""
         while True:
-            session = self.sessions.get(key)
+            session = self.sessions.peek(key)
+            if session is None:
+                if before_create is not None:
+                    before_create()
+                session = self.sessions.get(key)
             await session.lock.acquire()
-            if session.epoch == self.sessions.epoch and not session.retired:
+            if (session.epoch == self.sessions.epoch and not session.retired
+                    and self.sessions.peek(key) is session):
                 break
             session.lock.release()
         try:
@@ -501,7 +518,12 @@ class Gateway:
                                         "invalid_request_error", "call_id_invalid")
         return None
 
-    def _refuse_unrestorable(self, key: str, session: Session | None, body: dict[str, Any]) -> Response | None:
+    def _refuse_before_create(self, key: str, body: dict[str, Any], audited: set[str]) -> Response | None:
+        """The unrestorable check against the empty call set a new session starts with."""
+        return self._refuse_unrestorable(key, None, body, audited=audited)
+
+    def _refuse_unrestorable(self, key: str, session: Session | None, body: dict[str, Any],
+                             audited: set[str] | None = None) -> Response | None:
         """A resent function_call this session can't restore (never delivered, or removed) whose arguments repeat a
         key: the model could read either copy, and there's no delivered copy to send instead. Enforce answers 400,
         and shadow audits it. A call the session delivered is restored whatever its arguments say."""
@@ -516,6 +538,11 @@ class Gateway:
             repeated = repeated_key(item.get("arguments"))
             if repeated is None:
                 continue
+            if audited is not None:
+                if call_id in audited and not self.enforce:
+                    # Shadow already recorded this call on this request.
+                    continue
+                audited.add(call_id)
             _audit("duplicate_json_key", key=repeated, where="function_call.arguments", mode=self.config.mode,
                    **self._where(key, session))
             if self.enforce:
@@ -708,6 +735,14 @@ def _pin(session: Session, pins: list[Session]) -> None:
     if not any(pinned is session for pinned in pins):
         pins.append(session)
         session.active += 1
+
+
+class RequestRefused(Exception):
+    """A check found the request unacceptable in enforce, and this is the answer to send."""
+
+    def __init__(self, response: Response) -> None:
+        super().__init__("request refused")
+        self.response = response
 
 
 async def _continue(first: deque[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
