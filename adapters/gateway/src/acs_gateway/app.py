@@ -577,11 +577,18 @@ class Gateway:
             return
         try:
             await asyncio.wait_for(asyncio.shield(future), timeout)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            token.retire()
-            self.sessions.retire(session)
-            _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung",
-                   request_id=token.request_id)
+        except asyncio.TimeoutError:
+            self._retire(session, method, token, "step_hung")
+        except asyncio.CancelledError:
+            # The request was cancelled while its claimed step was still landing. Retire, then let it end cancelled.
+            self._retire(session, method, token, "request_cancelled")
+            raise
+
+    def _retire(self, session: Session, method: str, token: StepToken, cause: str) -> None:
+        token.retire()
+        self.sessions.retire(session)
+        _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
+               request_id=token.request_id)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny") -> None:
         """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since

@@ -380,3 +380,30 @@ def test_a_run_of_reasoning_belongs_to_the_item_after_it(gateway, guardian, upst
     output = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=finbot_request()).json()["output"]
     assert [i.get("id") for i in output] == ["rs_1", "rs_2", "fc_call_1"]
+
+
+def test_a_request_cancelled_while_settling_ends_cancelled(gateway, guardian, upstream, audit):
+    import asyncio
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="500")
+    upstream.reply(response_body(message_item("hello")))
+    client.post("/v1/responses", json=finbot_request())
+    gw = client.app.state.gateway
+    gw.guardian.transcript = SlowTranscript(gw.guardian.transcript, 3.0)
+    session = next(iter(gw.sessions._sessions.values()))
+    payload = {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+
+    async def cancel_while_settling():
+        task = asyncio.create_task(gw._step(session, "steps/toolCallRequest", payload))
+        # Past the outer deadline (1.5 s), inside the bounded wait for the claimed worker.
+        await asyncio.sleep(1.8)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return "cancelled"
+        return "finished"
+
+    assert client.portal.call(cancel_while_settling) == "cancelled"
+    assert session.retired
+    assert len(events(audit, "session_retired")) == 1
