@@ -18,37 +18,30 @@ from rfc8785 import CanonicalizationError
 DIGEST_FIELDS = ("name", "description", "parameters", "strict")
 
 
-def declarations_by_name(body: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """The request's function tool declarations that carry a non-empty string name, grouped by name in request
-    order."""
-    tools = body.get("tools")
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for tool in tools if isinstance(tools, list) else []:
-        name = tool.get("name") if isinstance(tool, dict) and tool.get("type") == "function" else None
-        if isinstance(name, str) and name:
-            grouped.setdefault(name, []).append(tool)
-    return grouped
-
-
-def repeated_function_name(body: dict[str, Any]) -> str | None:
-    """The first function name the request declares more than once, or None. The policy can't know which declaration
-    the model read, so such a name has no digest to pin, and enforce refuses the request."""
-    return next((name for name, tools in declarations_by_name(body).items() if len(tools) > 1), None)
-
-
 class ToolDigests:
     """One request's declaration digests, each computed the first time a gated step asks for it.
 
     A digest is "sha256:" plus the hex SHA-256 of the RFC 8785 form of the declaration's DIGEST_FIELDS. A name the
     request declares more than once has none, since the policy can't know which declaration the model read. Enforce
-    refuses such a request before anything is gated. on_skip hears each name whose declaration RFC 8785 can't
-    encode, once per request.
+    refuses such a request before anything is gated, naming repeated. on_skip hears each name whose declaration
+    RFC 8785 can't encode, once per request.
     """
 
     def __init__(self, body: dict[str, Any], on_skip: Callable[[str, str], None] | None = None) -> None:
-        # A name declared more than once maps to None, so it gets no digest.
-        self._declared = {name: tools[0] if len(tools) == 1 else None
-                          for name, tools in declarations_by_name(body).items()}
+        self._declared: dict[str, dict[str, Any] | None] = {}
+        # The first name whose second declaration appears, in request order, or None.
+        self.repeated: str | None = None
+        tools = body.get("tools")
+        for tool in tools if isinstance(tools, list) else []:
+            name = tool.get("name") if isinstance(tool, dict) and tool.get("type") == "function" else None
+            if not isinstance(name, str) or not name:
+                continue
+            if name in self._declared:
+                # A name declared more than once maps to None, so it gets no digest.
+                self._declared[name] = None
+                self.repeated = self.repeated or name
+            else:
+                self._declared[name] = tool
         self._digests: dict[str, str | None] = {}
         self._on_skip = on_skip
 

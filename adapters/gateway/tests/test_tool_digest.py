@@ -1,6 +1,6 @@
 import pytest
 
-from acs_gateway.tool_digest import ToolDigests, repeated_function_name
+from acs_gateway.tool_digest import ToolDigests
 
 SEND = {"type": "function", "name": "send_email", "description": "Send an email to a recipient",
         "parameters": {"type": "object", "properties": {"to": {"type": "string"}, "body": {"type": "string"}},
@@ -45,10 +45,15 @@ def test_type_and_unknown_fields_are_outside_the_digest():
 
 
 def test_a_repeated_name_has_no_digest_and_is_named_for_refusal():
-    body = {"tools": [SEND, {**SEND, "description": "Send mail"}]}
-    assert ToolDigests(body).get("send_email") is None
-    assert repeated_function_name(body) == "send_email"
-    assert repeated_function_name({"tools": [SEND]}) is None
+    digests = ToolDigests({"tools": [SEND, {**SEND, "description": "Send mail"}]})
+    assert digests.get("send_email") is None
+    assert digests.repeated == "send_email"
+    assert ToolDigests({"tools": [SEND]}).repeated is None
+
+
+def test_the_repeated_name_reported_is_the_one_whose_second_declaration_comes_first():
+    a, b = {**SEND, "name": "a"}, {**SEND, "name": "b"}
+    assert ToolDigests({"tools": [a, b, b, a]}).repeated == "b"
 
 
 def test_an_unencodable_declaration_is_skipped_and_reported_once():

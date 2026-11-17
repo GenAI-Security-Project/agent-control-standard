@@ -73,7 +73,7 @@ class CachedOutcome:
     raw: Any = None
     # The delivered call's arguments in canonical form, computed once.
     canonical_arguments: Any = None
-    # The tool.version the item was gated under (A.10), part of its identity, so another digest is another step.
+    # The tool.version a call was gated under (A.10). A call_id has one life, so a repeat under another is refused.
     digest: str | None = None
     # For a call, how many input items the request that produced it forwarded. Replay's branch tokens put a removed
     # call there, since the client never resends it (issue #579).
@@ -142,12 +142,6 @@ class Session:
     # Keyed on call_id within this session, so the cache key is (session_id, call_id) (PREMORTEM P3).
     calls: dict[str, CachedOutcome] = field(default_factory=dict)
     results: dict[str, CachedOutcome] = field(default_factory=dict)
-    # A call's verdicts under digests other than its calls record's, keyed (call_id, digest) (A.10). calls keeps what
-    # was delivered, so a later verdict never replaces it and history restoration always restores the call the client
-    # ran.
-    verdicts: dict[tuple[str, str | None], CachedOutcome] = field(default_factory=dict)
-    # The digest each call_id was last delivered under, which its toolCallResult carries.
-    call_digests: dict[str, str | None] = field(default_factory=dict)
     # Requests between their input and output phases. A session with any, or with its lock held, is never evicted.
     active: int = 0
     # time.monotonic() when opening last failed, so a retry waits out the backoff.

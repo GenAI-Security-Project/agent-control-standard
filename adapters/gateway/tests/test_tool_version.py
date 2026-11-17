@@ -15,6 +15,8 @@ POISONED_DIGEST = "sha256:578a3f442eb772a505cfb1ba0a969f74abb91bbb7864747eb81925
 LOOSE_DIGEST = "sha256:2cba536f7260f198cdc4b316562587a33a871d7ee9926a50808d83dc8b351462"
 SCHEMA_DIGEST = "sha256:9e7e780f3da586852b67df61c48bb634e9b9f9b1096cd97986decdbd29789eb9"
 CALL = response_body(call_item("pinned_tool", {"to": "ops@ns1.finbot"}, "call_1"))
+OUTPUT = {"type": "function_call_output", "call_id": "call_1", "output": "sent"}
+HISTORY = (CALL["output"][0], OUTPUT)
 
 
 def declaring(*tools, extra=(), user="Pay vendor 7"):
@@ -61,16 +63,41 @@ def test_one_changed_description_character_turns_a_pinned_pass_into_a_mismatch_d
     assert decisions(audit) == [("allow", []), ("deny", ["tool_content_hash_mismatch"])]
 
 
-def test_a_cached_call_is_gated_again_when_its_declaration_changes_in_the_same_conversation(
-        gateway, harness_guardian, upstream, audit):
-    # One conversation (same system and first user message), and the model repeats call_1 word for word.
+def test_a_repeated_call_id_under_a_changed_declaration_is_removed_without_a_guardian_step(
+        gateway, harness_guardian, upstream, audit, tmp_path):
+    # One conversation (same system and first user message), and the model repeats call_1 word for word under a
+    # poisoned declaration. A call_id has one life, so the cached allow is never reused and nothing is re-gated.
     client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
     upstream.reply(CALL)
     upstream.reply(CALL)
     assert client.post("/v1/responses", json=declaring(PINNED)).json() == CALL
     second = client.post("/v1/responses", json=declaring(POISONED)).json()
     assert second["output"][0]["content"][0]["text"] == NEUTRAL
-    assert decisions(audit) == [("allow", []), ("deny", ["tool_content_hash_mismatch"])]
+    assert [(e["call_id"], e.get("cause")) for e in events(audit, "call_id_reused")] == [("call_1", "digest_changed")]
+    assert sent_versions(tmp_path) == [PINNED_DIGEST]
+
+
+def test_a_repeated_call_id_under_a_changed_declaration_is_audited_and_delivered_in_shadow(
+        gateway, guardian, upstream, audit, tmp_path):
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    upstream.reply(CALL)
+    upstream.reply(CALL)
+    client.post("/v1/responses", json=declaring(PINNED))
+    assert client.post("/v1/responses", json=declaring(POISONED)).json() == CALL
+    assert [e.get("cause") for e in events(audit, "call_id_reused")] == ["digest_changed"]
+    assert sent_versions(tmp_path) == [PINNED_DIGEST]
+
+
+def test_a_new_call_under_a_changed_declaration_goes_to_the_guardian_with_the_new_digest(
+        gateway, harness_guardian, upstream, audit, tmp_path):
+    client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
+    upstream.reply(CALL)
+    client.post("/v1/responses", json=declaring(PINNED))
+    upstream.reply(response_body(call_item("pinned_tool", {"to": "ops@ns1.finbot"}, "call_2")))
+    output = client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY)).json()["output"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert sent_versions(tmp_path) == [PINNED_DIGEST, POISONED_DIGEST]
+    assert decisions(audit)[-1] == ("deny", ["tool_content_hash_mismatch"])
 
 
 def test_the_pin_check_denies_a_call_with_no_version(gateway, harness_guardian, upstream, audit):
@@ -162,7 +189,8 @@ def test_shadow_sends_the_digest_too(gateway, guardian, upstream, tmp_path):
     assert sent_versions(tmp_path) == [PINNED_DIGEST]
 
 
-# The model input log can't write a lone surrogate either, which is a separate path, so these runs switch it off.
+# The model input log can't write a lone surrogate yet, so these runs switch it off. LAB-04 fixes that crash at
+# the parse boundary on PR #599, and this branch rebases onto that fix before its pull request.
 SURROGATE_KEY = ('{"model": "gpt-5-nano", "input": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],'
                  ' "tools": [{"type": "function", "name": "pinned_tool", "description": "d",'
                  ' "parameters": {"type": "object", "properties": {"\\ud800": {"type": "string"}}}}]}')
@@ -187,12 +215,8 @@ def test_a_lone_surrogate_key_in_shadow_is_audited_and_gating_goes_on(gateway, g
     assert sent_versions(tmp_path) == [None]
 
 
-OUTPUT = {"type": "function_call_output", "call_id": "call_1", "output": "sent"}
-HISTORY = (CALL["output"][0], OUTPUT)
-
-
-def test_a_denied_regate_never_drops_the_delivered_call_from_history(gateway, harness_guardian, upstream):
-    # Turn 1 delivers call_1. Turn 2 changes the declaration and the model repeats call_1, which is denied. Turn 3
+def test_a_refused_repeat_never_drops_the_delivered_call_from_history(gateway, harness_guardian, upstream):
+    # Turn 1 delivers call_1. Turn 2 changes the declaration and the model repeats call_1, which is removed. Turn 3
     # resends the history, which still holds the call_1 the client ran, and its output.
     client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
     upstream.reply(CALL)
@@ -222,21 +246,18 @@ def test_a_result_keeps_its_calls_digest_when_the_declaration_vanishes(gateway, 
     assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
 
 
-def test_a_result_for_a_call_never_gated_carries_no_version(gateway, guardian, upstream, tmp_path):
+def test_a_result_for_a_call_never_recorded_carries_the_requests_declaration_digest(gateway, guardian, upstream,
+                                                                                     tmp_path):
     gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
         "/v1/responses", json=declaring(PINNED, extra=HISTORY))
-    assert sent_versions(tmp_path, "steps/toolCallResult") == [None]
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
 
 
-def test_a_resent_result_is_gated_again_once_its_call_is_delivered_under_another_digest(
-        gateway, guardian, upstream, tmp_path):
+def test_a_result_resent_after_an_epoch_bump_still_carries_a_digest(gateway, guardian, upstream, tmp_path):
     client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
     upstream.reply(CALL)
     client.post("/v1/responses", json=declaring(PINNED))
-    # The result is gated under the call's digest, and the model then repeats call_1 under the changed declaration,
-    # which the Guardian allows, so the client now holds call_1 under the new digest.
-    upstream.reply(CALL)
-    assert client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY)).json() == CALL
-    client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY))
-    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST, POISONED_DIGEST]
-    assert sent_versions(tmp_path) == [PINNED_DIGEST, POISONED_DIGEST]
+    # The new epoch's session has no record of call_1, so the result falls back to this request's declaration.
+    client.app.state.gateway.bump_epoch()
+    client.post("/v1/responses", json=declaring(PINNED, extra=HISTORY))
+    assert sent_versions(tmp_path, "steps/toolCallResult") == [PINNED_DIGEST]
