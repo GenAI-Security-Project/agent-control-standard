@@ -82,6 +82,28 @@ def unsupported_tool_choice(body: dict[str, Any]) -> str | None:
     return json.dumps(choice, sort_keys=True, default=str)[:200]
 
 
+# Content parts FinBot's history can hold: it sends string content only, and a model's own messages and reasoning
+# carry these. input_file, input_image and input_audio can pull stored content in by file_id, out of the gate's sight.
+ALLOWED_CONTENT_PARTS = frozenset({"input_text", "output_text", "refusal", "summary_text"})
+
+
+def unsupported_content_part(body: dict[str, Any]) -> str | None:
+    """The type of the first content or summary part of an input item outside ALLOWED_CONTENT_PARTS, or None."""
+    items = body.get("input")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        for field in ("content", "summary"):
+            parts = item.get(field)
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                kind = part.get("type") if isinstance(part, dict) else None
+                if kind not in ALLOWED_CONTENT_PARTS:
+                    return kind if isinstance(kind, str) else type(part).__name__
+    return None
+
+
 def unsupported_input_item(body: dict[str, Any]) -> str | None:
     """The type of the first input item outside ALLOWED_INPUT_TYPES, or None."""
     items = body.get("input")

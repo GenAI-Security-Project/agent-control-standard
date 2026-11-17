@@ -18,6 +18,7 @@ Enforce accepts only what it can gate, by allowlist, so anything new fails close
 
 - **Request fields:** `model`, `input`, `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens`, `reasoning`, `text`, `metadata`, `parallel_tool_calls`, `store`, `user`, `temperature`, `top_p`. FinBot sends a subset of these. Any other field, such as `prompt`, `previous_response_id`, `conversation`, `background` or `include`, answers 501 in enforce naming the field and is audited as `unsupported_field`, since server-side history or a stored prompt would hide items or tools from the gateway.
 - **Input items:** `message` (any role), `function_call`, `function_call_output`, `reasoning`. Any other type, such as `item_reference`, a hosted tool's `*_call`, or a non-function `*_call_output`, answers 501 in enforce naming the type before anything goes upstream, audited as `unsupported_item_type`.
+- **Content parts:** a message's `content` list and a reasoning item's `summary` list may hold `input_text`, `output_text`, `refusal` and `summary_text`. Any other part, such as `input_file`, `input_image` or `input_audio`, which can pull stored content in by file_id, answers 501 in enforce naming it, audited as `unsupported_content_part`. FinBot sends string content only.
 - **Tool declarations:** `function` only. Any other type, hosted tools that run upstream where no hook reaches them included, answers 501 in enforce, audited as `unsupported_tool_type`.
 - **tool_choice:** `auto`, `none`, `required`, or `{"type": "function", "name": ...}` naming a declared function tool. Anything else answers 501 in enforce, audited as `unsupported_tool_choice`.
 - **Output items:** `message`, `function_call`, `reasoning`. Enforce removes any other item from a model response and adds the neutral line if nothing else is left. Shadow forwards it. Both audit `unsupported_item_type`.
@@ -114,6 +115,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `duplicate_json_key` | A request repeated a JSON key, with `key` and `where` |
 | `unsupported_field` | A request field outside the allowlist, with `field` |
 | `unsupported_item_type` | An input or output item outside the allowlist, with `item_type` and `direction` |
+| `unsupported_content_part` | A message or reasoning part outside the allowlist, with `part_type` |
 | `unsupported_tool_choice` | A tool_choice outside the allowlist |
 | `unsupported_tool_type` | A tool declaration that isn't a function tool |
 | `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |

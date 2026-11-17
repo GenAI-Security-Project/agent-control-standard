@@ -110,3 +110,48 @@ def test_shadow_never_blocks_a_run_that_resends_an_unknown_output_item(gateway, 
     second = client.post("/v1/responses", json=finbot_request(*first))
     assert second.status_code == 200
     assert [e["direction"] for e in events(audit, "unsupported_item_type")] == ["output", "input"]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+@pytest.mark.parametrize("choice", [{"type": "web_search"}, {"type": "function", "name": "undeclared"},
+                                    {"type": "allowed_tools", "mode": "auto", "tools": []}, "sometimes"])
+def test_a_tool_choice_outside_the_allowlist_is_refused_in_enforce_and_recorded_in_shadow(
+        gateway, guardian, upstream, audit, mode, choice):
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json={**finbot_request(), "tool_choice": choice})
+    assert response.status_code == (501 if mode == "enforce" else 200)
+    assert len(events(audit, "unsupported_tool_choice")) == 1
+
+
+@pytest.mark.parametrize("choice", ["auto", "none", "required", {"type": "function", "name": "get_vendor_details"}])
+def test_an_allowed_tool_choice_passes(gateway, guardian, upstream, choice):
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json={**finbot_request(), "tool_choice": choice})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+@pytest.mark.parametrize("part", [{"type": "input_file", "file_id": "file_1"},
+                                  {"type": "input_image", "file_id": "file_2"},
+                                  {"type": "input_audio", "input_audio": {"data": "", "format": "wav"}}])
+def test_a_content_part_outside_the_allowlist_is_refused_in_enforce_and_recorded_in_shadow(
+        gateway, guardian, upstream, audit, mode, part):
+    item = {"role": "user", "content": [{"type": "input_text", "text": "see attached"}, part]}
+    response = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(item))
+    if mode == "enforce":
+        assert response.status_code == 501
+        assert part["type"] in response.json()["error"]["message"]
+    else:
+        assert response.status_code == 200
+    assert [e["part_type"] for e in events(audit, "unsupported_content_part")] == [part["type"]]
+
+
+def test_allowed_content_parts_pass(gateway, guardian, upstream):
+    items = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+             {"type": "message", "role": "assistant", "content": [
+                 {"type": "output_text", "text": "ok", "annotations": []}, {"type": "refusal", "refusal": "no"}]},
+             {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thought"}]}]
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", json=finbot_request(*items))
+    assert response.status_code == 200

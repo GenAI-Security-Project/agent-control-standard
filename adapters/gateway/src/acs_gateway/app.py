@@ -36,6 +36,7 @@ from acs_gateway.apply import (
     neutral_message,
     parse_arguments,
     result_payload,
+    unsupported_content_part,
     unsupported_field,
     unsupported_input_item,
     unsupported_tool,
@@ -199,6 +200,12 @@ class Gateway:
             if self.enforce:
                 return openai_error(501, f"Input items of type {kind} are not supported by this endpoint.",
                                     "invalid_request_error", "unsupported_item_type")
+        part = unsupported_content_part(body)
+        if part is not None:
+            _audit("unsupported_content_part", part_type=part, mode=self.config.mode)
+            if self.enforce:
+                return openai_error(501, f"Content parts of type {part} are not supported by this endpoint.",
+                                    "invalid_request_error", "unsupported_content_part")
         unsupported = unsupported_tool(body)
         if unsupported is not None:
             # Function tools only. Any other tool type runs where the gateway can't gate it: a hosted tool runs
