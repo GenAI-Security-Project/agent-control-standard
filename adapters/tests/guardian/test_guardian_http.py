@@ -64,7 +64,8 @@ def test_an_unexpected_error_is_answered_with_an_unsigned_internal_error(served,
     status, body = post(served, b'{"jsonrpc": "2.0", "id": "1", "method": "steps/sessionStart", "params": {}}')
     assert body["error"]["code"] == -32603
     assert "anything at all" not in body["error"]["message"]
-    assert "signature" not in body["error"] and body["id"] is None
+    # The id parsed and passed the id rule, so the floor echoes it (CR10-5).
+    assert "signature" not in body["error"] and body["id"] == "1"
 
 
 def test_an_integer_too_long_to_parse_is_a_parse_error(served):
