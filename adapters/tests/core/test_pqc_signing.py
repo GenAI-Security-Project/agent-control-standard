@@ -621,8 +621,9 @@ class VariantAndContextAreDocumented(unittest.TestCase):
     def test_the_usage_example_runs(self) -> None:
         # Review finding CR5-6: the doc's Python example is executed, so it can't rot.
         text = self.DOC.read_text(encoding="utf-8")
-        blocks = re.findall(r"```python\n(.*?)```", text, flags=re.DOTALL)
-        self.assertEqual(len(blocks), 1, "signing.md has exactly one Python example")
+        # Review finding CR6-7: the runnable example is marked, so other Python blocks may exist.
+        blocks = re.findall(r"<!-- runnable -->\n```python\n(.*?)```", text, flags=re.DOTALL)
+        self.assertEqual(len(blocks), 1, "signing.md marks exactly one example <!-- runnable -->")
         namespace: dict = {}
         exec(compile(blocks[0], str(self.DOC), "exec"), namespace)  # noqa: S102
         self.assertTrue(namespace["verified"])

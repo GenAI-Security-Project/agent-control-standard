@@ -46,6 +46,7 @@ The keyring matches `key_id` exactly. It never folds case, trims, or falls back 
 
 A keyring admits ML-DSA-65 keys only. Each key is parsed once, when it is built, so a malformed key fails at load. `VerificationKey.fingerprint` gives `sha256:` and the hex SHA-256 of the raw 1,952 byte public key.
 
+<!-- runnable -->
 ```python
 import secrets
 import uuid
