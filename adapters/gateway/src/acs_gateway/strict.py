@@ -49,3 +49,22 @@ def repeated_key(text: Any) -> str | None:
         return loads_recording(text)[1]
     except (ValueError, RecursionError):
         return None
+
+
+def has_lone_surrogate(value: Any) -> bool:
+    """Whether any string in a parsed JSON value, keys included, holds a lone surrogate, which UTF-8 can't encode and
+    RFC 8785 can't sign. Walks iteratively, so nesting depth can't exhaust the stack."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False

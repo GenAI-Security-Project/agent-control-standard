@@ -50,3 +50,14 @@ def test_transcript_records_a_missing_response_with_its_cause(tmp_path):
 def test_transcript_refuses_a_missing_envelope_without_a_cause(tmp_path):
     with pytest.raises(ValueError):
         Transcript(tmp_path).append(str(uuid.uuid4()), "resp", None)
+
+
+def test_every_log_and_transcript_writer_takes_a_lone_surrogate(tmp_path):
+    ModelInputLog(tmp_path / "m.jsonl").append({"input": "x \ud800 y"})
+    session_id = str(uuid.uuid4())
+    Transcript(tmp_path / "t").append(session_id, "req", {"params": {"note": "x \udfff y"}})
+    Transcript(tmp_path / "t").append(session_id, "resp", None, cause="bad \ud800 cause")
+    assert json.loads((tmp_path / "m.jsonl").read_text()) == {"input": "x \ud800 y"}
+    lines = [json.loads(line) for line in (tmp_path / "t" / f"{session_id}.jsonl").read_text().splitlines()]
+    assert lines[0]["envelope"]["params"]["note"] == "x \udfff y"
+    assert lines[1] == {"dir": "resp", "envelope": None, "cause": "bad \ud800 cause"}

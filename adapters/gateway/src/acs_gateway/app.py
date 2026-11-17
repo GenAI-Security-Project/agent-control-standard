@@ -57,7 +57,7 @@ from acs_gateway.sessions import (
     fingerprint,
     same_content,
 )
-from acs_gateway.strict import loads_recording, repeated_key
+from acs_gateway.strict import has_lone_surrogate, loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -77,10 +77,14 @@ def _audit(event: str, **fields: Any) -> None:
     audit_event(event, **fields)
 
 
-def openai_error(status: int, message: str, error_type: str, code: str | None = None) -> JSONResponse:
-    """An error in the Responses API's own shape, so a client sees an ordinary API failure and nothing about ACS."""
-    return JSONResponse({"error": {"message": message, "type": error_type, "param": None, "code": code}},
-                        status_code=status)
+def openai_error(status: int, message: str, error_type: str, code: str | None = None) -> Response:
+    """An error in the Responses API's own shape, so a client sees an ordinary API failure and nothing about ACS.
+
+    Messages are fixed text that echo nothing from the request. The body is still written ASCII-escaped, so no
+    message can fail to encode, which JSONResponse's strict UTF-8 can.
+    """
+    body = {"error": {"message": message, "type": error_type, "param": None, "code": code}}
+    return Response(json.dumps(body, ensure_ascii=True), status_code=status, media_type="application/json")
 
 
 def forward_headers(headers: Any) -> dict[str, str]:
@@ -186,6 +190,14 @@ class Gateway:
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
+        if has_lone_surrogate(body):
+            # A lone surrogate can't be encoded as UTF-8 or signed under RFC 8785, anywhere it sits, keys included.
+            # Enforce refuses it here, before any check could echo it or any step could carry it. Shadow records it
+            # and goes on, and the ASCII-escaping writers keep its logs safe.
+            _audit("lone_surrogate", mode=self.config.mode)
+            if self.enforce:
+                return openai_error(400, "The request body contains text that can't be encoded.",
+                                    "invalid_request_error", "lone_surrogate")
         if repeated is not None:
             # The message structure itself repeats a key, so the gateway can't know which copy the upstream reads.
             _audit("duplicate_json_key", key=repeated, where="body", mode=self.config.mode)
@@ -199,19 +211,19 @@ class Gateway:
             # item references) or a stored prompt would hide items or tools from the gateway.
             _audit("unsupported_field", field=field, mode=self.config.mode)
             if self.enforce:
-                return openai_error(501, f"The {field} parameter is not supported by this endpoint.",
+                return openai_error(501, "A request parameter is not supported by this endpoint.",
                                     "invalid_request_error", "unsupported_parameter")
         kind = unsupported_input_item(body)
         if kind is not None:
             _audit("unsupported_item_type", item_type=kind, direction="input", mode=self.config.mode)
             if self.enforce:
-                return openai_error(501, f"Input items of type {kind} are not supported by this endpoint.",
+                return openai_error(501, "An input item type is not supported by this endpoint.",
                                     "invalid_request_error", "unsupported_item_type")
         part = unsupported_content_part(body)
         if part is not None:
             _audit("unsupported_content_part", part_type=part, mode=self.config.mode)
             if self.enforce:
-                return openai_error(501, f"Content parts of type {part} are not supported by this endpoint.",
+                return openai_error(501, "A content part type is not supported by this endpoint.",
                                     "invalid_request_error", "unsupported_content_part")
         unsupported = unsupported_tool(body)
         if unsupported is not None:
