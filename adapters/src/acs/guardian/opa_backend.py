@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from acs.guardian._limits import depth_exceeds
+from acs.guardian._logging import log_value
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV
 
 URL_ENV = "ACS_OPA_URL"
@@ -63,7 +64,8 @@ def redact_url(url: str) -> str:
 
 
 def _log(reason_code: str, detail: str) -> None:
-    sys.stderr.write(f"[guardian] OPA {reason_code}: {detail}\n")
+    # The detail can name a path or a value from the request or the verdict, so it goes through log_value.
+    sys.stderr.write(f"[guardian] OPA {reason_code}: {log_value(detail, 300)}\n")
     sys.stderr.flush()
 
 

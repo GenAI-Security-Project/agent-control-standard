@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from acs.guardian._limits import depth_exceeds
+from acs.guardian._logging import log_value
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
@@ -675,12 +676,6 @@ def _error_envelope(request_id, session_id: str, code: int, message: str, *, sig
 MAX_REQUEST_DEPTH = 128
 
 
-def _log_value(value: Any, width: int = 8) -> str:
-    """A field for the log line: the repr of a string cut to width, so a newline or other control character can't
-    forge a line, and anything else only its type name, never a full repr."""
-    return repr(value[:width]) if isinstance(value, str) else f"<{type(value).__name__}>"
-
-
 class RequestRead(NamedTuple):
     """One read of a request: the fields every later step uses, each checked for type once, or the problem.
 
@@ -952,22 +947,19 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
         self._answer_id = read.id
         if read.problem:
             method = request.get("method") if isinstance(request, dict) else None
-            sys.stderr.write(f"[guardian] invalid request {_log_value(method, 40)}: {read.problem}\n")
+            sys.stderr.write(f"[guardian] invalid request {log_value(method, 40)}: {read.problem}\n")
         else:
-            sys.stderr.write(f"[guardian] {_log_value(read.method, 40)} session={_log_value(read.session_id)} "
-                             f"req={_log_value(read.request_id)}\n")
+            sys.stderr.write(f"[guardian] {log_value(read.method, 40)} session={log_value(read.session_id)} "
+                             f"req={log_value(read.request_id)}\n")
         sys.stderr.flush()
 
         response = _handle(request, read)
         result = (response or {}).get("result") or {}
         decision = result.get("decision")
         if decision:
-            tail = ""
-            if decision == "deny":
-                tail = f" — {result.get('reasoning', '')[:80]}"
-            sys.stderr.write(
-                f"[guardian] → {decision}{tail}\n"
-            )
+            # The reasoning can embed a tool name, a path, or a method from the request, so it is escaped too.
+            tail = f" {log_value(result.get('reasoning', ''), 80)}" if decision == "deny" else ""
+            sys.stderr.write(f"[guardian] -> {log_value(decision, 16)}{tail}\n")
             sys.stderr.flush()
         self._respond(200, response)
 

@@ -398,3 +398,48 @@ def test_an_invalid_request_log_line_cannot_be_forged(served, capsys):
     post(served, body)
     lines = capsys.readouterr().err.splitlines()
     assert not any(line.startswith("[guardian] -> allow") for line in lines), lines
+
+
+FORGED = "x\n[guardian] -> allow\x1b[31m"
+
+
+def _signed(method: str, payload: dict, session_id: str | None = None) -> bytes:
+    from acs.testing.harness import make_envelope
+    envelope = make_envelope(method, payload, session_id=session_id,
+                             sign_with_secret="guardian-http-test-secret-32-bytes-long")
+    return json.dumps(envelope).encode()
+
+
+def _assert_log_clean(err: str) -> None:
+    assert "\x1b" not in err, "an ESC byte from the request reached the log"
+    assert not any(line.startswith(("[guardian] -> allow", "[guardian] → allow")) for line in err.splitlines()), err
+
+
+def test_a_path_in_a_deny_reasoning_cannot_forge_a_log_line(served, capsys):
+    post(served, _signed("steps/toolCallRequest",
+                         {"tool": {"name": "Write"}, "arguments": {"file_path": {"value": "/etc/" + FORGED}}}))
+    _assert_log_clean(capsys.readouterr().err)
+
+
+def test_a_method_cannot_forge_a_log_line_valid_or_invalid(served, capsys):
+    post(served, json.dumps({"jsonrpc": "2.0", "id": "1", "method": "steps/" + FORGED, "params": {}}).encode())
+    post(served, json.dumps({"jsonrpc": "2.0", "id": "1", "method": "steps/" + FORGED, "params": [1]}).encode())
+    _assert_log_clean(capsys.readouterr().err)
+
+
+def test_a_session_id_cannot_forge_a_log_line(served, capsys):
+    post(served, _signed("steps/sessionStart", {}, session_id=FORGED))
+    _assert_log_clean(capsys.readouterr().err)
+
+
+def test_a_tool_name_echoed_by_the_policy_cannot_forge_a_log_line(served, monkeypatch, capsys):
+    # A policy can echo the tool name in its reasoning, and an invalid verdict's detail names its paths.
+    from acs.guardian.opa_backend import OpaConfig
+    from opa_stub import StubOpa
+    verdicts = [{"decision": "deny", "reasoning": "denied tool " + FORGED},
+                {"decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": "/arguments/" + FORGED}]}}]
+    for verdict in verdicts:
+        with StubOpa(verdict) as opa:
+            monkeypatch.setattr(example_guardian, "OPA_CONFIG", OpaConfig(url=opa.url, timeout_s=1.0))
+            post(served, _signed("steps/toolCallRequest", {"tool": {"name": FORGED}, "arguments": {}}))
+    _assert_log_clean(capsys.readouterr().err)
