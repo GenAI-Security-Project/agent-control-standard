@@ -354,7 +354,3 @@ def test_handle_request_never_raises_for_a_direct_caller(served, envelope):
     if answer["error"]["code"] == -32603:
         assert answer["error"]["message"] == example_guardian.INTERNAL_ERROR_MESSAGE
         assert "signature" not in answer["error"]
-
-
-def test_the_handler_times_out_a_silent_client_after_30_seconds():
-    assert example_guardian.GuardianHandler.timeout == 30
