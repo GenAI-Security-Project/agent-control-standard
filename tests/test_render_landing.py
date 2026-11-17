@@ -434,7 +434,9 @@ def test_render_nav_emits_the_pane_in_order():
     expected += [(2, r["title"], r["url"]) for r in NAV.external_resources]
     assert [(depth, label, url) for depth, label, url, _group, _section in rows] == expected
     # The design's count, so a walker and a renderer that drop the same row still fail.
-    assert len(rows) == 53
+    # 55 since the predicates page landed: one new group and one new entry, on top of the
+    # 53 the premortem derives for a nav with no predicate family.
+    assert len(rows) == 55
     by_label = {row[1]: row for row in rows}
     assert by_label["Trustworthy Agents"][2] == LANDING_ROOT + "docs/"
     assert by_label["FAQ"][2] == LANDING_ROOT + "docs/topics/faq/"
