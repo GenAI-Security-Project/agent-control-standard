@@ -84,9 +84,15 @@ reading the body. Returns 413 + JSON-RPC error -32600.
 **T7 — Leaked HMAC secret via world-readable file.**
 Operator (or misconfiguration) leaves `ACS_HMAC_SECRET_FILE` mode
 0644 / 0640; any local process can read the key.
-*Mitigation:* `load_hmac_secret()` rejects the file unless its mode is
-`& 0o077 == 0` (no group / other access) AND it is owned by the
-running user AND it is not a symlink. `SecretFilePermissionsError`
+*Mitigation:* `load_hmac_secret()` reads the file through
+`acs.client.read_trusted_file`, which opens its directory once and the
+file inside it without following a symlink. It rejects the file unless
+it is a regular file, its mode has no group or other access (0600 or
+0400), the file and its directory are owned by the running user or
+root, and the directory is not world-writable without the sticky bit.
+Ancestors above the directory are not checked. A file larger than
+64 KiB is refused as unreadable. `SecretFilePermissionsError` (or
+`SecretFileUnreadableError` for an unreadable or oversized file)
 prevents the adapter from silently using a leaked secret.
 *Test:* `HmacSecretFilePermissions::{test_world_readable_rejected,
 test_group_readable_rejected, test_symlink_rejected}`

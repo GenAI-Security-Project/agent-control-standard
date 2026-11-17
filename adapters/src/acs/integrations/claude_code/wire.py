@@ -52,7 +52,8 @@ What this tool does NOT do
 ==========================
 
   - Generate the HMAC secret. Run:
-      openssl rand -hex 32 > ~/.acs/hmac.key && chmod 600 ~/.acs/hmac.key
+      mkdir -p -m 700 ~/.acs && openssl rand -hex 32 > ~/.acs/hmac.key \\
+        && chmod 600 ~/.acs/hmac.key
   - Start the Guardian. Run it yourself in a terminal, launchd, systemd,
     Docker, whatever fits your deployment.
   - Validate that the Guardian is reachable. Test that with

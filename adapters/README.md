@@ -31,13 +31,15 @@ Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every proces
 
 ## Secret and trusted files
 
-`acs.client.read_trusted_file` is the one reader for every secret or trusted file: `ACS_HMAC_SECRET_FILE`, the example Guardian's ML-DSA-65 seed (`ACS_GUARDIAN_SIGNING_KEY_FILE`), and its key document (`ACS_GUARDIAN_KEYS`). It opens the file once, without following a symlink and without blocking on a FIFO, and checks the open descriptor, never the path a second time.
+`acs.client.read_trusted_file` is the one reader for every secret or trusted file: `ACS_HMAC_SECRET_FILE`, the example Guardian's ML-DSA-65 seed (`ACS_GUARDIAN_SIGNING_KEY_FILE`), and its key document (`ACS_GUARDIAN_KEYS`). It opens the file's directory once and the file inside it, without following a symlink and without blocking on a FIFO, and checks those descriptors, never the path a second time.
 
 - It must be a regular file.
-- Its owner must be the user the process runs as, or root.
-- Its directory must not be writable by group or other, unless the directory is sticky, as `/tmp` is.
+- For a secret, the file and its directory must be owned by the user the process runs as, or by root. The key document is public and the Guardian owns it, so its owners aren't checked. Pin `ACS_GUARDIAN_KEY_FINGERPRINT` to catch a swapped key.
+- Its directory must not be world-writable, unless the directory is sticky, as `/tmp` is. A group-writable directory is fine, since `mkdir` under the common umask 002 gives 0775. Directories above it aren't checked.
 - A secret must be owner-only (0600 or 0400). A key document may be readable by anyone, but no group or other may write it.
-- The HMAC secret is read up to 64 KiB, the seed up to 65 bytes, and the key document up to 1 MiB. A larger file is refused.
+- The HMAC secret is read up to 64 KiB, the seed up to 65 bytes, and the key document up to 1 MiB. A larger file is refused as unreadable, and for the HMAC secret that is audited like a file that can't be opened.
+
+What changed for an existing setup: a secret that sits in a world-writable directory without the sticky bit, or in a directory another user owns, is now refused. Move it into a directory you own, for example one made with `mkdir -p -m 700 ~/.acs`.
 
 Windows has no owner, group, or other bits, so only the symlink and regular-file checks run there, and a secret also needs the opt-in below.
 

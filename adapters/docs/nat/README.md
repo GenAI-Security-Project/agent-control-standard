@@ -40,7 +40,7 @@ The `nat` extra installs NAT itself, the middleware (NAT finds `_type: acs_guard
 Both the adapter and the Guardian read this file. Mode 0600 is enforced — anything looser and the adapter refuses to start.
 
 ```bash
-mkdir -p ~/.acs
+mkdir -p -m 700 ~/.acs
 openssl rand -hex 32 > ~/.acs/hmac.key
 chmod 600 ~/.acs/hmac.key
 ```
@@ -328,7 +328,7 @@ The adapter works across multiple NAT releases by feature-detecting the block me
 | `acs-nat-wire` errors out with "ruamel.yaml" missing | Install the `nat` extra: `pip install "$ACS_REPO/adapters[nat]"`. |
 | NAT runs functions as if no Guardian exists | NAT loaded the workflow before `acs-nat-wire --write` ran. **Restart your NAT process.** |
 | Every call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its calls unless `ACS_STARTUP_POSTURE=proceed`, and a call with no usable decision is denied unless the YAML sets `default_deny: false`. Check the Guardian process is running. |
-| Adapter says `SecretFilePermissionsError` | HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
+| Adapter says `SecretFilePermissionsError` | The secret file failed one of the checks, and the message names which. Group or other access: `chmod 600 ~/.acs/hmac.key` (0600 or 0400). A symlink, FIFO, or anything but a regular file: point `ACS_HMAC_SECRET_FILE` at the real file. A file or directory owned by another user: give both to the user that runs the adapter, or to root. A world-writable directory without the sticky bit: `chmod o-w ~/.acs`. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. Audit log shows `cause=signature_invalid_response`. |
 | Guardian returns `-32005 REPLAY_DETECTED` | Same `request_id` sent twice. Audit log shows `cause=replay_detected_response`. Usually a retry loop bug. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time. Audit log shows `cause=timestamp_out_of_window_response`. |
