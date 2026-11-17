@@ -11,18 +11,24 @@ Scope: predicate-only. No change to ACS normative text, no wire-format change.
 
 ### Why the type identifiers are URNs
 
-These are `urn:` identifiers, deliberately not `https:`. An earlier draft used an `https:` host for
-them and every one of those URIs returned HTTP 503 — a type URI that does not resolve is worse than
-one that never pretended to: a verifier that dereferences it fails in a way that looks like our
-fault, and a verifier that ignores it learns nothing. `docs/spec/conformance.md` records that
-ACS v0.1.0 has no registry and no steward body, so there is no authority to resolve a type URI
-against. A URN says exactly that: stable name, no resolver, resolution is the verifier's problem
-via `pin.registry_revision`.
+These are `urn:` identifiers, deliberately not `https:`. An earlier draft used an `https:` host
+for them and every one of those URIs returned HTTP 503. A type URI that does not resolve is a
+defect a verifier discovers in a single request, and the failure is attributed to the issuer;
+a verifier that ignores it, meanwhile, learns nothing from the identifier at all. The conformance
+document records that ACS v0.1.0 has no registry and no steward body, so there is no authority to
+resolve a type URI against. A URN states that position without pretending otherwise: stable name,
+no resolver, resolution settled by `pin.registry_revision`.
 
-When a registry exists, `https:` URIs will be minted and these URNs kept as aliases, so no
-statement signed today becomes unverifiable tomorrow. Until then, a verifier MUST NOT dereference
-and MUST treat an unresolvable registry as `verifier_context_incomplete` (fail-closed), never as
-a pass.
+If a registry is established, `https:` URIs may be minted alongside these URNs, which would be
+kept as aliases so that no statement signed today becomes unverifiable tomorrow.
+
+### Type identifier resolution (normative)
+
+Until such a registry exists, a verifier receiving a statement of this family:
+
+- MUST NOT dereference the type URN;
+- MUST treat an unresolvable registry as `verifier_context_incomplete` and fail closed, never as
+  a pass.
 
 ---
 
