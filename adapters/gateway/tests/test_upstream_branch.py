@@ -103,6 +103,60 @@ def test_the_branch_header_never_leaves_and_a_client_copy_is_ignored(gateway, gu
     assert not [h for h in upstream.received[0].headers if h.startswith("x-acs-")]
 
 
+def test_a_retry_whose_first_reply_was_removed_replays_with_the_same_branch(gateway, guardian, upstream, tmp_path,
+                                                                           audit):
+    """Fix round 3, CR3-1: the client keeps only the retry's reply, so only that reply's removed calls count."""
+    client = capture(gateway, tmp_path, guardian)
+    upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_1")))
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_2"),
+                                 call_item("bash", {"command": "rm -rf /"}, "call_3")))
+    upstream.reply(response_body(message_item("done")))
+    client.post("/v1/responses", json=finbot_request())
+    retried = client.post("/v1/responses", json=finbot_request()).json()
+    [kept] = [i for i in retried["output"] if i["type"] == "function_call"]
+    follow_up = finbot_request(kept, output("call_2", "{}"))
+    client.post("/v1/responses", json=follow_up)
+    captured = lines(tmp_path)[2]["branch"]
+    # Replay serves the first reply to both attempts, so its own removed call is the one that counts there.
+    replay = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"), ACS_LAB_MODE="enforce",
+                     ACS_GUARDIAN_URL=guardian)
+    replay.post("/v1/responses", json=finbot_request())
+    replay.post("/v1/responses", json=finbot_request())
+    answer = replay.post("/v1/responses", json=follow_up).json()
+    assert captured == "d,a,a"
+    assert answer["output"][0]["content"][0]["text"] == "done"
+    assert not [e for e in audit() if e["acs_audit_event"] == "replay_miss"]
+
+
+def test_a_tampered_resend_replaced_by_the_neutral_line_is_d(gateway, guardian, upstream, tmp_path):
+    """Fix round 3, CR3-2: the token says what the model received for this request."""
+    client = capture(gateway, tmp_path, guardian)
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    upstream.reply(response_body(message_item("first")))
+    upstream.reply(response_body(message_item("second")))
+    client.post("/v1/responses", json=finbot_request())
+    client.post("/v1/responses", json=finbot_request(call, output("call_1", '{"v": 1}')))
+    client.post("/v1/responses", json=finbot_request(call, output("call_1", '{"v": 2}')))
+    assert [line["branch"] for line in lines(tmp_path)] == ["", "a,a", "a,d"]
+
+
+def test_a_history_call_with_no_record_counts_as_delivered(gateway, guardian, upstream, tmp_path):
+    """Fix round 3, CR3-8: after an epoch bump the session never saw the call, and off would say a."""
+    for mode in ("shadow", "enforce"):
+        rec = tmp_path / mode
+        client = gateway(ACS_UPSTREAM="capture", ACS_RECORDINGS_DIR=str(rec), ACS_LAB_MODE=mode,
+                         ACS_GUARDIAN_URL=guardian)
+        call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+        upstream.reply(response_body(call))
+        upstream.reply(response_body(message_item("done")))
+        client.post("/v1/responses", json=finbot_request())
+        client.app.state.gateway.bump_epoch()
+        client.post("/v1/responses", json=finbot_request(call, output("call_1", "{}")))
+        branches = [json.loads(line)["branch"] for line in (rec / "capture.jsonl").read_text().splitlines()]
+        assert branches == ["", "a,a"], mode
+
+
 def test_plain_live_sends_no_branch_header(gateway, upstream):
     upstream.reply(response_body(message_item("done")))
     gateway().post("/v1/responses", json=finbot_request(), headers={"x-acs-lab-branch": "d"})

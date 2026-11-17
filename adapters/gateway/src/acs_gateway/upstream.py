@@ -209,14 +209,39 @@ def _token(outcome: Any, result: bool) -> str:
     return "m"
 
 
+def reply_call_ids(reply: Any) -> list[str]:
+    """The call_ids of the function calls in an upstream reply, read before gating removes any."""
+    output = reply.get("output") if isinstance(reply, dict) else None
+    return [i["call_id"] for i in output if isinstance(i, dict) and i.get("type") == "function_call"
+            and isinstance(i.get("call_id"), str) and i["call_id"]] if isinstance(output, list) else []
+
+
+def note_reply_calls(session: Session, call_ids: list[str], body: Any) -> None:
+    """Place this reply's calls where the request that produced them ended, for session_branch.
+
+    A client keeps only the reply it last received for a request, so a removed call from an earlier attempt at the
+    same request, an SDK retry or a rerun, stops counting (fix round 3, CR3-1). Replay answers every attempt with
+    the same recorded reply, and capture now counts only the last one, so the two agree.
+    """
+    items = body.get("input") if isinstance(body, dict) else None
+    position = len(items) if isinstance(items, list) else 0
+    kept = set(call_ids)
+    for call_id, outcome in session.calls.items():
+        if call_id in kept:
+            outcome.position = position
+        elif outcome.position == position:
+            outcome.position = None
+
+
 def session_branch(session: Session, body: Any) -> str:
-    """One token per governed item, from the session's own outcome records (A.8): a delivered, d removed or replaced
-    by the neutral line, m rewritten.
+    """Enforce's branch tokens, one per governed item, from the session's own outcome records (A.8): a delivered,
+    d removed or replaced by the neutral line, m rewritten. Shadow and off change nothing, so they use off_branch.
 
     Calls and outputs take their tokens in the order the request holds them. A call the gateway removed never comes
     back from the client, so its d goes where the request that produced it ended, which is where its siblings and
     the model's next items sit in every later resend. The producing request and its retries end exactly there, so
-    they carry no token for calls they haven't been shown yet.
+    they carry no token for calls they haven't been shown yet. A history call the session has no record of, after an
+    epoch bump or an eviction, reached the model as the client sent it, so it is a, as off would say (CR3-8).
     """
     items = body.get("input") if isinstance(body, dict) and isinstance(body.get("input"), list) else []
     removed: dict[int, int] = {}
@@ -229,10 +254,17 @@ def session_branch(session: Session, body: Any) -> str:
         call_id = item.get("call_id") if isinstance(item, dict) else None
         if not isinstance(call_id, str) or not call_id:
             continue
-        if item.get("type") == "function_call" and call_id in session.calls:
-            tokens.append(_token(session.calls[call_id], result=False))
-        elif item.get("type") == "function_call_output" and call_id in session.results:
-            tokens.append(_token(session.results[call_id], result=True))
+        if item.get("type") == "function_call":
+            outcome = session.calls.get(call_id)
+            tokens.append("a" if outcome is None else _token(outcome, result=False))
+        elif item.get("type") == "function_call_output":
+            outcome = session.results.get(call_id)
+            recorded = outcome.item.get("output") if outcome is not None and outcome.item is not None else None
+            if item.get("output") == NEUTRAL_LINE and recorded != NEUTRAL_LINE:
+                # The gateway withheld this resend (a reused call_id), so the model got the neutral line (CR3-2).
+                tokens.append("d")
+            else:
+                tokens.append("a" if outcome is None else _token(outcome, result=True))
     return ",".join(tokens)
 
 

@@ -64,7 +64,15 @@ from acs_gateway.sessions import (
 from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
-from acs_gateway.upstream import BRANCH_HEADER, UpstreamSource, off_branch, override_model, session_branch
+from acs_gateway.upstream import (
+    BRANCH_HEADER,
+    UpstreamSource,
+    note_reply_calls,
+    off_branch,
+    override_model,
+    reply_call_ids,
+    session_branch,
+)
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
 _HOP_HEADERS = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -337,7 +345,8 @@ class Gateway:
                 return failed
         if self.upstream_source.records_branch:
             # Capture and replay key on what the gateway did, read from its own records (A.8).
-            headers[BRANCH_HEADER] = session_branch(session, body) if session is not None else off_branch(body)
+            headers[BRANCH_HEADER] = (session_branch(session, body) if self.enforce and session is not None
+                                      else off_branch(body))
         if self.upstream_source.model is not None:
             # ACS_UPSTREAM_MODEL picks the model live and capture call. The model input log then shows what was sent.
             body["model"] = self.upstream_source.model
@@ -382,9 +391,10 @@ class Gateway:
                 # The input phase already made this request's one attempt, so only a new epoch's session opens here.
                 if session.handshake is None:
                     await self._ensure_open(session)
-                forwarded = body.get("input")
-                changed = await self._gate_output(session, reply, hold,
-                                                  len(forwarded) if isinstance(forwarded, list) else 0)
+                reply_calls = reply_call_ids(reply)
+                changed = await self._gate_output(session, reply, hold)
+                # Replay's branch tokens place this reply's removed calls where this request ended (issue #579).
+                note_reply_calls(session, reply_calls, body)
         except SessionsBusy:
             raise
         except Exception as e:  # noqa: BLE001
@@ -726,15 +736,13 @@ class Gateway:
             return CachedOutcome("delivered", name, item, result.request_id, first, raw)
         return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw)
 
-    async def _gate_output(self, session: Session, reply: dict[str, Any], asks: AskHold | None = None,
-                           position: int | None = None) -> bool:
+    async def _gate_output(self, session: Session, reply: dict[str, Any], asks: AskHold | None = None) -> bool:
         """Gate each new function_call before the client sees it (A.4). asks is the request's ASK budget, which a
-        stream passes in so its calls, decided one at a time, share it too. position is how many input items the
-        request forwarded, kept on each new call's outcome for replay's branch tokens."""
+        stream passes in so its calls, decided one at a time, share it too."""
         asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s)
         changed, removed, kept = False, False, []
         for item in reply["output"]:
-            delivered = await self._gate_item(session, item, asks, position)
+            delivered = await self._gate_item(session, item, asks)
             if delivered is None:
                 changed = removed = True
                 kept.append(_REMOVED)
@@ -749,8 +757,7 @@ class Gateway:
             reply["output"] = kept
         return changed
 
-    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None = None,
-                         position: int | None = None) -> Any:
+    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None = None) -> Any:
         """One output item through the gate: the item to deliver, the same object when nothing changes, or None when
         enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the request's
         ASK budget, shared by every item of one response."""
@@ -788,7 +795,6 @@ class Gateway:
             return None if self.enforce else item
         if cached is None:
             cached = await self._gate_call(session, item, asks)
-            cached.position = position
             session.calls[call_id] = cached
         if not self.enforce:
             return item
