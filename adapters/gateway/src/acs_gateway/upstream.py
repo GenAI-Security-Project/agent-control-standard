@@ -5,13 +5,11 @@ Live with no key file passes no transport at all, which is the gateway's behavio
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
 import stat
 import threading
-from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -322,6 +320,9 @@ def _recording(raw: str) -> Recording:
             raise ValueError(f"{name} is a whole number of at least 0")
     if not isinstance(line["branch"], str) or not _BRANCH.fullmatch(line["branch"]):
         raise ValueError("branch is a comma-separated list of a, d and m tokens")
+    if len([t for t in line["branch"].split(",") if t]) < step:
+        # Every function_call_output the gateway forwards has an outcome, so a step needs at least as many tokens.
+        raise ValueError(f"branch has fewer tokens than step {step}, so the line could never match")
     if not isinstance(line["stream"], bool):
         raise ValueError("stream is true or false")
     if not isinstance(line["ids"], list) or not all(isinstance(i, str) and _SKELETON_ENTRY.fullmatch(i)
@@ -423,32 +424,19 @@ def _response(status: int, content: bytes, content_type: str) -> httpx.Response:
 class ReplayTransport(httpx.AsyncBaseTransport):
     """Answers POST <base>/responses from recordings. It opens no socket and holds no credential.
 
-    A byte-identical request gets the bytes it got before from a bounded cache keyed on the request's sha256
-    (PREMORTEM P11), so an SDK retry sees exactly the first answer, a miss included.
+    An answer depends only on the request bytes and the gateway's branch tokens, both the same on a byte-identical
+    retry, so a retry gets exactly the first answer, a miss included, with no cache (PREMORTEM P11).
     """
-    CACHE_SIZE = 1024
 
     def __init__(self, store: RecordingStore) -> None:
         self.store = store
-        self.cache: OrderedDict[str, _Answer] = OrderedDict()
-        self.cache_hits = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.method != "POST" or not request.url.path.endswith("/responses"):
             error = {"error": {"message": "Unknown request URL.", "type": "invalid_request_error", "param": None,
                                "code": "unknown_url"}}
             return _response(404, json.dumps(error).encode("utf-8"), "application/json")
-        raw = await request.aread()
-        digest = hashlib.sha256(raw + b"\0" + request.headers.get(BRANCH_HEADER, "").encode("utf-8")).hexdigest()
-        answer = self.cache.get(digest)
-        if answer is not None:
-            self.cache.move_to_end(digest)
-            self.cache_hits += 1
-        else:
-            answer = self._answer(raw, request.headers.get(BRANCH_HEADER))
-            self.cache[digest] = answer
-            if len(self.cache) > self.CACHE_SIZE:
-                self.cache.popitem(last=False)
+        answer = self._answer(await request.aread(), request.headers.get(BRANCH_HEADER))
         if answer.miss is not None:
             _audit("replay_miss", **answer.miss)
         return _response(200, answer.content, answer.content_type)

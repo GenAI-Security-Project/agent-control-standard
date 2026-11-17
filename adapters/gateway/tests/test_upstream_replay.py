@@ -76,7 +76,7 @@ def test_the_step_comes_from_the_request_not_from_how_many_requests_came_before(
     assert text(client.post("/v1/responses", json=finbot_request(*history(2)))) == "step two"
 
 
-def test_a_byte_identical_retry_gets_the_cached_answer(gateway, tmp_path, no_network):
+def test_a_byte_identical_retry_gets_the_same_answer(gateway, tmp_path, no_network):
     write(tmp_path / "rec", line(0, response_body(message_item("cached"))))
     client = replay(gateway, tmp_path)
     raw = json.dumps(finbot_request()).encode()
@@ -84,7 +84,8 @@ def test_a_byte_identical_retry_gets_the_cached_answer(gateway, tmp_path, no_net
     second = client.post("/v1/responses", content=raw, headers={"content-type": "application/json"})
     assert first.content == second.content
     transport = client.app.state.gateway.http._transport
-    assert transport.cache_hits == 1
+    # The answer is a pure function of the request and the gateway's branch tokens, so nothing is cached (CR8).
+    assert not hasattr(transport, "cache")
 
 
 def test_off_mode_reads_a_neutral_output_as_delivered(gateway, tmp_path, no_network):
@@ -116,6 +117,9 @@ def test_an_unfillable_placeholder_is_a_miss(gateway, tmp_path, audit, no_networ
     "not json",
     json.dumps({"scenario": "s1", "match": "(", "turn": 1, "step": 0, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
     json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": -1, "branch": "", "stream": False, "ids": [], "response": {"output": []}}),
+    # Two outputs can't come with fewer than two tokens, so this line could never match (CR7).
+    json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 2, "branch": "a", "stream": False, "ids": [],
+                "response": {"output": []}}),
     json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 0, "branch": "q", "stream": False, "ids": [], "response": {"output": []}}),
     json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 0, "branch": "", "stream": False, "ids": [], "response": {}}),
     json.dumps({"scenario": "s1", "match": "x", "turn": 1, "step": 0, "branch": "", "stream": True, "ids": [], "response": [{"event": 1}]}),
