@@ -90,8 +90,10 @@ file inside it without following a symlink. It rejects the file unless
 it is a regular file, its mode has no group or other access (0600 or
 0400), the file and its directory are owned by the running user or
 root, and the directory is not world-writable without the sticky bit.
-Ancestors above the directory are not checked. A file larger than
-64 KiB is refused as unreadable. `SecretFilePermissionsError` (or
+Ancestors above the directory are not checked. The directory must be
+readable by the reader, not only traversable: a 0711 directory fails
+with "its directory ... cannot be opened", and the fix is `chmod a+r`
+on that directory. A file larger than 64 KiB is refused as unreadable. `SecretFilePermissionsError` (or
 `SecretFileUnreadableError` for an unreadable or oversized file)
 prevents the adapter from silently using a leaked secret.
 *Test:* `HmacSecretFilePermissions::{test_world_readable_rejected,

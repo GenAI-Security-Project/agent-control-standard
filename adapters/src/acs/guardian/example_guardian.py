@@ -208,7 +208,7 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
             if DEAD_KEY_REFUSALS.record():
                 sys.stderr.write(f"[guardian] decision key {DECISION_SIGNER.keys.key_id} is not live "
                                  "(outside its validity window or revoked). Refusing to sign every response "
-                                 "until the Guardian restarts with a live key\n")
+                                 "until the key is live again\n")
                 sys.stderr.flush()
             raise SigningUnavailable("the decision key is not live")
         if not isinstance(request, dict):
