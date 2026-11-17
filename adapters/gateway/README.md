@@ -22,6 +22,8 @@ Shadow and enforce accept only what they can gate, by allowlist, so anything new
 - **Output items:** `message`, `function_call`, `reasoning`. Enforce removes any other item from a model response and adds the neutral line if nothing else is left. Shadow forwards it. Both audit `unsupported_item_type`.
 
 
+In shadow and enforce, a JSON key repeated anywhere in the request body, or inside the arguments or output string of a resent call, is refused in enforce with 400 and recorded in shadow, audited as `duplicate_json_key`. Parsers disagree on which copy of a repeated key wins, so the gateway could gate one copy while the model read the other. A call whose arguments repeat a key is denied, and an upstream answer that repeats a key gets 502.
+
 In shadow and enforce, any `stream` value other than an absent field, `null` or `false` counts as a stream request. A compressed request body answers 415, the gateway asks the upstream for gzip or deflate only, and a 2xx answer that isn't a JSON object with an `output` list answers 502, since it could carry calls the gateway never gated. Off relays requests and answers verbatim, encodings and headers included, except that every mode strips `x-acs-*` lab headers in both directions.
 
 Every other path answers 404. Off mode relays a streamed request (`"stream": true`) as the upstream sends it. Shadow and enforce answer a streamed request with 501 until issue #578 adds governed streaming.
@@ -108,6 +110,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), a 2xx answer the gateway can't read (`upstream_unparseable`), or a body over the size limit (`request_too_large`, `upstream_too_large`) |
 | `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
+| `duplicate_json_key` | A request repeated a JSON key, with `key` and `where` |
 | `unsupported_field` | A request field outside the allowlist, with `field` |
 | `unsupported_item_type` | An input or output item outside the allowlist, with `item_type` and `direction` |
 | `unsupported_tool_type` | A tool declaration that isn't a function tool |

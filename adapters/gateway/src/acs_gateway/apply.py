@@ -10,6 +10,7 @@ from typing import Any
 from acs.core import modify_composition_violation
 
 from acs_gateway.guardian import StepResult
+from acs_gateway.strict import loads_strict
 
 # The one artifact of governance the client and the model may see.
 NEUTRAL_LINE = "I couldn't complete that action."
@@ -86,9 +87,10 @@ class Applied:
 
 
 def parse_arguments(raw: Any) -> dict[str, Any] | None:
-    """A function_call's arguments as an object, or None when they aren't a JSON object."""
+    """A function_call's arguments as an object, or None when they aren't a JSON object or repeat a key, since the
+    client and the Guardian could then read different values."""
     try:
-        value = json.loads(raw) if isinstance(raw, str) else None
+        value = loads_strict(raw) if isinstance(raw, str) else None
     except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None

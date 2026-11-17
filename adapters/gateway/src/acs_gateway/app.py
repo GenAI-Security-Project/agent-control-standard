@@ -51,6 +51,7 @@ from acs_gateway.sessions import (
     conversation_key,
     fingerprint,
 )
+from acs_gateway.strict import repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -173,6 +174,13 @@ class Gateway:
         headers["accept-encoding"] = _GOVERNED_ACCEPT_ENCODING
         if not isinstance(body, dict):
             return openai_error(400, "The request body must be a JSON object.", "invalid_request_error")
+        repeated = _repeated_key_in_request(raw, body)
+        if repeated is not None:
+            key, where = repeated
+            _audit("duplicate_json_key", key=key, where=where, mode=self.config.mode)
+            if self.enforce:
+                return openai_error(400, "The request body repeats a JSON key.", "invalid_request_error",
+                                    "duplicate_json_key")
         field = unsupported_field(body)
         if field is not None:
             # An allowlist, so a new field fails closed. Server-side history (previous_response_id, conversation,
@@ -233,6 +241,9 @@ class Gateway:
         if not 200 <= upstream.status_code < 300:
             return _relay(upstream, None)
         reply = _parse(upstream.content)
+        if self.enforce and repeated_key(upstream.content) is not None:
+            # The client might read the other copy of a repeated key, one the gateway never gated.
+            reply = None
         if not isinstance(reply, dict) or not isinstance(reply.get("output"), list):
             # A success the gateway can't read could carry calls it never gated, so it never reaches the client.
             _audit("upstream_error", cause="upstream_unparseable", http_status=upstream.status_code)
@@ -459,9 +470,9 @@ class Gateway:
         name = item.get("name") if isinstance(item.get("name"), str) else ""
         arguments = parse_arguments(item.get("arguments"))
         if arguments is None:
-            # The client would fail to parse these arguments too, and nothing the Guardian could judge exists.
-            result = StepResult(TOOL_CALL_REQUEST, None, cause="arguments_not_an_object",
-                                failure_class="observed_agent_error")
+            # Arguments that aren't one unambiguous JSON object leave the Guardian nothing it could judge safely.
+            cause = "duplicate_json_key" if repeated_key(item.get("arguments")) else "arguments_not_an_object"
+            result = StepResult(TOOL_CALL_REQUEST, None, cause=cause, failure_class="observed_agent_error")
         else:
             result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
@@ -509,6 +520,22 @@ class Gateway:
             _audit("verification_failed", **fields)
         elif result.cause and result.cause.startswith("http_"):
             _audit("guardian_http_error", **fields)
+
+
+def _repeated_key_in_request(raw: bytes, body: dict[str, Any]) -> tuple[str, str] | None:
+    """A key repeated anywhere in the body, or inside the JSON strings of a function_call's arguments or a
+    function_call_output's output, which the model reads as text. Returns (key, where) or None."""
+    key = repeated_key(raw)
+    if key is not None:
+        return key, "body"
+    items = body.get("input")
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("type") in ("function_call", "function_call_output"):
+            field = "arguments" if item["type"] == "function_call" else "output"
+            key = repeated_key(item.get(field))
+            if key is not None:
+                return key, f"{item['type']}.{field}"
+    return None
 
 
 def _opened(handshake: Any) -> bool:
