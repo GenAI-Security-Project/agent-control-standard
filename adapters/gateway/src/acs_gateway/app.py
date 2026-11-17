@@ -511,8 +511,9 @@ class Gateway:
                     # chain order, so it retires and the worker writes and sends nothing more.
                     token.retire()
                     self.sessions.retire(session)
-                    _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung")
-            return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
+                    _audit("session_retired", session_id=session.session_id, method=method, cause="step_hung",
+                           request_id=token.request_id)
+            return StepResult(method, token.request_id, cause="decision_timeout", failure_class="timeout")
 
     def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:
         """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since

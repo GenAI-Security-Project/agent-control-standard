@@ -287,6 +287,8 @@ def test_a_timed_out_step_writes_nothing_after_the_request_returns(gateway, guar
     assert transcript_lines(tmp_path) == at_return
     methods = [(line["dir"], (line["envelope"] or {}).get("method")) for line in at_return]
     assert methods[-2:] == [("req", "steps/toolCallRequest"), ("resp", None)]
+    # The late answer's audit line names the request it belongs to.
+    assert events(audit, "decision_applied")[0]["request_id"] == at_return[-2]["envelope"]["params"]["request_id"]
 
 
 def test_one_gateway_can_start_twice(gateway, guardian, upstream):
@@ -332,7 +334,7 @@ def test_a_hung_claimed_step_is_bounded_and_retires_its_session(gateway, harness
     assert time.monotonic() - started < 5
     assert output[0]["content"][0]["text"] == NEUTRAL
     applied = events(audit, "decision_applied")[0]
-    assert applied["cause"] == "decision_timeout"
+    assert applied["cause"] == "decision_timeout" and applied["request_id"]
     assert len(events(audit, "session_retired")) == 1
     hung.release.set()
     time.sleep(1.0)

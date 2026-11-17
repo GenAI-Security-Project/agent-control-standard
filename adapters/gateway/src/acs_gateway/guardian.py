@@ -96,6 +96,8 @@ class StepToken:
         self.deadline = deadline
         self._lock = threading.Lock()
         self._state = "pending"
+        # The claimed step's request_id, so a late answer's audit line still names its transcript lines.
+        self.request_id: str | None = None
         # Set when the loop stopped waiting for a claimed step. The worker then writes and sends nothing more.
         self._retired = threading.Event()
 
@@ -106,12 +108,13 @@ class StepToken:
     def retired(self) -> bool:
         return self._retired.is_set()
 
-    def claim(self) -> bool:
+    def claim(self, request_id: str) -> bool:
         with self._lock:
             if self._state == "cancelled" or time.monotonic() >= self.deadline:
                 self._state = "cancelled"
                 return False
             self._state = "claimed"
+            self.request_id = request_id
             return True
 
     def cancel(self) -> bool:
@@ -226,7 +229,7 @@ class GuardianClient:
             return posture.closed().resolve(Undecided("envelope_not_signable", {"error": str(e)},
                                                       f"envelope not signable: {e}")), request_id
         signature = dict(request["params"]["signature"])
-        if token is not None and not token.claim():
+        if token is not None and not token.claim(request_id):
             return None, request_id
         # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
         self.transcript.append(session_id, "req", request)
