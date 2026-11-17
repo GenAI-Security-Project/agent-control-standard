@@ -82,22 +82,22 @@ def request_binding_problem(request: object) -> str | None:
 def response_matches_request(request: dict, response: dict) -> bool:
     """Whether the response answers this request, so a signed response can't be replayed onto another call (D-029).
 
-    The rule follows the request, never the response's shape. A request that fails
-    request_binding_problem binds nothing. Every response needs the request's JSON-RPC id. An
-    error is bound by the id alone, and an id with neither a result nor an error answers
-    nothing. For the handshake, a ServerHello echoes nothing else from the ClientHello, so its
+    The rule follows the request, never the response's shape. Every response needs the
+    request's JSON-RPC id. An error object is bound by the id alone, whatever the request's
+    request_id, and an id with neither a result nor an error object answers nothing. A result
+    binds only a request that passes request_binding_problem. For the handshake, a ServerHello echoes nothing else from the ClientHello, so its
     result must carry no request_id, which keeps a step decision from answering a ClientHello.
     Issue #13 tracks binding the handshake to the traffic after it. For every other request, a
     result must carry the request's request_id. A result that isn't an object answers nothing.
     """
-    if request_binding_problem(request) is not None:
-        return False
     if not same_json_rpc_id(response.get("id"), request.get("id")):
         return False
     result = response.get("result")
     if result is None:
-        # An error answers by id. An id with neither a result nor an error answers nothing.
-        return response.get("error") is not None
+        # An error object answers by id alone. Anything else without a result answers nothing.
+        return isinstance(response.get("error"), dict)
+    if request_binding_problem(request) is not None:
+        return False
     if not isinstance(result, dict):
         return False
     if request.get("method") == HANDSHAKE_METHOD:

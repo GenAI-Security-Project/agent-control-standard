@@ -48,6 +48,19 @@ class JsonRpcIdsMatchAsJsonValues(unittest.TestCase):
                 self.assertFalse(response_matches_request(request, {"jsonrpc": "2.0", "id": "1"}))
                 self.assertFalse(response_matches_request(request, {"jsonrpc": "2.0", "id": "1", "result": None}))
 
+    def test_an_error_binds_by_id_whatever_the_request_id(self) -> None:
+        # Review finding CR8-1: the request_id precondition applies to results only.
+        error = {"jsonrpc": "2.0", "id": "1", "error": {"code": -32000, "message": "refused"}}
+        for params in ({}, {"request_id": 7}, {"request_id": ""}):
+            with self.subTest(params=params):
+                self.assertTrue(response_matches_request({**_request("1"), "params": params}, error))
+
+    def test_an_error_that_is_not_an_object_answers_nothing(self) -> None:
+        # Review finding CR8-4.
+        for error in (False, 0, "x", ["refused"]):
+            with self.subTest(error=error):
+                self.assertFalse(response_matches_request(_request("1"), {"jsonrpc": "2.0", "id": "1", "error": error}))
+
     def test_an_error_binds_by_id_with_the_same_rule(self) -> None:
         error = {"jsonrpc": "2.0", "id": True, "error": {"code": -32000, "message": "refused"}}
         self.assertFalse(response_matches_request(_request(1), error))
