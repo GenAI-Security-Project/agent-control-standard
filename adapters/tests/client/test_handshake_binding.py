@@ -1,11 +1,11 @@
-"""The handshake binds a ServerHello to its ClientHello with core's one rule (review findings R6-M2, CR6-5, CR6-6)."""
+"""The handshake binds a ServerHello to its ClientHello by id, compared as JSON values (review findings R6-M2, CR6-6)."""
 from __future__ import annotations
 
 import unittest
 from pathlib import Path
 
 from acs.client import _handshake
-from acs.client._outcome import SessionRefused
+from acs.client._outcome import Negotiated, SessionRefused
 from acs.core import HANDSHAKE_METHOD
 
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -30,10 +30,13 @@ class ServerHelloBinding(unittest.TestCase):
         response = {"jsonrpc": "2.0", "id": True, "result": dict(SERVER_HELLO)}
         self.assertEqual(_cause(_client_hello(1), response), "response_binding_mismatch")
 
-    def test_a_result_carrying_request_id_is_a_binding_mismatch(self) -> None:
-        # A step decision with a colliding id never answers a ClientHello.
+    def test_a_result_carrying_request_id_never_negotiates(self) -> None:
+        # A step decision with a colliding id never answers a ClientHello. The default path keeps
+        # its existing classification for that case (no answer, or a refusal when unsigned), which
+        # tests/common/test_serverhello_contract.py pins, so this asserts only that it never negotiates.
         response = {"jsonrpc": "2.0", "id": 1, "result": {"request_id": "hello-request-1", "decision": "allow"}}
-        self.assertEqual(_cause(_client_hello(1), response), "response_binding_mismatch")
+        outcome = _handshake._classify_hello(_client_hello(1), response, SESSION_ID)
+        self.assertNotIsInstance(outcome, Negotiated)
 
     def test_a_matching_id_passes_the_binding_check(self) -> None:
         for response_id in (1, 1.0):

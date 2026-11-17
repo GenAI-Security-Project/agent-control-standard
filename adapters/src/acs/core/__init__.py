@@ -27,6 +27,7 @@ _EXPORTS = {
     "parse_iso8601": "_envelope",
     "request_envelope": "_envelope",
     "response_matches_request": "_envelope",
+    "same_json_rpc_id": "_envelope",
     "schemas_dir": "_schemas",
     "server_hello_problem": "_handshake",
     "sign_with_key": "_signing",

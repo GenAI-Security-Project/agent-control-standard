@@ -34,7 +34,7 @@ from acs.core import (
     iso8601_now,
     jcs_canonicalize,
     normalize_decision,
-    response_matches_request,
+    same_json_rpc_id,
     server_hello_problem,
 )
 
@@ -300,8 +300,11 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
         return NoAnswer("malformed_response")
     error = response.get("error")
     code = error.get("code") if error is not None else None
-    # Core's one binding rule: the ClientHello's id, and a result carrying no request_id.
-    if not response_matches_request(dict(client_hello), response):
+    # The id binds the ServerHello, compared as JSON values. A result carrying request_id still
+    # never negotiates: the ServerHello checks below call it no answer, the contract
+    # test_signed_legacy_result_wrapper_is_no_answer pins, so this stays an id check rather
+    # than response_matches_request, which would refuse the session instead.
+    if not same_json_rpc_id(response.get("id"), client_hello["id"]):
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
     verified = verify_signature(response, session_id=session_id)
