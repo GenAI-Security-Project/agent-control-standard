@@ -1,0 +1,51 @@
+"""A call_id seen before with different content is never served from the cache (review I6, CR3)."""
+import json
+
+import pytest
+
+from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body
+
+
+def events(audit, name):
+    return [e for e in audit() if e["acs_audit_event"] == name]
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_a_reused_call_id_with_new_content_is_flagged(gateway, guardian, upstream, audit, mode):
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_1")))
+    client = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    second = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    reused = events(audit, "call_id_reused")
+    assert [(e["call_id"], e["tool"]) for e in reused] == [("call_1", "bash")]
+    if mode == "enforce":
+        assert [i["type"] for i in second] == ["message"] and second[0]["content"][0]["text"] == NEUTRAL
+        assert events(audit, "decision_applied")[-1]["cause"] == "call_id_reused"
+    else:
+        assert second[0]["name"] == "bash"
+
+
+def test_a_reused_call_id_with_the_same_content_is_not_flagged(gateway, guardian, upstream, audit):
+    reply = response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1"))
+    upstream.reply(reply)
+    upstream.reply(reply)
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    assert client.post("/v1/responses", json=finbot_request()).json() == reply
+    assert events(audit, "call_id_reused") == []
+
+
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+def test_a_resent_output_with_new_content_is_flagged(gateway, harness_guardian, upstream, audit, mode):
+    call = call_item("text_tool", {}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE=mode, ACS_GUARDIAN_URL=harness_guardian())
+    client.post("/v1/responses", json=finbot_request())
+    first = {"type": "function_call_output", "call_id": "call_1", "output": "original"}
+    changed = {**first, "output": "something else entirely"}
+    client.post("/v1/responses", json=finbot_request(call, first))
+    client.post("/v1/responses", json=finbot_request(call, changed))
+    sent = [i for i in upstream.received[-1].json()["input"] if i.get("type") == "function_call_output"][0]
+    assert [e["call_id"] for e in events(audit, "call_id_reused")] == ["call_1"]
+    assert sent["output"] == (NEUTRAL if mode == "enforce" else "something else entirely")

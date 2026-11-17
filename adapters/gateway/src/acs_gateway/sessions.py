@@ -47,6 +47,18 @@ class CachedOutcome:
     # The item as delivered (rewritten arguments or output included), or None when it was removed.
     item: dict[str, Any] | None
     request_id: str | None = None
+    # What the gated item first said, so a reused call_id carrying something else is caught, never served from here.
+    fingerprint: str = ""
+
+
+def fingerprint(item: dict[str, Any]) -> str:
+    """SHA-256 over what a function_call asks for (name, arguments) or what an output says (output)."""
+    content = [item.get("name"), item.get("arguments")] if item.get("type") == "function_call" else item.get("output")
+    try:
+        encoded = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+    except (ValueError, RecursionError):
+        encoded = repr(content)
+    return hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 @dataclass

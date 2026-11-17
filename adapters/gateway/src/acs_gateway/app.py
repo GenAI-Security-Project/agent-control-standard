@@ -25,6 +25,7 @@ from acs_gateway.apply import (
     call_payload,
     is_foreign_call,
     is_foreign_output,
+    NEUTRAL_LINE,
     neutral_message,
     neutralize_foreign_output,
     parse_arguments,
@@ -33,7 +34,7 @@ from acs_gateway.apply import (
 )
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
 from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult
-from acs_gateway.sessions import CachedOutcome, Session, SessionMap, conversation_key
+from acs_gateway.sessions import CachedOutcome, Session, SessionMap, conversation_key, fingerprint
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -214,6 +215,12 @@ class Gateway:
                     item, changed = {**item, "arguments": cached.item.get("arguments")}, True
             elif item.get("type") == "function_call_output":
                 cached = session.results.get(call_id)
+                if cached is not None and cached.fingerprint != fingerprint(item):
+                    self._reused(session, TOOL_CALL_RESULT, cached.name, call_id)
+                    if self.enforce:
+                        item, changed = {**item, "output": NEUTRAL_LINE}, True
+                    kept.append(item)
+                    continue
                 if cached is None:
                     known = session.calls.get(call_id)
                     name = names.get(call_id) or (known.name if known else "")
@@ -232,9 +239,10 @@ class Gateway:
         result = await asyncio.to_thread(self.guardian.step, session, TOOL_CALL_RESULT, payload)
         applied = apply_result(item, payload, parsed, result)
         self._record(session, result, applied, name, item.get("call_id"))
+        first = fingerprint(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id)
-        return CachedOutcome("rewritten", name, applied.item, result.request_id)
+            return CachedOutcome("delivered", name, item, result.request_id, first)
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first)
 
     async def _gate_output(self, session: Session, reply: dict[str, Any]) -> bool:
         """Gate each new function_call before the client sees it (A.4)."""
@@ -263,6 +271,13 @@ class Gateway:
                     kept.append(item)
                 continue
             cached = session.calls.get(call_id)
+            if cached is not None and cached.fingerprint != fingerprint(item):
+                self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
+                if self.enforce:
+                    changed = removed = True
+                else:
+                    kept.append(item)
+                continue
             if cached is None:
                 cached = await self._gate_call(session, item)
                 session.calls[call_id] = cached
@@ -291,11 +306,20 @@ class Gateway:
                                              call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
+        first = fingerprint(item)
         if not self.enforce or applied.decision == "allow":
-            return CachedOutcome("delivered", name, item, result.request_id)
+            return CachedOutcome("delivered", name, item, result.request_id, first)
         if applied.item is None:
-            return CachedOutcome("removed", name, None, result.request_id)
-        return CachedOutcome("rewritten", name, applied.item, result.request_id)
+            return CachedOutcome("removed", name, None, result.request_id, first)
+        return CachedOutcome("rewritten", name, applied.item, result.request_id, first)
+
+    def _reused(self, session: Session, method: str, name: str, call_id: str) -> None:
+        """A call_id already gated came back with other content. Enforce withholds it rather than re-gating, since
+        the model or the client is the only party that could have reused it."""
+        _audit("call_id_reused", session_id=session.session_id, epoch=session.epoch, method=method, tool=name,
+               call_id=call_id, mode=self.config.mode)
+        result = StepResult(method, None, cause="call_id_reused", failure_class="observed_agent_error")
+        self._record(session, result, Applied("deny", None, "call_id_reused"), name, call_id)
 
     def _record(self, session: Session, result: StepResult, applied: Applied, name: str, call_id: Any) -> None:
         """One audit line per governed step: decision_applied in enforce, shadow_decision in shadow (A.7)."""

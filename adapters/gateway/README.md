@@ -72,6 +72,8 @@ Each agent run is one ACS session, keyed on the SHA-256 of the system text (the 
 
 FinBot's agents resend their whole history every turn. The gateway caches each gated item's outcome on (session_id, call_id) and reapplies it on every resend, so a redacted value never reappears and no item is governed twice.
 
+A call_id that comes back with different content (another tool name, other arguments, or another output) is never served from the cache. Enforce withholds it, removing the call or replacing the output with the neutral line, and every mode audits `call_id_reused`.
+
 An epoch bump forgets every session and every cached outcome, so a call_id seen before is gated afresh under a new session. Send `POST /epoch` with `Authorization: Bearer <token>` to the admin port.
 
 ## Records
@@ -95,6 +97,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `verification_failed` | A Guardian response failed its signature check |
 | `guardian_http_error` | The Guardian answered with a non-2xx status |
 | `upstream_error` | An unknown path (`route_not_found`), an unreachable model (`upstream_unreachable`), a non-2xx model answer (`upstream_status`), or a 2xx answer the gateway can't read (`upstream_unparseable`) |
+| `call_id_reused` | A cached call_id came back with different content |
 | `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
 | `epoch_bumped` | The epoch moved |
 
