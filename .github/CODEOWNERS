@@ -66,10 +66,10 @@
 /adapters/  @bar-capsule @rocklambros @afogel
 
 # The gateway is a new subproject for the FinBot guided lab (issue #577). It gets a
-# wider owner set so its pull requests do not wait on two reviewers. GitHub silently
-# ignores a handle without write access, so @e2hln takes effect once she holds write.
+# wider owner set so its pull requests do not wait on two reviewers. Every handle
+# here holds write access, because GitHub silently ignores one that does not.
 # This line follows /adapters/ because the last matching pattern wins.
-/adapters/gateway/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc @e2hln
+/adapters/gateway/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead
