@@ -619,9 +619,11 @@ class Gateway:
             result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments))
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
-        # The one parse above gives the canonical form too. Unparseable arguments stand as they are, which is what
-        # canonical() would return for them.
-        first_arguments = canonical_value(arguments, raw_arguments) if arguments is not None else raw_arguments
+        # The one parse above gives the canonical form of an object. Arguments that parse to anything else still
+        # get their canonical form, so a re-serialization of them isn't taken for a reuse. canonical() leaves
+        # arguments that don't parse, or repeat a key, as they are.
+        first_arguments = (canonical_value(arguments, raw_arguments) if arguments is not None
+                           else canonical(raw_arguments))
         first, raw = fingerprint(item, first_arguments), content(item)
         if not self.enforce or applied.decision == "allow":
             return CachedOutcome("delivered", name, item, result.request_id, first, raw, first_arguments)

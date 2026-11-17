@@ -211,3 +211,12 @@ def test_strict_loading_is_built_on_the_recording_parser():
     assert loads_strict('{"a": 1}') == {"a": 1}
     with pytest.raises(DuplicateKey):
         loads_strict('{"a": 1, "a": 2}')
+
+
+def test_reserialized_non_object_arguments_are_not_flagged(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(call_item("get_vendor_details", "[ 1 ]", "call_1")))
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    rebuilt = {"type": "function_call", "name": "get_vendor_details", "call_id": "call_1", "arguments": "[1]"}
+    client.post("/v1/responses", json=finbot_request(rebuilt))
+    assert events(audit, "call_id_reused") == []
