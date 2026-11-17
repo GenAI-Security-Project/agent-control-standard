@@ -521,3 +521,15 @@ def test_a_move_or_rename_into_a_protected_path_denies(no_backend, tool, argumen
     payload = {"tool": {"name": tool}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
     result = _step("steps/toolCallRequest", payload)
     assert (result["decision"], result["reason_codes"]) == ("deny", ["protected_path"])
+
+
+
+@pytest.mark.parametrize("derivation", [["fresh"], {"x": 1}, 7, True])
+def test_a_non_string_intent_derivation_denies(no_backend, derivation):
+    result = _step("steps/subagentStart", {"intent_derivation": derivation})
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["argument_type_invalid"])
+
+
+def test_an_absent_or_null_intent_derivation_keeps_todays_answer(no_backend):
+    for payload in ({}, {"intent_derivation": None}):
+        assert _step("steps/subagentStart", payload)["reason_codes"] == ["subagent_gated"]

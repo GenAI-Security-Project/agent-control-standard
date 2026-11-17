@@ -610,7 +610,12 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
     if method == "steps/subagentStart":
         # Spawns are gated as strictly as the Task tool, and a fresh intent_derivation gets its own reason code.
-        derivation = (payload.get("intent_derivation") or "").lower()
+        # None reads as absent. Any other non-string denies, instead of crashing on .lower().
+        derivation = payload.get("intent_derivation")
+        derivation = "" if derivation is None else derivation
+        if not isinstance(derivation, str):
+            return _argument_type_deny(base, method, "intent_derivation", derivation)
+        derivation = derivation.lower()
         if not ALLOW_SUBAGENT:
             code = ("subagent_fresh_intent_gated" if derivation == "fresh"
                     else "subagent_gated")
