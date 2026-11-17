@@ -167,17 +167,15 @@ class Gateway:
         except RecursionError:
             return openai_error(400, "The request body is nested too deeply.", "invalid_request_error")
         session = self.sessions.get(key)
-        async with session.lock:
-            if not _opened(session.handshake):
-                if session.handshake is not None:
-                    # acs.client stores a session's handshake first-wins, so a retry needs a fresh session_id.
-                    # One attempt per request, and every step denies until one succeeds.
-                    _audit("session_retried", previous_session_id=session.session_id,
-                           cause=getattr(session.handshake, "cause", None) or "session_start_failed")
-                    session.session_id = str(uuid.uuid4())
-                await asyncio.to_thread(self.guardian.open, session)
-            if await self._gate_input(session, body):
-                raw = json.dumps(body).encode("utf-8")
+        try:
+            async with session.lock:
+                await self._ensure_open(session)
+                if await self._gate_input(session, body):
+                    raw = json.dumps(body).encode("utf-8")
+        except Exception as e:  # noqa: BLE001
+            failed = self._gating_failed(session, "input", e)
+            if failed is not None:
+                return failed
         upstream = await self._upstream(raw, body, headers)
         if isinstance(upstream, Response):
             return upstream
@@ -189,9 +187,34 @@ class Gateway:
             _audit("upstream_error", cause="upstream_unparseable", http_status=upstream.status_code)
             return openai_error(502, "The model service returned an unreadable response.", "server_error",
                                 "upstream_unreadable")
-        async with session.lock:
-            changed = await self._gate_output(session, reply)
+        try:
+            async with session.lock:
+                changed = await self._gate_output(session, reply)
+        except Exception as e:  # noqa: BLE001
+            failed = self._gating_failed(session, "output", e)
+            if failed is not None:
+                return failed
+            return _relay(upstream, None)
         return _relay(upstream, reply if changed else None)
+
+    async def _ensure_open(self, session: Session) -> None:
+        if _opened(session.handshake):
+            return
+        if session.handshake is not None:
+            # acs.client stores a session's handshake first-wins, so a retry needs a fresh session_id.
+            # One attempt per request, and every step denies until one succeeds.
+            _audit("session_retried", previous_session_id=session.session_id,
+                   cause=getattr(session.handshake, "cause", None) or "session_start_failed")
+            session.session_id = str(uuid.uuid4())
+        await asyncio.to_thread(self.guardian.open, session)
+
+    def _gating_failed(self, session: Session, phase: str, error: Exception) -> Response | None:
+        """A fault in the gateway's own gating code: shadow forwards unchanged (None), enforce fails closed."""
+        _audit("gateway_step_error", session_id=session.session_id, phase=phase, mode=self.config.mode,
+               error=f"{type(error).__name__}: {error}")
+        if not self.enforce:
+            return None
+        return openai_error(500, "The request could not be completed.", "server_error", "internal_error")
 
     async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> UpstreamAnswer | Response:
         """POST upstream and read the whole answer, up to the size limit, so the gateway can gate it."""

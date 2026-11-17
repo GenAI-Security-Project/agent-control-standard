@@ -25,3 +25,25 @@ def test_the_same_scenario_leaves_no_record_off_a_record_in_shadow_and_a_block_i
     assert shadow == DENIED
     enforce = run(gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian), upstream)
     assert enforce["output"][0]["content"][0]["text"] == NEUTRAL
+
+
+def boom(*args, **kwargs):
+    raise RuntimeError("gateway bug")
+
+
+def test_shadow_forwards_unchanged_when_gating_itself_fails(gateway, guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    client.app.state.gateway._gate_call = boom
+    reply = run(client, upstream)
+    assert reply == DENIED
+    assert [e["phase"] for e in audit() if e["acs_audit_event"] == "gateway_step_error"] == ["output"]
+
+
+def test_enforce_fails_closed_when_gating_itself_fails(gateway, guardian, upstream, audit):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.app.state.gateway._gate_call = boom
+    upstream.reply(DENIED)
+    response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == 500
+    assert "rm -rf" not in response.text and "bash" not in response.text
+    assert [e["phase"] for e in audit() if e["acs_audit_event"] == "gateway_step_error"] == ["output"]

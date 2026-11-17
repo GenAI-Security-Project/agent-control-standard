@@ -102,6 +102,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `result_name_from_client` | A tool output arrived for a call the gateway never gated, so the tool name came from the client's resent history |
 | `call_id_reused` | A cached call_id came back with different content |
 | `unsupported_tool_type` | A non-function tool declaration, call or output, with `item_type` and `direction` |
+| `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |
 | `session_retried` | A failed handshake or sessionStart was retried under a new session_id |
 | `session_evicted` | The session cap evicted the least recently used session |
 | `epoch_bumped` | The epoch moved |
