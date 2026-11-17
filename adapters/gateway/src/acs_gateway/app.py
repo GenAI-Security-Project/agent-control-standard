@@ -143,13 +143,14 @@ class Gateway:
     async def responses(self, request: Request) -> Response:
         if request.method != "POST":
             return await self.not_found(request)
+        headers = forward_headers(request.headers)
+        if not self.governed:
+            # Off is a pure passthrough, with no size limit on either leg.
+            return await self._relay_verbatim(await request.body(), headers)
         raw = await self._read_body(request)
         if raw is None:
             _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
             return openai_error(413, "The request body is too large.", "invalid_request_error", "request_too_large")
-        headers = forward_headers(request.headers)
-        if not self.governed:
-            return await self._relay_verbatim(raw, headers)
         body = _parse(raw)
         if is_stream(body):
             # Governed streaming is LAB-05 (issue #578). Refusing beats forwarding an ungoverned stream.

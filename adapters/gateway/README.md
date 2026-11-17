@@ -50,7 +50,7 @@ Run the tests with `uv run pytest -v`. They start the example Guardian and a fak
 
 | Mode | Hooks sent | Transcript | What reaches the client and the model |
 |---|---|---|---|
-| `off` | None | None | Exactly what each side sent, byte for byte, streamed answers included |
+| `off` | None | None | Exactly what each side sent, byte for byte, streamed answers included. A pure passthrough with no allowlists and no size limits |
 | `shadow` | Every one | Yes | Unchanged. Each decision is recorded as `shadow_decision` |
 | `enforce` | Every one | Yes | Each decision applied, as below |
 
@@ -134,7 +134,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_AUDIT_FILE` | None | Where audit lines go, besides stderr |
 | `ACS_MODEL_INPUT_LOG` | None | Where the model input log goes |
 | `ACS_GATEWAY_MAX_SESSIONS` | `256` | Sessions held at once. The least recently used idle one is evicted and audited as `session_evicted`. A session with a request in progress is never evicted, and a new conversation gets 503 (`sessions_full`) when every session is busy |
-| `ACS_GATEWAY_MAX_BODY_BYTES` | `8388608` (8 MiB) | Largest request body (413 above it) and, in shadow and enforce, largest upstream answer (502 above it) |
+| `ACS_GATEWAY_MAX_BODY_BYTES` | `8388608` (8 MiB) | In shadow and enforce, the largest request body (413 above it) and the largest upstream answer (502 above it). Off is a pure passthrough with no limits |
 | `ACS_GATEWAY_WORKERS` | `16` | Worker threads for Guardian calls. Time a step waits for a worker counts against its decision timeout |
 | `ACS_AGENT_ID` | `openai-responses-gateway` | `agent_id` in every envelope |
 | `ACS_GATEWAY_HOST`, `ACS_GATEWAY_PORT` | `127.0.0.1`, `8080` | The model port |

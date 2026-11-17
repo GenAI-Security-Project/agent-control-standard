@@ -6,11 +6,20 @@ def events(audit, name):
     return [e for e in audit() if e["acs_audit_event"] == name]
 
 
-def test_an_oversized_request_gets_413(gateway, upstream):
-    client = gateway(ACS_GATEWAY_MAX_BODY_BYTES="1000")
+def test_an_oversized_request_gets_413_when_governed(gateway, guardian, upstream):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_GATEWAY_MAX_BODY_BYTES="1000")
     response = client.post("/v1/responses", json=finbot_request(user="x" * 2000))
     assert response.status_code == 413
     assert upstream.received == []
+
+
+def test_off_mode_applies_no_size_limit(gateway, upstream):
+    upstream.reply(response_body(message_item("y" * 5000)))
+    client = gateway(ACS_GATEWAY_MAX_BODY_BYTES="1000")
+    response = client.post("/v1/responses", json=finbot_request(user="x" * 2000))
+    assert response.status_code == 200
+    assert len(upstream.received[0].body) > 2000
+    assert len(response.content) > 5000
 
 
 def test_an_oversized_upstream_answer_gets_502(gateway, guardian, upstream, audit):
