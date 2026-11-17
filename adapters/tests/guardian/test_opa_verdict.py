@@ -6,6 +6,7 @@ shapes in specification/v0.1.0 (modifications.json, ask-details.json, and the Ac
 from __future__ import annotations
 
 import copy
+import time
 
 import pytest
 
@@ -264,3 +265,63 @@ def test_redaction_paths_that_repeat_or_nest_are_invalid(paths):
     verdict = {"decision": "modify", "reasoning": "r",
                "modifications": {"redactions": [{"path": p} for p in paths]}}
     assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", RESULT, BASE)
+
+
+ROWS = {**RESULT, "outputs": [{"value": {"rows": [{"ssn": "1", "name": "a"}, {"ssn": "2", "name": "b"}]}},
+                              {"value": {"rows": [{"name": "c"}, {"ssn": "3"}]}}]}
+
+
+def _redact(*paths: str) -> dict:
+    return {"decision": "modify", "reasoning": "r", "modifications": {"redactions": [{"path": p} for p in paths]}}
+
+
+@pytest.mark.parametrize("payload,verdict", [
+    (RESULT, _redact("/outputs/0")),
+    (RESULT, _redact("/outputs/1/value")),
+    (ROWS, _redact("/outputs/0/value/rows/0/ssn")),
+    (ROWS, _redact("/outputs/0/value/rows/0/ssn", "/outputs/0/value/rows/1/ssn")),
+    (ROWS, _redact("/outputs/1/value/rows/1/ssn")),
+    (ROWS, _redact("/outputs/0/value/rows/0")),
+])
+def test_a_redaction_must_cover_every_index_that_holds_the_same_field(payload, verdict):
+    # Issue #469 in every form: a whole output, a value, and array elements nested inside a value.
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE)
+
+
+@pytest.mark.parametrize("payload,verdict", [
+    (RESULT, _redact("/outputs/0", "/outputs/1")),
+    (ROWS, _redact("/outputs/0/value/rows/0/ssn", "/outputs/0/value/rows/1/ssn", "/outputs/1/value/rows/1/ssn")),
+    (ROWS, _redact("/outputs/0/value/rows/0", "/outputs/0/value/rows/1", "/outputs/1/value/rows/0",
+                   "/outputs/1/value/rows/1")),
+])
+def test_a_redaction_that_covers_every_index_passes(payload, verdict):
+    assert opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE) is None
+
+
+def _many(outputs: int, fields: int = 1) -> tuple[dict, dict]:
+    payload = {**RESULT, "outputs": [{"value": {f"f{k}": "x" for k in range(fields)}} for _ in range(outputs)]}
+    paths = [f"/outputs/{i}/value/f{k}" for i in range(outputs) for k in range(fields)]
+    return payload, _redact(*paths)
+
+
+def _timed_problem(payload: dict, verdict: dict) -> tuple[str | None, float]:
+    started = time.monotonic()
+    problem = opa_backend.verdict_problem(verdict, "steps/toolCallResult", payload, BASE)
+    return problem, time.monotonic() - started
+
+
+def test_a_thousand_outputs_each_redacted_passes_within_a_second():
+    problem, elapsed = _timed_problem(*_many(1000))
+    assert problem is None
+    assert elapsed < 1.0
+
+
+def test_ten_thousand_outputs_each_redacted_denies_within_a_second():
+    problem, elapsed = _timed_problem(*_many(10_000))
+    assert problem and "1000" in problem
+    assert elapsed < 1.0
+
+
+def test_more_than_two_thousand_redactions_is_invalid():
+    problem, _ = _timed_problem(*_many(700, fields=3))
+    assert problem and "2000" in problem

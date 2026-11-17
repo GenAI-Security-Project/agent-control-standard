@@ -10,7 +10,6 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import re
 import socket
 import sys
 import threading
@@ -307,6 +306,10 @@ VERDICT_KEYS = frozenset({"decision", "reasoning", "reason_codes", "modification
 VERDICT_DECISIONS = frozenset({"allow", "deny", "modify", "ask"})
 # The Guardian canonicalizes and signs the result recursively, so a verdict nests no deeper than this.
 MAX_VERDICT_DEPTH = 64
+# Caps on a redacting modify, checked before anything walks the redactions, so validation stays well inside
+# the decision timeout.
+MAX_REDACTIONS = 2000
+MAX_REDACTED_OUTPUTS = 1000
 
 def _depth_exceeds(value: Any, limit: int) -> bool:
     """Whether value nests deeper than limit, checked without recursion."""
@@ -371,7 +374,7 @@ def _modification_problem(modifications: Mapping[str, Any], method: str, payload
         # A path that misses would redact nothing and let the value through, so it is a policy error, not a no-op.
         if not path or not _resolve_pointer(payload, path):
             return f"redaction path {path!r} does not name a value in the payload"
-    return _overlap_problem(paths) or _sibling_output_problem(paths, payload)
+    return _overlap_problem(paths) or _coverage_problem(paths, payload)
 
 
 def _overlap_problem(paths: list[str]) -> str | None:
@@ -390,27 +393,75 @@ def _overlap_problem(paths: list[str]) -> str | None:
     return None
 
 
-_OUTPUT_PATH = re.compile(r"/outputs/(?:0|[1-9][0-9]*)/value(/.*)?")
+class _Shape:
+    """One node of the redaction shapes: array positions are wildcards, object keys are literal."""
+
+    __slots__ = ("keys", "items", "path")
+
+    def __init__(self) -> None:
+        self.keys: dict[str, _Shape] = {}
+        self.items: _Shape | None = None
+        self.path: str | None = None  # set where a redaction path ends
 
 
-def _sibling_output_problem(paths: list[str], payload: Mapping[str, Any]) -> str | None:
-    """A redaction inside one output must be repeated in every output that carries the same field.
+def _decode(path: str) -> list[str]:
+    return [token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")]
 
-    Redacting only the first output let the rest through (issue #469), so a partial redaction is invalid.
+
+def _encode(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def _coverage_problem(paths: list[str], payload: Mapping[str, Any]) -> str | None:
+    """A redaction must also cover every other array index that holds the same field.
+
+    Redacting /outputs/0/value/ssn but not /outputs/1/value/ssn, or rows/0/ssn but not rows/1/ssn, let the rest
+    through (issue #469). Each path becomes a shape with its array indexes wildcarded. One walk of the payload
+    along the merged shapes then finds every value a shape names, and each one must be redacted. Arrays hold
+    only wildcards and objects only keys, so the walk visits each payload node at most once.
     """
-    outputs = payload.get("outputs")
-    if not isinstance(outputs, list):
-        return None
-    wanted = set(paths)
+    root = _Shape()
+    redacted: set[str] = set()
     for path in paths:
-        match = _OUTPUT_PATH.fullmatch(path)
-        if match is None:
-            continue
-        rest = match.group(1) or ""
-        for index in range(len(outputs)):
-            sibling = f"/outputs/{index}/value{rest}"
-            if sibling not in wanted and _resolve_pointer(payload, sibling):
-                return f"redaction {path!r} leaves the same field at {sibling!r} unredacted"
+        tokens = _decode(path)
+        node, shape = payload, root
+        for token in tokens:
+            if isinstance(node, list):
+                node = node[int(token)]
+                shape.items = shape.items or _Shape()
+                shape = shape.items
+            else:
+                node = node[token]
+                shape = shape.keys.setdefault(token, _Shape())
+        shape.path = path
+        redacted.add("/" + "/".join(_encode(token) for token in tokens))
+    stack: list[tuple[Any, _Shape, str]] = [(payload, root, "")]
+    while stack:
+        node, shape, pointer = stack.pop()
+        if shape.path is not None and pointer not in redacted:
+            return f"redaction {shape.path!r} leaves the same field at {pointer!r} unredacted"
+        if isinstance(node, list) and shape.items is not None:
+            stack.extend((item, shape.items, f"{pointer}/{index}") for index, item in enumerate(node))
+        elif isinstance(node, dict) and shape.keys:
+            # Walk the smaller side, so a wide object or a wide set of shapes costs no more than the other.
+            if len(node) <= len(shape.keys):
+                keys = [key for key in node if key in shape.keys]
+            else:
+                keys = [key for key in shape.keys if key in node]
+            stack.extend((node[key], shape.keys[key], f"{pointer}/{_encode(key)}") for key in keys)
+    return None
+
+
+def _size_problem(verdict: Mapping[str, Any], payload: Mapping[str, Any]) -> str | None:
+    modifications = verdict.get("modifications")
+    redactions = modifications.get("redactions") if isinstance(modifications, dict) else None
+    if not isinstance(redactions, list) or not redactions:
+        return None
+    if len(redactions) > MAX_REDACTIONS:
+        return f"the modify carries {len(redactions)} redactions, more than {MAX_REDACTIONS}"
+    outputs = payload.get("outputs")
+    if isinstance(outputs, list) and len(outputs) > MAX_REDACTED_OUTPUTS:
+        return f"a redacting modify on {len(outputs)} outputs, more than {MAX_REDACTED_OUTPUTS}"
     return None
 
 
@@ -430,6 +481,9 @@ def verdict_problem(verdict: Any, method: str, payload: Mapping[str, Any], base:
         return f"decision {decision} carries modifications"
     if "ask_details" in verdict and decision != "ask":
         return f"decision {decision} carries ask_details"
+    size = _size_problem(verdict, payload)
+    if size:
+        return size
     # The same AcsResult check acs.client applies to every answer it receives. It passes a section 6.3
     # composition violation, which _modification_problem below rejects.
     from acs.client._exchange import result_problem
