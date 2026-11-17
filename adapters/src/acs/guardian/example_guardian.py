@@ -105,10 +105,10 @@ ON_DECISION_FAILURE = "proceed" if os.environ.get("ACS_ON_DECISION_FAILURE", "")
 
 # /proc/ is here because /proc/self/root/ reaches the whole filesystem on Linux.
 PROTECTED_PATH_PREFIXES: tuple[str, ...] = ("/etc/", "/usr/", "/bin/", "/sbin/", "/boot/", "/proc/")
-# macOS links /etc, /var, and /tmp to these, so each one is compared as the path it reaches.
+# macOS links /etc to /private/etc, so that spelling is compared as /etc. /var and /tmp have the same links but
+# aren't protected, so they need none.
 DATA_VOLUME_PREFIX = "/system/volumes/data/"
-PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"), ("/private/var/", "/var/"),
-                                             ("/private/tmp/", "/tmp/"))
+PATH_ALIASES: tuple[tuple[str, str], ...] = (("/private/etc/", "/etc/"),)
 # Case-folded tool names that write a file, and the arguments that name the file.
 WRITE_CAPABLE_TOOLS = frozenset({"write", "edit", "multiedit", "notebookedit"})
 PATH_ARGUMENTS: tuple[str, ...] = ("file_path", "notebook_path")
