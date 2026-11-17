@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from acs.core import jcs_canonicalize
+
 
 def _text(content: Any) -> str:
     if isinstance(content, str):
@@ -53,9 +55,23 @@ class CachedOutcome:
     fingerprint: str = ""
 
 
+def canonical(value: Any) -> Any:
+    """A JSON string in RFC 8785 form, so key order and whitespace don't change what it says. Any other value, and a
+    string that isn't JSON or that RFC 8785 can't encode, stays as it is."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return jcs_canonicalize(json.loads(value)).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return value
+
+
 def fingerprint(item: dict[str, Any]) -> str:
     """SHA-256 over what a function_call asks for (name, arguments) or what an output says (output)."""
-    content = [item.get("name"), item.get("arguments")] if item.get("type") == "function_call" else item.get("output")
+    if item.get("type") == "function_call":
+        content: Any = [item.get("name"), canonical(item.get("arguments"))]
+    else:
+        content = canonical(item.get("output"))
     try:
         encoded = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
     except (ValueError, RecursionError):

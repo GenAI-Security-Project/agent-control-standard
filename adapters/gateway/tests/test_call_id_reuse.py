@@ -74,3 +74,24 @@ def test_a_faithful_rebuild_of_a_call_is_not_flagged(gateway, guardian, upstream
     rebuilt = {"type": "function_call", "name": call["name"], "call_id": "call_1", "arguments": call["arguments"]}
     client.post("/v1/responses", json=finbot_request(rebuilt))
     assert events(audit, "call_id_reused") == []
+
+
+def test_a_reserialized_json_output_is_the_same_output(gateway, guardian, upstream, audit):
+    call = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    upstream.reply(response_body(call))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    first = {"type": "function_call_output", "call_id": "call_1", "output": '{"a": 1, "b": [1, 2]}'}
+    again = {**first, "output": '{ "b":[1,2],\n "a":1 }'}
+    client.post("/v1/responses", json=finbot_request(call, first))
+    client.post("/v1/responses", json=finbot_request(call, again))
+    assert events(audit, "call_id_reused") == []
+
+
+def test_reserialized_arguments_are_the_same_call(gateway, guardian, upstream, audit):
+    upstream.reply(response_body(call_item("get_vendor_details", '{"vendor_id": 7, "x": "y"}', "call_1")))
+    upstream.reply(response_body(call_item("get_vendor_details", '{"x":"y","vendor_id":7}', "call_1")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    client.post("/v1/responses", json=finbot_request())
+    assert events(audit, "call_id_reused") == []

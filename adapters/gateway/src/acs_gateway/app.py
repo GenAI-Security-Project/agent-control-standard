@@ -42,7 +42,15 @@ from acs_gateway.apply import (
 )
 from acs_gateway.config import GatewayConfig, check_client_state_dirs
 from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult, StepToken
-from acs_gateway.sessions import CachedOutcome, Session, SessionMap, SessionsBusy, conversation_key, fingerprint
+from acs_gateway.sessions import (
+    CachedOutcome,
+    Session,
+    SessionMap,
+    SessionsBusy,
+    canonical,
+    conversation_key,
+    fingerprint,
+)
 from acs_gateway.transcript import ModelInputLog, Transcript
 
 # Headers that describe one hop, or that the next hop recomputes, never cross the gateway.
@@ -343,7 +351,7 @@ class Gateway:
                     if self.enforce:
                         changed = True
                         continue
-                elif any(item.get(f) != cached.item.get(f) for f in _CALL_FIELDS):
+                elif any(canonical(item.get(f)) != canonical(cached.item.get(f)) for f in _CALL_FIELDS):
                     self._reused(session, TOOL_CALL_REQUEST, str(item.get("name")), call_id)
                     if self.enforce:
                         # The whole call goes back as delivered, so the model never sees a renamed or edited call.
