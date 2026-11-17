@@ -42,7 +42,16 @@ from acs.core import (  # noqa: E402
 )
 from acs.testing.harness import signing_env  # noqa: E402
 from tests.client.test_key_document import KEY_ID, _document, _entry  # noqa: E402
-from tests.client.test_on_wire import HELLO, PROCEED, SESSION, URL, Recorder, decision_for, step_request  # noqa: E402
+from tests.client.test_on_wire import (  # noqa: E402
+    HELLO,
+    PROCEED,
+    SESSION,
+    URL,
+    Recorder,
+    decision_for,
+    decoded,
+    step_request,
+)
 
 UTC = datetime.timezone.utc
 # Lab convention: an ML-DSA-signed response names the request it answers by this hash. Section 10 gives a response
@@ -115,14 +124,14 @@ class _ResponseKeysBase(unittest.TestCase):
 
     def step(self, answer: Any, *, keys: Any = "default", request: dict | None = None) -> Any:
         request = request or step_request()
-        with mock.patch.object(_exchange, "post", side_effect=lambda r, **_: answer(r)):
+        with mock.patch.object(_exchange, "post", side_effect=decoded(lambda r, **_: answer(r))):
             return round_trip(request, guardian_url=URL, posture=PROCEED, session_id=SESSION,
                               response_keys=self.keys if keys == "default" else keys)
 
     def hello(self, answer: Any, *, keys: Any = "default", session_id: str = SESSION,
               recorder: Recorder | None = None) -> Any:
         config = Config.from_env({"ACS_GUARDIAN_URL": URL})
-        with mock.patch.object(_handshake, "post", side_effect=lambda h, **_: answer(h)):
+        with mock.patch.object(_handshake, "post", side_effect=decoded(lambda h, **_: answer(h))):
             return open_session(config=config, session_id=session_id, agent_id="test", platform="test",
                                 methods_implemented=["steps/toolCallRequest"],
                                 response_keys=self.keys if keys == "default" else keys, on_wire=recorder)

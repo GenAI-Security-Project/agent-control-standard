@@ -1,6 +1,7 @@
 """round_trip and open_session hand each envelope sent and received to an on_wire callback (issue #576, PREMORTEM P6)."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -51,6 +52,14 @@ def server_hello_for(hello: dict) -> dict:
     return sign_envelope({"jsonrpc": "2.0", "id": hello["id"], "result": dict(HELLO)}, session_id=session_id)
 
 
+def decoded(answer: Any) -> Any:
+    """A stand-in for post(), which takes only the encoded body: decode it and hand the request to answer."""
+    def post(body: bytes, **kwargs: Any) -> Any:
+        assert isinstance(body, bytes), type(body)
+        return answer(json.loads(body), **kwargs)
+    return post
+
+
 class Recorder:
     def __init__(self, fail_on: str | None = None) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -78,7 +87,7 @@ class OnWireTest(unittest.TestCase):
     def _round_trip(self, post: Any, recorder: Recorder, request: dict | None = None,
                     posture: FailPosture = PROCEED) -> tuple[dict, Any, mock.Mock]:
         request = request or step_request()
-        with mock.patch.object(_exchange, "post", side_effect=post) as sent:
+        with mock.patch.object(_exchange, "post", side_effect=decoded(post) if callable(post) else post) as sent:
             outcome = round_trip(request, guardian_url=URL, posture=posture, session_id=SESSION,
                                  on_wire=recorder)
         return request, outcome, sent
@@ -86,7 +95,7 @@ class OnWireTest(unittest.TestCase):
     def _open(self, recorder: Recorder, post: Any = None, session_id: str = SESSION) -> Any:
         config = Config.from_env({"ACS_GUARDIAN_URL": URL})
         answer = post or (lambda hello, **_: server_hello_for(hello))
-        with mock.patch.object(_handshake, "post", side_effect=answer) as sent:
+        with mock.patch.object(_handshake, "post", side_effect=decoded(answer) if callable(answer) else answer) as sent:
             decision = open_session(config=config, session_id=session_id, agent_id="test", platform="test",
                                     methods_implemented=["steps/toolCallRequest"], on_wire=recorder)
         return decision, sent
@@ -111,7 +120,7 @@ class OnWireTest(unittest.TestCase):
             envelope.clear()
 
         request = step_request()
-        with mock.patch.object(_exchange, "post", side_effect=lambda r, **_: decision_for(r)):
+        with mock.patch.object(_exchange, "post", side_effect=decoded(lambda r, **_: decision_for(r))):
             outcome = round_trip(request, guardian_url=URL, posture=PROCEED, session_id=SESSION, on_wire=mutate)
         self.assertIsInstance(outcome, Decided)
         self.assertEqual(outcome.response["result"]["decision"], "allow")
@@ -209,32 +218,38 @@ class OnWireTest(unittest.TestCase):
         self.assertFalse(outcome.proceed)
 
     def test_the_request_is_encoded_once_and_reported_as_sent(self) -> None:
-        # Review CR3-7: the bytes post() sends are the bytes on_wire saw, encoded once.
-        import json
+        # Review CR3-7, round 4 CR8: post() takes only the bytes, and on_wire saw exactly those bytes decoded, with no
+        # deep copy on the way.
         recorder, bodies = Recorder(), []
 
-        def post(request: dict, **kwargs: Any) -> dict:
-            bodies.append(kwargs.get("body"))
+        def post(request: dict, **_: Any) -> dict:
+            bodies.append(json.dumps(request))
             return decision_for(request)
 
-        with mock.patch.object(_exchange, "encode_request", wraps=_exchange.encode_request) as encode:
+        with mock.patch.object(_exchange, "encode_request", wraps=_exchange.encode_request) as encode, \
+                mock.patch.object(_exchange.copy, "deepcopy", wraps=_exchange.copy.deepcopy) as deepcopy:
             self._round_trip(post, recorder)
         self.assertEqual(encode.call_count, 1)
-        self.assertIsInstance(bodies[0], bytes)
         self.assertEqual(json.loads(bodies[0]), recorder.calls[0][1])
+        # One deep copy, for the "resp" event only.
+        self.assertEqual(deepcopy.call_count, 1)
 
     def test_the_client_hello_is_encoded_once_and_reported_as_sent(self) -> None:
-        import json
         recorder, bodies = Recorder(), []
 
-        def post(hello: dict, **kwargs: Any) -> dict:
-            bodies.append(kwargs.get("body"))
+        def post(hello: dict, **_: Any) -> dict:
+            bodies.append(json.dumps(hello))
             return server_hello_for(hello)
 
         with mock.patch.object(_exchange, "encode_request", wraps=_exchange.encode_request) as encode:
             self._open(recorder, post=post, session_id="encoded-once")
         self.assertEqual(encode.call_count, 1)
         self.assertEqual(json.loads(bodies[0]), recorder.calls[0][1])
+
+    def test_post_takes_only_the_encoded_body(self) -> None:
+        import inspect
+        parameters = list(inspect.signature(_exchange.post).parameters)
+        self.assertEqual(parameters, ["body", "guardian_url", "timeout_s"])
 
     def test_a_stored_session_reports_nothing(self) -> None:
         self._open(Recorder())

@@ -48,8 +48,13 @@ def report_on_wire(on_wire: OnWire | None, direction: str, envelope: Any, method
     """Hand a copy of the envelope to on_wire. When the callback raises, audit it and return the failure's fields."""
     if on_wire is None:
         return None
+    return _hand_to_on_wire(on_wire, direction, copy.deepcopy(envelope), method)
+
+
+def _hand_to_on_wire(on_wire: OnWire, direction: str, envelope: Any, method: Any) -> dict[str, Any] | None:
+    """Call on_wire with an envelope nothing else holds. When the callback raises, audit it and return the fields."""
     try:
-        on_wire(direction, copy.deepcopy(envelope))
+        on_wire(direction, envelope)
     except Exception as e:  # noqa: BLE001
         # A record of the exchange the caller asked for is missing, so the step must not go on as if it existed.
         fields = {"dir": direction, "method": method, "error": str(e)}
@@ -133,18 +138,18 @@ def wire_body(request: dict[str, Any], on_wire: OnWire | None, method: Any) -> b
     """
     body = encode_request(request)
     if on_wire is not None:
-        failed = report_on_wire(on_wire, "req", json.loads(body), method)
+        # Decoded from the bytes just encoded, so nothing else holds this object and no copy is needed.
+        failed = _hand_to_on_wire(on_wire, "req", json.loads(body), method)
         if failed is not None:
             raise OnWireFailed(failed)
     return body
 
 
-def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float, body: bytes | None = None) -> Any:
-    """POST the request and return the decoded JSON body. Raises on oversize, a non-2xx status, transport failure or bad JSON.
+def post(body: bytes, *, guardian_url: str, timeout_s: float) -> Any:
+    """POST the encoded request and return the decoded JSON body. Raises on a non-2xx status, transport failure or bad JSON.
 
-    body is the request already encoded by wire_body, so it is never encoded twice.
+    body comes from wire_body, which checked the cap and encoded the request once (review round 4 CR8).
     """
-    body = body if body is not None else encode_request(request)
     req = urllib.request.Request(
         guardian_url, data=body,
         headers={"Content-Type": "application/json"}, method="POST",
@@ -441,10 +446,7 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
         return Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
     http_status, reported = None, False
     try:
-        response = post(request, guardian_url=guardian_url, timeout_s=timeout_s, body=body)
-    except RequestTooLargeError as e:
-        return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
-                       f"envelope exceeds body cap: {e}")
+        response = post(body, guardian_url=guardian_url, timeout_s=timeout_s)
     except GuardianHTTPError as e:
         # Any decoded body is an answer that arrived, so on_wire sees it whatever its shape.
         if e.body is not None:

@@ -14,7 +14,16 @@ from unittest import mock
 from acs.client import Config, Decided, Negotiated, open_session, response_keys_from_env, round_trip
 from acs.client import _exchange, _handshake
 from acs.testing.harness import signing_env
-from tests.client.test_on_wire import PROCEED, SESSION, URL, Recorder, decision_for, server_hello_for, step_request
+from tests.client.test_on_wire import (
+    PROCEED,
+    SESSION,
+    URL,
+    Recorder,
+    decision_for,
+    decoded,
+    server_hello_for,
+    step_request,
+)
 
 
 class ResponseSigningOff(unittest.TestCase):
@@ -32,7 +41,7 @@ class ResponseSigningOff(unittest.TestCase):
     def test_the_client_hello_carries_no_lab_field(self) -> None:
         recorder = Recorder()
         config = Config.from_env({"ACS_GUARDIAN_URL": URL})
-        with mock.patch.object(_handshake, "post", side_effect=lambda h, **_: server_hello_for(h)):
+        with mock.patch.object(_handshake, "post", side_effect=decoded(lambda h, **_: server_hello_for(h))):
             decision = open_session(config=config, session_id=SESSION, agent_id="test", platform="test",
                                     methods_implemented=["steps/toolCallRequest"], on_wire=recorder)
         self.assertIsInstance(decision, Negotiated)
@@ -44,7 +53,7 @@ class ResponseSigningOff(unittest.TestCase):
         outcomes = []
         for kwargs in ({}, {"on_wire": None, "response_keys": None}):
             request = step_request()
-            with mock.patch.object(_exchange, "post", side_effect=lambda r, **_: decision_for(r)):
+            with mock.patch.object(_exchange, "post", side_effect=decoded(lambda r, **_: decision_for(r))):
                 outcome: Any = round_trip(request, guardian_url=URL, posture=PROCEED, session_id=SESSION, **kwargs)
             self.assertIsInstance(outcome, Decided)
             outcomes.append(outcome.response["result"]["decision"])

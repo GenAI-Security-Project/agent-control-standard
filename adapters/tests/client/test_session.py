@@ -197,7 +197,7 @@ class Negotiation(_SessionTest):
                 self.assertEqual(sent[0]["params"]["payload"]["transports_supported"], [scheme])
 
     def test_the_client_declares_the_largest_body_it_sends(self) -> None:
-        from acs.client._exchange import RequestTooLargeError, post
+        from acs.client._exchange import RequestTooLargeError, encode_request
         from acs.core import MAX_REQUEST_BODY_BYTES
         sent: list[dict] = []
 
@@ -210,8 +210,9 @@ class Negotiation(_SessionTest):
                          platform="test", methods_implemented=["steps/toolCallRequest"])
         declared = sent[0]["params"]["payload"]["max_payload_size_bytes"]
         self.assertEqual(declared, MAX_REQUEST_BODY_BYTES)
+        # The cap lives where the body is encoded, once, before post() sees it (issue #576).
         with self.assertRaises(RequestTooLargeError):
-            post({"pad": "x" * declared}, guardian_url=URL, timeout_s=1)
+            encode_request({"pad": "x" * declared})
 
     def test_a_required_profile_the_guardian_does_not_accept_refuses_the_session(self) -> None:
         required = {"ACS_REQUIRE_PROFILES": "acs-core"}

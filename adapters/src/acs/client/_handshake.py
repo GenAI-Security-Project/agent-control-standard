@@ -321,7 +321,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
         return NoAnswer("adapter_exception", {"error": str(e)})
     reported = False
     try:
-        response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout, body=body)
+        response = post(body, guardian_url=guardian_url, timeout_s=timeout)
     except GuardianHTTPError as e:
         # Any decoded body is an answer that arrived, so on_wire sees it whatever its shape.
         if e.body is not None:
