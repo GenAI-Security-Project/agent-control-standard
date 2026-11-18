@@ -60,12 +60,13 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'pqc'", specifier = ">=50,<51" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.25,<5" },
     { name = "nvidia-nat-core", marker = "extra == 'nat'", specifier = ">=1.7,<1.8" },
     { name = "rfc8785", specifier = ">=0.1.4,<0.2" },
     { name = "ruamel-yaml", marker = "extra == 'nat'", specifier = ">=0.19,<0.20" },
 ]
-provides-extras = ["nat"]
+provides-extras = ["nat", "pqc"]
 
 [package.metadata.requires-dev]
 test = [

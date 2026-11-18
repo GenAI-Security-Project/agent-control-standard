@@ -16,7 +16,7 @@ FAILURE_CLASSES = ("timeout", "unreachable", "malformed_response", "guardian_err
 
 _OBSERVED_AGENT_CAUSES = {"adapter_exception", "adapter_build_failed", "adapter_translate_exception", "envelope_not_signable",
                           "invalid_stdin_json", "guardian_url_rejected", "request_exceeds_max_payload",
-                          "session_start_incomplete"}
+                          "session_start_incomplete", "request_envelope_invalid"}
 _SIGNATURE_CAUSES = {"response_signature_invalid", "error_signature_invalid", "response_unverifiable",
                      "server_hello_signature_invalid"}
 
@@ -26,7 +26,7 @@ def failure_class(cause: str) -> str:
         return "timeout"
     if cause == "transport_failure":
         return "unreachable"
-    if cause in ("malformed_response", "response_binding_mismatch"):
+    if cause in ("malformed_response", "response_binding_mismatch", "response_shape_invalid"):
         return "malformed_response"
     if cause in _SIGNATURE_CAUSES:
         return "signature_invalid"

@@ -1,0 +1,89 @@
+// Independent ML-DSA-65 implementation for the acs.core interop tests (issue #574).
+//
+// Go's standard library crypto/mldsa shares no code with pyca/cryptography or OpenSSL, so
+// agreement between the two is evidence that acs.core signs plain FIPS 204 ML-DSA-65 in pure
+// mode with the context it claims. It needs Go 1.27 or later, the version CI pins and the one
+// that produced the test vector.
+//
+// It reads one JSON object on stdin and writes one JSON object on stdout. Byte fields are
+// standard base64. Context is a string, empty by default, as in mldsa.Options.
+//
+//	{"op": "keygen", "seed": ...}                                       -> {"public_key": ...}
+//	{"op": "sign", "seed": ..., "message": ..., "context": ...}          -> {"signature": ...}
+//	{"op": "verify", "public_key": ..., "message": ..., "signature": ..., "context": ...}
+//	                                                                     -> {"valid": true|false}
+//	{"op": "hmac", "key": ..., "message": ...}                           -> {"mac": ...}
+//
+// The hmac op is HMAC-SHA256. It exists so a test can feed the library a value spelled by
+// Go's own base64 encoder, which encoding/json uses for every byte field.
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/mldsa"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+type request struct {
+	Op        string `json:"op"`
+	Seed      []byte `json:"seed"`
+	PublicKey []byte `json:"public_key"`
+	Message   []byte `json:"message"`
+	Signature []byte `json:"signature"`
+	Context   string `json:"context"`
+	Key       []byte `json:"key"`
+}
+
+func run() (map[string]any, error) {
+	var req request
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+		return nil, fmt.Errorf("read request: %w", err)
+	}
+	params := mldsa.MLDSA65()
+	opts := &mldsa.Options{Context: req.Context}
+	switch req.Op {
+	case "keygen":
+		sk, err := mldsa.NewPrivateKey(params, req.Seed)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"public_key": sk.PublicKey().Bytes()}, nil
+	case "sign":
+		sk, err := mldsa.NewPrivateKey(params, req.Seed)
+		if err != nil {
+			return nil, err
+		}
+		sig, err := sk.Sign(nil, req.Message, opts)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"signature": sig}, nil
+	case "verify":
+		pk, err := mldsa.NewPublicKey(params, req.PublicKey)
+		if err != nil {
+			return nil, err
+		}
+		// A bad signature is an answer, not an error, so the caller can tell the two apart.
+		return map[string]any{"valid": mldsa.Verify(pk, req.Message, req.Signature, opts) == nil}, nil
+	case "hmac":
+		mac := hmac.New(sha256.New, req.Key)
+		mac.Write(req.Message)
+		return map[string]any{"mac": mac.Sum(nil)}, nil
+	}
+	return nil, fmt.Errorf("unknown op %q", req.Op)
+}
+
+func main() {
+	out, err := run()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mldsa:", err)
+		os.Exit(2)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+		fmt.Fprintln(os.Stderr, "mldsa:", err)
+		os.Exit(2)
+	}
+}

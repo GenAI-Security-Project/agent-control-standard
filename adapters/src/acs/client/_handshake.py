@@ -17,7 +17,7 @@ from typing import Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, key_id_rejected, post
+from acs.client._exchange import GuardianHTTPError, claims_json_rpc_answer, key_id_rejected, post
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
@@ -25,6 +25,10 @@ from acs.client._store import _locked
 from acs.client._urls import validate_guardian_url
 from acs.core import (
     ACS_VERSION,
+    BINDING_ID,
+    BINDING_REQUEST,
+    BINDING_SHAPE,
+    HANDSHAKE_METHOD,
     MAX_REQUEST_BODY_BYTES,
     derive_session_key,
     guardian_error_cause,
@@ -33,6 +37,9 @@ from acs.core import (
     iso8601_now,
     jcs_canonicalize,
     normalize_decision,
+    request_binding_problem,
+    response_binding_problem,
+    response_shape_problem,
     server_hello_problem,
 )
 
@@ -248,7 +255,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     client_hello = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),
-        "method": "handshake/hello",
+        "method": HANDSHAKE_METHOD,
         "params": {
             "acs_version": ACS_VERSION,
             "request_id": str(uuid.uuid4()),
@@ -276,7 +283,7 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     try:
         response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout)
     except GuardianHTTPError as e:
-        if not is_jsonrpc_response(e.body):
+        if response_shape_problem(e.body) is not None:
             return NoAnswer(f"http_{e.status}_error", {"http_status": e.status})
         response = e.body
     except (urllib.error.URLError, TimeoutError, OSError) as e:
@@ -294,13 +301,30 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
 
 def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
     """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
-    if not is_jsonrpc_response(response):
+    # The one binding rule decides. A malformed response is no answer, so the fail posture
+    # applies, as for a transport failure. A request or id problem refuses the session.
+    binding = response_binding_problem(client_hello, response)
+    if binding == BINDING_SHAPE:
+        # As in a step: a JSON-RPC answer rejected only for its members may be a signed answer someone altered.
+        if claims_json_rpc_answer(response):
+            return SessionRefused("response_shape_invalid")
         return NoAnswer("malformed_response")
-    error = response.get("error")
-    code = error.get("code") if error is not None else None
-    if response.get("id") != client_hello["id"]:
+    # A request problem can come with any response at all, so read the claimed code defensively.
+    error = response.get("error") if isinstance(response, Mapping) else None
+    code = error.get("code") if isinstance(error, Mapping) else None
+    if binding == BINDING_REQUEST:
+        # The ClientHello is the caller's own error, not the Guardian's.
+        return SessionRefused("request_envelope_invalid")
+    if binding == BINDING_ID:
         return SessionRefused("response_binding_mismatch",
                               {"claimed_error_code": code} if code is not None else {})
+    # A request that isn't a real ClientHello is the caller's error. For a handshake/hello request,
+    # request_binding_problem says whether its params and payload are objects, as the checks below
+    # need. A real ClientHello's result then binds by id alone, and server_hello_problem's
+    # required fields decide whether it is a ServerHello, as the legacy-wrapper contract asks.
+    if "result" in response and (client_hello.get("method") != HANDSHAKE_METHOD
+                                 or request_binding_problem(client_hello) is not None):
+        return SessionRefused("request_envelope_invalid")
     verified = verify_signature(response, session_id=session_id)
     if error is not None:
         if not verified:

@@ -8,6 +8,7 @@ import socket
 import threading
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -17,12 +18,16 @@ from acs.client._outcome import Decided, Outcome, Refused, Undecided
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._urls import validate_guardian_url
 from acs.core import (
+    BINDING_REQUEST,
+    BINDING_SHAPE,
     MAX_REQUEST_BODY_BYTES,
     guardian_error_cause,
     is_guardian_refusal,
     modify_composition_violation,
     normalize_decision,
-    response_matches_request,
+    request_binding_problem,
+    response_binding_problem,
+    response_shape_problem,
     schemas_dir,
 )
 
@@ -42,14 +47,6 @@ class GuardianHTTPError(Exception):
         self.status = status
         self.body = body
         super().__init__(f"HTTP {status}")
-
-
-def is_jsonrpc_response(body: Any) -> bool:
-    """True for a JSON-RPC 2.0 response: "jsonrpc": "2.0", and a result or error, each present one an object."""
-    if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
-        return False
-    members = [body[k] for k in ("result", "error") if k in body]
-    return bool(members) and all(isinstance(m, dict) for m in members)
 
 
 def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
@@ -317,6 +314,13 @@ def result_problem(result: Any) -> str | None:
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
              session_id: str | None) -> Outcome:
     """POST one request and classify the answer; never raises."""
+    # A request no answer could bind is the adapter's own error. The rule's own request check
+    # refuses it here, before any I/O and before anything below reads it, so exchange() never
+    # raises on it.
+    problem = request_binding_problem(request)
+    if problem is not None:
+        return Refused("request_envelope_invalid", {"error": problem},
+                       f"request can't bind a Guardian answer: {problem}")
     params = request.get("params") or {}
     method, request_id = request.get("method"), params.get("request_id")
     try:
@@ -331,7 +335,8 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
         return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
                        f"envelope exceeds body cap: {e}")
     except GuardianHTTPError as e:
-        if not is_jsonrpc_response(e.body):
+        # The rule's own shape check: a body that isn't a JSON-RPC answer stays an HTTP outcome.
+        if response_shape_problem(e.body) is not None:
             fields = {"http_status": e.status, "method": method}
             if e.status in HTTP_REFUSAL_STATUSES:
                 return Refused(f"http_{e.status}_refusal", fields, f"Guardian refused at HTTP layer ({e.status})")
@@ -364,15 +369,39 @@ def key_id_rejected(error: Any) -> bool:
     return isinstance(error, dict) and error.get("code") == -32004 and "signature" not in error
 
 
+def claims_json_rpc_answer(body: Any) -> bool:
+    """A JSON-RPC 2.0 object whose result or error, each present one, is an object: the shape accepted before the binding rule."""
+    if not isinstance(body, Mapping) or body.get("jsonrpc") != "2.0":
+        return False
+    members = [body[k] for k in ("result", "error") if k in body]
+    return bool(members) and all(isinstance(m, Mapping) for m in members)
+
+
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
     """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
-    params = request.get("params") or {}
+    # The one binding rule decides. A request it can't accept is the caller's error, so nothing
+    # here reads the request until the rule has.
+    binding = response_binding_problem(request, response)
+    if binding == BINDING_REQUEST:
+        return Refused("request_envelope_invalid", {}, "request can't bind a Guardian answer")
+    params = request.get("params")
+    # An error binds by id alone, so params may still be anything here.
+    params = params if isinstance(params, Mapping) else {}
     method, request_id = request.get("method"), params.get("request_id")
-    if not is_jsonrpc_response(response):
+    # A malformed response is undecided, so the fail posture applies, as for a transport
+    # failure. Any other reason refuses the step. A JSON-RPC answer the rule rejects only for a
+    # method or for carrying both members is refused, since its signature is never checked and
+    # altering a signed answer this way must not let an attacker choose the fail posture.
+    if binding == BINDING_SHAPE:
+        if claims_json_rpc_answer(response):
+            return Refused("response_shape_invalid", {"request_id": request_id, "method": method},
+                           "Guardian response is a JSON-RPC answer with a method or with both a result and an error")
         return Undecided("malformed_response", {"request_id": request_id, "method": method},
-                         "Guardian response is not a JSON-RPC 2.0 response with an object result or error")
-    if not response_matches_request(request, response):
-        claimed = response["error"].get("code") if "error" in response else None
+                         "Guardian response is not a JSON-RPC 2.0 response with exactly one object result or "
+                         "error and no method")
+    if binding is not None:
+        error = response.get("error") if isinstance(response, Mapping) else None
+        claimed = error.get("code") if isinstance(error, Mapping) else None
         return Refused("response_binding_mismatch",
                        {"claimed_error_code": claimed} if claimed is not None else {},
                        "response not bound to request")

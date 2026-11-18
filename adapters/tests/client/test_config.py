@@ -112,6 +112,7 @@ class FailureClasses(unittest.TestCase):
         table = {
             "decision_timeout": "timeout", "transport_failure": "unreachable",
             "malformed_response": "malformed_response", "response_binding_mismatch": "malformed_response",
+            "response_shape_invalid": "malformed_response",
             "response_signature_invalid": "signature_invalid", "error_signature_invalid": "signature_invalid",
             "response_unverifiable": "signature_invalid",
             "internal_error_response": "guardian_error", "replay_detected_response": "guardian_error",
@@ -119,6 +120,7 @@ class FailureClasses(unittest.TestCase):
             "adapter_exception": "observed_agent_error", "adapter_build_failed": "observed_agent_error",
             "adapter_translate_exception": "observed_agent_error", "request_exceeds_max_payload": "observed_agent_error",
             "guardian_url_rejected": "observed_agent_error", "invalid_stdin_json": "observed_agent_error",
+            "request_envelope_invalid": "observed_agent_error",
             "something_new": "other",
         }
         for cause, expected in table.items():

@@ -56,6 +56,17 @@ EXPECTED_SKIPS = frozenset({
     ("claude-code",
      "tests.integrations.claude_code.test_live.LiveClaudeCodeRoundTrip.test_destructive_bash_blocked",
      "live Claude Code test is opt-in: set ACS_LIVE_CLAUDE=1 to call the real claude CLI"),
+    # ML-DSA-65 needs the pqc extra, which can't share an environment with nat (issue #574), so
+    # each ML-DSA module skips whole there. With the extra installed they run, and CI installs it
+    # in the job without NAT. tests/common/test_pqc_skips.py ties these to tests/pqc_extra.py.
+    ("core",
+     "unittest.loader.ModuleSkipped.tests.core.test_pqc_signing",
+     "the pqc extra is not installed: ML-DSA-65 needs cryptography 50 (uv sync --extra pqc), "
+     "which can't share an environment with the nat extra"),
+    ("client",
+     "unittest.loader.ModuleSkipped.tests.client.test_pqc_verification",
+     "the pqc extra is not installed: ML-DSA-65 needs cryptography 50 (uv sync --extra pqc), "
+     "which can't share an environment with the nat extra"),
 })
 
 
