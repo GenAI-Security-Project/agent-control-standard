@@ -190,7 +190,7 @@ class Gateway:
                 executor.shutdown(wait=False, cancel_futures=True)
                 if self.tracing.enabled:
                     # Flush queued spans, waiting at most TRACING_CLOSE_S so a hung Jaeger never holds the exit
-                    # (LAB-09). This runs after every sessionEnd, so their spans are in the flush.
+                    # (LAB-09).
                     await asyncio.get_running_loop().run_in_executor(None, self.tracing.close, TRACING_CLOSE_S)
 
     def _evicted(self, session: Session) -> None:

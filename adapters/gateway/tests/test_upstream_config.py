@@ -138,8 +138,9 @@ def test_a_model_port_off_loopback_without_a_key_file_is_unchanged(tmp_path):
 
 
 def test_the_shared_key_opt_in_allows_a_model_port_off_loopback(tmp_path):
-    """Round 2, R4b: the lab bundle binds 0.0.0.0 on a container network whose only other member is FinBot, so an
-    explicit ACS_UPSTREAM_KEY_SHARED=1 lifts the loopback rule. Without it the refusal stands."""
+    """Round 2, R4b: the lab bundle binds 0.0.0.0 on a container network that only the lab's containers and the host
+    itself can reach, so an explicit ACS_UPSTREAM_KEY_SHARED=1 lifts the loopback rule. Without it the refusal
+    stands."""
     path = str(key_file(tmp_path))
     with pytest.raises(ValueError, match="ACS_UPSTREAM_KEY_SHARED"):
         config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0")

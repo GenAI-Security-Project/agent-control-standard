@@ -182,8 +182,8 @@ class GatewayConfig:
         if key_shared and shared != "1":
             # The model port takes no client credential, so with a key file anyone who reaches it spends the
             # operator's key. Loopback keeps that to this host (security scan F1 and F2). Lab convention: the lab
-            # bundle binds every address on a container network whose only other member is the agent, and says so
-            # with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
+            # bundle binds every address on a container network that only the lab's containers and the host itself
+            # can reach, and says so with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
             raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got "
                              f"{listen_host!r}. Set ACS_UPSTREAM_KEY_SHARED=1 only when every client that can reach "
                              "the model port may spend the key")
