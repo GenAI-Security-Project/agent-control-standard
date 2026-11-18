@@ -57,7 +57,7 @@ Shadow relays the upstream byte for byte, injects nothing, and applies no idle t
 
 ```bash
 cd adapters/gateway
-uv sync --locked
+uv sync --locked            # add --extra pqc to verify ML-DSA-65 decisions
 
 # A Guardian to talk to, with the same secret and label as the gateway
 export ACS_HMAC_SECRET_FILE=/path/to/hmac.key ACS_HMAC_KEY_ID=lab   # file is 0600, at least 32 bytes
@@ -206,7 +206,17 @@ One gap remains by design. When an epoch bump lands between a turn's calls and t
 {"dir": "resp", "envelope": {"jsonrpc": "2.0", "result": {"decision": "deny", "...": "..."}}}
 ```
 
-Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. When a request gets no usable answer (a timeout, an HTTP error, a refusal, a malformed or tampered answer), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. acs.client doesn't hand back the rejected answer itself, so the line can't carry it until LAB-03 (issue #576) adds that hook. An answer that arrived after the deadline keeps its envelope, since the Guardian chained it, and its line adds `"cause": "decision_timeout"`. The handshake isn't in the file, since acs.client sends it internally.
+The lines come from acs.client's `on_wire` hook (issue #576), so each envelope is written exactly once, as it went over the wire. The file starts with the ClientHello and the Guardian's ServerHello, then `steps/sessionStart`. Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. Every answer that comes back as a JSON-RPC envelope is written verbatim, a refusal, an error, or a tampered or mis-bound answer included, so a verifier judges the answer itself.
+
+When a request went out and no envelope came back (a timeout, a lost connection, or an HTTP error whose body isn't a JSON-RPC answer, such as a 429), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. A request acs.client refused before sending, such as one over the Guardian's body cap, leaves no line, since nothing reached the Guardian.
+
+An answer that arrived after the deadline keeps its envelope, since the Guardian chained it, and its line adds `"cause": "decision_timeout"`. An answer that arrived in time but became late behind its own line (a slow disk), or that the gateway found late when the step settled, is withheld like any late answer. Its line was already written without a cause, so the next line marks it:
+
+```json
+{"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}
+```
+
+`discards` names the request whose answer, on the line before, the gateway did not carry out. This cause line is a lab convention until issue #577 settles it.
 
 **Audit.** The gateway writes audit lines through acs.client `audit_event`, as `ACS_AUDIT {json}` on stderr and in `ACS_AUDIT_FILE`. The `acs_audit_event` field names the event:
 
@@ -295,6 +305,10 @@ Then open `http://127.0.0.1:16686` and pick the `acs-gateway` service, or paste 
 | `ACS_SESSION_STATE_DIR`, `ACS_HANDSHAKE_CACHE` | `<state dir>/sessions`, `<state dir>/handshakes` | acs.client's session and handshake records. A path under the home directory is refused |
 | `ACS_TRANSCRIPT_DIR` | `<state dir>/transcripts` | Where transcripts go |
 | `ACS_AUDIT_FILE` | None | Where audit lines go, besides stderr |
+| `ACS_RESPONSE_ALGORITHMS` | Unset | The algorithm every Guardian answer must be signed with. Unset or `HMAC-SHA256` verifies HMAC under the session key, as before. `ML-DSA-65` verifies every answer, the ServerHello included, under the key the key document holds for the pinned key_id, never a key the answer names (issue #308, RFC 8725 section 3.1). It takes exactly one value. Needs `uv sync --extra pqc`. Read once at startup in shadow and enforce, and any problem stops the gateway. Lab convention until issue #316 |
+| `ACS_GUARDIAN_KEYS` | None | The Guardian's key document (`acs-lab-keys/1`), required with `ML-DSA-65`. Not writable by group or others, and not a symlink |
+| `ACS_GUARDIAN_KEY_ID` | None | The key_id to pin. Unset, the document must hold exactly one live key |
+| `ACS_GUARDIAN_KEY_FINGERPRINT` | None | When set, the pinned key's `sha256:` fingerprint must match it |
 | `ACS_MODEL_INPUT_LOG` | None | Where the model input log goes |
 | `ACS_GATEWAY_MAX_SESSIONS` | `256` | Sessions held at once. The least recently used idle one is evicted and audited as `session_evicted`. A session with a request in progress is never evicted, and a new conversation gets 503 (`sessions_full`) when every session is busy |
 | `ACS_GATEWAY_MAX_BODY_BYTES` | `8388608` (8 MiB) | In shadow and enforce, the largest request body (413 above it). Above it, enforce answers 502 to an upstream answer, while shadow relays the answer whole, streaming the rest, and audits `upstream_too_large`. Off is a pure passthrough with no limits |
@@ -334,8 +348,9 @@ Each of these is the gateway's own choice where the specification is silent or a
 | A rejection is not resent, and only a human approver with options approve and reject is held | Issue #175 |
 | An SSE comment line every 15 seconds while a streamed call is held | Issue #578. The specification defers streaming semantics |
 | In enforce a streamed answer is built by the gateway: message text streams live from an allowlist, every other item is built after the final event from its output, and the gateway owns `sequence_number` and `output_index` | Issue #578. The specification defers streaming semantics, and PREMORTEM P21 allows gateway numbering |
-| Responses are verified with acs.client's HMAC-SHA256 check inside its round trip. LAB-03 changes the algorithm dispatch inside acs.client to verify by key_id from the key document | LAB-03, issue #576, and issue #460 |
-| An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and the signed bytes would differ from the transcript line | Issue #577 |
+| Responses are verified with acs.client's HMAC-SHA256 check by default. `ACS_RESPONSE_ALGORITHMS=ML-DSA-65` verifies every answer by key_id from the key document named by `ACS_GUARDIAN_KEYS`, and takes exactly one algorithm | Issue #316 for verifier rules, issue #460 for the key document, issue #576 |
+| A withheld answer that was written without a cause is followed by `{"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}` | Issue #577 |
+| An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and acs.client would rewrite it before signing, so the Guardian would judge other bytes than the gateway gated | Issue #577 |
 | In shadow and enforce, `tool.version` on `steps/toolCallRequest` carries `sha256:` plus the hex SHA-256 of the RFC 8785 (JCS) form of the request's declaration of that function. A streamed call carries it as a whole answer's call does, and the resend after an approved ASK repeats the asked payload, `tool.version` included, so a pin holds on every path. `steps/toolCallResult` carries a digest only from the recorded call it answers, so a call the session never gated can't borrow a pinned tool's digest. The result of a call the session has no record of, fabricated by the client or gated before an epoch bump, an eviction or a retirement, carries no `tool.version`, and a pin policy denies it. That is the cost of a reset mid-run, and the lab resets between runs. A.10's field list now includes `strict`, so the digest covers `name`, `description`, `parameters` and `strict`. Each field is hashed as the client sent it, with no default filled in. A client that starts sending a default explicitly, such as `"strict": false`, changes its digests, so `lab pins` must be recomputed from the same client. A policy can pin the digest, and one changed character in a description or schema changes it. A call_id has one life. A model reply that repeats a call_id under the same digest reuses its recorded outcome. A repeat under another digest is withheld with no Guardian step, like a repeat that says something else: enforce removes it and shadow delivers it. Both audit `call_id_reused`, whose `cause` lists every reason (`content_changed`, `digest_changed`), and the decision line repeats them as `reuse_causes`. A call removed for any reason, a transient failure included, is never delivered again under a changed declaration, and a client that drops `tools` mid-conversation has its repeated calls refused the same way, since an undeclared function has no digest. Both fail closed. A new call under the changed declaration goes to the Guardian with the new digest. The client asserts the declaration, so the digest isn't tamper evidence on its own. Only a policy that compares it with a pinned digest catches a change. A call to a function the request didn't declare, a call whose name isn't a non-empty string, and a declaration RFC 8785 can't encode (audited as `tool_digest_skipped`) carry no `tool.version`. A policy that pins a tool must treat a missing version as a mismatch. A function name declared twice answers 501 in enforce, audited as `unsupported_tool_type` with `item_type` `repeated_function`. Shadow records it and sends that function's steps with no `tool.version`. Shadow also digests a request that repeats a JSON key, which enforce refuses, so a shadow digest can describe a copy of a declaration the model never read | Issue #38. LAB-07, issue #580 |
 | The request field, input item and output item allowlists. FinBot sends only fields and items on them | Issue #577 |
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
