@@ -39,7 +39,7 @@ Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every proces
 - A secret must be owner-only (0600 or 0400). A key document may be readable by anyone, but no group or other may write it.
 - The HMAC secret is read up to 64 KiB, the seed up to 65 bytes, and the key document up to 1 MiB. A larger file is refused as unreadable, and for the HMAC secret that is audited like a file that can't be opened.
 
-What changed in this round: a group-writable directory, such as the 0775 that `mkdir` gives under umask 002, now passes. The reader opens the directory once and takes every directory check from that open directory, so a path through a symlink and `..` is checked where the kernel resolves it. For a secret, a directory another user owns is now refused. Move such a secret into a directory you own, for example one made with `mkdir -p -m 700 ~/.acs`.
+If you set up a secret before this release: a group-writable directory, such as the 0775 that `mkdir` gives under umask 002, now passes. The reader opens the directory once and takes every directory check from that open directory, so a path through a symlink and `..` is checked where the kernel resolves it. A secret in a directory another user owns is now refused. Move such a secret into a directory you own, for example one made with `mkdir -p -m 700 ~/.acs`.
 
 Windows has no owner, group, or other bits, so only the symlink and regular-file checks run there, and a secret also needs the opt-in below.
 
