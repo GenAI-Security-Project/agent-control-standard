@@ -300,7 +300,8 @@ def test_after_takes_ascii_digits_only(start, after):
 
 
 def test_a_paused_poll_reaches_the_page(start, logs, monkeypatch):
-    # Final-review R1: the page says checks are paused and why.
+    # Final-review R1: the page says checks are paused and why. The directory exists, so the listing doesn't pause.
+    logs.transcript_dir.mkdir(parents=True)
     port = start()
 
     def broken(self):
@@ -308,3 +309,21 @@ def test_a_paused_poll_reaches_the_page(start, logs, monkeypatch):
 
     monkeypatch.setattr(Model, "_judge", broken)
     assert rows(port)["paused"] == "checks paused: RuntimeError: nope"
+
+
+def test_every_answer_names_the_server_instance(static_dir, logs):
+    # Fix round 2, R5: a random id chosen at start, the same on every answer, different for another server.
+    ids = []
+    for _ in range(2):
+        model = Model(logs.transcript_dir, logs.audit_file, None)
+        httpd = viewer_server.make_server("127.0.0.1", 0, model, static_dir, None)
+        threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+            first, second = rows(port)["instance"], rows(port)["instance"]
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        assert first == second and len(first) >= 16
+        ids.append(first)
+    assert ids[0] != ids[1]

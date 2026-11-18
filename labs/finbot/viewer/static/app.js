@@ -61,6 +61,8 @@ let paintOn = false;
 let lastPainted = null;
 // The server's drop count when the page loaded, so the line counts only drops this page has seen.
 let dropsAtLoad = null;
+// The server instance this page's rows came from. Another one means the viewer restarted.
+let instance = null;
 
 function shortMethod(method) {
   if (method === "handshake/hello") return "handshake";
@@ -165,6 +167,25 @@ function paint(row) {
 }
 
 function apply(data) {
+  if (instance !== data.instance) {
+    if (instance !== null) {
+      // The viewer restarted, and its rows, seqs and counts start over. Every row and count this page holds came
+      // from the old server, so all of it goes, and the page reads again from the start (fix round 2, R5).
+      for (const group of groups.values()) group.remove();
+      groups.clear();
+      paintedBeat.clear();
+      lastPainted = null;
+      beatEl.textContent = WAITING_LABEL;
+      detailEl.textContent = "";
+      dropsAtLoad = null;
+      droppedEl.hidden = true;
+      next = 0;
+      caughtUp = false;
+      instance = data.instance;
+      return true;
+    }
+    instance = data.instance;
+  }
   paintOn = data.paint === true;
   let newest = null;
   for (const row of data.rows) {
@@ -209,11 +230,6 @@ function apply(data) {
   const drops = Array.isArray(data.dropped) ? data.dropped : [];
   const total = Number.isInteger(data.dropped_total) ? data.dropped_total : 0;
   if (dropsAtLoad === null) dropsAtLoad = total;
-  if (total < dropsAtLoad) {
-    // The server restarted and counts from zero again, so the count starts over from it.
-    dropsAtLoad = total;
-    droppedEl.hidden = true;
-  }
   if (drops.length > 0 && total > dropsAtLoad) {
     const last = drops[drops.length - 1];
     const name = document.createElement("code");

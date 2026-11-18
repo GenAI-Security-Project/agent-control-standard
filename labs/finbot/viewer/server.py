@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import socket
 import sys
 import threading
@@ -68,6 +69,9 @@ class ViewerServer(ThreadingHTTPServer):
         super().__init__(address, ViewerHandler)
         self.model = model
         self.paint_log = paint_log
+        # Chosen at start and sent on every answer, so a page open across a restart knows to drop what it holds and
+        # read again from the start (fix round 2, R5).
+        self.instance = secrets.token_hex(16)
         # One lock around every read of the logs and every paint, since the model is not thread safe.
         self.lock = threading.Lock()
         # The files served are the ones there at start, looked up by exact name, so no request path reaches the disk.
@@ -174,7 +178,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             body = {"rows": [row.public() for row in page], "next": next_seq, "more": more,
                     "no_record": model.no_record, "no_record_text": NO_RECORD_TEXT,
                     "paint": self.server.paint_log is not None, "dropped": model.drops(),
-                    "dropped_total": model.drop_count, "paused": model.paused}
+                    "dropped_total": model.drop_count, "paused": model.paused,
+                    "instance": self.server.instance}
         self._json(HTTPStatus.OK, body)
 
     def _paint(self) -> None:
@@ -248,9 +253,11 @@ def main(argv: list[str] | None = None) -> int:
     verify_dir = env.get("ACS_VIEWER_VERIFY_DIR", "").strip()
     paint = env.get("ACS_VIEWER_PAINT_LOG", "").strip()
     keys = KeySource(env)
-    if keys.configured and keys.current() is None:
-        sys.stderr.write("acs-viewer: ACS_GUARDIAN_KEYS can't be used yet, so every row reads not checked until it "
-                         "can\n")
+    try:
+        keys.current()
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"acs-viewer: {escape_text(str(e))}. The viewer pauses its checks until the key document "
+                         "can be used\n")
     model = Model(transcript_dir, Path(audit) if audit else None, keys,
                   verify_dir=Path(verify_dir) if verify_dir else transcript_dir.parent / "verify")
     httpd = make_server(args.host, args.port, model, STATIC_DIR, Path(paint) if paint else None)

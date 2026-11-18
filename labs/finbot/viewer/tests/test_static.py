@@ -124,7 +124,13 @@ def test_the_page_says_when_checks_are_paused():
     assert "data.paused" in script and 'id="paused"' in read("index.html")
 
 
-def test_the_drop_baseline_follows_a_server_restart():
-    # Final-review R3, N-2: a restarted server counts from zero, so the page's baseline drops to the new count.
+def test_a_new_server_instance_resets_the_page():
+    # Fix round 2, R5: a page open across a viewer restart drops every row and count it holds and reads again from
+    # the start. The drop-count heuristic is gone.
     script = read("app.js")
-    assert "if (total < dropsAtLoad)" in script
+    assert "data.instance" in script
+    reset = script.split("if (instance !== data.instance)")[1].split("return")[0]
+    for cleared in ("groups.clear()", "paintedBeat.clear()", "lastPainted = null", "dropsAtLoad = null", "next = 0",
+                    "caughtUp = false"):
+        assert cleared in reset, cleared
+    assert "total < dropsAtLoad" not in script
