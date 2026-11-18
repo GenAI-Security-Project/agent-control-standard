@@ -271,3 +271,32 @@ def test_a_replaced_audit_log_does_not_add_its_rows_twice(tmp_path):
     drop = model.drops()[-1]
     assert (drop["source"], drop["session_id"]) == ("audit", None)
     assert drop["why"] == "the audit log was replaced or cut shorter, so it is read again"
+
+
+# Final-review R8
+
+
+def test_a_missing_directory_with_no_rows_is_the_no_record_state(tmp_path):
+    # With ACS off (modules 1 and 2) the gateway writes no transcript, so the directory may not exist yet. With no
+    # transcript rows held, that is "no ACS record", not a pause. The audit log is still read.
+    logs = LabLogs(tmp_path)
+    logs.audit("replay_miss", cause="no_recording", step=1, branch="main", stream=False)
+    model = Model(logs.transcript_dir, logs.audit_file, None)
+    for _ in range(2):
+        model.refresh()
+        assert model.paused is None
+        assert model.no_record
+    assert [r.method for r in model.rows_after(0)] == ["model call"]
+
+
+def test_any_other_listing_error_pauses_even_with_no_rows(tmp_path, monkeypatch):
+    logs = LabLogs(tmp_path)
+    logs.transcript_dir.mkdir(parents=True)
+    model = Model(logs.transcript_dir, None, None)
+
+    def denied(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(model_module.os, "scandir", denied)
+    model.refresh()
+    assert model.paused.startswith("checks paused: PermissionError")

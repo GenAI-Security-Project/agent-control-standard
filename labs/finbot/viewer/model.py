@@ -467,6 +467,10 @@ class Model:
         except OSError as e:
             self._read_audit_safely()
             self._read_results()
+            if isinstance(e, FileNotFoundError) and not self._holds_transcript_rows():
+                # No transcript yet and none shown: with ACS off (modules 1 and 2) the gateway writes none, so this is
+                # the ordinary "no ACS record" state, not a pause (final review R8).
+                return None
             return e
         names = {path.stem for path in listed}
         for session in [s for s in self._sessions.values() if s.session_id not in names]:
@@ -486,6 +490,9 @@ class Model:
         self._read_results()
         self._judge()
         return None
+
+    def _holds_transcript_rows(self) -> bool:
+        return any(row.source == "transcript" and not row.gone for row in self._rows.values())
 
     def _read_audit_safely(self) -> None:
         if self.audit_tail is None:
