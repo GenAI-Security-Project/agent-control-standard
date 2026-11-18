@@ -1,6 +1,6 @@
 """Tests for the FinBot lab claims ledger and the check that holds lab text to it (issue #587, LAB-14).
 
-Version 1.3.0. Owner: ACS lab maintainers.
+Version 1.4.0. Owner: ACS lab maintainers.
 """
 
 import concurrent.futures
@@ -1636,6 +1636,8 @@ BIND_ENDINGS = {
     "paren": "(Decisions are signed with ML-DSA-65.)",
     # Round 10: a no-break space after the period, as pasted text carries it.
     "nbsp": "Decisions are signed with ML-DSA-65.\u00a0",
+    # Round 11: invisible format characters after the period, as copied text carries them.
+    **{f"invisible_{ord(ch):04x}": f"Decisions are signed with ML-DSA-65.{ch}" for ch in "\u200b\u200c\u200d\u2060\ufeff\u00ad"},
 }
 BIND_POSITIONS = ("trail", "lead", "alone")
 
@@ -1687,7 +1689,7 @@ BINDING_MATRIX = _binding_matrix()
 
 
 def test_binding_matrix_size():
-    assert len(BINDING_MATRIX) == 470 and len({n for n, _ in BINDING_MATRIX}) == len(BINDING_MATRIX)
+    assert len(BINDING_MATRIX) == 1034 and len({n for n, _ in BINDING_MATRIX}) == len(BINDING_MATRIX)
 
 
 def _binding_holds(tmp_path: Path, name: str, body: str) -> str:
@@ -1727,10 +1729,11 @@ def test_binding_matrix_catches_a_broken_binder(tmp_path, monkeypatch, mutant):
         return [(t, () if mutant == "binds_nothing" else every) for t, _ in real(unit)]
 
     # A Markdown line that opens with a marker is an HTML block, a unit apart from the overclaim, so no binder can
-    # join them there. Every other case puts the marker and the overclaim in one unit, where only the binder decides.
+    # join them there: paragraph-lead and blockquote-lead, 11 endings, both sides. Every other case puts the marker and
+    # the overclaim in one unit, where only the binder decides.
     shared = [(n, b) for n, b in BINDING_MATRIX
               if any("forge" in u.text and u.marks for u in lab_claims._units(b, Path(n).suffix))]
-    assert len(shared) == len(BINDING_MATRIX) - 20
+    assert len(shared) == len(BINDING_MATRIX) - 44
     monkeypatch.setattr(lab_claims, "_sentences", broken)
     for side in ("before", "after"):
         survivors = [n for n, b in shared if f"-{side}." in n and not _binding_holds(tmp_path, n, b)]
@@ -1796,3 +1799,74 @@ def test_reader_only_list_names_the_round_10_parks():
     text = " ".join(_section("What the tests enforce and what only a reader catches").split())
     for phrase in ("footnote reference or a `<sup>`", "line break inside a start tag", "fail loudly"):
         assert phrase in text, phrase
+
+
+# ---------------------------------------------------------------- Fix round 11: invisible characters and line ends
+
+INVISIBLE = "\u200b\u200c\u200d\u2060\ufeff\u00ad"
+
+
+def _r11_layouts():
+    cases = []
+    for ch in INVISIBLE:
+        tag = f"{ord(ch):04x}"
+        after_period = f"Decisions are signed with ML-DSA-65.{ch}{C2}"
+        line_end = f"{SIGNED}{ch}"
+        for where, line in (("after_period", after_period), ("line_end", line_end)):
+            for side, lines in (("after", [line, FORGE]), ("before", [FORGE + ch, line])):
+                text = "\n".join(lines)
+                cases += [(f"{tag}-{where}-{side}.md", text + "\n"), (f"{tag}-{where}-{side}.txt", text + "\n"),
+                          (f"{tag}-{where}-{side}.html", f"<p>{text}</p>\n")]
+    return cases
+
+
+R11_INVISIBLE = _r11_layouts()
+
+
+@pytest.mark.parametrize("name,body", R11_INVISIBLE, ids=[c[0] for c in R11_INVISIBLE])
+def test_invisible_character_does_not_widen_a_marker(tree, name, body):
+    findings = _scan(tree, {name: body})
+    assert [f.kind for f in findings] == ["unledgered"], findings
+    assert "forge" in findings[0].text and "ML-DSA" not in findings[0].text, findings
+
+
+def test_invisible_character_inside_a_sentence_keeps_it_whole(tree):
+    body = f"Decisions are signed\u200b with ML-DSA-65 {C2}\nas FIPS 204 says.\n"
+    assert _scan(tree, {"a.md": body, "b.html": f"<p>{body}</p>\n"}) == []
+
+
+R11_SEPARATORS = [(f"{name}{suffix}", sep) for name, sep in (("u2028", "\u2028"), ("u2029", "\u2029"),
+                                                              ("u0085", "\u0085"), ("lone_cr", "\r"))
+                  for suffix in (".md", ".html", ".txt")]
+
+
+@pytest.mark.parametrize("name,sep", R11_SEPARATORS, ids=[c[0] for c in R11_SEPARATORS])
+def test_unicode_and_cr_line_separators_break_lines(tree, name, sep):
+    text = f"{SIGNED}{sep}{FORGE}"
+    body = f"<p>{text}</p>\n" if name.endswith(".html") else text + "\n"
+    root, _ = tree
+    (root / name).write_bytes(body.encode("utf-8"))
+    findings = lab_claims.scan(root, lab_claims.load_ledger(tree[1]))
+    assert [f.kind for f in findings] == ["unledgered"], findings
+    assert "forge" in findings[0].text and "ML-DSA" not in findings[0].text, findings
+    # A plain-text line is its own unit, so its pointer is the overclaim's own line. A rendered unit points at its
+    # first line, as before this round.
+    assert not name.endswith(".txt") or findings[0].line == 2, findings
+
+
+R11_COMMENT_QUOTES = [
+    ("in_marker.md", "Keys are verified. <!-- claim:C-03 stops attacks -->\n", "stops attacks"),
+    ("in_marker.txt", "Keys are verified. <!-- claim:C-03 stops attacks -->\n", "stops attacks"),
+    ("in_marker.html", "<p>Keys are verified. <!-- claim:C-03 stops attacks --></p>\n", "stops attacks"),
+    ("alone.md", "<!-- claim:C-02 independently tested -->\n", "independently tested"),
+    ("alone_p.html", "<p><!-- claim:C-02 independently tested --></p>\n", "independently tested"),
+    ("wrapped.md", "Keys are verified. <!-- claim:C-03\nstops attacks -->\nMore text here.\n", "stops attacks"),
+    ("not_claimed.md", "Not claimed. <!-- claim:N-02 AGT -->\n", "AGT"),
+]
+
+
+@pytest.mark.parametrize("name,body,phrase", R11_COMMENT_QUOTES, ids=[c[0] for c in R11_COMMENT_QUOTES])
+def test_banned_phrase_in_a_marker_comment_is_quoted(tree, name, body, phrase):
+    findings = [f for f in _scan(tree, {name: body}) if f.kind == "banned"]
+    assert findings and all(phrase in f.text and f.text.strip() for f in findings), findings
+    assert all("claim:" not in f.text for f in findings), findings

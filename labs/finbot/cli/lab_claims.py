@@ -1,6 +1,6 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.6.0. Owner: ACS lab maintainers.
+Version 1.7.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
@@ -277,6 +277,8 @@ LINE = "\ue000"
 # A sentence ends at ., ! or ? and any run of closing quotes or brackets, followed by whitespace or a line break. The
 # split falls at the start of group 1, after the closers, so reads "verified." ends where a reader sees it end.
 SENTENCE_END = re.compile("[.!?][\"'\u201d\u2019)\\]}]*([\\s\ue000]+)")
+# Line ends an editor shows as a new line. Each becomes \n before any reader runs, in every scanned format.
+LINE_ENDS = re.compile("\r\n?|[\u2028\u2029\u0085]")
 # A line break in raw HTML or a page that the renderer hasn't marked yet.
 BARE_NEWLINE = re.compile("(?<!\ue000)\n")
 # Unicode Default_Ignorable_Code_Point (DerivedCoreProperties.txt, Unicode 15.1), which unicodedata doesn't expose.
@@ -597,6 +599,7 @@ def _source_lines(source: str, units: list[Unit]) -> None:
 
 def _units(text: str, suffix: str) -> list[Unit]:
     """Markdown is rendered and HTML is parsed, so each block is a unit. Plain text is one unit per line."""
+    text = LINE_ENDS.sub("\n", text)
     if suffix in MARKDOWN_SUFFIXES:
         # LINE is the renderer's own mark, so a literal one in the source can't fake a line break.
         units = _walk(_render(text.replace(LINE, "")))
@@ -634,6 +637,9 @@ def _sentences(unit: Unit) -> list[tuple[str, tuple[str, ...]]]:
     mask = unit.text
     for a, b in unit.comments:
         mask = mask[:a] + re.sub(r"[^\ue000]", " ", mask[a:b]) + mask[b:]
+    # Invisible characters draw nothing, so they can't hide a sentence end or a line break from the binder. Each is
+    # blanked in place, which keeps every offset.
+    mask = "".join(" " if _invisible(ch) else ch for ch in mask)
     lines = mask.split(LINE)
     bound: list[tuple[int | None, str]] = []
     for at, ident, whole in unit.marks:
@@ -679,6 +685,9 @@ def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], tri
         allowed = frozenset().union(*(excused.get(m, frozenset()) for m in valid))
         hits = {_key(m.group()) for m in banned.finditer(seen)}
         if hits - allowed:
+            # A banned phrase written inside a marker comment is quoted from the comment, never an empty quote.
+            if not banned.search(_seen(shown_piece, suffix)) or not shown_piece.strip():
+                shown_piece = MARKER.sub(" ", text) if MARKER.sub("", text).strip() else text
             kinds.setdefault("banned", shown_piece)
         elif not hits and not unit.code and triggers.search(seen) and not valid:
             kinds.setdefault("unledgered", shown_piece)
