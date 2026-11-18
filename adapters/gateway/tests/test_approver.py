@@ -295,3 +295,49 @@ def test_a_captured_cookie_stops_working_after_it_expires(page):
     assert replay.get("/").status_code == 200
     time.sleep(0.4)
     assert replay.get("/").status_code == 401
+
+
+class _CountingBody:
+    """An ASGI receive that hands out 1 KiB chunks and counts what was read."""
+
+    def __init__(self, total: int) -> None:
+        self.sent = 0
+        self.total = total
+
+    async def __call__(self) -> dict[str, Any]:
+        if self.sent >= self.total:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        self.sent += 1024
+        return {"type": "http.request", "body": b"a" * 1024, "more_body": self.sent < self.total}
+
+
+def _login_scope(headers: dict[str, str]) -> dict[str, Any]:
+    raw = {"host": "127.0.0.1:8090", "origin": ORIGIN, **headers}
+    return {"type": "http", "method": "POST", "path": "/login", "raw_path": b"/login", "query_string": b"",
+            "scheme": "http", "server": ("127.0.0.1", 8090), "client": ("127.0.0.1", 1), "http_version": "1.1",
+            "headers": [(k.encode(), v.encode()) for k, v in raw.items()]}
+
+
+def _post_login(headers: dict[str, str], total: int) -> tuple[int, int]:
+    app = create_approver_app(Approvals(), SECRET)
+    body = _CountingBody(total)
+    status: list[int] = []
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start":
+            status.append(message["status"])
+
+    asyncio.run(app(_login_scope(headers), body, send))
+    return status[0], body.sent
+
+
+def test_login_refuses_a_declared_oversize_body_without_reading_it():
+    status, read = _post_login({"content-length": str(10_000_000)}, 10_000_000)
+    assert status == 413
+    assert read == 0
+
+
+def test_login_stops_reading_an_undeclared_oversize_body_at_the_limit():
+    status, read = _post_login({}, 10_000_000)
+    assert status == 413
+    assert read <= 8 * 1024

@@ -309,9 +309,19 @@ def create_approver_app(approvals: Approvals, secret: str, bind_host: str = "127
         return request.headers.get("origin", "").lower() == expected
 
     async def form(request: Request, fields: set[str]) -> dict[str, str] | Response:
-        raw = await request.body()
-        if len(raw) > _MAX_FORM_BYTES:
-            return refuse(400, "The form is too large.")
+        # Refuse on the declared size, then count as the body arrives, so an unauthenticated caller can't make the
+        # gateway buffer more than the limit (the model port's reader does the same).
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > _MAX_FORM_BYTES:
+            return refuse(413, "The form is too large.")
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _MAX_FORM_BYTES:
+                return refuse(413, "The form is too large.")
+            chunks.append(chunk)
+        raw = b"".join(chunks)
         try:
             parsed = parse_qs(raw.decode("ascii"), keep_blank_values=True, strict_parsing=True)
         except (UnicodeDecodeError, ValueError):
