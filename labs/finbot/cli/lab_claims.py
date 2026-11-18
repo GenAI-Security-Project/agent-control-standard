@@ -1,6 +1,6 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.5.0. Owner: ACS lab maintainers.
+Version 1.6.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
@@ -15,7 +15,6 @@ import html
 import os
 import re
 import stat
-import string
 import sys
 import unicodedata
 import urllib.parse
@@ -646,7 +645,8 @@ def _sentences(unit: Unit) -> list[tuple[str, tuple[str, ...]]]:
     start = 0
     for end in [m.start(1) for m in SENTENCE_END.finditer(mask)] + [len(mask)]:
         piece = mask[start:end]
-        lead = len(piece) - len(piece.lstrip(string.whitespace + LINE))
+        # The same whitespace SENTENCE_END matches, so a no-break space after a period can't hide the line break.
+        lead = re.match("[\\s\ue000]*", piece).end()
         first = unit.text.count(LINE, 0, start + lead)
         last = unit.text.count(LINE, 0, end)
         out.append((unit.text[start:end], tuple(i for line, i in bound if line is None or first <= line <= last)))
@@ -660,7 +660,18 @@ def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], tri
     # kind -> the first sentence that earns it. A unit gets one claim finding, banned first.
     kinds: dict[str, str] = {}
     pieces = _sentences(unit)
+    # The finding quotes the text a reader sees, never a marker comment, which would read as if it marked that text.
+    plain = unit.text
+    for a, b in unit.comments:
+        if MARKER.search(plain[a:b]):
+            plain = plain[:a] + " " * (b - a) + plain[b:]
+    if not unit.comments:
+        # A plain-text line keeps its comments as written. Blanking keeps the length, so offsets still line up.
+        plain = COMMENT.sub(lambda m: " " * len(m.group()) if MARKER.search(m.group(1)) else m.group(), plain)
+    start = 0
     for text, markers in pieces:
+        shown_piece = plain[start:start + len(text)]
+        start += len(text)
         seen = _seen(text, suffix)
         valid = [m for m in markers if m in ledger.ids]
         # Only a Not claimed marker excuses a banned phrase, because a banned phrase asserted under a claim row is the
@@ -668,15 +679,14 @@ def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], tri
         allowed = frozenset().union(*(excused.get(m, frozenset()) for m in valid))
         hits = {_key(m.group()) for m in banned.finditer(seen)}
         if hits - allowed:
-            kinds.setdefault("banned", text)
+            kinds.setdefault("banned", shown_piece)
         elif not hits and not unit.code and triggers.search(seen) and not valid:
-            kinds.setdefault("unledgered", text)
+            kinds.setdefault("unledgered", shown_piece)
     if kinds:
         kind = "banned" if "banned" in kinds else "unledgered"
         # The finding shows the text as written or rendered, not the folded copy, so the author can find it. When
         # markers split a unit, it shows the sentence that needs one.
-        shown = kinds[kind] if len(pieces) > 1 else unit.text
-        found.append((kind, " ".join(shown.replace(LINE, "").split())))
+        found.append((kind, " ".join(kinds[kind].replace(LINE, "").split())))
     return found
 
 

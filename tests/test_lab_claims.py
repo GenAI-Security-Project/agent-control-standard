@@ -1,6 +1,6 @@
 """Tests for the FinBot lab claims ledger and the check that holds lab text to it (issue #587, LAB-14).
 
-Version 1.2.0. Owner: ACS lab maintainers.
+Version 1.3.0. Owner: ACS lab maintainers.
 """
 
 import concurrent.futures
@@ -1634,6 +1634,8 @@ BIND_ENDINGS = {
     "straight_quote": 'A checked row says the decision was "signed with ML-DSA-65."',
     "curly_quote": "A checked row says the decision was “signed with ML-DSA-65.”",
     "paren": "(Decisions are signed with ML-DSA-65.)",
+    # Round 10: a no-break space after the period, as pasted text carries it.
+    "nbsp": "Decisions are signed with ML-DSA-65.\u00a0",
 }
 BIND_POSITIONS = ("trail", "lead", "alone")
 
@@ -1685,16 +1687,54 @@ BINDING_MATRIX = _binding_matrix()
 
 
 def test_binding_matrix_size():
-    assert len(BINDING_MATRIX) == 376 and len({n for n, _ in BINDING_MATRIX}) == len(BINDING_MATRIX)
+    assert len(BINDING_MATRIX) == 470 and len({n for n, _ in BINDING_MATRIX}) == len(BINDING_MATRIX)
+
+
+def _binding_holds(tmp_path: Path, name: str, body: str) -> str:
+    """Empty when the marked claim is cleared and the neighboring overclaim is reported, else what went wrong."""
+    path = tmp_path / name
+    path.write_text(body, encoding="utf-8")
+    findings = lab_claims.scan(tmp_path, MATRIX_LEDGER)
+    path.unlink()
+    if [f.kind for f in findings] != ["unledgered"] or "forge" not in findings[0].text \
+            or "ML-DSA-65" in findings[0].text or "claim:" in findings[0].text:
+        return f"reported {findings}"
+    # Both directions, read off the binder itself: the claim's sentence carries C-02 and the overclaim's carries none.
+    # The report alone can't show the first when the overclaim comes first, since only one finding is kept per unit.
+    pieces = [p for u in lab_claims._units(body, Path(name).suffix) for p in lab_claims._sentences(u)]
+    claim = [m for t, m in pieces if "ML-DSA-65" in t]
+    forge = [m for t, m in pieces if "forge" in t]
+    if not claim or not all("C-02" in m for m in claim):
+        return f"claim not cleared {pieces}"
+    if not forge or any(forge):
+        return f"overclaim bound {pieces}"
+    return ""
 
 
 @pytest.mark.parametrize("name,body", BINDING_MATRIX, ids=[c[0] for c in BINDING_MATRIX])
 def test_marker_binds_only_its_own_line(tmp_path, name, body):
-    (tmp_path / name).write_text(body, encoding="utf-8")
-    findings = lab_claims.scan(tmp_path, MATRIX_LEDGER)
-    # The overclaim on the neighboring line is reported, and the marked claim is cleared, so it isn't in the finding.
-    assert [f.kind for f in findings] == ["unledgered"], f"{name}:\n{body}\n{findings}"
-    assert "forge" in findings[0].text and "ML-DSA-65" not in findings[0].text, f"{name}:\n{body}\n{findings}"
+    problem = _binding_holds(tmp_path, name, body)
+    assert not problem, f"{name}:\n{body}\n{problem}"
+
+
+@pytest.mark.parametrize("mutant", ["binds_nothing", "binds_everything"])
+def test_binding_matrix_catches_a_broken_binder(tmp_path, monkeypatch, mutant):
+    # Minor 1: each half of the matrix, before and after, fails against a binder that binds nothing or everything.
+    real = lab_claims._sentences
+
+    def broken(unit):
+        every = tuple(i for _, i, _ in unit.marks) or unit.markers
+        return [(t, () if mutant == "binds_nothing" else every) for t, _ in real(unit)]
+
+    # A Markdown line that opens with a marker is an HTML block, a unit apart from the overclaim, so no binder can
+    # join them there. Every other case puts the marker and the overclaim in one unit, where only the binder decides.
+    shared = [(n, b) for n, b in BINDING_MATRIX
+              if any("forge" in u.text and u.marks for u in lab_claims._units(b, Path(n).suffix))]
+    assert len(shared) == len(BINDING_MATRIX) - 20
+    monkeypatch.setattr(lab_claims, "_sentences", broken)
+    for side in ("before", "after"):
+        survivors = [n for n, b in shared if f"-{side}." in n and not _binding_holds(tmp_path, n, b)]
+        assert not survivors, f"{mutant}: {len(survivors)} {side} cases still pass, such as {survivors[:3]}"
 
 
 def test_fixture_probe_names_are_pinned():
@@ -1711,3 +1751,48 @@ def test_ledger_says_fixtures_check_reading_not_binding():
 def test_pandoc_drift_test_has_a_switch():
     head = Path(__file__).read_text(encoding="utf-8").split("def test_github_fixture_has_not_drifted", 1)[0]
     assert "LAB_CLAIMS_SKIP_PANDOC" in head.rsplit("@pytest.mark.skipif", 1)[-1]
+
+
+# ---------------------------------------------------------------- Fix round 10: Unicode spaces and finding text
+
+NBSP = "\u00a0"
+R10_CAUGHT = [
+    # I-1: a no-break or other Unicode space after a marked sentence doesn't bind the next line's overclaim.
+    ("ctrl_plain.md", f"{SIGNED}\n{FORGE}\n"),
+    ("nbsp_before_marker.md", f"Decisions are signed with ML-DSA-65.{NBSP}{C2}\n{FORGE}\n"),
+    ("gdocs_nbsp_space.md", f"Decisions are signed with ML-DSA-65.{NBSP} {C2}\n{FORGE}\n"),
+    ("trailing_nbsp.md", f"{SIGNED}{NBSP}\n{FORGE}\n"),
+    ("lead_marker_trailing_nbsp.md", f"{C2} Decisions are signed with ML-DSA-65.{NBSP}\n{FORGE}\n"),
+    ("thin_space.md", f"Decisions are signed with ML-DSA-65.\u2009{C2}\n{FORGE}\n"),
+    ("narrow_nbsp.md", f"Decisions are signed with ML-DSA-65.\u202f{C2}\n{FORGE}\n"),
+    ("html_entity.html", f"<p>Decisions are signed with ML-DSA-65.&nbsp; {C2}\n{FORGE}</p>\n"),
+    ("html_entity_md.md", f"Decisions are signed with ML-DSA-65.&nbsp; {C2}\n{FORGE}\n"),
+    ("list_item.md", f"- Decisions are signed with ML-DSA-65.{NBSP}{C2}\n  {FORGE}\n"),
+    ("td_html.html", f"<table><tr><td>Decisions are signed with ML-DSA-65.&nbsp;{C2}\n{FORGE}</td></tr></table>\n"),
+    ("closer_quote_nbsp.md", f'A checked row reads "verified."{NBSP}{C4}\n{FORGE}\n'),
+]
+
+
+@pytest.mark.parametrize("name,body", R10_CAUGHT, ids=[c[0] for c in R10_CAUGHT])
+def test_round_10_unicode_space_does_not_widen_a_marker(tree, name, body):
+    findings = _scan(tree, {name: body})
+    assert [f.kind for f in findings] == ["unledgered"], findings
+    assert "forge" in findings[0].text and "verified" not in findings[0].text and "ML-DSA" not in findings[0].text
+
+
+def test_finding_text_never_quotes_a_marker(tree):
+    # Minor 2: the split falls before a trailing comment, so the next sentence opened with the marker's text.
+    findings = _scan(tree, {"a.md": f"{SIGNED}\n{FORGE}\n", "b.html": f"<p>{SIGNED}\n{FORGE}</p>\n",
+                            "c.md": f"The gateway can forge an allow. {C4} {C2}\n"})
+    assert findings and all("claim:" not in f.text for f in findings), findings
+
+
+def test_ledger_says_a_marker_cell_binds_its_row():
+    head = " ".join(LEDGER.read_text(encoding="utf-8").split("## Claims", 1)[0].split())
+    assert "a marker alone in a table cell binds its row, every cell of it" in head
+
+
+def test_reader_only_list_names_the_round_10_parks():
+    text = " ".join(_section("What the tests enforce and what only a reader catches").split())
+    for phrase in ("footnote reference or a `<sup>`", "line break inside a start tag", "fail loudly"):
+        assert phrase in text, phrase
