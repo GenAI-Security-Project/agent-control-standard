@@ -228,3 +228,77 @@ def test_capture_never_writes_a_line_the_loader_rejects(gateway, upstream, tmp_p
     assert client.post("/v1/responses", json=finbot_request()).status_code == 200
     assert recorded(tmp_path) == []
     assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["invalid_line"]
+
+
+class _SlowFirstUpstream:
+    """A live transport whose first attempt answers after its retry, as when a client times out on a slow model and
+    retries while the first attempt is still running upstream."""
+
+    def __init__(self, delays, status=200):
+        self.delays = list(delays)
+        self.status = status
+        self.n = 0
+
+    async def handle_async_request(self, request):
+        import asyncio
+
+        import httpx
+
+        self.n += 1
+        attempt = self.n
+        await asyncio.sleep(self.delays[attempt - 1])
+        body = response_body(message_item(f"REPLY-{attempt}"), response_id=f"resp_{attempt}")
+        status = self.status if attempt > 1 else 200
+        return httpx.Response(status, headers={"content-type": "application/json"},
+                              stream=httpx.ByteStream(json.dumps(body).encode()))
+
+    async def aclose(self):
+        pass
+
+
+def _overlapping_retry(tmp_path, live):
+    """Two byte-identical requests through CaptureTransport, the retry sent while the first is in flight. Returns the
+    lines written and what replay serves for the request."""
+    import asyncio
+
+    import httpx
+
+    from acs_gateway import upstream as up
+
+    path = tmp_path / "s.jsonl"
+    transport = up.CaptureTransport(live, path, "s", 1 << 20)
+    request = finbot_request()
+    raw = json.dumps(request).encode()
+
+    async def send(delay):
+        await asyncio.sleep(delay)
+        sent = httpx.Request("POST", "http://x/v1/responses", content=raw, headers={up.BRANCH_HEADER: ""})
+        await (await transport.handle_async_request(sent)).aread()
+
+    async def both():
+        await asyncio.gather(send(0), send(0.1))
+
+    asyncio.run(both())
+    texts = [json.loads(line)["response"]["output"][0]["content"][0]["text"]
+             for line in path.read_text().splitlines()] if path.exists() else []
+    store = up.RecordingStore.load(tmp_path)
+    mapping = up.placeholder_map(request)
+    first, turn, step = up.replay_key(request, mapping)
+    found, _ = store.find(first, turn, step, "", False, up.id_skeleton(request, mapping))
+    return texts, found.response["output"][0]["content"][0]["text"] if found else None
+
+
+def test_a_retry_that_overtakes_its_first_attempt_is_the_line_replay_serves(tmp_path, audit):
+    """Final review I-1: the first attempt finishes after its retry, but the client kept the retry's reply, so the
+    first attempt's line is dropped however late it lands."""
+    texts, served = _overlapping_retry(tmp_path, _SlowFirstUpstream([0.3, 0.05]))
+    assert texts == ["REPLY-2"]
+    assert served == "REPLY-2"
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["superseded_attempt"]
+
+
+def test_a_failed_retry_still_drops_the_attempt_it_replaced(tmp_path):
+    """The client kept the retry's error, not the first attempt's reply, so neither is a line."""
+    texts, served = _overlapping_retry(tmp_path, _SlowFirstUpstream([0.3, 0.05], status=503))
+    assert texts == []
+    assert served is None

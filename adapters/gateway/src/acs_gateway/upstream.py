@@ -597,6 +597,11 @@ class CaptureTransport(httpx.AsyncBaseTransport):
     replay computes for the same run. A streamed answer reaches the client only once the whole stream has arrived,
     since the line needs all of it. Headers, the key among them, are never written. A failed write is audited and
     the client still gets its answer.
+
+    A line belongs to the attempt the client kept, which is the last to arrive with the same key, never the last to
+    finish (final review I-1). A client retries because it gave up on an attempt that is still running upstream, so
+    that attempt can finish after its retry. Each request takes an arrival number as it enters, and an exchange whose
+    key a later arrival has taken writes nothing, whenever it finishes and whatever the later one returns.
     """
 
     def __init__(self, live: LiveTransport, path: Path, scenario: str, max_bytes: int) -> None:
@@ -605,10 +610,41 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         self._scenario = scenario
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
+        self._arrivals = 0
+        # Line key to the arrival number of its latest attempt, for attempts still in flight. Every exchange runs on
+        # the gateway's one event loop and none awaits between reading and writing this, so it needs no lock.
+        self._latest: dict[tuple[Any, ...], int] = {}
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         raw_request = await request.aread()
-        branch = request.headers.get(BRANCH_HEADER)
+        body, key = self._line_key(raw_request, request.headers.get(BRANCH_HEADER))
+        self._arrivals += 1
+        arrival = self._arrivals
+        if key is not None:
+            self._latest[key] = arrival
+        try:
+            return await self._exchange(request, body, key, arrival)
+        finally:
+            if key is not None and self._latest.get(key) == arrival:
+                # Only in-flight keys stay, so the map never outgrows the requests running at once.
+                del self._latest[key]
+
+    @staticmethod
+    def _line_key(raw_request: bytes, branch: str | None) -> tuple[dict[str, Any] | None, tuple[Any, ...] | None]:
+        """The request parsed, and the key replay would look its line up by, or (None, None) when it can't be read."""
+        try:
+            body = json.loads(raw_request)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            return None, None
+        if not isinstance(body, dict):
+            return None, None
+        mapping = placeholder_map(body)
+        first_user, turn, step = replay_key(body, mapping)
+        return body, (first_user, turn, step, branch if branch is not None else off_branch(body), is_stream(body),
+                      tuple(id_skeleton(body, mapping)))
+
+    async def _exchange(self, request: httpx.Request, body: dict[str, Any] | None, key: tuple[Any, ...] | None,
+                        arrival: int) -> httpx.Response:
         upstream = await self._live.handle_async_request(request)
         # Capture holds the whole answer to write its line, so the gateway's body limit bounds it in every mode, off
         # included (fix round 2, CR3), on the raw bytes and on the decoded bytes as they stream (fix round 3, CR3-4).
@@ -644,7 +680,10 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             await upstream.aclose()
         raw = b"".join(chunks)
         if 200 <= upstream.status_code < 300:
-            self._record(raw_request, branch, b"".join(decoded) if decoded is not None else None)
+            if key is not None and self._latest.get(key) != arrival:
+                _audit("capture_skipped", cause="superseded_attempt", scenario=self._scenario)
+            else:
+                self._record(body, key, b"".join(decoded) if decoded is not None else None)
         return httpx.Response(upstream.status_code, headers=upstream.headers, stream=httpx.ByteStream(raw))
 
     def _too_large(self) -> httpx.Response:
@@ -653,18 +692,14 @@ class CaptureTransport(httpx.AsyncBaseTransport):
                            "type": "server_error", "param": None, "code": "upstream_too_large"}}
         return _response(502, json.dumps(error).encode("utf-8"), "application/json")
 
-    def _record(self, raw_request: bytes, branch: str | None, decoded: bytes | None) -> None:
-        try:
-            body = json.loads(raw_request)
-        except (ValueError, UnicodeDecodeError, RecursionError):
-            body = None
-        if not isinstance(body, dict):
+    def _record(self, body: dict[str, Any] | None, key: tuple[Any, ...] | None, decoded: bytes | None) -> None:
+        if body is None or key is None:
             _audit("capture_skipped", cause="unreadable_request", scenario=self._scenario)
             return
         if decoded is None:
             _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
             return
-        stream = is_stream(body)
+        first_user, turn, step, branch, stream, ids = key
         response: Any
         if stream:
             response = parse_events(decoded.decode("utf-8", "replace"))
@@ -679,9 +714,6 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             _audit("capture_skipped", cause="unreadable_response", scenario=self._scenario)
             return
         mapping = placeholder_map(body)
-        first_user, turn, step = replay_key(body, mapping)
-        if branch is None:
-            branch = off_branch(body)
         normalized = to_placeholders(response, mapping)
         if unmapped_user_id(normalized) or holds_mapped_user(normalized, mapping):
             # The request named no such user, so the line would carry this FinBot's namespace into another one.
@@ -696,7 +728,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
                 _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario, where="stream_deltas")
                 return
         line = {"scenario": self._scenario, "match": re.escape(first_user), "turn": turn, "step": step, "branch": branch,
-                "stream": stream, "ids": id_skeleton(body, mapping), "response": normalized}
+                "stream": stream, "ids": list(ids), "response": normalized}
         encoded = json.dumps(line, ensure_ascii=False)
         try:
             # A line the loader rejects would stop replay for the whole directory, so it is never written
