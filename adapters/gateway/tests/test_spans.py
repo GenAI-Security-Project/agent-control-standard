@@ -555,3 +555,16 @@ def test_an_unsigned_session_start_claims_no_request_id(guardian, tmp_path, monk
     # The envelope never left the gateway, so the session span has no request_id to name.
     assert client.open(session) is None
 
+
+def test_a_model_call_after_a_failed_open_has_no_session_parent(gateway, upstream, guardian, monkeypatch):
+    client = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian)
+    spans = traced(client)
+
+    def broken(session: Any) -> str:
+        raise RuntimeError("open failed")
+
+    monkeypatch.setattr(client.app.state.gateway.guardian, "open", broken)
+    assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+    (model,) = [s for s in spans() if s.name.startswith("chat ")]
+    # No acs.session span was recorded, so a parent would name a root that does not exist.
+    assert model.parent is None

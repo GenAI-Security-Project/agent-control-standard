@@ -361,9 +361,13 @@ class Gateway:
             if refused is not None:
                 raise RequestRefused(refused)
 
+        traced: str | None = None
         try:
             async with self._current(key, pins, recheck) as session:
                 await self._ensure_open(session)
+                # Read under the lock: a concurrent retry assigns a fresh session_id once the lock is released, and
+                # an open that raised never recorded a root for a parent to name.
+                traced = session.session_id
                 if await self._gate_input(session, body):
                     raw = json.dumps(body).encode("utf-8")
                 arrival = note_arrival(session, body)
@@ -378,7 +382,6 @@ class Gateway:
         # Capture and replay key on what the gateway did, read from its own records (A.8).
         branch = session_branch(session, body) if self.enforce and session is not None else None
         raw = self._to_upstream(raw, body, headers, branch)
-        traced = session.session_id if session is not None else None
         if is_stream(body):
             self.model_inputs.append(body)
             sent = await self._send(raw, headers, body, traced, stream=True, arrival=arrival)
