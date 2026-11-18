@@ -310,3 +310,41 @@ def test_a_streamed_call_to_a_redefined_pinned_tool_is_replaced_by_the_neutral_l
     assert output[0]["content"][0]["text"] == NEUTRAL
     assert sent_versions(tmp_path) == [POISONED_DIGEST]
     assert decisions(audit) == [("deny", ["tool_content_hash_mismatch"])]
+
+
+def deep_declaration(depth=1200):
+    """A declaration whose parameters nest past the interpreter's recursion limit while the body still parses."""
+    nested = "{}"
+    for _ in range(depth):
+        nested = '{"a": ' + nested + "}"
+    return ('{"model": "gpt-5-nano", "input": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],'
+            ' "tools": [{"type": "function", "name": "pinned_tool", "description": "d", "parameters": ' + nested + "}]}")
+
+
+def test_a_too_deep_declaration_is_audited_and_the_call_still_gated(gateway, guardian, upstream, audit, tmp_path):
+    upstream.reply(CALL)
+    response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", content=deep_declaration(), headers={"content-type": "application/json"})
+    assert response.status_code == 200
+    assert [e["tool"] for e in events(audit, "tool_digest_skipped")] == ["pinned_tool"]
+    assert sent_versions(tmp_path) == [None]
+
+
+def test_a_too_deep_declaration_is_gated_when_shadowed(gateway, guardian, upstream, audit, tmp_path):
+    upstream.reply(CALL)
+    response = gateway(ACS_LAB_MODE="shadow", ACS_GUARDIAN_URL=guardian).post(
+        "/v1/responses", content=deep_declaration(), headers={"content-type": "application/json"})
+    assert response.status_code == 200
+    assert [e["tool"] for e in events(audit, "tool_digest_skipped")] == ["pinned_tool"]
+    assert sent_versions(tmp_path) == [None]
+
+
+def test_a_too_deep_declaration_is_gated_when_the_answer_streams(gateway, guardian, upstream, audit, tmp_path):
+    upstream.reply(SSE(encode(stream_events(CALL["output"][0]))))
+    body = deep_declaration().replace('"model": "gpt-5-nano",', '"model": "gpt-5-nano", "stream": true,')
+    with gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).stream(
+            "POST", "/v1/responses", content=body, headers={"content-type": "application/json"}) as r:
+        assert r.status_code == 200
+        b"".join(r.iter_bytes())
+    assert [e["tool"] for e in events(audit, "tool_digest_skipped")] == ["pinned_tool"]
+    assert sent_versions(tmp_path) == [None]

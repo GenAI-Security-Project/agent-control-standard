@@ -871,7 +871,7 @@ class Gateway:
         return item if cached.item == item else cached.item
 
     async def _gate_call(self, session: Session, item: dict[str, Any], asks: AskHold,
-                         digest: str | None = None) -> CachedOutcome:
+                         digest: str | None) -> CachedOutcome:
         name = item.get("name") if isinstance(item.get("name"), str) else ""
         raw_arguments = item.get("arguments")
         arguments, repeated = parse_arguments(raw_arguments)

@@ -60,9 +60,10 @@ class ToolDigests:
             return None
         try:
             canonical = jcs_canonicalize({k: tool[k] for k in DIGEST_FIELDS if k in tool})
-        except (CanonicalizationError, UnicodeError) as e:
+        except (CanonicalizationError, UnicodeError, RecursionError) as e:
             # rfc8785 raises CanonicalizationError for a value it can't encode, but a lone surrogate in an object key
-            # escapes as a bare UnicodeEncodeError from its key sort. Both are encoding failures, and nothing else is.
+            # escapes as a bare UnicodeEncodeError from its key sort. A declaration nested past the recursion limit raises
+            # RecursionError. All three mean the declaration can't be digested, and nothing else does.
             if self._on_skip is not None:
                 self._on_skip(name, str(e))
             return None
