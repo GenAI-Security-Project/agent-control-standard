@@ -87,6 +87,13 @@ table {
   color: #ffd166;
 }
 
+.dropped code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  background: #ffffff;
+  color: #0f1b2d;
+  padding: 0 0.2rem;
+}
+
 th {
   text-align: left;
   font-weight: 700;

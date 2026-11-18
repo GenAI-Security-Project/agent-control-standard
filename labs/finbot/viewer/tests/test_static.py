@@ -105,3 +105,14 @@ def test_the_legend_names_the_edit_the_viewer_can_miss():
     # Round 4 I-2b: a write through a memory map moves neither mtime nor ctime on macOS.
     page = " ".join(read("index.html").split())
     assert "memory map" in page
+
+
+def test_the_drop_line_keeps_the_file_name_apart():
+    # M-B: the name sits in its own monospace element, so no name can run on into the sentence around it. A name the
+    # server didn't vouch for reads "a transcript file". M-C: the count since the page loaded sits beside it.
+    script = read("app.js")
+    assert 'createElement("code")' in script
+    assert '"a transcript file"' in script
+    assert "since this page loaded" in script
+    assert '"Rows dropped for session " +' not in script
+    assert "code" in read("style.css")

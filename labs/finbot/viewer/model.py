@@ -34,6 +34,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import stat
 import time
 import unicodedata
@@ -94,6 +95,9 @@ DROP_REPLACED = "the file was replaced or cut shorter, so it is read again"
 DROP_EDITED = "the file no longer holds the bytes read before, so it is read again"
 # Drops the page can name. The newest win.
 MAX_DROPS = 20
+# The gateway names each transcript str(uuid.UUID(session_id)), so a drop names a file only when its stem has that
+# shape. Any other name could carry text that reads as another session or reason on the page (round 5, M-B).
+_SESSION_FILE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 REJUDGE_NOTE = "judging again under the changed key document"
 WITHHELD_NOTE = "the gateway withheld this answer and denied the step (decision_timeout)"
 CLAIM_NOTE = "the gateway says it withheld the answer above and denied the step (decision_timeout)"
@@ -412,6 +416,8 @@ class Model:
         self._audit_unreadable: Row | None = None
         self._generation_seen: int | None = None
         self._drops: collections.deque[dict[str, str]] = collections.deque(maxlen=MAX_DROPS)
+        # Every drop since the viewer started, so the page can count those since it loaded (round 5, M-C).
+        self.drop_count = 0
 
     # Reading
 
@@ -517,10 +523,16 @@ class Model:
         self._history.forget(session.session_id)
         if dropped:
             self._drops.append({"t": receipt_time(), "session_id": session.session_id, "why": why})
+            self.drop_count += 1
 
-    def drops(self) -> list[dict[str, str]]:
-        """The latest drops, oldest first, each naming the file's session and why its rows went, escaped once."""
-        return [{key: escape_text(value) for key, value in drop.items()} for drop in self._drops]
+    def drops(self) -> list[dict[str, str | None]]:
+        """The latest drops, oldest first, each with why its rows went. session_id is the file's session when the
+        name has the gateway's shape, else None, which the page reads as a transcript file. Escaped once."""
+        out: list[dict[str, str | None]] = []
+        for drop in self._drops:
+            named = drop["session_id"] if _SESSION_FILE.fullmatch(drop["session_id"]) else None
+            out.append({"t": drop["t"], "session_id": named, "why": escape_text(drop["why"])})
+        return out
 
     def _forget(self, session: _Session, why: str) -> None:
         self._drop_session_rows(session, why)

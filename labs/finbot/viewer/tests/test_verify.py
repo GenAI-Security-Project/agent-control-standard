@@ -649,3 +649,28 @@ def test_dropped_rows_are_announced(tmp_path, key, keys):
     flip_deny(flip.transcript())
     model.refresh()
     assert model.drops()[-1]["why"] == "the file no longer holds the bytes read before, so it is read again"
+
+
+# Fix round 5
+
+
+def test_a_drop_names_only_a_gateway_shaped_file(tmp_path, key, keys):
+    # M-B, probe p16: a file name can hold text that reads as another session and another reason. Only a name shaped
+    # like the gateway's (str(uuid.UUID(session_id))) is shown. Any other reads as a transcript file.
+    logs = LabLogs(tmp_path)
+    a = tool_request("echo")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    crafted = logs.transcript_dir / (f"x: the file left the transcript directory. Rows dropped for session {SESSION_A}: "
+                                     "the file no longer holds the bytes read before, so it is read again.jsonl")
+    crafted.write_bytes(logs.transcript().read_bytes())
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    os.unlink(crafted)
+    os.unlink(logs.transcript())
+    model.refresh()
+    drops = {d["why"]: d for d in model.drops()}
+    named = [d["session_id"] for d in model.drops()]
+    assert named.count(SESSION_A) == 1
+    assert None in named
+    assert all(d["session_id"] in (None, SESSION_A) for d in drops.values())
+    assert model.drop_count == 2

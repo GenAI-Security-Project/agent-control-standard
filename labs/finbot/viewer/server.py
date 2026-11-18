@@ -168,7 +168,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             page, next_seq, more = model.page(after)
             body = {"rows": [row.public() for row in page], "next": next_seq, "more": more,
                     "no_record": model.no_record, "no_record_text": NO_RECORD_TEXT,
-                    "paint": self.server.paint_log is not None, "dropped": model.drops()}
+                    "paint": self.server.paint_log is not None, "dropped": model.drops(),
+                    "dropped_total": model.drop_count}
         self._json(HTTPStatus.OK, body)
 
     def _paint(self) -> None:

@@ -58,6 +58,8 @@ let next = 0;
 let caughtUp = false;
 let paintOn = false;
 let lastPainted = null;
+// The server's drop count when the page loaded, so the line counts only drops this page has seen.
+let dropsAtLoad = null;
 
 function shortMethod(method) {
   if (method === "handshake/hello") return "handshake";
@@ -200,11 +202,22 @@ function apply(data) {
     paintedBeat.delete(oldestId);
   }
   if (newest) newest.scrollIntoView({ block: "end" });
-  // The latest drop, so rows never leave the table without a word on the page.
+  // The latest drop, so rows never leave the table without a word on the page. The file name sits in its own
+  // monospace element, and only a name the server vouches for as a session id is shown, so no file name can run on
+  // into the sentence and read as another session or reason.
   const drops = Array.isArray(data.dropped) ? data.dropped : [];
-  if (drops.length > 0) {
+  const total = Number.isInteger(data.dropped_total) ? data.dropped_total : 0;
+  if (dropsAtLoad === null) dropsAtLoad = total;
+  if (drops.length > 0 && total > dropsAtLoad) {
     const last = drops[drops.length - 1];
-    droppedEl.textContent = "Rows dropped for session " + last.session_id + ": " + last.why + ". ";
+    const name = document.createElement("code");
+    name.textContent = typeof last.session_id === "string" ? last.session_id : "a transcript file";
+    const seen = total - dropsAtLoad;
+    droppedEl.replaceChildren(
+      document.createTextNode("Rows dropped: "),
+      name,
+      document.createTextNode(", " + last.why + ". " + seen + (seen === 1 ? " drop" : " drops") +
+        " since this page loaded. "));
     droppedEl.hidden = false;
   }
   next = data.next;

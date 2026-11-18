@@ -278,3 +278,13 @@ def test_dropped_rows_reach_the_page_escaped(start, logs):
     [drop] = body["dropped"]
     assert drop["session_id"] == SESSION_A and drop["why"] == "the file left the transcript directory"
     assert set(drop) == {"t", "session_id", "why"}
+
+
+def test_the_drop_count_reaches_the_page(start, logs):
+    # M-C: the page shows how many drops came since it loaded, beside the newest.
+    port = start()
+    req = tool_request("echo")
+    logs.pair(req, answer(req, "allow"))
+    assert rows(port)["dropped_total"] == 0
+    os.unlink(logs.transcript())
+    assert rows(port)["dropped_total"] == 1
