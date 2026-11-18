@@ -1,9 +1,10 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.0.0. Owner: ACS lab maintainers.
+Version 1.1.0. Owner: ACS lab maintainers.
 
-The ledger (CLAIMS.md) is Markdown for people with three fenced machine blocks. This module parses it and
-scans a tree. It is stdlib only so the root test suite and the lab wrapper can both load it by path.
+The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
+scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
+with Python-Markdown, which the root environment already carries through mkdocs. Without it the check refuses.
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ import html
 import os
 import re
 import stat
+import string
 import sys
 import unicodedata
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 
 ID_ROW = re.compile(r"^\|\s*([CN]-\d{2})\s*\|", re.M)
@@ -25,7 +28,11 @@ SIGN_HEADER = "| Signed by | Date | Commit | Ledger sha256 |"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
-PLACEHOLDER = re.compile(r"(?:tbd|todo)\b", re.I)
+BLOCK_OPEN = re.compile(r"^```(claims-[a-z-]+)\s*$", re.M)
+# An evidence cell that opens with one of these says the work is still to do.
+PLACEHOLDER_LEAD = frozenset({"tbd", "tba", "todo"})
+# An evidence cell that is only one of these says nothing was checked.
+PLACEHOLDER_WORDS = frozenset({"tbd", "tba", "todo", "n/a", "na", "pending", "none"})
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,9 @@ def _cells(line: str) -> list[str]:
 
 
 def _block(text: str, tag: str) -> tuple[str, ...]:
+    # A second block of the same kind, even one hidden in a comment, would leave a reader unsure which one binds.
+    if sum(1 for m in BLOCK_OPEN.finditer(text) if m.group(1) == tag) > 1:
+        raise ValueError(f"the ledger holds more than one {tag} block")
     match = re.search(rf"^```{tag}\n(.*?)^```", text, re.S | re.M)
     if not match:
         raise ValueError(f"the ledger has no {tag} block")
@@ -68,7 +78,7 @@ def _excuses(text: str, ids: frozenset[str], banned: tuple[str, ...]) -> tuple[t
 
     A marker excuses only the phrases its own row names, so one N marker can't carry a different banned phrase.
     """
-    known = {_normalize(b).lower() for b in banned}
+    known = {_key(b) for b in banned}
     rows: dict[str, tuple[str, ...]] = {}
     for line in _block(text, "claims-not-claimed"):
         row, _, rest = line.partition(":")
@@ -76,7 +86,7 @@ def _excuses(text: str, ids: frozenset[str], banned: tuple[str, ...]) -> tuple[t
         if row not in ids or not row.startswith("N-") or row in rows or not phrases:
             raise ValueError(f"claims-not-claimed line {line!r} doesn't name a Not claimed row and its phrases")
         for phrase in phrases:
-            if _normalize(phrase).lower() not in known:
+            if _key(phrase) not in known:
                 raise ValueError(f"{row} excuses {phrase!r}, which isn't on the banned list")
         rows[row] = phrases
     missing = sorted(i for i in ids if i.startswith("N-") and i not in rows)
@@ -85,15 +95,33 @@ def _excuses(text: str, ids: frozenset[str], banned: tuple[str, ...]) -> tuple[t
     return tuple(sorted(rows.items()))
 
 
+def _split(text: str) -> tuple[str, str]:
+    """The ledger text above the sign-off heading, and the sign-off section itself."""
+    headings = list(SIGN_HEADING.finditer(text))
+    if len(headings) != 1:
+        raise ValueError("the ledger must hold exactly one '## Sign-off' section")
+    return text[:headings[0].start()], text[headings[0].start():]
+
+
 def ledger_digest(text: str) -> str:
     """The sha256 of the ledger text above the sign-off section.
 
-    The sign-off row records it, so an edit to any claim after signing leaves the row stale and reads as unsigned.
+    The sign-off row records it, so an edit made without recomputing it leaves the row stale and reads as unsigned.
+    The digest has no key, so an edit with a recomputed digest passes, and only a reader catches that.
     """
-    headings = SIGN_HEADING.findall(text)
-    if len(headings) != 1:
-        raise ValueError("the ledger must hold exactly one '## Sign-off' section")
-    return hashlib.sha256(text[:SIGN_HEADING.search(text).start()].encode("utf-8")).hexdigest()
+    return hashlib.sha256(_split(text)[0].encode("utf-8")).hexdigest()
+
+
+def _cell_text(cell: str) -> str:
+    """A ledger cell as a reader sees it: entities decoded, emphasis and code marks dropped, characters folded."""
+    return _fold(html.unescape(TAG.sub("", cell)).translate(MARKUP))
+
+
+def _placeholder(evidence: str) -> bool:
+    if not re.search(r"[^\W_]", evidence):
+        return True
+    words = evidence.lower().split()
+    return words[0].strip(".:;,!") in PLACEHOLDER_LEAD or evidence.lower().strip(" .:;,!") in PLACEHOLDER_WORDS
 
 
 def _unconfirmed(text: str) -> tuple[str, ...]:
@@ -106,8 +134,9 @@ def _unconfirmed(text: str) -> tuple[str, ...]:
     for line in text.splitlines():
         cells = _cells(line) if line.startswith("|") else []
         if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]):
-            evidence = cells[2]
-            if "unconfirmed" in line.lower() or not evidence or PLACEHOLDER.match(evidence):
+            # The gate reads cells as a reader sees them, so an entity or emphasis can't hide a word from it.
+            shown = [_cell_text(c) for c in cells]
+            if "unconfirmed" in " ".join(shown).lower() or _placeholder(shown[2]):
                 rows.append(cells[0])
     return tuple(rows)
 
@@ -135,18 +164,27 @@ def _signed(text: str) -> tuple[bool, bool]:
 def load_ledger(path: Path) -> Ledger:
     """Parse the ledger. Raises OSError when unreadable and ValueError when malformed."""
     text = Path(path).read_text(encoding="utf-8")
+    above, below = _split(text)
+    # Everything the check reads comes from above the sign-off, the part the digest covers. A row or block below
+    # it would change the check without changing the digest.
+    if ID_ROW.search(below) or BLOCK_OPEN.search(below):
+        raise ValueError("the ledger holds a claim row or a machine block below '## Sign-off'")
     signed, stale = _signed(text)
-    ids = frozenset(ID_ROW.findall(text))
-    banned = _block(text, "claims-banned")
+    found = ID_ROW.findall(above)
+    duplicates = sorted({i for i in found if found.count(i) > 1})
+    if duplicates:
+        raise ValueError(f"the ledger repeats the ids {duplicates}")
+    ids = frozenset(found)
+    banned = _block(above, "claims-banned")
     return Ledger(
         ids=ids,
         banned=banned,
-        triggers=_block(text, "claims-triggers"),
-        exclude=_block(text, "claims-exclude"),
+        triggers=_block(above, "claims-triggers"),
+        exclude=_block(above, "claims-exclude"),
         signed=signed,
-        unconfirmed=_unconfirmed(text),
+        unconfirmed=_unconfirmed(above),
         stale=stale,
-        excuses=_excuses(text, ids, banned),
+        excuses=_excuses(above, ids, banned),
     )
 
 
@@ -154,7 +192,7 @@ def load_ledger(path: Path) -> Ledger:
 class Finding:
     path: str
     line: int
-    # "banned", "unledgered", "unknown_id", "unclosed_fence", "unreadable", or at the sign gate
+    # "banned", "unledgered", "unknown_id", "unreadable", or at the sign gate
     # "unsigned", "unconfirmed" and "no_claims".
     kind: str
     text: str
@@ -164,16 +202,50 @@ SCANNED = frozenset({".md", ".txt", ".html", ".js", ".css", ".py", ".rego", ".ya
 COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
-FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
-LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
-TABLE_ROW = re.compile(r"^\s*\|")
 LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 SNIFF_BYTES = 8192
 SNIPPET_CHARS = 100
 DASHES = dict.fromkeys(list(range(0x2010, 0x2016)) + [0x2212], "-")
-QUOTES = {0x2018: "'", 0x2019: "'"}
+QUOTES = {0x2018: "'", 0x2019: "'", 0x201A: "'", 0x201B: "'", 0x02BC: "'", 0x2032: "'",
+          0x201C: '"', 0x201D: '"', 0x201E: '"'}
+# Underscores read as spaces, so words joined by one in an identifier still meet a phrase. Tildes go, because GitHub
+# draws ~~text~~ as struck text and Python-Markdown leaves the marks in place.
+JOINERS = {ord("_"): " ", ord("~"): None}
 MARKUP = dict.fromkeys(map(ord, "*_`~"))
+# Unicode Default_Ignorable_Code_Point (DerivedCoreProperties.txt, Unicode 15.1), which unicodedata doesn't expose.
+# These draw nothing or nothing visible, so they are dropped before matching.
+IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
+             (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164),
+             (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
+             (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
+# The Braille blank draws as a space but isn't default-ignorable, so it is listed on its own.
+BLANKS = frozenset({0x2800})
+# The Markdown extensions mkdocs.yml enables that ship with Python-Markdown and change what a reader sees.
+MARKDOWN_EXTENSIONS = ("tables", "fenced_code", "admonition", "attr_list")
+# Each of these elements is one unit, so one marker clears only the block it sits in.
+BLOCKS = frozenset(
+    "address article aside blockquote body caption dd details dialog div dl dt fieldset figcaption figure footer "
+    "form h1 h2 h3 h4 h5 h6 head header hgroup hr html legend li main nav ol option p pre section summary table "
+    "tbody tfoot thead title tr ul".split())
+# Table cells and line breaks stay inside their unit but keep the words on each side apart.
+SPACERS = frozenset({"td", "th", "br"})
+# Script and style hold code, which is checked one line at a time like any other code file.
+LINEWISE = frozenset({"script", "style"})
+# Attributes a reader sees. Alt text stands in for an image where it sits. A title shows on hover, so it joins the
+# end of its unit rather than splitting the words around its element.
+INLINE_ATTRS = frozenset({"alt"})
+TRAILING_ATTRS = frozenset({"title"})
+
+# Inline raw HTML as CommonMark reads it: a quoted attribute value may hold a closing angle bracket. Python-Markdown's
+# own pattern ends the tag there, which leaves the rest of the tag as text and swallows the words after it.
+INLINE_HTML = (r"""(<(?:/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w.:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*"""
+               r"""\s*/?|!--(?:(?!<!--|-->).)*--|[?](?:(?!<[?]|[?]>).)*[?]|!\[CDATA\[(?:(?!<!\[CDATA\[|\]\]>).)*\]\])>)""")
+
+try:
+    import markdown
+    from markdown.inlinepatterns import HtmlInlineProcessor
+except ImportError:  # The lab wrapper may run outside the root environment. main() refuses rather than skip files.
+    markdown = None
 
 
 def escape_text(text: str) -> str:
@@ -209,98 +281,208 @@ def _glob_regex(glob: str) -> re.Pattern[str]:
     return re.compile("".join(out) + r"\Z")
 
 
-def _normalize(text: str) -> str:
-    """The copy phrases and triggers are matched against, so markup and look-alike characters can't hide one.
+def _invisible(ch: str) -> bool:
+    cp = ord(ch)
+    if cp in BLANKS or unicodedata.category(ch) in ("Cf", "Mn", "Me"):
+        return True
+    return any(lo <= cp <= hi for lo, hi in IGNORABLE)
 
-    Markers are read from the raw text, because the author typed them on purpose. Only an HTML comment marks.
+
+def _fold(text: str) -> str:
+    """Fold look-alike characters so a phrase matches what a reader sees.
+
+    NFKC first, then drop every invisible code point and combining mark, map dash and quote variants, and collapse
+    whitespace. This is the only character-level step. Markup is handled by rendering, never by patching here.
     """
-    # Comment delimiters go but their text stays, so a banned phrase inside a comment is still matched. Tags go
-    # before entities are unescaped, so an escaped angle bracket in prose isn't taken for markup.
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if not _invisible(ch))
+    text = text.translate(DASHES).translate(QUOTES).translate(JOINERS)
+    return " ".join(text.split())
+
+
+def _key(phrase: str) -> str:
+    """A phrase reduced to compare a match with an excuse, whatever whitespace the match spanned."""
+    return re.sub(r"\s+", "", _fold(phrase).lower())
+
+
+def _normalize(text: str) -> str:
+    """The matching copy of a line in a file that is neither Markdown nor HTML, such as code or plain text.
+
+    Code has no renderer, so its tags, entities, links and emphasis marks are stripped from the line itself.
+    """
     text = text.replace("<!--", " ").replace("-->", " ")
     text = TAG.sub("", text)
     text = html.unescape(text)
     text = LINK.sub(r"\1", text)
-    text = unicodedata.normalize("NFKC", text)
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
-    text = text.translate(DASHES).translate(QUOTES).translate(MARKUP)
-    return " ".join(text.split())
+    return _fold(text.translate(MARKUP))
 
 
 def _phrase_regex(phrases: tuple[str, ...], *, whole_word: bool) -> re.Pattern[str]:
-    """One alternation, case-insensitive, left boundary always. Banned phrases also stop at a word end."""
-    parts = [re.escape(_normalize(p)).replace(r"\ ", r"\s+") for p in phrases]
+    """One alternation, case-insensitive, left boundary always. Banned phrases also stop at a word end.
+
+    Spaces in a phrase match any whitespace or none, and punctuation may carry whitespace on either side, because
+    dropping an invisible character or splitting a table cell can glue words or pull them apart.
+    """
+    parts = []
+    for phrase in phrases:
+        out = []
+        for ch in _fold(phrase):
+            if ch.isspace():
+                out.append(r"\s*")
+            elif ch.isalnum():
+                out.append(re.escape(ch))
+            else:
+                out.append(r"\s*" + re.escape(ch) + r"\s*")
+        parts.append("".join(out))
     tail = r"(?!\w)" if whole_word else ""
     return re.compile(r"(?<!\w)(?:" + "|".join(parts) + ")" + tail, re.I)
 
 
-def _units(text: str, markdown: bool) -> tuple[list[tuple[int, str, bool]], int | None]:
-    """Return the (first line, text, in_fence) units and the line of a fence left open, if any.
+@dataclass
+class Unit:
+    line: int
+    text: str
+    markers: tuple[str, ...]
+    # Code blocks hold commands, so triggers don't apply there. Banned phrases still do.
+    code: bool
 
-    Markdown paragraphs join wrapped lines with single spaces. A list item, a table row and a heading are each
-    their own unit, so one marker clears only the unit it sits in.
+
+class _Walker(HTMLParser):
+    """Split HTML into units of visible text, reading markers only from real comment nodes."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.units: list[Unit] = []
+        self._text: list[str] = []
+        self._markers: list[str] = []
+        self._trailing: list[str] = []
+        self._line = 0
+        self._code = 0
+        self._linewise = False
+
+    def _add(self, text: str) -> None:
+        if not self._line and text.strip():
+            lead = text[: len(text) - len(text.lstrip())]
+            self._line = self.getpos()[0] + lead.count("\n")
+        self._text.append(text)
+
+    def _flush(self) -> None:
+        text = "".join(self._text + [f" {t} " for t in self._trailing])
+        if text.strip() or self._markers:
+            self.units.append(Unit(self._line or self.getpos()[0], text, tuple(self._markers), self._code > 0))
+        self._text, self._markers, self._trailing, self._line = [], [], [], 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in BLOCKS:
+            self._flush()
+            self._code += tag == "pre"
+        elif tag in SPACERS:
+            self._add(" ")
+        if tag in LINEWISE:
+            self._flush()
+            self._linewise = True
+        for name, value in attrs:
+            if name in INLINE_ATTRS and value:
+                self._add(f" {value} ")
+            elif name in TRAILING_ATTRS and value:
+                self._trailing.append(value)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in BLOCKS:
+            self._flush()
+            self._code = max(0, self._code - (tag == "pre"))
+        elif tag in SPACERS:
+            self._add(" ")
+        if tag in LINEWISE:
+            self._linewise = False
+
+    def handle_data(self, data: str) -> None:
+        if self._linewise:
+            first = self.getpos()[0]
+            self.units += [Unit(first + i, ln, (), False) for i, ln in enumerate(data.split("\n")) if ln.strip()]
+            return
+        self._add(data)
+
+    def handle_comment(self, data: str) -> None:
+        # The comment's text is still matched, so a banned phrase can't hide in one.
+        self._markers += MARKER.findall(data)
+        self._add(f" {data} ")
+
+    def close(self) -> None:
+        super().close()
+        self._flush()
+
+
+def _walk(html_text: str) -> list[Unit]:
+    walker = _Walker()
+    walker.feed(html_text)
+    walker.close()
+    return walker.units
+
+
+def _render(source: str) -> str:
+    if markdown is None:
+        raise RuntimeError("Python-Markdown isn't installed, so Markdown files can't be checked")
+    md = markdown.Markdown(extensions=list(MARKDOWN_EXTENSIONS))
+    # CommonMark, which GitHub renders, lets a backslash escape any ASCII punctuation. Python-Markdown escapes
+    # fewer, and would keep a real comment after a backslash-escaped angle bracket.
+    md.ESCAPED_CHARS = list(string.punctuation)
+    md.inlinePatterns.register(HtmlInlineProcessor(INLINE_HTML, md), "html", 90)
+    return md.convert(source)
+
+
+def _source_lines(source: str, units: list[Unit]) -> None:
+    """Point each rendered Markdown unit at the source line it starts on.
+
+    Rendering drops positions, so the line is found by the unit's first letters and digits, searched forward from
+    the previous unit. A line that can't be found keeps the previous unit's line. It is a pointer for the author.
     """
-    lines = text.splitlines()
-    if not markdown:
-        return [(n, line, False) for n, line in enumerate(lines, 1)], None
-    units: list[tuple[int, str, bool]] = []
-    para: list[str] = []
-    start = 0
-    fence: str | None = None
-    fence_line = 0
-
-    def flush() -> None:
-        nonlocal para
-        if para:
-            units.append((start, " ".join(para), False))
-            para = []
-
-    for n, line in enumerate(lines, 1):
-        opener = FENCE.match(line)
-        if fence is None and opener:
-            flush()
-            fence, fence_line = opener.group(1)[0], n
-        elif fence is not None:
-            # Only the same fence character closes it, so a ~~~ block can hold a ``` line.
-            if opener and opener.group(1)[0] == fence:
-                fence = None
-            else:
-                units.append((n, line, True))
-        elif not line.strip():
-            flush()
-        elif HEADING.match(line) or TABLE_ROW.match(line):
-            flush()
-            units.append((n, line.strip(), False))
-        elif LIST_ITEM.match(line):
-            flush()
-            start = n
-            para.append(line.strip())
-        else:
-            if not para:
-                start = n
-            para.append(line.strip())
-    flush()
-    return units, (fence_line if fence is not None else None)
+    keys = [re.sub(r"[\W_]", "", _fold(ln).lower()) for ln in source.splitlines()]
+    cursor = 0
+    for unit in units:
+        probe = re.sub(r"[\W_]", "", _fold(unit.text).lower())[:12]
+        found = None
+        for anchored in (True, False):
+            for i in range(cursor, len(keys)):
+                if not keys[i]:
+                    continue
+                at = (keys[i] + "".join(keys[i + 1:i + 4])).find(probe)
+                if (at == 0) if anchored else (0 <= at < len(keys[i])):
+                    found = i
+                    break
+            if found is not None or not probe:
+                break
+        if found is not None:
+            cursor = found
+        unit.line = cursor + 1
 
 
-def _markers(unit: str) -> list[str]:
-    """Ids written as claim:X-NN inside an HTML comment. The same words in plain text are ordinary text."""
-    return [m for comment in COMMENT.findall(unit) for m in MARKER.findall(comment)]
+def _units(text: str, suffix: str) -> list[Unit]:
+    """Markdown is rendered and HTML is parsed, so each block is a unit. Every other file is one unit per line."""
+    if suffix == ".md":
+        units = _walk(_render(text))
+        _source_lines(text, units)
+        return units
+    if suffix == ".html":
+        return _walk(text)
+    return [Unit(n, line, tuple(m for c in COMMENT.findall(line) for m in MARKER.findall(c)), False)
+            for n, line in enumerate(text.splitlines(), 1)]
 
 
-def _check(unit: str, in_fence: bool, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str],
+def _check(unit: Unit, seen: str, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str],
            excused: dict[str, frozenset[str]]) -> list[tuple[str, str]]:
-    markers = _markers(unit)
-    valid = [m for m in markers if m in ledger.ids]
-    found = [("unknown_id", f"claim:{m}") for m in markers if m not in ledger.ids]
-    seen = _normalize(unit)
+    valid = [m for m in unit.markers if m in ledger.ids]
+    found = [("unknown_id", f"claim:{m}") for m in unit.markers if m not in ledger.ids]
     # Only a Not claimed marker excuses a banned phrase, because a banned phrase asserted under a claim row is the
     # defect. It excuses only the phrases its own row names.
     allowed = frozenset().union(*(excused.get(m, frozenset()) for m in valid))
-    hits = {" ".join(m.group().lower().split()) for m in banned.finditer(seen)}
+    hits = {_key(m.group()) for m in banned.finditer(seen)}
+    # The finding shows the unit as written or rendered, not the folded copy, so the author can find it.
+    shown = " ".join(unit.text.split())
     if hits - allowed:
-        found.append(("banned", unit))
-    elif not hits and not in_fence and triggers.search(seen) and not valid:
-        found.append(("unledgered", unit))
+        found.append(("banned", shown))
+    elif not hits and not unit.code and triggers.search(seen) and not valid:
+        found.append(("unledgered", shown))
     return found
 
 
@@ -310,7 +492,7 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
     skip = ledger_path.resolve() if ledger_path else None
     banned = _phrase_regex(ledger.banned, whole_word=True)
     triggers = _phrase_regex(ledger.triggers, whole_word=False)
-    excused = {row: frozenset(_normalize(p).lower() for p in phrases) for row, phrases in ledger.excuses}
+    excused = {row: frozenset(_key(p) for p in phrases) for row, phrases in ledger.excuses}
     findings: list[Finding] = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -338,13 +520,11 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
                 continue
             scanned += 1
             text = raw.decode("utf-8", errors="replace")
-            units, open_fence = _units(text, path.suffix.lower() == ".md")
-            for line, unit, in_fence in units:
-                for kind, shown in _check(unit, in_fence, ledger, banned, triggers, excused):
-                    findings.append(Finding(rel, line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
-            if open_fence is not None:
-                # Everything after an unclosed fence is exempt from triggers, so the fence itself is the defect.
-                findings.append(Finding(rel, open_fence, "unclosed_fence", "a code fence is never closed"))
+            suffix = path.suffix.lower()
+            for unit in _units(text, suffix):
+                seen = _normalize(unit.text) if suffix not in (".md", ".html") else _fold(unit.text)
+                for kind, shown in _check(unit, seen, ledger, banned, triggers, excused):
+                    findings.append(Finding(rel, unit.line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
     return findings, scanned
 
 
@@ -378,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.path) if args.path else ledger_path.parent
     if not root.is_dir():
         print(f"ERROR: {escape_text(str(root))} isn't a readable directory", file=sys.stderr)
+        return 2
+    if markdown is None:
+        print("ERROR: Python-Markdown isn't installed, so Markdown files can't be checked", file=sys.stderr)
         return 2
     findings, scanned = _scan(root, ledger, ledger_path)
     if args.require_signed:

@@ -316,8 +316,8 @@ def test_honest_negative_survives_markup(tree):
     assert _scan(tree, {"a.md": "The stack isn\u2019t **ACS-Core** conformant. <!-- claim:N-06 -->\n"}) == []
 
 
-def test_marker_in_a_comment_is_read_from_raw_text(tree):
-    # The comment is stripped from the matching copy, but the marker inside it still counts.
+def test_marker_in_a_comment_counts(tree):
+    # A marker counts only from a real comment node, with or without spaces inside the delimiters.
     assert _scan(tree, {"a.md": "ACS guarantees nothing. <!--claim:C-03-->\n"}) == []
 
 
@@ -360,13 +360,14 @@ def test_fifo_does_not_hang(tree):
 
 
 def test_unclosed_fence_is_a_finding(tree):
+    # Round 4: the renderer reads an unclosed fence as prose, so the text after it is checked like any paragraph.
     findings = _scan(tree, {"a.md": "```\nx\n\nACS guarantees every attack is stopped.\n"})
-    assert "unclosed_fence" in _kinds(findings)
+    assert _kinds(findings) == ["unledgered"]
 
 
 def test_fence_closes_only_on_its_own_marker(tree):
     findings = _scan(tree, {"a.md": "~~~\n```\nACS guarantees safety.\n"})
-    assert "unclosed_fence" in _kinds(findings)
+    assert _kinds(findings) == ["unledgered"]
 
 
 def test_file_count_counts_scanned_files_only(tree, capsys):
@@ -453,7 +454,7 @@ def test_ledger_truth_rows():
     assert "can pin" in rows["C-03"][1] and "unconfirmed" in rows["C-03"][2].lower()
     assert "_response_signing.py" in rows["C-02"][2]
     assert "digest" in _section("What the tests enforce and what only a reader catches")
-    assert "non-Markdown" in _section("What the tests enforce and what only a reader catches")
+    assert "neither Markdown nor HTML" in _section("What the tests enforce and what only a reader catches")
 
 
 # ---------------------------------------------------------------- Fix round 3
@@ -515,3 +516,241 @@ def test_html_tags_do_not_hide_a_trigger(tree):
 
 def test_comment_text_is_still_matched(tree):
     assert "banned" in _kinds(_scan(tree, {"a.md": "<!-- The lab is ACS-Core conformant -->\n"}))
+
+
+# ---------------------------------------------------------------- Fix round 4: match rendered text
+#
+# Every reviewer probe from rounds 1 to 3 is a case here. Markdown is rendered with Python-Markdown and both
+# Markdown and HTML are read as the HTML a person sees, so the parser decides fences, escapes and comments.
+
+MARK_C = " <!-- claim:C-13 -->"
+
+CAUGHT = [
+    # Round 1 and 2 probes.
+    ("bold_split.md", "The lab is **ACS-Core** conformant.\n"),
+    ("ital.md", "The lab is ACS-Core *conformant*.\n"),
+    ("code.md", "The lab is `ACS-Core` conformant.\n"),
+    ("link.md", "The lab is [ACS-Core](x) conformant.\n"),
+    ("intraword.md", "The lab is ACS-Co**re conformant**.\n"),
+    ("endash.md", "The lab is ACS–Core conformant.\n"),
+    ("space.md", "The lab is ACS Core conformant.\n"),
+    ("zwsp.md", "The lab is ACS-Core​ conformant.\n"),
+    ("curly.md", "The agent can’t tell a control exists.\n"),
+    ("html_split.html", "<p>The lab is ACS-Core\nconformant</p>\n"),
+    ("html_entity.html", "<p>The lab is ACS-Core&nbsp;conformant</p>\n"),
+    ("anyN.md", "The lab is ACS-Core conformant and FIPS 140 validated. <!-- claim:N-01 -->\n"),
+    ("visible_marker.md", "The lab is ACS-Core conformant. claim:N-06\n"),
+    ("unclosed.md", "```\nx\n\nACS guarantees every attack is stopped.\n"),
+    ("tilde_mismatch.md", "~~~\n```\nACS guarantees safety.\n"),
+    ("lower_marker.md", "ACS guarantees safety. <!-- claim:c-03 -->\n"),
+    ("heading.md", "# ACS guarantees safety\nNext line. <!-- claim:C-03 -->\n"),
+    ("wrapped.md", "The lab is ACS-Core\n  conformant.\n"),
+    ("trig_split.md", "Decisions are signed\nwith ML-DSA-65.\n"),
+    ("unicode_hyphen.md", "The lab is ACS‑Core conformant.\n"),
+    ("fullwidth.md", "The lab is ＡCS-Core conformant.\n"),
+    ("py_split.py", "x = 'ACS-Core '\\\n    'conformant'\n"),
+    ("win1.md", "The lab is supported on Windows.\n"),
+    ("win2.md", "Windows support: yes.\n"),
+    ("win3.md", "It also runs fine on Windows 11.\n"),
+    ("bold_C.md", "The lab is **ACS-Core** conformant. <!-- claim:C-13 -->\n"),
+    ("agt_em.md", "Benchmarked with the Agent *Governance* Toolkit.\n"),
+    ("invis.md", "The control is invisible to the *agent*.\n"),
+    ("indep.md", "The lab was independently **tested**.\n"),
+    ("prod.md", "The gateway is production-*ready*.\n"),
+    ("stops.md", "ACS stops **attacks**.\n"),
+    ("html_agt.html", "<p>Works with the Agent Governance\nToolkit</p>\n"),
+    ("html_win.html", "<li>The lab runs on\nWindows</li>\n"),
+    ("md_win_em.md", "The lab runs on *Windows*.\n"),
+    ("revocation.md", "Revocation is *solved*.\n"),
+    ("blocks.md", "The Guardian blocks **every** exfiltration.\n"),
+    # Round 3 probes: normalization.
+    ("nested_em.md", "The lab is ***ACS-Core*** conformant.\n"),
+    ("nested_em2.md", "The lab is **_ACS-Core_** ~~not~~ conformant.\n"),
+    ("ent_dec.md", "The lab is ACS&#45;Core conformant.\n"),
+    ("ent_hex_letter.md", "The lab is &#x41;CS-Core conformant.\n"),
+    ("ent_shy.md", "The lab is ACS-Co&shy;re conformant.\n"),
+    ("ent_zwsp.md", "Production&ZeroWidthSpace;-ready gateway.\n"),
+    ("ent_hyphen.md", "The lab is ACS&hyphen;Core conformant.\n"),
+    ("ref_link.md", "The lab is [ACS-Core][1] conformant.\n\n[1]: https://example.com\n"),
+    ("ref_short.md", "The lab is [ACS-Core] conformant.\n\n[ACS-Core]: https://example.com\n"),
+    ("ref_collapsed.md", "The lab is [ACS-Core][] conformant.\n\n[ACS-Core]: https://example.com\n"),
+    ("link_title_parens.md", "The lab is [ACS-Core](https://x.example/a_(b)) conformant.\n"),
+    ("image_alt.md", "The lab is ![ACS-Core](x.png) conformant.\n"),
+    ("autolink.md", "Pinned at <https://example.com> and production-ready.\n"),
+    ("tag_split.md", "The lab is ACS-Co<span></span>re conformant.\n"),
+    ("tag_wrap.md", "The lab is ACS-Co<b>re</b> conformant.\n"),
+    ("tag_attr_gt.md", "The lab is ACS-Co<span title=\"a>b\">re conformant.\n"),
+    ("br_join.md", "Works with the Agent Governance<br>Toolkit.\n"),
+    ("br_join.html", "<p>Works with the Agent Governance<br>Toolkit</p>\n"),
+    ("td_join.html", "<td>production</td><td>-ready</td>\n"),
+    ("md_escape_dash.md", "The lab is ACS\\-Core conformant.\n"),
+    ("md_escape_prod.md", "The gateway is production\\-ready.\n"),
+    ("md_escape_dot.md", "Version 0\\.2\\.0 is released.\n"),
+    ("md_escape_apos.md", "The agent can\\'t tell a control exists.\n"),
+    ("combining_cgj.md", "The gateway is produc͏tion-ready.\n"),
+    ("variation_sel.md", "The gateway is produc️tion-ready.\n"),
+    ("hangul_filler.md", "The lab is ACS-Coreㅤconformant.\n"),
+    ("trig_escape.md", "Decisions are signed\\_with ML-DSA.\n"),
+    ("trig_cgj.md", "ACS gua͏rantees safety.\n"),
+    ("trig_vs.md", "ACS gua️rantees safety.\n"),
+    # Round 3 probes: fences, units and markers.
+    ("fence_marker.md", "```\nThe lab is ACS-Core conformant. <!-- claim:N-06 -->\n```\n"),
+    ("fence_indented4.md", "Intro.\n\n    ```\nACS guarantees every attack is stopped.\n\n    ```\n"),
+    ("fence_shorter_close.md", "````\n```\n````\nACS guarantees safety.\n"),
+    ("fence_in_quote.md", "> ```\n> ACS guarantees safety.\n> ```\n"),
+    ("quote_list.md", "> - Keys are verified. <!-- claim:C-03 -->\n> - ACS guarantees safety.\n"),
+    ("html_list.md", "<ul>\n<li>Keys are verified. <!-- claim:C-03 --></li>\n<li>ACS guarantees safety.</li>\n</ul>\n"),
+    ("quote_table.md", "> | a | b |\n> |---|---|\n> | ok <!-- claim:C-03 --> | x |\n> | ACS guarantees safety | y |\n"),
+    ("R1_other_phrase.md", "The lab is ACS-Core conformant and production-ready. <!-- claim:N-06 -->\n"),
+    ("R1_two_markers_one_comment.md", "Not ACS-Core conformant or FIPS 140 validated. <!-- claim:N-06 claim:N-01 -->\n"),
+    ("R2_code_span.md", "The lab is ACS-Core conformant. `<!-- claim:N-06 -->`\n"),
+    ("R2_escaped_comment.md", "The lab is ACS-Core conformant. \\<!-- claim:N-06 -->\n"),
+    ("R2_entity_comment.md", "The lab is ACS-Core conformant. &lt;!-- claim:N-06 --&gt;\n"),
+    ("R2_code_span_c.md", "ACS guarantees safety. `<!-- claim:C-03 -->`\n"),
+    ("R3_comment_hides.md", "<!--\n\nFinBot is production-ready.\n\n-->\n"),
+    ("R3_marker_comment_holds_phrase.md", "Keys are verified. <!-- claim:C-03 production-ready -->\n"),
+    ("win_bare.md", "Windows.\n"),
+    ("win_lower.md", "the windows build.\n"),
+    # Round 3 probes: a banned phrase the old normalizer missed, with a claim marker added for the trigger.
+    ("ref_link_c.md", "The lab is [ACS-Core][1] conformant." + MARK_C + "\n\n[1]: https://example.com\n"),
+    ("ref_short_c.md", "The lab is [ACS-Core] conformant." + MARK_C + "\n\n[ACS-Core]: https://example.com\n"),
+    ("link_parens_c.md", "The lab is [ACS-Core](https://x.example/a_(b)) conformant." + MARK_C + "\n"),
+    ("tag_attr_gt_c.md", "The lab is ACS-Co<span title=\"a>b\">re conformant." + MARK_C + "\n"),
+    ("md_escape_dash_c.md", "The lab is ACS\\-Core conformant." + MARK_C + "\n"),
+    ("cgj_c.md", "The lab is ACS-Co͏re conformant." + MARK_C + "\n"),
+    ("vs16_c.md", "The lab is ACS-Co️re conformant." + MARK_C + "\n"),
+    ("hangul_filler_c.md", "The lab is ACS-Coreㅤconformant." + MARK_C + "\n"),
+    ("braille_blank_c.md", "The lab is ACS-Core⠀conformant." + MARK_C + "\n"),
+    ("md_escape_fips.md", "The signer is FIPS\\-validated.\n"),
+    ("ref_link_agt.md", "Compared with [AGT][1].\n\n[1]: https://example.com\n"),
+    ("ref_link_prod.md", "The gateway is [production-ready][1].\n\n[1]: https://example.com\n"),
+    ("ref_link_zenity.md", "Built with [Zenity][z] in mind.\n\n[z]: https://example.com\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", CAUGHT, ids=[c[0] for c in CAUGHT])
+def test_reviewer_probe_is_caught(tree, name, body):
+    assert _scan(tree, {name: body}), f"{name} passed the check"
+
+
+PASSES = [
+    ("R1_own_phrase.md", "The lab doesn't claim to be ACS-Core conformant. <!-- claim:N-06 -->\n"),
+    ("R1_both_rows.md", "Not ACS-Core conformant or FIPS 140 validated. <!-- claim:N-06 claim:N-13 -->\n"),
+    ("R3_escaped_lt.md", "The value is 3 &lt; 4 and we verify it. <!-- claim:C-03 -->\n"),
+    ("plain_lt.md", "When a < b the loop exits.\n"),
+    ("legit.md", "The gateway forwards requests.\n"),
+    # R2 ruling (round 3): an id written as plain text is ordinary text and isn't checked, so the reviewer's
+    # R2_unknown_plain probe passes by decision.
+    ("R2_unknown_plain.md", "Ordinary. claim:N-99\n"),
+    ("indented_code.md", "Run this.\n\n    lab verify --all\n"),
+    ("html_pre.html", "<pre>lab verify --all</pre>\n"),
+    ("snake_case.md", "Set `on_decision_failure` to deny.\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", PASSES, ids=[c[0] for c in PASSES])
+def test_honest_text_passes(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+def test_marker_on_the_next_line_is_its_own_block(tree):
+    # Python-Markdown lifts a comment on its own line out of the paragraph, so it doesn't mark the line above.
+    findings = _scan(tree, {"a.md": "ACS guarantees safety.\n<!-- claim:C-03 -->\n"})
+    assert _kinds(findings) == ["unledgered"]
+
+
+def test_markdown_finding_points_at_its_source_line(tree):
+    findings = _scan(tree, {"a.md": "Intro.\n\nSecond paragraph.\n\n- one\n- The lab is ACS-Core conformant.\n"})
+    assert [(f.kind, f.line) for f in findings] == [("banned", 6)]
+
+
+def test_html_finding_points_at_its_source_line(tree):
+    findings = _scan(tree, {"a.html": "<html>\n<body>\n<p>Fine.</p>\n<p>The lab is\nACS-Core conformant.</p>\n"})
+    assert [(f.kind, f.line) for f in findings] == [("banned", 4)]
+
+
+def test_script_lines_are_checked_one_at_a_time(tree):
+    body = "<script>\nconst a = 'fine';\nconst b = 'ACS-Crypto';\n</script>\n"
+    assert [(f.kind, f.line) for f in _scan(tree, {"a.html": body})] == [("banned", 3)]
+
+
+def test_scan_refuses_without_the_renderer(tree, monkeypatch):
+    root, ledger = tree
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+    monkeypatch.setattr(lab_claims, "markdown", None)
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def _confirmed(ledger: Path) -> str:
+    return ledger.read_text(encoding="utf-8").replace("Unconfirmed:", "Confirmed:")
+
+
+@pytest.mark.parametrize("cell", ["-", "N/A", "n/a", "**TBD**", "Pending", "none", "`todo`", "_Pending_"])
+def test_sign_gate_refuses_placeholder_words_in_markup(tree, capsys, cell):
+    root, _ = tree
+    ledger = _evidence_ledger(tree, cell)
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "unconfirmed C-15" in capsys.readouterr().out
+
+
+def test_sign_gate_reads_unconfirmed_through_an_entity(tree, capsys):
+    root, _ = tree
+    ledger = _evidence_ledger(tree, "Un&shy;confirmed until the cut")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "unconfirmed C-15" in capsys.readouterr().out
+
+
+SIGN_TABLE = "| Signed by | Date | Commit | Ledger sha256 |"
+
+
+def test_claim_row_below_the_sign_off_is_refused(tree):
+    root, ledger = tree
+    text = _confirmed(ledger)
+    _sign(ledger, text)
+    row = "| C-17 | The Guardian guarantees every attack is stopped. | Rock. | None. |\n\n"
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace(SIGN_TABLE, row + SIGN_TABLE), encoding="utf-8")
+    (root / "x.md").write_text("The Guardian guarantees every attack is stopped. <!-- claim:C-17 -->\n")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 2
+
+
+def test_ledger_block_below_the_sign_off_is_refused(tree):
+    root, ledger = tree
+    ledger.write_text(ledger.read_text(encoding="utf-8") + "\n```claims-exclude\n**\n```\n", encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+@pytest.mark.parametrize("block", ["claims-not-claimed", "claims-banned", "claims-triggers", "claims-exclude"])
+def test_duplicate_ledger_block_is_refused(tree, block):
+    root, ledger = tree
+    hidden = f"<!--\n```{block}\nN-01: AGT\n```\n-->\n\n"
+    ledger.write_text(_confirmed(ledger).replace("## Claims\n", hidden + "## Claims\n", 1), encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_hidden_not_claimed_block_cannot_excuse_after_signing(tree):
+    root, ledger = tree
+    hidden = "<!--\n```claims-not-claimed\n" + "\n".join(
+        "N-01: production-ready" if i == 1 else f"N-{i:02d}: AGT" for i in range(1, 14)) + "\n```\n-->\n\n"
+    _sign(ledger, _confirmed(ledger).replace("## Claims\n", hidden + "## Claims\n", 1))
+    (root / "x.md").write_text("FinBot is production-ready. <!-- claim:N-01 -->\n", encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 2
+
+
+def test_duplicate_ledger_id_is_refused(tree):
+    root, ledger = tree
+    row = "| C-16 | The lab supports macOS and Linux only. Windows is untested. | Rock, 2026-11-17. | x |\n"
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace("\n## Not claimed", row + "\n## Not claimed"),
+                      encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_recomputed_digest_is_named_as_reader_only():
+    # The digest has no key, so an editor who recomputes it passes the gate. The ledger says a reader catches that.
+    reader = _section("What the tests enforce and what only a reader catches").split("Only a reader catches")[1]
+    assert "recomputed" in reader and "obfuscat" in reader
+    assert "without recomputing" in _section("Sign-off")
+
+
+def test_c02_limits_say_when_answers_stay_on_hmac():
+    limits = {r[0]: r for r in _rows(_section("Claims"))}["C-02"][3]
+    assert " then " not in limits and "While signing is off" in limits

@@ -11,7 +11,7 @@ Evidence names code on the lab branch. A row that starts its evidence with `Unco
 | Id | Claim | Evidence | Limits |
 |---|---|---|---|
 | C-01 | FinBot's code ran unchanged at 1450fc4. Four settings differ from FinBot's own `docker-compose.yml`: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LLM_TIMEOUT` (60 to 360) and `WEB_CONCURRENCY` (3 to 1). `REDIS_URL` and `DATABASE_URL` match FinBot's own compose. The Guardian lives on a network FinBot can't reach. | Unconfirmed: the lab compose file (LAB-15) isn't on this tree, so the four settings and the networks can't be read here. | A claim about the compose file as shipped. It says nothing about FinBot's code beyond that commit. |
-| C-02 | Every Guardian decision in a run with signing on was signed with ML-DSA-65 as specified in FIPS 204, pure mode, empty context. The library isn't a FIPS 140-3 validated module. | `adapters/src/acs/core/_mldsa.py` (pure mode, empty context string). `adapters/src/acs/guardian/_response_signing.py` and `adapters/src/acs/client/_key_document.py` (the `ACS_RESPONSE_SIGNING` setting and its off values). | Signing is off unless `ACS_RESPONSE_SIGNING=ML-DSA-65` is set, and answers then stay on HMAC-SHA256. Requests always stay on HMAC-SHA256. |
+| C-02 | Every Guardian decision in a run with signing on was signed with ML-DSA-65 as specified in FIPS 204, pure mode, empty context. The library isn't a FIPS 140-3 validated module. | `adapters/src/acs/core/_mldsa.py` (pure mode, empty context string). `adapters/src/acs/guardian/_response_signing.py` and `adapters/src/acs/client/_key_document.py` (the `ACS_RESPONSE_SIGNING` setting and its off values). | Signing is off unless `ACS_RESPONSE_SIGNING=ML-DSA-65` is set. While signing is off, Guardian answers stay on HMAC-SHA256. Requests always stay on HMAC-SHA256. |
 | C-03 | A forged decision fails under ML-DSA-65 when the verifier got the Guardian's public key over a channel the forger doesn't control. The lab can pin the key by fingerprint. | `adapters/src/acs/client/_key_document.py` (`ACS_GUARDIAN_KEY_FINGERPRINT`, when set, must equal the chosen key's fingerprint). Unconfirmed: that the lab compose sets the pin (LAB-15). | The pin is optional in the code, so an unpinned run gets no fingerprint check. The key document is a lab convention until issue #460. A verifier that fetched the key from the forger's channel gets no protection. |
 | C-04 | Anyone holding the shared HMAC key, here the gateway, can forge a Guardian allow. Decision signing makes a forgery detectable. | `adapters/src/acs/core/_signing.py` and `adapters/src/acs/client/_signing.py` (HMAC with a shared secret, and keyring verification for ML-DSA-65). | Detectable means a verifier holding the public key can tell. It doesn't mean anyone looked. |
 | C-05 | A Guardian signing with ML-DSA-65 refuses a session whose ClientHello doesn't offer ML-DSA-65, so a client that can only verify HMAC never gets the fallback. | `adapters/src/acs/guardian/example_guardian.py` (the handshake raises `SESSION_REFUSED`, lab convention, issue #316). | The refusal covers the response algorithm only. Requests stay on HMAC-SHA256. |
@@ -55,7 +55,7 @@ Say each of these wherever the lab is shown.
 
 ## Banned phrasing
 
-One case-insensitive phrase per line. A phrase matches on word boundaries. A unit that holds one fails the check unless it also carries a marker, written as an HTML comment such as `<!-- claim:N-06 -->`, for a Not claimed row that names that phrase in the block below. A marker for another row doesn't excuse it. A marker written as plain text isn't a marker.
+One case-insensitive phrase per line. A phrase matches on word boundaries. A unit (defined under what the tests enforce) that holds one fails the check unless it also carries a marker, written as an HTML comment such as `<!-- claim:N-06 -->`, for a Not claimed row that names that phrase in the block below. A marker for another row doesn't excuse it. A marker written as plain text isn't a marker.
 
 ```claims-banned
 ACS-Core conformant
@@ -110,7 +110,7 @@ N-13: FIPS 140 | FIPS validated | FIPS-validated
 
 ## Claim triggers
 
-One case-insensitive word stem per line, matched at the start of a word. A paragraph or line that holds one needs a marker for a row in this ledger, such as `<!-- claim:C-03 -->`. Markdown code fences are exempt, because they hold commands.
+One case-insensitive word stem per line, matched at the start of a word. A unit that holds one needs a marker for a row in this ledger, such as `<!-- claim:C-03 -->`. Code blocks are exempt, because they hold commands.
 
 ```claims-triggers
 prove
@@ -144,18 +144,24 @@ policy/tools/inputs/**
 
 ## What the tests enforce and what only a reader catches
 
+The check reads Markdown as Python-Markdown renders it and reads HTML as a browser parses it, then matches the text a reader sees. Each block is one unit: a paragraph, a list item, a table row, a heading or a code block. Every other file is matched one line at a time. A marker counts only inside a real HTML comment, so a marker in a code span, in a code block or after an escaped angle bracket doesn't count.
+
 The test enforces these:
 
-- No banned phrase appears in lab text unless its line or paragraph carries a marker for a Not claimed row.
-- No line or paragraph holding a claim trigger lacks a marker.
+- No banned phrase appears in lab text unless its unit carries a marker for a Not claimed row that names that phrase in the claims-not-claimed block.
+- No unit outside a code block holds a claim trigger without a marker.
 - Every marker names an id that exists in this ledger.
-- With `--require-signed`, the sign-off row is filled in, its digest matches the ledger text above it, no claim row says Unconfirmed in any case, no claim row has empty or placeholder evidence, and the ledger holds claim rows.
+- Every id, claim row and machine block sits above `## Sign-off`, no id repeats, and no machine block appears twice.
+- With `--require-signed`, the sign-off row is filled in, its digest matches the ledger text above it, no claim row says Unconfirmed in any case, no claim row has empty or placeholder evidence (no letters or digits, or only TBD, TODO, N/A, pending or none), and the ledger holds claim rows.
 
 Only a reader catches these:
 
 - A marker on a sentence that says more than its row does.
 - A paraphrase that avoids every banned phrase and every trigger.
-- A banned phrase split across lines in a non-Markdown file, such as a string wrapped over two lines of code. Markdown is joined per paragraph, and every other file is matched one line at a time.
+- A banned phrase split across lines in a file that is neither Markdown nor HTML, such as a string wrapped over two lines of code. Those files are matched one line at a time.
+- Markdown that Python-Markdown reads differently from GitHub, such as a fence inside a block quote. The check then reads more text as prose, not less, but a reader confirms what the page shows.
+- Deliberate obfuscation by someone with commit access. The check exists to catch an accidental overclaim. Hiding one on purpose is a reviewer's job.
+- An edit to this ledger made after signing with a recomputed digest. The digest has no key, so anyone can recompute it.
 - Anything outside the repository: the deck, the narration, the run sheets, and the words spoken in a recording.
 - Anything a viewer sees but no file holds, such as video frames and audio.
 - Evidence that stopped being true after a later code change.
@@ -163,7 +169,7 @@ Only a reader catches these:
 
 ## Sign-off
 
-The signer fills in the row on 2026-11-30 with a name, an ISO date, the full commit SHA the ledger was signed at, and the sha256 of the ledger text above this section, which `python3 labs/finbot/cli/lab_claims.py --digest` prints. An edit to any claim after signing changes that digest and reads as unsigned.
+The signer fills in the row on 2026-11-30 with a name, an ISO date, the full commit SHA the ledger was signed at, and the sha256 of the ledger text above this section, which `python3 labs/finbot/cli/lab_claims.py --digest` prints. The digest catches an edit made without recomputing it, which then reads as unsigned. The digest has no key, so an edit with a recomputed digest passes the gate, and only a reader catches it.
 
 | Signed by | Date | Commit | Ledger sha256 |
 |---|---|---|---|
