@@ -377,7 +377,7 @@ class Gateway:
                 return sent
             media = sent.headers.get("content-type", "").split(";")[0].strip().lower()
             if 200 <= sent.status_code < 300 and media == "text/event-stream":
-                return await self._governed_stream(key, pins, sent, hold, body, arrival)
+                return await self._governed_stream(key, pins, sent, hold, body, digests, arrival)
             # An error status, or an upstream that answered a stream request whole, takes the whole-answer path.
             upstream = await self._read_answer(sent)
         else:
@@ -424,12 +424,14 @@ class Gateway:
         return _relay(upstream, reply if changed else None)
 
     async def _governed_stream(self, key: str, pins: list[Session], upstream: httpx.Response,
-                               hold: AskHold, body: dict[str, Any], arrival: Arrival | None = None) -> Response:
+                               hold: AskHold, body: dict[str, Any], digests: ToolDigests,
+                               arrival: Arrival | None = None) -> Response:
         """A streamed answer (issue #578). Text streams as it arrives and each call reaches the client only as the item
         its decision produced. The session lock is held for the life of the stream, so the session's steps stay in
         order, and the response owns the lock, the pins and the upstream from here on, releasing them however the
         stream ends. body is the request, which places the stream's removed calls for replay's branch tokens, and
-        arrival says whether a later attempt has replaced it."""
+        arrival says whether a later attempt has replaced it. digests are its declaration digests, so a streamed call
+        carries tool.version as a whole answer's does (A.10)."""
         headers = _client_headers(upstream.headers, decoded=True)
         stack = contextlib.AsyncExitStack()
         session: Session | None = None
@@ -470,7 +472,7 @@ class Gateway:
         async def decide(item: dict[str, Any]) -> Any:
             # Read before gating, as the whole answer reads reply_call_ids, so a removed call still counts.
             reply_calls.extend(call_ids([item]))
-            return await self._gate_item(session, item, hold)
+            return await self._gate_item(session, item, hold, digests)
 
         editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes, decide=decide, audit=_audit,
                               audit_fields={"session_id": session.session_id},
@@ -794,7 +796,7 @@ class Gateway:
             return CachedOutcome("delivered", name, item, result.request_id, first, raw)
         return CachedOutcome("rewritten", name, applied.item, result.request_id, first, raw)
 
-    async def _gate_output(self, session: Session, reply: dict[str, Any], digests: ToolDigests | None = None,
+    async def _gate_output(self, session: Session, reply: dict[str, Any], digests: ToolDigests,
                            asks: AskHold | None = None) -> bool:
         """Gate each new function_call before the client sees it (A.4), each carrying its declaration digest (A.10).
         asks is the request's ASK budget, which a stream passes in so its calls, decided one at a time, share it
@@ -817,11 +819,11 @@ class Gateway:
             reply["output"] = kept
         return changed
 
-    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None = None,
-                         digests: ToolDigests | None = None) -> Any:
+    async def _gate_item(self, session: Session, item: Any, asks: AskHold | None, digests: ToolDigests) -> Any:
         """One output item through the gate: the item to deliver, the same object when nothing changes, or None when
         enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the request's
-        ASK budget, shared by every item of one response. digests are the request's declaration digests (A.10)."""
+        ASK budget, shared by every item of one response. digests are the request's declaration digests (A.10), required
+        so that no path can gate a declared tool's call without its tool.version (rehearsal R5)."""
         asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s)
         call_id = item.get("call_id") if isinstance(item, dict) else None
         if item_type(item) not in ALLOWED_OUTPUT_TYPES:
@@ -851,7 +853,7 @@ class Gateway:
             self._record(session, invalid, Applied("deny", None, "call_id_invalid"), str(item.get("name")), None)
             return None if self.enforce else item
         cached = session.calls.get(call_id)
-        digest = digests.get(item.get("name")) if digests is not None else None
+        digest = digests.get(item.get("name"))
         causes = [] if cached is None else [cause for cause, hit in (
             ("content_changed", not same_content(item, cached)), ("digest_changed", cached.digest != digest)) if hit]
         if causes:

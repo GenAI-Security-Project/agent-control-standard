@@ -3,7 +3,8 @@
 Expected digests are literals, the SHA-256 of each declaration's sorted compact JSON computed apart from the gateway.
 For these ASCII-only declarations that is their RFC 8785 form.
 """
-from conftest import NEUTRAL, call_item, finbot_request, response_body, transcript_lines
+from conftest import NEUTRAL, SSE, call_item, finbot_request, response_body, transcript_lines
+from streams import decode, encode, rebuilt_output, stream_events
 
 PINNED = {"type": "function", "name": "pinned_tool", "description": "Send an email to a recipient",
           "parameters": {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]},
@@ -273,3 +274,25 @@ def test_a_result_resent_after_an_epoch_bump_carries_no_version(gateway, guardia
     client.app.state.gateway.bump_epoch()
     client.post("/v1/responses", json=declaring(POISONED, extra=HISTORY))
     assert sent_versions(tmp_path, "steps/toolCallResult") == [None]
+
+
+def test_a_streamed_call_carries_the_declarations_digest(gateway, guardian, upstream, tmp_path):
+    """The whole answer and the stream gate each call through one path, so both send tool.version (rehearsal R5)."""
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    client.post("/v1/responses", json=finbot_request())
+    upstream.reply(SSE(encode(stream_events(call_item("get_vendor_details", {"vendor_id": 7}, "call_2")))))
+    with client.stream("POST", "/v1/responses", json={**finbot_request(user="Stream it"), "stream": True}) as r:
+        b"".join(r.iter_bytes())
+    assert sent_versions(tmp_path) == [VENDOR_DIGEST, VENDOR_DIGEST]
+
+
+def test_a_streamed_call_to_a_pinned_tool_with_its_declaration_unchanged_is_delivered(
+        gateway, harness_guardian, upstream, audit):
+    """A pin holds on the streamed path as it does on the whole answer, so FinBot's streamed chat isn't denied."""
+    client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
+    upstream.reply(SSE(encode(stream_events(CALL["output"][0]))))
+    with client.stream("POST", "/v1/responses", json={**declaring(PINNED), "stream": True}) as r:
+        streamed = decode(b"".join(r.iter_bytes()))
+    assert rebuilt_output(streamed) == CALL["output"]
+    assert decisions(audit) == [("allow", [])]
