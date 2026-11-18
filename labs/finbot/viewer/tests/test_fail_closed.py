@@ -373,3 +373,29 @@ def test_the_hash_and_the_keys_come_from_one_read(tmp_path, key, monkeypatch):
     second = source.current()
     assert second.document == key.document and source._digest == hashlib.sha256(a_bytes).digest()
     assert len(reads) == 2
+
+
+# Final-review fix round 4, R14: the viewer's own key-document path refuses what acs-verify refuses.
+
+
+def test_an_oversize_key_document_pauses(tmp_path, key):
+    import json
+    live = _live_document(tmp_path, key)
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    model = Model(logs.transcript_dir, None, KeySource({"ACS_GUARDIAN_KEYS": str(live)}))
+    model.refresh()
+    assert {verify for _, verify in marks(model).values()} == {"verified"}
+    document = key.document
+    document["padding"] = "x" * (1 << 20)
+    live.write_text(json.dumps(document), encoding="utf-8")
+    model.refresh()
+    assert model.paused.startswith("checks paused: KeyDocumentUnavailable")
+    assert {verify for _, verify in marks(model).values()} == {"not_checked"}
+
+
+def test_the_viewer_caps_the_key_document_as_acs_verify_does():
+    from acs.testing import verify as acs_verify
+
+    import verify as verify_module
+    assert verify_module.MAX_KEY_DOCUMENT_BYTES == acs_verify.MAX_KEY_DOCUMENT_BYTES
