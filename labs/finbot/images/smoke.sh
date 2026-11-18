@@ -6,7 +6,8 @@
 # The labs workflow's smoke job runs it, and so does anyone rerunning the stack check by hand. Until LAB-16's module 1
 # lands, the model call is a scripted POST /v1/responses through FinBot's own base URL, answered by replay.
 #
-# Prints one DONE or NOT YET: line per check. Exit 0 when every check passes, 1 otherwise.
+# Prints one DONE or NOT YET: line per check, plus NOTE: lines that record what FinBot can reach without checking
+# it. Exit 0 when every check passes, 1 otherwise. The NOTE: lines never change the exit code.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -28,7 +29,9 @@ admin_ip=${admin_ip:-10.88.47.10}
 uid=$(id -u)
 [ "$uid" -ne 0 ] || uid=10001
 finbot_port=$(env_value LAB_PORT_FINBOT)
+approver_port=$(env_value LAB_PORT_APPROVER)
 viewer_port=$(env_value LAB_PORT_VIEWER)
+jaeger_port=$(env_value LAB_PORT_JAEGER)
 
 if [ -e state/secrets/openai.key ] || [ "$(env_value ACS_UPSTREAM)" = openai ]; then
     fail "a model key or the openai upstream is configured. The smoke run needs replay with no key"
@@ -64,6 +67,40 @@ if in_service finbot python -c "$probe" acs-gateway 8080 >/dev/null 2>&1; then
     pass "finbot reaches the gateway's model port"
 else
     fail "finbot can't reach the gateway's model port"
+fi
+
+# The accepted residual from the LAB-15 review: finbot-net isn't internal, so FinBot can reach the approver port, the
+# host's published ports and the internet. FinBot's own tools make no network call at 1450fc4, so this is recorded on
+# every run, never checked, and a change in what FinBot reaches shows in the log. "@gateway" is the container's default
+# route, which is the host on a Linux bridge network. host.docker.internal is the host on Docker Desktop.
+reach_probe='# lab-reach-record
+import socket, struct, sys
+def default_route():
+    with open("/proc/net/route") as f:
+        for line in f.read().splitlines()[1:]:
+            fields = line.split()
+            if fields[1] == "00000000":
+                return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+    raise OSError("no default route")
+args = sys.argv[1:]
+for host, port in zip(args[::2], args[1::2]):
+    try:
+        address = default_route() if host == "@gateway" else host
+        socket.create_connection((address, int(port)), 2).close()
+        print(f"reaches {host}:{port}")
+    except OSError as e:
+        print(f"cannot reach {host}:{port} ({type(e).__name__})")'
+reach_targets="acs-gateway 8090"
+for port in "${finbot_port:-8000}" "${approver_port:-8090}" "${viewer_port:-8095}" "${jaeger_port:-16686}"; do
+    reach_targets="$reach_targets host.docker.internal $port @gateway $port"
+done
+reach_targets="$reach_targets example.com 443"
+printf 'NOTE: what FinBot reaches from finbot-net, recorded and not checked (the residual the LAB-15 review accepted)\n'
+# shellcheck disable=SC2086
+if reach=$(in_service finbot python -c "$reach_probe" $reach_targets 2>&1); then
+    printf '%s\n' "$reach" | sed 's/^/NOTE: finbot /'
+else
+    printf 'NOTE: the reachability probe did not run: %s\n' "$(printf '%s' "$reach" | tail -n 1)"
 fi
 
 if ./lab.sh _epoch | grep -q '^DONE'; then
