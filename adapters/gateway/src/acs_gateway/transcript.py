@@ -29,23 +29,32 @@ class Transcript:
         self._lock = threading.Lock()
 
     def append(self, session_id: str, direction: str, envelope: dict[str, Any] | None, *,
-               cause: str | None = None) -> None:
+               cause: str | None = None, discards: str | None = None) -> None:
         """envelope None with a cause marks a request that got no usable answer, so the gap is explicit. A response
         line may also carry its envelope and a cause, for an answer that came back but can't be used, such as one
         that arrived after its deadline.
 
         acs.client's on_wire hook (issue #576) hands the gateway every envelope sent and every answer received, a
         refused, malformed or tampered one included, so each line holds the envelope verbatim (PREMORTEM P6).
+
+        discards names the request_id of the answer on the line before, when that answer was on time but became late
+        behind its own line and the gateway withheld it. The line is {"dir": "resp", "envelope": null, "cause":
+        "decision_timeout", "discards": <request_id>}. Lab convention, issue #577: without it, the transcript's last
+        word on that request would be an allow the gateway never carried out.
         """
         if direction not in DIRECTIONS:
             raise ValueError(f"direction must be one of {DIRECTIONS}, got {direction!r}")
         if envelope is None and (direction != "resp" or not cause):
             raise ValueError("only a response line may omit its envelope, and it must name the cause")
+        if discards is not None and envelope is not None:
+            raise ValueError("only a response line with no envelope may discard the answer before it")
         # The session_id names the file, so only the gateway's own UUIDs are accepted.
         name = str(uuid.UUID(session_id))
         record: dict[str, Any] = {"dir": direction, "envelope": envelope}
         if cause is not None:
             record["cause"] = cause
+        if discards is not None:
+            record["discards"] = discards
         with self._lock:
             self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             _append_line(self._directory / f"{name}.jsonl", record)

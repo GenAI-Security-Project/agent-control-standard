@@ -340,7 +340,8 @@ def test_an_answer_that_comes_back_after_the_deadline_is_a_timeout(gateway, guar
     assert output[0]["content"][0]["text"] == NEUTRAL
     applied = events(audit, "decision_applied")[0]
     assert (applied["decision"], applied["cause"]) == ("deny", "decision_timeout")
-    assert applied["request_id"] == transcript_lines(tmp_path)[-2]["envelope"]["params"]["request_id"]
+    lines = transcript_lines(tmp_path)
+    assert applied["request_id"] == lines[-3]["envelope"]["params"]["request_id"] == lines[-1]["discards"]
 
 
 def test_an_answer_inside_the_deadline_is_honored(gateway, guardian, upstream, audit, tmp_path):

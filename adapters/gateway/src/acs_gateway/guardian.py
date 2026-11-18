@@ -404,5 +404,13 @@ class GuardianClient:
                     return None, request_id
             return (None if late else outcome), request_id
         if late:
+            if wire.answer_written and wire.answer_cause is None:
+                # On time when it arrived, late once its line landed: withheld, and the transcript says so.
+                self.discard_late(session_id, request_id, token)
             return None, request_id
         return outcome, request_id
+
+    def discard_late(self, session_id: str, request_id: str, token: StepToken | None) -> None:
+        """Mark the answer on the line before as withheld for lateness (lab convention, issue #577)."""
+        write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause="decision_timeout",
+                                                         discards=request_id))

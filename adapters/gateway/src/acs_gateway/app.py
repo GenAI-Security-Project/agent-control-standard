@@ -1056,11 +1056,29 @@ class Gateway:
             await self._settle_abandoned(session, method, token, future, timeout)
             raise
         if result.cause is None and time.monotonic() >= token.deadline:
-            # The worker times out an answer that arrived late. This catches one that arrived in time but came back
-            # late, such as behind a slow response line, which the transcript then holds without a cause.
+            # The worker settled in time and the loop resumed after the deadline. The answer is withheld like any
+            # late one, and the transcript says so after the line that holds it (issue #577).
+            await self._discard_late(session, method, token, result.request_id, timeout)
             return StepResult(method, result.request_id, cause="decision_timeout", failure_class="timeout",
                               sent=result.sent)
         return result
+
+    async def _discard_late(self, session: Session, method: str, token: StepToken, request_id: str | None,
+                            timeout: float) -> None:
+        """Write the discards line on a worker, bounded like a step. A write that hangs retires the session, so no
+        later line of it can land between the answer and its mark."""
+        if request_id is None:
+            return
+        future = asyncio.get_running_loop().run_in_executor(
+            self.executor, functools.partial(self.guardian.discard_late, session.session_id, request_id, token))
+        try:
+            await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
+        except asyncio.TimeoutError:
+            self._retire(session, method, token, "step_hung")
+        except Exception as e:  # noqa: BLE001
+            # The step already denies. A mark that can't be written is the gateway's own fault, so it is audited.
+            _audit("gateway_step_error", phase="discard_late", session_id=session.session_id, method=method,
+                   request_id=request_id, error=str(e))
 
     async def _settle_abandoned(self, session: Session, method: str, token: StepToken, future: Any,
                                 timeout: float) -> None:
