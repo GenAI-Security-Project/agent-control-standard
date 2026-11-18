@@ -592,3 +592,21 @@ def test_a_streamed_disconnect_during_the_approved_resend_writes_one_outcome(har
         server.should_exit = True
         thread.join(10)
     assert resolved == [("abandoned", "client_disconnected", "deny")]
+
+
+def test_the_resend_reserve_is_the_negotiated_timeout_when_the_guardian_set_one():
+    from types import SimpleNamespace
+
+    from acs.client._config import FailPosture
+
+    from acs_gateway.app import AskHold, Gateway, _STEP_GRACE_S
+
+    posture = FailPosture(deny_on_failure=True, timeout_s=5.0,
+                          per_method_timeout_s={"steps/toolCallRequest": 150.0})
+    config = SimpleNamespace(decision_timeout_s=5.0)
+    gateway = SimpleNamespace(config=config)
+    reserve = Gateway._resend_reserve(gateway, SimpleNamespace(posture=posture))
+    assert reserve == 150.0 + _STEP_GRACE_S
+    assert Gateway._resend_reserve(gateway, SimpleNamespace(posture=None)) == 5.0 + _STEP_GRACE_S
+    hold = AskHold(0.0, 240.0)
+    assert hold.deadline(10**9, reserve) == 240.0 - reserve

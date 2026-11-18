@@ -180,7 +180,7 @@ class Gateway:
     async def responses(self, request: Request) -> Response:
         # An ASK's budget runs from here, so the model's time counts against it and the answer lands inside the
         # client's own timeout (CR3).
-        hold = AskHold(time.monotonic(), self.config.ask_max_s, self.config.decision_timeout_s + _STEP_GRACE_S)
+        hold = AskHold(time.monotonic(), self.config.ask_max_s)
         # A non-streamed request has no reader on its receive channel once the body is in, so the hold polls through
         # one that flags a disconnect on the hold's own event. A stream swaps in its own reader (_governed_stream).
         hold.poll = Request(request.scope, hold.watch(request.receive)).is_disconnected
@@ -712,8 +712,7 @@ class Gateway:
     async def _gate_output(self, session: Session, reply: dict[str, Any], asks: AskHold | None = None) -> bool:
         """Gate each new function_call before the client sees it (A.4). asks is the request's ASK budget, which a
         stream passes in so its calls, decided one at a time, share it too."""
-        asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s,
-                                                     self.config.decision_timeout_s + _STEP_GRACE_S)
+        asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s)
         changed, removed, kept = False, False, []
         for item in reply["output"]:
             delivered = await self._gate_item(session, item, asks)
@@ -735,8 +734,7 @@ class Gateway:
         """One output item through the gate: the item to deliver, the same object when nothing changes, or None when
         enforce removes it. A whole answer and a stream (issue #578) both gate each item here. asks is the request's
         ASK budget, shared by every item of one response."""
-        asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s,
-                                                     self.config.decision_timeout_s + _STEP_GRACE_S)
+        asks = asks if asks is not None else AskHold(time.monotonic(), self.config.ask_max_s)
         call_id = item.get("call_id") if isinstance(item, dict) else None
         if item_type(item) not in ALLOWED_OUTPUT_TYPES:
             _audit("unsupported_item_type", session_id=session.session_id, item_type=item_type(item),
@@ -829,7 +827,7 @@ class Gateway:
             _audit("ask_unsupported", session_id=session.session_id, call_id=call_id, tool=name,
                    request_id=asked.request_id, field=settings)
             return replace(asked, cause="ask_unsupported", failure_class="guardian_error")
-        deadline = hold.deadline(settings.timeout_s)
+        deadline = hold.deadline(settings.timeout_s, self._resend_reserve(session))
         _audit("ask_pending", session_id=session.session_id, call_id=call_id, tool=name, request_id=asked.request_id,
                approver=settings.approver_id, question=settings.question, deadline_s=self.config.ask_max_s,
                remaining_s=round(max(0.0, deadline - time.monotonic()), 3))
@@ -887,6 +885,13 @@ class Gateway:
                    guardian_decision=result.decision.disposition if applied and result.decision else None,
                    decision=applied.decision if applied else "deny",
                    cause=(applied.cause if applied else None) or result.cause)
+
+    def _resend_reserve(self, session: Session) -> float:
+        """The time an approved resend can take: the step's own timeout, which is the one the Guardian negotiated
+        when its ServerHello set one, plus the wait's grace. Reserving the configured value alone would let a longer
+        negotiated resend run past the budget."""
+        timeout = session.posture.timeout_for(TOOL_CALL_REQUEST) if session.posture else self.config.decision_timeout_s
+        return timeout + _STEP_GRACE_S
 
     async def _step(self, session: Session, method: str, payload: dict[str, Any]) -> StepResult:
         """One Guardian step on the gateway's executor, under one deadline that starts when it is queued."""
@@ -971,14 +976,15 @@ class AskHold:
     (round 4, one disconnect signal).
     """
 
-    def __init__(self, arrival: float, cap_s: float, reserve_s: float) -> None:
-        self.ends = arrival + cap_s - reserve_s
+    def __init__(self, arrival: float, cap_s: float) -> None:
+        self.ends = arrival + cap_s
         self.gone = asyncio.Event()
         self.poll: Callable[[], Awaitable[Any]] | None = None
 
-    def deadline(self, timeout_s: float) -> float:
-        """The monotonic deadline for one ASK."""
-        return min(self.ends, time.monotonic() + float(timeout_s))
+    def deadline(self, timeout_s: float, reserve_s: float) -> float:
+        """The monotonic deadline for one ASK, with reserve_s kept back for its resend. The reserve is per ASK because
+        the negotiated timeout belongs to the session, which the hold doesn't know when the request arrives."""
+        return min(self.ends - reserve_s, time.monotonic() + float(timeout_s))
 
     def watch(self, receive: Callable[[], Awaitable[dict[str, Any]]]) -> Callable[[], Awaitable[dict[str, Any]]]:
         """receive, wrapped so a disconnect message sets gone before anyone else sees it."""
