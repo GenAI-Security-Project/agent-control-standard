@@ -536,3 +536,22 @@ def test_an_answer_handed_back_late_keeps_its_request_id(gateway, guardian, upst
     assert applied["cause"] == "decision_timeout" and applied["request_id"]
     (span,) = step_spans(spans())
     assert span.attributes.get("acs.request_id") == applied["request_id"]
+
+
+def test_an_unsigned_session_start_claims_no_request_id(guardian, tmp_path, monkeypatch):
+    from acs_gateway import guardian as guardian_module
+    from acs_gateway.config import GatewayConfig
+    from acs_gateway.guardian import GuardianClient
+    from acs_gateway.sessions import Session
+    from acs_gateway.transcript import Transcript
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("no key")
+
+    monkeypatch.setattr(guardian_module, "sign_envelope", refuse)
+    client = GuardianClient(GatewayConfig.from_env({"ACS_GUARDIAN_URL": guardian, "ACS_LAB_MODE": "enforce"}),
+                            Transcript(tmp_path / "t"))
+    session = Session(session_id=str(uuid.uuid4()), epoch=0)
+    # The envelope never left the gateway, so the session span has no request_id to name.
+    assert client.open(session) is None
+

@@ -108,7 +108,7 @@ class StepToken:
         self._retired = False
         self._writing = 0
         self._sending = False
-        # Whether a send ever started, for the step span after the loop gave up waiting (LAB-09).
+        # Whether a send ever started, so a step settled without its answer still says the Guardian got it.
         self.sent = False
 
     def retire(self) -> bool:
@@ -222,7 +222,9 @@ class GuardianClient:
                 return None
             outcome, request_id = self._send(session.session_id, SESSION_START, {},
                                              self.posture(negotiated.server_hello))
-            sent.append(request_id)
+            # An envelope the gateway couldn't sign never left it, so the session span has no request_id to claim.
+            if not (isinstance(outcome, Resolution) and outcome.cause == "envelope_not_signable"):
+                sent.append(request_id)
             return outcome
 
         handshake = open_session(config=self.acs_config, session_id=session.session_id, agent_id=self.config.agent_id,
