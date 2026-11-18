@@ -1,0 +1,5 @@
+{
+  "applied": true,
+  "audit_id": "a-77",
+  "effect": "read_file:/etc/hosts"
+}

@@ -1,0 +1,53 @@
+{
+  "_sig": "3zfZIdylROCSx1ob9/iKxhvf7+cnr1HayMH9f38fWpMQpllhS1jluolwYL1tadiehkzSGFfT1JzK8ZiWehkJCw==",
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "change": {
+      "canonicalization": "jcs-rfc8785",
+      "kind": "tool_register",
+      "payload_digest": {
+        "sha256": "16aad0ab433ac8e5d9b962b7a60d69212eb3ea356abb044887d05281b314b7af"
+      },
+      "payload_media_type": "application/json"
+    },
+    "context": {
+      "acs_version": "0.1.4",
+      "agent_id": "agent:researcher-01",
+      "chain_hash": "0000000000000000000000000000000000000000000000000000000000000001",
+      "request_id": "b0a2f7c4-2e21-4a10-9d55-0e6b8c2f4a13",
+      "session_id": "6f1c2a9e-1d40-4d3e-9c3a-77ab01e2c9de"
+    },
+    "decided_at": "2026-11-17T01:50:00Z",
+    "disposition": "ALLOW",
+    "guardian": {
+      "control_domain": "org:guardian",
+      "id": "guardian:gw-1",
+      "key_id": "guardian-key-1"
+    },
+    "outcome": {
+      "applied": true,
+      "audit_id": "a-77",
+      "effect": "read_file:/etc/hosts"
+    },
+    "outcome_digest": {
+      "sha256": "16aad0ab433ac8e5d9b962b7a60d69212eb3ea356abb044887d05281b314b7af"
+    },
+    "policy": {
+      "digest": {
+        "sha256": "49ea573d494ffe5df05349216896d5f230455aaf695bc7ff15400f398cf58a31"
+      },
+      "version": "2026.11.1"
+    },
+    "reason_codes": [],
+    "witness_scope": "self"
+  },
+  "predicateType": "urn:lgd:acs:predicate:agent-change-admission:v1",
+  "subject": [
+    {
+      "digest": {
+        "sha256": "16aad0ab433ac8e5d9b962b7a60d69212eb3ea356abb044887d05281b314b7af"
+      },
+      "name": "change-payload"
+    }
+  ]
+}
