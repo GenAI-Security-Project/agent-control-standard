@@ -472,9 +472,11 @@ class Gateway:
                         await editor.abort()
                     finally:
                         try:
-                            # The whole answer's rule, applied once every call the stream reached is decided, so the
-                            # next request's branch keeps a removed call's d (issue #579, rehearsal R7).
-                            note_reply_calls(session, reply_calls, body)
+                            # The whole answer's rule, applied once every call is decided, so the next request's
+                            # branch keeps a removed call's d (issue #579, rehearsal R7). A stream that never completed
+                            # places nothing, as the whole answer notes nothing on an error exit.
+                            if editor.completed:
+                                note_reply_calls(session, reply_calls, body)
                         finally:
                             await stack.aclose()
                             for pinned in owned:

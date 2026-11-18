@@ -119,6 +119,23 @@ def test_a_streamed_reply_sends_the_same_branch_header_as_a_whole_one(gateway, g
     assert lines(tmp_path)[-1]["branch"] == "d,a,a"
 
 
+def test_a_retry_that_fails_mid_stream_keeps_the_completed_attempts_d(gateway, guardian, upstream, tmp_path):
+    """A stream that never reaches response.completed places nothing, as the whole answer notes nothing on an error
+    exit, so the d from the attempt that completed survives on the next request's branch."""
+    client = capture(gateway, tmp_path, guardian)
+    calls = (call_item("get_vendor_details", {"vendor_id": 7}, "call_1"),
+             call_item("bash", {"command": "rm -rf /"}, "call_2"))
+    upstream.reply(SSE(encode(stream_events(*calls))))
+    # The retry's upstream stops before its terminal event.
+    upstream.reply(SSE(encode(stream_events(*calls)[:-1])))
+    upstream.reply(response_body(message_item("done")))
+    for _ in range(2):
+        with client.stream("POST", "/v1/responses", json={**finbot_request(), "stream": True}) as r:
+            b"".join(r.iter_bytes())
+    client.post("/v1/responses", json=finbot_request(calls[0], output("call_1", "{}")))
+    assert lines(tmp_path)[-1]["branch"] == "d,a,a"
+
+
 def test_shadow_records_only_a(gateway, guardian, upstream, tmp_path):
     client = capture(gateway, tmp_path, guardian, mode="shadow")
     upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_1")))

@@ -258,6 +258,9 @@ class StreamEditor:
         self._seq = 0
         self._kept = 0
         self._finished = False
+        # True once the upstream's response.completed has gone out, in either mode. Only a completed answer places
+        # its calls in replay's branch, as the whole-answer path notes nothing on an error exit (issue #579).
+        self.completed = False
         self._queue: deque[dict[str, Any]] = deque()
         self._wake = asyncio.Event()
         self._closing = False
@@ -359,6 +362,7 @@ class StreamEditor:
                                     "message", "reasoning"):
                                 self._record(item)
                             final = final or data["type"] in _TERMINAL or data["type"] == "error"
+                            self.completed = self.completed or data["type"] == "response.completed"
                         if frames.pending() > self.limit:
                             # An event that never ends can't be parsed within the limit. The bytes still relay, but
                             # nothing more is held for parsing.
@@ -450,6 +454,7 @@ class StreamEditor:
             async for out in self._terminal(data):
                 yield out
             self._finished = True
+            self.completed = kind == "response.completed"
             return
         index = _int(data.get("output_index"))
         if index is None or not kind.startswith("response."):

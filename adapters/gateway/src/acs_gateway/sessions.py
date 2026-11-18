@@ -22,7 +22,7 @@ def _text(content: Any) -> str:
 
 
 def is_stream(body: Any) -> bool:
-    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the 501.
+    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the gate.
 
     Gating and replay both read it here, so they never disagree on what a request asked for."""
     return isinstance(body, dict) and body.get("stream") is not None and body["stream"] is not False
