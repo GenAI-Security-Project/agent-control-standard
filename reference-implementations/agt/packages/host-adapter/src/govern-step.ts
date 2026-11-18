@@ -88,6 +88,7 @@ import type { GuardianClient } from "./guardian-client.ts";
 import type { AcsDecision, ValidatedAcsDecision } from "./decision-message.ts";
 import { renderDecision, type HostOutput } from "./render-decision.ts";
 import type { ResolvedSessionConfig } from "./handshake.ts";
+import { resolvePath } from "./hookmap-path.ts";
 import { assertOutputIsReplaceable, withResultOutput, type HostOutputLocation } from "./result-output.ts";
 import { validateDecision } from "./validate-decision.ts";
 
@@ -167,6 +168,14 @@ export type GovernStepInput = {
    * into a silent skip any more.
    */
   scopedTool?: string;
+  /**
+   * False when this host's stop at a result gate still delivers the output:
+   * Claude Code's exit 2 at PostToolUse "Shows stderr to Claude; the tool
+   * already ran". A posture `deny` there that no replacement can be built for
+   * is then audited `unenforced` rather than `blocked`, because the step was
+   * not blocked. Defaults to true, the case of a host whose stop withholds.
+   */
+  resultGateStopWithholds?: boolean;
 };
 
 /**
@@ -422,6 +431,17 @@ export function auditUngovernedStep(input: {
   });
 }
 
+/** `assertOutputIsReplaceable` as an answer, for a caller that has to choose
+ * an outcome rather than stop. */
+function isReplaceable(location: HostOutputLocation): boolean {
+  try {
+    assertOutputIsReplaceable(location);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Governs one step: build the ACS request, ask the Guardian for a decision,
  * honour it, and render it -- answering any failure along the way with the
@@ -440,6 +460,7 @@ export async function governStep({
   sessionId,
   audit,
   scopedTool,
+  resultGateStopWithholds = true,
 }: GovernStepInput): Promise<GovernedStep> {
   // Every render below -- the arriving decision's and the posture's -- goes
   // through the hook's own decisions block, so a hook this hookmap does not map
@@ -623,10 +644,14 @@ export async function governStep({
    * payload that does not carry what this hook's `outputs` block describes at
    * all. That is a posture deny this host cannot carry out, and the honest
    * answers are a loud stop or a block that withholds nothing while claiming to.
-   * It throws, and the caller turns that into a blocking stop. Every other route
-   * -- a leaf that is present and is not prose above all -- is refused before a
-   * decision is sought rather than answered here, because there it would be
-   * answering with a posture something a decision had already answered.
+   * It throws, and the caller turns that into a blocking stop. On a host whose
+   * stop does not withhold (`resultGateStopWithholds: false`) that stop still
+   * delivers the output, so the step is audited `unenforced` rather than
+   * `blocked`, and the throw carries the reasoning that says so. Every other
+   * route -- a leaf that is present and is not prose above all -- is refused
+   * before a decision is sought rather than answered here, because there it
+   * would be answering with a posture something a decision had already
+   * answered.
    *
    * `method` is the ACS method or null, never the host's own event name: an
    * envelope that could not be built has no ACS method to report, and the audit
@@ -639,6 +664,14 @@ export async function governStep({
     stage: FailureStage,
     envelope: AcsRequestEnvelope | undefined,
   ): GovernedStep {
+    // A deny this host's stop cannot carry out: no replacement can be built
+    // for the output, and the stop delivers it anyway. The tool is read from
+    // the same `tool_name` path buildEnvelope names it by.
+    const tool = entry === undefined ? undefined : resolvePath(payload, entry.tool_name);
+    const unenforceable =
+      !resultGateStopWithholds && outputLocation !== undefined && !isReplaceable(outputLocation)
+        ? { tool: typeof tool === "string" ? tool : null }
+        : undefined;
     const decision = applyFailurePosture({
       failure,
       session,
@@ -648,7 +681,13 @@ export async function governStep({
       requestId: envelope?.params.request_id ?? null,
       audit,
       stage,
+      unenforceable,
     });
+    // A deny here cannot be rendered, and this host's stop does not withhold,
+    // so the stop carries the reasoning that says the output was delivered.
+    if (unenforceable !== undefined && decision.decision === "deny") {
+      throw new Error(`governStep: ${decision.reasoning}`);
+    }
     return { output: render(decision), decision, stage };
   }
 

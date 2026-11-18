@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,6 +121,7 @@ function postToolUsePayload(stdout: string): Record<string, unknown> {
 async function runHook(
   payload: Record<string, unknown>,
   guardianUrl: string,
+  env: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number; dir: string }> {
   const dir = scratch();
   const proc = Bun.spawn({
@@ -133,6 +134,7 @@ async function runHook(
       ACS_GUARDIAN_URL: guardianUrl,
       ACS_SESSION_DIR: join(dir, "sessions"),
       ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+      ...env,
     },
   });
   proc.stdin.write(JSON.stringify(payload));
@@ -711,5 +713,97 @@ describe("the result gate governs Read, end to end through the real shim and a r
     // shipped `proceed` posture delivers the output too. What tells them apart
     // is the audit entry a fail-open writes, so none may exist.
     expect(existsSync(join(out.dir, "audit.jsonl"))).toBe(false);
+  });
+});
+
+/**
+ * The real `PostToolUse` payload Claude Code 2.1.325 delivers for `Read` on a
+ * PNG, captured with a probe hook. It has no `file.content`, so the hookmap's
+ * Read leaf resolves to nothing, and so do JPEG, GIF, WebP, PDF and notebook
+ * results (#568).
+ */
+function imageReadPayload(): Record<string, unknown> {
+  return {
+    ...postToolUsePayload(""),
+    tool_name: "Read",
+    tool_input: { file_path: "/current/dir/img.png" },
+    tool_response: {
+      type: "image",
+      file: {
+        base64: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP4z8CAFTEMLQkAKP8/wc53yE8AAAAASUVORK5CYII=",
+        type: "image/png",
+        originalSize: 74,
+        dimensions: { originalWidth: 8, originalHeight: 8, displayWidth: 8, displayHeight: 8 },
+      },
+    },
+  };
+}
+
+describe("the result gate, when a deny cannot withhold the output", () => {
+  // No step request is ever sent (there is no output leaf to send), so the
+  // real Guardian declaring `deny` is all these tests need from one.
+  let denying: StartedGuardian;
+  beforeAll(async () => {
+    denying = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", onDecisionFailure: "deny" });
+  });
+  afterAll(async () => {
+    await denying.close();
+  });
+
+  // Exit 2 at PostToolUse shows stderr to Claude and the tool has already
+  // run, so the image reaches the model. Measured live on 2.1.325 (#568).
+  it("audits a Read of an image under deny as unenforced, not blocked", async () => {
+    const out = await runHook(imageReadPayload(), denying.url);
+
+    expect(out.exitCode).toBe(2);
+    const audit = readFileSync(join(out.dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit.map((entry) => entry.outcome)).toEqual(["unenforced"]);
+    // The tool is named on the line itself: no request was built, so `method`
+    // is null, and the failure message names a hookmap path, not the tool.
+    expect(audit[0]).toMatchObject({
+      posture: "deny",
+      posture_source: "negotiated",
+      failure: { kind: "host_configuration" },
+      tool: "Read",
+    });
+  });
+
+  it("says the agent got the output and no audit entry was written, when the log cannot be written", async () => {
+    // A regular file where the log's directory should be: mkdir and append
+    // both fail, as in posture.test.ts.
+    const blocker = join(scratch(), "blocker");
+    writeFileSync(blocker, "x");
+    try {
+      const out = await runHook(imageReadPayload(), denying.url, { ACS_AUDIT_LOG: join(blocker, "audit.jsonl") });
+
+      expect(out.exitCode).toBe(2);
+      expect(out.stderr).toContain("the agent receives it anyway");
+      expect(out.stderr).toContain("no audit entry was written");
+    } finally {
+      unlinkSync(blocker);
+    }
+  });
+
+  // The case measured live on 2.1.325 (#568): the shipped `proceed` posture,
+  // an audit log that cannot be written, so the shim falls back to deny, and a
+  // deny it cannot carry out either. The stop must not also claim a block.
+  it("does not claim a block when an unrecordable proceed falls back to a deny it cannot carry out", async () => {
+    const blocker = join(scratch(), "blocker");
+    writeFileSync(blocker, "x");
+    try {
+      // Nothing listens on port 1, so no posture is negotiated and the ACS
+      // default, `proceed`, applies.
+      const out = await runHook(imageReadPayload(), "http://127.0.0.1:1/acs", {
+        ACS_AUDIT_LOG: join(blocker, "audit.jsonl"),
+      });
+
+      expect(out.exitCode).toBe(2);
+      expect(out.stderr).toContain("on_decision_failure=proceed");
+      expect(out.stderr).toContain("the agent receives it anyway");
+      expect(out.stderr).toContain("no audit entry was written");
+      expect(out.stderr).not.toContain("blocked instead:");
+    } finally {
+      unlinkSync(blocker);
+    }
   });
 });

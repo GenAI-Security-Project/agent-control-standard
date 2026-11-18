@@ -87,6 +87,14 @@ type PostureResolvedAuditEntry = AuditEntryIdentity & {
   session_failure?: { kind: string; message: string };
 };
 
+/** A posture `deny` the writer's host could not carry out: the agent received
+ * the output (#568). The posture arm's fields plus the tool, which nothing
+ * else on the line names -- see the writer's own `UnenforcedAuditEntry`. */
+type UnenforcedAuditEntry = Omit<PostureResolvedAuditEntry, "outcome"> & {
+  outcome: "unenforced";
+  tool: string | null;
+};
+
 /** A step no gate asked about: the writer's own hookmap scoped it out. No
  * posture and no failure, because neither was ever reached -- see the
  * writer's own `UngovernedAuditEntry` for why those are absent rather than
@@ -97,9 +105,10 @@ type UngovernedAuditEntry = AuditEntryIdentity & {
 };
 
 /** One line of the audit log, as written by the audit sink on the
- * posture-negotiating side of the wire. A union, because the two kinds of
- * line share nothing but their identity fields; narrow on `outcome`. */
-export type AuditEntry = PostureResolvedAuditEntry | UngovernedAuditEntry;
+ * posture-negotiating side of the wire. A union, because an ungoverned line
+ * shares nothing with the other two but their identity fields; narrow on
+ * `outcome`. */
+export type AuditEntry = PostureResolvedAuditEntry | UnenforcedAuditEntry | UngovernedAuditEntry;
 
 export type TailAuditLogOptions = {
   path: string;
@@ -145,17 +154,27 @@ function isAuditEntryShape(value: unknown): value is AuditEntry {
     return false;
   }
   // Branched on the discriminant rather than checked as one flat conjunction
-  // of optionals: the two kinds of line have disjoint field sets, so a flat
-  // check that made every arm-specific field optional would accept a line
-  // carrying an `ungoverned` block beside a `posture` -- a shape no writer
-  // produces and this renderer has no line for.
+  // of optionals: an ungoverned line and a posture line have disjoint field
+  // sets, so a flat check that made every arm-specific field optional would
+  // accept a line carrying an `ungoverned` block beside a `posture` -- a
+  // shape no writer produces and this renderer has no line for.
   if (candidate.outcome === "ungoverned") {
     return isUngovernedShape(candidate.ungoverned);
   }
+  // The renderer prints `tool` on this line, so a line without one is refused
+  // like an ungoverned line without its block.
+  if (candidate.outcome === "unenforced") {
+    return isPostureFieldsShape(candidate) && (typeof candidate.tool === "string" || candidate.tool === null);
+  }
+  return (candidate.outcome === "proceeded" || candidate.outcome === "blocked") && isPostureFieldsShape(candidate);
+}
+
+/** The fields the posture arm and the unenforced arm share: in both, the
+ * posture answered the step. */
+function isPostureFieldsShape(candidate: Record<string, unknown>): boolean {
   return (
     (candidate.posture === "proceed" || candidate.posture === "deny") &&
     (candidate.posture_source === "negotiated" || candidate.posture_source === "default") &&
-    (candidate.outcome === "proceeded" || candidate.outcome === "blocked") &&
     isFailureShape(candidate.failure) &&
     // Optional, so absent is valid -- but a present one is checked as
     // strictly as the required one, because the renderer prints it.

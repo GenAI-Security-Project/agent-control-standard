@@ -87,7 +87,7 @@ console.log(
 );
 console.log("Ctrl-C to stop.\n");
 
-let badgeState: PostureBadgeState = { posture: null, proceeds: 0 };
+let badgeState: PostureBadgeState = { posture: null, proceeds: 0, unenforced: 0 };
 console.log(renderPostureBadge(badgeState, { color }));
 console.log("");
 
@@ -100,12 +100,22 @@ function noteAuditEntry(entry: AuditEntry): void {
   // a bypass of a decision this deployment wanted made, and folding it into
   // `proceeds` would inflate the one number an operator reads to decide
   // whether the Guardian is healthy. It still prints above -- the badge
-  // summarises the posture, the stream is where the skips are visible.
+  // summarises the posture, the stream is where the skips are visible. An
+  // unenforced line moves its own count, not `proceeds`: it is not a
+  // fail-open, and the agent still received the output (#568).
   const next: PostureBadgeState =
     entry.outcome === "ungoverned"
       ? badgeState
-      : { posture: entry.posture, proceeds: badgeState.proceeds + (entry.outcome === "proceeded" ? 1 : 0) };
-  if (next.posture !== badgeState.posture || next.proceeds !== badgeState.proceeds) {
+      : {
+          posture: entry.posture,
+          proceeds: badgeState.proceeds + (entry.outcome === "proceeded" ? 1 : 0),
+          unenforced: badgeState.unenforced + (entry.outcome === "unenforced" ? 1 : 0),
+        };
+  if (
+    next.posture !== badgeState.posture ||
+    next.proceeds !== badgeState.proceeds ||
+    next.unenforced !== badgeState.unenforced
+  ) {
     badgeState = next;
     console.log(renderPostureBadge(badgeState, { color }));
     console.log("");
