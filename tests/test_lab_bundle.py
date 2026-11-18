@@ -350,3 +350,135 @@ def test_viewer_command_matches_lab_13():
     text = server.read_text(encoding="utf-8")
     for needle in ('"--host"', '"--port"', "ACS_TRANSCRIPT_DIR", "ACS_AUDIT_FILE", "ACS_GUARDIAN_KEYS"):
         assert needle in text, needle
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# .github/workflows/labs-images.yml and labs.yml (Tasks 6 and 7)
+# ---------------------------------------------------------------------------------------------------------------------
+
+WORKFLOWS = ROOT / ".github" / "workflows"
+IMAGES_WORKFLOW = WORKFLOWS / "labs-images.yml"
+LABS_WORKFLOW = WORKFLOWS / "labs.yml"
+PINNED_USES = re.compile(r"^\s*(?:-\s*)?uses:\s*[\w.-]+/[\w./-]+@[0-9a-f]{40}\s+#\s*v\d")
+
+
+def _workflow(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _steps(job: dict) -> list[dict]:
+    return job.get("steps", [])
+
+
+def _check_hygiene(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if re.match(r"^\s*(?:-\s*)?uses:", line):
+            assert PINNED_USES.match(line), f"{path.name}: {line.strip()}"
+    workflow = _workflow(path)
+    assert workflow["permissions"] == {}
+    for name, job in workflow["jobs"].items():
+        assert "permissions" in job, f"{path.name} {name} grants its own permissions"
+        for step in _steps(job):
+            assert "${{" not in step.get("run", ""), f"{path.name} {name}: {step.get('name')}"
+            if step.get("uses", "").startswith("actions/checkout@"):
+                assert step["with"]["persist-credentials"] is False, f"{path.name} {name}"
+
+
+def test_images_workflow_pins_and_scopes():
+    _check_hygiene(IMAGES_WORKFLOW)
+    workflow = _workflow(IMAGES_WORKFLOW)
+    # PyYAML reads the key `on` as True.
+    trigger = workflow[True]
+    assert trigger["push"]["branches"] == ["refimpl/acs-lab-2026-12-09"]
+    assert trigger["push"]["tags"] == ["acs-lab-*"]
+    assert set(workflow["jobs"]) == {"publish"}
+    job = workflow["jobs"]["publish"]
+    assert job["permissions"] == {"contents": "read", "packages": "write"}
+    builds = [s for s in _steps(job) if s.get("uses", "").startswith("docker/build-push-action@")]
+    assert len(builds) == 2
+    names = set()
+    for step in builds:
+        args = step["with"]
+        assert args["platforms"] == "linux/amd64,linux/arm64"
+        assert "push-by-digest=true" in args["outputs"] and "push=true" in args["outputs"]
+        names.add(re.search(r"name=([^,]+)", args["outputs"]).group(1))
+    assert names == set(LAB_IMAGES.values())
+    runtime, finbot = sorted(builds, key=lambda s: "finbot" in s["with"]["outputs"])
+    assert runtime["with"]["file"] == "labs/finbot/images/acs.Dockerfile" and runtime["with"]["context"] == "."
+    compose_finbot = _services()["finbot"]["build"]
+    assert finbot["with"]["context"] == compose_finbot["context"]
+    assert finbot["with"]["target"] == compose_finbot["target"]
+    contexts = dict(line.split("=", 1) for line in finbot["with"]["build-contexts"].split())
+    assert contexts == compose_finbot["additional_contexts"]
+
+
+def test_only_the_publish_job_writes_packages():
+    for path in (IMAGES_WORKFLOW, LABS_WORKFLOW):
+        for name, job in _workflow(path)["jobs"].items():
+            if (path, name) != (IMAGES_WORKFLOW, "publish"):
+                assert "packages" not in job["permissions"], f"{path.name} {name}"
+
+
+def test_labs_workflow_shape():
+    _check_hygiene(LABS_WORKFLOW)
+    workflow = _workflow(LABS_WORKFLOW)
+    trigger = workflow[True]
+    for event in ("push", "pull_request"):
+        assert set(trigger[event]["paths"]) == {"labs/**", "adapters/**", ".github/workflows/labs.yml"}
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"policy", "compose", "cli", "viewer", "images", "smoke"}
+    for name, job in jobs.items():
+        assert job["permissions"] == {"contents": "read"}, name
+    # Rock 2026-11-17: macOS and Linux only, so no windows leg.
+    assert jobs["cli"]["strategy"]["matrix"]["os"] == ["ubuntu-latest", "macos-latest"]
+    assert "windows" not in LABS_WORKFLOW.read_text(encoding="utf-8").lower()
+    assert jobs["smoke"]["needs"] == "images"
+
+
+def _runs(job: dict) -> str:
+    return "\n".join(step.get("run", "") for step in _steps(job))
+
+
+def test_policy_job_runs_every_lab_12_check_on_the_compose_opa_version():
+    job = _workflow(LABS_WORKFLOW)["jobs"]["policy"]
+    runs = _runs(job)
+    assert "python3 labs/finbot/policy/tools/check_pack.py --opa" in runs
+    assert "uv run --project adapters --locked python labs/finbot/policy/tools/check_pack.py --opa" in runs
+    assert "--verdicts" in runs
+    # LAB-12's interface pins need the gateway environment, or they never run in CI.
+    assert ("uv run --project adapters/gateway --locked python -m pytest labs/finbot/policy/tools/test_pins.py"
+            in runs)
+    env = {k: str(v) for step in _steps(job) for k, v in step.get("env", {}).items()}
+    opa_tag = _services()["opa"]["image"].split("@")[0].split(":")[1]
+    assert env["OPA_VERSION"] == opa_tag
+    assert re.fullmatch(r"[0-9a-f]{64}", env["OPA_SHA256"])
+    assert "sha256sum -c" in runs
+
+
+def test_compose_job_checks_every_combination():
+    runs = _runs(_workflow(LABS_WORKFLOW)["jobs"]["compose"])
+    assert "docker compose -f compose.yaml config --quiet" in runs
+    assert "docker compose -f compose.yaml --profile traces --profile cli config --quiet" in runs
+    assert "docker compose -f compose.yaml -f compose.openai.yaml config --quiet" in runs
+
+
+def test_cli_viewer_and_images_jobs_run_their_suites():
+    jobs = _workflow(LABS_WORKFLOW)["jobs"]
+    assert "python -m pytest labs/finbot/cli/tests -v" in _runs(jobs["cli"])
+    assert ("uv run --project adapters --locked --extra pqc python -m pytest labs/finbot/viewer/tests -v"
+            in _runs(jobs["viewer"]))
+    images = jobs["images"]
+    assert "python -m pytest labs/finbot/images/tests -v" in _runs(images)
+    assert any(step.get("env", {}).get("LAB_REQUIRE_DOCKER") == "1" for step in _steps(images))
+
+
+def test_smoke_job_runs_the_bundle_with_no_model_key():
+    job = _workflow(LABS_WORKFLOW)["jobs"]["smoke"]
+    runs = _runs(job)
+    for command in ("./lab.sh init", "./lab.sh up", "./images/smoke.sh"):
+        assert command in runs, command
+    text = yaml.safe_dump(job)
+    assert "OPENAI" not in text.upper().replace("COMPOSE.OPENAI", "")
+    teardown = [s for s in _steps(job) if "./lab.sh down" in s.get("run", "")]
+    assert teardown and teardown[0].get("if") == "always()"
