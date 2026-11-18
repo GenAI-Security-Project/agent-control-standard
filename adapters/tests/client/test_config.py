@@ -112,6 +112,7 @@ class FailureClasses(unittest.TestCase):
         table = {
             "decision_timeout": "timeout", "transport_failure": "unreachable",
             "malformed_response": "malformed_response", "response_binding_mismatch": "malformed_response",
+            "response_shape_invalid": "malformed_response",
             "response_signature_invalid": "signature_invalid", "error_signature_invalid": "signature_invalid",
             "response_unverifiable": "signature_invalid",
             "internal_error_response": "guardian_error", "replay_detected_response": "guardian_error",

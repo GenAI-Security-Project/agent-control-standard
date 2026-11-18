@@ -26,7 +26,7 @@ def failure_class(cause: str) -> str:
         return "timeout"
     if cause == "transport_failure":
         return "unreachable"
-    if cause in ("malformed_response", "response_binding_mismatch"):
+    if cause in ("malformed_response", "response_binding_mismatch", "response_shape_invalid"):
         return "malformed_response"
     if cause in _SIGNATURE_CAUSES:
         return "signature_invalid"

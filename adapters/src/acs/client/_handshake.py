@@ -17,7 +17,7 @@ from typing import Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import GuardianHTTPError, key_id_rejected, post
+from acs.client._exchange import GuardianHTTPError, claims_json_rpc_answer, key_id_rejected, post
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
@@ -305,6 +305,9 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
     # applies, as for a transport failure. A request or id problem refuses the session.
     binding = response_binding_problem(client_hello, response)
     if binding == BINDING_SHAPE:
+        # As in a step: a JSON-RPC answer rejected only for its members may be a signed answer someone altered.
+        if claims_json_rpc_answer(response):
+            return SessionRefused("response_shape_invalid")
         return NoAnswer("malformed_response")
     # A request problem can come with any response at all, so read the claimed code defensively.
     error = response.get("error") if isinstance(response, Mapping) else None

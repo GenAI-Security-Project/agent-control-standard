@@ -369,6 +369,14 @@ def key_id_rejected(error: Any) -> bool:
     return isinstance(error, dict) and error.get("code") == -32004 and "signature" not in error
 
 
+def claims_json_rpc_answer(body: Any) -> bool:
+    """A JSON-RPC 2.0 object whose result or error, each present one, is an object: the shape accepted before the binding rule."""
+    if not isinstance(body, Mapping) or body.get("jsonrpc") != "2.0":
+        return False
+    members = [body[k] for k in ("result", "error") if k in body]
+    return bool(members) and all(isinstance(m, Mapping) for m in members)
+
+
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
     """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
     # The one binding rule decides. A request it can't accept is the caller's error, so nothing
@@ -381,8 +389,13 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
     params = params if isinstance(params, Mapping) else {}
     method, request_id = request.get("method"), params.get("request_id")
     # A malformed response is undecided, so the fail posture applies, as for a transport
-    # failure. Any other reason refuses the step.
+    # failure. Any other reason refuses the step. A JSON-RPC answer the rule rejects only for a
+    # method or for carrying both members is refused, since its signature is never checked and
+    # altering a signed answer this way must not let an attacker choose the fail posture.
     if binding == BINDING_SHAPE:
+        if claims_json_rpc_answer(response):
+            return Refused("response_shape_invalid", {"request_id": request_id, "method": method},
+                           "Guardian response is a JSON-RPC answer with a method or with both a result and an error")
         return Undecided("malformed_response", {"request_id": request_id, "method": method},
                          "Guardian response is not a JSON-RPC 2.0 response with exactly one object result or "
                          "error and no method")

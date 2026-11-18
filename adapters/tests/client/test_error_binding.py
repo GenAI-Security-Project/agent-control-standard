@@ -75,10 +75,10 @@ class TheStepExchangeUsesTheOneRule(unittest.TestCase):
         self.assertEqual((type(outcome), outcome.cause), (Refused, "request_envelope_invalid"))
         self.assertEqual(failure_class(outcome.cause), "observed_agent_error")
 
-    def test_a_response_carrying_method_is_malformed(self) -> None:
+    def test_a_json_rpc_answer_carrying_method_is_refused(self) -> None:
         response = {**_signed_error(-32000), "method": "steps/toolCallRequest"}
         outcome = _exchange.classify_response(_request({"request_id": "req-1"}), response, session_id=SESSION)
-        self.assertEqual(outcome.cause, "malformed_response")
+        self.assertEqual((type(outcome), outcome.cause), (Refused, "response_shape_invalid"))
 
 
 class OneShapeRule(unittest.TestCase):
