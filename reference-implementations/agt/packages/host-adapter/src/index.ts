@@ -82,6 +82,14 @@ export {
   type CreateFileSessionConfigStoreOptions,
 } from "./session-config.ts";
 export {
+  createMemoryAppliedRequestStore,
+  createFileAppliedRequestStore,
+  appliedRequestPath,
+  InvalidRequestIdError,
+  type AppliedRequestStore,
+  type CreateFileAppliedRequestStoreOptions,
+} from "./applied-request-store.ts";
+export {
   createAuditSink,
   NULL_AUDIT_SINK,
   type AuditEntry,
