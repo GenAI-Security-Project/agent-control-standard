@@ -69,7 +69,7 @@ not `http` or `https`. Called from `acs.client.exchange` (every
 step's round trip), `open_session` and `ping`. The step and handshake
 exchanges do not follow redirects, so a response cannot send the
 request to a host the check never saw; a redirect status is a
-decision failure under the posture.
+refusal, which blocks the step whatever the posture.
 *Test:* `GuardianUrlSchemeAllowlist`: `file`, `ftp`, `data` and
 `javascript` rejected, `http` and `https` accepted.
 

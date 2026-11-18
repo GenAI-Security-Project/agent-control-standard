@@ -800,7 +800,7 @@ class SessionGateThroughHooks(unittest.TestCase):
         for host, run in (("claude-code", self._claude), ("cursor", self._cursor)):
             for name, result, deny, denied in (
                     ("unknown decision under fail-open", {"decision": "maybe", "reasoning": "x"}, "0", True),
-                    ("allow without type under fail-open", {"decision": "allow"}, "0", False),
+                    ("allow without type under fail-open", {"decision": "allow"}, "0", True),
                     ("allow without type under fail-closed", {"decision": "allow"}, "1", True)):
                 with self.subTest(host, case=name):
                     guardian = ProgrammableGuardian(hmac_secret=SECRET)

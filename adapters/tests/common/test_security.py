@@ -394,17 +394,16 @@ class Item16_ResponseRequestBinding(unittest.TestCase):
 
 
 class Item17_GuardianRefusalClassification(unittest.TestCase):
-    """Refusals are attacker-reachable, so they fail closed under either posture (issue #32)."""
+    """§6.4: every signed error but -32603 is a refusal, which blocks the step under either posture."""
 
     def test_refusal_codes(self) -> None:
-        for code in (-32000, -32004, -32005, -32006, -32600, -32700):
+        for code in (-32000, -32001, -32002, -32003, -32004, -32005, -32006, -32007, -32600, -32601, -32602,
+                     -32700, -32099, 500, None):
             with self.subTest(code=code):
                 self.assertTrue(core.is_guardian_refusal(code))
 
-    def test_non_refusal_codes_follow_posture(self) -> None:
-        """Version/negotiation errors and unknowns are decision
-        failures, not refusals — they follow the §6.4 posture."""
-        for code in (None, -32001, -32002, -32003, -32099, 500):
+    def test_only_internal_error_follows_posture(self) -> None:
+        for code in (-32603, -32603.0):
             with self.subTest(code=code):
                 self.assertFalse(core.is_guardian_refusal(code))
 

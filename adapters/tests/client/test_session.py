@@ -74,8 +74,15 @@ CASES = [
     ("SIGNATURE_INVALID", _answer(lambda h: _error(h, -32004)), SessionRefused, "signature_invalid_response"),
     ("SESSION_REFUSED under HTTP 403", _answer(lambda h: _error(h, -32000), 403),
      SessionRefused, "session_refused_response"),
+    ("signed ServerHello under HTTP 429", _answer(lambda h: _result(h, HELLO), 429), SessionRefused, "http_429_refusal"),
+    ("signed internal error under HTTP 400", _answer(lambda h: _error(h, -32603), 400),
+     SessionRefused, "http_400_refusal"),
+    ("signed internal error under HTTP 503", _answer(lambda h: _error(h, -32603), 503),
+     NoAnswer, "internal_error_response"),
     ("signed internal error", _answer(lambda h: _error(h, -32603)), NoAnswer, "internal_error_response"),
-    ("signed method not found", _answer(lambda h: _error(h, -32601)), NoAnswer, "method_not_found_response"),
+    ("signed method not found", _answer(lambda h: _error(h, -32601)), SessionRefused, "method_not_found_response"),
+    ("signed error with an unregistered code", _answer(lambda h: _error(h, -32050)),
+     SessionRefused, "guardian_error_response"),
     ("unsigned SESSION_REFUSED", _answer(lambda h: _error(h, -32000, sign=False)),
      SessionRefused, "error_signature_invalid"),
     ("forged ServerHello", _answer(lambda h: _forged_hello(h)), SessionRefused, "server_hello_signature_invalid"),
@@ -84,13 +91,27 @@ CASES = [
     ("signed error for another request", _answer(lambda h: _error(h, -32603, rpc_id="other")),
      SessionRefused, "response_binding_mismatch"),
     ("signed result that is not a ServerHello", _answer(lambda h: _result(h, {"decision": "allow"})),
-     NoAnswer, "invalid_server_hello"),
+     SessionRefused, "invalid_server_hello"),
     ("connection refused", _raises(urllib.error.URLError(ConnectionRefusedError(61, "refused"))),
      NoAnswer, "transport_failure"),
     ("timeout", _raises(TimeoutError("timed out")), NoAnswer, "handshake_timeout"),
     ("bare HTTP 503", _answer(lambda h: b"", 503), NoAnswer, "http_503_error"),
-    ("non-JSON-RPC HTTP 400", _answer(lambda h: {"error": "Bad Request"}, 400), NoAnswer, "http_400_error"),
-    ("body that is not JSON", _answer(lambda h: b"<html>"), NoAnswer, "malformed_response"),
+    ("bare HTTP 408", _answer(lambda h: b"", 408), NoAnswer, "http_408_error"),
+    ("bare HTTP 429", _answer(lambda h: b"", 429), SessionRefused, "http_429_refusal"),
+    ("non-JSON-RPC HTTP 400", _answer(lambda h: {"error": "Bad Request"}, 400), SessionRefused, "http_400_refusal"),
+    ("body that is not JSON", _answer(lambda h: b"<html>"), SessionRefused, "malformed_response"),
+    ("JSON nested past the parser's depth", _answer(lambda h: b"[" * 100000 + b"]" * 100000),
+     SessionRefused, "malformed_response"),
+    ("signed internal error without a message", _answer(lambda h: _signed(
+        {"jsonrpc": "2.0", "id": h["id"], "error": {"code": -32603}}, h["params"]["metadata"]["session_id"])),
+     SessionRefused, "malformed_response"),
+    ("signed ServerHello that is also an AcsResult", _answer(lambda h: _result(h, {
+        **HELLO, "type": "final", "acs_version": "0.1.0", "request_id": "11111111-1111-4111-8111-111111111111",
+        "decision": "allow"})), SessionRefused, "malformed_response"),
+    ("signed ServerHello with a member the envelope does not define", _answer(lambda h: _signed(
+        {"jsonrpc": "2.0", "id": h["id"], "result": dict(HELLO), "extension": True}, h["params"]["metadata"]["session_id"])),
+     SessionRefused, "malformed_response"),
+    ("JSON that is not a JSON-RPC response", _answer(lambda h: {"detail": "ok"}), SessionRefused, "malformed_response"),
     ("unexpected exception", _raises(RuntimeError("boom")), NoAnswer, "adapter_exception"),
 ]
 
@@ -132,6 +153,9 @@ class Classification(_SessionTest):
                 self.assertIsInstance(decision, kind)
                 if cause is not None:
                     self.assertEqual(decision.cause, cause)
+                gate = Config.from_env({"ACS_STARTUP_POSTURE": "proceed"}).gate(decision)
+                self.assertEqual(gate is None or gate.proceed, kind is not SessionRefused,
+                                 "§4.1: a refusal does not start the session whatever the startup posture")
 
     def test_a_verifier_that_raises_refuses_the_session(self) -> None:
         with mock.patch.object(_handshake, "verify_signature", side_effect=RuntimeError("verifier bug")):
@@ -165,18 +189,21 @@ class Negotiation(_SessionTest):
         hello = {**HELLO, **change}
         return _answer(lambda h: _result(h, {k: v for k, v in hello.items() if v is not None}))
 
-    def test_a_server_hello_that_does_not_answer_the_client_hello_negotiates_nothing(self) -> None:
+    def test_a_server_hello_that_does_not_answer_the_client_hello_refuses_the_session(self) -> None:
         cases = {"another major version": {"negotiated_version": "1.0.0"},
                  "transport not offered": {"selected_transport": "stdio"},
                  "profile not claimed": {"profiles_accepted": ["acs-core", "acs-trace"]},
                  "posture in another case": {"on_decision_failure": "Deny"},
                  "no default timeout": {"timeout_config": {"per_method_ms": {}}},
-                 "no methods_evaluated": {"methods_evaluated": None}}
+                 "no methods_evaluated": {"methods_evaluated": None},
+                 "negative skew window": {"skew_window_ms": -1},
+                 "signature algorithms not a list": {"signature_algorithms_supported": "HMAC-SHA256"},
+                 "provenance flag not a boolean": {"policy_requires_provenance": "yes"}}
         for i, (name, change) in enumerate(cases.items()):
             with self.subTest(name):
                 decision, calls = self._open(self._hello(**change), session_id=f"invalid-{i}")
                 self.assertEqual(calls, 1)
-                self.assertIsInstance(decision, NoAnswer)
+                self.assertIsInstance(decision, SessionRefused)
                 self.assertEqual(decision.cause, "invalid_server_hello")
                 self.assertIn("problem", decision.fields)
 

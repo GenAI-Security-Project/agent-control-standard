@@ -1132,7 +1132,7 @@ class ACSMiddleware(FunctionMiddleware):  # type: ignore[misc, valid-type]
                                               "method": "steps/toolCallRequest"})
         if resolution.proceed:
             return None
-        return self._block(context, message or resolution.message or resolution.cause)
+        return self._block(context, message or f"{resolution.label} ({resolution.cause})")
 
     def _settle_post(self, context, resolution: Resolution, step: _Step):
         """Withhold the unvetted output unless the resolution proceeds, and record why."""
