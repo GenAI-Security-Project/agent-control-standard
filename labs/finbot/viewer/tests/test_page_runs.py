@@ -37,12 +37,20 @@ def run(*extra: str) -> dict:
 
 
 def test_an_open_page_shows_the_restarted_servers_marks():
+    # Server B holds one row under a new id, so only that row may be on the page (final review R13).
     seen = run()
     assert seen["onA"] == [["echo", "allow", "verified"], ["rm", "deny", "verified"]]
-    assert seen["onB"] == [["echo", "allow", "not checked"], ["rm", "DENY", "failed"]]
+    assert seen["onB"] == [["rm", "DENY", "failed"]]
 
 
 def test_the_harness_catches_a_page_without_the_reset():
     # The same run with the instance check taken out keeps server A's verified marks, the stale view R5 fixed.
     seen = run("--without-reset")
     assert seen["onB"] == [["echo", "allow", "verified"], ["rm", "deny", "verified"]]
+
+
+def test_the_harness_catches_a_reset_that_keeps_the_old_rows():
+    # Review m-1: a reset that redraws but keeps A's rows still shows A's verified marks beside B's row.
+    seen = run("--keep-rows")
+    assert ["rm", "deny", "verified"] in seen["onB"]
+    assert seen["onB"] != [["rm", "DENY", "failed"]]

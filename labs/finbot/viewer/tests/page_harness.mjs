@@ -2,16 +2,21 @@
 //
 //   bun --no-install page_harness.mjs <app.js> [--without-reset]
 //
-// Server A shows rm deny verified. The viewer then restarts as server B, which judged an in-place edit while A was
-// down: rm DENY failed. The page must drop A's rows and show B's. --without-reset removes the page's instance check,
-// so the test can show that the harness catches the stale view. Prints one JSON object. Only node: builtins, so
-// nothing is fetched or installed.
+// Server A shows echo allow and rm deny, both verified. The viewer then restarts as server B, which judged an
+// in-place edit while A was down and holds one row under a new id: rm DENY failed. The page must drop both of A's
+// rows and show only B's. Two mutations show the harness catches a broken reset: --without-reset removes the
+// instance check, and --keep-rows keeps the old rows through the reset. Prints one JSON object. Only node: builtins,
+// so nothing is fetched or installed.
 import fs from "node:fs";
 import vm from "node:vm";
 
 let src = fs.readFileSync(process.argv[2], "utf8");
 if (process.argv.includes("--without-reset")) {
   src = src.replace("if (instance !== data.instance) {", "if (false) {");
+}
+if (process.argv.includes("--keep-rows")) {
+  src = src.replace("for (const group of groups.values()) group.remove();", "")
+    .replace("groups.clear();", "");
 }
 
 class El {
@@ -55,11 +60,12 @@ const row = (id, seq, tool, decision, verify) => ({
   algorithm: "ML-DSA-65", verify, note: null, beat: null,
 });
 
-// B reuses A's ids and seqs, as a restarted viewer does, which is what hid the new marks before R5.
+// B has fewer rows than A, under an id A never used, and lower seqs, as a restarted viewer has. A reset that kept
+// any of A's rows would leave a verified mark B never gave (final review R13).
 const servers = {
-  A: { instance: "a".repeat(32), rows: [row(1, 3, "echo", "allow", "verified"), row(2, 4, "rm", "deny", "verified")] },
-  B: { instance: "b".repeat(32),
-       rows: [row(1, 3, "echo", "allow", "not_checked"), row(2, 4, "rm", "DENY", "failed")] },
+  A: { instance: "a".repeat(32), last: 4,
+       rows: [row(1, 3, "echo", "allow", "verified"), row(2, 4, "rm", "deny", "verified")] },
+  B: { instance: "b".repeat(32), last: 2, rows: [row(5, 2, "rm", "DENY", "failed")] },
 };
 let current = "A";
 
@@ -71,7 +77,7 @@ async function fetch(url) {
     ok: true,
     status: 200,
     json: async () => ({
-      rows, next: 4, more: false, no_record: false, no_record_text: "no ACS record", paint: false,
+      rows, next: server.last, more: false, no_record: false, no_record_text: "no ACS record", paint: false,
       dropped: [], dropped_total: 0, paused: null, instance: server.instance,
     }),
   };
