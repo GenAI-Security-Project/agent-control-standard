@@ -447,8 +447,8 @@ def test_policy_job_runs_every_lab_12_check_on_the_compose_opa_version():
     assert "uv run --project adapters --locked python labs/finbot/policy/tools/check_pack.py --opa" in runs
     assert "--verdicts" in runs
     # LAB-12's interface pins need the gateway environment, or they never run in CI.
-    assert ("uv run --project adapters/gateway --locked python -m pytest labs/finbot/policy/tools/test_pins.py"
-            in runs)
+    assert ("uv run --project adapters/gateway --locked --group test python -m pytest "
+            "labs/finbot/policy/tools/test_pins.py -v") in runs
     env = {k: str(v) for step in _steps(job) for k, v in step.get("env", {}).items()}
     opa_tag = _services()["opa"]["image"].split("@")[0].split(":")[1]
     assert env["OPA_VERSION"] == opa_tag

@@ -32,7 +32,7 @@ defaults:
 jobs:
   policy:
     # LAB-12's pack against real OPA, at the version compose.yaml runs, plus its interface pins in the gateway's
-    # environment.
+    # environment. The pins install the test group by name, so pytest is there whatever the gateway's default groups.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -61,7 +61,7 @@ jobs:
       - name: Check every fixture's verdict against the Guardian's validator
         run: uv run --project adapters --locked python labs/finbot/policy/tools/check_pack.py --opa ./opa --verdicts
       - name: Run the pack's interface pins against the gateway
-        run: uv run --project adapters/gateway --locked python -m pytest labs/finbot/policy/tools/test_pins.py -v
+        run: uv run --project adapters/gateway --locked --group test python -m pytest labs/finbot/policy/tools/test_pins.py -v
 
   compose:
     runs-on: ubuntu-latest
