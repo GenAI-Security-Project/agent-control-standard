@@ -42,6 +42,14 @@ main {
   padding: 0 1rem 1rem;
 }
 
+.paused {
+  margin: 0.6rem 0 0;
+  padding: 0.3rem 0.5rem;
+  background: #a3141b;
+  color: #ffffff;
+  font-weight: 700;
+}
+
 .empty {
   margin: 1.5rem 0;
   font-size: 2rem;

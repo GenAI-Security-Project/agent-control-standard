@@ -36,6 +36,7 @@ import json
 import os
 import re
 import stat
+import sys
 import time
 import unicodedata
 from collections.abc import Mapping
@@ -93,6 +94,7 @@ DROP_LEFT = "the file left the transcript directory"
 DROP_UNLISTED = "the file is no longer among the newest followed"
 DROP_REPLACED = "the file was replaced or cut shorter, so it is read again"
 DROP_EDITED = "the file no longer holds the bytes read before, so it is read again"
+DROP_AUDIT = "the audit log was replaced or cut shorter, so it is read again"
 # Drops the page can name. The newest win.
 MAX_DROPS = 20
 # The gateway names each transcript str(uuid.UUID(session_id)), so a drop names a file only when its stem has that
@@ -378,6 +380,8 @@ class _Session:
     # The line and session_id of the first request naming a session, checked against the file's name (M2).
     named: tuple[int, str] | None = None
     dirty: bool = False
+    # Set when this poll's read of the session failed, so it isn't judged until a read succeeds.
+    failed: bool = False
     judged_with: int = -1
     judged_at: float = 0.0
 
@@ -418,40 +422,114 @@ class Model:
         self._drops: collections.deque[dict[str, str]] = collections.deque(maxlen=MAX_DROPS)
         # Every drop since the viewer started, so the page can count those since it loaded (round 5, M-C).
         self.drop_count = 0
+        # Why the last poll failed as a whole, escaped, or None while polls succeed (final review R1).
+        self.paused: str | None = None
+        self._audit_restarts = 0
 
     # Reading
 
     def refresh(self) -> None:
+        """Read what the logs gained and judge what changed, failing closed (final review R1).
+
+        Each session, the audit log and each result file is read in a step of its own, so one that fails affects
+        only itself and every other session is still judged that poll. If the poll fails as a whole, every mark drops
+        to not checked and paused says why, until a poll succeeds.
+        """
+        try:
+            self._refresh()
+        except Exception as e:  # noqa: BLE001
+            self.fail_closed(e)
+        else:
+            self.paused = None
+
+    def fail_closed(self, error: BaseException) -> None:
+        """Drop every mark to not checked and say why, so no mark stands that this poll couldn't check."""
+        reason = f"checks paused: {type(error).__name__}: {error}"
+        # paused goes to the page as it is, so it is escaped here. The row note is escaped on its way out.
+        self.paused = _clip(escape_text(reason))
+        for row in list(self._rows.values()):
+            if not row.gone and row.verify in ("verified", "warning", "failed"):
+                row.verify, row.check_note = "not_checked", _clip(reason)
+                self._touch(row)
+        for session in self._sessions.values():
+            # Judged again in full at the next poll that succeeds.
+            session.dirty, session.judged_with = True, -1
+
+    def _refresh(self) -> None:
         listed = self._transcript_files()
-        names = {path.stem for path in listed}
-        for session in [s for s in self._sessions.values() if s.session_id not in names]:
+        names = {path.stem for path in listed} if listed is not None else None
+        for session in [s for s in self._sessions.values() if names is not None and s.session_id not in names]:
             # A file no longer listed, deleted or past the newest MAX_SESSIONS, is no longer stat'ed or judged, so
             # its rows go from the table and the beat history rather than keep marks nothing checks (round 4, I-2a).
+            # A listing that failed as a whole forgets nothing.
             gone = not os.path.lexists(session.tail.path)
             self._forget(session, DROP_LEFT if gone else DROP_UNLISTED)
-        for path in listed:
+        for path in listed or []:
             session = self._sessions.get(path.stem)
             if session is None:
                 session = self._sessions[path.stem] = _Session(path.stem, LogTail(path))
             try:
-                info = os.stat(path, follow_symlinks=False)
-                stamp = (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-            except OSError:
-                stamp = None
-            if stamp != session.stamp:
-                session.stamp, session.dirty = stamp, True
-            if session.too_long:
-                # Past the cap the tail stops and nothing is read or hashed again, so the session costs one stat a
-                # poll however large the file grows (round 4, I-1). A replaced or shortened file starts over.
-                if stamp is None or not session.tail.outgrown(stamp[0], stamp[1]):
-                    continue
-                self._start_over(session, DROP_REPLACED)
-            self._read_session(session)
+                self._poll_session(session, path)
+            except Exception as e:  # noqa: BLE001
+                self._session_failed(session, e)
         if self.audit_tail is not None:
-            for raw in self.audit_tail.read_new():
-                self._audit_line(raw)
+            try:
+                self._read_audit()
+            except Exception as e:  # noqa: BLE001
+                # The audit log fills the applied column and its own rows, never a verify mark, so a failure here
+                # stops only that.
+                sys.stderr.write(f"acs-viewer: reading the audit log failed: {escape_text(type(e).__name__)}\n")
         self._read_results()
         self._judge()
+
+    def _poll_session(self, session: _Session, path: Path) -> None:
+        session.failed = False
+        try:
+            info = os.stat(path, follow_symlinks=False)
+            stamp = (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        except OSError:
+            stamp = None
+        if stamp != session.stamp:
+            session.stamp, session.dirty = stamp, True
+        if session.too_long:
+            # Past the cap the tail stops and nothing is read or hashed again, so the session costs one stat a
+            # poll however large the file grows (round 4, I-1). A replaced or shortened file starts over.
+            if stamp is None or not session.tail.outgrown(stamp[0], stamp[1]):
+                return
+            self._start_over(session, DROP_REPLACED)
+        self._read_session(session)
+
+    def _session_failed(self, session: _Session, error: BaseException) -> None:
+        """One session failed to read or judge. Its marks drop to not checked, and it is judged again next poll."""
+        note = _clip(f"checks paused for this file: {type(error).__name__}: {error}")
+        for row in session.rows:
+            if row.id in self._rows and not row.gone and row.verify in ("verified", "warning", "failed"):
+                row.verify, row.check_note = "not_checked", note
+                self._touch(row)
+        # Not judged again this poll, since what it gained is unknown. The next poll reads and judges it afresh.
+        session.dirty, session.failed = True, True
+
+    def _read_audit(self) -> None:
+        assert self.audit_tail is not None
+        raws = self.audit_tail.read_new()
+        if self.audit_tail.restarts != self._audit_restarts:
+            # Replaced or cut shorter: drop the rows the old log made and read it again once (final review M-3).
+            self._audit_restarts = self.audit_tail.restarts
+            self._drop_audit_rows()
+        for raw in raws:
+            self._audit_line(raw)
+
+    def _drop_audit_rows(self) -> None:
+        dropped = False
+        for row in list(self._rows.values()):
+            if row.source == "audit" and not row.gone:
+                self._gone(row)
+                dropped = True
+        self._epoch_at, self._audit_unreadable = None, None
+        self._waiting.clear()
+        if dropped:
+            self._drops.append({"t": receipt_time(), "session_id": "", "why": DROP_AUDIT, "source": "audit"})
+            self.drop_count += 1
 
     def rows_after(self, seq: int) -> list[Row]:
         """Every row still held that is new or changed after seq, oldest change first, escaped once."""
@@ -522,7 +600,8 @@ class Model:
                 dropped = True
         self._history.forget(session.session_id)
         if dropped:
-            self._drops.append({"t": receipt_time(), "session_id": session.session_id, "why": why})
+            self._drops.append({"t": receipt_time(), "session_id": session.session_id, "why": why,
+                                "source": "transcript"})
             self.drop_count += 1
 
     def drops(self) -> list[dict[str, str | None]]:
@@ -531,7 +610,7 @@ class Model:
         out: list[dict[str, str | None]] = []
         for drop in self._drops:
             named = drop["session_id"] if _SESSION_FILE.fullmatch(drop["session_id"]) else None
-            out.append({"t": drop["t"], "session_id": named, "why": escape_text(drop["why"])})
+            out.append({"t": drop["t"], "session_id": named, "why": escape_text(drop["why"]), "source": drop["source"]})
         return out
 
     def _forget(self, session: _Session, why: str) -> None:
@@ -542,14 +621,20 @@ class Model:
         row.gone = True
         self._touch(row)
 
-    def _transcript_files(self) -> list[Path]:
+    def _transcript_files(self) -> list[Path] | None:
+        """The newest MAX_SESSIONS transcript files, or None when the directory can't be listed. A file that goes
+        between the listing and its stat is skipped alone, so it never empties the listing (final review M-1)."""
         try:
-            found = []
-            for entry in os.scandir(self.transcript_dir):
+            entries = list(os.scandir(self.transcript_dir))
+        except OSError:
+            return None
+        found = []
+        for entry in entries:
+            try:
                 if entry.name.endswith(".jsonl") and entry.is_file(follow_symlinks=False):
                     found.append((entry.stat(follow_symlinks=False).st_mtime_ns, entry.name))
-        except OSError:
-            return []
+            except OSError:
+                continue
         newest = sorted(found, reverse=True)[:MAX_SESSIONS]
         return [self.transcript_dir / name for _, name in sorted(newest, key=lambda item: item[1])]
 
@@ -728,14 +813,18 @@ class Model:
                         row.verify, row.check_note = "not_checked", REJUDGE_NOTE
                         self._touch(row)
         self._generation_seen = generation
-        waiting = sorted((s for s in self._sessions.values() if s.dirty or s.judged_with != generation),
+        waiting = sorted((s for s in self._sessions.values()
+                          if (s.dirty or s.judged_with != generation) and not s.failed),
                          key=lambda s: s.judged_at)
         started = time.monotonic()
         for number, session in enumerate(waiting):
             if number and time.monotonic() - started >= JUDGE_BUDGET_S:
                 break
             session.dirty, session.judged_with, session.judged_at = False, generation, time.monotonic()
-            self._judge_session(session, keys)
+            try:
+                self._judge_session(session, keys)
+            except Exception as e:  # noqa: BLE001
+                self._session_failed(session, e)
 
     def _judge_session(self, session: _Session, keys: Any | None) -> None:
         from verify import verify_session
@@ -901,16 +990,28 @@ class Model:
     # The module 7 result files
 
     def _read_results(self) -> None:
-        for name, key, record in self._beats.result_files(self.verify_dir):
-            known = self._results.get(name)
-            if known is not None and known[0] == key:
+        try:
+            results = self._beats.result_files(self.verify_dir)
+        except Exception:  # noqa: BLE001
+            # The result files make module 7 rows only, never a verify mark, so a failed listing skips them alone.
+            return
+        for name, key, record in results:
+            try:
+                self._read_result(name, key, record)
+            except (ValueError, OverflowError, OSError):
+                # One result file the viewer can't use, such as an mtime past year 9999, skips that file alone.
                 continue
-            fresh = self._beats.result_row(record, key[0])
-            if known is None or known[1].id not in self._rows:
-                self._results[name] = (key, self._add(fresh))
-                continue
-            row = known[1]
-            for field in ("t", "decision", "algorithm", "note", "kind"):
-                setattr(row, field, getattr(fresh, field))
-            self._results[name] = (key, row)
-            self._touch(row)
+
+    def _read_result(self, name: str, key: tuple[int, int], record: dict[str, Any]) -> None:
+        known = self._results.get(name)
+        if known is not None and known[0] == key:
+            return
+        fresh = self._beats.result_row(record, key[0])
+        if known is None or known[1].id not in self._rows:
+            self._results[name] = (key, self._add(fresh))
+            return
+        row = known[1]
+        for field in ("t", "decision", "algorithm", "note", "kind"):
+            setattr(row, field, getattr(fresh, field))
+        self._results[name] = (key, row)
+        self._touch(row)

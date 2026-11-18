@@ -155,7 +155,11 @@ def verify_dir_beats(directory: Path) -> list[Row]:
     history = BeatHistory()
     rows = []
     for _, (mtime_ns, _), record in result_files(directory):
-        row = result_row(record, mtime_ns)
+        try:
+            row = result_row(record, mtime_ns)
+        except (ValueError, OverflowError, OSError):
+            # An mtime no date can hold, such as one past year 9999, skips that file alone (final review M-2).
+            continue
         row.beat = classify(row, history)
         rows.append(row)
     return rows

@@ -48,6 +48,7 @@ const detailEl = document.getElementById("detail");
 const emptyEl = document.getElementById("empty");
 const statusEl = document.getElementById("status");
 const droppedEl = document.getElementById("dropped");
+const pausedEl = document.getElementById("paused");
 const WAITING_LABEL = beatEl.textContent;
 
 const groups = new Map();
@@ -208,10 +209,19 @@ function apply(data) {
   const drops = Array.isArray(data.dropped) ? data.dropped : [];
   const total = Number.isInteger(data.dropped_total) ? data.dropped_total : 0;
   if (dropsAtLoad === null) dropsAtLoad = total;
+  if (total < dropsAtLoad) {
+    // The server restarted and counts from zero again, so the count starts over from it.
+    dropsAtLoad = total;
+    droppedEl.hidden = true;
+  }
   if (drops.length > 0 && total > dropsAtLoad) {
     const last = drops[drops.length - 1];
     const name = document.createElement("code");
-    name.textContent = typeof last.session_id === "string" ? last.session_id : "a transcript file";
+    if (typeof last.session_id === "string") {
+      name.textContent = last.session_id;
+    } else {
+      name.textContent = last.source === "audit" ? "the audit log" : "a transcript file";
+    }
     const seen = total - dropsAtLoad;
     droppedEl.replaceChildren(
       document.createTextNode("Rows dropped: "),
@@ -220,6 +230,9 @@ function apply(data) {
         " since this page loaded. "));
     droppedEl.hidden = false;
   }
+  // While a poll fails, every mark reads not checked, and this line says why, until a poll succeeds.
+  pausedEl.hidden = typeof data.paused !== "string";
+  pausedEl.textContent = typeof data.paused === "string" ? data.paused : "";
   next = data.next;
   emptyEl.hidden = !data.no_record;
   emptyEl.textContent = data.no_record ? data.no_record_text : "";

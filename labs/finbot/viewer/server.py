@@ -44,6 +44,7 @@ LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})
 WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::"})
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8"}
+_AFTER = re.compile(r"[0-9]{1,18}")
 _STATIC_NAME = re.compile(r"[a-z][a-z0-9_-]*\.(?:html|js|css)")
 # A client that sends nothing for this long is dropped, so a silent connection can't hold a handler thread (M9).
 HANDLER_TIMEOUT_S = 10.0
@@ -154,7 +155,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _rows(self, query: str) -> None:
         values = parse_qs(query, keep_blank_values=True).get("after", [])
-        if len(values) != 1 or not values[0].isdigit():
+        # ASCII digits only, at most 18 of them. str.isdigit accepts any Unicode digit, which int() then rejects, and
+        # that escaped as a traceback holding the client's text (final review M-4).
+        if len(values) != 1 or not _AFTER.fullmatch(values[0]):
             self._reply(HTTPStatus.BAD_REQUEST, b"after must be one whole number")
             return
         after = int(values[0])
@@ -163,13 +166,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             try:
                 model.refresh()
             except Exception as e:  # noqa: BLE001
-                # A read that breaks leaves the rows already read standing. The page keeps polling.
-                sys.stderr.write(f"acs-viewer: reading the logs failed: {escape_text(type(e).__name__)}\n")
+                # refresh fails closed itself. Anything that still escapes it drops every mark the same way.
+                model.fail_closed(e)
+            if model.paused is not None:
+                sys.stderr.write(f"acs-viewer: {model.paused}\n")
             page, next_seq, more = model.page(after)
             body = {"rows": [row.public() for row in page], "next": next_seq, "more": more,
                     "no_record": model.no_record, "no_record_text": NO_RECORD_TEXT,
                     "paint": self.server.paint_log is not None, "dropped": model.drops(),
-                    "dropped_total": model.drop_count}
+                    "dropped_total": model.drop_count, "paused": model.paused}
         self._json(HTTPStatus.OK, body)
 
     def _paint(self) -> None:

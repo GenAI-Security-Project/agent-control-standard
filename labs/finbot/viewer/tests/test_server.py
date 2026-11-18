@@ -277,7 +277,7 @@ def test_dropped_rows_reach_the_page_escaped(start, logs):
     body = rows(port)
     [drop] = body["dropped"]
     assert drop["session_id"] == SESSION_A and drop["why"] == "the file left the transcript directory"
-    assert set(drop) == {"t", "session_id", "why"}
+    assert set(drop) == {"t", "session_id", "why", "source"}
 
 
 def test_the_drop_count_reaches_the_page(start, logs):
@@ -288,3 +288,23 @@ def test_the_drop_count_reaches_the_page(start, logs):
     assert rows(port)["dropped_total"] == 0
     os.unlink(logs.transcript())
     assert rows(port)["dropped_total"] == 1
+
+
+@pytest.mark.parametrize("after", ["²", "①", "9" * 5000, "1" * 19])
+def test_after_takes_ascii_digits_only(start, after):
+    # Review M-4: str.isdigit accepts any Unicode digit, and int() raised past the check, which closed the
+    # connection and printed client text in a traceback. Each now gets 400.
+    from urllib.parse import quote
+    port = start()
+    assert call(port, "GET", "/api/rows?after=" + quote(after))[0] == 400
+
+
+def test_a_paused_poll_reaches_the_page(start, logs, monkeypatch):
+    # Final-review R1: the page says checks are paused and why.
+    port = start()
+
+    def broken(self):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(Model, "_judge", broken)
+    assert rows(port)["paused"] == "checks paused: RuntimeError: nope"

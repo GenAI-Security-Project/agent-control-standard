@@ -116,3 +116,15 @@ def test_the_drop_line_keeps_the_file_name_apart():
     assert "since this page loaded" in script
     assert '"Rows dropped for session " +' not in script
     assert "code" in read("style.css")
+
+
+def test_the_page_says_when_checks_are_paused():
+    # Final-review R1: one line, written as text, while a poll fails.
+    script = read("app.js")
+    assert "data.paused" in script and 'id="paused"' in read("index.html")
+
+
+def test_the_drop_baseline_follows_a_server_restart():
+    # Final-review R3, N-2: a restarted server counts from zero, so the page's baseline drops to the new count.
+    script = read("app.js")
+    assert "if (total < dropsAtLoad)" in script
