@@ -131,7 +131,7 @@ You are building ten things:
 - **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
-- **Decision honoring.** Wait for the verdict and apply it. On a timeout or a transport failure, apply the failure posture (`deny` by default, which is fail-closed). Block a step the Guardian refused, whatever the posture, and record every decision failure and refusal as an audit event.
+- **Decision honoring.** Wait for the verdict and apply it. On a timeout or a transport failure, apply the failure posture (`deny` by default, which is fail-closed), and keep that outcome when a decision arrives after the timeout. Block a step the Guardian refused, whatever the posture, and record every decision failure and refusal as an audit event.
 - **Liveness.** A way to notice that the Guardian has stopped answering.
 - **MCP coverage.** The `protocols/MCP/*` methods for MCP traffic.
 

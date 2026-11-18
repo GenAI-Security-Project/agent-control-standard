@@ -127,3 +127,15 @@ def test_a_blocked_step_says_why_it_was_blocked():
     assert "with its failure class and its cause: the JSON-RPC error code, the HTTP status, or the timeout that elapsed" in honoring
     assert "SHOULD tell the user and the agent that ACS blocked it and why" in honoring
     assert "rather than copying from the response" in honoring
+
+
+def test_a_decision_that_arrives_after_the_timeout_changes_nothing():
+    honoring = _section("### 6.4 Honoring decisions (normative)", "### 6.5")
+    assert "A decision that arrives after the negotiated timeout changes nothing" in honoring
+    assert "MUST keep that outcome and discard the late answer, for that request and for any other" in honoring
+    assert "Under `proceed`, the action runs even when a `DENY` arrives after the timeout but before the action has started" in honoring
+    assert "SHOULD be shorter than the host framework's own hook timeout" in honoring
+    conformance = (ROOT / "docs" / "spec" / "conformance.md").read_text(encoding="utf-8")
+    assert "a decision that arrives after the timeout leaves that outcome as it is" in conformance
+    faq = (ROOT / "docs" / "topics" / "faq.md").read_text(encoding="utf-8")
+    assert "keep that outcome when a decision arrives after the timeout" in faq
