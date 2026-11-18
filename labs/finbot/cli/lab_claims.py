@@ -1,6 +1,6 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.4.0. Owner: ACS lab maintainers.
+Version 1.5.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
@@ -275,8 +275,11 @@ MARKUP = dict.fromkeys(map(ord, "*`~"))
 # Rendered Markdown marks each source line break inside a paragraph, heading or table row with this private-use
 # character, so a marker binds only to the sentences on its own line.
 LINE = "\ue000"
-# A sentence ends at ., ! or ? followed by whitespace or a line break.
-SENTENCE_END = re.compile(r"(?<=[.!?])[\s\ue000]+")
+# A sentence ends at ., ! or ? and any run of closing quotes or brackets, followed by whitespace or a line break. The
+# split falls at the start of group 1, after the closers, so reads "verified." ends where a reader sees it end.
+SENTENCE_END = re.compile("[.!?][\"'\u201d\u2019)\\]}]*([\\s\ue000]+)")
+# A line break in raw HTML or a page that the renderer hasn't marked yet.
+BARE_NEWLINE = re.compile("(?<!\ue000)\n")
 # Unicode Default_Ignorable_Code_Point (DerivedCoreProperties.txt, Unicode 15.1), which unicodedata doesn't expose.
 # These draw nothing or nothing visible, so they are dropped before matching.
 IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
@@ -289,7 +292,7 @@ BLANKS = frozenset({0x2800})
 BLOCKS = frozenset(
     "address article aside blockquote body caption dd details dialog div dl dt fieldset figcaption figure footer "
     "form h1 h2 h3 h4 h5 h6 head header hgroup hr html legend li main nav ol option p pre section summary table "
-    "tbody tfoot thead title tr ul".split())
+    "tbody tfoot thead title tr ul center dir listing menu search xmp".split())
 # Table cells and line breaks stay inside their unit but keep the words on each side apart.
 SPACERS = frozenset({"td", "th", "br"})
 # Script and style in a page are code, which makes no claim to attendees, so their content is skipped.
@@ -402,8 +405,9 @@ class Unit:
     markers: tuple[str, ...]
     # Code blocks hold commands, so triggers don't apply there. Banned phrases still do.
     code: bool
-    # (offset in text, id) for each marker, so it binds to the sentences on its own line.
-    marks: tuple[tuple[int, str], ...] = ()
+    # (offset in text, id, whole) for each marker, so it binds to the sentences on its own line. whole is set for a
+    # marker alone in a table cell, which binds its row.
+    marks: tuple[tuple[int, str, bool], ...] = ()
     # (start, end) of each comment's text, which is matched but doesn't start or end a sentence.
     comments: tuple[tuple[int, int], ...] = ()
 
@@ -416,8 +420,10 @@ class _Walker(HTMLParser):
         self.units: list[Unit] = []
         self._text: list[str] = []
         self._markers: list[str] = []
-        self._marks: list[tuple[int, str]] = []
+        self._marks: list[tuple[int, str, bool]] = []
         self._comments: list[tuple[int, int]] = []
+        # (offset, marks so far) where the open table cell starts.
+        self._cell: tuple[int, int] | None = None
         self._trailing: list[str] = []
         self._line = 0
         self._code = 0
@@ -427,11 +433,17 @@ class _Walker(HTMLParser):
         if not self._line and text.strip():
             lead = text[: len(text) - len(text.lstrip())]
             self._line = self.getpos()[0] + lead.count("\n")
-        self._text.append(text)
+        # Each source line break carries LINE, in a page and in raw HTML as in rendered Markdown, so a marker binds by
+        # line everywhere.
+        self._text.append(BARE_NEWLINE.sub(LINE + "\n", text))
+
+    def _offset(self) -> int:
+        return sum(map(len, self._text))
 
     def _flush(self) -> None:
         text = "".join(self._text + [f" {t} " for t in self._trailing])
-        if text.strip() or self._markers:
+        self._cell = None
+        if text.replace(LINE, "").strip() or self._markers:
             self.units.append(Unit(self._line or self.getpos()[0], text, tuple(self._markers), self._code > 0,
                                    tuple(self._marks), tuple(self._comments)))
         self._text, self._markers, self._marks, self._comments, self._trailing = [], [], [], [], []
@@ -443,6 +455,8 @@ class _Walker(HTMLParser):
             self._code += tag == "pre"
         elif tag in SPACERS:
             self._add(" ")
+        if tag in ("td", "th"):
+            self._cell = (self._offset(), len(self._marks))
         if tag in CODE_ELEMENTS:
             self._flush()
             self._in_code_element = True
@@ -453,6 +467,8 @@ class _Walker(HTMLParser):
                 self._trailing.append(value)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._cell:
+            self._close_cell()
         if tag in BLOCKS:
             self._flush()
             self._code = max(0, self._code - (tag == "pre"))
@@ -461,18 +477,31 @@ class _Walker(HTMLParser):
         if tag in CODE_ELEMENTS:
             self._in_code_element = False
 
+    def _close_cell(self) -> None:
+        """A cell that holds nothing but markers binds its row, as a GFM row on one source line does."""
+        start, first = self._cell
+        self._cell = None
+        text = "".join(self._text)
+        for a, b in self._comments:
+            if a >= start:
+                text = text[:a] + " " * (b - a) + text[b:]
+        if first < len(self._marks) and not text[start:].replace(LINE, "").strip():
+            self._marks[first:] = [(at, i, True) for at, i, _ in self._marks[first:]]
+
     def handle_data(self, data: str) -> None:
         if not self._in_code_element:
             self._add(data)
 
     def handle_comment(self, data: str) -> None:
         # The comment's text is still matched, so a banned phrase can't hide in one.
-        at = sum(map(len, self._text)) + 1
+        at = self._offset() + 1
+        self._add(f" {data} ")
+        # Marking line breaks in the comment changes its length, so offsets come from the text as added.
+        data = self._text[-1][1:-1]
         for match in MARKER.finditer(data):
             self._markers.append(match.group(1))
-            self._marks.append((at + match.start(), match.group(1)))
+            self._marks.append((at + match.start(), match.group(1), False))
         self._comments.append((at, at + len(data)))
-        self._add(f" {data} ")
 
     def close(self) -> None:
         super().close()
@@ -490,6 +519,31 @@ def _line_break(text: str) -> str:
     return text.replace("\n", LINE + "\n")
 
 
+FOOTNOTE_DEF = re.compile(r" {0,3}\[\^[^\]\s]+\]:")
+INDENT = re.compile(r"(?: {4}|\t)")
+
+
+def _footnote_prose(source: str) -> str:
+    """Unindent the paragraphs that continue a footnote, which GitHub shows as prose and CommonMark reads as code.
+
+    A footnote runs from its [^x]: line until a line that holds text and isn't indented follows a blank line.
+    """
+    out: list[str] = []
+    inside = continued = blank = False
+    for line in source.split("\n"):
+        if FOOTNOTE_DEF.match(line):
+            inside, continued = True, False
+        elif line.strip():
+            if inside and INDENT.match(line) and (blank or continued):
+                continued = True
+                line = INDENT.sub("", line, count=1)
+            elif blank and not INDENT.match(line):
+                inside = continued = False
+        blank = not line.strip()
+        out.append(line)
+    return "\n".join(out)
+
+
 def _render(source: str) -> str:
     """Render Markdown as GitHub reads it: CommonMark with GFM tables and strikethrough, raw HTML kept, no linkify.
 
@@ -503,8 +557,10 @@ def _render(source: str) -> str:
     md.add_render_rule("softbreak", lambda self, tokens, idx, options, env: LINE + "\n")
     md.add_render_rule("hardbreak", lambda self, tokens, idx, options, env: "<br />" + LINE + "\n")
     md.add_render_rule("html_inline", lambda self, tokens, idx, options, env: _line_break(tokens[idx].content))
+    # An HTML block always opens a source line, but a tight list item renders it straight after the paragraph text.
+    md.add_render_rule("html_block", lambda self, tokens, idx, options, env: LINE + "\n" + tokens[idx].content)
     env: dict = {}
-    rendered = md.render(source, env)
+    rendered = md.render(_footnote_prose(source), env)
     # GitHub shows [^x]: text as a footnote. CommonMark reads a one-word body as a link reference definition, which
     # draws nothing, so each one is added back as a paragraph of its own.
     for label, ref in env.get("references", {}).items():
@@ -570,7 +626,8 @@ def _sentences(unit: Unit) -> list[tuple[str, tuple[str, ...]]]:
     """Each sentence of a unit with the markers bound to it.
 
     A marker binds to every sentence that touches its own source line, before or after it, and never to a sentence
-    on another line. Only rendered Markdown carries LINE, so raw HTML and plain-text units stay whole.
+    on another line. A marker alone on its line binds the next line that holds text, and a marker alone in a table
+    cell binds its whole row. Plain-text units are one line each, so they stay whole.
     """
     if LINE not in unit.text or not unit.marks:
         return [(unit.text, unit.markers)]
@@ -578,14 +635,21 @@ def _sentences(unit: Unit) -> list[tuple[str, tuple[str, ...]]]:
     mask = unit.text
     for a, b in unit.comments:
         mask = mask[:a] + re.sub(r"[^\ue000]", " ", mask[a:b]) + mask[b:]
+    lines = mask.split(LINE)
+    bound: list[tuple[int | None, str]] = []
+    for at, ident, whole in unit.marks:
+        line = unit.text.count(LINE, 0, at)
+        if not whole and not lines[line].strip():
+            line = next((n for n in range(line + 1, len(lines)) if lines[n].strip()), line)
+        bound.append((None if whole else line, ident))
     out = []
     start = 0
-    for end in [m.start() for m in SENTENCE_END.finditer(mask)] + [len(mask)]:
+    for end in [m.start(1) for m in SENTENCE_END.finditer(mask)] + [len(mask)]:
         piece = mask[start:end]
         lead = len(piece) - len(piece.lstrip(string.whitespace + LINE))
         first = unit.text.count(LINE, 0, start + lead)
         last = unit.text.count(LINE, 0, end)
-        out.append((unit.text[start:end], tuple(i for at, i in unit.marks if first <= unit.text.count(LINE, 0, at) <= last)))
+        out.append((unit.text[start:end], tuple(i for line, i in bound if line is None or first <= line <= last)))
         start = end
     return out
 

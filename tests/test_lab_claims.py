@@ -1,6 +1,6 @@
 """Tests for the FinBot lab claims ledger and the check that holds lab text to it (issue #587, LAB-14).
 
-Version 1.1.0. Owner: ACS lab maintainers.
+Version 1.2.0. Owner: ACS lab maintainers.
 """
 
 import concurrent.futures
@@ -1557,6 +1557,157 @@ def test_matrix_layout_reads_as_github_does(name):
     assert _check_reading(_markdown_matrix()[name]) == GITHUB["matrix"][name]["github"], name
 
 
-@pytest.mark.skipif(PANDOC is None, reason="pandoc isn't installed, so GitHub's reading can't be regenerated")
+# The regeneration takes minutes. LAB_CLAIMS_SKIP_PANDOC=1 skips it on a machine that has pandoc, for a quick run.
+@pytest.mark.skipif(PANDOC is None or os.environ.get("LAB_CLAIMS_SKIP_PANDOC") == "1",
+                    reason="pandoc isn't installed or LAB_CLAIMS_SKIP_PANDOC=1, so the fixture isn't regenerated")
 def test_github_fixture_has_not_drifted(tmp_path):
     assert _regenerate(GITHUB, tmp_path) == GITHUB, "pandoc's reading changed: rerun the fixture recording"
+
+
+# ---------------------------------------------------------------- Fix round 9: marker binding by line everywhere
+
+R9_CAUGHT = [
+    # I-1: a sentence ends at . ! or ? followed by any run of closing quotes or brackets.
+    ("closer_straight.md", f'A checked row reads "verified." {C4}\n{FORGE}\n', "unledgered"),
+    ("closer_curly.md", f"A checked row reads “verified.” {C4}\n{FORGE}\n", "unledgered"),
+    ("closer_reverse.md", f'The gateway can forge an allow, and the row reads "failed."\n'
+                          f"A checked row reads verified. {C4}\n", "unledgered"),
+    ("closer_paren.md", f"Decisions are signed with ML-DSA-65. (The library follows FIPS 204.) {C2}\n{FORGE}\n",
+     "unledgered"),
+    ("closer_paren_before.md", f"{FORGE}\n(The library follows FIPS 204.) {C2}\n", "unledgered"),
+    ("closer_brace.md", f"Decisions are signed with ML-DSA-65.}} {C2}\n{FORGE}\n", "unledgered"),
+    # I-2: in HTML a marker clears only the sentences on its own source line.
+    ("p_two_lines.html", f"<p>{SIGNED}\n{FORGE}</p>\n", "unledgered"),
+    ("p_two_lines_lead.html", f"<p>{C2} Decisions are signed with ML-DSA-65.\n{FORGE}</p>\n", "unledgered"),
+    ("p_center.md", f'<p align="center">\n{SIGNED}\n{FORGE}\n</p>\n', "unledgered"),
+    ("div_spans.html", f"<div><span>{SIGNED}</span>\n<span>{FORGE}</span></div>\n", "unledgered"),
+    ("div_label_button.md", f"<div>\n<label>{SIGNED}</label>\n<button>{FORGE}</button>\n</div>\n", "unledgered"),
+    ("li_two_lines.html", f"<ul><li>{SIGNED}\n{FORGE}</li></ul>\n", "unledgered"),
+    ("td_two_cells.html", f"<table><tr><td>{SIGNED}</td>\n<td>{FORGE}</td></tr></table>\n", "unledgered"),
+    ("td_two_lines.html", f"<table><tr><td>{SIGNED}\n{FORGE}</td></tr></table>\n", "unledgered"),
+    ("br_lines.html", f"<p>{SIGNED}<br>\n{FORGE}</p>\n", "unledgered"),
+    ("alone_then_two.html", f"<div>\n{C2}\nDecisions are signed with ML-DSA-65.\n{FORGE}\n</div>\n", "unledgered"),
+    ("alone_after_forge.html", f"<div>\n{FORGE}\n{C2}\nDecisions are signed with ML-DSA-65.\n</div>\n",
+     "unledgered"),
+    # m-5: elements a browser draws as blocks are units of their own.
+    ("center_pair.html", f"<div><center>{SIGNED}</center><center>{FORGE}</center></div>\n", "unledgered"),
+    ("menu_pair.html", f"<div><menu>{SIGNED}</menu><menu>{FORGE}</menu></div>\n", "unledgered"),
+    # m-2: an indented paragraph after a blank line continues a footnote, as prose.
+    ("footnote_para.md", "Signing is on.[^1]\n\n[^1]: See the key document.\n\n    The gateway can forge an allow.\n",
+     "unledgered"),
+]
+
+
+@pytest.mark.parametrize("name,body,kind", R9_CAUGHT, ids=[c[0] for c in R9_CAUGHT])
+def test_round_9_overclaim_is_caught(tree, name, body, kind):
+    findings = _scan(tree, {name: body})
+    assert kind in _kinds(findings), findings
+    # The finding names the unmarked sentence, never the marked one.
+    assert all("ML-DSA-65" not in f.text or "forge" in f.text for f in findings), findings
+
+
+R9_PASSES = [
+    # A marker alone on its line binds the next non-blank line's sentences.
+    ("alone_next_line.html", f"<div>\n{C2}\n\nDecisions are signed with ML-DSA-65.\n</div>\n"),
+    ("alone_next_line_p.html", f"<p>{C2}\nDecisions are signed with ML-DSA-65.</p>\n"),
+    # A marker alone in a table cell binds its row, as a GFM row on one line does.
+    ("cell_alone.md", f"<table>\n<tr>\n<td>Decisions are signed with ML-DSA-65.</td>\n<td>{C2}</td>\n</tr>\n</table>\n"),
+    ("cell_alone.html", f"<table><tr><td>Decisions are signed with ML-DSA-65.</td>\n<td> {C2} </td></tr></table>\n"),
+    # Every sentence on the marker's own line, in a page.
+    ("one_line_two.html", f"<p>Read the key document. Decisions are signed with ML-DSA-65. {C2}</p>\n"),
+    ("wrapped.html", f"<p>Anyone holding the HMAC key can\nforge an allow. {C4}</p>\n"),
+    ("closer_honest.md", f'A forged row reads "failed." {C4}\nRead the key document.\n'),
+    ("footnote_para_marked.md", f"Signing is on.[^1]\n\n[^1]: See the key document.\n\n    {SIGNED}\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", R9_PASSES, ids=[c[0] for c in R9_PASSES])
+def test_round_9_honest_text_passes(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+# The binding matrix. It doesn't use the pandoc fixtures, which record how a source is read but run the check's own
+# binder. Each case holds one marked claim and one unmarked overclaim on the line before or after the marker's line,
+# and asserts which sentence is cleared and which is reported.
+BIND_ENDINGS = {
+    "period": "Decisions are signed with ML-DSA-65.",
+    "straight_quote": 'A checked row says the decision was "signed with ML-DSA-65."',
+    "curly_quote": "A checked row says the decision was “signed with ML-DSA-65.”",
+    "paren": "(Decisions are signed with ML-DSA-65.)",
+}
+BIND_POSITIONS = ("trail", "lead", "alone")
+
+
+def _bind_lines(claim: str, position: str, before: bool) -> list[str]:
+    if position == "trail":
+        lines = [f"{claim} {C2}"]
+    elif position == "lead":
+        lines = [f"{C2} {claim}"]
+    else:
+        lines = [C2, claim]
+    return [FORGE] + lines if before else lines + [FORGE]
+
+
+# (name, suffix, builder, positions it applies to). A Markdown prose container reads a marker alone on its line as an
+# HTML block of its own, which marks nothing, so "alone" applies only where the lines sit inside raw HTML.
+BIND_CONTAINERS = [
+    ("paragraph", (".md",), lambda ls: "\n".join(ls) + "\n", ("trail", "lead")),
+    ("list_item", (".md",), lambda ls: "- " + "\n  ".join(ls) + "\n", ("trail", "lead")),
+    ("blockquote", (".md",), lambda ls: "> " + "\n> ".join(ls) + "\n", ("trail", "lead")),
+    ("p", (".md", ".html"), lambda ls: "<p>\n" + "\n".join(ls) + "\n</p>\n", BIND_POSITIONS),
+    ("p_center", (".md", ".html"), lambda ls: '<p align="center">\n' + "\n".join(ls) + "\n</p>\n", BIND_POSITIONS),
+    ("div", (".md", ".html"), lambda ls: "<div>\n" + "\n".join(ls) + "\n</div>\n", BIND_POSITIONS),
+    ("br", (".md", ".html"), lambda ls: "<p>" + "<br>\n".join(ls) + "</p>\n", BIND_POSITIONS),
+    ("spans", (".md", ".html"), lambda ls: "<div>" + "\n".join(f"<span>{x}</span>" for x in ls) + "</div>\n",
+     ("trail", "lead")),
+    ("li", (".html",), lambda ls: "<ul><li>" + "\n".join(ls) + "</li></ul>\n", BIND_POSITIONS),
+    ("td_lines", (".md", ".html"), lambda ls: "<table><tr><td>" + "\n".join(ls) + "</td></tr></table>\n",
+     BIND_POSITIONS),
+    ("td_cells", (".md", ".html"),
+     lambda ls: "<table><tr>" + "\n".join(f"<td>{x}</td>" for x in ls) + "</tr></table>\n", ("trail", "lead")),
+]
+
+
+def _binding_matrix():
+    cases = []
+    for cname, suffixes, build, positions in BIND_CONTAINERS:
+        for suffix in suffixes:
+            for position in positions:
+                for ending, claim in BIND_ENDINGS.items():
+                    for before in (True, False):
+                        side = "before" if before else "after"
+                        body = build(_bind_lines(claim, position, before))
+                        cases.append((f"{cname}-{position}-{ending}-{side}{suffix}", body))
+    return cases
+
+
+BINDING_MATRIX = _binding_matrix()
+
+
+def test_binding_matrix_size():
+    assert len(BINDING_MATRIX) == 376 and len({n for n, _ in BINDING_MATRIX}) == len(BINDING_MATRIX)
+
+
+@pytest.mark.parametrize("name,body", BINDING_MATRIX, ids=[c[0] for c in BINDING_MATRIX])
+def test_marker_binds_only_its_own_line(tmp_path, name, body):
+    (tmp_path / name).write_text(body, encoding="utf-8")
+    findings = lab_claims.scan(tmp_path, MATRIX_LEDGER)
+    # The overclaim on the neighboring line is reported, and the marked claim is cleared, so it isn't in the finding.
+    assert [f.kind for f in findings] == ["unledgered"], f"{name}:\n{body}\n{findings}"
+    assert "forge" in findings[0].text and "ML-DSA-65" not in findings[0].text, f"{name}:\n{body}\n{findings}"
+
+
+def test_fixture_probe_names_are_pinned():
+    # m-1: the drift test regenerates from the fixture's own probe list, so a dropped probe shows only here.
+    assert len(GITHUB["probes"]) == 207 + len([c for c in R9_CAUGHT + R9_PASSES if c[0].endswith(".md")])
+
+
+def test_ledger_says_fixtures_check_reading_not_binding():
+    text = " ".join(_section("What the tests enforce and what only a reader catches").split())
+    assert "how the source is read, not how markers bind" in text
+    assert "with no closing punctuation" in text
+
+
+def test_pandoc_drift_test_has_a_switch():
+    head = Path(__file__).read_text(encoding="utf-8").split("def test_github_fixture_has_not_drifted", 1)[0]
+    assert "LAB_CLAIMS_SKIP_PANDOC" in head.rsplit("@pytest.mark.skipif", 1)[-1]

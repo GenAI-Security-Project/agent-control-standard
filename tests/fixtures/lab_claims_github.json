@@ -8464,7 +8464,9 @@
   },
   "r7.html.div_noblank_two_lines": {
    "body": "<div>\nDecisions are signed with ML-DSA-65. <!-- claim:C-02 -->\nThe gateway can forge an allow.\n</div>\n",
-   "github": []
+   "github": [
+    "unledgered"
+   ]
   },
   "r7.html.p_center_noblank": {
    "body": "<p align=\"center\">\nDecisions are signed with ML-DSA-65. <!-- claim:C-02 -->\n</p>\n\nThe gateway can forge an allow.\n",
@@ -8536,7 +8538,9 @@
   },
   "r7.lists.leading.lead_item_next_line": {
    "body": "- <!-- claim:C-02 --> Decisions are signed with ML-DSA-65.\n  The gateway can forge an allow.\n",
-   "github": []
+   "github": [
+    "unledgered"
+   ]
   },
   "r7.lists.leading.lead_mid_paragraph": {
    "body": "Read this first.\n<!-- claim:C-02 --> Decisions are signed with ML-DSA-65.\nThe gateway can forge an allow.\n",
@@ -9169,6 +9173,72 @@
   "r8named.wrapped_sentence": {
    "body": "Anyone holding the HMAC key can\nforge an allow. <!-- claim:C-04 -->\n",
    "github": []
+  },
+  "r9named.cell_alone": {
+   "body": "<table>\n<tr>\n<td>Decisions are signed with ML-DSA-65.</td>\n<td><!-- claim:C-02 --></td>\n</tr>\n</table>\n",
+   "github": []
+  },
+  "r9named.closer_brace": {
+   "body": "Decisions are signed with ML-DSA-65.} <!-- claim:C-02 -->\nThe gateway can forge an allow.\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.closer_curly": {
+   "body": "A checked row reads “verified.” <!-- claim:C-04 -->\nThe gateway can forge an allow.\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.closer_honest": {
+   "body": "A forged row reads \"failed.\" <!-- claim:C-04 -->\nRead the key document.\n",
+   "github": []
+  },
+  "r9named.closer_paren": {
+   "body": "Decisions are signed with ML-DSA-65. (The library follows FIPS 204.) <!-- claim:C-02 -->\nThe gateway can forge an allow.\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.closer_paren_before": {
+   "body": "The gateway can forge an allow.\n(The library follows FIPS 204.) <!-- claim:C-02 -->\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.closer_reverse": {
+   "body": "The gateway can forge an allow, and the row reads \"failed.\"\nA checked row reads verified. <!-- claim:C-04 -->\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.closer_straight": {
+   "body": "A checked row reads \"verified.\" <!-- claim:C-04 -->\nThe gateway can forge an allow.\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.div_label_button": {
+   "body": "<div>\n<label>Decisions are signed with ML-DSA-65. <!-- claim:C-02 --></label>\n<button>The gateway can forge an allow.</button>\n</div>\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.footnote_para": {
+   "body": "Signing is on.[^1]\n\n[^1]: See the key document.\n\n    The gateway can forge an allow.\n",
+   "github": [
+    "unledgered"
+   ]
+  },
+  "r9named.footnote_para_marked": {
+   "body": "Signing is on.[^1]\n\n[^1]: See the key document.\n\n    Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->\n",
+   "github": []
+  },
+  "r9named.p_center": {
+   "body": "<p align=\"center\">\nDecisions are signed with ML-DSA-65. <!-- claim:C-02 -->\nThe gateway can forge an allow.\n</p>\n",
+   "github": [
+    "unledgered"
+   ]
   }
  }
 }
