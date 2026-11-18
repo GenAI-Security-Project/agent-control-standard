@@ -88,11 +88,12 @@ def test_machine_blocks_parse():
 
 def test_sign_off_row_shape():
     lines = [ln for ln in _section("Sign-off").splitlines() if ln.startswith("|")]
-    assert lines[0] == "| Signed by | Date | Commit |"
+    assert lines[0] == "| Signed by | Date | Commit | Ledger sha256 |"
     rows = [c for c in _rows(_section("Sign-off"))]
-    assert len(rows) == 1 and len(rows[0]) == 3
-    name, date, sha = rows[0]
+    assert len(rows) == 1 and len(rows[0]) == 4
+    name, date, sha, digest = rows[0]
     assert name == "" or name
+    assert digest == "" or re.fullmatch(r"[0-9a-f]{64}", digest)
     assert date == "" or re.fullmatch(r"\d{4}-\d{2}-\d{2}", date)
     assert sha == "" or re.fullmatch(r"[0-9a-f]{40}", sha)
 
@@ -226,8 +227,11 @@ def test_windows_named_as_supported_fails(tree):
 
 
 def _sign(ledger, text=None):
+    """Sign a ledger copy the way Rock would: the digest covers everything above the sign-off section."""
     body = text if text is not None else ledger.read_text(encoding="utf-8")
-    ledger.write_text(body.replace("| | | |", f"| Rock Lambros | 2026-11-30 | {'a' * 40} |"), encoding="utf-8")
+    digest = lab_claims.ledger_digest(body)
+    ledger.write_text(body.replace("| | | | |", f"| Rock Lambros | 2026-11-30 | {'a' * 40} | {digest} |"),
+                      encoding="utf-8")
 
 
 def test_require_signed(tree, capsys):
@@ -246,7 +250,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
     _sign(ledger)
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     out = capsys.readouterr().out
-    for row in ("C-01", "C-07", "C-08", "C-11", "C-12"):
+    for row in ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12"):
         assert f"unconfirmed {row}" in out
     assert "unsigned" not in out
     # Without the flag the same ledger is fine, since CI runs before Rock decides.
@@ -255,7 +259,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
-    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-07", "C-08", "C-11", "C-12")
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12")
 
 
 def test_main_exit_codes(tree, tmp_path):
@@ -275,3 +279,178 @@ def test_lab_text_holds_to_the_ledger(capsys):
     code = lab_claims.main([str(LABS_FINBOT), "--ledger", str(LEDGER)])
     out = capsys.readouterr().out
     assert code == 0, out
+
+
+# ---------------------------------------------------------------- Fix round 2
+
+
+@pytest.mark.parametrize("body", [
+    "The lab is **ACS-Core** conformant.\n",
+    "The lab is ACS-Core *conformant*.\n",
+    "The lab is `ACS-Core` conformant.\n",
+    "The lab is [ACS-Core](x) conformant.\n",
+    "The lab is ACS-Co**re conformant**.\n",
+    "The lab is ACS\u2013Core conformant.\n",
+    "The lab is ACS\u2011Core conformant.\n",
+    "The lab is ACS-Core\u200b conformant.\n",
+    "The agent can\u2019t tell a control exists.\n",
+    "The lab is ACS-Core&nbsp;conformant.\n",
+    "The lab is ACS-Core\u00a0conformant.\n",
+    "The lab is \uff21CS-Core conformant.\n",
+    "THE LAB IS ACS-CORE CONFORMANT.\n",
+    "The lab is ~~ACS-Core~~ conformant.\n",
+    "The lab is ACS-Core conformant. <!-- claim:C-03 -->\n",
+    "The lab is **ACS-Core** conformant. <!-- claim:C-03 -->\n",
+])
+def test_banned_phrase_survives_markup(tree, body):
+    assert "banned" in _kinds(_scan(tree, {"a.md": body}))
+
+
+def test_markup_does_not_hide_a_trigger(tree):
+    assert _kinds(_scan(tree, {"a.md": "ACS **guarantees** safety.\n"})) == ["unledgered"]
+    split = [f for f in _scan(tree, {"b.md": "Decisions are signed\nwith ML-DSA-65.\n"}) if f.path == "b.md"]
+    assert [f.kind for f in split] == ["unledgered"]
+
+
+def test_honest_negative_survives_markup(tree):
+    assert _scan(tree, {"a.md": "The stack isn\u2019t **ACS-Core** conformant. <!-- claim:N-06 -->\n"}) == []
+
+
+def test_marker_is_read_from_raw_text(tree):
+    # A marker in a link target or inline code still counts, because the author typed it there.
+    assert _scan(tree, {"a.md": "ACS guarantees nothing. [x](claim:C-03)\n"}) == []
+
+
+def test_marker_clears_only_its_list_item(tree):
+    findings = _scan(tree, {"a.md": "- The stack isn't AGT. <!-- claim:N-10 -->\n- The stack is ACS-Core conformant.\n"
+                                    "- ACS guarantees safety.\n"})
+    assert sorted((f.line, f.kind) for f in findings) == [(2, "banned"), (3, "unledgered")]
+
+
+def test_marker_clears_only_its_table_row(tree):
+    body = "| a | b |\n|---|---|\n| ok | <!-- claim:N-06 --> |\n| The lab is ACS-Core conformant | x |\n"
+    assert [(f.line, f.kind) for f in _scan(tree, {"a.md": body})] == [(4, "banned")]
+
+
+def test_marker_clears_only_its_heading(tree):
+    findings = _scan(tree, {"a.md": "# ACS guarantees safety\nNext line. <!-- claim:C-03 -->\n"})
+    assert [(f.line, f.kind) for f in findings] == [(1, "unledgered")]
+
+
+def test_wrapped_list_item_stays_one_unit(tree):
+    assert _scan(tree, {"a.md": "- The stack isn't ACS-Core\n  conformant. <!-- claim:N-06 -->\n"}) == []
+
+
+def test_windows_is_a_trigger(tree):
+    assert _kinds(_scan(tree, {"a.md": "Run it on Windows.\n"})) == ["unledgered"]
+
+
+def test_windows_mention_with_marker_passes(tree):
+    root, ledger = tree
+    (root / "b.md").write_text("Windows is untested. <!-- claim:C-16 -->\n", encoding="utf-8")
+    assert lab_claims.scan(root, lab_claims.load_ledger(ledger)) == []
+
+
+def test_fifo_does_not_hang(tree):
+    import os
+    root, ledger = tree
+    os.mkfifo(root / "pipe.md")
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+    assert lab_claims.scan(root, lab_claims.load_ledger(ledger)) == []
+
+
+def test_unclosed_fence_is_a_finding(tree):
+    findings = _scan(tree, {"a.md": "```\nx\n\nACS guarantees every attack is stopped.\n"})
+    assert "unclosed_fence" in _kinds(findings)
+
+
+def test_fence_closes_only_on_its_own_marker(tree):
+    findings = _scan(tree, {"a.md": "~~~\n```\nACS guarantees safety.\n"})
+    assert "unclosed_fence" in _kinds(findings)
+
+
+def test_file_count_counts_scanned_files_only(tree, capsys):
+    root, ledger = tree
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+    (root / "clip.mp4").write_bytes(b"x")
+    (root / "blob.txt").write_bytes(b"x\x00")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 0
+    assert "(1 files)" in capsys.readouterr().out
+
+
+def _evidence_ledger(tree, evidence_cell: str) -> Path:
+    root, ledger = tree
+    text = ledger.read_text(encoding="utf-8").replace("Unconfirmed:", "Confirmed:")
+    text = re.sub(r"(\| C-15 \| [^|]*\| )[^|]*(\|)", lambda m: m.group(1) + evidence_cell + " " + m.group(2), text)
+    _sign(ledger, text)
+    return ledger
+
+
+@pytest.mark.parametrize("cell", ["", "TBD", "todo", "TODO later"])
+def test_sign_gate_refuses_empty_or_placeholder_evidence(tree, capsys, cell):
+    root, _ = tree
+    ledger = _evidence_ledger(tree, cell)
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "unconfirmed C-15" in capsys.readouterr().out
+
+
+def test_sign_gate_matches_unconfirmed_in_any_case(tree, capsys):
+    root, _ = tree
+    ledger = _evidence_ledger(tree, "UNCONFIRMED until the cut")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "unconfirmed C-15" in capsys.readouterr().out
+    ledger = _evidence_ledger(tree, "Not yet unconfirmed")
+    assert "C-15" in lab_claims.load_ledger(ledger).unconfirmed
+
+
+def test_sign_gate_refuses_a_ledger_with_no_claim_rows(tree, capsys):
+    root, ledger = tree
+    text = "\n".join(ln for ln in ledger.read_text(encoding="utf-8").splitlines() if not ln.startswith("| C-"))
+    _sign(ledger, text)
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "no_claims" in capsys.readouterr().out
+
+
+def test_cells_honor_escaped_pipes(tree):
+    root, ledger = tree
+    text = ledger.read_text(encoding="utf-8").replace(
+        "| Unconfirmed: the lab compose file (LAB-15)", "| ok a\\| b Unconfirmed: the lab compose file (LAB-15)", 1)
+    ledger.write_text(text, encoding="utf-8")
+    assert "C-01" in lab_claims.load_ledger(ledger).unconfirmed
+
+
+def test_edit_after_signing_reads_as_unsigned(tree, capsys):
+    root, ledger = tree
+    _sign(ledger, ledger.read_text(encoding="utf-8").replace("Unconfirmed:", "Confirmed:"))
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 0
+    capsys.readouterr()
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace("macOS and Linux only", "every platform"),
+                      encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "changed after it was signed" in capsys.readouterr().out
+
+
+def test_edit_below_the_digest_boundary_keeps_the_signature(tree):
+    root, ledger = tree
+    _sign(ledger, ledger.read_text(encoding="utf-8").replace("Unconfirmed:", "Confirmed:"))
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace("The signer fills in", "The signer will fill in"),
+                      encoding="utf-8")
+    assert lab_claims.load_ledger(ledger).signed
+
+
+def test_digest_flag_prints_the_digest(tree, capsys):
+    root, ledger = tree
+    assert lab_claims.main(["--ledger", str(ledger), "--digest"]) == 0
+    assert capsys.readouterr().out.strip() == lab_claims.ledger_digest(ledger.read_text(encoding="utf-8"))
+
+
+def test_ledger_truth_rows():
+    claims = _section("Claims")
+    rows = {r[0]: r for r in _rows(claims)}
+    assert "4 of the 7" in _section("Not claimed") and "sessionEnd" in rows["C-06"][1] + rows["C-06"][2]
+    assert "enforce" in rows["C-09"][1] and "shadow" in (rows["C-09"][1] + rows["C-09"][3]).lower()
+    assert "enforce" in rows["C-14"][1]
+    assert "can pin" in rows["C-03"][1] and "unconfirmed" in rows["C-03"][2].lower()
+    assert "_response_signing.py" in rows["C-02"][2]
+    assert "digest" in _section("What the tests enforce and what only a reader catches")
+    assert "non-Markdown" in _section("What the tests enforce and what only a reader catches")
