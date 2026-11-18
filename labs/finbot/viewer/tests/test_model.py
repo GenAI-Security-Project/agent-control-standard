@@ -132,9 +132,12 @@ def test_discards_line_marks_the_answer_before_it(tmp_path):
     req = tool_request("echo")
     logs.pair(req, answer(req, "allow"))
     logs.resp(SESSION_A, None, cause="decision_timeout", discards=req["params"]["request_id"])
-    [row] = rows(Model(logs.transcript_dir, None, None))
+    row, claim = sorted(rows(Model(logs.transcript_dir, None, None)), key=lambda r: r.id)
     assert row.decision == "allow"
     assert row.note == "the gateway withheld this answer and denied the step (decision_timeout)"
+    # The discards line is a row of its own, the gateway's unsigned claim (fix round 2, M3).
+    assert (claim.method, claim.decision, claim.verify) == ("withheld", None, "unsigned")
+    assert claim.note == "the gateway says it withheld the answer above and denied the step (decision_timeout)"
 
 
 def test_late_answer_keeps_its_envelope_and_says_it_was_withheld(tmp_path):

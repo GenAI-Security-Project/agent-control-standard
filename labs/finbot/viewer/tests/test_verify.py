@@ -131,16 +131,21 @@ def test_forged_cause_on_a_signed_answer_fails(tmp_path, key, keys):
     assert marks(logs, keys) == [("pay", "allow", "failed")]
 
 
-def test_discards_line_that_is_not_next_to_its_answer_fails(tmp_path, key, keys):
-    # Probe E: a discards line must follow the answer it marks.
+def test_discards_line_that_is_not_next_to_its_answer_fails_only_itself(tmp_path, key, keys):
+    # Probe E and round 2 M3: a discards line must follow the answer it marks. One that doesn't fails the session at
+    # its own row, and never paints the earlier genuine answer it names as failed.
     logs = LabLogs(tmp_path)
     a, b = tool_request("transfer_funds"), tool_request("read_balance")
     logs.pair(a, key.sign(answer(a, "allow"), a))
     logs.pair(b, key.sign(answer(b, "deny"), b))
     logs.resp(SESSION_A, None, cause="decision_timeout", discards=a["params"]["request_id"])
-    got = marks(logs, keys)
-    assert "verified" not in [m for _, _, m in got]
-    assert got[0][2] == "failed"
+    assert marks(logs, keys) == [("transfer_funds", "allow", "not_checked"), ("read_balance", "deny", "not_checked"),
+                                 ("withheld", None, "failed")]
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    first = min(model.rows_after(0), key=lambda r: r.id)
+    # The stray line doesn't get to call the earlier answer withheld either.
+    assert "withheld" not in (first.note or "")
 
 
 def test_adjacent_discards_line_keeps_the_answer_verified(tmp_path, key, keys):
@@ -150,9 +155,11 @@ def test_adjacent_discards_line_keeps_the_answer_verified(tmp_path, key, keys):
     logs.resp(SESSION_A, None, cause="decision_timeout", discards=a["params"]["request_id"])
     model = Model(logs.transcript_dir, None, keys)
     model.refresh()
-    [row] = model.rows_after(0)
+    row, claim = sorted(model.rows_after(0), key=lambda r: r.id)
     assert (row.decision, row.verify) == ("allow", "verified")
     assert "withheld" in row.note
+    # The discards line is the gateway's unsigned claim, a row of its own.
+    assert (claim.method, claim.verify) == ("withheld", "unsigned")
 
 
 def test_hmac_session_is_never_verified(tmp_path, keys):
@@ -348,3 +355,90 @@ def test_entry_after_a_revocation_fails(tmp_path, key):
     req = tool_request("echo")
     logs.pair(req, key.sign(answer(req, "allow"), req))
     assert marks(logs, KeySource({"ACS_GUARDIAN_KEYS": str(revoked)})) == [("echo", "allow", "failed")]
+
+
+# Fix round 2
+
+
+def test_rows_a_replaced_file_no_longer_holds_lose_their_mark(tmp_path, key, keys):
+    # M1: a file cut shorter or replaced starts over. Rows it no longer holds keep no mark from content it lost.
+    logs = LabLogs(tmp_path)
+    a, b = tool_request("echo"), tool_request("wire_money")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    logs.pair(b, key.sign(answer(b, "deny"), b))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    assert [r.verify for r in model.rows_after(0)] == ["verified", "verified"]
+    kept = logs.transcript().read_bytes().splitlines(keepends=True)[:2]
+    replacement = logs.transcript().with_suffix(".new")
+    replacement.write_bytes(b"".join(kept))
+    os.replace(replacement, logs.transcript())
+    model.refresh()
+    got = sorted(model.rows_after(0), key=lambda r: r.id)
+    assert [(r.tool, r.verify) for r in got] == [("echo", "not_checked"), ("wire_money", "not_checked"),
+                                                 ("echo", "verified")]
+    assert "no longer holds" in got[0].note
+    # A later key document change judges the file's current rows only. The history rows stay not checked.
+    other = decision_key(tmp_path / "other")
+    keys._path = str(other.document_path)
+    model.refresh()
+    assert {r.verify for r in model.rows_after(0) if r.id <= got[1].id} == {"not_checked"}
+
+
+def test_a_file_named_for_another_session_fails(tmp_path, key, keys):
+    # M2: genuine pairs copied into a file named for another session. Every signature checks, the name doesn't.
+    logs = LabLogs(tmp_path)
+    a, b = tool_request("echo"), tool_request("read_balance")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    logs.pair(b, key.sign(answer(b, "allow"), b))
+    logs.transcript(SESSION_B).write_bytes(logs.transcript().read_bytes())
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    copied = sorted((r for r in model.rows_after(0) if r.session_id == SESSION_B), key=lambda r: r.id)
+    original = [r for r in model.rows_after(0) if r.session_id == SESSION_A]
+    assert [r.verify for r in copied] == ["failed", "not_checked"]
+    assert "session_file_mismatch" in copied[0].note
+    assert {r.verify for r in original} == {"verified"}
+
+
+def test_judging_is_budgeted_across_polls(tmp_path, key, keys, monkeypatch):
+    # M4: a poll judges sessions until its budget runs out and leaves the rest to later polls. With no budget it
+    # still judges one session, so every session is judged in the end.
+    import model as model_module
+    monkeypatch.setattr(model_module, "JUDGE_BUDGET_S", 0.0)
+    logs = LabLogs(tmp_path)
+    sessions = [SESSION_A, SESSION_B, "33333333-3333-4333-8333-333333333333"]
+    for session_id in sessions:
+        req = tool_request("echo", session_id=session_id)
+        logs.pair(req, key.sign(answer(req, "allow"), req))
+    model = Model(logs.transcript_dir, None, keys)
+    seen = []
+    for _ in range(3):
+        model.refresh()
+        seen.append(sum(r.verify == "verified" for r in model.rows_after(0)))
+    assert seen == [1, 2, 3]
+
+
+def test_a_key_change_greys_sessions_waiting_to_be_judged_again(tmp_path, key, keys, monkeypatch):
+    # M4: a changed key document is judged in again a session at a time. A session still waiting shows no mark from
+    # the old document.
+    import model as model_module
+    logs = LabLogs(tmp_path)
+    for session_id in (SESSION_A, SESSION_B):
+        req = tool_request("echo", session_id=session_id)
+        logs.pair(req, key.sign(answer(req, "allow"), req))
+    live = tmp_path / "live.json"
+    live.write_text(json.dumps(key.document), encoding="utf-8")
+    os.chmod(live, 0o644)
+    model = Model(logs.transcript_dir, None, KeySource({"ACS_GUARDIAN_KEYS": str(live)}))
+    model.refresh()
+    assert [r.verify for r in model.rows_after(0)] == ["verified", "verified"]
+    monkeypatch.setattr(model_module, "JUDGE_BUDGET_S", 0.0)
+    other = decision_key(tmp_path / "other-keys")
+    live.write_text(json.dumps(other.document), encoding="utf-8")
+    os.utime(live, ns=(1, 1))
+    model.refresh()
+    got = {r.session_id: r for r in model.rows_after(0)}
+    assert sorted(r.verify for r in got.values()) == ["failed", "not_checked"]
+    waiting = next(r for r in got.values() if r.verify == "not_checked")
+    assert "judging again" in waiting.note

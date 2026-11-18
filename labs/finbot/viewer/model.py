@@ -34,6 +34,7 @@ import datetime
 import json
 import os
 import stat
+import time
 import unicodedata
 from collections.abc import Mapping
 from pathlib import Path
@@ -67,16 +68,26 @@ MAX_ROWS_PER_ANSWER = 500
 # Session files followed, the most recently changed first.
 MAX_SESSIONS = 200
 # A session longer than this is not judged here, since acs-verify reads the whole session on every change. Its rows
-# read not checked and say to run lab verify. 4000 lines is about 2000 steps, far past a lab scenario, and acs-verify
-# reads that many in well under a second.
-MAX_SESSION_LINES = 4000
+# read not checked and say to run lab verify. 2000 lines is about 1000 steps, far past a lab scenario. acs-verify
+# judged 4000 signed lines in 0.36 seconds (round 2 probe), so 2000 keeps one judge near the poll's budget.
+MAX_SESSION_LINES = 2000
 MAX_SESSION_BYTES = 32 * 1024 * 1024
 # The longest text a row carries for an unreadable line or a note.
 MAX_TEXT_CHARS = 400
 # Audit lines for a step whose transcript line hasn't been read yet wait here.
 MAX_WAITING_AUDIT = 10_000
 
+# One poll spends at most this long judging sessions, and leaves the rest for the next poll (round 2, M4). A poll
+# always judges at least one session, so every session is judged in the end, and a poll judges for at most the budget
+# plus one session at the line cap, about 0.2 second more.
+JUDGE_BUDGET_S = 0.25
+
 TOO_LONG_NOTE = "this session is too long for the viewer to judge. Run lab verify on it"
+RETIRED_NOTE = "the file was replaced or cut shorter and no longer holds this row"
+REJUDGE_NOTE = "judging again under the changed key document"
+WITHHELD_NOTE = "the gateway withheld this answer and denied the step (decision_timeout)"
+CLAIM_NOTE = "the gateway says it withheld the answer above and denied the step (decision_timeout)"
+STRAY_DISCARDS_NOTE = "a discards line that does not follow the answer it names"
 
 # Characters a terminal or a browser can't show as themselves, or that reorder what is shown: controls (Cc), format
 # characters such as bidi overrides, isolates and zero-width marks (Cf), surrogates (Cs), and line and paragraph
@@ -299,14 +310,20 @@ class _Session:
     # can check, so its rows read not checked and never verified.
     first_algorithm: str | None = None
     last_unreadable: Row | None = None
+    # The row whose answer is on the line just read, the only answer a discards line may mark.
+    just_answered: Row | None = None
+    # The line and session_id of the first request naming a session, checked against the file's name (M2).
+    named: tuple[int, str] | None = None
     dirty: bool = False
     judged_with: int = -1
+    judged_at: float = 0.0
 
     def reset(self) -> None:
-        """The file was replaced or cut shorter. Its old rows stay as history, and the new content starts over."""
+        """The file was replaced or cut shorter, so the new content starts over. The caller retires the old rows."""
         self.lines, self.line_count, self.size, self.too_long = [], 0, 0, False
         self.open_request, self.by_request, self.by_line, self.rows = None, {}, {}, []
-        self.first_algorithm, self.last_unreadable, self.dirty = None, None, True
+        self.first_algorithm, self.last_unreadable, self.just_answered, self.named = None, None, None, None
+        self.dirty = True
 
 
 class Model:
@@ -334,6 +351,7 @@ class Model:
         self._seq = 0
         self._waiting: collections.OrderedDict[tuple[str, str], Mapping[str, Any]] = collections.OrderedDict()
         self._audit_unreadable: Row | None = None
+        self._generation_seen: int | None = None
 
     # Reading
 
@@ -345,6 +363,7 @@ class Model:
             raws = session.tail.read_new()
             if session.tail.restarts != session.restarts:
                 session.restarts = session.tail.restarts
+                self._retire(session)
                 session.reset()
             for raw in raws:
                 self._transcript_line(session, raw)
@@ -406,6 +425,16 @@ class Model:
             return []
         newest = sorted(found, reverse=True)[:MAX_SESSIONS]
         return [self.transcript_dir / name for _, name in sorted(newest, key=lambda item: item[1])]
+
+    def _retire(self, session: _Session) -> None:
+        """The file no longer holds these rows, so none keeps a mark judged from content it lost (round 2, M1). They
+        stay as history, out of the session, and are never judged again."""
+        for row in session.rows:
+            if row.id not in self._rows:
+                continue
+            mark = "not_checked" if row.answered or row.method == "unreadable" else "no_answer"
+            row.verify, row.check_note = mark, RETIRED_NOTE
+            self._touch(row)
 
     # Rows
 
@@ -477,6 +506,7 @@ class Model:
 
     def _transcript_line(self, session: _Session, raw: bytes) -> None:
         number = self._record_line(session, raw)
+        just_answered, session.just_answered = session.just_answered, None
         try:
             record = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError, RecursionError):
@@ -494,7 +524,7 @@ class Model:
             session.open_request = (number, envelope)
             return
         if "discards" in record:
-            self._discard(session, record.get("discards"), number)
+            self._discard(session, record.get("discards"), number, just_answered)
             return
         if session.open_request is None:
             self._unreadable(raw, session, "a response line with no request before it", number)
@@ -502,13 +532,18 @@ class Model:
         request, session.open_request = session.open_request, None
         cause = _text(record.get("cause"))
         response = envelope if isinstance(envelope, dict) and ("result" in envelope or "error" in envelope) else None
-        self._step_row(session, request, (number, response), cause, record)
+        row = self._step_row(session, request, (number, response), cause, record)
+        if response is not None:
+            session.just_answered = row
 
     def _step_row(self, session: _Session, request: tuple[int, dict[str, Any]],
                   response: tuple[int, dict[str, Any] | None] | None, cause: str | None,
-                  record: dict[str, Any] | None) -> None:
+                  record: dict[str, Any] | None) -> Row:
         req_line, envelope = request
         params = _mapping(envelope.get("params"))
+        named = _text(_mapping(params.get("metadata")).get("session_id"))
+        if session.named is None and named:
+            session.named = (req_line, named)
         payload = _mapping(params.get("payload"))
         request_id = _text(params.get("request_id"))
         row = Row(0, 0, _text(params.get("timestamp")) or receipt_time(), session.session_id,
@@ -547,24 +582,45 @@ class Model:
             waiting = self._waiting.pop((session.session_id, request_id), None)
             if waiting is not None:
                 self._join(row, waiting)
+        return row
 
-    def _discard(self, session: _Session, request_id: Any, number: int) -> None:
-        row = session.by_request.get(request_id) if isinstance(request_id, str) else None
-        if row is not None:
-            row.note = "the gateway withheld this answer and denied the step (decision_timeout)"
-            session.by_line[number] = row
-            self._touch(row)
+    def _discard(self, session: _Session, request_id: Any, number: int, just_answered: Row | None) -> None:
+        """A discards line is the gateway's unsigned claim, a row of its own, so acs-verify failing it fails that row
+        and never the answer it names (round 2, M3). Only the answer on the line just before may be marked withheld,
+        acs-verify's adjacency rule."""
+        adjacent = just_answered is not None and isinstance(request_id, str) and just_answered.request_id == request_id
+        claim = Row(0, 0, just_answered.t if adjacent else receipt_time(), session.session_id, "withheld",
+                    note=CLAIM_NOTE if adjacent else STRAY_DISCARDS_NOTE, answered=True, lines=(number,))
+        self._add(claim)
+        session.rows.append(claim)
+        session.by_line[number] = claim
+        if adjacent:
+            just_answered.note = WITHHELD_NOTE
+            self._touch(just_answered)
 
     # acs-verify
 
     def _judge(self) -> None:
-        """Run acs-verify over every session that changed, or every session when the key document changed."""
+        """Run acs-verify over sessions that changed, or over every session when the key document changed, within the
+        poll's budget. The longest-waiting session goes first, and the rest wait for the next poll (round 2, M4)."""
         keys = self.keys.current() if self.keys is not None else None
         generation = self.keys.generation if self.keys is not None else 0
-        for session in self._sessions.values():
-            if session.dirty or session.judged_with != generation:
-                session.dirty, session.judged_with = False, generation
-                self._judge_session(session, keys)
+        if self._generation_seen is not None and generation != self._generation_seen:
+            # A mark judged under the old document says nothing under the new one, so it goes until judged again.
+            for session in self._sessions.values():
+                for row in session.rows:
+                    if row.id in self._rows and row.verify in ("verified", "warning", "failed"):
+                        row.verify, row.check_note = "not_checked", REJUDGE_NOTE
+                        self._touch(row)
+        self._generation_seen = generation
+        waiting = sorted((s for s in self._sessions.values() if s.dirty or s.judged_with != generation),
+                         key=lambda s: s.judged_at)
+        started = time.monotonic()
+        for number, session in enumerate(waiting):
+            if number and time.monotonic() - started >= JUDGE_BUDGET_S:
+                break
+            session.dirty, session.judged_with, session.judged_at = False, generation, time.monotonic()
+            self._judge_session(session, keys)
 
     def _judge_session(self, session: _Session, keys: Any | None) -> None:
         from verify import verify_session
@@ -578,13 +634,25 @@ class Model:
             verdict = None
             marks = {row.id: (self._unchecked(row), None) for row in session.rows}
         else:
-            verdict = verify_session(session.lines, keys)
+            verdict = self._name_problem(session) or verify_session(session.lines, keys)
             marks = {row.id: self._mark(row, session, verdict) for row in session.rows}
         for row in session.rows:
             mark, note = marks[row.id]
             if (row.verify, row.check_note) != (mark, note):
                 row.verify, row.check_note = mark, note
                 self._touch(row)
+
+    @staticmethod
+    def _name_problem(session: _Session) -> Any | None:
+        """The gateway names each file for its session, so a file whose requests name another session holds lines
+        copied from elsewhere, each of which may verify on its own (round 2, M2)."""
+        from verify import SessionVerdict
+
+        if session.named is None or session.named[1] == session.session_id:
+            return None
+        return SessionVerdict(ok=False, failure_line=session.named[0], failure_code="session_file_mismatch",
+                              failure_reason=f"the file is named for session {session.session_id}, and its requests "
+                                             f"name session {session.named[1]}")
 
     @staticmethod
     def _unchecked(row: Row) -> str:
