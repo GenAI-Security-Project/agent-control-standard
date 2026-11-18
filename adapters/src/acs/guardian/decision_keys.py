@@ -141,15 +141,15 @@ def load_decision_signer(env: Mapping[str, str], *, now: datetime.datetime | Non
         settings[name] = value
     key_id = settings[KEY_ID_ENV]
     signing_key = load_signing_key(settings[SIGNING_KEY_FILE_ENV], key_id)
-    try:
-        keys = load_response_keys(settings[KEY_DOCUMENT_ENV], key_id=key_id, now=now)
-    except KeyDocumentError as exc:
-        raise DecisionKeyError(str(exc)) from exc
-    # A regenerated seed beside a stale document would sign responses no client can verify.
+    # The seed's own fingerprint is the pin. A regenerated seed beside a stale document would sign responses no client
+    # can verify, so the pin refuses that, and a pinned document needs no owner check, so a document another user
+    # owns, as in a container layout, never stops the Guardian (final review round 2 R3b).
     fingerprint = signing_key.verification_key().fingerprint
-    if fingerprint != keys.fingerprint:
-        raise DecisionKeyError(f"the key in {SIGNING_KEY_FILE_ENV} has fingerprint {fingerprint}, but "
-                               f"{KEY_DOCUMENT_ENV} publishes {keys.fingerprint} for key_id {key_id!r}")
+    try:
+        keys = load_response_keys(settings[KEY_DOCUMENT_ENV], key_id=key_id, now=now, fingerprint=fingerprint)
+    except KeyDocumentError as exc:
+        raise DecisionKeyError(f"{exc}. The Guardian pins {KEY_DOCUMENT_ENV} to the key in {SIGNING_KEY_FILE_ENV}, "
+                               f"fingerprint {fingerprint}") from exc
     return DecisionSigner(signing_key=signing_key, keys=keys)
 
 

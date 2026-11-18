@@ -129,6 +129,46 @@ def test_a_seed_missing_from_the_document_refuses(files):
         load_decision_signer(_env(key_path, doc_path))
 
 
+def _document_owned_by_another_user(doc_path):
+    """fstat reports another uid for the document and its directory, as a non-root test can't chown. The seed keeps
+    its real owner, since the seed is a secret and its owner rule is unchanged."""
+    from types import SimpleNamespace
+    from unittest import mock
+    from acs.client import _secrets
+    real_fstat = os.fstat
+    foreign = {os.stat(doc_path).st_ino, os.stat(doc_path.parent).st_ino}
+
+    def fstat(fd):
+        st = real_fstat(fd)
+        uid = os.geteuid() + 1 if st.st_ino in foreign else st.st_uid
+        return SimpleNamespace(st_mode=st.st_mode, st_uid=uid, st_size=st.st_size)
+
+    return mock.patch.object(_secrets.os, "fstat", side_effect=fstat)
+
+
+def test_a_document_another_user_owns_still_starts_the_guardian(tmp_path):
+    # Final review round 2 R3b: the Guardian pins its document with its own seed's fingerprint, so ownership never
+    # stops it. Seed and document sit in separate directories so only the document's side is foreign.
+    seeds, docs = tmp_path / "seed", tmp_path / "docs"
+    key_path, doc_path = write_key_files(seeds, key_id=KEY_ID, guardian_id="lab-guardian")
+    docs.mkdir()
+    moved = docs / doc_path.name
+    doc_path.rename(moved)
+    with _document_owned_by_another_user(moved):
+        signer = load_decision_signer(_env(key_path, moved))
+    assert signer.keys.fingerprint == signer.signing_key.verification_key().fingerprint
+
+
+def test_a_document_another_user_owns_with_a_different_key_still_refuses(tmp_path):
+    seeds, docs = tmp_path / "seed", tmp_path / "docs"
+    key_path, _ = write_key_files(seeds, key_id=KEY_ID, guardian_id="lab-guardian")
+    _, other_doc = write_key_files(docs, key_id=KEY_ID, guardian_id="lab-guardian")
+    os.chmod(docs, 0o755)
+    with _document_owned_by_another_user(other_doc), pytest.raises(DecisionKeyError, match="fingerprint") as caught:
+        load_decision_signer(_env(key_path, other_doc))
+    assert "owned by uid" not in str(caught.value)
+
+
 def test_an_expired_or_revoked_key_refuses(files):
     key_path, doc_path = files
     later = datetime.datetime.now(UTC) + datetime.timedelta(days=91)
