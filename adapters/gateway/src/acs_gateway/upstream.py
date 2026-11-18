@@ -21,6 +21,7 @@ import httpx
 from acs_gateway import secretfile
 from acs_gateway.apply import NEUTRAL_LINE
 from acs_gateway.sessions import conversation_parts, is_stream
+from acs_gateway.telemetry import replay_miss
 
 if TYPE_CHECKING:
     from acs_gateway.config import GatewayConfig
@@ -511,6 +512,9 @@ class ReplayTransport(httpx.AsyncBaseTransport):
         answer = self._answer(await request.aread(), request.headers.get(BRANCH_HEADER))
         if answer.miss is not None:
             _audit("replay_miss", **answer.miss)
+            # The transport runs inside the gateway's upstream send, so the miss marks that model call's span (LAB-09,
+            # A.8, A.9). With tracing off this does nothing.
+            replay_miss(**answer.miss)
         return _response(200, answer.content, answer.content_type)
 
     def _answer(self, raw: bytes, branch: str | None) -> _Answer:

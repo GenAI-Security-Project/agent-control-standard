@@ -299,6 +299,22 @@ def test_a_replay_miss_is_an_event_on_the_model_call_span(gateway, upstream):
                                       "acs.lab.replay.branch": "a,d", "acs.lab.replay.stream": False}
 
 
+def test_the_replay_transport_marks_its_miss_on_the_model_call_span(gateway, guardian, tmp_path, audit):
+    """LAB-06's own replay transport, not a stand-in, puts the miss on the model call span (A.8, A.9, rehearsal R8)."""
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_UPSTREAM="replay",
+                     ACS_RECORDINGS_DIR=str(rec), ACS_UPSTREAM_URL="http://127.0.0.1:9/v1")
+    spans = traced(client)
+    assert client.post("/v1/responses", json=finbot_request(user="Nothing recorded for this")).status_code == 200
+    (miss,) = [e for e in audit() if e["acs_audit_event"] == "replay_miss"]
+    (model,) = [s for s in spans() if s.name.startswith("chat")]
+    (event,) = [e for e in model.events if e.name == "acs.lab.replay_miss"]
+    assert event.attributes["acs.lab.replay.cause"] == miss["cause"] == "no_recording"
+    assert event.attributes["acs.lab.replay.step"] == miss["step"]
+    assert event.attributes["acs.lab.replay.stream"] is False
+
+
 def test_a_replay_miss_outside_a_model_call_does_nothing():
     from acs_gateway.telemetry import replay_miss
 
