@@ -257,9 +257,9 @@ class ResponseKeysTest(_ResponseKeysBase):
         self.assertEqual(decision.cause, "server_hello_signature_invalid")
 
     def test_a_signed_step_decision_offered_as_a_server_hello_is_no_answer(self) -> None:
-        # Review round 4 L1: LAB-01 drops the binding rule's request_id refusal, so a signed decision whose JSON-RPC id
-        # collides with the ClientHello's verifies by keyring alone. The required-field check must still refuse it,
-        # with or without the request_id, on the key document path as on the HMAC path.
+        # The binding rule no longer refuses a handshake result for its request_id, so a signed decision whose
+        # JSON-RPC id collides with the ClientHello's verifies by keyring alone. The required-field check must
+        # still refuse it, with or without the request_id, on the key document path as on the HMAC path.
         from acs.client import NoAnswer
         for name, with_request_id in (("with request_id", True), ("without request_id", False)):
             with self.subTest(name):
@@ -274,12 +274,8 @@ class ResponseKeysTest(_ResponseKeysBase):
                                        wraps=_handshake.server_hello_problem) as checked:
                     decision = self.hello(answer, session_id=f"decision-as-hello-{with_request_id}")
                 self.assertNotIsInstance(decision, Negotiated)
-                if with_request_id and isinstance(decision, SessionRefused):
-                    # Today's base still refuses a handshake result that carries request_id inside the binding rule,
-                    # so the signature never verifies. After LAB-01 drops that rule, this case reaches the
-                    # required-field check below like the other one.
-                    self.assertEqual(decision.cause, "server_hello_signature_invalid")
-                    continue
+                # The binding rule ignores a handshake result's request_id, so both cases reach the
+                # required-field check.
                 self.assertIsInstance(decision, NoAnswer)
                 self.assertEqual(decision.cause, "invalid_server_hello")
                 # It lacks negotiated_version, which the classifier checks before server_hello_problem runs.
