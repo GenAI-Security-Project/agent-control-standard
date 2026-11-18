@@ -238,6 +238,13 @@ class Gateway:
             _audit("session_ended", session_id=session.session_id, reason=reason, cause="lock_timeout",
                    request_id=None)
             return
+        if session.retire_cause == "discard_unwritten":
+            # A step that held the lock retired the session on an allow it withheld and couldn't mark, after this end
+            # was scheduled. Nothing can retire it again while the lock is held, so this is the last check.
+            session.lock.release()
+            _audit("session_ended", session_id=session.session_id, reason=reason, cause="discard_unwritten",
+                   request_id=None)
+            return
         try:
             token = StepToken(time.monotonic() + bound - _STEP_GRACE_S)
             try:
@@ -1207,7 +1214,7 @@ class Gateway:
     def _retire(self, session: Session, method: str, token: StepToken, cause: str,
                 worker: asyncio.Future | None = None) -> None:
         in_flight = token.retire()
-        self.sessions.retire(session)
+        self.sessions.retire(session, cause)
         # in_flight says a line or the send started before retirement and may still land, so a reader expects it.
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
                request_id=token.request_id, in_flight=in_flight)
@@ -1220,8 +1227,8 @@ class Gateway:
         """Send no sessionEnd for a session whose transcript ends on an allow it withheld and couldn't mark.
 
         A sessionEnd tail would make a verifier read the session as complete with that allow carried out. Without it
-        the unmarked allow stays the last line and the session reads as incomplete. A sessionEnd already under way
-        audits its own outcome, so nothing more is said for it here.
+        the unmarked allow stays the last line and the session reads as incomplete. A sessionEnd already scheduled
+        re-checks the retire cause under the session lock and audits its own outcome, so nothing more is said here.
         """
         if session.ending:
             return

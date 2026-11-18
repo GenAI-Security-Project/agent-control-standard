@@ -146,8 +146,9 @@ class Session:
     active: int = 0
     # time.monotonic() when opening last failed, so a retry waits out the backoff.
     open_failed_at: float | None = None
-    # A step of this session hung past its bounded wait, so the session left the map and takes no more steps.
-    retired: bool = False
+    # Why the session left the map and takes no more steps, or None while it is live. A cause, not a flag, because
+    # discard_unwritten also forbids the sessionEnd tail, and a sessionEnd scheduled earlier re-checks it.
+    retire_cause: str | None = None
     # Requests counted as they pass the input phase, and the latest count at each request position, so a reply to an
     # attempt the client has already retried never places its calls in the branch (issue #579, final review I-1).
     arrivals: int = 0
@@ -157,6 +158,10 @@ class Session:
     ordinal: int = 0
     # Set once the gateway scheduled steps/sessionEnd, so a session is never ended twice.
     ending: bool = False
+
+    @property
+    def retired(self) -> bool:
+        return self.retire_cause is not None
 
     @property
     def busy(self) -> bool:
@@ -199,9 +204,9 @@ class SessionMap:
         """The key's session if one exists, without creating one, evicting or touching the LRU order."""
         return self._sessions.get(key)
 
-    def retire(self, session: Session) -> None:
+    def retire(self, session: Session, cause: str) -> None:
         """Take a session out of the map, so the next request for its conversation opens a fresh one."""
-        session.retired = True
+        session.retire_cause = cause
         for key in [k for k, s in self._sessions.items() if s is session]:
             del self._sessions[key]
 

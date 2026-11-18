@@ -102,6 +102,37 @@ def test_a_session_retired_for_an_unmarked_answer_sends_no_session_end(gateway, 
     assert len(events(audit, "session_ended")) == 1
 
 
+class BumpThenUnmarkable(UnmarkableLine):
+    """Bumps the epoch while the step's answer line stalls, so sessionEnd is already scheduled when it retires."""
+
+    def __init__(self, inner, gateway):
+        super().__init__(inner)
+        self.gateway = gateway
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if direction == "resp" and envelope is not None and self.stall:
+            self.gateway.bump_epoch()
+        super().append(session_id, direction, envelope, **kwargs)
+
+
+def test_a_session_end_scheduled_before_an_unmarked_answer_is_not_sent(gateway, guardian, upstream, audit, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="300")
+    opened(client, upstream)
+    gw = client.app.state.gateway
+    gw.guardian.transcript = BumpThenUnmarkable(gw.guardian.transcript, gw)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request(user="First conversation"))
+    (retired,) = events(audit, "session_retired")
+    assert retired["cause"] == "discard_unwritten"
+    ended = wait_for_end(audit, retired["session_id"])
+    assert (ended["reason"], ended["cause"], ended["request_id"]) == ("cancelled", "discard_unwritten", None)
+    time.sleep(1.0)
+    lines = lines_of(tmp_path, retired["session_id"])
+    assert lines[-1]["dir"] == "resp" and lines[-1]["envelope"]["result"]["decision"] == "allow", lines[-2:]
+    assert "steps/sessionEnd" not in [line["envelope"]["method"] for line in lines if line["dir"] == "req"]
+    assert len(events(audit, "session_ended")) == 1
+
+
 def test_a_graceful_shutdown_ends_every_open_session(gateway, guardian, upstream, audit, tmp_path):
     client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
     opened(client, upstream)

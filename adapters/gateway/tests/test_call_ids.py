@@ -108,7 +108,7 @@ def retire_on_peek(gw, call):
         session = original_peek(key)
         peeks.append(key)
         if len(peeks) == 1 and session is not None:
-            gw.sessions.retire(session)
+            gw.sessions.retire(session, "step_hung")
             stand_in = Session(session_id=session.session_id, epoch=session.epoch)
             stand_in.calls[call["call_id"]] = CachedOutcome("delivered", call["name"], dict(call))
             return stand_in
@@ -276,7 +276,7 @@ def test_a_replacement_session_another_request_created_still_gets_the_check(gate
         if len(peeks) == 1:
             # The pre-pass sees the session that delivered call_1. Then another request replaces it with a session
             # of its own, which has never seen call_1 (the probe's shape, review R11-I1).
-            gw.sessions.retire(session)
+            gw.sessions.retire(session, "step_hung")
             gw.sessions.get(key)
         return session
 
