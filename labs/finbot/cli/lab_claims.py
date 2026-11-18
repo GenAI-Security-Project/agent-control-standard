@@ -28,6 +28,8 @@ class Ledger:
     triggers: tuple[str, ...]
     exclude: tuple[str, ...]
     signed: bool
+    # Claim rows whose evidence still says Unconfirmed:, which the sign gate refuses.
+    unconfirmed: tuple[str, ...] = ()
 
 
 def _block(text: str, tag: str) -> tuple[str, ...]:
@@ -38,6 +40,20 @@ def _block(text: str, tag: str) -> tuple[str, ...]:
     if not lines:
         raise ValueError(f"the ledger's {tag} block is empty")
     return lines
+
+
+def _unconfirmed(text: str) -> tuple[str, ...]:
+    """Claim rows with Unconfirmed: anywhere in the evidence cell, not only at its start.
+
+    A row can open with the evidence that exists and then name what it can't show. Matching the whole cell keeps
+    that row from slipping past the sign gate.
+    """
+    rows = []
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if re.fullmatch(r"C-\d{2}", cells[0]) and len(cells) >= 3 and "Unconfirmed:" in cells[2]:
+            rows.append(cells[0])
+    return tuple(rows)
 
 
 def _signed(text: str) -> bool:
@@ -65,6 +81,7 @@ def load_ledger(path: Path) -> Ledger:
         triggers=_block(text, "claims-triggers"),
         exclude=_block(text, "claims-exclude"),
         signed=_signed(text),
+        unconfirmed=_unconfirmed(text),
     )
 
 
@@ -72,7 +89,7 @@ def load_ledger(path: Path) -> Ledger:
 class Finding:
     path: str
     line: int
-    kind: str  # "banned", "unledgered", "unknown_id", "unsigned" or "unreadable"
+    kind: str  # "banned", "unledgered", "unknown_id", "unsigned", "unconfirmed" or "unreadable"
     text: str
 
 
@@ -201,11 +218,14 @@ def _count_files(root: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Exit 0 clean, 1 findings, 2 the ledger or the path can't be read."""
+    """Exit 0 clean, 1 findings, 2 the ledger or the path can't be read.
+
+    --require-signed also fails on an empty sign-off row and on each claim row still marked Unconfirmed:.
+    """
     parser = argparse.ArgumentParser(prog="lab_claims", description="Hold lab text to the claims ledger.")
     parser.add_argument("path", nargs="?", help="directory to scan, default the directory holding the ledger")
     parser.add_argument("--ledger", help="ledger file, default CLAIMS.md beside the cli directory")
-    parser.add_argument("--require-signed", action="store_true", help="fail while the sign-off row is empty")
+    parser.add_argument("--require-signed", action="store_true", help="fail while the sign-off row is empty or any claim row is Unconfirmed:")
     args = parser.parse_args(argv)
     ledger_path = Path(args.ledger) if args.ledger else Path(__file__).resolve().parents[1] / "CLAIMS.md"
     try:
@@ -220,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     findings = scan(root, ledger, ledger_path)
     if args.require_signed and not ledger.signed:
         findings.append(Finding(ledger_path.name, 0, "unsigned", "the sign-off row is empty"))
+    if args.require_signed:
+        # Signing a ledger that still says a row can't be confirmed would sign a claim nobody checked.
+        findings += [Finding(ledger_path.name, 0, "unconfirmed", row) for row in ledger.unconfirmed]
     if findings:
         for f in findings:
             print(f"NOT YET: {f.path}:{f.line} {f.kind} {f.text}")

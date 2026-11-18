@@ -225,16 +225,37 @@ def test_windows_named_as_supported_fails(tree):
     assert [f for f in _scan(tree, {"b.md": "Windows is untested. <!-- claim:C-16 -->\n"}) if f.path == "b.md"] == []
 
 
+def _sign(ledger, text=None):
+    body = text if text is not None else ledger.read_text(encoding="utf-8")
+    ledger.write_text(body.replace("| | | |", f"| Rock Lambros | 2026-11-30 | {'a' * 40} |"), encoding="utf-8")
+
+
 def test_require_signed(tree, capsys):
     root, ledger = tree
     (root / "ok.md").write_text("Plain text.\n", encoding="utf-8")
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     assert "NOT YET" in capsys.readouterr().out
-    sha = "a" * 40
-    ledger.write_text(ledger.read_text(encoding="utf-8").replace(
-        "| | | |", f"| Rock Lambros | 2026-11-30 | {sha} |"), encoding="utf-8")
+    # Signed and with every row confirmed, the gate opens.
+    _sign(ledger, ledger.read_text(encoding="utf-8").replace("Unconfirmed:", "Confirmed:"))
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 0
     assert capsys.readouterr().out.startswith("DONE: lab text holds to the ledger (1 files)")
+
+
+def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
+    root, ledger = tree
+    _sign(ledger)
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    out = capsys.readouterr().out
+    for row in ("C-01", "C-07", "C-08", "C-11", "C-12"):
+        assert f"unconfirmed {row}" in out
+    assert "unsigned" not in out
+    # Without the flag the same ledger is fine, since CI runs before Rock decides.
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 0
+
+
+def test_unconfirmed_rows_parsed(tree):
+    _, ledger = tree
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-07", "C-08", "C-11", "C-12")
 
 
 def test_main_exit_codes(tree, tmp_path):
