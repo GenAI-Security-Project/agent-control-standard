@@ -296,3 +296,17 @@ def test_a_streamed_call_to_a_pinned_tool_with_its_declaration_unchanged_is_deli
         streamed = decode(b"".join(r.iter_bytes()))
     assert rebuilt_output(streamed) == CALL["output"]
     assert decisions(audit) == [("allow", [])]
+
+
+def test_a_streamed_call_to_a_redefined_pinned_tool_is_replaced_by_the_neutral_line(
+        gateway, harness_guardian, upstream, audit, tmp_path):
+    """The deny side of the pin on the streamed path, the twin of the whole-answer mismatch test above."""
+    client = pinned_client(gateway, harness_guardian, HARNESS_PINNED_VERSION=PINNED_DIGEST)
+    upstream.reply(SSE(encode(stream_events(CALL["output"][0]))))
+    with client.stream("POST", "/v1/responses", json={**declaring(POISONED), "stream": True}) as r:
+        streamed = decode(b"".join(r.iter_bytes()))
+    output = rebuilt_output(streamed)
+    assert [item["type"] for item in output] == ["message"]
+    assert output[0]["content"][0]["text"] == NEUTRAL
+    assert sent_versions(tmp_path) == [POISONED_DIGEST]
+    assert decisions(audit) == [("deny", ["tool_content_hash_mismatch"])]
