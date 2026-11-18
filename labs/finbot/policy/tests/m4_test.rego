@@ -1,6 +1,6 @@
 # Module 4 tests: a transfer above data.finbot_lab.payment_ask_threshold waits for a person.
 #
-# The starter fails test_above_threshold_asks, test_non_number_amount_asks and test_forged_answer_still_asks.
+# tools/modules.json lists the tests the starter fails.
 package finbot_test.m4
 
 import data.finbot
@@ -61,6 +61,18 @@ test_non_number_amount_asks if {
 test_missing_amount_asks if {
 	inp := json.remove(transfer(7500), ["payload/arguments/amount"])
 	verdict_for(inp).decision == "ask"
+}
+
+test_missing_threshold_asks if {
+	v := finbot.verdict with input as transfer(100)
+		with data.finbot_lab as {"tools": tools, "vendor_domains": [], "egress_allow": []}
+	v.decision == "ask"
+}
+
+test_string_threshold_asks if {
+	v := finbot.verdict with input as transfer(100) with data.finbot_lab.tools as tools
+		with data.finbot_lab.payment_ask_threshold as "5000"
+	v.decision == "ask"
 }
 
 test_deny_beats_ask if {
