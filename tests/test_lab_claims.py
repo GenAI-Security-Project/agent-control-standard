@@ -1,10 +1,16 @@
 """Tests for the FinBot lab claims ledger and the check that holds lab text to it (issue #587, LAB-14).
 
-Version 1.0.0. Owner: ACS lab maintainers.
+Version 1.1.0. Owner: ACS lab maintainers.
 """
 
+import concurrent.futures
+import hashlib
 import importlib.util
+import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -360,15 +366,17 @@ def test_fifo_does_not_hang(tree):
     assert lab_claims.scan(root, lab_claims.load_ledger(ledger)) == []
 
 
-def test_unclosed_fence_is_a_finding(tree):
-    # Round 4: the renderer reads an unclosed fence as prose, so the text after it is checked like any paragraph.
-    findings = _scan(tree, {"a.md": "```\nx\n\nACS guarantees every attack is stopped.\n"})
-    assert _kinds(findings) == ["unledgered"]
+def test_unclosed_fence_is_code_to_the_end(tree):
+    # Round 8: CommonMark, and so GitHub, runs an unclosed fence to the end of the file. Triggers are exempt in code,
+    # and a banned phrase is still caught.
+    assert _scan(tree, {"a.md": "```\nx\n\nACS guarantees every attack is stopped.\n"}) == []
+    assert _kinds(_scan(tree, {"b.md": "```\nx\n\nThe lab is ACS-Core conformant.\n"})) == ["banned"]
 
 
 def test_fence_closes_only_on_its_own_marker(tree):
-    findings = _scan(tree, {"a.md": "~~~\n```\nACS guarantees safety.\n"})
-    assert _kinds(findings) == ["unledgered"]
+    # A backtick line doesn't close a tilde fence, so the trigger after it is still inside the code block.
+    assert _scan(tree, {"a.md": "~~~\n```\nACS guarantees safety.\n"}) == []
+    assert _kinds(_scan(tree, {"b.md": "~~~\n```\n~~~\nACS guarantees safety.\n"})) == ["unledgered"]
 
 
 def test_file_count_counts_scanned_files_only(tree, capsys):
@@ -541,8 +549,8 @@ CAUGHT = [
     ("html_entity.html", "<p>The lab is ACS-Core&nbsp;conformant</p>\n"),
     ("anyN.md", "The lab is ACS-Core conformant and FIPS 140 validated. <!-- claim:N-01 -->\n"),
     ("visible_marker.md", "The lab is ACS-Core conformant. claim:N-06\n"),
-    ("unclosed.md", "```\nx\n\nACS guarantees every attack is stopped.\n"),
-    ("tilde_mismatch.md", "~~~\n```\nACS guarantees safety.\n"),
+    # Round 8: CommonMark runs an unclosed fence to the end of the file, so GitHub shows the rest as code. A banned
+    # phrase there is still caught (test_unclosed_fence_is_code_to_the_end).
     ("lower_marker.md", "ACS guarantees safety. <!-- claim:c-03 -->\n"),
     ("heading.md", "# ACS guarantees safety\nNext line. <!-- claim:C-03 -->\n"),
     ("wrapped.md", "The lab is ACS-Core\n  conformant.\n"),
@@ -591,7 +599,6 @@ CAUGHT = [
     ("combining_cgj.md", "The gateway is produc͏tion-ready.\n"),
     ("variation_sel.md", "The gateway is produc️tion-ready.\n"),
     ("hangul_filler.md", "The lab is ACS-Coreㅤconformant.\n"),
-    ("trig_escape.md", "Decisions are signed\\_with ML-DSA.\n"),
     ("trig_cgj.md", "ACS gua͏rantees safety.\n"),
     ("trig_vs.md", "ACS gua️rantees safety.\n"),
     # Round 3 probes: fences, units and markers.
@@ -645,6 +652,8 @@ PASSES = [
     ("indented_code.md", "Run this.\n\n    lab verify --all\n"),
     ("html_pre.html", "<pre>lab verify --all</pre>\n"),
     ("snake_case.md", "Set `on_decision_failure` to deny.\n"),
+    # Round 8, I-B: an escaped underscore renders as signed_with, one identifier, so no trigger starts inside it.
+    ("trig_escape.md", "Decisions are signed\\_with ML-DSA.\n"),
 ]
 
 
@@ -654,7 +663,7 @@ def test_honest_text_passes(tree, name, body):
 
 
 def test_marker_on_the_next_line_is_its_own_block(tree):
-    # Python-Markdown lifts a comment on its own line out of the paragraph, so it doesn't mark the line above.
+    # A line that opens with a comment is an HTML block in CommonMark, so it doesn't mark the line above.
     findings = _scan(tree, {"a.md": "ACS guarantees safety.\n<!-- claim:C-03 -->\n"})
     assert _kinds(findings) == ["unledgered"]
 
@@ -673,13 +682,6 @@ def test_script_and_style_in_html_are_not_scanned(tree):
     # Round 4 ruling: code makes no claim to attendees, and script or style in a page is code.
     body = "<script>\nconst b = 'ACS-Crypto verified';\n</script>\n<style>/* ACS-Crypto */</style>\n<p>Fine.</p>\n"
     assert _scan(tree, {"a.html": body}) == []
-
-
-def test_scan_refuses_without_the_renderer(tree, monkeypatch):
-    root, ledger = tree
-    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
-    monkeypatch.setattr(lab_claims, "markdown", None)
-    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
 
 
 def _confirmed(ledger: Path) -> str:
@@ -883,8 +885,8 @@ def test_tilde_block_below_the_sign_off_is_refused(tree):
 
 def test_ledger_names_the_renderer_divergences():
     text = _section("What the tests enforce and what only a reader catches")
-    assert "more text" not in text and "not GitHub's renderer" in text
-    assert "list" in text and "markdown=\"block\"" in text
+    assert "more text" not in text and "reads Markdown differently from GitHub" in text
+    assert "lists" in text and "footnote" in text
 
 
 # ---------------------------------------------------------------- Fix round 6: named fixes
@@ -1288,13 +1290,6 @@ def test_ledger_says_where_a_marker_goes():
     assert "before or after the sentence on the same line" in " ".join(head.split())
 
 
-def test_scan_refuses_without_superfences(tree, monkeypatch):
-    root, ledger = tree
-    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
-    monkeypatch.setattr(lab_claims, "superfences", None)
-    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
-
-
 def test_every_cited_evidence_path_exists():
     ledger = lab_claims.load_ledger(LEDGER)
     assert ledger.evidence, "the ledger cites no evidence path"
@@ -1326,5 +1321,242 @@ def test_viewer_evidence_is_pending_until_lab_13_lands():
 
 
 def test_reader_only_list_names_admonitions_with_a_blank_line():
+    # Round 8: CommonMark reads an admonition body after a blank line as code, as GitHub does, so the ledger says the
+    # two agree rather than naming it as reader-only.
     text = " ".join(_section("What the tests enforce and what only a reader catches").split())
-    assert "admonition" in text and "blank line" in text and "code block on GitHub" in text
+    assert "admonition body after a blank line is a code block on GitHub and to the check alike" in text
+
+
+# ---------------------------------------------------------------- Fix round 8: a CommonMark parser
+
+FORGE = "The gateway can forge an allow."
+SIGNED = f"Decisions are signed with ML-DSA-65. {C2}"
+
+R8_CAUGHT = [
+    # I-A: a marker binds only to the sentences on its own source line, before or after it.
+    ("lead_next_line.md", f"{C2} Decisions are signed with ML-DSA-65.\n{FORGE}\n", "unledgered"),
+    ("lead_after_forge.md", f"{FORGE}\n{C2} Decisions are signed with ML-DSA-65.\n", "unledgered"),
+    ("lead_mid.md", f"Read this first.\n{C2} Decisions are signed with ML-DSA-65.\n{FORGE}\n", "unledgered"),
+    ("lead_wrap_claim.md", f"{C4} Anyone holding the HMAC key can\nforge an allow.\n", "unledgered"),
+    ("trail_line_2.md", f"{FORGE}\n{SIGNED}\n", "unledgered"),
+    ("trail_line_2_item.md", f"- {FORGE}\n  {SIGNED}\n", "unledgered"),
+    ("trail_line_2_banned.md", f"The lab is ACS-Core conformant.\nIt isn't ACS-Core conformant. {N6}\n", "banned"),
+    ("trail_line_2.txt", f"{FORGE}\n{SIGNED}\n", "unledgered"),
+    # m-1: a tab-indented nested item after paragraph text is a nested item of its own.
+    ("tab_para_then_item_sib.md", f"- Start the stack.\n\n\t{SIGNED}\n\t- {FORGE}\n", "unledgered"),
+    # m-2: a changed ordered delimiter starts a new list, and an unprefixed year leaves the quote.
+    ("ordered_delim_change.md", f"1. {SIGNED}\n2) {FORGE}\n", "unledgered"),
+    ("quote_list_lazy_year.md", f"> 1. Decisions were signed with ML-DSA-65 in December\n2026. {C2}\n", "unledgered"),
+    # I-B: an underscore that isn't between two letters or digits still reads as a space.
+    ("emph_raw_banned.md", "<details><summary>We compared ACS with _AGT_ here</summary>\n\nBody.\n\n</details>\n",
+     "banned"),
+    ("emph_md_trigger.md", "Decisions are _signed with_ ML-DSA-65.\n", "unledgered"),
+    ("emph_txt_trigger.txt", "Decisions are _signed with_ ML-DSA-65.\n", "unledgered"),
+    ("snake_prose_trigger.md", "The gateway can forge_an allow.\n", "unledgered"),
+    ("underscore_forge.md", "The gateway can _forge_ an allow.\n", "unledgered"),
+    ("underscore_forge.txt", "The gateway can _forge_ an allow.\n", "unledgered"),
+    ("txt_emph.txt", "The lab is _ACS-Core conformant_.\n", "banned"),
+    ("code_fips.md", "Signing follows `FIPS 204`.\n", "unledgered"),
+]
+
+
+@pytest.mark.parametrize("name,body,kind", R8_CAUGHT, ids=[c[0] for c in R8_CAUGHT])
+def test_round_8_overclaim_is_caught(tree, name, body, kind):
+    assert kind in _kinds(_scan(tree, {name: body}))
+
+
+R8_PASSES = [
+    # I-A: a marker binds to every sentence on its own line, and a marker can sit beside inline HTML or another marker.
+    ("lead_then_inline_html.md", f"{C2} <strong>Decisions are signed with ML-DSA-65.</strong>\n"),
+    ("lead_two_markers.md", f"{C2} {C4} Decisions are signed with ML-DSA-65 and a holder can forge an allow.\n"),
+    ("lead_two_sentences.md", f"{C2} Decisions are signed with ML-DSA-65. Read the key document.\n"),
+    ("trail_two_sentences.md", f"Read the key document. Decisions are signed with ML-DSA-65. {C2}\n"),
+    ("wrapped_sentence.md", f"Anyone holding the HMAC key can\nforge an allow. {C4}\n"),
+    # I-C: an indented code block inside a step is code, where triggers are exempt.
+    ("item_indented_code_2.md", "- Check the run:\n\n      ./lab.sh verify\n"),
+    ("item_indented_code_3.md", "1. Check the run:\n\n       ./lab.sh verify\n"),
+    ("nested_indented_code.md", "1. Outer.\n   - Check the run:\n\n         ./lab.sh verify\n"),
+    # m-1: tabs expand to stops of four, as in CommonMark.
+    ("tab_fence_in_step.md", "1. Check the run:\n\n\t```bash\n\t./lab.sh verify\n\t```\n"),
+    ("tab_year_wrap.md", f"- Start.\n\n\tDecisions were signed with ML-DSA-65 in December\n\t2026. {C2}\n"),
+    # m-2: lazy continuation keeps a quote's paragraph together.
+    ("quote_lazy.md", f"> Decisions are signed\nwith ML-DSA-65. {C2}\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", R8_PASSES, ids=[c[0] for c in R8_PASSES])
+def test_round_8_honest_text_passes(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+# I-B: real lab identifiers. An underscore between two letters or digits is part of the word, so no trigger starts
+# inside an identifier, in prose or in inline code.
+IDENTIFIER_SENTENCES = {
+    "fail_closed_reason": "A refused session shows {session_refused_fail_closed} in the audit log.",
+    "decision_failure": "When the Guardian is down, the reason reads {decision_failure_fail_closed}.",
+    "keyring_verified": "The {keyring_verified} column names the key the viewer used.",
+    "response_verified": "The {response_verified} field sits next to the method name.",
+    "acs_verify": "Run {acs_verify} from the viewer directory.",
+    "provenance": "The {policy_requires_provenance} rule is off in this lab.",
+    "require_signed_with": "Pass {require_signed} with a value of true to refuse HMAC sessions.",
+}
+
+
+def _identifier_cases():
+    cases = []
+    for key, template in IDENTIFIER_SENTENCES.items():
+        for form, md, html_code in (("prose", "{}", "{}"), ("code", "`{}`", "<code>{}</code>")):
+            text = re.sub(r"\{([^}]*)\}", lambda m: md.format(m.group(1)), template)
+            page = re.sub(r"\{([^}]*)\}", lambda m: html_code.format(m.group(1)), template)
+            cases += [(f"{key}_{form}.md", text + "\n"), (f"{key}_{form}.txt", text + "\n"),
+                      (f"{key}_{form}.html", f"<p>{page}</p>\n")]
+    return cases
+
+
+@pytest.mark.parametrize("name,body", _identifier_cases(), ids=[c[0] for c in _identifier_cases()])
+def test_identifier_underscores_join_words(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+def test_markdown_renders_with_markdown_it_only():
+    source = MODULE.read_text(encoding="utf-8")
+    assert "markdown_it" in source
+    assert not re.search(r"^\s*(?:import|from)\s+(?:markdown|pymdownx)\b", source, re.M)
+
+
+def test_markdown_it_is_pinned_once_in_the_lock():
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pins = re.findall(r'"markdown-it-py==([\d.]+)"', project)
+    assert len(pins) == 1, "pyproject.toml must pin markdown-it-py to one exact version"
+    lock = (ROOT / "uv.lock").read_text(encoding="utf-8")
+    assert re.search(rf'name = "markdown-it-py"\nversion = "{re.escape(pins[0])}"', lock)
+
+
+def test_scan_refuses_without_markdown_it(tree, monkeypatch):
+    root, ledger = tree
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+    monkeypatch.setattr(lab_claims, "markdown_it", None)
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_ledger_says_inline_code_needs_a_marker():
+    head = " ".join(LEDGER.read_text(encoding="utf-8").split("## Claims", 1)[0].split())
+    assert "trigger inside inline code needs a marker" in head
+
+
+def test_ledger_says_a_marker_binds_to_its_own_line():
+    head = " ".join(LEDGER.read_text(encoding="utf-8").split("## Claims", 1)[0].split())
+    assert "never clears a sentence on another line" in head
+
+
+def test_ledger_names_the_commonmark_reader():
+    text = " ".join(_section("What the tests enforce and what only a reader catches").split())
+    assert "markdown-it-py" in text and "CommonMark" in text
+    assert "Python-Markdown" not in text and "superfences" not in text
+
+
+@pytest.mark.parametrize("token", ["adapters/guardian-go/main.go", "labs/finbot/viewer/static/app.ts",
+                                   "crates/a/b/c/lib.rs", "docs/", "a/b/c/d/e/"])
+def test_evidence_paths_cover_more_suffixes_and_depths(token):
+    paths, _ = lab_claims._evidence(f"| C-01 | Claim. | `{token}` (here). | None. |\n")
+    assert paths == (("C-01", token),)
+
+
+def test_evidence_says_which_tokens_it_skips(tree, capsys):
+    root, ledger = tree
+    _, skipped = lab_claims._evidence("| C-01 | Claim. | `acs-lab-keys/1` and `adapters/benchmarks` (here). | x |\n")
+    assert skipped == (("C-01", "acs-lab-keys/1"), ("C-01", "adapters/benchmarks"))
+    lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"])
+    assert "skipped C-13 acs-lab-keys/1" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- Fix round 8: GitHub's reading, recorded
+#
+# pandoc's gfm reader is a CommonMark implementation. It rendered every Markdown matrix layout and every reviewer
+# probe from rounds 6 and 7, and the check's own walker and matcher read the result. Those readings are committed in
+# GITHUB_FIXTURE, and the check must agree with each one. CI has no pandoc, so only the drift test calls it, and only
+# where pandoc is installed.
+
+GITHUB_FIXTURE = ROOT / "tests" / "fixtures" / "lab_claims_github.json"
+PANDOC = shutil.which("pandoc")
+# Source line breaks in prose carry lab_claims.LINE, as the check's own renderer emits them, so a marker binds the
+# same way in both readings.
+PANDOC_FILTER = """
+local LINE = utf8.char(0xE000)
+function SoftBreak() return pandoc.RawInline("html", LINE .. "\\n") end
+function LineBreak() return pandoc.RawInline("html", "<br />" .. LINE .. "\\n") end
+function RawInline(el)
+  if el.format == "html" then el.text = el.text:gsub("\\n", LINE .. "\\n") end
+  return el
+end
+"""
+
+
+def _digest(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def _kinds_of(units) -> list[str]:
+    banned = lab_claims._phrase_regex(MATRIX_LEDGER.banned, whole_word=True)
+    triggers = lab_claims._phrase_regex(MATRIX_LEDGER.triggers, whole_word=False)
+    excused = {row: frozenset(lab_claims._key(p) for p in phrases) for row, phrases in MATRIX_LEDGER.excuses}
+    return sorted(k for u in units for k, _ in lab_claims._check(u, ".md", MATRIX_LEDGER, banned, triggers, excused))
+
+
+def _github_reading(body: str, filter_path: str) -> list[str]:
+    page = subprocess.run([PANDOC, "-f", "gfm", "-t", "html", "--wrap=preserve", "--lua-filter", filter_path],
+                          input=body, capture_output=True, text=True, check=True, timeout=60).stdout
+    return _kinds_of(lab_claims._walk(page))
+
+
+def _check_reading(body: str) -> list[str]:
+    units = lab_claims._units(body, ".md")
+    return _kinds_of(units)
+
+
+def _markdown_matrix() -> dict[str, str]:
+    return {name: body for name, body, _ in MATRIX + HONEST_MATRIX if name.endswith(".md")}
+
+
+def _load_fixture() -> dict:
+    return json.loads(GITHUB_FIXTURE.read_text(encoding="utf-8"))
+
+
+def _regenerate(fixture: dict, tmp_path: Path) -> dict:
+    """GitHub's reading of every recorded case, from pandoc. Probe bodies come from the fixture itself."""
+    filter_path = tmp_path / "lines.lua"
+    filter_path.write_text(PANDOC_FILTER, encoding="utf-8")
+    bodies = {name: entry["body"] for name, entry in fixture["probes"].items()}
+    bodies.update(_markdown_matrix())
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        readings = dict(zip(bodies, pool.map(lambda b: _github_reading(b, str(filter_path)), bodies.values())))
+    return {
+        "probes": {name: {"body": bodies[name], "github": readings[name]} for name in fixture["probes"]},
+        "matrix": {name: {"sha": _digest(bodies[name]), "github": readings[name]} for name in _markdown_matrix()},
+    }
+
+
+GITHUB = _load_fixture() if GITHUB_FIXTURE.exists() else {"probes": {}, "matrix": {}}
+
+
+def test_github_fixture_covers_every_markdown_layout():
+    assert GITHUB["probes"], "the fixture records no reviewer probe"
+    assert set(GITHUB["matrix"]) == set(_markdown_matrix())
+    stale = [n for n, body in _markdown_matrix().items() if GITHUB["matrix"][n]["sha"] != _digest(body)]
+    assert not stale, f"matrix layouts changed since the fixture was recorded: {stale[:5]}"
+
+
+@pytest.mark.parametrize("name", sorted(GITHUB["probes"]))
+def test_probe_reads_as_github_does(name):
+    entry = GITHUB["probes"][name]
+    assert _check_reading(entry["body"]) == entry["github"], entry["body"]
+
+
+@pytest.mark.parametrize("name", sorted(GITHUB["matrix"]))
+def test_matrix_layout_reads_as_github_does(name):
+    assert _check_reading(_markdown_matrix()[name]) == GITHUB["matrix"][name]["github"], name
+
+
+@pytest.mark.skipif(PANDOC is None, reason="pandoc isn't installed, so GitHub's reading can't be regenerated")
+def test_github_fixture_has_not_drifted(tmp_path):
+    assert _regenerate(GITHUB, tmp_path) == GITHUB, "pandoc's reading changed: rerun the fixture recording"
