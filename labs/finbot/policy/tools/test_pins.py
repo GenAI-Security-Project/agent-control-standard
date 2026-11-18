@@ -86,3 +86,61 @@ def test_main_exit_codes(tmp_path: Path) -> None:
     assert pins.main(["--model-log", str(broken), "--data", str(data)]) == 2
     assert data.read_text() == before
     assert pins.main(["--model-log", str(tmp_path / "missing.jsonl"), "--data", str(data)]) == 2
+
+
+# Interface pins. The policy reads these stack interfaces, so each test fails when the gateway or the Guardian
+# changes one and the pack would silently stop matching.
+
+INPUTS = sorted((HERE / "inputs").glob("*.json"))
+
+
+@pytest.mark.parametrize("path", INPUTS, ids=lambda p: p.stem)
+def test_inputs_match_the_payloads_the_gateway_builds(path: Path) -> None:
+    from acs.guardian.opa_backend import build_input
+    from acs_gateway.app import ASK_ANSWER_FIELD
+    from acs_gateway.apply import call_payload, result_payload
+
+    document = json.loads(path.read_text())["input"]
+    payload = dict(document["payload"])
+    tool = payload["tool"]
+    if document["method"] == "steps/toolCallRequest":
+        answer = payload.pop(ASK_ANSWER_FIELD, None)
+        built = call_payload(tool["name"], {k: v["value"] for k, v in payload["arguments"].items()}, tool["version"])
+        assert built == payload
+        if answer is not None:
+            assert answer["approver"] == {"type": "human", "id": "lab-approver"}
+            assert answer["answer"] == "approve"
+    else:
+        output = payload["outputs"][0]["value"]
+        built, _parsed, _repeated = result_payload(tool["name"], json.dumps(output), None, tool["version"])
+        assert built == payload
+    assert build_input(document["method"], {"payload": document["payload"]}) == {"input": document}
+
+
+def test_the_ask_answer_field_and_the_approver_the_gateway_sends() -> None:
+    import inspect
+
+    from acs_gateway import app
+
+    assert app.ASK_ANSWER_FIELD == "x_acs_lab_ask_answer"
+    # base.rego's ask_approved compares the approver with exactly this object.
+    assert '"approver": {"type": "human", "id": settings.approver_id}' in inspect.getsource(app)
+
+
+def test_the_gateway_honors_the_packs_ask() -> None:
+    from acs_gateway.app import ask_settings
+    from acs_gateway.config import MAX_ASK_S
+
+    details = {"approver": {"type": "human", "id": "lab-approver"}, "question": "Approve a transfer of 7500?",
+               "timeout_seconds": 240}
+    settings = ask_settings(details)
+    assert not isinstance(settings, str), settings
+    assert settings.approver_id == "lab-approver"
+    assert settings.timeout_s <= MAX_ASK_S
+
+
+def test_the_verdict_keys_the_pack_sets_are_allowed() -> None:
+    from acs.guardian.opa_backend import VERDICT_DECISIONS, VERDICT_KEYS
+
+    assert {"decision", "reasoning", "reason_codes", "modifications", "ask_details"} <= VERDICT_KEYS
+    assert VERDICT_DECISIONS == {"allow", "deny", "modify", "ask"}
